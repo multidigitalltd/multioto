@@ -37,6 +37,16 @@ class WebhookTest extends TestCase
         $this->assertSame(0, WebhookEvent::count());
     }
 
+    public function test_webhooks_fail_closed_when_secret_is_not_configured(): void
+    {
+        config(['billing.cardcom.webhook_secret' => null, 'billing.waha.webhook_secret' => '']);
+
+        $this->post('/webhooks/cardcom', ['LowProfileId' => 'lp-1'])->assertForbidden();
+        $this->post('/webhooks/waha', ['event' => 'message'])->assertForbidden();
+
+        $this->assertSame(0, WebhookEvent::count());
+    }
+
     public function test_cardcom_webhook_is_idempotent_per_low_profile_id(): void
     {
         Queue::fake([ProcessCardcomLowProfileJob::class]);

@@ -136,6 +136,47 @@ class ChargeSubscriptionJobTest extends TestCase
         $this->assertSame(0, $subscription->charges()->count());
     }
 
+    public function test_unknown_outcome_reuses_the_pending_charge_and_idempotency_key(): void
+    {
+        Queue::fake([IssueInvoiceJob::class]);
+
+        $subscription = Subscription::factory()->create(['next_charge_at' => now()->subHour()]);
+
+        // First run: the Cardcom call throws after (possibly) processing —
+        // the charge row stays pending and the job dies.
+        $this->mock(CardcomClient::class, function ($mock) {
+            $mock->shouldReceive('chargeToken')->once()->andThrow(new \RuntimeException('timeout'));
+        });
+
+        try {
+            ChargeSubscriptionJob::dispatchSync($subscription->id);
+        } catch (\RuntimeException) {
+            // Expected — the queue would record the failure.
+        }
+
+        $pending = $subscription->charges()->sole();
+        $this->assertSame(ChargeStatus::Pending, $pending->status);
+
+        // Next scheduler run must reuse the SAME row (same attempt number →
+        // same ExternalUniqueTranId) so Cardcom can dedupe server-side.
+        $this->mock(CardcomClient::class, function ($mock) use ($subscription, $pending) {
+            $mock->shouldReceive('chargeToken')
+                ->once()
+                ->withArgs(fn ($token, $amount, $desc, $uniqueId) => $uniqueId === sprintf(
+                    'sub-%d-%s-a%d',
+                    $subscription->id,
+                    $pending->period_start->format('Ymd'),
+                    $pending->attempt_number,
+                ))
+                ->andReturn(new ChargeResult(true, 'tx-9', '0'));
+        });
+
+        ChargeSubscriptionJob::dispatchSync($subscription->id);
+
+        $this->assertSame(1, $subscription->charges()->count());
+        $this->assertSame(ChargeStatus::Succeeded, $pending->fresh()->status);
+    }
+
     public function test_retry_during_dunning_keeps_the_same_billing_period(): void
     {
         Queue::fake([SendDunningNotificationJob::class]);

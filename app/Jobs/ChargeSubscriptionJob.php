@@ -104,6 +104,20 @@ class ChargeSubscriptionJob implements ShouldQueue
             ? $periodStart->copy()->addYear()
             : $periodStart->copy()->addMonth();
 
+        // An earlier attempt whose outcome is unknown (the HTTP call threw
+        // after Cardcom may have processed it) leaves a pending row. Reuse it —
+        // same attempt number → same ExternalUniqueTranId → Cardcom dedupes
+        // server-side instead of charging the period twice.
+        $pending = $subscription->charges()
+            ->where('status', ChargeStatus::Pending)
+            ->whereDate('period_start', $periodStart)
+            ->latest('id')
+            ->first();
+
+        if ($pending) {
+            return $pending;
+        }
+
         $attempt = (int) $subscription->charges()
             ->whereDate('period_start', $periodStart)
             ->max('attempt_number') + 1;

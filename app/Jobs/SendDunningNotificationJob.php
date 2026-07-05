@@ -47,18 +47,23 @@ class SendDunningNotificationJob implements ShouldQueue
         $subject = __("dunning.{$event->template_key}.subject", $replacements);
         $body = __("dunning.{$event->template_key}.body", $replacements);
 
-        try {
-            if ($event->channel === DunningChannel::Whatsapp) {
-                $waha->sendMessage($customer->whatsapp_jid ?? $customer->phone, $body);
-            } else {
-                Mail::to($customer->email)->send(new DunningNotificationMail($subject, $body));
-            }
-
-            $event->update(['status' => DunningStatus::Sent, 'sent_at' => now()]);
-        } catch (\Throwable $e) {
-            $event->update(['status' => DunningStatus::Failed]);
-
-            throw $e; // Let the queue retry with backoff.
+        // On a transient send failure the exception bubbles up and the queue
+        // retries with backoff; the event stays Queued so the retry actually
+        // processes it. Only exhausting all tries marks it Failed (see failed()).
+        if ($event->channel === DunningChannel::Whatsapp) {
+            $waha->sendMessage($customer->whatsapp_jid ?? $customer->phone, $body);
+        } else {
+            Mail::to($customer->email)->send(new DunningNotificationMail($subject, $body));
         }
+
+        $event->update(['status' => DunningStatus::Sent, 'sent_at' => now()]);
+    }
+
+    /**
+     * All retries exhausted — record the terminal failure.
+     */
+    public function failed(?\Throwable $exception): void
+    {
+        DunningEvent::find($this->dunningEventId)?->update(['status' => DunningStatus::Failed]);
     }
 }

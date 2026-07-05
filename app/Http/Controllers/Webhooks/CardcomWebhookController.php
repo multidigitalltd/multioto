@@ -18,8 +18,11 @@ class CardcomWebhookController extends Controller
 {
     public function __invoke(Request $request): Response
     {
+        // Fail closed: a blank/unset secret must never mean "accept everything".
+        $secret = (string) config('billing.cardcom.webhook_secret');
+
         abort_unless(
-            hash_equals((string) config('billing.cardcom.webhook_secret'), (string) $request->query('secret')),
+            $secret !== '' && hash_equals($secret, (string) $request->query('secret')),
             403,
         );
 
