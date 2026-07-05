@@ -37,11 +37,11 @@ class SettingsTest extends TestCase
 
     public function test_blank_setting_leaves_env_config_intact(): void
     {
-        config(['billing.linet.api_key' => 'env-key']);
-        Setting::put('linet.api_key', '');
+        config(['billing.linet.login_id' => 'env-login']);
+        Setting::put('linet.login_id', '');
 
         (new SettingsServiceProvider($this->app))->boot();
 
-        $this->assertSame('env-key', config('billing.linet.api_key'));
+        $this->assertSame('env-login', config('billing.linet.login_id'));
     }
 }

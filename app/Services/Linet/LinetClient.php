@@ -25,6 +25,7 @@ class LinetClient
 
         $response = $this->request('documents', [
             'type' => 'invrec', // חשבונית מס/קבלה
+            'company_id' => config('billing.linet.company_id'),
             'customer' => [
                 'name' => $customer->name,
                 'vat_number' => $customer->business_number,
@@ -78,13 +79,22 @@ class LinetClient
         return $response->json() ?? [];
     }
 
+    /**
+     * Linet authenticates each request with the account's Login ID and Key
+     * (from the Linet API settings screen); the Company ID scopes the request
+     * to the right business and is also sent in the document payload.
+     *
+     * NOTE: the exact header/param names must be verified against Linet's
+     * current API docs before going live — see docs/architecture.md.
+     */
     protected function authHeaders(): array
     {
         $config = config('billing.linet');
 
         return [
-            'X-Api-Key' => $config['api_key'],
-            'X-Api-Secret' => $config['api_secret'],
+            'X-Login-Id' => $config['login_id'],
+            'X-Api-Key' => $config['key'],
+            'X-Company-Id' => (string) $config['company_id'],
         ];
     }
 }

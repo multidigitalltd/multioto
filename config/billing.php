@@ -46,8 +46,11 @@ return [
     ],
 
     'linet' => [
-        'api_key' => env('LINET_API_KEY'),
-        'api_secret' => env('LINET_API_SECRET'),
+        // Linet authenticates with three values from the account (see the
+        // Linet API settings screen): Login ID, Key, and Company ID.
+        'login_id' => env('LINET_LOGIN_ID'),
+        'key' => env('LINET_KEY'),
+        'company_id' => env('LINET_COMPANY_ID'),
         'base_url' => env('LINET_BASE_URL', 'https://app.linet.org.il/api/v1'),
         // Send the invoice to the customer by email from Linet's side.
         'email_document' => env('LINET_EMAIL_DOCUMENT', true),

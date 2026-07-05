@@ -54,10 +54,12 @@ class ManageIntegrations extends Page implements HasForms
                     ])->columns(3),
 
                 Section::make('לינט — חשבוניות')
+                    ->description('שלושת הערכים ממסך הגדרות ה-API בלינט: Login ID, Key ו-Company ID. השאירו ריק כדי לא לשנות ערך קיים.')
                     ->schema([
-                        TextInput::make('linet.api_key')->label('API Key')->password()->revealable()->autocomplete('new-password'),
-                        TextInput::make('linet.api_secret')->label('API Secret')->password()->revealable()->autocomplete('new-password'),
-                    ])->columns(2),
+                        TextInput::make('linet.login_id')->label('Login ID')->password()->revealable()->autocomplete('new-password'),
+                        TextInput::make('linet.key')->label('Key')->password()->revealable()->autocomplete('new-password'),
+                        TextInput::make('linet.company_id')->label('Company ID')->autocomplete(false),
+                    ])->columns(3),
 
                 Section::make('FlyWP — אחסון')
                     ->schema([
