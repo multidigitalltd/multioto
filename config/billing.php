@@ -66,8 +66,17 @@ return [
     ],
 
     'hosting' => [
-        // Driver behind HostingClient: 'log' until the real panel API is decided (§13).
+        // Driver behind HostingClient: 'flywp' (real) or 'log' (records intent only).
         'driver' => env('HOSTING_DRIVER', 'log'),
+
+        'flywp' => [
+            'base_url' => env('FLYWP_BASE_URL', 'https://app.flywp.com/api/v1'),
+            'api_token' => env('FLYWP_API_TOKEN'),
+            'server_id' => env('FLYWP_SERVER_ID'),
+            // Suspend/restore via maintenance mode. {server}/{site} are substituted;
+            // site is the FlyWP site id stored on sites.hosting_ref.
+            'maintenance_path' => env('FLYWP_MAINTENANCE_PATH', 'servers/{server}/sites/{site}/maintenance'),
+        ],
     ],
 
     'ai' => [

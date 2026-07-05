@@ -2,6 +2,7 @@
 
 namespace App\Providers;
 
+use App\Services\Hosting\FlyWpHostingClient;
 use App\Services\Hosting\HostingClient;
 use App\Services\Hosting\LogHostingClient;
 use Illuminate\Support\ServiceProvider;
@@ -17,6 +18,7 @@ class AppServiceProvider extends ServiceProvider
         // Swap the driver here once it lands; 'log' records intents only.
         $this->app->bind(HostingClient::class, function () {
             return match (config('billing.hosting.driver')) {
+                'flywp' => new FlyWpHostingClient,
                 default => new LogHostingClient,
             };
         });

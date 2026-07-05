@@ -54,8 +54,9 @@
 ### 4.4 מייל טרנזקציוני
 - ספק ייעודי (Postmark / SES / Resend) לכל מייל תפעולי. SPF + DKIM + DMARC חובה. מייל החשבונית יוצא מלינט.
 
-### 4.5 אחסון — השעיה/שחזור
-- `App\Services\Hosting\HostingClient` (interface) — `suspendSite()`, `restoreSite()`. הדרייבר הנוכחי `log` בלבד עד להחלטה על פאנל האחסון (§13); ההחלפה ב-`AppServiceProvider`.
+### 4.5 אחסון — השעיה/שחזור (FlyWP)
+- `App\Services\Hosting\HostingClient` (interface) — `suspendSite()`, `restoreSite()`.
+- דרייבר **FlyWP** (`HOSTING_DRIVER=flywp`): השעיה/שחזור דרך **מצב תחזוקה** (הכי הפיך — האתר נשאר מאוחסן והנתונים שמורים). `sites.hosting_ref` מחזיק את מזהה האתר ב-FlyWP. דרייבר `log` נשאר כברירת מחדל לפיתוח.
 
 ## 5. מנוע החיוב + מכונת המצבים של הדאנינג
 
@@ -99,7 +100,8 @@ Scheduler (`routes/console.php`) מזהה מנוי עם `next_charge_at <= now` 
 
 ## 10. אבטחה ותאימות
 - PCI: אין אחסון מספרי כרטיס; קליטה רק ב-Low Profile.
-- אימות סוד על webhooks (hash_equals), rate limiting, קישורי לקוח חתומים (signed URLs), secrets ב-`.env`.
+- אימות סוד על webhooks (hash_equals), rate limiting, קישורי לקוח חתומים (signed URLs).
+- **ניהול מפתחות:** עמוד "מפתחות אינטגרציות" ב-Filament (קארדקום/לינט/FlyWP/WAHA) — נשמרים **מוצפנים** ב-DB (Laravel Crypt) ומוחלים על ה-config ב-boot; `.env` נשאר fallback. סודות לעולם לא מוצגים חזרה בטופס ולא נכתבים בלוגים.
 - גיבויי Postgres יומיים + activity log — שלב הקשחה.
 
 ## 11. שלבי עבודה
@@ -123,7 +125,7 @@ Scheduler (`routes/console.php`) מזהה מנוי עם `next_charge_at <= now` 
 9. שלב 5 — AI Tier-1 (סיווג/טיוטות תשובה) אופציונלי.
 
 ## 13. פתוחות והחלטות שנדרשות
-- **פאנל האחסון:** איזה API להשעיה/שחזור (cPanel/WHM? Plesk?) — קובע את מימוש `HostingClient`.
+- **פאנל האחסון:** ✅ נבחר FlyWP — דרייבר ממומש (מצב תחזוקה). נותר לאמת את נתיב ה-API המדויק מול חשבון FlyWP (ניתן לכוונון ב-`FLYWP_MAINTENANCE_PATH` בלי שינוי קוד).
 - **הגדרות קארדקום:** מודול אסימונים + מסוף ללא חובת CVV.
 - **מפתחות לינט:** זוג מפתחות API + זמינות הפקה פר-חיוב במסלול.
 - **ספק מייל + אימות דומיין:** בחירה + SPF/DKIM/DMARC + warmup.
