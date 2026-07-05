@@ -67,6 +67,12 @@ class ManageIntegrations extends Page implements HasForms
                     ->schema([
                         TextInput::make('waha.api_key')->label('API Key')->password()->revealable()->autocomplete('new-password'),
                     ]),
+
+                Section::make('Postmark — מייל (יוצא + נכנס)')
+                    ->description('Server API Token מ-Postmark. הגדירו MAIL_MAILER=postmark ואת webhook ה-inbound אל /webhooks/email.')
+                    ->schema([
+                        TextInput::make('postmark.token')->label('Server Token')->password()->revealable()->autocomplete('new-password'),
+                    ]),
             ])
             ->statePath('data');
     }

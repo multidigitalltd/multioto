@@ -51,8 +51,8 @@
 - יוצא: `WahaClient::sendMessage()` / `sendMedia()`; `sessionStatus()` לניטור ניתוקים.
 - דיוור המוני בוואטסאפ — סיכון חסימה: throttling אגרסיבי, פילוחים קטנים בלבד (§7).
 
-### 4.4 מייל טרנזקציוני
-- ספק ייעודי (Postmark / SES / Resend) לכל מייל תפעולי. SPF + DKIM + DMARC חובה. מייל החשבונית יוצא מלינט.
+### 4.4 מייל טרנזקציוני (Postmark)
+- **Postmark** לשני הכיוונים: יוצא (`MAIL_MAILER=postmark`) לכל מייל תפעולי, ונכנס (Inbound webhook → `/webhooks/email` → כרטיס). SPF + DKIM + DMARC חובה בדומיין; MX ל-inbound. מייל החשבונית עצמה יוצא מלינט. פרטי ההתקנה: `docs/deployment.md`.
 
 ### 4.5 אחסון — השעיה/שחזור (FlyWP)
 - `App\Services\Hosting\HostingClient` (interface) — `suspendSite()`, `restoreSite()`.
