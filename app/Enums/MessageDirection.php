@@ -11,6 +11,9 @@ enum MessageDirection: string implements HasLabel
 
     public function getLabel(): string
     {
-        return str_replace('_', ' ', $this->value);
+        return match ($this) {
+            self::Inbound => 'נכנס',
+            self::Outbound => 'יוצא',
+        };
     }
 }

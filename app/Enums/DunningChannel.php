@@ -11,6 +11,9 @@ enum DunningChannel: string implements HasLabel
 
     public function getLabel(): string
     {
-        return str_replace('_', ' ', $this->value);
+        return match ($this) {
+            self::Whatsapp => 'וואטסאפ',
+            self::Email => 'אימייל',
+        };
     }
 }

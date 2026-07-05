@@ -14,6 +14,12 @@ enum SubscriptionStatus: string implements HasLabel
 
     public function getLabel(): string
     {
-        return str_replace('_', ' ', $this->value);
+        return match ($this) {
+            self::Trialing => 'תקופת ניסיון',
+            self::Active => 'פעיל',
+            self::PastDue => 'בפיגור',
+            self::Suspended => 'מושהה',
+            self::Canceled => 'בוטל',
+        };
     }
 }

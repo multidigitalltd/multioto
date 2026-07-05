@@ -12,6 +12,10 @@ enum DocumentType: string implements HasLabel
 
     public function getLabel(): string
     {
-        return str_replace('_', ' ', $this->value);
+        return match ($this) {
+            self::TaxInvoiceReceipt => 'חשבונית מס/קבלה',
+            self::Receipt => 'קבלה',
+            self::Invoice => 'חשבונית מס',
+        };
     }
 }

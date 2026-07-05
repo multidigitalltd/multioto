@@ -12,6 +12,10 @@ enum TokenStatus: string implements HasLabel
 
     public function getLabel(): string
     {
-        return str_replace('_', ' ', $this->value);
+        return match ($this) {
+            self::Active => 'פעיל',
+            self::Expired => 'פג תוקף',
+            self::Replaced => 'הוחלף',
+        };
     }
 }

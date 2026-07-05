@@ -14,6 +14,12 @@ enum TicketStatus: string implements HasLabel
 
     public function getLabel(): string
     {
-        return str_replace('_', ' ', $this->value);
+        return match ($this) {
+            self::Open => 'פתוח',
+            self::Pending => 'ממתין',
+            self::OnHold => 'בהמתנה',
+            self::Resolved => 'טופל',
+            self::Closed => 'סגור',
+        };
     }
 }

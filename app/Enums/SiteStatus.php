@@ -11,6 +11,9 @@ enum SiteStatus: string implements HasLabel
 
     public function getLabel(): string
     {
-        return str_replace('_', ' ', $this->value);
+        return match ($this) {
+            self::Active => 'פעיל',
+            self::Suspended => 'מושהה',
+        };
     }
 }

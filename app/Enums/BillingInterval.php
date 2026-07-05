@@ -11,6 +11,9 @@ enum BillingInterval: string implements HasLabel
 
     public function getLabel(): string
     {
-        return str_replace('_', ' ', $this->value);
+        return match ($this) {
+            self::Monthly => 'חודשי',
+            self::Yearly => 'שנתי',
+        };
     }
 }

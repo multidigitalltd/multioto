@@ -12,6 +12,10 @@ enum BusinessType: string implements HasLabel
 
     public function getLabel(): string
     {
-        return str_replace('_', ' ', $this->value);
+        return match ($this) {
+            self::ExemptDealer => 'עוסק פטור',
+            self::LicensedDealer => 'עוסק מורשה',
+            self::Company => 'חברה בע״מ',
+        };
     }
 }

@@ -13,6 +13,11 @@ enum MessageAuthor: string implements HasLabel
 
     public function getLabel(): string
     {
-        return str_replace('_', ' ', $this->value);
+        return match ($this) {
+            self::Customer => 'לקוח',
+            self::Agent => 'נציג',
+            self::System => 'מערכת',
+            self::Ai => 'סוכן AI',
+        };
     }
 }

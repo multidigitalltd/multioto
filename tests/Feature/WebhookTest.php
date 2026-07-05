@@ -103,6 +103,40 @@ class WebhookTest extends TestCase
         $this->assertSame(2, $customer->paymentTokens()->count());
     }
 
+    public function test_low_profile_activates_a_newly_onboarded_trialing_subscription(): void
+    {
+        Queue::fake([ChargeSubscriptionJob::class]);
+
+        // A subscription created by the onboarding wizard: Trialing, no token,
+        // waiting for the customer to enter a card via the capture link.
+        $customer = Customer::factory()->create();
+        $subscription = Subscription::factory()->create([
+            'customer_id' => $customer->id,
+            'token_id' => null,
+            'status' => SubscriptionStatus::Trialing,
+            'next_charge_at' => now()->addDays(5),
+        ]);
+
+        [$event] = WebhookEvent::record(
+            WebhookSource::Cardcom,
+            'low_profile_completed',
+            'lp-onboard',
+            [
+                'LowProfileId' => 'lp-onboard',
+                'ReturnValue' => (string) $customer->id,
+                'TokenInfo' => ['Token' => 'onboard-token', 'CardLast4Digits' => '1234'],
+            ],
+        );
+
+        (new ProcessCardcomLowProfileJob($event->id))->handle();
+
+        $subscription->refresh();
+        $this->assertSame(SubscriptionStatus::Active, $subscription->status);
+        $this->assertSame($customer->fresh()->default_token_id, $subscription->token_id);
+        // First charge stays on its scheduled date — activation must not charge early.
+        Queue::assertNotPushed(ChargeSubscriptionJob::class);
+    }
+
     public function test_waha_message_creates_a_ticket_and_matches_customer_by_phone(): void
     {
         $customer = Customer::factory()->create(['phone' => '+972501234567', 'whatsapp_jid' => null]);

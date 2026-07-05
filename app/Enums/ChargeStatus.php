@@ -12,6 +12,10 @@ enum ChargeStatus: string implements HasLabel
 
     public function getLabel(): string
     {
-        return str_replace('_', ' ', $this->value);
+        return match ($this) {
+            self::Pending => 'ממתין',
+            self::Succeeded => 'הצליח',
+            self::Failed => 'נכשל',
+        };
     }
 }

@@ -11,6 +11,9 @@ enum VatCategory: string implements HasLabel
 
     public function getLabel(): string
     {
-        return str_replace('_', ' ', $this->value);
+        return match ($this) {
+            self::Taxable => 'חייב מע״מ',
+            self::Exempt => 'פטור ממע״מ',
+        };
     }
 }

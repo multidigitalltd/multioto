@@ -63,12 +63,17 @@ class ProcessCardcomLowProfileJob implements ShouldQueue
 
         $customer->update(['default_token_id' => $token->id]);
 
-        // Point every non-canceled subscription at the fresh token, and retry
-        // charges for anything stuck in dunning right away.
+        // Point every non-canceled subscription at the fresh token. A brand-new
+        // (Trialing) subscription is activated so the scheduler starts charging
+        // it on its due date; anything stuck in dunning is retried right away.
         $customer->subscriptions()
             ->whereNot('status', SubscriptionStatus::Canceled)
             ->each(function ($subscription) use ($token) {
                 $subscription->update(['token_id' => $token->id]);
+
+                if ($subscription->status === SubscriptionStatus::Trialing) {
+                    $subscription->update(['status' => SubscriptionStatus::Active]);
+                }
 
                 if (in_array($subscription->status, [SubscriptionStatus::PastDue, SubscriptionStatus::Suspended], true)) {
                     $subscription->update(['next_charge_at' => now()]);
