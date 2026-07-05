@@ -2,22 +2,19 @@
 
 namespace App\Jobs;
 
-use App\Enums\MessageAuthor;
 use App\Enums\MessageChannel;
-use App\Enums\MessageDirection;
 use App\Enums\TicketChannel;
-use App\Enums\TicketStatus;
 use App\Models\Customer;
-use App\Models\Ticket;
 use App\Models\WebhookEvent;
+use App\Services\Support\TicketIntake;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Str;
 
 /**
  * Turn an inbound WAHA message into a ticket message: match the sender to a
- * customer by WhatsApp id / phone, append to their open WhatsApp ticket or
- * open a fresh one. Unmatched senders get an "unidentified" ticket for triage.
+ * customer by WhatsApp id / phone, then hand off to TicketIntake which opens or
+ * continues the conversation. Unmatched senders get an "unidentified" ticket.
  */
 class IngestWhatsappMessageJob implements ShouldQueue
 {
@@ -29,7 +26,7 @@ class IngestWhatsappMessageJob implements ShouldQueue
 
     public function __construct(public int $webhookEventId) {}
 
-    public function handle(): void
+    public function handle(TicketIntake $intake): void
     {
         $event = WebhookEvent::find($this->webhookEventId);
 
@@ -49,61 +46,34 @@ class IngestWhatsappMessageJob implements ShouldQueue
             return;
         }
 
-        $customer = $this->matchCustomer($chatId);
-        $ticket = $this->findOrCreateTicket($customer, $chatId, $body);
+        $customer = $this->matchCustomer($intake, $chatId);
 
-        // Unique external_message_id makes redelivered messages a no-op.
-        $ticket->messages()->firstOrCreate(
-            ['external_message_id' => $messageId],
-            [
-                'direction' => MessageDirection::Inbound,
-                'channel' => MessageChannel::Whatsapp,
-                'body' => $body !== '' ? $body : '[מדיה מצורפת]',
-                'author' => MessageAuthor::Customer,
-                'attachments' => ! empty($payload['hasMedia']) ? ['media' => $payload['media'] ?? true] : null,
-            ],
+        $intake->recordInbound(
+            channel: TicketChannel::Whatsapp,
+            messageChannel: MessageChannel::Whatsapp,
+            customer: $customer,
+            body: $body,
+            threadRef: $chatId,
+            externalMessageId: $messageId,
+            attachments: ! empty($payload['hasMedia']) ? ['media' => $payload['media'] ?? true] : null,
         );
-
-        // Reopen resolved conversations when the customer writes again.
-        if (in_array($ticket->status, [TicketStatus::Resolved, TicketStatus::Closed], true)) {
-            $ticket->update(['status' => TicketStatus::Open]);
-        }
 
         $event->markProcessed();
     }
 
-    protected function matchCustomer(string $chatId): ?Customer
+    /**
+     * Match by JID, then by phone — and remember the JID on the customer so
+     * future messages match exactly.
+     */
+    protected function matchCustomer(TicketIntake $intake, string $chatId): ?Customer
     {
-        $customer = Customer::where('whatsapp_jid', $chatId)->first();
+        $phone = '+'.Str::before($chatId, '@');
+        $customer = $intake->matchCustomer(phone: $phone, whatsappJid: $chatId);
 
-        if ($customer) {
-            return $customer;
+        if ($customer && $customer->whatsapp_jid === null) {
+            $customer->update(['whatsapp_jid' => $chatId]);
         }
 
-        $phone = '+'.Str::before($chatId, '@');
-        $customer = Customer::where('phone', $phone)->first();
-
-        // Remember the JID for next time so future matching is exact.
-        $customer?->update(['whatsapp_jid' => $chatId]);
-
         return $customer;
-    }
-
-    protected function findOrCreateTicket(?Customer $customer, string $chatId, string $body): Ticket
-    {
-        $open = Ticket::where('external_thread_ref', $chatId)
-            ->whereNotIn('status', [TicketStatus::Closed])
-            ->latest('id')
-            ->first();
-
-        return $open ?? Ticket::create([
-            'customer_id' => $customer?->id,
-            'channel' => TicketChannel::Whatsapp,
-            'subject' => $customer
-                ? Str::limit($body !== '' ? $body : 'פנייה חדשה בוואטסאפ', 80)
-                : 'פנייה לא מזוהה בוואטסאפ',
-            'status' => TicketStatus::Open,
-            'external_thread_ref' => $chatId,
-        ]);
     }
 }

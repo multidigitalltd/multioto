@@ -1,11 +1,22 @@
 <?php
 
 use App\Http\Controllers\BillingController;
+use App\Http\Controllers\SupportFormController;
 use App\Http\Controllers\Webhooks\CardcomWebhookController;
+use App\Http\Controllers\Webhooks\EmailWebhookController;
 use App\Http\Controllers\Webhooks\WahaWebhookController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', fn () => view('welcome'));
+
+/*
+ | Public support form — the web intake channel for tickets. CSRF-protected,
+ | rate limited, honeypot-guarded.
+ */
+Route::get('/support', [SupportFormController::class, 'show'])->name('support.form');
+Route::post('/support', [SupportFormController::class, 'store'])
+    ->middleware('throttle:5,1')
+    ->name('support.form.store');
 
 /*
  | Customer-facing billing links (embedded in dunning messages).
@@ -28,4 +39,5 @@ Route::view('/billing/update-card/done/{result}', 'billing.update-card-done')
 Route::middleware('throttle:120,1')->prefix('webhooks')->group(function () {
     Route::post('/cardcom', CardcomWebhookController::class)->name('webhooks.cardcom');
     Route::post('/waha', WahaWebhookController::class)->name('webhooks.waha');
+    Route::post('/email', EmailWebhookController::class)->name('webhooks.email');
 });

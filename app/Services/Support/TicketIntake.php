@@ -1,0 +1,114 @@
+<?php
+
+namespace App\Services\Support;
+
+use App\Enums\MessageAuthor;
+use App\Enums\MessageChannel;
+use App\Enums\MessageDirection;
+use App\Enums\TicketChannel;
+use App\Enums\TicketStatus;
+use App\Models\Customer;
+use App\Models\Ticket;
+use App\Models\TicketMessage;
+use Illuminate\Support\Str;
+
+/**
+ * Single entry point for turning an inbound contact (WhatsApp, email, web form)
+ * into a ticket message. Centralizes customer matching, ticket find-or-create,
+ * message dedupe and reopen-on-reply so every channel behaves identically.
+ */
+class TicketIntake
+{
+    /**
+     * Match an inbound contact to a customer by any identifier we hold.
+     * WhatsApp JID is matched exactly; phone/email fall back to a lookup.
+     */
+    public function matchCustomer(?string $email = null, ?string $phone = null, ?string $whatsappJid = null): ?Customer
+    {
+        return Customer::query()
+            ->when($whatsappJid, fn ($q) => $q->orWhere('whatsapp_jid', $whatsappJid))
+            ->when($email, fn ($q) => $q->orWhere('email', $email))
+            ->when($phone, fn ($q) => $q->orWhere('phone', $phone))
+            ->when(! $whatsappJid && ! $email && ! $phone, fn ($q) => $q->whereRaw('1 = 0'))
+            ->first();
+    }
+
+    /**
+     * Record an inbound message.
+     *
+     * When $threadRef is given, the message is appended to the open ticket that
+     * carries that reference (a continuing conversation); otherwise a fresh
+     * ticket is opened. Redelivered messages are deduped on $externalMessageId.
+     */
+    public function recordInbound(
+        TicketChannel $channel,
+        MessageChannel $messageChannel,
+        ?Customer $customer,
+        string $body,
+        ?string $threadRef = null,
+        ?string $externalMessageId = null,
+        ?string $subject = null,
+        ?array $attachments = null,
+    ): TicketMessage {
+        $ticket = $this->findOrCreateTicket($channel, $customer, $threadRef, $subject, $body);
+
+        $message = $ticket->messages()->firstOrCreate(
+            ['external_message_id' => $externalMessageId],
+            [
+                'direction' => MessageDirection::Inbound,
+                'channel' => $messageChannel,
+                'body' => $body !== '' ? $body : '[ללא תוכן טקסט]',
+                'author' => MessageAuthor::Customer,
+                'attachments' => $attachments,
+            ],
+        );
+
+        // A new inbound message on a resolved/closed thread reopens it.
+        if ($message->wasRecentlyCreated
+            && in_array($ticket->status, [TicketStatus::Resolved, TicketStatus::Closed], true)) {
+            $ticket->update(['status' => TicketStatus::Open]);
+        }
+
+        return $message;
+    }
+
+    protected function findOrCreateTicket(
+        TicketChannel $channel,
+        ?Customer $customer,
+        ?string $threadRef,
+        ?string $subject,
+        string $body,
+    ): Ticket {
+        if ($threadRef !== null) {
+            $open = Ticket::where('external_thread_ref', $threadRef)
+                ->where('status', '!=', TicketStatus::Closed)
+                ->latest('id')
+                ->first();
+
+            if ($open) {
+                return $open;
+            }
+        }
+
+        return Ticket::create([
+            'customer_id' => $customer?->id,
+            'channel' => $channel,
+            'subject' => $this->buildSubject($customer, $subject, $body),
+            'status' => TicketStatus::Open,
+            'external_thread_ref' => $threadRef,
+        ]);
+    }
+
+    protected function buildSubject(?Customer $customer, ?string $subject, string $body): string
+    {
+        if (filled($subject)) {
+            return Str::limit($subject, 120);
+        }
+
+        if (! $customer) {
+            return 'פנייה לא מזוהה';
+        }
+
+        return Str::limit($body !== '' ? $body : 'פנייה חדשה', 80);
+    }
+}

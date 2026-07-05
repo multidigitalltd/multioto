@@ -138,6 +138,6 @@ class WebhookTest extends TestCase
 
         $ticket = Ticket::sole();
         $this->assertNull($ticket->customer_id);
-        $this->assertSame('פנייה לא מזוהה בוואטסאפ', $ticket->subject);
+        $this->assertSame('פנייה לא מזוהה', $ticket->subject);
     }
 }

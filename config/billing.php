@@ -58,6 +58,13 @@ return [
         'broadcast_throttle_seconds' => env('WAHA_BROADCAST_THROTTLE', 30),
     ],
 
+    'email' => [
+        // Shared secret the inbound-parse provider includes on its webhook URL.
+        'webhook_secret' => env('EMAIL_WEBHOOK_SECRET'),
+        // Address customers reply to; agent email replies are sent from here.
+        'support_address' => env('SUPPORT_EMAIL', 'support@multi.digital'),
+    ],
+
     'hosting' => [
         // Driver behind HostingClient: 'log' until the real panel API is decided (§13).
         'driver' => env('HOSTING_DRIVER', 'log'),

@@ -81,9 +81,9 @@ Scheduler (`routes/console.php`) מזהה מנוי עם `next_charge_at <= now` 
 - כל webhook עובר דרך `WebhookEvent::record()` עם `external_id` ייחודי.
 
 ## 6. מערכת כרטיסים וקליטה אומניצ'אנל
-- וואטסאפ ממומש end-to-end; מייל נכנס (inbound parse) וטופס אתר — שלב 3.
-- התאמה ללקוח לפי JID/טלפון; אי-התאמה → כרטיס "לא מזוהה".
-- תשובת סוכן: `SendTicketReplyJob` מנתב לערוץ המקורי.
+- שלושת הערוצים ממומשים end-to-end דרך `TicketIntake` (שירות מרכזי, DRY): **וואטסאפ** (`IngestWhatsappMessageJob`), **מייל נכנס** (`EmailWebhookController` → `IngestEmailMessageJob`, שרשור לפי שולח+נושא מנורמל), **טופס אתר** (`SupportFormController`, נגיש WCAG 2.2 AA + honeypot + rate limit).
+- התאמה ללקוח לפי JID/מייל/טלפון; אי-התאמה → כרטיס "לא מזוהה". הודעה חדשה בכרטיס פתור פותחת אותו מחדש.
+- תשובת סוכן: RelationManager "שיחה" ב-Filament (thread מלא + תבניות מענה מהיר) → `SendTicketReplyJob` מנתב לערוץ המקורי; הערה פנימית לא נשלחת.
 
 ## 7. דיוור המוני ותקלות
 - `SendBroadcastJob`: מייל בצ'אנקים (ברירת מחדל), וואטסאפ עם throttle של 30ש' בין הודעות ולפילוחים קטנים בלבד.
@@ -104,7 +104,7 @@ Scheduler (`routes/console.php`) מזהה מנוי עם `next_charge_at <= now` 
 - **שלב 0 — תשתית** ✅ שלד, מיגרציות, Filament, seeders.
 - **שלב 1 — ליבת החיוב** ✅ CardcomClient, LinetClient, ChargeSubscriptionJob, IssueInvoiceJob, Scheduler.
 - **שלב 2 — דאנינג ומחזור חיים** ✅ DunningMachine, תזכורות, התאוששות, השעיה/שחזור (דרייבר log עד החלטת פאנל).
-- **שלב 3 — קליטת תמיכה** ◐ וואטסאפ דו-כיווני ממומש; נותר: מייל נכנס, טופס אתר, UI שיחה מלא ב-Filament.
+- **שלב 3 — קליטת תמיכה** ✅ שלושת הערוצים (וואטסאפ + מייל נכנס + טופס) → כרטיסים דרך `TicketIntake`; UI שיחה עם מענה חוזר ותבניות ב-Filament.
 - **שלב 4 — ניטור ודיוור** ✅ ליבה ממומשת; נותר: דיוור ללקוח מושפע בתקלה.
 - **שלב 5 — AI Tier-1** ☐ אופציונלי.
 
@@ -112,12 +112,12 @@ Scheduler (`routes/console.php`) מזהה מנוי עם `next_charge_at <= now` 
 1. החלטת פאנל אחסון ומימוש דרייבר אמיתי ל-`HostingClient`.
 2. Sandbox קארדקום: אימות פורמט payload אמיתי של Low Profile / Transactions מול המימוש.
 3. אימות פורמט API של לינט מול חשבון אמיתי (חשבונית פטור/חייב).
-4. מייל נכנס → כרטיסים (inbound parse), טופס אתר → כרטיסים.
-5. UI שיחת כרטיס מלא ב-Filament (thread + תבניות מענה + שליחה).
-6. ניטור session של WAHA + התראת re-scan QR.
-7. דיוור אוטומטי ללקוחות מושפעים בתקלה (incident → broadcast).
-8. הקשחה: activity log, גיבויים, אימות דומיין מייל.
-9. הגירת נתונים מווקומרס/קארדקום (בדיקה מה ניתן לשמר מהטוקנים הקיימים).
+4. אימות פורמט inbound-parse של ספק המייל בפועל (מיפוי שדות ב-`IngestEmailMessageJob`).
+5. ניטור session של WAHA + התראת re-scan QR.
+6. דיוור אוטומטי ללקוחות מושפעים בתקלה (incident → broadcast).
+7. הקשחה: activity log, גיבויים, אימות דומיין מייל.
+8. הגירת נתונים מווקומרס/קארדקום (בדיקה מה ניתן לשמר מהטוקנים הקיימים).
+9. שלב 5 — AI Tier-1 (סיווג/טיוטות תשובה) אופציונלי.
 
 ## 13. פתוחות והחלטות שנדרשות
 - **פאנל האחסון:** איזה API להשעיה/שחזור (cPanel/WHM? Plesk?) — קובע את מימוש `HostingClient`.
