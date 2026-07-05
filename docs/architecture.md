@@ -18,7 +18,7 @@
 
 | רכיב | בחירה | הערה |
 |---|---|---|
-| שפה/פריימוורק | PHP 8.3+, Laravel 11 | Scheduler, Queue, Eloquent, Mail מובנים |
+| שפה/פריימוורק | PHP 8.3+, Laravel 12 (שודרג מ-11 — תיקוני אבטחה) | Scheduler, Queue, Eloquent, Mail מובנים |
 | DB | PostgreSQL 15+ | |
 | תור + ניטור תור | Redis + Laravel Horizon | |
 | ממשק ניהול פנימי | **Filament 3** | פאנל CRUD על גבי המודלים |

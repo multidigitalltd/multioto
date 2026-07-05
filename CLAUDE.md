@@ -4,7 +4,7 @@
 
 ## Stack
 
-- PHP 8.3+, Laravel 11
+- PHP 8.3+, Laravel 12
 - PostgreSQL 15+ (dev/tests fall back to SQLite where noted)
 - Redis + Laravel Horizon (queues)
 - Filament 3 (admin panel, team-only — לא לקוחות קצה)
