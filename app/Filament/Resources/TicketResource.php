@@ -19,37 +19,65 @@ class TicketResource extends Resource
 
     protected static ?string $navigationIcon = 'heroicon-o-lifebuoy';
 
-    protected static ?string $navigationLabel = 'כרטיסים';
+    protected static ?string $navigationLabel = 'פניות';
 
-    protected static ?string $modelLabel = 'כרטיס';
+    protected static ?string $modelLabel = 'פנייה';
 
-    protected static ?string $pluralModelLabel = 'כרטיסים';
+    protected static ?string $pluralModelLabel = 'פניות';
 
     protected static ?string $navigationGroup = 'תמיכה';
 
     protected static ?int $navigationSort = 1;
 
+    protected static ?string $recordTitleAttribute = 'subject';
+
     public static function form(Form $form): Form
     {
         return $form
             ->schema([
-                Forms\Components\Select::make('customer_id')
-                    ->relationship('customer', 'name'),
-                Forms\Components\Select::make('channel')
-                    ->options(TicketChannel::class)
-                    ->required(),
-                Forms\Components\TextInput::make('subject')
-                    ->required(),
-                Forms\Components\Select::make('status')
-                    ->options(TicketStatus::class)
-                    ->required(),
-                Forms\Components\Select::make('priority')
-                    ->options(TicketPriority::class)
-                    ->required(),
-                Forms\Components\TextInput::make('assignee'),
-                Forms\Components\TextInput::make('external_thread_ref'),
-                Forms\Components\DateTimePicker::make('first_response_at'),
-                Forms\Components\DateTimePicker::make('resolved_at'),
+                Forms\Components\Section::make('פנייה')
+                    ->schema([
+                        Forms\Components\Select::make('customer_id')
+                            ->label('לקוח')
+                            ->relationship('customer', 'name')
+                            ->searchable()
+                            ->preload(),
+                        Forms\Components\Select::make('channel')
+                            ->label('ערוץ')
+                            ->options(TicketChannel::class)
+                            ->required(),
+                        Forms\Components\TextInput::make('subject')
+                            ->label('נושא')
+                            ->required()
+                            ->maxLength(255)
+                            ->columnSpanFull(),
+                    ])->columns(2),
+
+                Forms\Components\Section::make('טיפול')
+                    ->schema([
+                        Forms\Components\Select::make('status')
+                            ->label('סטטוס')
+                            ->options(TicketStatus::class)
+                            ->required(),
+                        Forms\Components\Select::make('priority')
+                            ->label('עדיפות')
+                            ->options(TicketPriority::class)
+                            ->required(),
+                        Forms\Components\TextInput::make('assignee')
+                            ->label('אחראי')
+                            ->maxLength(255),
+                        Forms\Components\TextInput::make('external_thread_ref')
+                            ->label('מזהה שיחה חיצוני')
+                            ->maxLength(255),
+                    ])->columns(2),
+
+                Forms\Components\Section::make('זמנים')
+                    ->schema([
+                        Forms\Components\DateTimePicker::make('first_response_at')
+                            ->label('מענה ראשון'),
+                        Forms\Components\DateTimePicker::make('resolved_at')
+                            ->label('טופל בתאריך'),
+                    ])->columns(2),
             ]);
     }
 
@@ -57,47 +85,71 @@ class TicketResource extends Resource
     {
         return $table
             ->columns([
+                Tables\Columns\TextColumn::make('subject')
+                    ->label('נושא')
+                    ->searchable()
+                    ->weight('bold'),
                 Tables\Columns\TextColumn::make('customer.name')
-                    ->numeric()
+                    ->label('לקוח')
+                    ->searchable()
                     ->sortable(),
                 Tables\Columns\TextColumn::make('channel')
-                    ->badge(),
-                Tables\Columns\TextColumn::make('subject')
-                    ->searchable(),
-                Tables\Columns\TextColumn::make('status')
+                    ->label('ערוץ')
                     ->badge(),
                 Tables\Columns\TextColumn::make('priority')
-                    ->badge(),
+                    ->label('עדיפות')
+                    ->badge()
+                    ->color(fn (TicketPriority $state): string => match ($state) {
+                        TicketPriority::Low => 'gray',
+                        TicketPriority::Normal => 'info',
+                        TicketPriority::High => 'warning',
+                        TicketPriority::Urgent => 'danger',
+                    }),
+                Tables\Columns\TextColumn::make('status')
+                    ->label('סטטוס')
+                    ->badge()
+                    ->color(fn (TicketStatus $state): string => match ($state) {
+                        TicketStatus::Open => 'warning',
+                        TicketStatus::Pending => 'info',
+                        TicketStatus::OnHold => 'gray',
+                        TicketStatus::Resolved => 'success',
+                        TicketStatus::Closed => 'gray',
+                    }),
                 Tables\Columns\TextColumn::make('assignee')
-                    ->searchable(),
-                Tables\Columns\TextColumn::make('external_thread_ref')
-                    ->searchable(),
-                Tables\Columns\TextColumn::make('first_response_at')
-                    ->dateTime()
-                    ->sortable(),
-                Tables\Columns\TextColumn::make('resolved_at')
-                    ->dateTime()
-                    ->sortable(),
+                    ->label('אחראי')
+                    ->searchable()
+                    ->toggleable(),
                 Tables\Columns\TextColumn::make('created_at')
-                    ->dateTime()
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
+                    ->label('נפתח')
+                    ->date('d/m/Y')
+                    ->sortable(),
                 Tables\Columns\TextColumn::make('updated_at')
-                    ->dateTime()
+                    ->label('עודכן')
+                    ->dateTime('d/m/Y H:i')
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
             ])
+            ->defaultSort('created_at', 'desc')
             ->filters([
-                //
+                Tables\Filters\SelectFilter::make('status')
+                    ->label('סטטוס')
+                    ->options(TicketStatus::class),
+                Tables\Filters\SelectFilter::make('priority')
+                    ->label('עדיפות')
+                    ->options(TicketPriority::class),
+                Tables\Filters\SelectFilter::make('channel')
+                    ->label('ערוץ')
+                    ->options(TicketChannel::class),
             ])
             ->actions([
-                Tables\Actions\EditAction::make(),
+                Tables\Actions\EditAction::make()->label('עריכה'),
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([
-                    Tables\Actions\DeleteBulkAction::make(),
+                    Tables\Actions\DeleteBulkAction::make()->label('מחיקה'),
                 ]),
-            ]);
+            ])
+            ->emptyStateHeading('אין פניות עדיין');
     }
 
     public static function getRelations(): array

@@ -31,17 +31,37 @@ class IncidentResource extends Resource
     {
         return $form
             ->schema([
-                Forms\Components\Select::make('site_id')
-                    ->relationship('site', 'id')
-                    ->required(),
-                Forms\Components\DateTimePicker::make('started_at')
-                    ->required(),
-                Forms\Components\DateTimePicker::make('resolved_at'),
-                Forms\Components\Select::make('status')
-                    ->options(IncidentStatus::class)
-                    ->required(),
-                Forms\Components\Select::make('broadcast_id')
-                    ->relationship('broadcast', 'id'),
+                Forms\Components\Section::make('תקלה')
+                    ->schema([
+                        Forms\Components\Select::make('site_id')
+                            ->label('אתר')
+                            ->relationship('site', 'domain')
+                            ->searchable()
+                            ->preload()
+                            ->required(),
+                        Forms\Components\Select::make('status')
+                            ->label('סטטוס')
+                            ->options(IncidentStatus::class)
+                            ->required(),
+                    ])->columns(2),
+
+                Forms\Components\Section::make('זמנים')
+                    ->schema([
+                        Forms\Components\DateTimePicker::make('started_at')
+                            ->label('התחיל בתאריך')
+                            ->required(),
+                        Forms\Components\DateTimePicker::make('resolved_at')
+                            ->label('טופל בתאריך'),
+                    ])->columns(2),
+
+                Forms\Components\Section::make('קשרים')
+                    ->schema([
+                        Forms\Components\Select::make('broadcast_id')
+                            ->label('דיוור מקושר')
+                            ->relationship('broadcast', 'subject')
+                            ->searchable()
+                            ->preload(),
+                    ])->columns(2),
             ]);
     }
 
@@ -49,40 +69,52 @@ class IncidentResource extends Resource
     {
         return $table
             ->columns([
-                Tables\Columns\TextColumn::make('site.id')
-                    ->numeric()
-                    ->sortable(),
-                Tables\Columns\TextColumn::make('started_at')
-                    ->dateTime()
-                    ->sortable(),
-                Tables\Columns\TextColumn::make('resolved_at')
-                    ->dateTime()
+                Tables\Columns\TextColumn::make('site.domain')
+                    ->label('אתר')
+                    ->searchable()
                     ->sortable(),
                 Tables\Columns\TextColumn::make('status')
-                    ->badge(),
-                Tables\Columns\TextColumn::make('broadcast.id')
-                    ->numeric()
+                    ->label('סטטוס')
+                    ->badge()
+                    ->color(fn (IncidentStatus $state): string => match ($state) {
+                        IncidentStatus::Open => 'danger',
+                        IncidentStatus::Resolved => 'success',
+                    }),
+                Tables\Columns\TextColumn::make('started_at')
+                    ->label('התחיל')
+                    ->dateTime('d/m/Y H:i')
                     ->sortable(),
+                Tables\Columns\TextColumn::make('resolved_at')
+                    ->label('טופל')
+                    ->dateTime('d/m/Y H:i')
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
                 Tables\Columns\TextColumn::make('created_at')
-                    ->dateTime()
+                    ->label('נוצר')
+                    ->date('d/m/Y')
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
                 Tables\Columns\TextColumn::make('updated_at')
-                    ->dateTime()
+                    ->label('עודכן')
+                    ->dateTime('d/m/Y H:i')
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
             ])
+            ->defaultSort('started_at', 'desc')
             ->filters([
-                //
+                Tables\Filters\SelectFilter::make('status')
+                    ->label('סטטוס')
+                    ->options(IncidentStatus::class),
             ])
             ->actions([
-                Tables\Actions\EditAction::make(),
+                Tables\Actions\EditAction::make()->label('עריכה'),
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([
-                    Tables\Actions\DeleteBulkAction::make(),
+                    Tables\Actions\DeleteBulkAction::make()->label('מחיקה'),
                 ]),
-            ]);
+            ])
+            ->emptyStateHeading('אין תקלות עדיין');
     }
 
     public static function getRelations(): array

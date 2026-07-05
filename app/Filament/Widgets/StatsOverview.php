@@ -58,7 +58,7 @@ class StatsOverview extends BaseWidget
                 ->icon('heroicon-o-credit-card')
                 ->color('primary'),
 
-            Stat::make('כרטיסים פתוחים', $openTickets)
+            Stat::make('פניות פתוחות', $openTickets)
                 ->description('פניות שממתינות לטיפול')
                 ->icon('heroicon-o-lifebuoy')
                 ->color($openTickets > 0 ? 'warning' : 'success'),

@@ -27,24 +27,41 @@ class PlanResource extends Resource
 
     protected static ?int $navigationSort = 3;
 
+    protected static ?string $recordTitleAttribute = 'name';
+
     public static function form(Form $form): Form
     {
         return $form
             ->schema([
-                Forms\Components\TextInput::make('name')
-                    ->required(),
-                Forms\Components\TextInput::make('price_agorot')
-                    ->required()
-                    ->numeric(),
-                Forms\Components\Toggle::make('vat_applies')
-                    ->required(),
-                Forms\Components\Select::make('billing_interval')
-                    ->options(BillingInterval::class)
-                    ->required(),
-                Forms\Components\Textarea::make('description')
-                    ->columnSpanFull(),
-                Forms\Components\Toggle::make('active')
-                    ->required(),
+                Forms\Components\Section::make('פרטי התוכנית')
+                    ->description('שם, מחיר ותנאי חיוב')
+                    ->schema([
+                        Forms\Components\TextInput::make('name')
+                            ->label('שם התוכנית')
+                            ->required()
+                            ->maxLength(255),
+                        Forms\Components\TextInput::make('price_agorot')
+                            ->label('מחיר (אגורות)')
+                            ->helperText('100 אגורות = ₪1')
+                            ->numeric()
+                            ->required(),
+                        Forms\Components\Select::make('billing_interval')
+                            ->label('תדירות חיוב')
+                            ->options(BillingInterval::class)
+                            ->required(),
+                        Forms\Components\Toggle::make('vat_applies')
+                            ->label('חל מע״מ')
+                            ->inline(false)
+                            ->required(),
+                        Forms\Components\Toggle::make('active')
+                            ->label('פעילה')
+                            ->inline(false)
+                            ->required(),
+                        Forms\Components\Textarea::make('description')
+                            ->label('תיאור')
+                            ->rows(3)
+                            ->columnSpanFull(),
+                    ])->columns(2),
             ]);
     }
 
@@ -53,36 +70,52 @@ class PlanResource extends Resource
         return $table
             ->columns([
                 Tables\Columns\TextColumn::make('name')
-                    ->searchable(),
+                    ->label('שם התוכנית')
+                    ->searchable()
+                    ->sortable()
+                    ->weight('bold'),
                 Tables\Columns\TextColumn::make('price_agorot')
-                    ->numeric()
+                    ->label('מחיר')
+                    ->money('ILS', divideBy: 100)
                     ->sortable(),
-                Tables\Columns\IconColumn::make('vat_applies')
-                    ->boolean(),
                 Tables\Columns\TextColumn::make('billing_interval')
+                    ->label('תדירות חיוב')
                     ->badge(),
+                Tables\Columns\IconColumn::make('vat_applies')
+                    ->label('חל מע״מ')
+                    ->boolean(),
                 Tables\Columns\IconColumn::make('active')
+                    ->label('פעילה')
                     ->boolean(),
                 Tables\Columns\TextColumn::make('created_at')
-                    ->dateTime()
+                    ->label('נוצר')
+                    ->dateTime('d/m/Y H:i')
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
                 Tables\Columns\TextColumn::make('updated_at')
-                    ->dateTime()
+                    ->label('עודכן')
+                    ->dateTime('d/m/Y H:i')
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
             ])
+            ->defaultSort('name', 'asc')
             ->filters([
-                //
+                Tables\Filters\SelectFilter::make('billing_interval')
+                    ->label('תדירות חיוב')
+                    ->options(BillingInterval::class),
+                Tables\Filters\TernaryFilter::make('active')
+                    ->label('פעילה'),
             ])
             ->actions([
-                Tables\Actions\EditAction::make(),
+                Tables\Actions\EditAction::make()->label('עריכה'),
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([
-                    Tables\Actions\DeleteBulkAction::make(),
+                    Tables\Actions\DeleteBulkAction::make()->label('מחיקה'),
                 ]),
-            ]);
+            ])
+            ->emptyStateHeading('אין תוכניות עדיין')
+            ->emptyStateDescription('הקימו תוכנית חדשה דרך "תוכנית חדשה" בתפריט.');
     }
 
     public static function getRelations(): array

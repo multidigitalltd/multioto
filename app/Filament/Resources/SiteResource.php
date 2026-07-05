@@ -27,22 +27,49 @@ class SiteResource extends Resource
 
     protected static ?int $navigationSort = 4;
 
+    protected static ?string $recordTitleAttribute = 'domain';
+
     public static function form(Form $form): Form
     {
         return $form
             ->schema([
-                Forms\Components\Select::make('customer_id')
-                    ->relationship('customer', 'name')
-                    ->required(),
-                Forms\Components\TextInput::make('domain')
-                    ->required(),
-                Forms\Components\TextInput::make('hosting_ref'),
-                Forms\Components\TextInput::make('monitor_url'),
-                Forms\Components\Toggle::make('monitor_enabled')
-                    ->required(),
-                Forms\Components\Select::make('status')
-                    ->options(SiteStatus::class)
-                    ->required(),
+                Forms\Components\Section::make('האתר')
+                    ->description('לקוח ודומיין')
+                    ->schema([
+                        Forms\Components\Select::make('customer_id')
+                            ->label('לקוח')
+                            ->relationship('customer', 'name')
+                            ->searchable()
+                            ->preload()
+                            ->required(),
+                        Forms\Components\TextInput::make('domain')
+                            ->label('דומיין')
+                            ->required()
+                            ->maxLength(255),
+                    ])->columns(2),
+
+                Forms\Components\Section::make('ניטור')
+                    ->schema([
+                        Forms\Components\TextInput::make('monitor_url')
+                            ->label('כתובת לניטור')
+                            ->url()
+                            ->maxLength(255),
+                        Forms\Components\Toggle::make('monitor_enabled')
+                            ->label('ניטור פעיל')
+                            ->inline(false)
+                            ->required(),
+                    ])->columns(2),
+
+                Forms\Components\Section::make('אחסון וסטטוס')
+                    ->schema([
+                        Forms\Components\TextInput::make('hosting_ref')
+                            ->label('מזהה אחסון')
+                            ->maxLength(255),
+                        Forms\Components\Select::make('status')
+                            ->label('סטטוס')
+                            ->options(SiteStatus::class)
+                            ->required(),
+                    ])->columns(2),
             ]);
     }
 
@@ -51,38 +78,61 @@ class SiteResource extends Resource
         return $table
             ->columns([
                 Tables\Columns\TextColumn::make('customer.name')
-                    ->numeric()
+                    ->label('לקוח')
+                    ->searchable()
                     ->sortable(),
                 Tables\Columns\TextColumn::make('domain')
-                    ->searchable(),
-                Tables\Columns\TextColumn::make('hosting_ref')
-                    ->searchable(),
+                    ->label('דומיין')
+                    ->searchable()
+                    ->sortable()
+                    ->weight('bold'),
                 Tables\Columns\TextColumn::make('monitor_url')
-                    ->searchable(),
+                    ->label('כתובת לניטור')
+                    ->searchable()
+                    ->toggleable(),
                 Tables\Columns\IconColumn::make('monitor_enabled')
+                    ->label('ניטור פעיל')
                     ->boolean(),
                 Tables\Columns\TextColumn::make('status')
-                    ->badge(),
+                    ->label('סטטוס')
+                    ->badge()
+                    ->color(fn (SiteStatus $state): string => match ($state) {
+                        SiteStatus::Active => 'success',
+                        SiteStatus::Suspended => 'danger',
+                    }),
+                Tables\Columns\TextColumn::make('hosting_ref')
+                    ->label('מזהה אחסון')
+                    ->searchable()
+                    ->toggleable(isToggledHiddenByDefault: true),
                 Tables\Columns\TextColumn::make('created_at')
-                    ->dateTime()
+                    ->label('נוצר')
+                    ->dateTime('d/m/Y H:i')
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
                 Tables\Columns\TextColumn::make('updated_at')
-                    ->dateTime()
+                    ->label('עודכן')
+                    ->dateTime('d/m/Y H:i')
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
             ])
+            ->defaultSort('domain', 'asc')
             ->filters([
-                //
+                Tables\Filters\SelectFilter::make('status')
+                    ->label('סטטוס')
+                    ->options(SiteStatus::class),
+                Tables\Filters\TernaryFilter::make('monitor_enabled')
+                    ->label('ניטור פעיל'),
             ])
             ->actions([
-                Tables\Actions\EditAction::make(),
+                Tables\Actions\EditAction::make()->label('עריכה'),
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([
-                    Tables\Actions\DeleteBulkAction::make(),
+                    Tables\Actions\DeleteBulkAction::make()->label('מחיקה'),
                 ]),
-            ]);
+            ])
+            ->emptyStateHeading('אין אתרים עדיין')
+            ->emptyStateDescription('הקימו אתר חדש דרך "אתר חדש" בתפריט.');
     }
 
     public static function getRelations(): array

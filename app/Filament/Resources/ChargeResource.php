@@ -31,36 +31,64 @@ class ChargeResource extends Resource
     {
         return $form
             ->schema([
-                Forms\Components\Select::make('subscription_id')
-                    ->relationship('subscription', 'id')
-                    ->required(),
-                Forms\Components\TextInput::make('amount_agorot')
-                    ->required()
-                    ->numeric(),
-                Forms\Components\TextInput::make('vat_agorot')
-                    ->required()
-                    ->numeric()
-                    ->default(0),
-                Forms\Components\TextInput::make('total_agorot')
-                    ->required()
-                    ->numeric(),
-                Forms\Components\TextInput::make('currency')
-                    ->required(),
-                Forms\Components\Select::make('status')
-                    ->options(ChargeStatus::class)
-                    ->required(),
-                Forms\Components\TextInput::make('attempt_number')
-                    ->required()
-                    ->numeric()
-                    ->default(1),
-                Forms\Components\TextInput::make('cardcom_transaction_id'),
-                Forms\Components\TextInput::make('cardcom_response_code'),
-                Forms\Components\TextInput::make('failure_reason'),
-                Forms\Components\DatePicker::make('period_start')
-                    ->required(),
-                Forms\Components\DatePicker::make('period_end')
-                    ->required(),
-                Forms\Components\DateTimePicker::make('charged_at'),
+                Forms\Components\Section::make('מנוי וסכום')
+                    ->schema([
+                        Forms\Components\Select::make('subscription_id')
+                            ->label('מנוי')
+                            ->relationship('subscription', 'id')
+                            ->searchable()
+                            ->required(),
+                        Forms\Components\TextInput::make('amount_agorot')
+                            ->label('סכום (אגורות)')
+                            ->helperText('100 אגורות = ₪1')
+                            ->required()
+                            ->numeric(),
+                        Forms\Components\TextInput::make('vat_agorot')
+                            ->label('מע״מ (אגורות)')
+                            ->helperText('100 אגורות = ₪1')
+                            ->required()
+                            ->numeric()
+                            ->default(0),
+                        Forms\Components\TextInput::make('total_agorot')
+                            ->label('סה״כ (אגורות)')
+                            ->helperText('100 אגורות = ₪1')
+                            ->required()
+                            ->numeric(),
+                        Forms\Components\TextInput::make('currency')
+                            ->label('מטבע')
+                            ->required(),
+                    ])->columns(2),
+
+                Forms\Components\Section::make('תוצאת חיוב')
+                    ->schema([
+                        Forms\Components\Select::make('status')
+                            ->label('סטטוס')
+                            ->options(ChargeStatus::class)
+                            ->required(),
+                        Forms\Components\TextInput::make('attempt_number')
+                            ->label('מספר ניסיון')
+                            ->required()
+                            ->numeric()
+                            ->default(1),
+                        Forms\Components\TextInput::make('cardcom_transaction_id')
+                            ->label('מזהה עסקה (קארדקום)'),
+                        Forms\Components\TextInput::make('cardcom_response_code')
+                            ->label('קוד תגובה'),
+                        Forms\Components\TextInput::make('failure_reason')
+                            ->label('סיבת כישלון'),
+                        Forms\Components\DateTimePicker::make('charged_at')
+                            ->label('חויב בתאריך'),
+                    ])->columns(2),
+
+                Forms\Components\Section::make('תקופה')
+                    ->schema([
+                        Forms\Components\DatePicker::make('period_start')
+                            ->label('תחילת תקופה')
+                            ->required(),
+                        Forms\Components\DatePicker::make('period_end')
+                            ->label('סוף תקופה')
+                            ->required(),
+                    ])->columns(2),
             ]);
     }
 
@@ -68,60 +96,73 @@ class ChargeResource extends Resource
     {
         return $table
             ->columns([
-                Tables\Columns\TextColumn::make('subscription.id')
-                    ->numeric()
-                    ->sortable(),
-                Tables\Columns\TextColumn::make('amount_agorot')
-                    ->numeric()
-                    ->sortable(),
-                Tables\Columns\TextColumn::make('vat_agorot')
-                    ->numeric()
-                    ->sortable(),
+                Tables\Columns\TextColumn::make('subscription.customer.name')
+                    ->label('לקוח')
+                    ->searchable()
+                    ->sortable()
+                    ->weight('bold'),
                 Tables\Columns\TextColumn::make('total_agorot')
-                    ->numeric()
+                    ->label('סה״כ')
+                    ->money('ILS', divideBy: 100)
                     ->sortable(),
-                Tables\Columns\TextColumn::make('currency')
-                    ->searchable(),
                 Tables\Columns\TextColumn::make('status')
-                    ->badge(),
+                    ->label('סטטוס')
+                    ->badge()
+                    ->color(fn (ChargeStatus $state): string => match ($state) {
+                        ChargeStatus::Succeeded => 'success',
+                        ChargeStatus::Pending => 'warning',
+                        ChargeStatus::Failed => 'danger',
+                    }),
                 Tables\Columns\TextColumn::make('attempt_number')
-                    ->numeric()
+                    ->label('ניסיון')
                     ->sortable(),
-                Tables\Columns\TextColumn::make('cardcom_transaction_id')
-                    ->searchable(),
-                Tables\Columns\TextColumn::make('cardcom_response_code')
-                    ->searchable(),
-                Tables\Columns\TextColumn::make('failure_reason')
-                    ->searchable(),
                 Tables\Columns\TextColumn::make('period_start')
-                    ->date()
-                    ->sortable(),
-                Tables\Columns\TextColumn::make('period_end')
-                    ->date()
+                    ->label('תחילת תקופה')
+                    ->date('d/m/Y')
                     ->sortable(),
                 Tables\Columns\TextColumn::make('charged_at')
-                    ->dateTime()
+                    ->label('חויב')
+                    ->dateTime('d/m/Y H:i')
                     ->sortable(),
+                Tables\Columns\TextColumn::make('cardcom_transaction_id')
+                    ->label('מזהה עסקה (קארדקום)')
+                    ->searchable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+                Tables\Columns\TextColumn::make('cardcom_response_code')
+                    ->label('קוד תגובה')
+                    ->searchable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+                Tables\Columns\TextColumn::make('failure_reason')
+                    ->label('סיבת כישלון')
+                    ->searchable()
+                    ->toggleable(isToggledHiddenByDefault: true),
                 Tables\Columns\TextColumn::make('created_at')
-                    ->dateTime()
+                    ->label('נוצר')
+                    ->dateTime('d/m/Y H:i')
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
                 Tables\Columns\TextColumn::make('updated_at')
-                    ->dateTime()
+                    ->label('עודכן')
+                    ->dateTime('d/m/Y H:i')
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
             ])
+            ->defaultSort('created_at', 'desc')
             ->filters([
-                //
+                Tables\Filters\SelectFilter::make('status')
+                    ->label('סטטוס')
+                    ->options(ChargeStatus::class),
             ])
             ->actions([
-                Tables\Actions\EditAction::make(),
+                Tables\Actions\EditAction::make()->label('עריכה'),
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([
-                    Tables\Actions\DeleteBulkAction::make(),
+                    Tables\Actions\DeleteBulkAction::make()->label('מחיקה'),
                 ]),
-            ]);
+            ])
+            ->emptyStateHeading('אין חיובים עדיין')
+            ->emptyStateDescription('חיובים נוצרים אוטומטית על ידי מנוע החיוב.');
     }
 
     public static function getRelations(): array

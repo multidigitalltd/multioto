@@ -28,28 +28,46 @@ class BroadcastResource extends Resource
 
     protected static ?int $navigationSort = 3;
 
+    protected static ?string $recordTitleAttribute = 'subject';
+
     public static function form(Form $form): Form
     {
         return $form
             ->schema([
-                Forms\Components\TextInput::make('subject')
-                    ->required(),
-                Forms\Components\Textarea::make('body')
-                    ->required()
-                    ->columnSpanFull(),
-                Forms\Components\Select::make('channel')
-                    ->options(BroadcastChannel::class)
-                    ->required(),
-                Forms\Components\Textarea::make('segment')
-                    ->columnSpanFull(),
-                Forms\Components\Select::make('status')
-                    ->options(BroadcastStatus::class)
-                    ->required(),
-                Forms\Components\DateTimePicker::make('scheduled_at'),
-                Forms\Components\TextInput::make('sent_count')
-                    ->required()
-                    ->numeric()
-                    ->default(0),
+                Forms\Components\Section::make('תוכן הדיוור')
+                    ->schema([
+                        Forms\Components\TextInput::make('subject')
+                            ->label('נושא')
+                            ->required()
+                            ->maxLength(255),
+                        Forms\Components\Textarea::make('body')
+                            ->label('תוכן')
+                            ->required()
+                            ->columnSpanFull(),
+                        Forms\Components\Select::make('channel')
+                            ->label('ערוץ')
+                            ->options(BroadcastChannel::class)
+                            ->required(),
+                        Forms\Components\Textarea::make('segment')
+                            ->label('קהל יעד')
+                            ->helperText('הגדרת קהל יעד')
+                            ->columnSpanFull(),
+                    ])->columns(2),
+
+                Forms\Components\Section::make('תזמון וסטטוס')
+                    ->schema([
+                        Forms\Components\Select::make('status')
+                            ->label('סטטוס')
+                            ->options(BroadcastStatus::class)
+                            ->required(),
+                        Forms\Components\DateTimePicker::make('scheduled_at')
+                            ->label('מתוזמן לתאריך'),
+                        Forms\Components\TextInput::make('sent_count')
+                            ->label('נשלחו')
+                            ->required()
+                            ->numeric()
+                            ->default(0),
+                    ])->columns(2),
             ]);
     }
 
@@ -58,37 +76,58 @@ class BroadcastResource extends Resource
         return $table
             ->columns([
                 Tables\Columns\TextColumn::make('subject')
-                    ->searchable(),
+                    ->label('נושא')
+                    ->searchable()
+                    ->weight('bold'),
                 Tables\Columns\TextColumn::make('channel')
+                    ->label('ערוץ')
                     ->badge(),
                 Tables\Columns\TextColumn::make('status')
-                    ->badge(),
+                    ->label('סטטוס')
+                    ->badge()
+                    ->color(fn (BroadcastStatus $state): string => match ($state) {
+                        BroadcastStatus::Draft => 'gray',
+                        BroadcastStatus::Scheduled => 'info',
+                        BroadcastStatus::Sending => 'warning',
+                        BroadcastStatus::Sent => 'success',
+                    }),
                 Tables\Columns\TextColumn::make('scheduled_at')
-                    ->dateTime()
+                    ->label('מתוזמן')
+                    ->dateTime('d/m/Y H:i')
                     ->sortable(),
                 Tables\Columns\TextColumn::make('sent_count')
+                    ->label('נשלחו')
                     ->numeric()
                     ->sortable(),
                 Tables\Columns\TextColumn::make('created_at')
-                    ->dateTime()
+                    ->label('נוצר')
+                    ->date('d/m/Y')
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
                 Tables\Columns\TextColumn::make('updated_at')
-                    ->dateTime()
+                    ->label('עודכן')
+                    ->dateTime('d/m/Y H:i')
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
             ])
+            ->defaultSort('created_at', 'desc')
             ->filters([
-                //
+                Tables\Filters\SelectFilter::make('status')
+                    ->label('סטטוס')
+                    ->options(BroadcastStatus::class),
+                Tables\Filters\SelectFilter::make('channel')
+                    ->label('ערוץ')
+                    ->options(BroadcastChannel::class),
             ])
             ->actions([
-                Tables\Actions\EditAction::make(),
+                Tables\Actions\EditAction::make()->label('עריכה'),
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([
-                    Tables\Actions\DeleteBulkAction::make(),
+                    Tables\Actions\DeleteBulkAction::make()->label('מחיקה'),
                 ]),
-            ]);
+            ])
+            ->emptyStateHeading('אין דיוורים עדיין');
     }
 
     public static function getRelations(): array
