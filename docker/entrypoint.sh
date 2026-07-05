@@ -7,6 +7,18 @@
 #
 set -euo pipefail
 
+# Guard the classic bind-mount gotcha: if the host ./.env did not exist when
+# the stack came up, Docker creates it as a *directory*. Fail loudly with the
+# fix instead of silently booting without an APP_KEY.
+if [ -d .env ]; then
+    echo "ERROR: /app/.env is a directory, not a file." >&2
+    echo "On the host run:  rm -rf .env && cp .env.example .env  then 'docker compose up -d'." >&2
+    exit 1
+fi
+if [ ! -f .env ]; then
+    cp .env.example .env
+fi
+
 # Block until PostgreSQL accepts a connection (db:show connects and exits
 # non-zero when the server isn't reachable yet).
 wait_for_db() {

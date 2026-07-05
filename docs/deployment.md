@@ -28,9 +28,9 @@ docker compose up -d --build
 
 ליצירת משתמש אדמין ונתוני דמו (פעם אחת):
 ```bash
-docker compose exec app php artisan db:seed --force
+docker compose exec app php artisan app:create-admin
 ```
-משתמש ברירת מחדל: `admin@multi.digital` / `password` — **שנו סיסמה מיד**.
+הפקודה תשאל שם / מייל / סיסמה ותיצור משתמש אדמין. (בפרודקשן משתמשים ב-`app:create-admin` ולא ב-`db:seed`, כי ה-seeder כולל נתוני דמו התלויים ב-faker שאינו מותקן ב-`--no-dev`.)
 
 > שאר המדריך (Forge/Ploi, VPS ידני) הוא למי שרוצה שליטה מלאה. אם בחרתם א׳ או ב׳ — אתם מסודרים; דלגו ל"רשימת בדיקה אחרי פריסה".
 
