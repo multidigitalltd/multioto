@@ -41,7 +41,11 @@ class SendDunningNotificationJob implements ShouldQueue
             'name' => $customer->name,
             'plan' => $event->subscription->plan->name,
             'amount' => number_format(($event->charge?->total_agorot ?? $event->subscription->totalChargeAgorot()) / 100, 2),
-            'update_link' => URL::signedRoute('billing.update-card', ['customer' => $customer->id]),
+            'update_link' => URL::temporarySignedRoute(
+                'billing.update-card',
+                now()->addHours((int) config('billing.card_update_link_ttl_hours')),
+                ['customer' => $customer->id],
+            ),
         ];
 
         $subject = __("dunning.{$event->template_key}.subject", $replacements);

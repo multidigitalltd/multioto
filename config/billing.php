@@ -13,6 +13,10 @@ return [
 
     'currency' => 'ILS',
 
+    // How long a signed card-update link (embedded in dunning messages) stays
+    // valid. Short-lived so a forwarded/leaked message can't be reused forever.
+    'card_update_link_ttl_hours' => env('CARD_UPDATE_LINK_TTL_HOURS', 72),
+
     /*
      | Dunning state machine. Stage 0 means "healthy". A failed charge moves the
      | subscription to stage 1 immediately; each subsequent stage is entered when

@@ -5,7 +5,11 @@ services:
     build: .
     command: web
     ports:
-      - "8000:8000"
+      # Bind to localhost only. Docker's published-port iptables rules bypass
+      # ufw, so 0.0.0.0 would expose the app to the internet regardless of the
+      # firewall. A reverse proxy (Caddy on the docker network, or a host nginx
+      # on 127.0.0.1) is what actually faces the world.
+      - "127.0.0.1:8000:8000"
     env_file: .env
     environment:
       DB_CONNECTION: pgsql
