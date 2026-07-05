@@ -7,6 +7,7 @@ use App\Enums\MessageChannel;
 use App\Enums\MessageDirection;
 use App\Enums\TicketChannel;
 use App\Enums\TicketStatus;
+use App\Jobs\ClassifyTicketJob;
 use App\Models\Customer;
 use App\Models\Ticket;
 use App\Models\TicketMessage;
@@ -63,10 +64,16 @@ class TicketIntake
             ],
         );
 
-        // A new inbound message on a resolved/closed thread reopens it.
-        if ($message->wasRecentlyCreated
-            && in_array($ticket->status, [TicketStatus::Resolved, TicketStatus::Closed], true)) {
-            $ticket->update(['status' => TicketStatus::Open]);
+        if ($message->wasRecentlyCreated) {
+            // A new inbound message on a resolved/closed thread reopens it.
+            if (in_array($ticket->status, [TicketStatus::Resolved, TicketStatus::Closed], true)) {
+                $ticket->update(['status' => TicketStatus::Open]);
+            }
+
+            // Kick off optional Tier-1 AI (classification → draft reply). The
+            // job is a no-op when the AI layer is disabled, and never sends
+            // anything to the customer — drafts await agent approval.
+            ClassifyTicketJob::dispatch($ticket->id);
         }
 
         return $message;

@@ -70,6 +70,16 @@ return [
         'driver' => env('HOSTING_DRIVER', 'log'),
     ],
 
+    'ai' => [
+        // Optional Tier-1 AI (Stage 5). When api_key is empty the layer is a
+        // no-op — tickets are still handled manually, nothing breaks.
+        'enabled' => env('AI_ENABLED', false),
+        'api_key' => env('ANTHROPIC_API_KEY'),
+        'base_url' => env('ANTHROPIC_BASE_URL', 'https://api.anthropic.com'),
+        'model' => env('AI_MODEL', 'claude-opus-4-8'),
+        'effort' => env('AI_EFFORT', 'low'),
+    ],
+
     'monitoring' => [
         'interval_minutes' => env('MONITOR_INTERVAL_MINUTES', 5),
         'timeout_seconds' => env('MONITOR_TIMEOUT_SECONDS', 10),

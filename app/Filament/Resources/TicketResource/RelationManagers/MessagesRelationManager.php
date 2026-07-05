@@ -8,6 +8,7 @@ use App\Enums\MessageDirection;
 use App\Enums\TicketChannel;
 use App\Jobs\SendTicketReplyJob;
 use App\Models\CannedResponse;
+use App\Models\TicketMessage;
 use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Resources\RelationManagers\RelationManager;
@@ -92,6 +93,39 @@ class MessagesRelationManager extends RelationManager
                             SendTicketReplyJob::dispatch($record->id);
                         }
                     }),
+
+                // Human-in-the-loop for the AI layer: opens the reply form
+                // pre-filled with the latest AI draft. The agent reviews/edits
+                // and only then sends — the AI never messages a customer itself.
+                Tables\Actions\Action::make('approveAiDraft')
+                    ->label('אישור טיוטת AI')
+                    ->icon('heroicon-o-sparkles')
+                    ->visible(fn () => $this->latestAiDraft() !== null)
+                    ->form([
+                        Forms\Components\Select::make('channel')
+                            ->label('ערוץ')
+                            ->options([
+                                MessageChannel::Whatsapp->value => 'וואטסאפ',
+                                MessageChannel::Email->value => 'מייל',
+                            ])
+                            ->default(fn () => $this->defaultReplyChannel())
+                            ->required(),
+                        Forms\Components\Textarea::make('body')
+                            ->label('תוכן (ניתן לעריכה לפני שליחה)')
+                            ->default(fn () => $this->extractDraftReply($this->latestAiDraft()))
+                            ->required()
+                            ->rows(6),
+                    ])
+                    ->action(function (array $data): void {
+                        $message = $this->getOwnerRecord()->messages()->create([
+                            'direction' => MessageDirection::Outbound,
+                            'channel' => MessageChannel::from($data['channel']),
+                            'body' => $data['body'],
+                            'author' => MessageAuthor::Agent,
+                        ]);
+
+                        SendTicketReplyJob::dispatch($message->id);
+                    }),
             ])
             ->actions([])
             ->bulkActions([]);
@@ -106,5 +140,32 @@ class MessagesRelationManager extends RelationManager
             TicketChannel::Whatsapp => MessageChannel::Whatsapp->value,
             default => MessageChannel::Email->value,
         };
+    }
+
+    /**
+     * The most recent unsent AI draft on this ticket, if any.
+     */
+    protected function latestAiDraft(): ?TicketMessage
+    {
+        return $this->getOwnerRecord()->messages()
+            ->where('author', MessageAuthor::Ai)
+            ->where('channel', MessageChannel::InternalNote)
+            ->where('body', 'like', '%טיוטת תשובה%')
+            ->latest('created_at')
+            ->first();
+    }
+
+    /**
+     * Strip the "🤖 טיוטת תשובה …:" preamble to recover the raw reply text.
+     */
+    protected function extractDraftReply(?TicketMessage $draft): string
+    {
+        if (! $draft) {
+            return '';
+        }
+
+        $parts = explode("\n\n", $draft->body, 2);
+
+        return trim($parts[1] ?? $draft->body);
     }
 }
