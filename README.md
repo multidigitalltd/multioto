@@ -13,7 +13,7 @@
 ```bash
 git clone https://github.com/multidigitalltd/multioto.git
 cd multioto
-cp .env.example .env
+cp .env.docker .env          # הגדרות Docker מוכנות (PostgreSQL/Redis/דומיין)
 docker compose up -d --build
 docker compose exec app php artisan app:create-admin   # יוצר משתמש אדמין (שם/מייל/סיסמה)
 ```
