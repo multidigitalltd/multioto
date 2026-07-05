@@ -1,0 +1,32 @@
+<?php
+
+namespace App\Providers;
+
+use App\Services\Hosting\HostingClient;
+use App\Services\Hosting\LogHostingClient;
+use Illuminate\Support\ServiceProvider;
+
+class AppServiceProvider extends ServiceProvider
+{
+    /**
+     * Register any application services.
+     */
+    public function register(): void
+    {
+        // The concrete hosting panel API is still an open decision (§13).
+        // Swap the driver here once it lands; 'log' records intents only.
+        $this->app->bind(HostingClient::class, function () {
+            return match (config('billing.hosting.driver')) {
+                default => new LogHostingClient,
+            };
+        });
+    }
+
+    /**
+     * Bootstrap any application services.
+     */
+    public function boot(): void
+    {
+        //
+    }
+}
