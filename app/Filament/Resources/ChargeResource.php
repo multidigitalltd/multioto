@@ -15,7 +15,17 @@ class ChargeResource extends Resource
 {
     protected static ?string $model = Charge::class;
 
-    protected static ?string $navigationIcon = 'heroicon-o-rectangle-stack';
+    protected static ?string $navigationIcon = 'heroicon-o-credit-card';
+
+    protected static ?string $navigationLabel = 'חיובים';
+
+    protected static ?string $modelLabel = 'חיוב';
+
+    protected static ?string $pluralModelLabel = 'חיובים';
+
+    protected static ?string $navigationGroup = 'כספים';
+
+    protected static ?int $navigationSort = 1;
 
     public static function form(Form $form): Form
     {

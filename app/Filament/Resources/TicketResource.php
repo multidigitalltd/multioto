@@ -17,7 +17,17 @@ class TicketResource extends Resource
 {
     protected static ?string $model = Ticket::class;
 
-    protected static ?string $navigationIcon = 'heroicon-o-rectangle-stack';
+    protected static ?string $navigationIcon = 'heroicon-o-lifebuoy';
+
+    protected static ?string $navigationLabel = 'כרטיסים';
+
+    protected static ?string $modelLabel = 'כרטיס';
+
+    protected static ?string $pluralModelLabel = 'כרטיסים';
+
+    protected static ?string $navigationGroup = 'תמיכה';
+
+    protected static ?int $navigationSort = 1;
 
     public static function form(Form $form): Form
     {

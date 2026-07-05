@@ -16,7 +16,17 @@ class BroadcastResource extends Resource
 {
     protected static ?string $model = Broadcast::class;
 
-    protected static ?string $navigationIcon = 'heroicon-o-rectangle-stack';
+    protected static ?string $navigationIcon = 'heroicon-o-megaphone';
+
+    protected static ?string $navigationLabel = 'דיוורים';
+
+    protected static ?string $modelLabel = 'דיוור';
+
+    protected static ?string $pluralModelLabel = 'דיוורים';
+
+    protected static ?string $navigationGroup = 'תמיכה';
+
+    protected static ?int $navigationSort = 3;
 
     public static function form(Form $form): Form
     {

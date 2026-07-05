@@ -14,7 +14,17 @@ class CannedResponseResource extends Resource
 {
     protected static ?string $model = CannedResponse::class;
 
-    protected static ?string $navigationIcon = 'heroicon-o-rectangle-stack';
+    protected static ?string $navigationIcon = 'heroicon-o-chat-bubble-bottom-center-text';
+
+    protected static ?string $navigationLabel = 'תבניות מענה';
+
+    protected static ?string $modelLabel = 'תבנית מענה';
+
+    protected static ?string $pluralModelLabel = 'תבניות מענה';
+
+    protected static ?string $navigationGroup = 'תמיכה';
+
+    protected static ?int $navigationSort = 2;
 
     public static function form(Form $form): Form
     {

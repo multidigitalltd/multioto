@@ -15,7 +15,17 @@ class SubscriptionResource extends Resource
 {
     protected static ?string $model = Subscription::class;
 
-    protected static ?string $navigationIcon = 'heroicon-o-rectangle-stack';
+    protected static ?string $navigationIcon = 'heroicon-o-arrow-path-rounded-square';
+
+    protected static ?string $navigationLabel = 'מנויים';
+
+    protected static ?string $modelLabel = 'מנוי';
+
+    protected static ?string $pluralModelLabel = 'מנויים';
+
+    protected static ?string $navigationGroup = 'ניהול';
+
+    protected static ?int $navigationSort = 2;
 
     public static function form(Form $form): Form
     {

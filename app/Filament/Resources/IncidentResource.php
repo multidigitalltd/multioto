@@ -15,7 +15,17 @@ class IncidentResource extends Resource
 {
     protected static ?string $model = Incident::class;
 
-    protected static ?string $navigationIcon = 'heroicon-o-rectangle-stack';
+    protected static ?string $navigationIcon = 'heroicon-o-exclamation-triangle';
+
+    protected static ?string $navigationLabel = 'תקלות';
+
+    protected static ?string $modelLabel = 'תקלה';
+
+    protected static ?string $pluralModelLabel = 'תקלות';
+
+    protected static ?string $navigationGroup = 'ניטור';
+
+    protected static ?int $navigationSort = 1;
 
     public static function form(Form $form): Form
     {
