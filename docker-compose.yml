@@ -1,0 +1,86 @@
+# Multioto — full stack in one command:  docker compose up -d --build
+# Brings up the app, queue worker, scheduler, PostgreSQL and Redis together.
+services:
+  app:
+    build: .
+    command: web
+    ports:
+      - "8000:8000"
+    env_file: .env
+    environment:
+      DB_CONNECTION: pgsql
+      DB_HOST: postgres
+      DB_PORT: 5432
+      REDIS_HOST: redis
+      QUEUE_CONNECTION: redis
+      CACHE_STORE: redis
+      DB_DATABASE: multioto
+      DB_USERNAME: multioto
+      DB_PASSWORD: multioto
+    volumes:
+      # Bind .env so the app key generated on first boot persists on the host,
+      # and mount storage so uploads/logs survive container rebuilds.
+      - ./.env:/app/.env
+      - storage:/app/storage
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+
+  queue:
+    build: .
+    command: queue
+    env_file: .env
+    environment:
+      DB_CONNECTION: pgsql
+      DB_HOST: postgres
+      REDIS_HOST: redis
+      QUEUE_CONNECTION: redis
+      CACHE_STORE: redis
+      DB_DATABASE: multioto
+      DB_USERNAME: multioto
+      DB_PASSWORD: multioto
+    volumes:
+      - ./.env:/app/.env
+      - storage:/app/storage
+    depends_on:
+      - app
+    restart: unless-stopped
+
+  scheduler:
+    build: .
+    command: scheduler
+    env_file: .env
+    environment:
+      DB_CONNECTION: pgsql
+      DB_HOST: postgres
+      REDIS_HOST: redis
+      QUEUE_CONNECTION: redis
+      CACHE_STORE: redis
+      DB_DATABASE: multioto
+      DB_USERNAME: multioto
+      DB_PASSWORD: multioto
+    volumes:
+      - ./.env:/app/.env
+      - storage:/app/storage
+    depends_on:
+      - app
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: multioto
+      POSTGRES_USER: multioto
+      POSTGRES_PASSWORD: multioto
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  storage:

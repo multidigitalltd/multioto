@@ -1,0 +1,8 @@
+.git
+vendor
+node_modules
+public/build
+storage/*.key
+database/*.sqlite*
+.env
+tests

@@ -6,7 +6,22 @@
 
 > **התקנה בפרודקשן:** זו אפליקציית Laravel עצמאית (לא תבנית וורדפרס). פרסו ב-Laravel Forge/Ploi ישירות מ-GitHub, או ידנית לפי [docs/deployment.md](docs/deployment.md). FlyWP מארח את אתרי הלקוחות שהמערכת משעה/משחזרת — לא את הפאנל עצמו.
 
-## התקנה מקומית
+## התקנה — הכי פשוט
+
+**פקודה אחת עם Docker** (מקים הכל: אפליקציה + PostgreSQL + Redis + תור + scheduler):
+
+```bash
+git clone https://github.com/multidigitalltd/multioto.git
+cd multioto
+cp .env.example .env
+docker compose up -d --build
+docker compose exec app php artisan db:seed --force   # פעם אחת — אדמין + דמו
+```
+פתחו `http://localhost:8000/admin` · משתמש: `admin@multi.digital` / `password` (שנו מיד).
+
+**או מנוהל בלי שרתים:** [Laravel Cloud](https://cloud.laravel.com) → חברו את ה-GitHub repo. פרטים ואפשרויות נוספות: [docs/deployment.md](docs/deployment.md).
+
+## התקנה מקומית (לפיתוח, בלי Docker)
 
 ```bash
 composer install
