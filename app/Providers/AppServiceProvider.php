@@ -5,6 +5,7 @@ namespace App\Providers;
 use App\Services\Hosting\FlyWpHostingClient;
 use App\Services\Hosting\HostingClient;
 use App\Services\Hosting\LogHostingClient;
+use Illuminate\Support\Facades\URL;
 use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
@@ -29,6 +30,11 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        //
+        // Force HTTPS for all generated URLs (signed card-update links, assets,
+        // redirects) whenever the app is served over TLS — behind Caddy/nginx
+        // the app itself sees plain HTTP, so key off APP_URL.
+        if (str_starts_with((string) config('app.url'), 'https://')) {
+            URL::forceScheme('https');
+        }
     }
 }

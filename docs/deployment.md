@@ -36,6 +36,48 @@ docker compose exec app php artisan db:seed --force
 
 ---
 
+## דומיין + HTTPS (app.multidigital.co.il)
+
+1. הפנו רשומת **A** של `app.multidigital.co.il` ל-IP של השרת.
+2. ב-`.env`: `APP_URL=https://app.multidigital.co.il` ו-`APP_DOMAIN=app.multidigital.co.il`.
+3. הריצו עם ה-reverse proxy המובנה (Caddy — תעודת SSL אוטומטית מ-Let's Encrypt):
+   ```bash
+   docker compose --profile proxy up -d --build
+   ```
+   Caddy מאזין ב-80/443 ומפנה ל-`app:8000` עם HTTPS אוטומטי. זהו — הכתובת עולה מאובטחת.
+
+> **אם כבר יש reverse proxy בשרת** (nginx/Traefik/פאנל אחר) — אל תפעילו את פרופיל `proxy`; פשוט הפנו את ה-proxy הקיים ל-`http://127.0.0.1:8000`.
+
+---
+
+## הרצה לצד אפליקציית Docker אחרת שכבר על השרת
+
+**לא צריך "Docker נפרד".** Docker אחד מריץ כמה מערכות במקביל — כל `docker compose` הוא פרויקט מבודד משלו (רשת + volumes נפרדים). רק שימו לב לשניים:
+
+- **התנגשות פורטים:** אם 80/443 כבר תפוסים ע"י המערכת האחרת, אל תפעילו את פרופיל `proxy` של Multioto. במקום זה חברו את ה-proxy הקיים (או ה-Caddy/Traefik המשותף) אל `app:8000`, או שנו את המיפוי ב-`docker-compose.yml` (למשל `"8001:8000"`).
+- **שם פרויקט:** הריצו מתוך תיקיית `multioto` (שם הפרויקט נגזר מהתיקייה) כדי שה-volumes לא יתנגשו עם האפליקציה האחרת.
+
+בקצרה: אותו Docker, פרויקט נפרד. אין צורך בשרת/דוקר שני.
+
+---
+
+## עדכון גרסה מ-GitHub (בלי למחוק תכנים)
+
+יש סקריפט עדכון בטוח: `update.sh`. הוא מושך את הקוד העדכני ומריץ **רק מיגרציות חדשות** — אף פעם לא מוחק טבלאות או נתונים. הנתונים (PostgreSQL) והקבצים שהועלו נשמרים ב-Docker volumes (`pgdata`, `storage`) ושורדים כל עדכון ו-rebuild.
+
+```bash
+cd multioto
+./update.sh            # התקנת Docker
+# או:
+./update.sh --native   # התקנת Forge/Ploi/VPS ללא Docker
+```
+
+מכיוון שאתם מתכננים הרבה עדכונים — זה התהליך שתריצו בכל פעם. **בלי `migrate:fresh` ובלי `db:seed`** בעדכון, ולכן שום תוכן לא נמחק.
+
+> טיפ: אפשר להריץ `./update.sh` דרך cron או webhook של GitHub Actions לפריסה אוטומטית בכל push ל-`main`.
+
+---
+
 ## מה המערכת צריכה כדי לרוץ
 
 | רכיב | דרישה |

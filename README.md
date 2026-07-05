@@ -2,7 +2,7 @@
 
 מונוליט Laravel שמחליף את הניהול הידני (וורדפרס + ווקומרס): חיובים מחזוריים בקארדקום, חשבוניות בלינט, תמיכה אומניצ'אנל בוואטסאפ (WAHA) ומייל, מכונת דאנינג אוטומטית עם השעיה/שחזור אתרים, ניטור אתרים ודיוור.
 
-📄 **התוכנית המלאה:** [docs/architecture.md](docs/architecture.md) · **מדריך התקנה ופריסה:** [docs/deployment.md](docs/deployment.md) · **תקן הפיתוח המחייב:** [docs/multi-digital-standard.md](docs/multi-digital-standard.md) · **כללי עבודה לקוד:** [CLAUDE.md](CLAUDE.md)
+📄 **התוכנית המלאה:** [docs/architecture.md](docs/architecture.md) · **מדריך התקנה ופריסה:** [docs/deployment.md](docs/deployment.md) · **אבטחה:** [docs/security.md](docs/security.md) · **תקן הפיתוח המחייב:** [docs/multi-digital-standard.md](docs/multi-digital-standard.md) · **כללי עבודה לקוד:** [CLAUDE.md](CLAUDE.md)
 
 > **התקנה בפרודקשן:** זו אפליקציית Laravel עצמאית (לא תבנית וורדפרס). פרסו ב-Laravel Forge/Ploi ישירות מ-GitHub, או ידנית לפי [docs/deployment.md](docs/deployment.md). FlyWP מארח את אתרי הלקוחות שהמערכת משעה/משחזרת — לא את הפאנל עצמו.
 

@@ -81,6 +81,29 @@ services:
     image: redis:7
     restart: unless-stopped
 
+  # Optional HTTPS reverse proxy for your domain (app.multidigital.co.il).
+  # Enable with:  docker compose --profile proxy up -d
+  # Caddy fetches a free Let's Encrypt certificate automatically once the
+  # domain's DNS A record points at this server. Skip this service if the
+  # server already has its own reverse proxy — just point it at app:8000.
+  caddy:
+    image: caddy:2
+    profiles: ["proxy"]
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      APP_DOMAIN: "${APP_DOMAIN:-app.multidigital.co.il}"
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+    restart: unless-stopped
+
 volumes:
   pgdata:
   storage:
+  caddy_data:
+  caddy_config:
