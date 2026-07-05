@@ -28,6 +28,8 @@ class SettingsServiceProvider extends ServiceProvider
         'flywp.server_id' => 'billing.hosting.flywp.server_id',
         'waha.api_key' => 'billing.waha.api_key',
         'postmark.token' => 'services.postmark.token',
+        'ai.enabled' => 'billing.ai.enabled',
+        'ai.api_key' => 'billing.ai.api_key',
     ];
 
     public function boot(): void
