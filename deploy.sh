@@ -24,6 +24,9 @@ php artisan filament:assets
 echo "→ Running database migrations"
 php artisan migrate --force
 
+echo "→ Seeding starter plans (idempotent)"
+php artisan app:seed-plans || true
+
 echo "→ Caching config, routes, views"
 php artisan optimize
 

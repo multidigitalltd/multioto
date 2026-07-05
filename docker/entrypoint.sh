@@ -45,6 +45,10 @@ case "${1:-web}" in
         wait_for_db
         echo "→ Running migrations"
         php artisan migrate --force
+        # Ensure the panel is usable out of the box: starter plans so the
+        # onboarding wizard has something to pick. Idempotent — never overwrites
+        # plans the team has edited.
+        php artisan app:seed-plans || true
         # Clear any stale caches but do NOT config:cache — caching would freeze
         # whatever DB_CONNECTION is in .env (sqlite by default) instead of the
         # pgsql value the compose environment injects. Reading config live keeps
