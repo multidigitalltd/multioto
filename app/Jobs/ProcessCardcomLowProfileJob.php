@@ -73,6 +73,14 @@ class ProcessCardcomLowProfileJob implements ShouldQueue
 
                 if ($subscription->status === SubscriptionStatus::Trialing) {
                     $subscription->update(['status' => SubscriptionStatus::Active]);
+
+                    // Immediate-start signup: if the first charge is already due,
+                    // collect it now instead of waiting for the scheduler.
+                    if ($subscription->next_charge_at && $subscription->next_charge_at->isPast()) {
+                        ChargeSubscriptionJob::dispatch($subscription->id);
+                    }
+
+                    return;
                 }
 
                 if (in_array($subscription->status, [SubscriptionStatus::PastDue, SubscriptionStatus::Suspended], true)) {

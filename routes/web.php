@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\BillingController;
+use App\Http\Controllers\SignupController;
 use App\Http\Controllers\SupportFormController;
 use App\Http\Controllers\Webhooks\CardcomWebhookController;
 use App\Http\Controllers\Webhooks\EmailWebhookController;
@@ -17,6 +18,16 @@ Route::get('/support', [SupportFormController::class, 'show'])->name('support.fo
 Route::post('/support', [SupportFormController::class, 'store'])
     ->middleware('throttle:5,1')
     ->name('support.form.store');
+
+/*
+ | Public self-signup — the link the team sends to a prospect. The customer
+ | picks a plan and enters their details, then is handed off to Cardcom's hosted
+ | page to enter a card. CSRF-protected, rate limited, honeypot-guarded.
+ */
+Route::get('/join', [SignupController::class, 'show'])->name('signup');
+Route::post('/join', [SignupController::class, 'store'])
+    ->middleware('throttle:8,1')
+    ->name('signup.store');
 
 /*
  | Customer-facing billing links (embedded in dunning messages).

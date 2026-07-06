@@ -137,6 +137,36 @@ class WebhookTest extends TestCase
         Queue::assertNotPushed(ChargeSubscriptionJob::class);
     }
 
+    public function test_low_profile_charges_a_self_signup_subscription_immediately_when_due(): void
+    {
+        Queue::fake([ChargeSubscriptionJob::class]);
+
+        // Self-signup: Trialing, no token, first charge already due (now).
+        $customer = Customer::factory()->create();
+        $subscription = Subscription::factory()->create([
+            'customer_id' => $customer->id,
+            'token_id' => null,
+            'status' => SubscriptionStatus::Trialing,
+            'next_charge_at' => now()->subMinute(),
+        ]);
+
+        [$event] = WebhookEvent::record(
+            WebhookSource::Cardcom,
+            'low_profile_completed',
+            'lp-signup',
+            [
+                'LowProfileId' => 'lp-signup',
+                'ReturnValue' => (string) $customer->id,
+                'TokenInfo' => ['Token' => 'signup-token', 'CardLast4Digits' => '4321'],
+            ],
+        );
+
+        (new ProcessCardcomLowProfileJob($event->id))->handle();
+
+        $this->assertSame(SubscriptionStatus::Active, $subscription->fresh()->status);
+        Queue::assertPushed(ChargeSubscriptionJob::class, fn ($job) => $job->subscriptionId === $subscription->id);
+    }
+
     public function test_waha_message_creates_a_ticket_and_matches_customer_by_phone(): void
     {
         $customer = Customer::factory()->create(['phone' => '+972501234567', 'whatsapp_jid' => null]);
