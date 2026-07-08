@@ -5,6 +5,7 @@ namespace App\Services\Cardcom;
 use App\Models\PaymentToken;
 use App\Services\Health\ConnectionResult;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 /**
@@ -52,9 +53,19 @@ class CardcomClient
                 return ConnectionResult::ok('החיבור תקין — המסוף אימת את הבקשה');
             }
 
+            // Log the full raw response so we can diagnose from real data, not
+            // guesses. A token-only response carries no card data.
+            Log::warning('Cardcom LowProfile/Create (CreateTokenOnly) returned a non-zero code', [
+                'response' => $response,
+            ]);
+
             $desc = $response['Description'] ?? 'תשובה לא צפויה מקארדקום';
 
-            return ConnectionResult::fail("קארדקום דחתה את הבקשה (קוד {$code}): {$desc}".$this->hintForCode($code));
+            // Surface the full raw JSON on screen too, so the exact reason is
+            // visible without digging in the server logs.
+            $raw = Str::limit(json_encode($response, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), 400);
+
+            return ConnectionResult::fail("קארדקום דחתה את הבקשה (קוד {$code}): {$desc}".$this->hintForCode($code)."\n\nתשובה גולמית: {$raw}");
         } catch (\Throwable $e) {
             return ConnectionResult::fail('לא ניתן להתחבר לקארדקום: '.Str::limit(trim($e->getMessage()) ?: class_basename($e), 120));
         }
@@ -163,15 +174,14 @@ class CardcomClient
 
     /**
      * Actionable Hebrew hint for well-known Cardcom response codes. 5046 ("No
-     * InvoiceHead data was send") is not a payload error — per the v11 spec our
-     * request is valid and Document is optional. It means the TERMINAL is set to
-     * auto-produce a document/invoice, so Cardcom demands invoice-head data.
-     * Since we issue invoices via Linet, that terminal setting should be off.
+     * InvoiceHead data was send") means Cardcom tried to produce a document —
+     * even though this request sends no Document object (we invoice via Linet).
+     * The raw response is logged and surfaced so the real trigger is visible.
      */
     protected function hintForCode(string $code): string
     {
         return match ($code) {
-            '5046' => ' — נראה שהמסוף מוגדר בקארדקום להפקת מסמך/חשבונית אוטומטית. מכיוון שהחשבוניות מונפקות אצלנו דרך לינט, יש לכבות "הפקת מסמך אוטומטית" בהגדרות המסוף (או לפנות לתמיכת קארדקום).',
+            '5046' => ' — קארדקום ניסתה להפיק מסמך, למרות שאיננו שולחים אובייקט Document (החשבוניות מונפקות בלינט). ראו את התשובה הגולמית למטה ושלחו אותה אליי לאבחון מדויק.',
             default => '',
         };
     }
