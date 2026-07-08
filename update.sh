@@ -13,10 +13,15 @@ set -euo pipefail
 
 MODE="${1:-}"
 
-echo "→ Fetching latest code"
-git fetch origin
-git checkout main
-git pull --ff-only origin main
+# Deploy the branch the server is currently on (override with DEPLOY_BRANCH).
+# We intentionally do NOT force-checkout a fixed branch: an empty/placeholder
+# branch would wipe the working tree. Whatever is deployed here gets updated.
+DEPLOY_BRANCH="${DEPLOY_BRANCH:-$(git rev-parse --abbrev-ref HEAD)}"
+
+echo "→ Fetching latest code (branch: $DEPLOY_BRANCH)"
+git fetch origin "$DEPLOY_BRANCH"
+git checkout "$DEPLOY_BRANCH"
+git pull --ff-only origin "$DEPLOY_BRANCH"
 
 # Stamp the deployed version so the admin panel's "מערכת ועדכונים" screen shows it.
 mkdir -p ops
