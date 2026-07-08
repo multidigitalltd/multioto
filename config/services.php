@@ -16,6 +16,10 @@ return [
 
     'postmark' => [
         'token' => env('POSTMARK_TOKEN'),
+        // Account-level token (Account API). Optional — only used to sync the
+        // list of verified Sender Signatures / Domains into the mail settings
+        // screen. It is NOT used to send mail; sending uses the server token.
+        'account_token' => env('POSTMARK_ACCOUNT_TOKEN'),
     ],
 
     'ses' => [
