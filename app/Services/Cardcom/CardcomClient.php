@@ -82,19 +82,29 @@ class CardcomClient
 
     /**
      * Charge a stored token. Amount is integer agorot; Cardcom expects ILS units.
+     *
+     * Per Cardcom v11 docs the token is a TOP-LEVEL `Token` field (not under
+     * `Advanced`). We deliberately omit the `Document` object — invoices are
+     * issued separately through Linet after a successful charge (§7), not by
+     * Cardcom. ExternalUniqueTranId gives Cardcom server-side idempotency.
      */
     public function chargeToken(PaymentToken $token, int $totalAgorot, string $description, string $externalUniqueId): ChargeResult
     {
-        $response = $this->request('Transactions/Transaction', [
+        $payload = [
+            'Token' => $token->cardcom_token,
             'Amount' => round($totalAgorot / 100, 2),
-            'ExternalUniqueTranId' => $externalUniqueId,
-            'Advanced' => [
-                'Token' => $token->cardcom_token,
-                'JValidateType' => null,
-            ],
             'ISOCoinId' => 1, // ILS
+            'ExternalUniqueTranId' => $externalUniqueId,
             'ProductName' => $description,
-        ]);
+        ];
+
+        // Include the stored expiry (MMYY) when we have it — some terminals
+        // require it alongside the token.
+        if ($token->expiry_month && $token->expiry_year) {
+            $payload['CardExpirationMMYY'] = sprintf('%02d%02d', $token->expiry_month, $token->expiry_year % 100);
+        }
+
+        $response = $this->request('Transactions/Transaction', $payload);
 
         $code = (string) ($response['ResponseCode'] ?? '');
 
