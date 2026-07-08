@@ -10,6 +10,7 @@ use App\Providers\SettingsServiceProvider;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Livewire\Livewire;
 use Tests\TestCase;
 
@@ -52,6 +53,9 @@ class SettingsTest extends TestCase
     public function test_saving_one_integration_group_does_not_touch_other_groups(): void
     {
         Setting::put('waha.api_key', 'existing-waha');
+
+        // Saving now runs a live connection check — fake Cardcom's endpoint.
+        Http::fake(['*/LowProfile/Create' => Http::response(['ResponseCode' => 0, 'Url' => 'https://secure.cardcom.solutions/x'])]);
 
         $this->actingAs(User::factory()->create());
 

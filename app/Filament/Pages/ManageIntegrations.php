@@ -3,6 +3,8 @@
 namespace App\Filament\Pages;
 
 use App\Models\Setting;
+use App\Providers\SettingsServiceProvider;
+use App\Services\Health\IntegrationHealth;
 use Filament\Forms\Components\Actions\Action as FormAction;
 use Filament\Forms\Components\Section;
 use Filament\Forms\Components\TextInput;
@@ -57,6 +59,17 @@ class ManageIntegrations extends Page implements HasForms
             'label' => 'Postmark',
             'keys' => ['postmark.token'],
         ],
+    ];
+
+    /**
+     * Integration group => IntegrationHealth check key. Groups missing here have
+     * no live connection test (a save just confirms it was stored).
+     */
+    public const HEALTH_KEYS = [
+        'cardcom' => 'cardcom',
+        'linet' => 'linet',
+        'waha' => 'waha',
+        'postmark' => 'email',
     ];
 
     /** @var array<string, mixed> */
@@ -150,11 +163,40 @@ class ManageIntegrations extends Page implements HasForms
             }
         }
 
-        Notification::make()
-            ->title("מפתחות {$meta['label']} נשמרו והוצפנו")
-            ->body('אפשר לאמת אותם במסך "בדיקת חיבורים".')
-            ->success()
-            ->send();
+        // Overlay the just-saved values onto config so the connection test below
+        // sees them (the boot-time overlay ran with the old values).
+        (new SettingsServiceProvider(app()))->boot();
+
+        $this->notifySaved($meta['label'], $group);
+    }
+
+    /**
+     * Save confirmation — and, when the integration is testable, the live result
+     * of a connection check run immediately after saving.
+     */
+    protected function notifySaved(string $label, string $group): void
+    {
+        $healthKey = self::HEALTH_KEYS[$group] ?? null;
+
+        if ($healthKey === null) {
+            Notification::make()->title("מפתחות {$label} נשמרו והוצפנו")->success()->send();
+
+            return;
+        }
+
+        $result = app(IntegrationHealth::class)->check($healthKey);
+
+        $notification = Notification::make()->body($result->message);
+
+        if ($result->ok) {
+            $notification->title("מפתחות {$label} נשמרו — החיבור תקין ✓")->success();
+        } elseif ($result->configured) {
+            $notification->title("מפתחות {$label} נשמרו, אך בדיקת החיבור נכשלה")->danger();
+        } else {
+            $notification->title("מפתחות {$label} נשמרו")->warning();
+        }
+
+        $notification->persistent()->send();
     }
 
     /** The per-section save button. */
