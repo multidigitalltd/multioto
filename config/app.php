@@ -65,7 +65,10 @@ return [
     |
     */
 
-    'timezone' => env('APP_TIMEZONE', 'Asia/Jerusalem'),
+    // Hardcoded (not env-driven) so a stale .env with APP_TIMEZONE=UTC can't
+    // push the whole app back to UTC. The business runs in Israel — all
+    // display/scheduling is Asia/Jerusalem.
+    'timezone' => 'Asia/Jerusalem',
 
     /*
     |--------------------------------------------------------------------------
