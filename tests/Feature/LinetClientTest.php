@@ -1,0 +1,98 @@
+<?php
+
+namespace Tests\Feature;
+
+use App\Enums\VatCategory;
+use App\Models\Charge;
+use App\Models\Subscription;
+use App\Services\Linet\LinetClient;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
+use Tests\TestCase;
+
+class LinetClientTest extends TestCase
+{
+    use RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        config([
+            'billing.linet.base_url' => 'https://app.linet.test/api',
+            'billing.linet.login_id' => 'lid',
+            'billing.linet.key' => 'lhash',
+            'billing.linet.company_id' => '1',
+            'billing.linet.doctype' => '9',
+            'billing.linet.vat_cat_taxable' => 1,
+            'billing.linet.vat_cat_exempt' => 2,
+            'billing.linet.payment_type' => 3,
+            'billing.linet.email_document' => true,
+        ]);
+    }
+
+    private function charge(): Charge
+    {
+        $subscription = Subscription::factory()->create();
+
+        return Charge::create([
+            'subscription_id' => $subscription->id,
+            'amount_agorot' => 10000,
+            'vat_agorot' => 1800,
+            'total_agorot' => 11800,
+            'period_start' => now()->toDateString(),
+            'period_end' => now()->addMonth()->toDateString(),
+        ]);
+    }
+
+    public function test_create_document_posts_auth_in_body_and_correct_structure(): void
+    {
+        Http::fake(['*/create/doc' => Http::response(['id' => 4321, 'pdf' => 'https://app.linet.test/doc/4321.pdf'])]);
+
+        $result = app(LinetClient::class)->issueDocument($this->charge(), VatCategory::Taxable, 'מנוי חודשי');
+
+        $this->assertSame('4321', $result['document_id']);
+        $this->assertSame('https://app.linet.test/doc/4321.pdf', $result['pdf_url']);
+
+        Http::assertSent(function ($request) {
+            $body = $request->data();
+
+            return str_ends_with($request->url(), '/create/doc')
+                // Auth is carried in the request BODY, not headers.
+                && $body['login_id'] === 'lid'
+                && $body['login_hash'] === 'lhash'
+                && $body['login_company'] === '1'
+                && $body['doctype'] === '9'
+                && $body['sendmail'] === 1
+                && $body['docDet'][0]['vat_cat_id'] === 1        // taxable category
+                && $body['docDet'][0]['iItem'] === 118.0         // total incl VAT
+                && $body['docDet'][0]['iItemWithVat'] === 1
+                && $body['docCheq'][0]['sum'] === 118.0
+                && $body['docCheq'][0]['type'] === 3;
+        });
+    }
+
+    public function test_exempt_customer_uses_the_exempt_vat_category(): void
+    {
+        Http::fake(['*/create/doc' => Http::response(['id' => 1])]);
+
+        app(LinetClient::class)->issueDocument($this->charge(), VatCategory::Exempt, 'x');
+
+        Http::assertSent(fn ($request) => $request->data()['docDet'][0]['vat_cat_id'] === 2);
+    }
+
+    public function test_connection_check_reports_ok_on_a_clean_search_response(): void
+    {
+        Http::fake(['*/newsearch/account' => Http::response([])]);
+
+        $this->assertTrue(app(LinetClient::class)->testConnection()->ok);
+    }
+
+    public function test_connection_check_reports_failure_when_linet_returns_an_error(): void
+    {
+        Http::fake(['*/newsearch/account' => Http::response(['error' => 'invalid login'])]);
+
+        $result = app(LinetClient::class)->testConnection();
+        $this->assertFalse($result->ok);
+        $this->assertTrue($result->configured);
+    }
+}

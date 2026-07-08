@@ -5,46 +5,53 @@ namespace App\Services\Linet;
 use App\Enums\VatCategory;
 use App\Models\Charge;
 use App\Services\Health\ConnectionResult;
+use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 
 /**
- * Thin client for the Linet invoicing API.
+ * Thin client for the Linet ERP API (https://app.linet.org.il/api).
  *
- * Documents are issued only after a successful charge. The VAT category
- * (taxable/exempt) is decided per customer by the caller and passed through.
+ * Per Linet's docs, every request is a plain POST whose JSON body carries the
+ * auth triple — login_id (API ID), login_hash (API Key), login_company
+ * (Company ID). Documents are created at /create/doc with docDet (line items)
+ * and docCheq (payments). Documents are issued only after a successful charge;
+ * VAT category (taxable/exempt) is decided per customer by the caller.
+ *
+ * NOTE: doctype, vat_cat_* and payment_type are account-specific codes taken
+ * from config — verify them against the Linet account before going live. The
+ * create response field names are parsed defensively and should be confirmed
+ * against a real Linet response.
  */
 class LinetClient
 {
     /**
-     * Best-effort connectivity + credentials check. Linet's exact API surface
-     * still needs verification against their docs, so this only confirms the
-     * endpoint is reachable and the credentials aren't outright rejected — a
-     * definitive test is issuing a real document.
+     * Validate the auth triple by running a tiny account search. Linet rejects
+     * a bad login pair, so a clean response means the credentials work.
      */
     public function testConnection(): ConnectionResult
     {
         $config = config('billing.linet');
 
-        if (blank($config['login_id']) || blank($config['key'])) {
-            return ConnectionResult::notConfigured('Login ID / Key לא הוגדרו');
+        if (blank($config['login_id']) || blank($config['key']) || blank($config['company_id'])) {
+            return ConnectionResult::notConfigured('Login ID / Key / Company ID לא הוגדרו');
         }
 
         try {
-            $response = Http::baseUrl($config['base_url'])
-                ->withHeaders($this->authHeaders())
-                ->timeout(10)
-                ->get('documents');
+            $response = $this->post('/newsearch/account', ['limit' => 1, 'query' => ['type' => 0]]);
 
-            if ($response->status() === 401 || $response->status() === 403) {
-                return ConnectionResult::fail('לינט דחתה את פרטי ההזדהות (Login ID / Key / Company ID)');
+            if ($response->failed()) {
+                return ConnectionResult::fail('לינט החזירה שגיאה (קוד '.$response->status().')');
             }
 
-            if ($response->serverError()) {
-                return ConnectionResult::fail('שגיאת שרת בלינט (קוד '.$response->status().')');
+            $json = $response->json();
+
+            // Linet surfaces auth/errors in an `error`/`errors`/`message` field.
+            if (is_array($json) && (filled($json['error'] ?? null) || filled($json['errors'] ?? null))) {
+                return ConnectionResult::fail('לינט דחתה את פרטי ההזדהות: '.Str::limit((string) ($json['error'] ?? json_encode($json['errors'])), 100));
             }
 
-            return ConnectionResult::ok('לינט זמינה והפרטים התקבלו (מומלץ לאמת בהנפקת מסמך אמיתי)');
+            return ConnectionResult::ok('החיבור ללינט תקין — ההזדהות התקבלה');
         } catch (\Throwable $e) {
             return ConnectionResult::fail('לא ניתן להתחבר ללינט: '.Str::limit(trim($e->getMessage()) ?: class_basename($e), 120));
         }
@@ -57,80 +64,100 @@ class LinetClient
      */
     public function issueDocument(Charge $charge, VatCategory $vatCategory, string $description): array
     {
+        $config = config('billing.linet');
         $customer = $charge->subscription->customer;
 
-        $response = $this->request('documents', [
-            'type' => 'invrec', // חשבונית מס/קבלה
-            'company_id' => config('billing.linet.company_id'),
-            'customer' => [
-                'name' => $customer->name,
-                'vat_number' => $customer->business_number,
-                'email' => $customer->email,
-                'phone' => $customer->phone,
-            ],
-            'vat_type' => $vatCategory === VatCategory::Exempt ? 'exempt' : 'standard',
-            'currency' => $charge->currency,
-            'lines' => [[
-                'description' => $description,
-                'quantity' => 1,
-                'unit_price' => round($charge->amount_agorot / 100, 2),
-                'vat_amount' => round($charge->vat_agorot / 100, 2),
+        $vatCatId = $vatCategory === VatCategory::Exempt
+            ? $config['vat_cat_exempt']
+            : $config['vat_cat_taxable'];
+
+        // Unit price INCLUDING VAT (iItemWithVat = 1). Linet derives the VAT
+        // breakdown from the category, keeping our integer-agorot total exact.
+        $totalIls = round($charge->total_agorot / 100, 2);
+
+        $response = $this->post($config['create_doc_path'] ?? '/create/doc', [
+            'doctype' => (string) $config['doctype'],
+            'status' => 2, // final (non-draft) document
+            'currency_id' => 'ILS',
+            'country_id' => 'IL',
+            'language' => 'he_il',
+            'autoRound' => false,
+            'sendmail' => $config['email_document'] ? 1 : 0,
+            'company' => $customer->name,
+            'email' => $customer->email,
+            'phone' => $customer->phone,
+            'refnum_ext' => "charge-{$charge->id}",
+            'docDet' => [[
+                'name' => $description,
+                'description' => '',
+                'qty' => 1,
+                'currency_id' => 'ILS',
+                'vat_cat_id' => $vatCatId,
+                'unit_id' => 0,
+                'iItem' => $totalIls,
+                'iItemWithVat' => 1,
             ]],
-            'total' => round($charge->total_agorot / 100, 2),
-            'send_email' => (bool) config('billing.linet.email_document'),
+            'docCheq' => [[
+                'type' => (int) $config['payment_type'],
+                'currency_id' => 'ILS',
+                'sum' => $totalIls,
+                'doc_sum' => $totalIls,
+                'line' => 1,
+            ]],
         ]);
 
+        $response->throw();
+        $json = $response->json() ?? [];
+
         return [
-            'document_id' => (string) ($response['id'] ?? ''),
-            'pdf_url' => $response['pdf_url'] ?? null,
-            'allocation_number' => $response['allocation_number'] ?? null,
+            'document_id' => (string) $this->firstValue($json, ['id', 'doc_id', 'docId', 'docnum', 'document_id']),
+            'pdf_url' => $this->firstValue($json, ['pdf', 'pdf_url', 'url', 'pdfUrl']) ?: null,
+            'allocation_number' => $this->firstValue($json, ['allocation_number', 'allocationNum', 'refnum']) ?: null,
         ];
     }
 
+    /**
+     * Look up a document by id via the search endpoint.
+     */
     public function getDocument(string $documentId): array
     {
-        $config = config('billing.linet');
-
-        $response = Http::baseUrl($config['base_url'])
-            ->withHeaders($this->authHeaders())
-            ->timeout(30)
-            ->get("documents/{$documentId}");
-
-        $response->throw();
-
-        return $response->json() ?? [];
-    }
-
-    protected function request(string $path, array $payload): array
-    {
-        $config = config('billing.linet');
-
-        $response = Http::baseUrl($config['base_url'])
-            ->withHeaders($this->authHeaders())
-            ->timeout(30)
-            ->post($path, $payload);
-
+        $response = $this->post('/newsearch/doc', ['query' => ['id' => $documentId]]);
         $response->throw();
 
         return $response->json() ?? [];
     }
 
     /**
-     * Linet authenticates each request with the account's Login ID and Key
-     * (from the Linet API settings screen); the Company ID scopes the request
-     * to the right business and is also sent in the document payload.
-     *
-     * NOTE: the exact header/param names must be verified against Linet's
-     * current API docs before going live — see docs/architecture.md.
+     * POST to a Linet endpoint with the auth triple merged into the body.
      */
-    protected function authHeaders(): array
+    protected function post(string $path, array $payload): Response
     {
         $config = config('billing.linet');
 
-        return [
-            'X-Login-Id' => $config['login_id'],
-            'X-Api-Key' => $config['key'],
-            'X-Company-Id' => (string) $config['company_id'],
-        ];
+        return Http::baseUrl($config['base_url'])
+            ->timeout(30)
+            ->post($path, array_merge($payload, [
+                'login_id' => $config['login_id'],
+                'login_hash' => $config['key'],
+                'login_company' => (string) $config['company_id'],
+            ]));
+    }
+
+    /**
+     * First present, non-empty value among candidate keys (Linet's exact
+     * response field names still need confirming against a live response).
+     *
+     * @param  array<string, mixed>  $data
+     * @param  array<int, string>  $keys
+     */
+    protected function firstValue(array $data, array $keys): mixed
+    {
+        foreach ($keys as $key) {
+            if (filled($data[$key] ?? null)) {
+                return $data[$key];
+            }
+        }
+
+        return null;
     }
 }

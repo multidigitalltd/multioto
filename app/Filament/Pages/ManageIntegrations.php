@@ -47,7 +47,7 @@ class ManageIntegrations extends Page implements HasForms
         ],
         'linet' => [
             'label' => 'לינט',
-            'keys' => ['linet.login_id', 'linet.key', 'linet.company_id'],
+            'keys' => ['linet.login_id', 'linet.key', 'linet.company_id', 'linet.doctype', 'linet.vat_cat_taxable', 'linet.vat_cat_exempt', 'linet.payment_type'],
         ],
         'flywp' => [
             'label' => 'FlyWP',
@@ -97,11 +97,15 @@ class ManageIntegrations extends Page implements HasForms
                     ->footerActions([$this->saveAction('cardcom')]),
 
                 Section::make('לינט — חשבוניות')
-                    ->description($this->groupDescription('linet', 'שלושת הערכים ממסך הגדרות ה-API בלינט: Login ID, Key ו-Company ID.'))
+                    ->description($this->groupDescription('linet', 'שלושת הערכים ממסך הגדרות ה-API בלינט: Login ID, Key ו-Company ID. הקודים למטה (סוג מסמך, קטגוריות מע״מ, אמצעי תשלום) ספציפיים לחשבון שלכם בלינט.'))
                     ->schema([
                         TextInput::make('linet.login_id')->label('Login ID')->password()->revealable()->autocomplete('new-password'),
                         TextInput::make('linet.key')->label('Key')->password()->revealable()->autocomplete('new-password'),
                         TextInput::make('linet.company_id')->label('Company ID')->autocomplete(false),
+                        TextInput::make('linet.doctype')->label('קוד סוג מסמך (חשבונית מס/קבלה)')->autocomplete(false),
+                        TextInput::make('linet.vat_cat_taxable')->label('קוד מע״מ — חייב')->numeric()->autocomplete(false),
+                        TextInput::make('linet.vat_cat_exempt')->label('קוד מע״מ — פטור')->numeric()->autocomplete(false),
+                        TextInput::make('linet.payment_type')->label('קוד אמצעי תשלום (כרטיס אשראי)')->numeric()->autocomplete(false),
                     ])->columns(3)
                     ->footerActions([$this->saveAction('linet')]),
 
