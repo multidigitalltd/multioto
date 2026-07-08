@@ -27,6 +27,8 @@ class AdminPanelProvider extends PanelProvider
             ->id('admin')
             ->path('admin')
             ->login()
+            ->passwordReset()
+            ->profile()
             ->brandName('מולטי דיגיטל')
             ->colors([
                 'primary' => Color::Indigo,

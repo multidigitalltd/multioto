@@ -4,7 +4,9 @@ namespace App\Services\Linet;
 
 use App\Enums\VatCategory;
 use App\Models\Charge;
+use App\Services\Health\ConnectionResult;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Str;
 
 /**
  * Thin client for the Linet invoicing API.
@@ -14,6 +16,40 @@ use Illuminate\Support\Facades\Http;
  */
 class LinetClient
 {
+    /**
+     * Best-effort connectivity + credentials check. Linet's exact API surface
+     * still needs verification against their docs, so this only confirms the
+     * endpoint is reachable and the credentials aren't outright rejected — a
+     * definitive test is issuing a real document.
+     */
+    public function testConnection(): ConnectionResult
+    {
+        $config = config('billing.linet');
+
+        if (blank($config['login_id']) || blank($config['key'])) {
+            return ConnectionResult::notConfigured('Login ID / Key לא הוגדרו');
+        }
+
+        try {
+            $response = Http::baseUrl($config['base_url'])
+                ->withHeaders($this->authHeaders())
+                ->timeout(10)
+                ->get('documents');
+
+            if ($response->status() === 401 || $response->status() === 403) {
+                return ConnectionResult::fail('לינט דחתה את פרטי ההזדהות (Login ID / Key / Company ID)');
+            }
+
+            if ($response->serverError()) {
+                return ConnectionResult::fail('שגיאת שרת בלינט (קוד '.$response->status().')');
+            }
+
+            return ConnectionResult::ok('לינט זמינה והפרטים התקבלו (מומלץ לאמת בהנפקת מסמך אמיתי)');
+        } catch (\Throwable $e) {
+            return ConnectionResult::fail('לא ניתן להתחבר ללינט: '.Str::limit(trim($e->getMessage()) ?: class_basename($e), 120));
+        }
+    }
+
     /**
      * Issue a tax invoice/receipt for a successful charge.
      *

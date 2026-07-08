@@ -3,7 +3,9 @@
 namespace App\Services\Cardcom;
 
 use App\Models\PaymentToken;
+use App\Services\Health\ConnectionResult;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Str;
 
 /**
  * Thin client for the Cardcom API (v11, token module).
@@ -14,6 +16,42 @@ use Illuminate\Support\Facades\Http;
  */
 class CardcomClient
 {
+    /**
+     * Verify the terminal + API credentials by opening a hosted-page session
+     * (no charge, no card — the session is simply discarded). A non-zero
+     * ResponseCode means Cardcom rejected the credentials or request.
+     */
+    public function testConnection(): ConnectionResult
+    {
+        $config = config('billing.cardcom');
+
+        if (blank($config['terminal_number']) || blank($config['api_name'])) {
+            return ConnectionResult::notConfigured('מספר מסוף / API Name לא הוגדרו');
+        }
+
+        try {
+            $response = $this->request('LowProfile/Create', [
+                'Operation' => 'CreateTokenOnly',
+                'ReturnValue' => 'connection-test',
+                'SuccessRedirectUrl' => url('/'),
+                'FailedRedirectUrl' => url('/'),
+                'Document' => null,
+            ]);
+
+            $code = (string) ($response['ResponseCode'] ?? '');
+
+            if ($code === '0' && filled($response['Url'] ?? null)) {
+                return ConnectionResult::ok('החיבור תקין — המסוף אימת את הבקשה');
+            }
+
+            $desc = $response['Description'] ?? 'תשובה לא צפויה מקארדקום';
+
+            return ConnectionResult::fail("קארדקום דחתה את הבקשה (קוד {$code}): {$desc}");
+        } catch (\Throwable $e) {
+            return ConnectionResult::fail('לא ניתן להתחבר לקארדקום: '.Str::limit(trim($e->getMessage()) ?: class_basename($e), 120));
+        }
+    }
+
     /**
      * Create a hosted Low Profile page URL for capturing a card and returning a token.
      *

@@ -2,7 +2,9 @@
 
 namespace App\Services\Waha;
 
+use App\Services\Health\ConnectionResult;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Str;
 
 /**
  * Thin client for a WAHA (WhatsApp HTTP API) instance.
@@ -12,6 +14,31 @@ use Illuminate\Support\Facades\Http;
  */
 class WahaClient
 {
+    /**
+     * Verify the WAHA instance is reachable and the session is up. Called from
+     * the admin "test connection" button, so a short synchronous call is fine.
+     */
+    public function testConnection(): ConnectionResult
+    {
+        if (blank(config('billing.waha.base_url'))) {
+            return ConnectionResult::notConfigured('כתובת WAHA לא הוגדרה');
+        }
+
+        try {
+            $status = $this->sessionStatus();
+            $state = (string) ($status['status'] ?? $status['state'] ?? 'UNKNOWN');
+
+            return match ($state) {
+                'WORKING' => ConnectionResult::ok('מחובר ופעיל'),
+                'SCAN_QR_CODE', 'STARTING' => ConnectionResult::fail("מחובר ל-WAHA אך ה-session אינו מוכן (מצב: {$state}) — יש לסרוק QR"),
+                'FAILED', 'STOPPED' => ConnectionResult::fail("ה-session במצב {$state} — יש להפעיל מחדש"),
+                default => ConnectionResult::ok("מחובר ל-WAHA (מצב session: {$state})"),
+            };
+        } catch (\Throwable $e) {
+            return ConnectionResult::fail('לא ניתן להתחבר ל-WAHA: '.Str::limit(trim($e->getMessage()) ?: class_basename($e), 120));
+        }
+    }
+
     /**
      * Send a plain text message to a chat id (JID) or E.164 phone number.
      */
