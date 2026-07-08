@@ -2,6 +2,7 @@
 
 namespace App\Services\Cardcom;
 
+use App\Models\Customer;
 use App\Models\PaymentToken;
 use App\Services\Health\ConnectionResult;
 use Illuminate\Support\Facades\Http;
@@ -36,7 +37,7 @@ class CardcomClient
             // FailedRedirectUrl and WebHookUrl. Operation "CreateTokenOnly" is a
             // valid enum value and Document is optional — so this request is
             // spec-complete for capturing a token without charging.
-            $response = $this->request('LowProfile/Create', [
+            $response = $this->request('LowProfile/Create', array_filter([
                 'Operation' => 'CreateTokenOnly',
                 'Amount' => 0,
                 'ISOCoinId' => 1, // ILS
@@ -45,7 +46,10 @@ class CardcomClient
                 'SuccessRedirectUrl' => url('/'),
                 'FailedRedirectUrl' => url('/'),
                 'WebHookUrl' => url('/'), // required by the spec even for a token-only test
-            ], withApiPassword: false);
+                // Terminals that mandate a document reject a request without one
+                // (error 5046). This session is discarded, so nothing is issued.
+                'Document' => $this->buildDocument('בדיקת חיבור', null, null, 'בדיקת חיבור', 0),
+            ], fn ($v) => $v !== null), withApiPassword: false);
 
             $code = (string) ($response['ResponseCode'] ?? '');
 
@@ -78,7 +82,9 @@ class CardcomClient
      */
     public function createTokenLowProfile(int $customerId, string $successUrl, string $failureUrl, string $webhookUrl): array
     {
-        $response = $this->request('LowProfile/Create', [
+        $customer = Customer::find($customerId);
+
+        $response = $this->request('LowProfile/Create', array_filter([
             'Operation' => 'CreateTokenOnly',
             'Amount' => 0,
             'ISOCoinId' => 1, // ILS
@@ -87,9 +93,17 @@ class CardcomClient
             'SuccessRedirectUrl' => $successUrl,
             'FailedRedirectUrl' => $failureUrl,
             'WebHookUrl' => $webhookUrl,
-            // No Document object and no ApiPassword — token-only must not enter
-            // document-creation mode (which demands InvoiceHead → error 5046).
-        ], withApiPassword: false);
+            // Terminals that mandate a document reject a token-only request
+            // without one (error 5046). Type comes from config — 'Order' keeps
+            // it non-fiscal so Linet stays the invoicer.
+            'Document' => $this->buildDocument(
+                $customer?->name,
+                $customer?->email,
+                $customer?->phone,
+                'עדכון אמצעי תשלום',
+                0,
+            ),
+        ], fn ($v) => $v !== null), withApiPassword: false);
 
         return [
             'url' => $response['Url'] ?? '',
@@ -101,19 +115,30 @@ class CardcomClient
      * Charge a stored token. Amount is integer agorot; Cardcom expects ILS units.
      *
      * Per Cardcom v11 docs the token is a TOP-LEVEL `Token` field (not under
-     * `Advanced`). We deliberately omit the `Document` object — invoices are
-     * issued separately through Linet after a successful charge (§7), not by
-     * Cardcom. ExternalUniqueTranId gives Cardcom server-side idempotency.
+     * `Advanced`). ExternalUniqueTranId gives Cardcom server-side idempotency.
+     * A Document is attached because some terminals require one (error 5046);
+     * the config document_type ('Order' by default) keeps it non-fiscal so the
+     * real tax invoice is still issued by Linet after the charge (§7).
      */
     public function chargeToken(PaymentToken $token, int $totalAgorot, string $description, string $externalUniqueId): ChargeResult
     {
-        $payload = [
+        $customer = $token->customer;
+        $amountNis = round($totalAgorot / 100, 2);
+
+        $payload = array_filter([
             'Token' => $token->cardcom_token,
-            'Amount' => round($totalAgorot / 100, 2),
+            'Amount' => $amountNis,
             'ISOCoinId' => 1, // ILS
             'ExternalUniqueTranId' => $externalUniqueId,
             'ProductName' => $description,
-        ];
+            'Document' => $this->buildDocument(
+                $customer?->name,
+                $customer?->email,
+                $customer?->phone,
+                $description,
+                $amountNis,
+            ),
+        ], fn ($v) => $v !== null);
 
         // Include the stored expiry (MMYY) when we have it — some terminals
         // require it alongside the token.
@@ -121,7 +146,6 @@ class CardcomClient
             $payload['CardExpirationMMYY'] = sprintf('%02d%02d', $token->expiry_month, $token->expiry_year % 100);
         }
 
-        // No ApiPassword / Document — we charge only; invoices are issued by Linet.
         $response = $this->request('Transactions/Transaction', $payload, withApiPassword: false);
 
         $code = (string) ($response['ResponseCode'] ?? '');
@@ -178,10 +202,40 @@ class CardcomClient
      * even though this request sends no Document object (we invoice via Linet).
      * The raw response is logged and surfaced so the real trigger is visible.
      */
+    /**
+     * Build the Cardcom Document object, or null when documents are disabled
+     * (config document_type empty). The type is configurable: 'Order' (default)
+     * is non-fiscal — it satisfies terminals that mandate a document (avoiding
+     * error 5046) without issuing a tax invoice, so Linet remains the invoicer.
+     * Set it to 'Auto'/'TaxInvoiceAndReceipt' to let Cardcom issue the invoice.
+     *
+     * @return array<string, mixed>|null
+     */
+    protected function buildDocument(?string $name, ?string $email, ?string $phone, string $productDescription, float $unitCostNis): ?array
+    {
+        $type = config('billing.cardcom.document_type');
+
+        if (blank($type)) {
+            return null; // Terminal does not require a document — send none.
+        }
+
+        return [
+            'DocumentTypeToCreate' => $type,
+            'IsAllowEditDocument' => true,
+            'Name' => $name ?: 'לקוח',
+            'Email' => $email ?: '',
+            'Mobile' => $phone ?: '',
+            'Language' => 'he',
+            'Products' => [
+                ['Description' => $productDescription, 'UnitCost' => $unitCostNis],
+            ],
+        ];
+    }
+
     protected function hintForCode(string $code): string
     {
         return match ($code) {
-            '5046' => ' — קארדקום ניסתה להפיק מסמך, למרות שאיננו שולחים אובייקט Document (החשבוניות מונפקות בלינט). ראו את התשובה הגולמית למטה ושלחו אותה אליי לאבחון מדויק.',
+            '5046' => ' — המסוף דורש נתוני מסמך. אנחנו כבר שולחים אובייקט Document; אם השגיאה נמשכת, ייתכן שסוג המסמך אינו נתמך במסוף — נסו לשנות את CARDCOM_DOCUMENT_TYPE (למשל ל-Auto) או שלחו לי את התשובה הגולמית.',
             default => '',
         };
     }

@@ -39,18 +39,19 @@ class IntegrationHealthTest extends TestCase
 
         $this->assertTrue($result->ok);
 
-        // A token-only request must NOT carry a Document object NOR ApiPassword
-        // (either pushes Cardcom into document mode → error 5046), must send
-        // Amount + ISOCoinId, and TerminalNumber as int.
+        // A token-only request must NOT carry ApiPassword (only refunds/doc
+        // creation use it). It DOES carry a Document — terminals that mandate
+        // one reject a request without it (error 5046); the configured type
+        // ('Order' by default) keeps it non-fiscal so Linet stays the invoicer.
         Http::assertSent(function ($request) {
             $body = $request->data();
 
             return ($body['Operation'] ?? null) === 'CreateTokenOnly'
-                && ! array_key_exists('Document', $body)
                 && ! array_key_exists('ApiPassword', $body)
                 && array_key_exists('Amount', $body)
                 && ($body['ISOCoinId'] ?? null) === 1
-                && $body['TerminalNumber'] === 1000;
+                && $body['TerminalNumber'] === 1000
+                && ($body['Document']['DocumentTypeToCreate'] ?? null) === 'Order';
         });
     }
 
