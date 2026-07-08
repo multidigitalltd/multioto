@@ -13,8 +13,6 @@ use Filament\Forms\Contracts\HasForms;
 use Filament\Forms\Form;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
-use Illuminate\Support\Facades\Mail;
-use Illuminate\Support\Str;
 
 /**
  * Admin settings page for entering integration credentials (Cardcom, Linet,
@@ -57,10 +55,8 @@ class ManageIntegrations extends Page implements HasForms
             'label' => 'WAHA',
             'keys' => ['waha.api_key'],
         ],
-        'postmark' => [
-            'label' => 'Postmark',
-            'keys' => ['postmark.token'],
-        ],
+        // Postmark / outbound-mail settings live on their own page (ManageMail),
+        // which also manages the sender address and verified-sender sync.
     ];
 
     /**
@@ -71,7 +67,6 @@ class ManageIntegrations extends Page implements HasForms
         'cardcom' => 'cardcom',
         'linet' => 'linet',
         'waha' => 'waha',
-        'postmark' => 'email',
     ];
 
     /** @var array<string, mixed> */
@@ -123,13 +118,6 @@ class ManageIntegrations extends Page implements HasForms
                         TextInput::make('waha.api_key')->label('API Key')->password()->revealable()->autocomplete('new-password'),
                     ])
                     ->footerActions([$this->saveAction('waha')]),
-
-                Section::make('Postmark — מייל (יוצא + נכנס)')
-                    ->description($this->groupDescription('postmark', 'Server API Token מ-Postmark. הגדירו MAIL_MAILER=postmark ואת webhook ה-inbound אל /webhooks/email. אפשר לבדוק עם דומיין/תיבה זמניים ורק אחר כך להחליף לתיבה האמיתית.'))
-                    ->schema([
-                        TextInput::make('postmark.token')->label('Server Token')->password()->revealable()->autocomplete('new-password'),
-                    ])
-                    ->footerActions([$this->saveAction('postmark'), $this->testEmailAction()]),
             ])
             ->statePath('data');
     }
@@ -212,38 +200,6 @@ class ManageIntegrations extends Page implements HasForms
             ->label('שמירת מפתחות '.self::GROUPS[$group]['label'])
             ->icon('heroicon-o-check')
             ->action(fn () => $this->saveGroup($group));
-    }
-
-    /**
-     * Send a real test email through the currently-configured mailer, so the
-     * operator can validate delivery (with any domain) before pointing the
-     * production mailbox at the system. Save the Postmark token first.
-     */
-    protected function testEmailAction(): FormAction
-    {
-        return FormAction::make('test_email')
-            ->label('שלח מייל בדיקה')
-            ->icon('heroicon-o-paper-airplane')
-            ->color('gray')
-            ->form([
-                TextInput::make('to')->label('לכתובת')->email()->required(),
-            ])
-            ->action(function (array $data): void {
-                try {
-                    Mail::raw(
-                        'זהו מייל בדיקה ממערכת מולטי דיגיטל. אם קיבלתם אותו — המייל היוצא מוגדר כראוי.',
-                        fn ($message) => $message->to($data['to'])->subject('מייל בדיקה — מולטי דיגיטל'),
-                    );
-
-                    Notification::make()->title("מייל בדיקה נשלח אל {$data['to']}")->success()->send();
-                } catch (\Throwable $e) {
-                    Notification::make()
-                        ->title('שליחת מייל הבדיקה נכשלה')
-                        ->body(Str::limit($e->getMessage(), 150))
-                        ->danger()
-                        ->send();
-                }
-            });
     }
 
     /**

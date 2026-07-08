@@ -38,8 +38,9 @@ class CardcomClient
                 'ReturnValue' => 'connection-test',
                 'SuccessRedirectUrl' => url('/'),
                 'FailedRedirectUrl' => url('/'),
-                // No Document object — token-only must omit it (else error 5046).
-            ]);
+                // No Document object and no ApiPassword — token-only must not enter
+                // document-creation mode (which demands InvoiceHead → error 5046).
+            ], withApiPassword: false);
 
             $code = (string) ($response['ResponseCode'] ?? '');
 
@@ -71,8 +72,9 @@ class CardcomClient
             'SuccessRedirectUrl' => $successUrl,
             'FailedRedirectUrl' => $failureUrl,
             'WebHookUrl' => $webhookUrl,
-            // No Document object — token-only must omit it (else error 5046).
-        ]);
+            // No Document object and no ApiPassword — token-only must not enter
+            // document-creation mode (which demands InvoiceHead → error 5046).
+        ], withApiPassword: false);
 
         return [
             'url' => $response['Url'] ?? '',
@@ -104,7 +106,8 @@ class CardcomClient
             $payload['CardExpirationMMYY'] = sprintf('%02d%02d', $token->expiry_month, $token->expiry_year % 100);
         }
 
-        $response = $this->request('Transactions/Transaction', $payload);
+        // No ApiPassword / Document — we charge only; invoices are issued by Linet.
+        $response = $this->request('Transactions/Transaction', $payload, withApiPassword: false);
 
         $code = (string) ($response['ResponseCode'] ?? '');
 
@@ -126,18 +129,28 @@ class CardcomClient
         ]);
     }
 
-    protected function request(string $path, array $payload): array
+    /**
+     * POST to Cardcom with the terminal auth merged in. ApiPassword is only sent
+     * when needed (refunds / document creation) — sending it on token/hosted-page
+     * calls pushes Cardcom into document mode and triggers error 5046.
+     */
+    protected function request(string $path, array $payload, bool $withApiPassword = true): array
     {
         $config = config('billing.cardcom');
 
+        $auth = [
+            // Cardcom expects TerminalNumber as an integer, not a string.
+            'TerminalNumber' => (int) $config['terminal_number'],
+            'ApiName' => $config['api_name'],
+        ];
+
+        if ($withApiPassword && filled($config['api_password'])) {
+            $auth['ApiPassword'] = $config['api_password'];
+        }
+
         $response = Http::baseUrl($config['base_url'])
             ->timeout(30)
-            ->post($path, array_merge($payload, [
-                // Cardcom expects TerminalNumber as an integer, not a string.
-                'TerminalNumber' => (int) $config['terminal_number'],
-                'ApiName' => $config['api_name'],
-                'ApiPassword' => $config['api_password'],
-            ]));
+            ->post($path, array_merge($payload, $auth));
 
         $response->throw();
 
