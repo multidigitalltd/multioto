@@ -40,7 +40,8 @@ return [
         'terminal_number' => env('CARDCOM_TERMINAL_NUMBER'),
         'api_name' => env('CARDCOM_API_NAME'),
         'api_password' => env('CARDCOM_API_PASSWORD'),
-        'base_url' => env('CARDCOM_BASE_URL', 'https://secure.cardcom.solutions/api/v11'),
+        // Fixed API endpoint — hardcoded so a stale .env can't point it wrong.
+        'base_url' => 'https://secure.cardcom.solutions/api/v11',
         // Shared secret we embed in Low Profile return/webhook URLs for origin verification.
         'webhook_secret' => env('CARDCOM_WEBHOOK_SECRET'),
     ],
@@ -52,7 +53,8 @@ return [
         'login_id' => env('LINET_LOGIN_ID'),
         'key' => env('LINET_KEY'),
         'company_id' => env('LINET_COMPANY_ID'),
-        'base_url' => env('LINET_BASE_URL', 'https://app.linet.org.il/api'),
+        // Fixed API endpoint — hardcoded so a stale .env can't point it wrong.
+        'base_url' => 'https://app.linet.org.il/api',
 
         // Send the created document to the customer by email from Linet's side.
         'email_document' => env('LINET_EMAIL_DOCUMENT', true),
