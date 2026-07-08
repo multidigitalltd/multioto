@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Filament\Pages\ManageAiAgent;
 use App\Filament\Pages\ManageIntegrations;
 use App\Models\Setting;
 use App\Models\User;
@@ -79,5 +80,27 @@ class SettingsTest extends TestCase
             ->call('saveGroup', 'linet');
 
         $this->assertArrayNotHasKey('linet.login_id', Setting::map());
+    }
+
+    public function test_ai_agent_page_saves_instructions_without_overwriting_a_blank_key(): void
+    {
+        Setting::put('ai.api_key', 'existing-key');
+        $this->actingAs(User::factory()->create());
+
+        Livewire::test(ManageAiAgent::class)
+            ->set('data.ai.enabled', true)
+            ->set('data.ai.provider', 'openai')
+            ->set('data.ai.persona', 'PERSONA שלי')
+            ->set('data.ai.rules', 'כלל אחד')
+            ->set('data.ai.api_key', '') // left blank → must not overwrite
+            ->call('save');
+
+        $stored = Setting::map();
+        $this->assertSame('1', $stored['ai.enabled']);
+        $this->assertSame('openai', $stored['ai.provider']);
+        $this->assertSame('PERSONA שלי', $stored['ai.persona']);
+        $this->assertSame('כלל אחד', $stored['ai.rules']);
+        // Blank key field left the previously stored key intact.
+        $this->assertSame('existing-key', $stored['ai.api_key']);
     }
 }

@@ -133,6 +133,40 @@ class AiTierOneTest extends TestCase
         });
     }
 
+    public function test_editable_persona_flows_into_the_system_prompt(): void
+    {
+        $this->enableAi();
+        config(['billing.ai.persona' => 'PERSONA_MARKER_XYZ']);
+        $this->fakeClaude(['reply' => 'ok', 'confidence' => 'low']);
+
+        $ticket = $this->ticketWithInbound();
+        (new DraftReplyJob($ticket->id))->handle(app(ClaudeClient::class), app(SupportToolkit::class));
+
+        Http::assertSent(fn ($request) => str_contains($request['system'] ?? '', 'PERSONA_MARKER_XYZ'));
+    }
+
+    public function test_it_uses_the_openai_compatible_provider_when_selected(): void
+    {
+        config([
+            'billing.ai.enabled' => true,
+            'billing.ai.api_key' => 'test-key',
+            'billing.ai.provider' => 'openai',
+            'billing.ai.base_url' => 'https://api.openai.test/v1',
+        ]);
+        Http::fake([
+            'https://api.openai.test/*' => Http::response([
+                'choices' => [['message' => ['content' => json_encode(['reply' => 'שלום מ-OpenAI', 'confidence' => 'high'])]]],
+            ]),
+        ]);
+
+        $ticket = $this->ticketWithInbound();
+        (new DraftReplyJob($ticket->id))->handle(app(ClaudeClient::class), app(SupportToolkit::class));
+
+        $draft = $ticket->messages()->where('author', MessageAuthor::Ai)->sole();
+        $this->assertStringContainsString('שלום מ-OpenAI', $draft->body);
+        Http::assertSent(fn ($request) => str_contains($request->url(), '/chat/completions'));
+    }
+
     public function test_draft_is_skipped_when_last_message_is_not_from_customer(): void
     {
         $this->enableAi();

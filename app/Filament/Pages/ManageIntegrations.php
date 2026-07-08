@@ -6,7 +6,6 @@ use App\Models\Setting;
 use Filament\Forms\Components\Actions\Action as FormAction;
 use Filament\Forms\Components\Section;
 use Filament\Forms\Components\TextInput;
-use Filament\Forms\Components\Toggle;
 use Filament\Forms\Concerns\InteractsWithForms;
 use Filament\Forms\Contracts\HasForms;
 use Filament\Forms\Form;
@@ -58,10 +57,6 @@ class ManageIntegrations extends Page implements HasForms
             'label' => 'Postmark',
             'keys' => ['postmark.token'],
         ],
-        'ai' => [
-            'label' => 'סוכן AI',
-            'keys' => ['ai.enabled', 'ai.api_key'],
-        ],
     ];
 
     /** @var array<string, mixed> */
@@ -69,9 +64,8 @@ class ManageIntegrations extends Page implements HasForms
 
     public function mount(): void
     {
-        // Start blank — we never echo stored secrets back to the browser —
-        // except the AI toggle, whose current on/off state we do want to show.
-        $this->form->fill(['ai.enabled' => (bool) config('billing.ai.enabled')]);
+        // Start blank — we never echo stored secrets back to the browser.
+        $this->form->fill();
     }
 
     public function form(Form $form): Form
@@ -117,14 +111,6 @@ class ManageIntegrations extends Page implements HasForms
                         TextInput::make('postmark.token')->label('Server Token')->password()->revealable()->autocomplete('new-password'),
                     ])
                     ->footerActions([$this->saveAction('postmark')]),
-
-                Section::make('סוכן AI — סיווג וטיוטות תשובה')
-                    ->description($this->groupDescription('ai', 'כשמופעל: כל פנייה מסווגת אוטומטית ומוכנה לה טיוטת תשובה — לאישורך לפני שליחה. שום דבר לא נשלח ללקוח אוטומטית.'))
-                    ->schema([
-                        Toggle::make('ai.enabled')->label('הפעל סוכן AI'),
-                        TextInput::make('ai.api_key')->label('מפתח Anthropic API')->password()->revealable()->autocomplete('new-password'),
-                    ])
-                    ->footerActions([$this->saveAction('ai')]),
             ])
             ->statePath('data');
     }

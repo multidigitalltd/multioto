@@ -47,6 +47,15 @@ class Setting extends Model
         Cache::forget(self::CACHE_KEY);
     }
 
+    /**
+     * Remove a stored override so the value falls back to .env / config default.
+     */
+    public static function forget(string $key): void
+    {
+        static::query()->whereKey($key)->delete();
+        Cache::forget(self::CACHE_KEY);
+    }
+
     protected static function booted(): void
     {
         static::saved(fn () => Cache::forget(self::CACHE_KEY));

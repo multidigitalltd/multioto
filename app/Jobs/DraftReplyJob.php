@@ -69,15 +69,7 @@ class DraftReplyJob implements ShouldQueue
             : 'הפנייה אינה מקושרת ללקוח מזוהה.';
 
         $result = $claude->structured(
-            system: implode("\n", [
-                'אתה נציג תמיכה של Multi Digital (אחסון ותחזוקת אתרים).',
-                'נסח טיוטת תשובה מנומסת, קצרה וברורה בעברית לפנייה האחרונה של הלקוח.',
-                'בסס את התשובה אך ורק על "נתוני הלקוח" שסופקו. אל תמציא פרטים שאינם שם.',
-                'אם הלקוח דיווח שהאתר למטה — התייחס לסטטוס האתר מהנתונים.',
-                'אם הלקוח שאל על חיוב/חשבונית — השתמש בנתוני החיוב/החשבונית.',
-                'צרף את הקישור לעדכון כרטיס רק אם הלקוח ביקש לעדכן/להחליף אמצעי תשלום.',
-                'התשובה תעבור אישור אנושי לפני שליחה.',
-            ]),
+            system: $this->systemPrompt(),
             prompt: "לקוח: {$ticket->customer?->name}\nנושא: {$ticket->subject}\n\nנתוני הלקוח:\n{$facts}\n\nשיחה:\n{$conversation}\n\nתבניות מענה זמינות:\n{$cannedContext}",
             schema: [
                 'type' => 'object',
@@ -104,5 +96,21 @@ class DraftReplyJob implements ShouldQueue
             ),
             'author' => MessageAuthor::Ai,
         ]);
+    }
+
+    /**
+     * The agent's system prompt: the operator-editable persona + guardrails
+     * (from settings), plus a non-negotiable safety line appended in code.
+     */
+    protected function systemPrompt(): string
+    {
+        return implode("\n", array_filter([
+            trim((string) config('billing.ai.persona')),
+            '',
+            'כללים מחייבים:',
+            trim((string) config('billing.ai.rules')),
+            '',
+            'התשובה נשמרת כטיוטה פנימית ותעבור אישור אנושי לפני שליחה — אל תתחייב בשם החברה.',
+        ], fn ($line) => $line !== null));
     }
 }
