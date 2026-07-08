@@ -30,6 +30,11 @@ class CardcomClient
         }
 
         try {
+            // Per the official v11 spec (CreateLowProfile schema) the required
+            // fields are TerminalNumber, ApiName, Amount, SuccessRedirectUrl,
+            // FailedRedirectUrl and WebHookUrl. Operation "CreateTokenOnly" is a
+            // valid enum value and Document is optional — so this request is
+            // spec-complete for capturing a token without charging.
             $response = $this->request('LowProfile/Create', [
                 'Operation' => 'CreateTokenOnly',
                 'Amount' => 0,
@@ -38,8 +43,7 @@ class CardcomClient
                 'ReturnValue' => 'connection-test',
                 'SuccessRedirectUrl' => url('/'),
                 'FailedRedirectUrl' => url('/'),
-                // No Document object and no ApiPassword — token-only must not enter
-                // document-creation mode (which demands InvoiceHead → error 5046).
+                'WebHookUrl' => url('/'), // required by the spec even for a token-only test
             ], withApiPassword: false);
 
             $code = (string) ($response['ResponseCode'] ?? '');
@@ -50,7 +54,7 @@ class CardcomClient
 
             $desc = $response['Description'] ?? 'תשובה לא צפויה מקארדקום';
 
-            return ConnectionResult::fail("קארדקום דחתה את הבקשה (קוד {$code}): {$desc}");
+            return ConnectionResult::fail("קארדקום דחתה את הבקשה (קוד {$code}): {$desc}".$this->hintForCode($code));
         } catch (\Throwable $e) {
             return ConnectionResult::fail('לא ניתן להתחבר לקארדקום: '.Str::limit(trim($e->getMessage()) ?: class_basename($e), 120));
         }
@@ -155,5 +159,20 @@ class CardcomClient
         $response->throw();
 
         return $response->json() ?? [];
+    }
+
+    /**
+     * Actionable Hebrew hint for well-known Cardcom response codes. 5046 ("No
+     * InvoiceHead data was send") is not a payload error — per the v11 spec our
+     * request is valid and Document is optional. It means the TERMINAL is set to
+     * auto-produce a document/invoice, so Cardcom demands invoice-head data.
+     * Since we issue invoices via Linet, that terminal setting should be off.
+     */
+    protected function hintForCode(string $code): string
+    {
+        return match ($code) {
+            '5046' => ' — נראה שהמסוף מוגדר בקארדקום להפקת מסמך/חשבונית אוטומטית. מכיוון שהחשבוניות מונפקות אצלנו דרך לינט, יש לכבות "הפקת מסמך אוטומטית" בהגדרות המסוף (או לפנות לתמיכת קארדקום).',
+            default => '',
+        };
     }
 }
