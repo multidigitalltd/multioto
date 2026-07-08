@@ -11,8 +11,10 @@ use App\Enums\TicketStatus;
 use App\Jobs\ClassifyTicketJob;
 use App\Jobs\DraftReplyJob;
 use App\Models\Customer;
+use App\Models\Site;
 use App\Models\Ticket;
 use App\Services\Ai\ClaudeClient;
+use App\Services\Ai\SupportToolkit;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
@@ -96,7 +98,7 @@ class AiTierOneTest extends TestCase
         $this->fakeClaude(['reply' => 'שלום, בדקנו ונטפל בכך היום.', 'confidence' => 'medium']);
 
         $ticket = $this->ticketWithInbound();
-        (new DraftReplyJob($ticket->id))->handle(app(ClaudeClient::class));
+        (new DraftReplyJob($ticket->id))->handle(app(ClaudeClient::class), app(SupportToolkit::class));
 
         $draft = $ticket->messages()->where('author', MessageAuthor::Ai)->sole();
 
@@ -105,6 +107,30 @@ class AiTierOneTest extends TestCase
         $this->assertSame(MessageChannel::InternalNote, $draft->channel);
         $this->assertStringContainsString('טיוטת תשובה', $draft->body);
         $this->assertNull($draft->external_message_id);
+    }
+
+    public function test_draft_prompt_includes_real_customer_facts(): void
+    {
+        $this->enableAi();
+        $this->fakeClaude(['reply' => 'טופל', 'confidence' => 'high']);
+
+        $ticket = $this->ticketWithInbound();
+        Site::factory()->create([
+            'customer_id' => $ticket->customer_id,
+            'domain' => 'client-site.co.il',
+        ]);
+
+        (new DraftReplyJob($ticket->id))->handle(app(ClaudeClient::class), app(SupportToolkit::class));
+
+        // The outgoing prompt carried the customer's real site domain and a
+        // card-update link, so the AI can answer concretely.
+        Http::assertSent(function ($request) {
+            $prompt = $request['messages'][0]['content'] ?? '';
+
+            return str_contains($prompt, 'client-site.co.il')
+                && str_contains($prompt, 'נתוני הלקוח')
+                && str_contains($prompt, '/billing/update-card/');
+        });
     }
 
     public function test_draft_is_skipped_when_last_message_is_not_from_customer(): void
@@ -120,7 +146,7 @@ class AiTierOneTest extends TestCase
             'author' => MessageAuthor::Agent,
         ]);
 
-        (new DraftReplyJob($ticket->id))->handle(app(ClaudeClient::class));
+        (new DraftReplyJob($ticket->id))->handle(app(ClaudeClient::class), app(SupportToolkit::class));
 
         $this->assertSame(0, $ticket->messages()->where('author', MessageAuthor::Ai)->count());
     }
@@ -136,7 +162,7 @@ class AiTierOneTest extends TestCase
         ]);
 
         $ticket = $this->ticketWithInbound();
-        (new DraftReplyJob($ticket->id))->handle(app(ClaudeClient::class));
+        (new DraftReplyJob($ticket->id))->handle(app(ClaudeClient::class), app(SupportToolkit::class));
 
         $this->assertSame(0, $ticket->messages()->where('author', MessageAuthor::Ai)->count());
     }

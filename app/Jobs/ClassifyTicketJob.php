@@ -55,10 +55,14 @@ class ClassifyTicketJob implements ShouldQueue
                         'type' => 'string',
                         'enum' => ['low', 'normal', 'high', 'urgent'],
                     ],
+                    'intent' => [
+                        'type' => 'string',
+                        'enum' => ['site_down', 'billing', 'invoice', 'account', 'card_update', 'technical', 'other'],
+                    ],
                     'category' => ['type' => 'string'],
                     'summary' => ['type' => 'string'],
                 ],
-                'required' => ['priority', 'category', 'summary'],
+                'required' => ['priority', 'intent', 'category', 'summary'],
             ],
         );
 
@@ -76,8 +80,9 @@ class ClassifyTicketJob implements ShouldQueue
             'direction' => MessageDirection::Outbound,
             'channel' => MessageChannel::InternalNote,
             'body' => sprintf(
-                "🤖 סיווג AI\nעדיפות: %s\nקטגוריה: %s\nתקציר: %s",
+                "🤖 סיווג AI\nעדיפות: %s\nכוונה: %s\nקטגוריה: %s\nתקציר: %s",
                 $priority->value,
+                $result['intent'] ?? '-',
                 $result['category'] ?? '-',
                 $result['summary'] ?? '-',
             ),
