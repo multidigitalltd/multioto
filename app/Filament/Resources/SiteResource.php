@@ -131,7 +131,8 @@ class SiteResource extends Resource
                     ->label('השהה')
                     ->icon('heroicon-o-pause-circle')
                     ->color('danger')
-                    ->visible(fn (Site $record): bool => $record->status === SiteStatus::Active)
+                    ->visible(fn (Site $record): bool => $record->status === SiteStatus::Active
+                        && self::hostingActionable($record))
                     ->requiresConfirmation()
                     ->modalHeading('השהיית אתר')
                     ->modalDescription(fn (Site $record): string => "להשהות את {$record->domain}? האתר יעבור למצב תחזוקה אצל ספק האחסון.")
@@ -150,7 +151,8 @@ class SiteResource extends Resource
                     ->label('שחזר')
                     ->icon('heroicon-o-play-circle')
                     ->color('success')
-                    ->visible(fn (Site $record): bool => $record->status === SiteStatus::Suspended)
+                    ->visible(fn (Site $record): bool => $record->status === SiteStatus::Suspended
+                        && self::hostingActionable($record))
                     ->requiresConfirmation()
                     ->modalHeading('שחזור אתר')
                     ->modalDescription(fn (Site $record): string => "לשחזר את {$record->domain} לפעילות מלאה?")
@@ -173,6 +175,21 @@ class SiteResource extends Resource
             ])
             ->emptyStateHeading('אין אתרים עדיין')
             ->emptyStateDescription('הקימו אתר חדש דרך "אתר חדש" בתפריט.');
+    }
+
+    /**
+     * Whether the suspend/restore quick actions can actually take effect. The
+     * real FlyWP driver needs a linked site (hosting_ref); the 'log' driver just
+     * records intent, so it's always actionable. Prevents enqueuing a job that
+     * would fail while the UI reports success.
+     */
+    protected static function hostingActionable(Site $record): bool
+    {
+        if (config('billing.hosting.driver') === 'flywp') {
+            return filled($record->hosting_ref);
+        }
+
+        return true;
     }
 
     public static function getRelations(): array

@@ -4,6 +4,7 @@ namespace App\Filament\Resources;
 
 use App\Enums\ChargeStatus;
 use App\Filament\Resources\ChargeResource\Pages;
+use App\Filament\Support\MoneyField;
 use App\Models\Charge;
 use Filament\Forms;
 use Filament\Forms\Form;
@@ -38,22 +39,13 @@ class ChargeResource extends Resource
                             ->relationship('subscription', 'id')
                             ->searchable()
                             ->required(),
-                        Forms\Components\TextInput::make('amount_agorot')
-                            ->label('סכום (אגורות)')
-                            ->helperText('100 אגורות = ₪1')
+                        MoneyField::make('amount_agorot', 'סכום (₪)')
+                            ->required(),
+                        MoneyField::make('vat_agorot', 'מע״מ (₪)')
                             ->required()
-                            ->numeric(),
-                        Forms\Components\TextInput::make('vat_agorot')
-                            ->label('מע״מ (אגורות)')
-                            ->helperText('100 אגורות = ₪1')
-                            ->required()
-                            ->numeric()
                             ->default(0),
-                        Forms\Components\TextInput::make('total_agorot')
-                            ->label('סה״כ (אגורות)')
-                            ->helperText('100 אגורות = ₪1')
-                            ->required()
-                            ->numeric(),
+                        MoneyField::make('total_agorot', 'סה״כ (₪)')
+                            ->required(),
                         Forms\Components\TextInput::make('currency')
                             ->label('מטבע')
                             ->required(),

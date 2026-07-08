@@ -4,6 +4,7 @@ namespace App\Filament\Resources;
 
 use App\Enums\SubscriptionStatus;
 use App\Filament\Resources\SubscriptionResource\Pages;
+use App\Filament\Support\MoneyField;
 use App\Jobs\ChargeSubscriptionJob;
 use App\Jobs\SendCardCaptureLinkJob;
 use App\Models\Subscription;
@@ -73,10 +74,8 @@ class SubscriptionResource extends Resource
                             ->label('סוף תקופה'),
                         Forms\Components\DateTimePicker::make('next_charge_at')
                             ->label('חיוב הבא'),
-                        Forms\Components\TextInput::make('price_agorot_override')
-                            ->label('מחיר מיוחד (אגורות)')
-                            ->helperText('100 אגורות = ₪1')
-                            ->numeric(),
+                        MoneyField::make('price_agorot_override', 'מחיר מיוחד (₪)')
+                            ->helperText('רק אם סוכם מחיר שונה מהתוכנית'),
                     ])->columns(2),
 
                 Forms\Components\Section::make('גבייה')
