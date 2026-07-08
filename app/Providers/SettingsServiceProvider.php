@@ -30,7 +30,12 @@ class SettingsServiceProvider extends ServiceProvider
         'waha.api_key' => 'billing.waha.api_key',
         'postmark.token' => 'services.postmark.token',
         'ai.enabled' => 'billing.ai.enabled',
+        'ai.provider' => 'billing.ai.provider',
         'ai.api_key' => 'billing.ai.api_key',
+        'ai.base_url' => 'billing.ai.base_url',
+        'ai.model' => 'billing.ai.model',
+        'ai.persona' => 'billing.ai.persona',
+        'ai.rules' => 'billing.ai.rules',
     ];
 
     public function boot(): void

@@ -108,7 +108,7 @@
                                 @endif
                             </span>
                             <span class="price">
-                                ₪{{ number_format($plan->price_agorot / 100) }}
+                                ₪{{ rtrim(rtrim(number_format($plan->price_agorot / 100, 2, '.', ''), '0'), '.') }}
                                 <small>{{ $plan->vat_applies ? 'לחודש + מע״מ' : 'לחודש' }}</small>
                             </span>
                         </label>

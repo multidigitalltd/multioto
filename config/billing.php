@@ -90,10 +90,28 @@ return [
         // Optional Tier-1 AI (Stage 5). When api_key is empty the layer is a
         // no-op — tickets are still handled manually, nothing breaks.
         'enabled' => env('AI_ENABLED', false),
-        'api_key' => env('ANTHROPIC_API_KEY'),
-        'base_url' => env('ANTHROPIC_BASE_URL', 'https://api.anthropic.com'),
+
+        // Provider: 'anthropic' (Claude) or 'openai' (any OpenAI-compatible
+        // endpoint — OpenAI, Azure OpenAI, OpenRouter, or a local model server).
+        'provider' => env('AI_PROVIDER', 'anthropic'),
+
+        // AI_API_KEY is the generic name; ANTHROPIC_API_KEY kept for back-compat.
+        'api_key' => env('AI_API_KEY', env('ANTHROPIC_API_KEY')),
+        'base_url' => env('AI_BASE_URL', env('ANTHROPIC_BASE_URL', 'https://api.anthropic.com')),
         'model' => env('AI_MODEL', 'claude-opus-4-8'),
         'effort' => env('AI_EFFORT', 'low'),
+
+        // Editable agent instructions. The persona sets the tone/role; the rules
+        // are the guardrails (what's allowed/forbidden). Non-negotiable safety
+        // rules are always appended in code on top of these.
+        'persona' => env('AI_PERSONA', 'אתה נציג תמיכה של Multi Digital — חברת אחסון ותחזוקת אתרים. דבר בעברית, בנימוס, בקצרה ולעניין.'),
+        'rules' => env('AI_RULES', implode("\n", [
+            '- בסס תשובות אך ורק על נתוני הלקוח שסופקו; אל תמציא פרטים.',
+            '- אל תבטיח החזרים, זיכויים או מועדים שלא אושרו.',
+            '- אל תחשוף פרטים פנימיים, מפתחות, או נתונים של לקוחות אחרים.',
+            '- בנושאים רגישים (ביטול מנוי, סכסוך תשלום) — המלץ להעביר לנציג אנושי.',
+            '- צרף קישור לעדכון כרטיס רק אם הלקוח ביקש לעדכן אמצעי תשלום.',
+        ])),
     ],
 
     'monitoring' => [

@@ -4,10 +4,13 @@ namespace App\Filament\Resources;
 
 use App\Enums\BusinessType;
 use App\Enums\CustomerStatus;
+use App\Enums\SubscriptionStatus;
 use App\Filament\Resources\CustomerResource\Pages;
+use App\Jobs\SendCardCaptureLinkJob;
 use App\Models\Customer;
 use Filament\Forms;
 use Filament\Forms\Form;
+use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
@@ -131,6 +134,39 @@ class CustomerResource extends Resource
                     ->label('פטור ממע״מ'),
             ])
             ->actions([
+                Tables\Actions\Action::make('sendCardLink')
+                    ->label('קישור לכרטיס')
+                    ->icon('heroicon-o-credit-card')
+                    ->visible(fn (Customer $record): bool => filled($record->phone ?? $record->email)
+                        && $record->subscriptions()->whereNot('status', SubscriptionStatus::Canceled)->exists())
+                    ->requiresConfirmation()
+                    ->modalHeading('שליחת קישור להזנת כרטיס')
+                    ->modalDescription(fn (Customer $record): string => "לשלוח ל-{$record->name} קישור מאובטח להזנת/עדכון כרטיס אשראי (וואטסאפ + מייל)?")
+                    ->modalSubmitActionLabel('שלח')
+                    ->action(function (Customer $record): void {
+                        $subscriptionId = $record->subscriptions()
+                            ->whereNot('status', SubscriptionStatus::Canceled)
+                            ->orderBy('id')
+                            ->value('id');
+
+                        // The subscription may have been canceled between render and click.
+                        if ($subscriptionId === null) {
+                            Notification::make()
+                                ->title('ללקוח אין מנוי פעיל לשליחת קישור')
+                                ->warning()
+                                ->send();
+
+                            return;
+                        }
+
+                        SendCardCaptureLinkJob::dispatch($subscriptionId);
+
+                        Notification::make()
+                            ->title('הקישור נשלח ללקוח')
+                            ->success()
+                            ->send();
+                    }),
+
                 Tables\Actions\EditAction::make()->label('עריכה'),
             ])
             ->bulkActions([

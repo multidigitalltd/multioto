@@ -38,6 +38,18 @@ class IntegrationHealthTest extends TestCase
         $result = $this->health()->check('cardcom');
 
         $this->assertTrue($result->ok);
+
+        // A token-only request must NOT carry a Document object (Cardcom rejects
+        // it with 5046), must send Amount + ISOCoinId, and TerminalNumber as int.
+        Http::assertSent(function ($request) {
+            $body = $request->data();
+
+            return ($body['Operation'] ?? null) === 'CreateTokenOnly'
+                && ! array_key_exists('Document', $body)
+                && array_key_exists('Amount', $body)
+                && ($body['ISOCoinId'] ?? null) === 1
+                && $body['TerminalNumber'] === 1000;
+        });
     }
 
     public function test_cardcom_reports_failure_on_nonzero_response_code(): void

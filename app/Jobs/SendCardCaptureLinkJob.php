@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Enums\SubscriptionStatus;
 use App\Mail\DunningNotificationMail;
 use App\Models\Subscription;
 use App\Services\Waha\WahaClient;
@@ -31,7 +32,9 @@ class SendCardCaptureLinkJob implements ShouldQueue
     {
         $subscription = Subscription::with(['customer', 'plan'])->find($this->subscriptionId);
 
-        if (! $subscription) {
+        // Skip if the subscription vanished or was canceled between enqueue and
+        // run — a canceled subscription must never receive a card-capture link.
+        if (! $subscription || $subscription->status === SubscriptionStatus::Canceled) {
             return;
         }
 

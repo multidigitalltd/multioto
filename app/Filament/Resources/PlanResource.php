@@ -4,6 +4,7 @@ namespace App\Filament\Resources;
 
 use App\Enums\BillingInterval;
 use App\Filament\Resources\PlanResource\Pages;
+use App\Filament\Support\MoneyField;
 use App\Models\Plan;
 use Filament\Forms;
 use Filament\Forms\Form;
@@ -40,10 +41,7 @@ class PlanResource extends Resource
                             ->label('שם התוכנית')
                             ->required()
                             ->maxLength(255),
-                        Forms\Components\TextInput::make('price_agorot')
-                            ->label('מחיר (אגורות)')
-                            ->helperText('100 אגורות = ₪1')
-                            ->numeric()
+                        MoneyField::make('price_agorot', 'מחיר (₪ לחודש)')
                             ->required(),
                         Forms\Components\Select::make('billing_interval')
                             ->label('תדירות חיוב')

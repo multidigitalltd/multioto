@@ -5,6 +5,7 @@ namespace App\Filament\Resources;
 use App\Enums\DocumentType;
 use App\Enums\VatCategory;
 use App\Filament\Resources\InvoiceResource\Pages;
+use App\Filament\Support\MoneyField;
 use App\Models\Invoice;
 use Filament\Forms;
 use Filament\Forms\Form;
@@ -61,22 +62,13 @@ class InvoiceResource extends Resource
 
                 Forms\Components\Section::make('סכומים')
                     ->schema([
-                        Forms\Components\TextInput::make('amount_agorot')
-                            ->label('סכום (אגורות)')
-                            ->helperText('100 אגורות = ₪1')
+                        MoneyField::make('amount_agorot', 'סכום (₪)')
+                            ->required(),
+                        MoneyField::make('vat_agorot', 'מע״מ (₪)')
                             ->required()
-                            ->numeric(),
-                        Forms\Components\TextInput::make('vat_agorot')
-                            ->label('מע״מ (אגורות)')
-                            ->helperText('100 אגורות = ₪1')
-                            ->required()
-                            ->numeric()
                             ->default(0),
-                        Forms\Components\TextInput::make('total_agorot')
-                            ->label('סה״כ (אגורות)')
-                            ->helperText('100 אגורות = ₪1')
-                            ->required()
-                            ->numeric(),
+                        MoneyField::make('total_agorot', 'סה״כ (₪)')
+                            ->required(),
                     ])->columns(2),
 
                 Forms\Components\Section::make('קובץ')

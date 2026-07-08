@@ -8,6 +8,7 @@ use App\Enums\MessageDirection;
 use App\Models\CannedResponse;
 use App\Models\Ticket;
 use App\Services\Ai\ClaudeClient;
+use App\Services\Ai\SupportToolkit;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 
@@ -29,7 +30,7 @@ class DraftReplyJob implements ShouldQueue
 
     public function __construct(public int $ticketId) {}
 
-    public function handle(ClaudeClient $claude): void
+    public function handle(ClaudeClient $claude, SupportToolkit $toolkit): void
     {
         if (! $claude->isEnabled()) {
             return;
@@ -61,14 +62,15 @@ class DraftReplyJob implements ShouldQueue
             ->map(fn ($m) => "[{$m->author->value}] {$m->body}")
             ->implode("\n");
 
+        // Real, read-only facts about this customer (account, billing, uptime,
+        // last invoice + a card-update link) so the draft answers concretely.
+        $facts = $ticket->customer
+            ? $toolkit->factsFor($ticket->customer)
+            : 'הפנייה אינה מקושרת ללקוח מזוהה.';
+
         $result = $claude->structured(
-            system: implode("\n", [
-                'אתה נציג תמיכה של Multi Digital (אחסון ותחזוקת אתרים).',
-                'נסח טיוטת תשובה מנומסת, קצרה וברורה בעברית לפנייה האחרונה של הלקוח.',
-                'אל תמציא פרטים שאינם ידועים. אם חסר מידע — ציין זאת בטיוטה.',
-                'התשובה תעבור אישור אנושי לפני שליחה.',
-            ]),
-            prompt: "לקוח: {$ticket->customer?->name}\nנושא: {$ticket->subject}\n\nשיחה:\n{$conversation}\n\nתבניות מענה זמינות:\n{$cannedContext}",
+            system: $this->systemPrompt(),
+            prompt: "לקוח: {$ticket->customer?->name}\nנושא: {$ticket->subject}\n\nנתוני הלקוח:\n{$facts}\n\nשיחה:\n{$conversation}\n\nתבניות מענה זמינות:\n{$cannedContext}",
             schema: [
                 'type' => 'object',
                 'additionalProperties' => false,
@@ -94,5 +96,21 @@ class DraftReplyJob implements ShouldQueue
             ),
             'author' => MessageAuthor::Ai,
         ]);
+    }
+
+    /**
+     * The agent's system prompt: the operator-editable persona + guardrails
+     * (from settings), plus a non-negotiable safety line appended in code.
+     */
+    protected function systemPrompt(): string
+    {
+        return implode("\n", array_filter([
+            trim((string) config('billing.ai.persona')),
+            '',
+            'כללים מחייבים:',
+            trim((string) config('billing.ai.rules')),
+            '',
+            'התשובה נשמרת כטיוטה פנימית ותעבור אישור אנושי לפני שליחה — אל תתחייב בשם החברה.',
+        ], fn ($line) => $line !== null));
     }
 }

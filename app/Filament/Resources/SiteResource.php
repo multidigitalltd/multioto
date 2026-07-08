@@ -4,9 +4,12 @@ namespace App\Filament\Resources;
 
 use App\Enums\SiteStatus;
 use App\Filament\Resources\SiteResource\Pages;
+use App\Jobs\RestoreSiteJob;
+use App\Jobs\SuspendSiteJob;
 use App\Models\Site;
 use Filament\Forms;
 use Filament\Forms\Form;
+use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
@@ -124,6 +127,45 @@ class SiteResource extends Resource
                     ->label('ניטור פעיל'),
             ])
             ->actions([
+                Tables\Actions\Action::make('suspend')
+                    ->label('השהה')
+                    ->icon('heroicon-o-pause-circle')
+                    ->color('danger')
+                    ->visible(fn (Site $record): bool => $record->status === SiteStatus::Active
+                        && self::hostingActionable($record))
+                    ->requiresConfirmation()
+                    ->modalHeading('השהיית אתר')
+                    ->modalDescription(fn (Site $record): string => "להשהות את {$record->domain}? האתר יעבור למצב תחזוקה אצל ספק האחסון.")
+                    ->modalSubmitActionLabel('השהה')
+                    ->action(function (Site $record): void {
+                        SuspendSiteJob::dispatch($record->id);
+
+                        Notification::make()
+                            ->title('ההשהיה נשלחה לביצוע')
+                            ->body('הסטטוס יתעדכן תוך רגעים.')
+                            ->success()
+                            ->send();
+                    }),
+
+                Tables\Actions\Action::make('restore')
+                    ->label('שחזר')
+                    ->icon('heroicon-o-play-circle')
+                    ->color('success')
+                    ->visible(fn (Site $record): bool => $record->status === SiteStatus::Suspended
+                        && self::hostingActionable($record))
+                    ->requiresConfirmation()
+                    ->modalHeading('שחזור אתר')
+                    ->modalDescription(fn (Site $record): string => "לשחזר את {$record->domain} לפעילות מלאה?")
+                    ->modalSubmitActionLabel('שחזר')
+                    ->action(function (Site $record): void {
+                        RestoreSiteJob::dispatch($record->id);
+
+                        Notification::make()
+                            ->title('השחזור נשלח לביצוע')
+                            ->success()
+                            ->send();
+                    }),
+
                 Tables\Actions\EditAction::make()->label('עריכה'),
             ])
             ->bulkActions([
@@ -133,6 +175,21 @@ class SiteResource extends Resource
             ])
             ->emptyStateHeading('אין אתרים עדיין')
             ->emptyStateDescription('הקימו אתר חדש דרך "אתר חדש" בתפריט.');
+    }
+
+    /**
+     * Whether the suspend/restore quick actions can actually take effect. The
+     * real FlyWP driver needs a linked site (hosting_ref); the 'log' driver just
+     * records intent, so it's always actionable. Prevents enqueuing a job that
+     * would fail while the UI reports success.
+     */
+    protected static function hostingActionable(Site $record): bool
+    {
+        if (config('billing.hosting.driver') === 'flywp') {
+            return filled($record->hosting_ref);
+        }
+
+        return true;
     }
 
     public static function getRelations(): array

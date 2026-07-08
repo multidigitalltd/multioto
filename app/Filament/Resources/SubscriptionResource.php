@@ -4,9 +4,13 @@ namespace App\Filament\Resources;
 
 use App\Enums\SubscriptionStatus;
 use App\Filament\Resources\SubscriptionResource\Pages;
+use App\Filament\Support\MoneyField;
+use App\Jobs\ChargeSubscriptionJob;
+use App\Jobs\SendCardCaptureLinkJob;
 use App\Models\Subscription;
 use Filament\Forms;
 use Filament\Forms\Form;
+use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
@@ -70,10 +74,8 @@ class SubscriptionResource extends Resource
                             ->label('סוף תקופה'),
                         Forms\Components\DateTimePicker::make('next_charge_at')
                             ->label('חיוב הבא'),
-                        Forms\Components\TextInput::make('price_agorot_override')
-                            ->label('מחיר מיוחד (אגורות)')
-                            ->helperText('100 אגורות = ₪1')
-                            ->numeric(),
+                        MoneyField::make('price_agorot_override', 'מחיר מיוחד (₪)')
+                            ->helperText('רק אם סוכם מחיר שונה מהתוכנית'),
                     ])->columns(2),
 
                 Forms\Components\Section::make('גבייה')
@@ -159,6 +161,44 @@ class SubscriptionResource extends Resource
                     ->options(SubscriptionStatus::class),
             ])
             ->actions([
+                Tables\Actions\Action::make('chargeNow')
+                    ->label('חייב עכשיו')
+                    ->icon('heroicon-o-bolt')
+                    ->color('warning')
+                    ->visible(fn (Subscription $record): bool => $record->isChargeable())
+                    ->requiresConfirmation()
+                    ->modalHeading('חיוב מיידי')
+                    ->modalDescription(fn (Subscription $record): string => 'לחייב את '.$record->customer->name.' בסך ₪'.number_format($record->totalChargeAgorot() / 100, 2).' עכשיו? החיוב ירוץ ברקע עם כל הגנות הכפילות הרגילות.')
+                    ->modalSubmitActionLabel('חייב עכשיו')
+                    ->action(function (Subscription $record): void {
+                        $record->update(['next_charge_at' => now()]);
+                        ChargeSubscriptionJob::dispatch($record->id);
+
+                        Notification::make()
+                            ->title('החיוב נשלח לביצוע')
+                            ->body('התוצאה תופיע במסך "חיובים" תוך רגעים.')
+                            ->success()
+                            ->send();
+                    }),
+
+                Tables\Actions\Action::make('sendCardLink')
+                    ->label('קישור לכרטיס')
+                    ->icon('heroicon-o-credit-card')
+                    ->visible(fn (Subscription $record): bool => $record->status !== SubscriptionStatus::Canceled
+                        && filled($record->customer->phone ?? $record->customer->email))
+                    ->requiresConfirmation()
+                    ->modalHeading('שליחת קישור להזנת כרטיס')
+                    ->modalDescription(fn (Subscription $record): string => 'לשלוח ל-'.$record->customer->name.' קישור מאובטח להזנת/עדכון כרטיס אשראי (וואטסאפ + מייל)?')
+                    ->modalSubmitActionLabel('שלח')
+                    ->action(function (Subscription $record): void {
+                        SendCardCaptureLinkJob::dispatch($record->id);
+
+                        Notification::make()
+                            ->title('הקישור נשלח ללקוח')
+                            ->success()
+                            ->send();
+                    }),
+
                 Tables\Actions\EditAction::make()->label('עריכה'),
             ])
             ->bulkActions([
