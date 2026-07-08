@@ -46,14 +46,27 @@ return [
     ],
 
     'linet' => [
-        // Linet authenticates with three values from the account (see the
-        // Linet API settings screen): Login ID, Key, and Company ID.
+        // Linet authenticates by sending these three values in the request BODY
+        // of every call: login_id (API ID), login_hash (API Key), login_company
+        // (Company ID). See https://www.linet.org.il/linet-api-documentation/.
         'login_id' => env('LINET_LOGIN_ID'),
         'key' => env('LINET_KEY'),
         'company_id' => env('LINET_COMPANY_ID'),
-        'base_url' => env('LINET_BASE_URL', 'https://app.linet.org.il/api/v1'),
-        // Send the invoice to the customer by email from Linet's side.
+        'base_url' => env('LINET_BASE_URL', 'https://app.linet.org.il/api'),
+
+        // Send the created document to the customer by email from Linet's side.
         'email_document' => env('LINET_EMAIL_DOCUMENT', true),
+
+        // Account-specific codes from YOUR Linet setup — verify these against
+        // your account before issuing real documents:
+        //  - doctype: the document-type code for a tax-invoice/receipt (חשבונית מס/קבלה)
+        //  - vat_cat_taxable / vat_cat_exempt: VAT category ids (taxable vs exempt)
+        //  - payment_type: docCheq payment method (e.g. credit card)
+        'doctype' => env('LINET_DOCTYPE'),
+        'vat_cat_taxable' => env('LINET_VAT_CAT_TAXABLE', 1),
+        'vat_cat_exempt' => env('LINET_VAT_CAT_EXEMPT'),
+        'payment_type' => env('LINET_PAYMENT_TYPE', 3),
+        'create_doc_path' => env('LINET_CREATE_DOC_PATH', '/create/doc'),
     ],
 
     'waha' => [
