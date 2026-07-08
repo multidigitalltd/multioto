@@ -26,6 +26,9 @@ services:
       # and mount storage so uploads/logs survive container rebuilds.
       - ./.env:/app/.env
       - storage:/app/storage
+      # Shared with the host deploy watcher: the panel drops a deploy-request
+      # flag here and reads back the version/status the watcher writes.
+      - ./ops:/app/ops
     depends_on:
       - postgres
       - redis

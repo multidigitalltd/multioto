@@ -18,6 +18,13 @@ git fetch origin
 git checkout main
 git pull --ff-only origin main
 
+# Stamp the deployed version so the admin panel's "מערכת ועדכונים" screen shows it.
+mkdir -p ops
+printf '{"sha":"%s","short":"%s","date":"%s"}\n' \
+    "$(git rev-parse HEAD 2>/dev/null || echo unknown)" \
+    "$(git rev-parse --short HEAD 2>/dev/null || echo unknown)" \
+    "$(date '+%Y-%m-%d %H:%M')" > ops/version.json
+
 if [ "$MODE" = "--native" ]; then
     echo "→ Installing dependencies"
     composer install --no-dev --optimize-autoloader --no-interaction
