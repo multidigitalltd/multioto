@@ -21,6 +21,11 @@ services:
       DB_DATABASE: multioto
       DB_USERNAME: multioto
       DB_PASSWORD: multioto
+    # Reach services that publish ports on the host (e.g. a separately-run WAHA
+    # container) via http://host.docker.internal:<port>, since they're not on
+    # this compose network. On Linux 'host-gateway' resolves to the host.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       # Bind .env so the app key generated on first boot persists on the host,
       # and mount storage so uploads/logs survive container rebuilds.
@@ -47,6 +52,8 @@ services:
       DB_DATABASE: multioto
       DB_USERNAME: multioto
       DB_PASSWORD: multioto
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./.env:/app/.env
       - storage:/app/storage
@@ -67,6 +74,8 @@ services:
       DB_DATABASE: multioto
       DB_USERNAME: multioto
       DB_PASSWORD: multioto
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./.env:/app/.env
       - storage:/app/storage
