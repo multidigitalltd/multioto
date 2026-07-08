@@ -32,20 +32,22 @@ class IntegrationHealthTest extends TestCase
 
     public function test_cardcom_reports_ok_on_zero_response_code(): void
     {
-        config(['billing.cardcom.terminal_number' => '1000', 'billing.cardcom.api_name' => 'test']);
+        config(['billing.cardcom.terminal_number' => '1000', 'billing.cardcom.api_name' => 'test', 'billing.cardcom.api_password' => 'secret']);
         Http::fake(['*/LowProfile/Create' => Http::response(['ResponseCode' => 0, 'Url' => 'https://secure.cardcom.solutions/x'])]);
 
         $result = $this->health()->check('cardcom');
 
         $this->assertTrue($result->ok);
 
-        // A token-only request must NOT carry a Document object (Cardcom rejects
-        // it with 5046), must send Amount + ISOCoinId, and TerminalNumber as int.
+        // A token-only request must NOT carry a Document object NOR ApiPassword
+        // (either pushes Cardcom into document mode → error 5046), must send
+        // Amount + ISOCoinId, and TerminalNumber as int.
         Http::assertSent(function ($request) {
             $body = $request->data();
 
             return ($body['Operation'] ?? null) === 'CreateTokenOnly'
                 && ! array_key_exists('Document', $body)
+                && ! array_key_exists('ApiPassword', $body)
                 && array_key_exists('Amount', $body)
                 && ($body['ISOCoinId'] ?? null) === 1
                 && $body['TerminalNumber'] === 1000;
