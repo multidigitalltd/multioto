@@ -14,6 +14,7 @@ use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
+use Illuminate\Support\Facades\URL;
 
 class CustomerResource extends Resource
 {
@@ -163,9 +164,35 @@ class CustomerResource extends Resource
 
                         Notification::make()
                             ->title('הקישור נשלח ללקוח')
+                            ->body('נשלח בוואטסאפ ובמייל (אם הערוצים מחוברים). אם עדיין לא הגדרתם וואטסאפ/מייל — השתמשו ב"העתקת קישור לכרטיס".')
                             ->success()
                             ->send();
                     }),
+
+                // Show the signed card-capture link on screen to copy/open
+                // directly — works even before WhatsApp/email are connected, and
+                // is the quickest way to capture a card for a manual charge test.
+                Tables\Actions\Action::make('copyCardLink')
+                    ->label('העתקת קישור לכרטיס')
+                    ->icon('heroicon-o-link')
+                    ->color('gray')
+                    ->modalHeading('קישור מאובטח להזנת כרטיס')
+                    ->modalDescription('העתיקו את הקישור ושִלחו ללקוח, או פִּתחו אותו בעצמכם כדי להזין כרטיס (הכרטיס מוזן בעמוד המאובטח של קארדקום). הקישור חתום ופג תוקף.')
+                    ->fillForm(fn (Customer $record): array => [
+                        'link' => URL::temporarySignedRoute(
+                            'billing.update-card',
+                            now()->addHours((int) config('billing.card_update_link_ttl_hours')),
+                            ['customer' => $record->id],
+                        ),
+                    ])
+                    ->form([
+                        Forms\Components\TextInput::make('link')
+                            ->label('קישור')
+                            ->readOnly()
+                            ->columnSpanFull(),
+                    ])
+                    ->modalSubmitAction(false)
+                    ->modalCancelActionLabel('סגור'),
 
                 Tables\Actions\EditAction::make()->label('עריכה'),
             ])
