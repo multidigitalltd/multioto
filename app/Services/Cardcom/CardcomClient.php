@@ -32,10 +32,13 @@ class CardcomClient
         try {
             $response = $this->request('LowProfile/Create', [
                 'Operation' => 'CreateTokenOnly',
+                'Amount' => 0,
+                'ISOCoinId' => 1, // ILS
+                'Language' => 'he',
                 'ReturnValue' => 'connection-test',
                 'SuccessRedirectUrl' => url('/'),
                 'FailedRedirectUrl' => url('/'),
-                'Document' => null,
+                // No Document object — token-only must omit it (else error 5046).
             ]);
 
             $code = (string) ($response['ResponseCode'] ?? '');
@@ -61,11 +64,14 @@ class CardcomClient
     {
         $response = $this->request('LowProfile/Create', [
             'Operation' => 'CreateTokenOnly',
+            'Amount' => 0,
+            'ISOCoinId' => 1, // ILS
+            'Language' => 'he',
             'ReturnValue' => (string) $customerId,
             'SuccessRedirectUrl' => $successUrl,
             'FailedRedirectUrl' => $failureUrl,
             'WebHookUrl' => $webhookUrl,
-            'Document' => null,
+            // No Document object — token-only must omit it (else error 5046).
         ]);
 
         return [
@@ -117,7 +123,8 @@ class CardcomClient
         $response = Http::baseUrl($config['base_url'])
             ->timeout(30)
             ->post($path, array_merge($payload, [
-                'TerminalNumber' => $config['terminal_number'],
+                // Cardcom expects TerminalNumber as an integer, not a string.
+                'TerminalNumber' => (int) $config['terminal_number'],
                 'ApiName' => $config['api_name'],
                 'ApiPassword' => $config['api_password'],
             ]));
