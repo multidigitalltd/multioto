@@ -74,6 +74,8 @@ cd multioto
 
 מכיוון שאתם מתכננים הרבה עדכונים — זה התהליך שתריצו בכל פעם. **בלי `migrate:fresh` ובלי `db:seed`** בעדכון, ולכן שום תוכן לא נמחק.
 
+> **חיבור הוואטסאפ שורד את העדכון.** ה-session של WAHA נשמר ב-named volumes (`waha_sessions`, `waha_media`) ולכן `update.sh` (שמריץ `docker compose up -d --build`) **לא מנתק** את המספר המחובר ולא דורש סריקת QR מחדש. ראו סעיף WAHA Plus למטה.
+
 > טיפ: אפשר להריץ `./update.sh` דרך cron או webhook של GitHub Actions לפריסה אוטומטית בכל push ל-`main`.
 
 ---
@@ -190,6 +192,28 @@ Postmark משמש לשני הכיוונים:
 
 - **יוצא:** `MAIL_MAILER=postmark` + `POSTMARK_TOKEN`. הגדירו את הדומיין ב-Postmark עם **SPF + DKIM** (ו-DMARC בדומיין), ואמתו אותו. כל המיילים התפעוליים (דאנינג, תשובות תמיכה, דיוור) יוצאים דרכו.
 - **נכנס (Inbound):** ב-Postmark → Server → **Inbound**, הגדירו את ה-Webhook URL ל-`https://app.multidigital.co.il/webhooks/email?secret=<EMAIL_WEBHOOK_SECRET>`. כדי שלקוחות יוכלו להשיב לכתובת שלכם, הפנו רשומת **MX** (למשל של `reply.multidigital.co.il`) ל-`inbound.postmarkapp.com` — או השתמשו בכתובת ה-inbound hash ש-Postmark מספק. הפורמט ש-Postmark שולח (`From` / `Subject` / `TextBody` / `MessageID`) כבר נתמך ב-`EmailWebhookController` — הפנייה הופכת לכרטיס אוטומטית.
+
+---
+
+## WhatsApp — WAHA Plus (חיבור שלא מתנתק בעדכון)
+
+הקמת Docker (אפשרות ב׳) כוללת שירות **`waha`** מובנה ב-`docker-compose.yml`. הוא רץ על **WAHA Plus** דווקא (לא Core), וזה מה שמשאיר את המספר מחובר גם אחרי עדכון גרסה:
+
+- **מנוע NOWEB + volume קבוע** (`waha_sessions`, `waha_media`) — נתוני ה-session נשמרים בדיסק ולא בתוך הקונטיינר, ולכן שורדים כל `up --build` / `./update.sh`.
+- **`WHATSAPP_RESTART_ALL_SESSIONS=True`** — בכל הפעלה מחדש ה-session נטען ומתחבר אוטומטית, בלי סריקת QR חוזרת.
+- **Webhook פנימי** — WAHA שולח הודעות נכנסות ישירות ל-`http://app:8000/webhooks/waha?secret=<WAHA_WEBHOOK_SECRET>` ברשת הפנימית של Docker.
+
+### הפעלה ראשונה
+
+1. **התחברות ל-registry הפרטי של Plus** (פעם אחת, עם המפתח שקיבלתם):
+   ```bash
+   docker login -u devlikeapro -p <YOUR_WAHA_PLUS_KEY>
+   ```
+   (אם קיבלתם תג אחר — עדכנו `WAHA_IMAGE` ב-`.env`.)
+2. מלאו ב-`.env`: `WAHA_API_KEY` (מפתח לשרת WAHA) ו-`WAHA_WEBHOOK_SECRET`.
+3. `docker compose up -d --build` ואז היכנסו לדשבורד WAHA ב-`http://127.0.0.1:3000` וסרקו QR **פעם אחת**. מכאן והלאה החיבור נשמר.
+
+> אם אתם מריצים WAHA במקום אחר (מנוהל/שרת נפרד) — אל תפעילו את שירות `waha` של compose; פשוט הצביעו `WAHA_BASE_URL` אל אותו instance. שם ודאו בעצמכם persistence של ה-session + `WHATSAPP_RESTART_ALL_SESSIONS=True`, אחרת הוא ינותק בכל restart.
 
 ---
 

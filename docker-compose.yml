@@ -88,6 +88,43 @@ services:
     image: redis:7
     restart: unless-stopped
 
+  # WhatsApp transport — WAHA Plus (NOT Core). Plus is what keeps the logged-in
+  # session alive across a version update / rebuild: its session lives on disk
+  # (NOWEB engine) inside the named volume below, and WHATSAPP_RESTART_ALL_SESSIONS
+  # reconnects it automatically on boot. So `./update.sh` (docker compose up
+  # --build) restarts the container WITHOUT forcing a fresh QR scan — the number
+  # stays connected. Core, or a session kept only in the container filesystem,
+  # would disconnect on every rebuild.
+  #
+  # The Plus image ships from a private registry — authenticate once, before the
+  # first `up`, with the key you were issued:
+  #   docker login -u devlikeapro -p <YOUR_WAHA_PLUS_KEY>
+  # (see https://waha.devlike.pro/docs/how-to/waha-plus/). If your license uses a
+  # different tag, override WAHA_IMAGE in .env.
+  waha:
+    image: "${WAHA_IMAGE:-devlikeapro/waha-plus:latest}"
+    environment:
+      # Lightweight, session-persisting engine (Plus only).
+      WHATSAPP_DEFAULT_ENGINE: "${WAHA_ENGINE:-NOWEB}"
+      # Restart every saved session on boot → reconnects after an update with no QR.
+      WHATSAPP_RESTART_ALL_SESSIONS: "True"
+      # Protect the WAHA API/dashboard with the same key the app authenticates with.
+      WAHA_API_KEY: "${WAHA_API_KEY}"
+      # Global webhook straight to our endpoint over the internal network, carrying
+      # the shared secret WahaWebhookController verifies (it fails closed without it).
+      WHATSAPP_HOOK_URL: "http://app:8000/webhooks/waha?secret=${WAHA_WEBHOOK_SECRET}"
+      WHATSAPP_HOOK_EVENTS: "message"
+      TZ: "${APP_TIMEZONE:-Asia/Jerusalem}"
+    volumes:
+      # THIS is what survives updates: the WhatsApp session (and downloaded media)
+      # persist in named volumes, so a rebuild never logs the number out.
+      - waha_sessions:/app/.sessions
+      - waha_media:/app/.media
+    # Dashboard/API on localhost only; the app reaches it in-network at waha:3000.
+    ports:
+      - "127.0.0.1:3000:3000"
+    restart: unless-stopped
+
   # Optional HTTPS reverse proxy for your domain (app.multidigital.co.il).
   # Enable with:  docker compose --profile proxy up -d
   # Caddy fetches a free Let's Encrypt certificate automatically once the
@@ -112,5 +149,9 @@ services:
 volumes:
   pgdata:
   storage:
+  # WAHA session + media: named volumes so the connected WhatsApp number survives
+  # every `./update.sh` / rebuild without a re-scan.
+  waha_sessions:
+  waha_media:
   caddy_data:
   caddy_config:
