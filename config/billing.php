@@ -44,6 +44,17 @@ return [
         'base_url' => 'https://secure.cardcom.solutions/api/v11',
         // Shared secret we embed in Low Profile return/webhook URLs for origin verification.
         'webhook_secret' => env('CARDCOM_WEBHOOK_SECRET'),
+
+        // Some Cardcom terminals REQUIRE a Document object on every request and
+        // reject one without it (error 5046 "No InvoiceHead data was send").
+        // We therefore attach a document. Its type controls what Cardcom emits:
+        //  - 'Order' (default) — a NON-fiscal order document. Satisfies the
+        //    terminal without issuing a tax invoice, so Linet stays the invoicer.
+        //  - 'Auto' / 'TaxInvoiceAndReceipt' — let Cardcom issue the fiscal
+        //    invoice itself (then you'd disable Linet issuance to avoid duplicates).
+        //  - '' (empty) — send NO Document at all (only for terminals that don't
+        //    require one).
+        'document_type' => env('CARDCOM_DOCUMENT_TYPE', 'Order'),
     ],
 
     'linet' => [
