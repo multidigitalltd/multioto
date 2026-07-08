@@ -1,0 +1,7 @@
+# Automatic HTTPS for the Multioto panel.
+# The domain comes from the APP_DOMAIN environment variable (docker-compose.yml).
+# Caddy obtains and renews a free Let's Encrypt certificate on its own.
+{$APP_DOMAIN} {
+	encode gzip
+	reverse_proxy app:8000
+}
