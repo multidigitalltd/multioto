@@ -10,6 +10,10 @@ use App\Jobs\SendCardCaptureLinkJob;
 use App\Models\Customer;
 use Filament\Forms;
 use Filament\Forms\Form;
+use Filament\Infolists\Components\RepeatableEntry;
+use Filament\Infolists\Components\Section as InfoSection;
+use Filament\Infolists\Components\TextEntry;
+use Filament\Infolists\Infolist;
 use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Tables;
@@ -194,6 +198,7 @@ class CustomerResource extends Resource
                     ->modalSubmitAction(false)
                     ->modalCancelActionLabel('סגור'),
 
+                Tables\Actions\ViewAction::make()->label('כרטיס לקוח'),
                 Tables\Actions\EditAction::make()->label('עריכה'),
             ])
             ->bulkActions([
@@ -203,6 +208,99 @@ class CustomerResource extends Resource
             ])
             ->emptyStateHeading('אין לקוחות עדיין')
             ->emptyStateDescription('הקימו לקוח חדש דרך "לקוח חדש" בתפריט.');
+    }
+
+    /**
+     * The customer 360° view — everything about one customer on a single page:
+     * details, subscriptions, invoices, sites, tickets and saved cards.
+     */
+    public static function infolist(Infolist $infolist): Infolist
+    {
+        $money = fn ($state): string => '₪'.number_format(((int) $state) / 100, 2);
+
+        return $infolist->schema([
+            InfoSection::make('פרטי לקוח')
+                ->icon('heroicon-o-identification')
+                ->schema([
+                    TextEntry::make('name')->label('שם'),
+                    TextEntry::make('business_number')->label('ח.פ / עוסק')->placeholder('—'),
+                    TextEntry::make('business_type')->label('סוג עוסק')->badge(),
+                    TextEntry::make('vat_exempt')->label('מע״מ')->formatStateUsing(fn ($state): string => $state ? 'פטור' : 'חייב'),
+                    TextEntry::make('email')->label('אימייל')->copyable()->placeholder('—'),
+                    TextEntry::make('phone')->label('טלפון')->copyable()->placeholder('—'),
+                    TextEntry::make('status')->label('סטטוס')->badge(),
+                    TextEntry::make('notes')->label('הערות')->placeholder('—')->columnSpanFull(),
+                ])->columns(3),
+
+            InfoSection::make('מנויים')
+                ->icon('heroicon-o-arrow-path-rounded-square')
+                ->collapsible()
+                ->schema([
+                    RepeatableEntry::make('subscriptions')
+                        ->hiddenLabel()
+                        ->schema([
+                            TextEntry::make('plan.name')->label('תוכנית'),
+                            TextEntry::make('status')->label('סטטוס')->badge(),
+                            TextEntry::make('next_charge_at')->label('חיוב הבא')->dateTime('d/m/Y')->placeholder('—'),
+                        ])->columns(3),
+                ]),
+
+            InfoSection::make('חשבוניות')
+                ->icon('heroicon-o-document-text')
+                ->collapsible()
+                ->schema([
+                    RepeatableEntry::make('invoices')
+                        ->hiddenLabel()
+                        ->schema([
+                            TextEntry::make('linet_document_id')->label('מסמך'),
+                            TextEntry::make('total_agorot')->label('סכום')->formatStateUsing($money),
+                            TextEntry::make('issued_at')->label('הונפק')->dateTime('d/m/Y'),
+                            TextEntry::make('pdf_url')->label('PDF')
+                                ->url(fn ($state) => $state, shouldOpenInNewTab: true)
+                                ->formatStateUsing(fn ($state): string => filled($state) ? 'פתח' : '—'),
+                        ])->columns(4),
+                ]),
+
+            InfoSection::make('אתרים')
+                ->icon('heroicon-o-globe-alt')
+                ->collapsible()
+                ->schema([
+                    RepeatableEntry::make('sites')
+                        ->hiddenLabel()
+                        ->schema([
+                            TextEntry::make('domain')->label('דומיין'),
+                            TextEntry::make('status')->label('סטטוס')->badge(),
+                            TextEntry::make('monitor_url')->label('ניטור')->placeholder('—'),
+                        ])->columns(3),
+                ]),
+
+            InfoSection::make('פניות')
+                ->icon('heroicon-o-lifebuoy')
+                ->collapsible()
+                ->schema([
+                    RepeatableEntry::make('tickets')
+                        ->hiddenLabel()
+                        ->schema([
+                            TextEntry::make('subject')->label('נושא'),
+                            TextEntry::make('status')->label('סטטוס')->badge(),
+                            TextEntry::make('created_at')->label('נפתחה')->dateTime('d/m/Y'),
+                        ])->columns(3),
+                ]),
+
+            InfoSection::make('כרטיסים שמורים')
+                ->icon('heroicon-o-credit-card')
+                ->collapsible()
+                ->schema([
+                    RepeatableEntry::make('paymentTokens')
+                        ->hiddenLabel()
+                        ->schema([
+                            TextEntry::make('card_brand')->label('סוג')->placeholder('—'),
+                            TextEntry::make('card_last4')->label('4 ספרות אחרונות')
+                                ->formatStateUsing(fn ($state): string => filled($state) ? '****'.$state : '—'),
+                            TextEntry::make('status')->label('סטטוס')->badge(),
+                        ])->columns(3),
+                ]),
+        ]);
     }
 
     public static function getRelations(): array
@@ -217,6 +315,7 @@ class CustomerResource extends Resource
         return [
             'index' => Pages\ListCustomers::route('/'),
             'create' => Pages\CreateCustomer::route('/create'),
+            'view' => Pages\ViewCustomer::route('/{record}'),
             'edit' => Pages\EditCustomer::route('/{record}/edit'),
         ];
     }
