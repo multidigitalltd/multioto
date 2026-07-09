@@ -3,6 +3,28 @@
         {{ $this->form }}
     </form>
 
+    @if ($paymentUrl)
+        <x-filament::section class="mt-6" icon="heroicon-o-lock-closed">
+            <x-slot name="heading">תשלום מאובטח — קארדקום</x-slot>
+            <x-slot name="description">הזינו את פרטי הכרטיס בחלון המאובטח של קארדקום. לאחר התשלום החיוב יתעדכן והחשבונית תופק אוטומטית. הכרטיס מוזן ישירות מול קארדקום ואינו עובר דרך המערכת.</x-slot>
+
+            <div wire:ignore>
+                <iframe
+                    src="{{ $paymentUrl }}"
+                    title="תשלום מאובטח קארדקום"
+                    style="width:100%;height:74vh;border:0;border-radius:0.5rem;background:#fff"
+                    allow="payment"
+                ></iframe>
+            </div>
+
+            <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">
+                אם החלון לא נטען,
+                <a href="{{ $paymentUrl }}" target="_blank" rel="noopener" class="text-primary-600 dark:text-primary-400 underline">פִּתחו את עמוד התשלום בכרטיסייה חדשה</a>,
+                או העתיקו את הקישור ושִלחו ללקוח.
+            </p>
+        </x-filament::section>
+    @endif
+
     <x-filament::section class="mt-6" icon="heroicon-o-shield-check">
         <x-slot name="heading">איך זה עובד</x-slot>
         <ul class="list-disc pr-5 text-sm text-gray-500 dark:text-gray-400 space-y-1">

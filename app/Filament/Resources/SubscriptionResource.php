@@ -6,8 +6,8 @@ use App\Enums\SubscriptionStatus;
 use App\Filament\Resources\SubscriptionResource\Pages;
 use App\Filament\Support\MoneyField;
 use App\Jobs\ChargeSubscriptionJob;
-use App\Jobs\SendCardCaptureLinkJob;
 use App\Models\Subscription;
+use App\Services\Notifications\CardCaptureLinkSender;
 use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Notifications\Notification;
@@ -190,13 +190,9 @@ class SubscriptionResource extends Resource
                     ->modalHeading('שליחת קישור להזנת כרטיס')
                     ->modalDescription(fn (Subscription $record): string => 'לשלוח ל-'.$record->customer->name.' קישור מאובטח להזנת/עדכון כרטיס אשראי (וואטסאפ + מייל)?')
                     ->modalSubmitActionLabel('שלח')
-                    ->action(function (Subscription $record): void {
-                        SendCardCaptureLinkJob::dispatch($record->id);
-
-                        Notification::make()
-                            ->title('הקישור נשלח ללקוח')
-                            ->success()
-                            ->send();
+                    ->action(function (Subscription $record, CardCaptureLinkSender $sender): void {
+                        $record->loadMissing(['customer', 'plan']);
+                        CustomerResource::notifyLinkResult($sender->send($record));
                     }),
 
                 Tables\Actions\EditAction::make()->label('עריכה'),

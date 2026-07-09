@@ -3,13 +3,11 @@
 namespace App\Jobs;
 
 use App\Enums\SubscriptionStatus;
-use App\Mail\DunningNotificationMail;
 use App\Models\Subscription;
-use App\Services\Waha\WahaClient;
+use App\Services\Notifications\CardCaptureLinkSender;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
-use Illuminate\Support\Facades\Mail;
-use Illuminate\Support\Facades\URL;
+use Illuminate\Support\Facades\Log;
 
 /**
  * Invite a newly onboarded customer to enter their card on Cardcom's hosted
@@ -28,7 +26,7 @@ class SendCardCaptureLinkJob implements ShouldQueue
 
     public function __construct(public int $subscriptionId) {}
 
-    public function handle(WahaClient $waha): void
+    public function handle(CardCaptureLinkSender $sender): void
     {
         $subscription = Subscription::with(['customer', 'plan'])->find($this->subscriptionId);
 
@@ -38,28 +36,20 @@ class SendCardCaptureLinkJob implements ShouldQueue
             return;
         }
 
-        $customer = $subscription->customer;
+        $result = $sender->send($subscription);
 
-        $replacements = [
-            'name' => $customer->name,
-            'plan' => $subscription->plan->name,
-            'amount' => number_format($subscription->totalChargeAgorot() / 100, 2),
-            'link' => URL::temporarySignedRoute(
-                'billing.update-card',
-                now()->addHours((int) config('billing.card_update_link_ttl_hours')),
-                ['customer' => $customer->id],
-            ),
-        ];
-
-        $subject = __('onboarding.card_capture.subject', $replacements);
-        $body = __('onboarding.card_capture.body', $replacements);
-
-        if (filled($customer->whatsapp_jid ?? $customer->phone)) {
-            $waha->sendMessage($customer->whatsapp_jid ?? $customer->phone, $body);
+        if ($result['failed'] !== []) {
+            Log::warning('Card-capture link delivery had failures', [
+                'subscription_id' => $subscription->id,
+                'sent' => $result['sent'],
+                'failed' => $result['failed'],
+            ]);
         }
 
-        if (filled($customer->email)) {
-            Mail::to($customer->email)->send(new DunningNotificationMail($subject, $body));
+        // If nothing got through, throw so the job retries (a transient WhatsApp
+        // or mail error may clear); if at least one channel delivered, we're done.
+        if ($result['sent'] === []) {
+            throw new \RuntimeException('Card-capture link delivery failed: '.implode('; ', $result['failed']));
         }
     }
 }

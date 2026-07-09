@@ -18,7 +18,6 @@ use Filament\Forms\Concerns\InteractsWithForms;
 use Filament\Forms\Contracts\HasForms;
 use Filament\Forms\Form;
 use Filament\Forms\Get;
-use Filament\Notifications\Actions\Action as NotificationAction;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 use Illuminate\Support\Str;
@@ -49,6 +48,9 @@ class ManualCharge extends Page implements HasForms
 
     /** @var array<string, mixed> */
     public array $data = [];
+
+    /** Cardcom hosted payment page to embed in an iframe after "בצע חיוב". */
+    public ?string $paymentUrl = null;
 
     public function mount(): void
     {
@@ -258,13 +260,14 @@ class ManualCharge extends Page implements HasForms
 
         $charge->update(['cardcom_low_profile_id' => $lowProfile['low_profile_id']]);
 
+        // Embed Cardcom's secure page in an iframe on this screen (below), so the
+        // operator/customer enters the card without leaving the system.
+        $this->paymentUrl = $lowProfile['url'];
+
         Notification::make()
-            ->title('עמוד תשלום נוצר עבור '.$customer->name)
-            ->body('ללקוח אין כרטיס שמור, לכן נוצר עמוד תשלום מאובטח. פִּתחו אותו כאן להזנת כרטיס, או העתיקו ושִלחו את הקישור ללקוח: '.$lowProfile['url'])
-            ->success()->persistent()
-            ->actions([
-                NotificationAction::make('open')->label('פתח עמוד תשלום')->url($lowProfile['url'], shouldOpenInNewTab: true),
-            ])
+            ->title('עמוד תשלום נפתח עבור '.$customer->name)
+            ->body('הזינו את הכרטיס בחלון המאובטח שנפתח למטה. לאחר התשלום החיוב יתעדכן והחשבונית תופק אוטומטית.')
+            ->success()
             ->send();
 
         $this->resetForm();
