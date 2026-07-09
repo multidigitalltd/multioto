@@ -76,6 +76,21 @@ class ManageIntegrations extends Page implements HasForms
         'waha' => 'waha',
     ];
 
+    /**
+     * Secret keys are never rendered back into the form (write-only): blank on
+     * load, blanked again after save. Everything else (doctype, VAT/payment
+     * codes, URLs, ids) is non-secret configuration and IS shown, so the
+     * operator can see and verify the current values — and tell that a save
+     * actually took effect.
+     */
+    public const SECRET_KEYS = [
+        'cardcom.api_password',
+        'linet.login_id',
+        'linet.key',
+        'flywp.api_token',
+        'waha.api_key',
+    ];
+
     /** @var array<string, mixed> */
     public array $data = [];
 
@@ -91,8 +106,37 @@ class ManageIntegrations extends Page implements HasForms
 
     public function mount(): void
     {
-        // Start blank — we never echo stored secrets back to the browser.
-        $this->form->fill();
+        // Show current non-secret config (doctype, VAT/payment codes, URLs…) so
+        // the operator can see what is configured; secrets stay blank (write-only).
+        $this->form->fill($this->currentNonSecretValues());
+    }
+
+    /**
+     * The current effective value of every non-secret setting, keyed for the
+     * form's nested state (e.g. data.linet.doctype). Reads live config, which
+     * already reflects stored settings overlaid on .env.
+     *
+     * @return array<string, mixed>
+     */
+    protected function currentNonSecretValues(): array
+    {
+        $values = [];
+
+        foreach (self::GROUPS as $meta) {
+            foreach ($meta['keys'] as $key) {
+                if (in_array($key, self::SECRET_KEYS, true)) {
+                    continue;
+                }
+
+                $path = SettingsServiceProvider::MAP[$key] ?? null;
+
+                if ($path !== null) {
+                    data_set($values, $key, config($path));
+                }
+            }
+        }
+
+        return $values;
     }
 
     public function form(Form $form): Form
@@ -182,21 +226,30 @@ class ManageIntegrations extends Page implements HasForms
             }
         }
 
-        // Clear the group's inputs (secrets are never echoed back) while
-        // preserving everything the operator typed in other sections.
-        foreach ($meta['keys'] as $key) {
-            if ($key !== 'ai.enabled') {
-                data_set($this->data, $key, null);
-            }
-        }
-
-        // Overlay the just-saved values onto config so a subsequent connection
-        // test (or anything else this request touches) sees them. Guarded so an
-        // overlay hiccup can never swallow the save confirmation below.
+        // Overlay the just-saved values onto config so the re-display below (and
+        // any connection test) sees them. Guarded so an overlay hiccup can never
+        // swallow the save confirmation.
         try {
             (new SettingsServiceProvider(app()))->boot();
         } catch (\Throwable) {
             // Values are already persisted; the overlay refresh is best-effort.
+        }
+
+        // Blank the secrets (never echoed back), but re-show the just-saved
+        // non-secret values so the operator can SEE the save took effect.
+        foreach ($meta['keys'] as $key) {
+            if ($key === 'ai.enabled') {
+                continue;
+            }
+
+            if (in_array($key, self::SECRET_KEYS, true)) {
+                data_set($this->data, $key, null);
+
+                continue;
+            }
+
+            $path = SettingsServiceProvider::MAP[$key] ?? null;
+            data_set($this->data, $key, $path !== null ? config($path) : null);
         }
 
         $this->confirmSaved($meta['label'], $group);
