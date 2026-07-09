@@ -12,6 +12,7 @@ use App\Models\Charge;
 use App\Models\Customer;
 use App\Models\PaymentToken;
 use App\Models\WebhookEvent;
+use App\Services\Billing\ManualChargeService;
 use App\Services\Cardcom\CardcomClient;
 use App\Services\Cardcom\ChargeReconciler;
 use App\Services\Linet\InvoiceIssuer;
@@ -231,6 +232,29 @@ class ManualChargeTest extends TestCase
         ]);
         Http::assertSent(fn ($request) => str_ends_with($request->url(), '/create/doc')
             && $request->data()['docDet'][0]['name'] === 'שירות חד-פעמי');
+    }
+
+    public function test_manual_charge_service_splits_vat_and_queues_the_charge(): void
+    {
+        Bus::fake([IssueInvoiceJob::class, ProcessManualChargeJob::class]);
+        config(['billing.vat_rate' => 0.18]);
+
+        $service = app(ManualChargeService::class);
+
+        // VAT-inclusive 118 → net 100 + VAT 18 for a taxable customer.
+        $taxable = Customer::factory()->create(['vat_exempt' => false]);
+        $charge = $service->chargeSavedToken($taxable, 11800, 'שירות');
+        $this->assertSame(10000, $charge->amount_agorot);
+        $this->assertSame(1800, $charge->vat_agorot);
+        $this->assertSame(11800, $charge->total_agorot);
+        $this->assertNull($charge->subscription_id);
+        Bus::assertDispatched(ProcessManualChargeJob::class);
+
+        // Exempt customer: the whole amount is net, no VAT.
+        $exempt = Customer::factory()->create(['vat_exempt' => true]);
+        [$net, $vat] = $service->splitVat(11800, true);
+        $this->assertSame(11800, $net);
+        $this->assertSame(0, $vat);
     }
 
     public function test_invoice_issuer_returns_the_linet_error_instead_of_failing_silently(): void
