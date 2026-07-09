@@ -45,6 +45,12 @@ else
     docker compose up -d --build
     echo "→ Applying new migrations (data preserved)"
     docker compose exec -T app php artisan migrate --force
-    docker compose exec -T app php artisan optimize
+    # Clear caches only — do NOT config:cache here. Under Docker the real
+    # DB_CONNECTION (pgsql) is injected via compose environment, while .env
+    # still holds the sqlite default; config:cache would freeze the wrong value,
+    # and a half-written bootstrap/cache/config.php breaks boot with
+    # "require(bootstrap/cache/config.php): No such file or directory". This
+    # matches docker/entrypoint.sh, which reads config live on purpose.
+    docker compose exec -T app php artisan optimize:clear
     echo "✓ Updated. All data and uploads are intact."
 fi
