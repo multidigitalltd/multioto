@@ -38,7 +38,9 @@ class LinetClient
         }
 
         try {
-            $response = $this->post('/newsearch/account', ['limit' => 1, 'query' => ['type' => 0]]);
+            // Short timeout: the admin-save connection test must not hang the UI.
+            // Document creation keeps the default (longer) timeout.
+            $response = $this->post('/newsearch/account', ['limit' => 1, 'query' => ['type' => 0]], timeout: 12);
 
             if ($response->failed()) {
                 return ConnectionResult::fail('לינט החזירה שגיאה (קוד '.$response->status().')');
@@ -132,12 +134,12 @@ class LinetClient
     /**
      * POST to a Linet endpoint with the auth triple merged into the body.
      */
-    protected function post(string $path, array $payload): Response
+    protected function post(string $path, array $payload, int $timeout = 30): Response
     {
         $config = config('billing.linet');
 
         return Http::baseUrl($config['base_url'])
-            ->timeout(15)
+            ->timeout($timeout)
             ->connectTimeout(8)
             ->post($path, array_merge($payload, [
                 'login_id' => $config['login_id'],
