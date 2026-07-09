@@ -211,6 +211,19 @@ class CardcomClient
     }
 
     /**
+     * Look up a transaction by the ExternalUniqueTranId we sent when charging.
+     * Used to reconcile a charge whose response we never recorded (a crashed
+     * job or lost webhook) — Cardcom is the source of truth. ResponseCode 0
+     * (or 700/701) means the charge exists and succeeded.
+     */
+    public function transactionByExternalId(string $externalId): array
+    {
+        return $this->request('Transactions/GetTransactionByExternalUniqTran', [
+            'ExternalUniqueTranId' => $externalId,
+        ], withApiPassword: false);
+    }
+
+    /**
      * POST to Cardcom with the terminal auth merged in. ApiPassword is only sent
      * when needed (refunds / document creation) — sending it on token/hosted-page
      * calls pushes Cardcom into document mode and triggers error 5046.

@@ -1,10 +1,13 @@
 <?php
 
 use App\Enums\BroadcastStatus;
+use App\Enums\ChargeStatus;
 use App\Jobs\ChargeSubscriptionJob;
 use App\Jobs\MonitorSiteJob;
+use App\Jobs\ReconcileChargeJob;
 use App\Jobs\SendBroadcastJob;
 use App\Models\Broadcast;
+use App\Models\Charge;
 use App\Models\Site;
 use App\Models\Subscription;
 use Illuminate\Support\Facades\Schedule;
@@ -23,6 +26,20 @@ Schedule::call(function () {
         ->pluck('id')
         ->each(fn (int $id) => ChargeSubscriptionJob::dispatch($id));
 })->everyFifteenMinutes()->name('billing:dispatch-due-charges')->onOneServer();
+
+// Reconcile manual charges left "pending": if Cardcom actually charged the card
+// but we never recorded the result (lost webhook / crashed job), finalise the
+// charge and issue its invoice. Cardcom is the source of truth; a card is never
+// re-charged. Covers both saved-token and hosted (walk-in) charges.
+Schedule::call(function () {
+    Charge::query()
+        ->where('status', ChargeStatus::Pending)
+        ->whereNull('subscription_id')       // manual/one-off charges only
+        ->whereNotNull('customer_id')
+        ->where('created_at', '<=', now()->subMinute())
+        ->pluck('id')
+        ->each(fn (int $id) => ReconcileChargeJob::dispatch($id));
+})->everyThreeMinutes()->name('billing:reconcile-pending-charges')->onOneServer();
 
 // Uptime monitoring.
 Schedule::call(function () {

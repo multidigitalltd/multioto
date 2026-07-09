@@ -6,11 +6,14 @@ use App\Enums\ChargeStatus;
 use App\Filament\Resources\ChargeResource\Pages;
 use App\Filament\Support\MoneyField;
 use App\Models\Charge;
+use App\Services\Cardcom\ChargeReconciler;
 use Filament\Forms;
 use Filament\Forms\Form;
+use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
+use Illuminate\Support\Str;
 
 class ChargeResource extends Resource
 {
@@ -38,7 +41,7 @@ class ChargeResource extends Resource
                             ->label('מנוי')
                             ->relationship('subscription', 'id')
                             ->searchable()
-                            ->required(),
+                            ->helperText('ריק עבור חיוב ידני/חד-פעמי.'),
                         MoneyField::make('amount_agorot', 'סכום (₪)')
                             ->required(),
                         MoneyField::make('vat_agorot', 'מע״מ (₪)')
@@ -88,10 +91,11 @@ class ChargeResource extends Resource
     {
         return $table
             ->columns([
-                Tables\Columns\TextColumn::make('subscription.customer.name')
+                Tables\Columns\TextColumn::make('customer_name')
                     ->label('לקוח')
-                    ->searchable()
-                    ->sortable()
+                    // Subscription charges reach the customer via the subscription;
+                    // manual/one-off charges link the customer directly.
+                    ->getStateUsing(fn (Charge $record): ?string => $record->subscription?->customer?->name ?? $record->customer?->name)
                     ->weight('bold'),
                 Tables\Columns\TextColumn::make('total_agorot')
                     ->label('סה״כ')
@@ -146,6 +150,29 @@ class ChargeResource extends Resource
                     ->options(ChargeStatus::class),
             ])
             ->actions([
+                // Recover a charge stuck on "ממתין": ask Cardcom directly whether
+                // it went through, and finalise + invoice if so.
+                Tables\Actions\Action::make('reconcile')
+                    ->label('בדוק מול קארדקום')
+                    ->icon('heroicon-o-arrow-path')
+                    ->color('warning')
+                    ->visible(fn (Charge $record): bool => $record->status === ChargeStatus::Pending)
+                    ->action(function (Charge $record, ChargeReconciler $reconciler): void {
+                        try {
+                            $status = $reconciler->reconcile($record->fresh());
+                        } catch (\Throwable $e) {
+                            Notification::make()->title('בדיקת הסטטוס נכשלה')->body(Str::limit($e->getMessage(), 150))->danger()->send();
+
+                            return;
+                        }
+
+                        match ($status) {
+                            'succeeded' => Notification::make()->title('החיוב אושר בקארדקום ✓')->body('הסטטוס עודכן ל"הצליח" והחשבונית מונפקת בלינט.')->success()->send(),
+                            'failed' => Notification::make()->title('החיוב סומן ככשל')->warning()->send(),
+                            default => Notification::make()->title('קארדקום עדיין לא מדווחת על חיוב')->body('ייתכן שהתשלום לא הושלם. נסו שוב בעוד כמה רגעים.')->warning()->send(),
+                        };
+                    }),
+
                 Tables\Actions\EditAction::make()->label('עריכה'),
             ])
             ->bulkActions([
