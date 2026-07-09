@@ -13,6 +13,7 @@ use Filament\Forms\Contracts\HasForms;
 use Filament\Forms\Form;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
+use Illuminate\Support\Str;
 
 /**
  * Admin settings page for entering integration credentials (Cardcom, Linet,
@@ -172,24 +173,36 @@ class ManageIntegrations extends Page implements HasForms
      */
     protected function notifySaved(string $label, string $group): void
     {
+        // Always confirm the save FIRST, so feedback never depends on the
+        // connection test (which may be slow or throw). The user must never be
+        // left with "nothing happened".
+        Notification::make()->title("מפתחות {$label} נשמרו והוצפנו")->success()->send();
+
         $healthKey = self::HEALTH_KEYS[$group] ?? null;
 
         if ($healthKey === null) {
-            Notification::make()->title("מפתחות {$label} נשמרו והוצפנו")->success()->send();
+            return;
+        }
+
+        try {
+            $result = app(IntegrationHealth::class)->check($healthKey);
+        } catch (\Throwable $e) {
+            Notification::make()
+                ->title("בדיקת החיבור ל{$label} לא הושלמה")
+                ->body('המפתחות נשמרו. '.Str::limit(trim($e->getMessage()) ?: class_basename($e), 150))
+                ->warning()->persistent()->send();
 
             return;
         }
 
-        $result = app(IntegrationHealth::class)->check($healthKey);
-
         $notification = Notification::make()->body($result->message);
 
         if ($result->ok) {
-            $notification->title("מפתחות {$label} נשמרו — החיבור תקין ✓")->success();
+            $notification->title("החיבור ל{$label} תקין ✓")->success();
         } elseif ($result->configured) {
-            $notification->title("מפתחות {$label} נשמרו, אך בדיקת החיבור נכשלה")->danger();
+            $notification->title("בדיקת החיבור ל{$label} נכשלה")->danger();
         } else {
-            $notification->title("מפתחות {$label} נשמרו")->warning();
+            $notification->title("{$label}: המפתחות עדיין לא מלאים")->warning();
         }
 
         $notification->persistent()->send();
