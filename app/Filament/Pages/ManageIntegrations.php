@@ -13,16 +13,17 @@ use Filament\Forms\Contracts\HasForms;
 use Filament\Forms\Form;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 /**
  * Admin settings page for entering integration credentials (Cardcom, Linet,
- * FlyWP, WAHA, Postmark, AI) from the UI. Values are stored encrypted (Setting)
- * and overlaid onto config at boot; blank fields fall back to .env. Existing
- * secrets are never rendered back into the form — a blank field means "leave
- * unchanged". Each integration has its own save button, so updating one
- * provider never touches the others.
+ * FlyWP, WAHA) from the UI. Values are stored encrypted (Setting) and overlaid
+ * onto config at boot; blank fields fall back to .env. Existing secrets are
+ * never rendered back into the form — a blank field means "leave unchanged".
+ *
+ * Saving ONLY persists + confirms; it never calls an external service. Testing
+ * the live connection is a separate, deliberate button, so a slow or unreachable
+ * provider (e.g. the Linet ERP) can never hang the save or swallow its feedback.
  */
 class ManageIntegrations extends Page implements HasForms
 {
@@ -63,7 +64,7 @@ class ManageIntegrations extends Page implements HasForms
 
     /**
      * Integration group => IntegrationHealth check key. Groups missing here have
-     * no live connection test (a save just confirms it was stored).
+     * no live connection test (only a save button is shown).
      */
     public const HEALTH_KEYS = [
         'cardcom' => 'cardcom',
@@ -87,49 +88,49 @@ class ManageIntegrations extends Page implements HasForms
                 Section::make('קארדקום — סליקה')
                     ->description($this->groupDescription('cardcom', 'מודול אסימונים + מסוף ללא חובת CVV. השאר ריק כדי לא לשנות ערך קיים.'))
                     ->schema([
-                        TextInput::make('cardcom.terminal_number')->label('מספר מסוף')->autocomplete(false),
-                        TextInput::make('cardcom.api_name')->label('API Name')->autocomplete(false),
-                        TextInput::make('cardcom.api_password')->label('API Password')->password()->revealable()->autocomplete('new-password'),
+                        TextInput::make('cardcom.terminal_number')->label('מספר מסוף')->live(onBlur: true)->autocomplete(false),
+                        TextInput::make('cardcom.api_name')->label('API Name')->live(onBlur: true)->autocomplete(false),
+                        TextInput::make('cardcom.api_password')->label('API Password')->password()->revealable()->live(onBlur: true)->autocomplete('new-password'),
                     ])->columns(3)
-                    ->footerActions([$this->saveAction('cardcom')]),
+                    ->footerActions($this->groupActions('cardcom')),
 
                 Section::make('לינט — חשבוניות')
                     ->description($this->groupDescription('linet', 'שלושת הערכים ממסך הגדרות ה-API בלינט: Login ID, Key ו-Company ID. הקודים למטה (סוג מסמך, קטגוריות מע״מ, אמצעי תשלום) ספציפיים לחשבון שלכם בלינט.'))
                     ->schema([
-                        TextInput::make('linet.login_id')->label('Login ID')->password()->revealable()->autocomplete('new-password'),
-                        TextInput::make('linet.key')->label('Key')->password()->revealable()->autocomplete('new-password'),
-                        TextInput::make('linet.company_id')->label('Company ID')->autocomplete(false),
-                        TextInput::make('linet.doctype')->label('קוד סוג מסמך (חשבונית מס/קבלה)')->autocomplete(false),
-                        TextInput::make('linet.vat_cat_taxable')->label('קוד מע״מ — חייב')->numeric()->autocomplete(false),
-                        TextInput::make('linet.vat_cat_exempt')->label('קוד מע״מ — פטור')->numeric()->autocomplete(false),
-                        TextInput::make('linet.payment_type')->label('קוד אמצעי תשלום (כרטיס אשראי)')->numeric()->autocomplete(false),
+                        TextInput::make('linet.login_id')->label('Login ID')->password()->revealable()->live(onBlur: true)->autocomplete('new-password'),
+                        TextInput::make('linet.key')->label('Key')->password()->revealable()->live(onBlur: true)->autocomplete('new-password'),
+                        TextInput::make('linet.company_id')->label('Company ID')->live(onBlur: true)->autocomplete(false),
+                        TextInput::make('linet.doctype')->label('קוד סוג מסמך (חשבונית מס/קבלה)')->live(onBlur: true)->autocomplete(false),
+                        TextInput::make('linet.vat_cat_taxable')->label('קוד מע״מ — חייב')->numeric()->live(onBlur: true)->autocomplete(false),
+                        TextInput::make('linet.vat_cat_exempt')->label('קוד מע״מ — פטור')->numeric()->live(onBlur: true)->autocomplete(false),
+                        TextInput::make('linet.payment_type')->label('קוד אמצעי תשלום (כרטיס אשראי)')->numeric()->live(onBlur: true)->autocomplete(false),
                     ])->columns(3)
-                    ->footerActions([$this->saveAction('linet')]),
+                    ->footerActions($this->groupActions('linet')),
 
                 Section::make('FlyWP — אחסון')
                     ->description($this->groupDescription('flywp'))
                     ->schema([
-                        TextInput::make('flywp.api_token')->label('API Token')->password()->revealable()->autocomplete('new-password'),
-                        TextInput::make('flywp.server_id')->label('Server ID')->autocomplete(false),
+                        TextInput::make('flywp.api_token')->label('API Token')->password()->revealable()->live(onBlur: true)->autocomplete('new-password'),
+                        TextInput::make('flywp.server_id')->label('Server ID')->live(onBlur: true)->autocomplete(false),
                     ])->columns(2)
-                    ->footerActions([$this->saveAction('flywp')]),
+                    ->footerActions($this->groupActions('flywp')),
 
                 Section::make('WAHA — וואטסאפ')
                     ->description($this->groupDescription('waha', 'כתובת שרת WAHA + מפתח. אם WAHA רץ על אותו שרת בקונטיינר נפרד, השתמשו ב-http://host.docker.internal:3000. את חיבור מספר הוואטסאפ עצמו (סריקת QR) עושים בלוח הבקרה של WAHA.'))
                     ->schema([
-                        TextInput::make('waha.base_url')->label('כתובת שרת (Base URL)')->placeholder('http://host.docker.internal:3000')->autocomplete(false),
-                        TextInput::make('waha.api_key')->label('API Key')->password()->revealable()->autocomplete('new-password'),
-                        TextInput::make('waha.session')->label('שם Session')->placeholder('default')->autocomplete(false),
+                        TextInput::make('waha.base_url')->label('כתובת שרת (Base URL)')->placeholder('http://host.docker.internal:3000')->live(onBlur: true)->autocomplete(false),
+                        TextInput::make('waha.api_key')->label('API Key')->password()->revealable()->live(onBlur: true)->autocomplete('new-password'),
+                        TextInput::make('waha.session')->label('שם Session')->placeholder('default')->live(onBlur: true)->autocomplete(false),
                     ])->columns(3)
-                    ->footerActions([$this->saveAction('waha')]),
+                    ->footerActions($this->groupActions('waha')),
             ])
             ->statePath('data');
     }
 
     /**
-     * Persist only the given integration's keys. A blank field preserves the
-     * current value (env or previously stored); the AI toggle is a boolean and
-     * is always persisted (unchecked = explicitly off).
+     * Persist only the given integration's keys, then confirm. A blank field
+     * preserves the current value (env or previously stored). This method never
+     * touches an external service — the connection test is a separate button.
      */
     public function saveGroup(string $group): void
     {
@@ -140,27 +141,16 @@ class ManageIntegrations extends Page implements HasForms
         }
 
         // Force Filament to gather every component's current value into a fresh
-        // array. Reading this (rather than the raw $this->data property) fixes
-        // cases where a field's value hasn't flushed to $this->data yet.
+        // array; fall back to the raw property if validation on another section
+        // would otherwise block the read.
         try {
             $state = $this->form->getState();
-        } catch (\Throwable $e) {
+        } catch (\Throwable) {
             $state = $this->data;
         }
 
-        // TEMP diagnostic: which of the group's fields actually arrived (values
-        // are NOT logged — only filled/empty), from both sources. Remove once the
-        // save-binding issue is resolved.
-        Log::info('saveGroup called', [
-            'group' => $group,
-            'from_getState' => collect($meta['keys'])->mapWithKeys(fn ($k) => [$k => filled(data_get($state, $k)) ? 'filled' : 'empty'])->all(),
-            'from_data' => collect($meta['keys'])->mapWithKeys(fn ($k) => [$k => filled(data_get($this->data, $k)) ? 'filled' : 'empty'])->all(),
-        ]);
-
         foreach ($meta['keys'] as $key) {
-            // Prefer the gathered form state; fall back to the raw property (nested
-            // then flat) for robustness against any binding quirk.
-            $value = data_get($state, $key) ?? data_get($this->data, $key) ?? ($this->data[$key] ?? null);
+            $value = data_get($state, $key) ?? data_get($this->data, $key);
 
             if ($key === 'ai.enabled') {
                 Setting::put($key, $value ? '1' : '0');
@@ -181,44 +171,36 @@ class ManageIntegrations extends Page implements HasForms
             }
         }
 
-        // Overlay the just-saved values onto config so the connection test below
-        // sees them (the boot-time overlay ran with the old values).
+        // Overlay the just-saved values onto config so a subsequent connection
+        // test (or anything else this request touches) sees them.
         (new SettingsServiceProvider(app()))->boot();
 
-        $this->notifySaved($meta['label'], $group);
+        $this->confirmSaved($meta['label'], $group);
     }
 
     /**
-     * Save confirmation — and, when the integration is testable, the live result
-     * of a connection check run immediately after saving.
+     * Run the live connection test for a group on demand. Kept separate from the
+     * save so a slow/unreachable provider can never hang saving or hide its
+     * confirmation.
      */
-    protected function notifySaved(string $label, string $group): void
+    public function testGroup(string $group): void
     {
-        // Always confirm the save FIRST, so feedback never depends on the
-        // connection test (which may be slow or throw). The user must never be
-        // left with "nothing happened". Report how many of the group's keys are
-        // now stored so a partial/failed save is immediately visible.
-        $stored = Setting::map();
-        $keys = collect(self::GROUPS[$group]['keys'])->reject(fn ($k) => $k === 'ai.enabled');
-        $savedCount = $keys->filter(fn ($k) => filled($stored[$k] ?? null))->count();
-
-        Notification::make()
-            ->title("מפתחות {$label} נשמרו והוצפנו")
-            ->body("שמורים כעת {$savedCount} מתוך {$keys->count()} שדות בקבוצה זו.")
-            ->success()->send();
-
+        $label = self::GROUPS[$group]['label'] ?? $group;
         $healthKey = self::HEALTH_KEYS[$group] ?? null;
 
         if ($healthKey === null) {
             return;
         }
 
+        // Ensure the check reads the latest stored credentials.
+        (new SettingsServiceProvider(app()))->boot();
+
         try {
             $result = app(IntegrationHealth::class)->check($healthKey);
         } catch (\Throwable $e) {
             Notification::make()
                 ->title("בדיקת החיבור ל{$label} לא הושלמה")
-                ->body('המפתחות נשמרו. '.Str::limit(trim($e->getMessage()) ?: class_basename($e), 150))
+                ->body(Str::limit(trim($e->getMessage()) ?: class_basename($e), 150))
                 ->warning()->persistent()->send();
 
             return;
@@ -237,6 +219,45 @@ class ManageIntegrations extends Page implements HasForms
         $notification->persistent()->send();
     }
 
+    /**
+     * Save confirmation — reports how many of the group's keys are now stored so
+     * a partial save is immediately visible. Never makes a network call.
+     */
+    protected function confirmSaved(string $label, string $group): void
+    {
+        $stored = Setting::map();
+        $keys = collect(self::GROUPS[$group]['keys'])->reject(fn ($k) => $k === 'ai.enabled');
+        $savedCount = $keys->filter(fn ($k) => filled($stored[$k] ?? null))->count();
+
+        $body = "שמורים כעת {$savedCount} מתוך {$keys->count()} שדות בקבוצה זו.";
+
+        if (isset(self::HEALTH_KEYS[$group])) {
+            $body .= ' לבדיקת החיבור לספק לחצו על "בדיקת חיבור".';
+        }
+
+        Notification::make()
+            ->title("מפתחות {$label} נשמרו והוצפנו")
+            ->body($body)
+            ->success()->send();
+    }
+
+    /**
+     * The footer actions for a section: always a save button, plus a connection
+     * test for groups that support one.
+     *
+     * @return array<int, FormAction>
+     */
+    protected function groupActions(string $group): array
+    {
+        $actions = [$this->saveAction($group)];
+
+        if (isset(self::HEALTH_KEYS[$group])) {
+            $actions[] = $this->testAction($group);
+        }
+
+        return $actions;
+    }
+
     /** The per-section save button. */
     protected function saveAction(string $group): FormAction
     {
@@ -244,6 +265,16 @@ class ManageIntegrations extends Page implements HasForms
             ->label('שמירת מפתחות '.self::GROUPS[$group]['label'])
             ->icon('heroicon-o-check')
             ->action(fn () => $this->saveGroup($group));
+    }
+
+    /** The per-section "test connection" button (only for testable groups). */
+    protected function testAction(string $group): FormAction
+    {
+        return FormAction::make("test_{$group}")
+            ->label('בדיקת חיבור')
+            ->icon('heroicon-o-signal')
+            ->color('gray')
+            ->action(fn () => $this->testGroup($group));
     }
 
     /**
