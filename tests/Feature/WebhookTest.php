@@ -12,6 +12,7 @@ use App\Models\Subscription;
 use App\Models\Ticket;
 use App\Models\WebhookEvent;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
 
@@ -101,6 +102,41 @@ class WebhookTest extends TestCase
         // Reprocessing the same event is a no-op.
         (new ProcessCardcomLowProfileJob($event->id))->handle();
         $this->assertSame(2, $customer->paymentTokens()->count());
+    }
+
+    public function test_low_profile_token_capture_fetches_the_token_via_getlpresult_when_webhook_is_minimal(): void
+    {
+        Queue::fake([ChargeSubscriptionJob::class]);
+        config(['billing.cardcom.base_url' => 'https://secure.cardcom.test/api/v11/']);
+
+        $customer = Customer::factory()->create();
+        $subscription = Subscription::factory()->create([
+            'customer_id' => $customer->id,
+            'token_id' => null,
+            'status' => SubscriptionStatus::Trialing,
+            'next_charge_at' => now()->addDays(5),
+        ]);
+
+        // Cardcom's webhook body is minimal (no TokenInfo) — the token must be
+        // fetched from the authoritative GetLpResult.
+        Http::fake(['*/LowProfile/GetLpResult' => Http::response([
+            'ResponseCode' => 0,
+            'ReturnValue' => (string) $customer->id,
+            'TokenInfo' => ['Token' => 'fetched-token', 'CardLast4Digits' => '9999', 'CardYear' => 2031, 'CardMonth' => 6],
+        ])]);
+
+        [$event] = WebhookEvent::record(
+            WebhookSource::Cardcom,
+            'low_profile_completed',
+            'lp-min',
+            ['LowProfileId' => 'lp-min'],
+        );
+
+        (new ProcessCardcomLowProfileJob($event->id))->handle();
+
+        $this->assertSame('fetched-token', $customer->fresh()->defaultToken?->cardcom_token);
+        $this->assertSame($customer->fresh()->default_token_id, $subscription->fresh()->token_id);
+        Http::assertSent(fn ($request) => str_ends_with($request->url(), '/LowProfile/GetLpResult'));
     }
 
     public function test_low_profile_activates_a_newly_onboarded_trialing_subscription(): void

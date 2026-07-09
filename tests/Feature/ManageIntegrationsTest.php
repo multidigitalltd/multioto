@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Filament\Pages\ManageIntegrations;
 use App\Models\Setting;
 use App\Models\User;
+use App\Providers\SettingsServiceProvider;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Livewire\Livewire;
@@ -38,6 +39,18 @@ class ManageIntegrationsTest extends TestCase
         $this->assertSame('3', $m['linet.company_id'] ?? null);
         $this->assertSame('9', $m['linet.doctype'] ?? null);
         $this->assertSame('100', $m['linet.vat_cat_taxable'] ?? null);
+    }
+
+    public function test_non_secret_settings_are_shown_on_load_but_secrets_are_hidden(): void
+    {
+        $this->actingAs(User::factory()->create());
+        Setting::put('linet.doctype', '9');
+        Setting::put('linet.key', 'super-secret');
+        (new SettingsServiceProvider(app()))->boot();
+
+        Livewire::test(ManageIntegrations::class)
+            ->assertSet('data.linet.doctype', '9')   // non-secret: visible
+            ->assertSet('data.linet.key', null);     // secret: never echoed
     }
 
     public function test_testing_a_connection_sets_the_inline_status_banner(): void

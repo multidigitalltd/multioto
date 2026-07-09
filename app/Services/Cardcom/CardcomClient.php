@@ -46,6 +46,8 @@ class CardcomClient
                 'SuccessRedirectUrl' => url('/'),
                 'FailedRedirectUrl' => url('/'),
                 'WebHookUrl' => url('/'), // required by the spec even for a token-only test
+                // J5 authorization (not J2) — matches the real token-capture flow.
+                'AdvancedDefinition' => ['JValidateType' => 5],
                 // Terminals that mandate a document reject a request without one
                 // (error 5046). This session is discarded, so nothing is issued.
                 'Document' => $this->buildDocument('בדיקת חיבור', null, null, 'בדיקת חיבור', 0),
@@ -93,6 +95,10 @@ class CardcomClient
             'SuccessRedirectUrl' => $successUrl,
             'FailedRedirectUrl' => $failureUrl,
             'WebHookUrl' => $webhookUrl,
+            // Validate the card with a J5 authorization (not J2 simple check).
+            // Cards that require an authorization query reject J2 with code
+            // 60000042 ("ישנה חובת יציאה לשאילתא"); J5 performs the query.
+            'AdvancedDefinition' => ['JValidateType' => 5],
             // Terminals that mandate a document reject a token-only request
             // without one (error 5046). Type comes from config — 'Order' keeps
             // it non-fiscal so Linet stays the invoicer.
