@@ -139,7 +139,9 @@ class ManageIntegrations extends Page implements HasForms
         }
 
         foreach ($meta['keys'] as $key) {
-            $value = data_get($this->data, $key);
+            // Read the field from the nested form state, with a flat-key fallback
+            // for robustness against any binding quirk.
+            $value = data_get($this->data, $key) ?? ($this->data[$key] ?? null);
 
             if ($key === 'ai.enabled') {
                 Setting::put($key, $value ? '1' : '0');
@@ -175,8 +177,16 @@ class ManageIntegrations extends Page implements HasForms
     {
         // Always confirm the save FIRST, so feedback never depends on the
         // connection test (which may be slow or throw). The user must never be
-        // left with "nothing happened".
-        Notification::make()->title("מפתחות {$label} נשמרו והוצפנו")->success()->send();
+        // left with "nothing happened". Report how many of the group's keys are
+        // now stored so a partial/failed save is immediately visible.
+        $stored = Setting::map();
+        $keys = collect(self::GROUPS[$group]['keys'])->reject(fn ($k) => $k === 'ai.enabled');
+        $savedCount = $keys->filter(fn ($k) => filled($stored[$k] ?? null))->count();
+
+        Notification::make()
+            ->title("מפתחות {$label} נשמרו והוצפנו")
+            ->body("שמורים כעת {$savedCount} מתוך {$keys->count()} שדות בקבוצה זו.")
+            ->success()->send();
 
         $healthKey = self::HEALTH_KEYS[$group] ?? null;
 
