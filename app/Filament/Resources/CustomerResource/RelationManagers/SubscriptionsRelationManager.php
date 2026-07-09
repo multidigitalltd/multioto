@@ -27,7 +27,11 @@ class SubscriptionsRelationManager extends RelationManager
     {
         return $form->schema([
             Forms\Components\Select::make('plan_id')->label('תוכנית')->relationship('plan', 'name')->required(),
-            Forms\Components\Select::make('status')->label('סטטוס')->options(SubscriptionStatus::class)->required(),
+            Forms\Components\Select::make('site_id')->label('אתר')
+                ->relationship('site', 'domain', fn ($query, RelationManager $livewire) => $query->where('customer_id', $livewire->getOwnerRecord()->id))
+                ->helperText('אופציונלי — האתר שהמנוי מכסה.'),
+            Forms\Components\Select::make('status')->label('סטטוס')->options(SubscriptionStatus::class)
+                ->default(SubscriptionStatus::Active)->required(),
             Forms\Components\DateTimePicker::make('next_charge_at')->label('חיוב הבא'),
         ]);
     }
@@ -41,6 +45,17 @@ class SubscriptionsRelationManager extends RelationManager
                 Tables\Columns\TextColumn::make('status')->label('סטטוס')->badge(),
                 Tables\Columns\TextColumn::make('next_charge_at')->label('חיוב הבא')->dateTime('d/m/Y')->placeholder('—'),
                 Tables\Columns\TextColumn::make('dunning_stage')->label('שלב דאנינג')->badge(),
+            ])
+            ->headerActions([
+                Tables\Actions\CreateAction::make()
+                    ->label('מנוי חדש')
+                    ->mutateFormDataUsing(function (array $data): array {
+                        // Give a new subscription a sensible first period.
+                        $data['current_period_start'] ??= now()->toDateString();
+                        $data['current_period_end'] ??= now()->addMonth()->toDateString();
+
+                        return $data;
+                    }),
             ])
             ->actions([
                 Tables\Actions\Action::make('chargeNow')

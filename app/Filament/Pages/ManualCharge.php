@@ -2,12 +2,9 @@
 
 namespace App\Filament\Pages;
 
-use App\Enums\ChargeStatus;
 use App\Enums\TokenStatus;
-use App\Jobs\ProcessManualChargeJob;
-use App\Models\Charge;
 use App\Models\Customer;
-use App\Services\Cardcom\CardcomClient;
+use App\Services\Billing\ManualChargeService;
 use Filament\Forms\Components\Actions\Action as FormAction;
 use Filament\Forms\Components\Grid;
 use Filament\Forms\Components\Section;
@@ -189,22 +186,7 @@ class ManualCharge extends Page implements HasForms
     /** Charge the customer's saved active token in the queue. */
     private function chargeSavedToken(Customer $customer, int $totalAgorot, string $description): void
     {
-        [$net, $vat] = $this->splitVat($totalAgorot, (bool) $customer->vat_exempt);
-
-        $charge = Charge::create([
-            'subscription_id' => null,
-            'customer_id' => $customer->id,
-            'amount_agorot' => $net,
-            'vat_agorot' => $vat,
-            'total_agorot' => $totalAgorot,
-            'status' => ChargeStatus::Pending,
-            'attempt_number' => 1,
-            'description' => $description,
-            'period_start' => now()->toDateString(),
-            'period_end' => now()->toDateString(),
-        ]);
-
-        ProcessManualChargeJob::dispatch($charge->id);
+        app(ManualChargeService::class)->chargeSavedToken($customer, $totalAgorot, $description);
 
         Notification::make()
             ->title('החיוב נשלח לעיבוד')
@@ -217,52 +199,17 @@ class ManualCharge extends Page implements HasForms
     /** Create a hosted Cardcom payment page for a customer without a saved card. */
     private function openPaymentPage(Customer $customer, int $totalAgorot, string $description): void
     {
-        [$net, $vat] = $this->splitVat($totalAgorot, (bool) $customer->vat_exempt);
-
-        $charge = Charge::create([
-            'subscription_id' => null,
-            'customer_id' => $customer->id,
-            'amount_agorot' => $net,
-            'vat_agorot' => $vat,
-            'total_agorot' => $totalAgorot,
-            'status' => ChargeStatus::Pending,
-            'attempt_number' => 1,
-            'description' => $description,
-            'period_start' => now()->toDateString(),
-            'period_end' => now()->toDateString(),
-        ]);
-
         try {
-            $lowProfile = app(CardcomClient::class)->createChargeLowProfile(
-                $charge->id,
-                $totalAgorot,
-                $description,
-                $customer->name,
-                $customer->email,
-                $customer->phone,
-                route('billing.update-card.done', ['result' => 'success']),
-                route('billing.update-card.done', ['result' => 'failed']),
-                route('webhooks.cardcom', ['secret' => config('billing.cardcom.webhook_secret')]),
-            );
+            $result = app(ManualChargeService::class)->createHostedPage($customer, $totalAgorot, $description);
         } catch (\Throwable $e) {
-            $charge->update(['status' => ChargeStatus::Failed, 'failure_reason' => 'יצירת עמוד תשלום נכשלה']);
-            Notification::make()->title('יצירת עמוד התשלום נכשלה')->body(Str::limit($e->getMessage(), 150))->danger()->send();
+            Notification::make()->title('פתיחת עמוד התשלום נכשלה')->body(Str::limit($e->getMessage(), 150))->danger()->send();
 
             return;
         }
-
-        if (blank($lowProfile['url'])) {
-            $charge->update(['status' => ChargeStatus::Failed, 'failure_reason' => 'קארדקום לא החזירה כתובת תשלום']);
-            Notification::make()->title('קארדקום לא החזירה עמוד תשלום')->danger()->send();
-
-            return;
-        }
-
-        $charge->update(['cardcom_low_profile_id' => $lowProfile['low_profile_id']]);
 
         // Embed Cardcom's secure page in an iframe on this screen (below), so the
         // operator/customer enters the card without leaving the system.
-        $this->paymentUrl = $lowProfile['url'];
+        $this->paymentUrl = $result['url'];
 
         Notification::make()
             ->title('עמוד תשלום נפתח עבור '.$customer->name)
@@ -276,23 +223,5 @@ class ManualCharge extends Page implements HasForms
     private function resetForm(): void
     {
         $this->form->fill(['new_customer' => false, 'description' => 'חיוב חד-פעמי']);
-    }
-
-    /**
-     * Split a VAT-inclusive total into net + VAT agorot. Exempt customers pay no
-     * VAT, so the whole amount is net.
-     *
-     * @return array{0: int, 1: int}
-     */
-    private function splitVat(int $totalAgorot, bool $vatExempt): array
-    {
-        if ($vatExempt) {
-            return [$totalAgorot, 0];
-        }
-
-        $vatRate = (float) config('billing.vat_rate');
-        $net = (int) round($totalAgorot / (1 + $vatRate));
-
-        return [$net, $totalAgorot - $net];
     }
 }
