@@ -73,6 +73,7 @@ class LinetClientTest extends TestCase
                 && $body['account_id'] === 77                     // resolved account
                 && $body['doctype'] === '9'
                 && $body['sendmail'] === 1
+                && $body['docDet'][0]['item_id'] === '1'          // general item
                 && $body['docDet'][0]['vat_cat_id'] === 1         // taxable category
                 && $body['docDet'][0]['iItem'] === 118.0          // total incl VAT
                 && $body['docDet'][0]['iItemWithVat'] === 1
@@ -84,7 +85,8 @@ class LinetClientTest extends TestCase
     public function test_missing_account_is_created_before_the_document(): void
     {
         Http::fake([
-            '*/search/account' => Http::response(['status' => 200, 'body' => []]),   // none found
+            // Real "not found" shape: HTTP 200 with errorCode 1000 and a string body.
+            '*/search/account' => Http::response(['status' => 200, 'errorCode' => 1000, 'body' => 'No items where found for model']),
             '*/create/account' => Http::response(['status' => 200, 'body' => ['id' => 909]]),
             '*/create/doc' => Http::response(['status' => 200, 'body' => ['id' => 5]]),
         ]);
@@ -117,6 +119,26 @@ class LinetClientTest extends TestCase
         ]);
 
         $this->expectException(\RuntimeException::class);
+
+        app(LinetClient::class)->issueDocument($this->charge(), VatCategory::Taxable, 'x');
+    }
+
+    public function test_a_200_with_a_nonzero_errorcode_is_treated_as_a_failure(): void
+    {
+        // Linet returns HTTP 200 + errorCode 1001 with field errors when it
+        // REJECTS a document. This must surface as an error, never a false
+        // "document created", and the field message must reach the caller.
+        Http::fake([
+            '*/search/account' => Http::response(['status' => 200, 'body' => [['id' => 1]]]),
+            '*/create/doc' => Http::response([
+                'status' => 200,
+                'errorCode' => 1001,
+                'body' => ['account_id' => ['מזהה חשבון לא יכול להיות ריק.']],
+            ]),
+        ]);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('account_id');
 
         app(LinetClient::class)->issueDocument($this->charge(), VatCategory::Taxable, 'x');
     }

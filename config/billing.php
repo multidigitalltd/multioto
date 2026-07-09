@@ -80,6 +80,10 @@ return [
         'vat_cat_exempt' => env('LINET_VAT_CAT_EXEMPT'),
         'payment_type' => env('LINET_PAYMENT_TYPE', 3),
         'create_doc_path' => env('LINET_CREATE_DOC_PATH', '/create/doc'),
+        // Linet item id used for our free-text service lines (every document line
+        // must reference an item). Linet's own plugin defaults the general item
+        // to "1"; override if your account uses a different general item.
+        'general_item_id' => env('LINET_GENERAL_ITEM_ID', '1'),
     ],
 
     'waha' => [

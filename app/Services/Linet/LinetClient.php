@@ -113,9 +113,11 @@ class LinetClient
             'phone' => $customer?->phone,
             'refnum_ext' => "charge-{$charge->id}",
             'docDet' => [[
+                'item_id' => (string) ($config['general_item_id'] ?? '1'),
                 'name' => $description,
                 'description' => '',
                 'qty' => 1,
+                'line' => 1,
                 'currency_id' => 'ILS',
                 'vat_cat_id' => $vatCatId,
                 'unit_id' => 0,
@@ -156,10 +158,13 @@ class LinetClient
     {
         try {
             $search = $this->post('/search/account', ['email' => $customer->email, 'type' => 0], timeout: 20);
-            $existing = data_get($search->json(), 'body.0.id');
 
-            if (filled($existing)) {
-                return (int) $existing;
+            if ($this->envelopeSucceeded($search->json())) {
+                $existing = data_get($search->json(), 'body.0.id');
+
+                if (filled($existing)) {
+                    return (int) $existing;
+                }
             }
 
             $created = $this->post('/create/account', [
@@ -172,9 +177,20 @@ class LinetClient
                 'type' => 0,
             ], timeout: 20);
 
-            $newId = data_get($created->json(), 'body.id');
+            if ($this->envelopeSucceeded($created->json())) {
+                $newId = data_get($created->json(), 'body.id');
 
-            return filled($newId) ? (int) $newId : null;
+                if (filled($newId)) {
+                    return (int) $newId;
+                }
+            }
+
+            Log::warning('Linet account resolution returned no id', [
+                'customer_id' => $customer->id,
+                'create_error' => $this->describeError($created->json()),
+            ]);
+
+            return null;
         } catch (\Throwable $e) {
             Log::warning('Linet account resolution failed; issuing document without account_id', [
                 'customer_id' => $customer->id,
@@ -197,30 +213,68 @@ class LinetClient
 
     /**
      * Validate a Linet response and return its `body` payload as an array.
-     * Linet answers 200 with {"status": 200, "body": ...} on success; anything
-     * else (HTTP 4xx/5xx or a non-200 envelope status) is a real error the
-     * caller must see, so we throw with Linet's own message.
+     *
+     * CRITICAL: Linet answers HTTP 200 even for failures. Success is signalled by
+     * BOTH envelope status == 200 AND errorCode == 0 (absent = 0). A validation
+     * failure comes back as {"status":200,"errorCode":1001,"body":{field:[msgs]}}
+     * and an auth failure as {"status":400,"body":"Unauthorized"}. Checking only
+     * the HTTP code or `status` would treat a rejected request as success and
+     * report a document as created when nothing was — so we gate on errorCode too
+     * and throw with Linet's own field-level messages.
      *
      * @return array<mixed>
      */
     protected function unwrap(Response $response): array
     {
         $json = $response->json();
-        $status = data_get($json, 'status');
 
-        if ($response->failed() && $status === null) {
+        // HTTP failure with no Linet envelope at all (gateway/transport error).
+        if ($response->failed() && data_get($json, 'status') === null) {
             $response->throw();
         }
 
-        if ($status !== null && (int) $status !== 200) {
-            $message = (string) (data_get($json, 'message') ?? data_get($json, 'error') ?? json_encode(data_get($json, 'body')) ?? $status);
-
-            throw new \RuntimeException('Linet API status '.$status.': '.Str::limit($message, 200));
+        if (! $this->envelopeSucceeded($json)) {
+            throw new \RuntimeException('Linet: '.$this->describeError($json));
         }
 
         $body = data_get($json, 'body', $json);
 
         return is_array($body) ? $body : (array) $body;
+    }
+
+    /**
+     * A Linet call succeeded only when the envelope status is 200 AND errorCode
+     * is 0/absent. Both fields default to their success value when missing.
+     */
+    protected function envelopeSucceeded(mixed $json): bool
+    {
+        $status = (int) (data_get($json, 'status') ?? 200);
+        $errorCode = (int) (data_get($json, 'errorCode') ?? 0);
+
+        return $status === 200 && $errorCode === 0;
+    }
+
+    /**
+     * Turn a Linet error envelope into a readable message. Validation failures
+     * put a {field: [messages]} map in `body`; auth/transport failures put a
+     * plain string there (e.g. "Unauthorized").
+     */
+    protected function describeError(mixed $json): string
+    {
+        $body = data_get($json, 'body');
+
+        if (is_array($body)) {
+            $parts = [];
+            foreach ($body as $field => $messages) {
+                $text = is_array($messages) ? implode(' ', $messages) : (string) $messages;
+                $parts[] = is_string($field) ? "{$field}: {$text}" : $text;
+            }
+            $message = implode(' | ', $parts);
+        } else {
+            $message = (string) ($body ?? data_get($json, 'message') ?? data_get($json, 'text') ?? 'שגיאה לא ידועה');
+        }
+
+        return Str::limit(trim($message) ?: 'שגיאה לא ידועה', 250);
     }
 
     /**
