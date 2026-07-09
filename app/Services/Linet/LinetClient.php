@@ -137,7 +137,8 @@ class LinetClient
         $config = config('billing.linet');
 
         return Http::baseUrl($config['base_url'])
-            ->timeout(30)
+            ->timeout(15)
+            ->connectTimeout(8)
             ->post($path, array_merge($payload, [
                 'login_id' => $config['login_id'],
                 'login_hash' => $config['key'],
