@@ -93,7 +93,9 @@ class LinetClientTest extends TestCase
 
         app(LinetClient::class)->issueDocument($this->charge(), VatCategory::Taxable, 'x');
 
-        Http::assertSent(fn ($request) => str_ends_with($request->url(), '/create/account'));
+        // The account model rejects a `company` parameter — it must never be sent.
+        Http::assertSent(fn ($request) => str_ends_with($request->url(), '/create/account')
+            && ! array_key_exists('company', $request->data()));
         Http::assertSent(fn ($request) => str_ends_with($request->url(), '/create/doc')
             && $request->data()['account_id'] === 909);
     }

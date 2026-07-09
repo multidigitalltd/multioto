@@ -167,9 +167,11 @@ class LinetClient
                 }
             }
 
+            // NB: the `account` model rejects a `company` parameter (Linet 500s
+            // "Parameter company is not allowed for model account"). The account
+            // name carries the business name; type 0 = customer.
             $created = $this->post('/create/account', [
                 'name' => $customer->name,
-                'company' => $customer->name,
                 'email' => $customer->email,
                 'phone' => $customer->phone,
                 'country_id' => 'IL',

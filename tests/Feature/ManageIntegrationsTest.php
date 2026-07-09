@@ -40,6 +40,24 @@ class ManageIntegrationsTest extends TestCase
         $this->assertSame('100', $m['linet.vat_cat_taxable'] ?? null);
     }
 
+    public function test_testing_a_connection_sets_the_inline_status_banner(): void
+    {
+        $this->actingAs(User::factory()->create());
+        config([
+            'billing.linet.base_url' => 'https://app.linet.test/api',
+            'billing.linet.login_id' => 'lid',
+            'billing.linet.key' => 'lhash',
+            'billing.linet.company_id' => '3',
+        ]);
+        Http::fake(['*/search/account' => Http::response(['status' => 200, 'body' => []])]);
+
+        $component = Livewire::test(ManageIntegrations::class)->call('testGroup', 'linet');
+
+        // Inline banner is populated regardless of whether the toast renders.
+        $this->assertStringContainsString('תקין', (string) $component->get('statusText'));
+        $this->assertSame('success', $component->get('statusVariant'));
+    }
+
     public function test_credentials_are_trimmed_so_a_pasted_space_cannot_reject_auth(): void
     {
         $this->actingAs(User::factory()->create());
