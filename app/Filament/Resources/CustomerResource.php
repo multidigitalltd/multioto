@@ -6,6 +6,7 @@ use App\Enums\BusinessType;
 use App\Enums\CustomerStatus;
 use App\Enums\SubscriptionStatus;
 use App\Filament\Resources\CustomerResource\Pages;
+use App\Filament\Resources\CustomerResource\RelationManagers;
 use App\Models\Customer;
 use App\Services\Notifications\CardCaptureLinkSender;
 use Filament\Forms;
@@ -250,19 +251,6 @@ class CustomerResource extends Resource
                     TextEntry::make('notes')->label('הערות')->placeholder('—')->columnSpanFull(),
                 ])->columns(3),
 
-            InfoSection::make('מנויים')
-                ->icon('heroicon-o-arrow-path-rounded-square')
-                ->collapsible()
-                ->schema([
-                    RepeatableEntry::make('subscriptions')
-                        ->hiddenLabel()
-                        ->schema([
-                            TextEntry::make('plan.name')->label('תוכנית'),
-                            TextEntry::make('status')->label('סטטוס')->badge(),
-                            TextEntry::make('next_charge_at')->label('חיוב הבא')->dateTime('d/m/Y')->placeholder('—'),
-                        ])->columns(3),
-                ]),
-
             InfoSection::make('חשבוניות')
                 ->icon('heroicon-o-document-text')
                 ->collapsible()
@@ -324,7 +312,8 @@ class CustomerResource extends Resource
     public static function getRelations(): array
     {
         return [
-            //
+            RelationManagers\SubscriptionsRelationManager::class,
+            RelationManagers\SitesRelationManager::class,
         ];
     }
 

@@ -14,7 +14,7 @@ use App\Models\PaymentToken;
 use App\Models\WebhookEvent;
 use App\Services\Cardcom\CardcomClient;
 use App\Services\Cardcom\ChargeReconciler;
-use App\Services\Linet\LinetClient;
+use App\Services\Linet\InvoiceIssuer;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Http;
@@ -220,7 +220,7 @@ class ManualChargeTest extends TestCase
         $customer = Customer::factory()->create(['vat_exempt' => false]);
         $charge = $this->oneOffCharge($customer, ChargeStatus::Succeeded);
 
-        (new IssueInvoiceJob($charge->id))->handle(app(LinetClient::class));
+        (new IssueInvoiceJob($charge->id))->handle(app(InvoiceIssuer::class));
 
         // A one-off charge (no subscription) still issues a Linet invoice, with
         // the customer resolved directly and the charge's own description.
@@ -231,5 +231,26 @@ class ManualChargeTest extends TestCase
         ]);
         Http::assertSent(fn ($request) => str_ends_with($request->url(), '/create/doc')
             && $request->data()['docDet'][0]['name'] === 'שירות חד-פעמי');
+    }
+
+    public function test_invoice_issuer_returns_the_linet_error_instead_of_failing_silently(): void
+    {
+        config([
+            'billing.linet.base_url' => 'https://app.linet.test/api',
+            'billing.linet.login_id' => 'lid',
+            'billing.linet.key' => 'lhash',
+            'billing.linet.company_id' => '1',
+            'billing.linet.doctype' => '9',
+        ]);
+        Http::fake(['*/create/doc' => Http::response(['error' => 'invalid doctype'], 500)]);
+
+        $customer = Customer::factory()->create();
+        $charge = $this->oneOffCharge($customer, ChargeStatus::Succeeded);
+
+        $result = app(InvoiceIssuer::class)->issue($charge);
+
+        $this->assertFalse($result['ok']);
+        $this->assertNotNull($result['error']);
+        $this->assertDatabaseMissing('invoices', ['charge_id' => $charge->id]);
     }
 }

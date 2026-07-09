@@ -7,6 +7,7 @@ use App\Filament\Resources\ChargeResource\Pages;
 use App\Filament\Support\MoneyField;
 use App\Models\Charge;
 use App\Services\Cardcom\ChargeReconciler;
+use App\Services\Linet\InvoiceIssuer;
 use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Notifications\Notification;
@@ -175,6 +176,26 @@ class ChargeResource extends Resource
                             'failed' => Notification::make()->title('החיוב סומן ככשל')->warning()->send(),
                             default => Notification::make()->title('קארדקום עדיין לא מדווחת על חיוב')->body('ייתכן שהתשלום לא הושלם. נסו שוב בעוד כמה רגעים.')->warning()->send(),
                         };
+                    }),
+
+                // Issue (or retry) the Linet invoice for a succeeded charge and
+                // show the exact Linet error if it fails — no silent queue retry.
+                Tables\Actions\Action::make('issueInvoice')
+                    ->label('הנפק חשבונית')
+                    ->icon('heroicon-o-document-plus')
+                    ->color('success')
+                    ->visible(fn (Charge $record): bool => $record->status === ChargeStatus::Succeeded && $record->invoice()->doesntExist())
+                    ->action(function (Charge $record, InvoiceIssuer $issuer): void {
+                        $result = $issuer->issue($record->fresh());
+
+                        if ($result['ok']) {
+                            Notification::make()->title('החשבונית הונפקה בלינט ✓')->success()->send();
+                        } else {
+                            Notification::make()
+                                ->title('הנפקת החשבונית נכשלה')
+                                ->body($result['error'].' — בדקו את קודי לינט (סוג מסמך / מע״מ / אמצעי תשלום) בהגדרות → מפתחות → לינט.')
+                                ->danger()->persistent()->send();
+                        }
                     }),
 
                 Tables\Actions\EditAction::make()->label('עריכה'),
