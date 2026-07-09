@@ -3,18 +3,23 @@
 namespace App\Filament\Pages;
 
 use App\Enums\ChargeStatus;
+use App\Enums\TokenStatus;
 use App\Jobs\ProcessManualChargeJob;
 use App\Models\Charge;
 use App\Models\Customer;
+use App\Services\Cardcom\CardcomClient;
 use Filament\Forms\Components\Actions\Action as FormAction;
 use Filament\Forms\Components\Section;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
+use Filament\Forms\Components\Toggle;
 use Filament\Forms\Concerns\InteractsWithForms;
 use Filament\Forms\Contracts\HasForms;
 use Filament\Forms\Form;
+use Filament\Notifications\Actions\Action as NotificationAction;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
+use Illuminate\Support\Str;
 
 /**
  * חיוב ידני — לחייב לקוח בעל כרטיס שמור בסכום חד-פעמי, מחוץ למחזור המנוי.
@@ -45,7 +50,10 @@ class ManualCharge extends Page implements HasForms
 
     public function mount(): void
     {
-        $this->form->fill(['description' => 'חיוב ידני']);
+        $this->form->fill([
+            'description' => 'חיוב ידני',
+            'walkin_description' => 'חיוב חד-פעמי',
+        ]);
     }
 
     public function form(Form $form): Form
@@ -58,13 +66,13 @@ class ManualCharge extends Page implements HasForms
                         Select::make('customer_id')
                             ->label('לקוח')
                             ->options(fn (): array => Customer::query()
-                                ->whereHas('paymentTokens')
+                                ->whereHas('paymentTokens', fn ($q) => $q->where('status', TokenStatus::Active))
                                 ->orderBy('name')
                                 ->pluck('name', 'id')
                                 ->all())
                             ->searchable()
                             ->required()
-                            ->helperText('מוצגים רק לקוחות עם כרטיס שמור.'),
+                            ->helperText('מוצגים רק לקוחות עם כרטיס פעיל שמור.'),
                         TextInput::make('amount')
                             ->label('סכום לחיוב (₪, כולל מע״מ)')
                             ->numeric()
@@ -88,6 +96,24 @@ class ManualCharge extends Page implements HasForms
                             ->modalSubmitActionLabel('חייב עכשיו')
                             ->action(fn () => $this->charge()),
                     ]),
+
+                Section::make('חיוב לקוח מזדמן (ללא כרטיס שמור)')
+                    ->description('ממלאים את פרטי הלקוח והסכום ויוצרים עמוד תשלום מאובטח של קארדקום. את פרטי הכרטיס מזינים בעמוד של קארדקום — הפקיד יכול לפתוח אותו כאן, או לשלוח את הקישור ללקוח. מספרי כרטיס לעולם אינם עוברים דרך המערכת.')
+                    ->schema([
+                        TextInput::make('walkin_name')->label('שם הלקוח')->required()->maxLength(120),
+                        TextInput::make('walkin_email')->label('אימייל')->email()->maxLength(150),
+                        TextInput::make('walkin_phone')->label('טלפון')->tel()->maxLength(30),
+                        TextInput::make('walkin_business_number')->label('ח.פ / עוסק')->maxLength(30),
+                        TextInput::make('walkin_amount')->label('סכום לחיוב (₪, כולל מע״מ)')->numeric()->prefix('₪')->step('0.01')->minValue(0.1)->inputMode('decimal')->required(),
+                        TextInput::make('walkin_description')->label('תיאור (יופיע בחשבונית)')->maxLength(120)->required(),
+                        Toggle::make('walkin_vat_exempt')->label('פטור ממע״מ')->helperText('סמנו אם ללקוח אין חבות מע״מ.'),
+                    ])->columns(3)
+                    ->footerActions([
+                        FormAction::make('createChargePage')
+                            ->label('צור עמוד תשלום')
+                            ->icon('heroicon-o-globe-alt')
+                            ->action(fn () => $this->createChargePage()),
+                    ]),
             ])
             ->statePath('data');
     }
@@ -102,8 +128,8 @@ class ManualCharge extends Page implements HasForms
 
         $customer = Customer::find($data['customer_id']);
 
-        if (! $customer || ! $customer->paymentTokens()->exists()) {
-            Notification::make()->title('ללקוח אין כרטיס שמור')->danger()->send();
+        if (! $customer || ! $customer->paymentTokens()->where('status', TokenStatus::Active)->exists()) {
+            Notification::make()->title('ללקוח אין כרטיס פעיל שמור')->danger()->send();
 
             return;
         }
@@ -116,16 +142,7 @@ class ManualCharge extends Page implements HasForms
             return;
         }
 
-        // Split the total into net + VAT for the invoice. Exempt customers pay
-        // no VAT, so the whole amount is net.
-        if ($customer->vat_exempt) {
-            $net = $totalAgorot;
-            $vat = 0;
-        } else {
-            $vatRate = (float) config('billing.vat_rate');
-            $net = (int) round($totalAgorot / (1 + $vatRate));
-            $vat = $totalAgorot - $net;
-        }
+        [$net, $vat] = $this->splitVat($totalAgorot, (bool) $customer->vat_exempt);
 
         $charge = Charge::create([
             'subscription_id' => null,
@@ -149,6 +166,114 @@ class ManualCharge extends Page implements HasForms
             ->persistent()
             ->send();
 
-        $this->form->fill(['description' => 'חיוב ידני']);
+        $this->form->fill(['description' => 'חיוב ידני', 'walkin_description' => 'חיוב חד-פעמי']);
+    }
+
+    /**
+     * One-off charge for a walk-in customer: create (or reuse) the customer and a
+     * pending charge, then open a Cardcom hosted page where the card is entered.
+     * The charge is finalised by the webhook (matched on LowProfileId).
+     */
+    public function createChargePage(): void
+    {
+        $data = $this->form->getState();
+
+        $name = trim((string) ($data['walkin_name'] ?? ''));
+        $totalAgorot = (int) round(((float) ($data['walkin_amount'] ?? 0)) * 100);
+
+        if ($name === '' || $totalAgorot <= 0) {
+            Notification::make()->title('יש למלא שם וסכום תקין')->danger()->send();
+
+            return;
+        }
+
+        $email = filled($data['walkin_email'] ?? null) ? $data['walkin_email'] : null;
+        $vatExempt = (bool) ($data['walkin_vat_exempt'] ?? false);
+        $description = filled($data['walkin_description'] ?? null) ? $data['walkin_description'] : 'חיוב חד-פעמי';
+
+        // Reuse an existing customer by email, otherwise create a new one.
+        $customer = ($email ? Customer::where('email', $email)->first() : null)
+            ?? Customer::create([
+                'name' => $name,
+                'email' => $email,
+                'phone' => $data['walkin_phone'] ?? null,
+                'business_number' => $data['walkin_business_number'] ?? null,
+                'vat_exempt' => $vatExempt,
+            ]);
+
+        [$net, $vat] = $this->splitVat($totalAgorot, $vatExempt);
+
+        $charge = Charge::create([
+            'subscription_id' => null,
+            'customer_id' => $customer->id,
+            'amount_agorot' => $net,
+            'vat_agorot' => $vat,
+            'total_agorot' => $totalAgorot,
+            'status' => ChargeStatus::Pending,
+            'attempt_number' => 1,
+            'description' => $description,
+            'period_start' => now()->toDateString(),
+            'period_end' => now()->toDateString(),
+        ]);
+
+        try {
+            $lowProfile = app(CardcomClient::class)->createChargeLowProfile(
+                $charge->id,
+                $totalAgorot,
+                $description,
+                $customer->name,
+                $customer->email,
+                $customer->phone,
+                route('billing.update-card.done', ['result' => 'success']),
+                route('billing.update-card.done', ['result' => 'failed']),
+                route('webhooks.cardcom', ['secret' => config('billing.cardcom.webhook_secret')]),
+            );
+        } catch (\Throwable $e) {
+            $charge->update(['status' => ChargeStatus::Failed, 'failure_reason' => 'יצירת עמוד תשלום נכשלה']);
+            Notification::make()->title('יצירת עמוד התשלום נכשלה')->body(Str::limit($e->getMessage(), 150))->danger()->send();
+
+            return;
+        }
+
+        if (blank($lowProfile['url'])) {
+            $charge->update(['status' => ChargeStatus::Failed, 'failure_reason' => 'קארדקום לא החזירה כתובת תשלום']);
+            Notification::make()->title('קארדקום לא החזירה עמוד תשלום')->danger()->send();
+
+            return;
+        }
+
+        $charge->update(['cardcom_low_profile_id' => $lowProfile['low_profile_id']]);
+
+        Notification::make()
+            ->title('עמוד התשלום נוצר')
+            ->body('פִּתחו את עמוד התשלום להזנת כרטיס, או העתיקו ושִלחו את הקישור ללקוח: '.$lowProfile['url'])
+            ->success()
+            ->persistent()
+            ->actions([
+                NotificationAction::make('open')
+                    ->label('פתח עמוד תשלום')
+                    ->url($lowProfile['url'], shouldOpenInNewTab: true),
+            ])
+            ->send();
+
+        $this->form->fill(['description' => 'חיוב ידני', 'walkin_description' => 'חיוב חד-פעמי']);
+    }
+
+    /**
+     * Split a VAT-inclusive total into net + VAT agorot. Exempt customers pay no
+     * VAT, so the whole amount is net.
+     *
+     * @return array{0: int, 1: int}
+     */
+    private function splitVat(int $totalAgorot, bool $vatExempt): array
+    {
+        if ($vatExempt) {
+            return [$totalAgorot, 0];
+        }
+
+        $vatRate = (float) config('billing.vat_rate');
+        $net = (int) round($totalAgorot / (1 + $vatRate));
+
+        return [$net, $totalAgorot - $net];
     }
 }

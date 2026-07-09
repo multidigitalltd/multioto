@@ -3,7 +3,9 @@
 namespace App\Jobs;
 
 use App\Enums\ChargeStatus;
+use App\Enums\TokenStatus;
 use App\Models\Charge;
+use App\Models\PaymentToken;
 use App\Services\Cardcom\CardcomClient;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -40,11 +42,10 @@ class ProcessManualChargeJob implements ShouldQueue
                 return; // Gone, or already processed.
             }
 
-            $customer = $charge->customer;
-            $token = $customer?->defaultToken ?? $customer?->paymentTokens()->latest('id')->first();
+            $token = $this->activeToken($charge);
 
             if (! $token) {
-                $charge->update(['status' => ChargeStatus::Failed, 'failure_reason' => 'ללקוח אין כרטיס שמור']);
+                $charge->update(['status' => ChargeStatus::Failed, 'failure_reason' => 'ללקוח אין כרטיס פעיל שמור']);
 
                 return;
             }
@@ -70,5 +71,30 @@ class ProcessManualChargeJob implements ShouldQueue
         } finally {
             $lock->release();
         }
+    }
+
+    /**
+     * The customer's usable card: their default token if it's active, otherwise
+     * the most recent active token. Superseded/expired tokens are never charged
+     * (card capture marks replaced tokens TokenStatus::Replaced).
+     */
+    private function activeToken(Charge $charge): ?PaymentToken
+    {
+        $customer = $charge->customer;
+
+        if (! $customer) {
+            return null;
+        }
+
+        $default = $customer->defaultToken;
+
+        if ($default && $default->status === TokenStatus::Active) {
+            return $default;
+        }
+
+        return $customer->paymentTokens()
+            ->where('status', TokenStatus::Active)
+            ->latest('id')
+            ->first();
     }
 }

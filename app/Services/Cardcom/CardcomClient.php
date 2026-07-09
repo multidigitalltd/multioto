@@ -112,6 +112,48 @@ class CardcomClient
     }
 
     /**
+     * Create a hosted Low Profile page that CHARGES a card (Operation ChargeOnly)
+     * for a one-off / walk-in customer. The card is entered on Cardcom's secure
+     * page — never here. The result is delivered to the webhook; we match it back
+     * to the pending charge by the returned LowProfileId.
+     *
+     * @return array{url: string, low_profile_id: string}
+     */
+    public function createChargeLowProfile(int $chargeId, int $totalAgorot, string $description, ?string $name, ?string $email, ?string $phone, string $successUrl, string $failureUrl, string $webhookUrl): array
+    {
+        $amountNis = round($totalAgorot / 100, 2);
+
+        $response = $this->request('LowProfile/Create', array_filter([
+            'Operation' => 'ChargeOnly',
+            'Amount' => $amountNis,
+            'ISOCoinId' => 1, // ILS
+            'Language' => 'he',
+            'ReturnValue' => "charge:{$chargeId}",
+            'SuccessRedirectUrl' => $successUrl,
+            'FailedRedirectUrl' => $failureUrl,
+            'WebHookUrl' => $webhookUrl,
+            'Document' => $this->buildDocument($name, $email, $phone, $description, $amountNis),
+        ], fn ($v) => $v !== null), withApiPassword: false);
+
+        return [
+            'url' => $response['Url'] ?? '',
+            'low_profile_id' => $response['LowProfileId'] ?? '',
+        ];
+    }
+
+    /**
+     * Fetch the authoritative result of a completed Low Profile session (used by
+     * the webhook to confirm a hosted charge). The webhook body itself is
+     * minimal, so we read the transaction result here.
+     */
+    public function getLpResult(string $lowProfileId): array
+    {
+        return $this->request('LowProfile/GetLpResult', [
+            'LowProfileId' => $lowProfileId,
+        ], withApiPassword: false);
+    }
+
+    /**
      * Charge a stored token. Amount is integer agorot; Cardcom expects ILS units.
      *
      * Per Cardcom v11 docs the token is a TOP-LEVEL `Token` field (not under
