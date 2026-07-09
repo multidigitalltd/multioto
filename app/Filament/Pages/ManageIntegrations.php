@@ -13,6 +13,7 @@ use Filament\Forms\Contracts\HasForms;
 use Filament\Forms\Form;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 /**
@@ -137,6 +138,16 @@ class ManageIntegrations extends Page implements HasForms
         if ($meta === null) {
             return; // Unknown group — nothing outside the allow-list is ever saved.
         }
+
+        // TEMP diagnostic: which of the group's fields actually arrived from the
+        // browser (values are NOT logged — only filled/empty). Remove after the
+        // save-binding issue is resolved.
+        Log::info('saveGroup called', [
+            'group' => $group,
+            'fields' => collect($meta['keys'])
+                ->mapWithKeys(fn ($k) => [$k => filled(data_get($this->data, $k) ?? ($this->data[$k] ?? null)) ? 'filled' : 'empty'])
+                ->all(),
+        ]);
 
         foreach ($meta['keys'] as $key) {
             // Read the field from the nested form state, with a flat-key fallback
