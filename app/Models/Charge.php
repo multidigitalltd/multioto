@@ -13,9 +13,9 @@ class Charge extends Model
     use HasFactory;
 
     protected $fillable = [
-        'subscription_id', 'amount_agorot', 'vat_agorot', 'total_agorot', 'currency',
+        'subscription_id', 'customer_id', 'amount_agorot', 'vat_agorot', 'total_agorot', 'currency',
         'status', 'attempt_number', 'cardcom_transaction_id', 'cardcom_response_code',
-        'failure_reason', 'period_start', 'period_end', 'charged_at',
+        'failure_reason', 'description', 'period_start', 'period_end', 'charged_at',
     ];
 
     protected function casts(): array
@@ -35,6 +35,21 @@ class Charge extends Model
     public function subscription(): BelongsTo
     {
         return $this->belongsTo(Subscription::class);
+    }
+
+    /**
+     * Direct customer link for one-off (manual) charges that have no
+     * subscription. Subscription charges reach the customer via the subscription.
+     */
+    public function customer(): BelongsTo
+    {
+        return $this->belongsTo(Customer::class);
+    }
+
+    /** The customer behind this charge, whether one-off or via a subscription. */
+    public function resolveCustomer(): ?Customer
+    {
+        return $this->subscription?->customer ?? $this->customer;
     }
 
     public function invoice(): HasOne

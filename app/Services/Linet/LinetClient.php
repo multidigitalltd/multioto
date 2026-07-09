@@ -65,7 +65,9 @@ class LinetClient
     public function issueDocument(Charge $charge, VatCategory $vatCategory, string $description): array
     {
         $config = config('billing.linet');
-        $customer = $charge->subscription->customer;
+        // One-off (manual) charges have no subscription — resolve the customer
+        // directly in that case.
+        $customer = $charge->subscription?->customer ?? $charge->customer;
 
         $vatCatId = $vatCategory === VatCategory::Exempt
             ? $config['vat_cat_exempt']

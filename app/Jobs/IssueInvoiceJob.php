@@ -26,25 +26,32 @@ class IssueInvoiceJob implements ShouldQueue
 
     public function handle(LinetClient $linet): void
     {
-        $charge = Charge::with(['subscription.customer', 'subscription.plan', 'invoice'])
+        $charge = Charge::with(['subscription.customer', 'subscription.plan', 'customer', 'invoice'])
             ->find($this->chargeId);
 
         if (! $charge || $charge->status !== ChargeStatus::Succeeded || $charge->invoice) {
             return;
         }
 
-        $customer = $charge->subscription->customer;
+        $customer = $charge->resolveCustomer();
+
+        if (! $customer) {
+            return; // Can't issue an invoice without a customer.
+        }
+
         $vatCategory = $customer->vat_exempt ? VatCategory::Exempt : VatCategory::Taxable;
 
-        $document = $linet->issueDocument(
-            $charge,
-            $vatCategory,
-            sprintf('%s — %s עד %s',
+        // Subscription charges describe the plan + period; one-off (manual)
+        // charges carry their own free-text description.
+        $description = $charge->subscription
+            ? sprintf('%s — %s עד %s',
                 $charge->subscription->plan->name,
                 $charge->period_start->format('d/m/Y'),
                 $charge->period_end->format('d/m/Y'),
-            ),
-        );
+            )
+            : ($charge->description ?: 'חיוב');
+
+        $document = $linet->issueDocument($charge, $vatCategory, $description);
 
         $charge->invoice()->create([
             'customer_id' => $customer->id,
