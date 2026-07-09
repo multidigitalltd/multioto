@@ -39,4 +39,22 @@ class ManageIntegrationsTest extends TestCase
         $this->assertSame('9', $m['linet.doctype'] ?? null);
         $this->assertSame('100', $m['linet.vat_cat_taxable'] ?? null);
     }
+
+    public function test_credentials_are_trimmed_so_a_pasted_space_cannot_reject_auth(): void
+    {
+        $this->actingAs(User::factory()->create());
+        Http::fake(['*/search/account' => Http::response(['status' => 200, 'body' => []])]);
+
+        Livewire::test(ManageIntegrations::class)
+            ->fillForm([
+                'linet.login_id' => '  G9TF8SbjbbAMfl6ITLEohIAsEJiRQUrc  ',
+                'linet.key' => "34sA3Ru8uLrkEIsgkUdlMYjGm0FX-7HY\n",
+                'linet.company_id' => '3',
+            ])
+            ->call('saveGroup', 'linet');
+
+        $m = Setting::map();
+        $this->assertSame('G9TF8SbjbbAMfl6ITLEohIAsEJiRQUrc', $m['linet.login_id'] ?? null);
+        $this->assertSame('34sA3Ru8uLrkEIsgkUdlMYjGm0FX-7HY', $m['linet.key'] ?? null);
+    }
 }
