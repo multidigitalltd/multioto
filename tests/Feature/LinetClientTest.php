@@ -44,9 +44,14 @@ class LinetClientTest extends TestCase
         ]);
     }
 
-    public function test_create_document_posts_auth_in_body_and_correct_structure(): void
+    public function test_create_document_resolves_account_and_posts_correct_structure(): void
     {
-        Http::fake(['*/create/doc' => Http::response(['id' => 4321, 'pdf' => 'https://app.linet.test/doc/4321.pdf'])]);
+        // Linet wraps responses in {status, body}. An existing account is found
+        // via search/account and its id is carried into the document.
+        Http::fake([
+            '*/search/account' => Http::response(['status' => 200, 'body' => [['id' => 77]]]),
+            '*/create/doc' => Http::response(['status' => 200, 'body' => ['id' => 4321, 'pdf' => 'https://app.linet.test/doc/4321.pdf']]),
+        ]);
 
         $result = app(LinetClient::class)->issueDocument($this->charge(), VatCategory::Taxable, 'מנוי חודשי');
 
@@ -54,42 +59,78 @@ class LinetClientTest extends TestCase
         $this->assertSame('https://app.linet.test/doc/4321.pdf', $result['pdf_url']);
 
         Http::assertSent(function ($request) {
+            if (! str_ends_with($request->url(), '/create/doc')) {
+                return false;
+            }
+
             $body = $request->data();
 
-            return str_ends_with($request->url(), '/create/doc')
+            return
                 // Auth is carried in the request BODY, not headers.
-                && $body['login_id'] === 'lid'
+                $body['login_id'] === 'lid'
                 && $body['login_hash'] === 'lhash'
                 && $body['login_company'] === '1'
+                && $body['account_id'] === 77                     // resolved account
                 && $body['doctype'] === '9'
                 && $body['sendmail'] === 1
-                && $body['docDet'][0]['vat_cat_id'] === 1        // taxable category
-                && $body['docDet'][0]['iItem'] === 118.0         // total incl VAT
+                && $body['docDet'][0]['vat_cat_id'] === 1         // taxable category
+                && $body['docDet'][0]['iItem'] === 118.0          // total incl VAT
                 && $body['docDet'][0]['iItemWithVat'] === 1
                 && $body['docCheq'][0]['sum'] === 118.0
                 && $body['docCheq'][0]['type'] === 3;
         });
     }
 
+    public function test_missing_account_is_created_before_the_document(): void
+    {
+        Http::fake([
+            '*/search/account' => Http::response(['status' => 200, 'body' => []]),   // none found
+            '*/create/account' => Http::response(['status' => 200, 'body' => ['id' => 909]]),
+            '*/create/doc' => Http::response(['status' => 200, 'body' => ['id' => 5]]),
+        ]);
+
+        app(LinetClient::class)->issueDocument($this->charge(), VatCategory::Taxable, 'x');
+
+        Http::assertSent(fn ($request) => str_ends_with($request->url(), '/create/account'));
+        Http::assertSent(fn ($request) => str_ends_with($request->url(), '/create/doc')
+            && $request->data()['account_id'] === 909);
+    }
+
     public function test_exempt_customer_uses_the_exempt_vat_category(): void
     {
-        Http::fake(['*/create/doc' => Http::response(['id' => 1])]);
+        Http::fake([
+            '*/search/account' => Http::response(['status' => 200, 'body' => [['id' => 1]]]),
+            '*/create/doc' => Http::response(['status' => 200, 'body' => ['id' => 1]]),
+        ]);
 
         app(LinetClient::class)->issueDocument($this->charge(), VatCategory::Exempt, 'x');
 
-        Http::assertSent(fn ($request) => $request->data()['docDet'][0]['vat_cat_id'] === 2);
+        Http::assertSent(fn ($request) => str_ends_with($request->url(), '/create/doc')
+            && $request->data()['docDet'][0]['vat_cat_id'] === 2);
+    }
+
+    public function test_a_non_200_envelope_status_is_surfaced_as_an_error(): void
+    {
+        Http::fake([
+            '*/search/account' => Http::response(['status' => 200, 'body' => [['id' => 1]]]),
+            '*/create/doc' => Http::response(['status' => 401, 'message' => 'invalid login']),
+        ]);
+
+        $this->expectException(\RuntimeException::class);
+
+        app(LinetClient::class)->issueDocument($this->charge(), VatCategory::Taxable, 'x');
     }
 
     public function test_connection_check_reports_ok_on_a_clean_search_response(): void
     {
-        Http::fake(['*/newsearch/account' => Http::response([])]);
+        Http::fake(['*/search/account' => Http::response(['status' => 200, 'body' => []])]);
 
         $this->assertTrue(app(LinetClient::class)->testConnection()->ok);
     }
 
-    public function test_connection_check_reports_failure_when_linet_returns_an_error(): void
+    public function test_connection_check_reports_failure_when_linet_rejects_the_login(): void
     {
-        Http::fake(['*/newsearch/account' => Http::response(['error' => 'invalid login'])]);
+        Http::fake(['*/search/account' => Http::response(['status' => 401, 'message' => 'invalid login'])]);
 
         $result = app(LinetClient::class)->testConnection();
         $this->assertFalse($result->ok);

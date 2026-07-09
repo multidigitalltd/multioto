@@ -18,7 +18,7 @@ class ManageIntegrationsTest extends TestCase
     {
         $this->actingAs(User::factory()->create());
         // The save runs the Linet connection check — keep it off the network.
-        Http::fake(['*/newsearch/account' => Http::response([])]);
+        Http::fake(['*/search/account' => Http::response(['status' => 200, 'body' => []])]);
 
         Livewire::test(ManageIntegrations::class)
             ->fillForm([
