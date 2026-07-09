@@ -145,7 +145,12 @@ class ManualCharge extends Page implements HasForms
             return;
         }
 
-        $activeToken = $customer->paymentTokens()->where('status', TokenStatus::Active)->exists();
+        // The "new customer" (enter/collect a card) path must always go through
+        // the hosted page — never silently charge a stored card, even if the
+        // entered email happens to match an existing card-holding customer.
+        $viaNewCustomer = (bool) ($data['new_customer'] ?? false);
+        $activeToken = ! $viaNewCustomer
+            && $customer->paymentTokens()->where('status', TokenStatus::Active)->exists();
 
         if ($activeToken) {
             $this->chargeSavedToken($customer, $totalAgorot, $description);
