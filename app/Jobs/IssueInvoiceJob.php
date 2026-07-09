@@ -3,16 +3,16 @@
 namespace App\Jobs;
 
 use App\Enums\ChargeStatus;
-use App\Enums\DocumentType;
-use App\Enums\VatCategory;
 use App\Models\Charge;
-use App\Services\Linet\LinetClient;
+use App\Services\Linet\InvoiceIssuer;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 
 /**
  * Issue a Linet tax invoice/receipt for a successful charge — and only for a
- * successful charge. Safe to retry: skips if an invoice already exists.
+ * successful charge. Safe to retry: skips if an invoice already exists. The
+ * actual work lives in InvoiceIssuer, shared with the manual "issue invoice"
+ * button so Linet errors are visible there too.
  */
 class IssueInvoiceJob implements ShouldQueue
 {
@@ -24,46 +24,21 @@ class IssueInvoiceJob implements ShouldQueue
 
     public function __construct(public int $chargeId) {}
 
-    public function handle(LinetClient $linet): void
+    public function handle(InvoiceIssuer $issuer): void
     {
-        $charge = Charge::with(['subscription.customer', 'subscription.plan', 'customer', 'invoice'])
-            ->find($this->chargeId);
+        $charge = Charge::find($this->chargeId);
 
-        if (! $charge || $charge->status !== ChargeStatus::Succeeded || $charge->invoice) {
+        if (! $charge || $charge->status !== ChargeStatus::Succeeded || $charge->invoice()->exists()) {
             return;
         }
 
-        $customer = $charge->resolveCustomer();
+        $result = $issuer->issue($charge);
 
-        if (! $customer) {
-            return; // Can't issue an invoice without a customer.
+        // Throw so the job retries — a transient Linet error may clear. A
+        // misconfiguration (wrong codes) will keep failing until fixed, which
+        // is surfaced via the manual "issue invoice" button.
+        if (! $result['ok']) {
+            throw new \RuntimeException('Linet invoice failed: '.($result['error'] ?? 'unknown'));
         }
-
-        $vatCategory = $customer->vat_exempt ? VatCategory::Exempt : VatCategory::Taxable;
-
-        // Subscription charges describe the plan + period; one-off (manual)
-        // charges carry their own free-text description.
-        $description = $charge->subscription
-            ? sprintf('%s — %s עד %s',
-                $charge->subscription->plan->name,
-                $charge->period_start->format('d/m/Y'),
-                $charge->period_end->format('d/m/Y'),
-            )
-            : ($charge->description ?: 'חיוב');
-
-        $document = $linet->issueDocument($charge, $vatCategory, $description);
-
-        $charge->invoice()->create([
-            'customer_id' => $customer->id,
-            'linet_document_id' => $document['document_id'],
-            'document_type' => DocumentType::TaxInvoiceReceipt,
-            'allocation_number' => $document['allocation_number'],
-            'vat_category' => $vatCategory,
-            'amount_agorot' => $charge->amount_agorot,
-            'vat_agorot' => $charge->vat_agorot,
-            'total_agorot' => $charge->total_agorot,
-            'pdf_url' => $document['pdf_url'],
-            'issued_at' => now(),
-        ]);
     }
 }

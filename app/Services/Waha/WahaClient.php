@@ -82,15 +82,25 @@ class WahaClient
     }
 
     /**
-     * Convert an E.164 phone number to a WAHA chat id; pass JIDs through untouched.
+     * Convert a phone number to a WAHA chat id; pass JIDs through untouched.
+     *
+     * Strips punctuation (+, spaces, dashes) and converts a local number with a
+     * leading 0 (e.g. Israeli "0501234567") to international form
+     * ("972501234567") — WAHA rejects local numbers, which returned a 500.
      */
     public function normalizeChatId(string $chatIdOrPhone): string
     {
         if (str_contains($chatIdOrPhone, '@')) {
-            return $chatIdOrPhone;
+            return $chatIdOrPhone; // already a JID / chat id
         }
 
-        return ltrim($chatIdOrPhone, '+').'@c.us';
+        $digits = preg_replace('/\D+/', '', $chatIdOrPhone) ?? '';
+
+        if (str_starts_with($digits, '0')) {
+            $digits = (string) config('billing.waha.default_country_code', '972').substr($digits, 1);
+        }
+
+        return $digits.'@c.us';
     }
 
     protected function request(string $path, array $payload): array

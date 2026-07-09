@@ -100,9 +100,18 @@ class Subscription extends Model
         return $this->basePriceAgorot() + $this->vatAgorot();
     }
 
+    /**
+     * Whether a charge may be attempted now. Includes Suspended so a manual
+     * "charge now" or a card-update recovery can collect a lapsed debtor and
+     * restore the site (activatePaidPeriod). The scheduler does NOT auto-retry
+     * suspended subscriptions — dueForCharge scopes to Active/PastDue only.
+     */
     public function isChargeable(): bool
     {
-        return in_array($this->status, [SubscriptionStatus::Active, SubscriptionStatus::PastDue], true)
-            && $this->token_id !== null;
+        return in_array($this->status, [
+            SubscriptionStatus::Active,
+            SubscriptionStatus::PastDue,
+            SubscriptionStatus::Suspended,
+        ], true) && $this->token_id !== null;
     }
 }
