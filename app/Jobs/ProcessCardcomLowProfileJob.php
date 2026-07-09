@@ -46,13 +46,28 @@ class ProcessCardcomLowProfileJob implements ShouldQueue
             return;
         }
 
-        $tokenInfo = $payload['TokenInfo'] ?? [];
-        $customerId = (int) ($payload['ReturnValue'] ?? 0);
+        // Token capture (subscription setup / card update). Cardcom's webhook
+        // body is minimal — the token itself lives in the authoritative
+        // GetLpResult, so fetch it whenever the payload doesn't already carry it.
+        $lowProfileId = $payload['LowProfileId'] ?? null;
+        $result = $payload;
+
+        if ($lowProfileId && empty(data_get($payload, 'TokenInfo.Token'))) {
+            $result = app(CardcomClient::class)->getLpResult((string) $lowProfileId);
+        }
+
+        $responseCode = (string) ($result['ResponseCode'] ?? '0');
+        $tokenInfo = $result['TokenInfo'] ?? [];
+        $customerId = (int) ($result['ReturnValue'] ?? $payload['ReturnValue'] ?? 0);
         $customer = Customer::find($customerId);
 
-        if (! $customer || empty($tokenInfo['Token'])) {
-            Log::warning('Cardcom low profile webhook without customer/token', [
+        if ($responseCode !== '0' || ! $customer || empty($tokenInfo['Token'])) {
+            Log::warning('Cardcom low profile webhook without a usable token', [
                 'webhook_event_id' => $event->id,
+                'low_profile_id' => $lowProfileId,
+                'response_code' => $responseCode,
+                'has_customer' => (bool) $customer,
+                'has_token' => ! empty($tokenInfo['Token']),
             ]);
             $event->markProcessed();
 
