@@ -6,8 +6,8 @@ use App\Enums\BusinessType;
 use App\Enums\CustomerStatus;
 use App\Enums\SubscriptionStatus;
 use App\Filament\Resources\CustomerResource\Pages;
-use App\Jobs\SendCardCaptureLinkJob;
 use App\Models\Customer;
+use App\Services\Notifications\CardCaptureLinkSender;
 use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Infolists\Components\RepeatableEntry;
@@ -148,14 +148,15 @@ class CustomerResource extends Resource
                     ->modalHeading('שליחת קישור להזנת כרטיס')
                     ->modalDescription(fn (Customer $record): string => "לשלוח ל-{$record->name} קישור מאובטח להזנת/עדכון כרטיס אשראי (וואטסאפ + מייל)?")
                     ->modalSubmitActionLabel('שלח')
-                    ->action(function (Customer $record): void {
-                        $subscriptionId = $record->subscriptions()
+                    ->action(function (Customer $record, CardCaptureLinkSender $sender): void {
+                        $subscription = $record->subscriptions()
                             ->whereNot('status', SubscriptionStatus::Canceled)
+                            ->with(['customer', 'plan'])
                             ->orderBy('id')
-                            ->value('id');
+                            ->first();
 
                         // The subscription may have been canceled between render and click.
-                        if ($subscriptionId === null) {
+                        if ($subscription === null) {
                             Notification::make()
                                 ->title('ללקוח אין מנוי פעיל לשליחת קישור')
                                 ->warning()
@@ -164,13 +165,7 @@ class CustomerResource extends Resource
                             return;
                         }
 
-                        SendCardCaptureLinkJob::dispatch($subscriptionId);
-
-                        Notification::make()
-                            ->title('הקישור נשלח ללקוח')
-                            ->body('נשלח בוואטסאפ ובמייל (אם הערוצים מחוברים). אם עדיין לא הגדרתם וואטסאפ/מייל — השתמשו ב"העתקת קישור לכרטיס".')
-                            ->success()
-                            ->send();
+                        self::notifyLinkResult($sender->send($subscription));
                     }),
 
                 // Show the signed card-capture link on screen to copy/open
@@ -208,6 +203,29 @@ class CustomerResource extends Resource
             ])
             ->emptyStateHeading('אין לקוחות עדיין')
             ->emptyStateDescription('הקימו לקוח חדש דרך "לקוח חדש" בתפריט.');
+    }
+
+    /**
+     * Turn a CardCaptureLinkSender result into an honest notification — which
+     * channel actually delivered, and why any failed.
+     *
+     * @param  array{link: string, sent: array<int, string>, failed: array<int, string>}  $result
+     */
+    public static function notifyLinkResult(array $result): void
+    {
+        if ($result['sent'] !== [] && $result['failed'] === []) {
+            Notification::make()->title('הקישור נשלח: '.implode(', ', $result['sent']).' ✓')->success()->send();
+        } elseif ($result['sent'] !== []) {
+            Notification::make()
+                ->title('נשלח חלקית')
+                ->body('נשלח: '.implode(', ', $result['sent']).'. נכשל: '.implode('; ', $result['failed']))
+                ->warning()->persistent()->send();
+        } else {
+            Notification::make()
+                ->title('השליחה נכשלה')
+                ->body(implode('; ', $result['failed']).' — אפשר להעתיק את הקישור ידנית בכפתור "העתקת קישור לכרטיס".')
+                ->danger()->persistent()->send();
+        }
     }
 
     /**

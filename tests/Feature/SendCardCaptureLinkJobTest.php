@@ -6,6 +6,7 @@ use App\Enums\SubscriptionStatus;
 use App\Jobs\SendCardCaptureLinkJob;
 use App\Models\Customer;
 use App\Models\Subscription;
+use App\Services\Notifications\CardCaptureLinkSender;
 use App\Services\Waha\WahaClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Mail;
@@ -28,7 +29,7 @@ class SendCardCaptureLinkJobTest extends TestCase
             'status' => SubscriptionStatus::Canceled,
         ]);
 
-        (new SendCardCaptureLinkJob($subscription->id))->handle($waha);
+        (new SendCardCaptureLinkJob($subscription->id))->handle(new CardCaptureLinkSender($waha));
 
         Mail::assertNothingSent();
     }
@@ -45,7 +46,7 @@ class SendCardCaptureLinkJobTest extends TestCase
             'status' => SubscriptionStatus::Active,
         ]);
 
-        (new SendCardCaptureLinkJob($subscription->id))->handle($waha);
+        (new SendCardCaptureLinkJob($subscription->id))->handle(new CardCaptureLinkSender($waha));
 
         Mail::assertSentCount(1);
     }
