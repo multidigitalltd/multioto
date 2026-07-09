@@ -52,7 +52,7 @@ class ManageIntegrations extends Page implements HasForms
         ],
         'linet' => [
             'label' => 'לינט',
-            'keys' => ['linet.login_id', 'linet.key', 'linet.company_id', 'linet.doctype', 'linet.vat_cat_taxable', 'linet.vat_cat_exempt', 'linet.payment_type'],
+            'keys' => ['linet.login_id', 'linet.key', 'linet.company_id', 'linet.doctype', 'linet.vat_cat_taxable', 'linet.vat_cat_exempt', 'linet.payment_type', 'linet.general_item_id'],
         ],
         'flywp' => [
             'label' => 'FlyWP',
@@ -78,6 +78,16 @@ class ManageIntegrations extends Page implements HasForms
 
     /** @var array<string, mixed> */
     public array $data = [];
+
+    /**
+     * Inline result banner shown at the top of the page after a save/test. This
+     * is a guaranteed, in-page confirmation that does not depend on the toast
+     * notification layer rendering — the operator always sees an outcome.
+     */
+    public ?string $statusText = null;
+
+    /** success | danger | warning — drives the banner colour. */
+    public string $statusVariant = 'success';
 
     public function mount(): void
     {
@@ -108,6 +118,7 @@ class ManageIntegrations extends Page implements HasForms
                         TextInput::make('linet.vat_cat_taxable')->label('קוד מע״מ — חייב')->numeric()->live(onBlur: true)->autocomplete(false),
                         TextInput::make('linet.vat_cat_exempt')->label('קוד מע״מ — פטור')->numeric()->live(onBlur: true)->autocomplete(false),
                         TextInput::make('linet.payment_type')->label('קוד אמצעי תשלום (כרטיס אשראי)')->numeric()->live(onBlur: true)->autocomplete(false),
+                        TextInput::make('linet.general_item_id')->label('קוד פריט כללי')->helperText('הפריט בלינט שאליו משויכת כל שורת חשבונית. ברירת מחדל: 1. שנו רק אם הפריט הכללי בחשבונכם שונה.')->live(onBlur: true)->autocomplete(false),
                     ])->columns(3)
                     ->footerActions($this->groupActions('linet')),
 
@@ -180,8 +191,13 @@ class ManageIntegrations extends Page implements HasForms
         }
 
         // Overlay the just-saved values onto config so a subsequent connection
-        // test (or anything else this request touches) sees them.
-        (new SettingsServiceProvider(app()))->boot();
+        // test (or anything else this request touches) sees them. Guarded so an
+        // overlay hiccup can never swallow the save confirmation below.
+        try {
+            (new SettingsServiceProvider(app()))->boot();
+        } catch (\Throwable) {
+            // Values are already persisted; the overlay refresh is best-effort.
+        }
 
         $this->confirmSaved($meta['label'], $group);
     }
@@ -200,30 +216,49 @@ class ManageIntegrations extends Page implements HasForms
             return;
         }
 
-        // Ensure the check reads the latest stored credentials.
-        (new SettingsServiceProvider(app()))->boot();
+        // Ensure the check reads the latest stored credentials (best-effort).
+        try {
+            (new SettingsServiceProvider(app()))->boot();
+        } catch (\Throwable) {
+            // Fall through — the check below still runs with current config.
+        }
 
         try {
             $result = app(IntegrationHealth::class)->check($healthKey);
         } catch (\Throwable $e) {
-            Notification::make()
-                ->title("בדיקת החיבור ל{$label} לא הושלמה")
-                ->body(Str::limit(trim($e->getMessage()) ?: class_basename($e), 150))
-                ->warning()->persistent()->send();
+            $this->announce(
+                "בדיקת החיבור ל{$label} לא הושלמה",
+                Str::limit(trim($e->getMessage()) ?: class_basename($e), 150),
+                'warning',
+            );
 
             return;
         }
 
-        $notification = Notification::make()->body($result->message);
-
         if ($result->ok) {
-            $notification->title("החיבור ל{$label} תקין ✓")->success();
+            $this->announce("החיבור ל{$label} תקין ✓", $result->message, 'success');
         } elseif ($result->configured) {
-            $notification->title("בדיקת החיבור ל{$label} נכשלה")->danger();
+            $this->announce("בדיקת החיבור ל{$label} נכשלה", $result->message, 'danger');
         } else {
-            $notification->title("{$label}: המפתחות עדיין לא מלאים")->warning();
+            $this->announce("{$label}: המפתחות עדיין לא מלאים", $result->message, 'warning');
         }
+    }
 
+    /**
+     * Show an outcome both as a toast AND as an inline page banner, so the
+     * operator always sees a result even if the toast layer doesn't render.
+     */
+    protected function announce(string $title, string $body, string $variant): void
+    {
+        $this->statusText = trim($title.' — '.$body, ' —');
+        $this->statusVariant = $variant;
+
+        $notification = Notification::make()->title($title)->body($body);
+        match ($variant) {
+            'success' => $notification->success(),
+            'danger' => $notification->danger(),
+            default => $notification->warning(),
+        };
         $notification->persistent()->send();
     }
 
@@ -243,10 +278,7 @@ class ManageIntegrations extends Page implements HasForms
             $body .= ' לבדיקת החיבור לספק לחצו על "בדיקת חיבור".';
         }
 
-        Notification::make()
-            ->title("מפתחות {$label} נשמרו והוצפנו")
-            ->body($body)
-            ->success()->send();
+        $this->announce("מפתחות {$label} נשמרו והוצפנו", $body, 'success');
     }
 
     /**
