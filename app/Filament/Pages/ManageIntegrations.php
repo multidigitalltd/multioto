@@ -13,6 +13,7 @@ use Filament\Forms\Contracts\HasForms;
 use Filament\Forms\Form;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 /**
@@ -138,10 +139,28 @@ class ManageIntegrations extends Page implements HasForms
             return; // Unknown group — nothing outside the allow-list is ever saved.
         }
 
+        // Force Filament to gather every component's current value into a fresh
+        // array. Reading this (rather than the raw $this->data property) fixes
+        // cases where a field's value hasn't flushed to $this->data yet.
+        try {
+            $state = $this->form->getState();
+        } catch (\Throwable $e) {
+            $state = $this->data;
+        }
+
+        // TEMP diagnostic: which of the group's fields actually arrived (values
+        // are NOT logged — only filled/empty), from both sources. Remove once the
+        // save-binding issue is resolved.
+        Log::info('saveGroup called', [
+            'group' => $group,
+            'from_getState' => collect($meta['keys'])->mapWithKeys(fn ($k) => [$k => filled(data_get($state, $k)) ? 'filled' : 'empty'])->all(),
+            'from_data' => collect($meta['keys'])->mapWithKeys(fn ($k) => [$k => filled(data_get($this->data, $k)) ? 'filled' : 'empty'])->all(),
+        ]);
+
         foreach ($meta['keys'] as $key) {
-            // Read the field from the nested form state, with a flat-key fallback
-            // for robustness against any binding quirk.
-            $value = data_get($this->data, $key) ?? ($this->data[$key] ?? null);
+            // Prefer the gathered form state; fall back to the raw property (nested
+            // then flat) for robustness against any binding quirk.
+            $value = data_get($state, $key) ?? data_get($this->data, $key) ?? ($this->data[$key] ?? null);
 
             if ($key === 'ai.enabled') {
                 Setting::put($key, $value ? '1' : '0');
