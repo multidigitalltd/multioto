@@ -32,6 +32,8 @@ class SettingsServiceProvider extends ServiceProvider
         'flywp.api_token' => 'billing.hosting.flywp.api_token',
         'flywp.server_id' => 'billing.hosting.flywp.server_id',
         'waha.api_key' => 'billing.waha.api_key',
+        'waha.base_url' => 'billing.waha.base_url',
+        'waha.session' => 'billing.waha.session',
         'postmark.token' => 'services.postmark.token',
         'postmark.account_token' => 'services.postmark.account_token',
         // Outbound mail identity — editable from the מייל settings screen so the

@@ -53,7 +53,7 @@ class ManageIntegrations extends Page implements HasForms
         ],
         'waha' => [
             'label' => 'WAHA',
-            'keys' => ['waha.api_key'],
+            'keys' => ['waha.base_url', 'waha.api_key', 'waha.session'],
         ],
         // Postmark / outbound-mail settings live on their own page (ManageMail),
         // which also manages the sender address and verified-sender sync.
@@ -113,10 +113,12 @@ class ManageIntegrations extends Page implements HasForms
                     ->footerActions([$this->saveAction('flywp')]),
 
                 Section::make('WAHA — וואטסאפ')
-                    ->description($this->groupDescription('waha'))
+                    ->description($this->groupDescription('waha', 'כתובת שרת WAHA + מפתח. אם WAHA רץ על אותו שרת בקונטיינר נפרד, השתמשו ב-http://host.docker.internal:3000. את חיבור מספר הוואטסאפ עצמו (סריקת QR) עושים בלוח הבקרה של WAHA.'))
                     ->schema([
+                        TextInput::make('waha.base_url')->label('כתובת שרת (Base URL)')->placeholder('http://host.docker.internal:3000')->autocomplete(false),
                         TextInput::make('waha.api_key')->label('API Key')->password()->revealable()->autocomplete('new-password'),
-                    ])
+                        TextInput::make('waha.session')->label('שם Session')->placeholder('default')->autocomplete(false),
+                    ])->columns(3)
                     ->footerActions([$this->saveAction('waha')]),
             ])
             ->statePath('data');
