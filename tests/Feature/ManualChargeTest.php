@@ -62,6 +62,7 @@ class ManualChargeTest extends TestCase
         // requirement); the card number itself never leaves Cardcom.
         Http::assertSent(fn ($request) => str_contains($request->url(), 'Transactions/Transaction')
             && ($request->data()['Token'] ?? null) === $token->cardcom_token
+            && ($request->data()['ExternalUniqTranId'] ?? null) === "manual-{$charge->id}"
             && ($request->data()['Document']['DocumentTypeToCreate'] ?? null) === 'Order');
     }
 
@@ -163,7 +164,7 @@ class ManualChargeTest extends TestCase
         $this->assertSame('424242', $charge->cardcom_transaction_id);
         Bus::assertDispatched(IssueInvoiceJob::class);
         Http::assertSent(fn ($request) => str_contains($request->url(), 'GetTransactionByExternalUniqTran')
-            && ($request->data()['ExternalUniqueTranId'] ?? null) === "manual-{$charge->id}");
+            && ($request->data()['ExternalUniqTranId'] ?? null) === "manual-{$charge->id}");
     }
 
     public function test_reconcile_finalises_a_stuck_hosted_charge_via_low_profile(): void

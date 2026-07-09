@@ -26,8 +26,14 @@ class ChargeReconciler
             return $charge->status->value;
         }
 
+        // Only manual/one-off charges are reconciled here. Subscription charges
+        // use a different external id and recover via the dunning machine.
+        if ($charge->subscription_id !== null) {
+            return 'pending';
+        }
+
         // Hosted (walk-in) charge → look up the Low Profile result; saved-token
-        // (manual) charge → look up by the ExternalUniqueTranId we sent.
+        // (manual) charge → look up by the ExternalUniqTranId we sent.
         $result = filled($charge->cardcom_low_profile_id)
             ? $this->cardcom->getLpResult($charge->cardcom_low_profile_id)
             : $this->cardcom->transactionByExternalId("manual-{$charge->id}");

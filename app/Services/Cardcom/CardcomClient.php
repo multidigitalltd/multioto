@@ -171,7 +171,9 @@ class CardcomClient
             'Token' => $token->cardcom_token,
             'Amount' => $amountNis,
             'ISOCoinId' => 1, // ILS
-            'ExternalUniqueTranId' => $externalUniqueId,
+            // Cardcom's documented field name is ExternalUniqTranId (v11). This
+            // gives server-side idempotency AND is the key we reconcile by.
+            'ExternalUniqTranId' => $externalUniqueId,
             'ProductName' => $description,
             'Document' => $this->buildDocument(
                 $customer?->name,
@@ -218,8 +220,10 @@ class CardcomClient
      */
     public function transactionByExternalId(string $externalId): array
     {
+        // Per the v11 spec this endpoint requires only TerminalNumber + ApiName
+        // (no ApiPassword) and the key field is ExternalUniqTranId.
         return $this->request('Transactions/GetTransactionByExternalUniqTran', [
-            'ExternalUniqueTranId' => $externalId,
+            'ExternalUniqTranId' => $externalId,
         ], withApiPassword: false);
     }
 

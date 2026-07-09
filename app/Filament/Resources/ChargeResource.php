@@ -156,7 +156,11 @@ class ChargeResource extends Resource
                     ->label('בדוק מול קארדקום')
                     ->icon('heroicon-o-arrow-path')
                     ->color('warning')
-                    ->visible(fn (Charge $record): bool => $record->status === ChargeStatus::Pending)
+                    // Manual/one-off charges only: the reconciler looks these up
+                    // by low-profile id or the manual-{id} external id.
+                    // Subscription charges use a different external id and recover
+                    // via the dunning machine, so the button is hidden for them.
+                    ->visible(fn (Charge $record): bool => $record->status === ChargeStatus::Pending && $record->subscription_id === null)
                     ->action(function (Charge $record, ChargeReconciler $reconciler): void {
                         try {
                             $status = $reconciler->reconcile($record->fresh());
