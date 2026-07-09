@@ -24,6 +24,10 @@ use Illuminate\Support\Str;
  * Saving ONLY persists + confirms; it never calls an external service. Testing
  * the live connection is a separate, deliberate button, so a slow or unreachable
  * provider (e.g. the Linet ERP) can never hang the save or swallow its feedback.
+ *
+ * Secret inputs use ->password() (masking) but deliberately NOT ->revealable():
+ * the reveal toggle swaps the input type via Alpine, which broke Livewire's
+ * deferred wire:model sync so typed keys never reached the server on save.
  */
 class ManageIntegrations extends Page implements HasForms
 {
@@ -90,15 +94,15 @@ class ManageIntegrations extends Page implements HasForms
                     ->schema([
                         TextInput::make('cardcom.terminal_number')->label('מספר מסוף')->live(onBlur: true)->autocomplete(false),
                         TextInput::make('cardcom.api_name')->label('API Name')->live(onBlur: true)->autocomplete(false),
-                        TextInput::make('cardcom.api_password')->label('API Password')->password()->revealable()->live(onBlur: true)->autocomplete('new-password'),
+                        TextInput::make('cardcom.api_password')->label('API Password')->password()->live(onBlur: true)->autocomplete('new-password'),
                     ])->columns(3)
                     ->footerActions($this->groupActions('cardcom')),
 
                 Section::make('לינט — חשבוניות')
                     ->description($this->groupDescription('linet', 'שלושת הערכים ממסך הגדרות ה-API בלינט: Login ID, Key ו-Company ID. הקודים למטה (סוג מסמך, קטגוריות מע״מ, אמצעי תשלום) ספציפיים לחשבון שלכם בלינט.'))
                     ->schema([
-                        TextInput::make('linet.login_id')->label('Login ID')->password()->revealable()->live(onBlur: true)->autocomplete('new-password'),
-                        TextInput::make('linet.key')->label('Key')->password()->revealable()->live(onBlur: true)->autocomplete('new-password'),
+                        TextInput::make('linet.login_id')->label('Login ID')->password()->live(onBlur: true)->autocomplete('new-password'),
+                        TextInput::make('linet.key')->label('Key')->password()->live(onBlur: true)->autocomplete('new-password'),
                         TextInput::make('linet.company_id')->label('Company ID')->live(onBlur: true)->autocomplete(false),
                         TextInput::make('linet.doctype')->label('קוד סוג מסמך (חשבונית מס/קבלה)')->live(onBlur: true)->autocomplete(false),
                         TextInput::make('linet.vat_cat_taxable')->label('קוד מע״מ — חייב')->numeric()->live(onBlur: true)->autocomplete(false),
@@ -110,7 +114,7 @@ class ManageIntegrations extends Page implements HasForms
                 Section::make('FlyWP — אחסון')
                     ->description($this->groupDescription('flywp'))
                     ->schema([
-                        TextInput::make('flywp.api_token')->label('API Token')->password()->revealable()->live(onBlur: true)->autocomplete('new-password'),
+                        TextInput::make('flywp.api_token')->label('API Token')->password()->live(onBlur: true)->autocomplete('new-password'),
                         TextInput::make('flywp.server_id')->label('Server ID')->live(onBlur: true)->autocomplete(false),
                     ])->columns(2)
                     ->footerActions($this->groupActions('flywp')),
@@ -119,7 +123,7 @@ class ManageIntegrations extends Page implements HasForms
                     ->description($this->groupDescription('waha', 'כתובת שרת WAHA + מפתח. אם WAHA רץ על אותו שרת בקונטיינר נפרד, השתמשו ב-http://host.docker.internal:3000. את חיבור מספר הוואטסאפ עצמו (סריקת QR) עושים בלוח הבקרה של WAHA.'))
                     ->schema([
                         TextInput::make('waha.base_url')->label('כתובת שרת (Base URL)')->placeholder('http://host.docker.internal:3000')->live(onBlur: true)->autocomplete(false),
-                        TextInput::make('waha.api_key')->label('API Key')->password()->revealable()->live(onBlur: true)->autocomplete('new-password'),
+                        TextInput::make('waha.api_key')->label('API Key')->password()->live(onBlur: true)->autocomplete('new-password'),
                         TextInput::make('waha.session')->label('שם Session')->placeholder('default')->live(onBlur: true)->autocomplete(false),
                     ])->columns(3)
                     ->footerActions($this->groupActions('waha')),
@@ -157,6 +161,10 @@ class ManageIntegrations extends Page implements HasForms
 
                 continue;
             }
+
+            // Trim so a stray space/newline pasted with an API key can never
+            // silently reject auth (a value that is only whitespace is "blank").
+            $value = is_string($value) ? trim($value) : $value;
 
             if (filled($value)) {
                 Setting::put($key, (string) $value);
