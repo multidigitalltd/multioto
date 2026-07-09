@@ -6,6 +6,7 @@ use App\Filament\Pages\ManageIntegrations;
 use App\Models\Setting;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
 use Livewire\Livewire;
 use Tests\TestCase;
 
@@ -16,6 +17,8 @@ class ManageIntegrationsTest extends TestCase
     public function test_saving_linet_persists_every_field(): void
     {
         $this->actingAs(User::factory()->create());
+        // The save runs the Linet connection check — keep it off the network.
+        Http::fake(['*/newsearch/account' => Http::response([])]);
 
         Livewire::test(ManageIntegrations::class)
             ->fillForm([
