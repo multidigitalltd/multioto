@@ -44,7 +44,7 @@ class CardcomClientTest extends TestCase
                 && ! array_key_exists('Advanced', $body)         // not wrapped
                 && $body['Amount'] === 118.0                      // agorot → shekels
                 && $body['ISOCoinId'] === 1
-                && $body['ExternalUniqueTranId'] === 'sub-1-20260101-a1'
+                && $body['ExternalUniqTranId'] === 'sub-1-20260101-a1'
                 && $body['CardExpirationMMYY'] === '1230'        // MMYY from stored expiry
                 && $body['TerminalNumber'] === 1000;             // integer
         });

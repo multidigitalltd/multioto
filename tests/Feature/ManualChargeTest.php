@@ -13,6 +13,7 @@ use App\Models\Customer;
 use App\Models\PaymentToken;
 use App\Models\WebhookEvent;
 use App\Services\Cardcom\CardcomClient;
+use App\Services\Cardcom\ChargeReconciler;
 use App\Services\Linet\LinetClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Bus;
@@ -61,6 +62,7 @@ class ManualChargeTest extends TestCase
         // requirement); the card number itself never leaves Cardcom.
         Http::assertSent(fn ($request) => str_contains($request->url(), 'Transactions/Transaction')
             && ($request->data()['Token'] ?? null) === $token->cardcom_token
+            && ($request->data()['ExternalUniqTranId'] ?? null) === "manual-{$charge->id}"
             && ($request->data()['Document']['DocumentTypeToCreate'] ?? null) === 'Order');
     }
 
@@ -141,6 +143,64 @@ class ManualChargeTest extends TestCase
         Bus::assertDispatched(IssueInvoiceJob::class);
         // The captured card is stored so the walk-in becomes reusable.
         $this->assertDatabaseHas('payment_tokens', ['customer_id' => $customer->id, 'cardcom_token' => 'tok_abc']);
+    }
+
+    public function test_reconcile_finalises_a_stuck_saved_token_charge_via_external_id(): void
+    {
+        Bus::fake([IssueInvoiceJob::class]);
+        config(['billing.cardcom.terminal_number' => '1000', 'billing.cardcom.api_name' => 'test']);
+
+        $customer = Customer::factory()->create();
+        $charge = $this->oneOffCharge($customer, ChargeStatus::Pending); // no low_profile_id → saved-token path
+
+        // Cardcom confirms the charge went through even though we never recorded it.
+        Http::fake(['*/Transactions/GetTransactionByExternalUniqTran' => Http::response(['ResponseCode' => 0, 'TranzactionId' => 424242])]);
+
+        $status = app(ChargeReconciler::class)->reconcile($charge);
+
+        $this->assertSame('succeeded', $status);
+        $charge->refresh();
+        $this->assertSame(ChargeStatus::Succeeded, $charge->status);
+        $this->assertSame('424242', $charge->cardcom_transaction_id);
+        Bus::assertDispatched(IssueInvoiceJob::class);
+        Http::assertSent(fn ($request) => str_contains($request->url(), 'GetTransactionByExternalUniqTran')
+            && ($request->data()['ExternalUniqTranId'] ?? null) === "manual-{$charge->id}");
+    }
+
+    public function test_reconcile_finalises_a_stuck_hosted_charge_via_low_profile(): void
+    {
+        Bus::fake([IssueInvoiceJob::class]);
+        config(['billing.cardcom.terminal_number' => '1000', 'billing.cardcom.api_name' => 'test']);
+
+        $customer = Customer::factory()->create();
+        $charge = $this->oneOffCharge($customer, ChargeStatus::Pending);
+        $charge->update(['cardcom_low_profile_id' => 'LP-77']);
+
+        Http::fake(['*/LowProfile/GetLpResult' => Http::response(['ResponseCode' => 0, 'TranzactionId' => 99])]);
+
+        $status = app(ChargeReconciler::class)->reconcile($charge);
+
+        $this->assertSame('succeeded', $status);
+        $this->assertSame(ChargeStatus::Succeeded, $charge->refresh()->status);
+        Bus::assertDispatched(IssueInvoiceJob::class);
+    }
+
+    public function test_reconcile_leaves_pending_when_cardcom_has_no_matching_charge(): void
+    {
+        Bus::fake([IssueInvoiceJob::class]);
+        config(['billing.cardcom.terminal_number' => '1000', 'billing.cardcom.api_name' => 'test']);
+
+        $customer = Customer::factory()->create();
+        $charge = $this->oneOffCharge($customer, ChargeStatus::Pending);
+
+        // Not found / not charged → non-zero code. Must NOT be marked failed (no re-charge guesswork).
+        Http::fake(['*/Transactions/GetTransactionByExternalUniqTran' => Http::response(['ResponseCode' => 33, 'Description' => 'not found'])]);
+
+        $status = app(ChargeReconciler::class)->reconcile($charge);
+
+        $this->assertSame('pending', $status);
+        $this->assertSame(ChargeStatus::Pending, $charge->refresh()->status);
+        Bus::assertNotDispatched(IssueInvoiceJob::class);
     }
 
     public function test_issue_invoice_job_issues_a_linet_document_for_a_one_off_charge(): void
