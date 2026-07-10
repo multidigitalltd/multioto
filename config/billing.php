@@ -76,8 +76,11 @@ return [
         //  - vat_cat_taxable / vat_cat_exempt: VAT category ids (taxable vs exempt)
         //  - payment_type: docCheq payment method (e.g. credit card)
         'doctype' => env('LINET_DOCTYPE'),
+        // Linet vat_cat_id values. Linet's own plugin hardcodes 1 = taxable,
+        // 2 = exempt/abroad — verified against the live API (other codes are
+        // rejected with "Income VAT account must match VAT percent").
         'vat_cat_taxable' => env('LINET_VAT_CAT_TAXABLE', 1),
-        'vat_cat_exempt' => env('LINET_VAT_CAT_EXEMPT'),
+        'vat_cat_exempt' => env('LINET_VAT_CAT_EXEMPT', 2),
         'payment_type' => env('LINET_PAYMENT_TYPE', 3),
         'create_doc_path' => env('LINET_CREATE_DOC_PATH', '/create/doc'),
         // Linet item id used for our free-text service lines (every document line
