@@ -114,6 +114,13 @@ class LinetClient
         // e-mail first, exactly as Linet's own plugin does.
         $accountId = $customer ? $this->resolveAccountId($customer) : null;
 
+        // Linet requires a no-VAT income account on an exempt (0%) line; a
+        // taxable line uses the item's default income account, so we send
+        // nothing there. Verified against the live API.
+        $lineIncomeAccount = $vatCategory === VatCategory::Exempt
+            ? ($config['income_account_exempt'] ?? null)
+            : null;
+
         $payload = [
             'doctype' => (string) $config['doctype'],
             'status' => 2, // final (non-draft) document
@@ -126,7 +133,7 @@ class LinetClient
             'email' => $customer?->email,
             'phone' => $customer?->phone,
             'refnum_ext' => "charge-{$charge->id}",
-            'docDet' => [[
+            'docDet' => [array_filter([
                 'item_id' => (string) ($config['general_item_id'] ?? '1'),
                 'name' => $description,
                 'description' => '',
@@ -137,7 +144,8 @@ class LinetClient
                 'unit_id' => 0,
                 'iItem' => $totalIls,
                 'iItemWithVat' => 1,
-            ]],
+                'account_id' => filled($lineIncomeAccount) ? (int) $lineIncomeAccount : null,
+            ], fn ($v) => $v !== null)],
             'docCheq' => [[
                 'type' => (int) $config['payment_type'],
                 'currency_id' => 'ILS',
