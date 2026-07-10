@@ -76,6 +76,7 @@ class LinetClient
             $missingCodes = collect([
                 'קוד סוג מסמך' => $config['doctype'] ?? null,
                 'קוד מע״מ — חייב' => $config['vat_cat_taxable'] ?? null,
+                'קוד מע״מ — פטור' => $config['vat_cat_exempt'] ?? null,
                 'קוד אמצעי תשלום' => $config['payment_type'] ?? null,
             ])->reject(fn ($value) => filled($value))->keys();
 

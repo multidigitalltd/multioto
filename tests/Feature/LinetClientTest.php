@@ -154,15 +154,17 @@ class LinetClientTest extends TestCase
 
     public function test_connection_check_warns_when_document_codes_are_missing(): void
     {
-        config(['billing.linet.doctype' => null]);
+        config(['billing.linet.doctype' => null, 'billing.linet.vat_cat_exempt' => null]);
         Http::fake(['*/search/account' => Http::response(['status' => 200, 'body' => []])]);
 
         $result = app(LinetClient::class)->testConnection();
 
-        // Credentials work, but the operator must learn the doctype is missing
-        // here — not from a cryptic failed invoice later.
+        // Credentials work, but the operator must learn about missing codes here
+        // — not from a cryptic failed invoice later. The exempt VAT code is
+        // included so exempt-customer setups are caught up front (Codex P2).
         $this->assertTrue($result->ok);
         $this->assertStringContainsString('קוד סוג מסמך', $result->message);
+        $this->assertStringContainsString('קוד מע״מ — פטור', $result->message);
     }
 
     public function test_connection_check_reports_failure_when_linet_rejects_the_login(): void
