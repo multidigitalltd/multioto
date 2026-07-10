@@ -5,6 +5,10 @@ namespace App\Filament\Widgets;
 use App\Enums\ChargeStatus;
 use App\Enums\SubscriptionStatus;
 use App\Enums\TicketStatus;
+use App\Filament\Resources\ChargeResource;
+use App\Filament\Resources\CustomerResource;
+use App\Filament\Resources\SubscriptionResource;
+use App\Filament\Resources\TicketResource;
 use App\Models\Charge;
 use App\Models\Customer;
 use App\Models\Subscription;
@@ -37,31 +41,37 @@ class StatsOverview extends BaseWidget
         $openTickets = Ticket::whereIn('status', [TicketStatus::Open, TicketStatus::Pending])->count();
         $pastDue = Subscription::where('status', SubscriptionStatus::PastDue)->count();
 
+        // Every tile links to the screen showing what it counts.
         return [
             Stat::make('לקוחות', Customer::count())
                 ->description('סה"כ לקוחות במערכת')
                 ->icon('heroicon-o-users')
-                ->color('primary'),
+                ->color('primary')
+                ->url(CustomerResource::getUrl()),
 
             Stat::make('מנויים פעילים', $activeSubscriptions->count())
                 ->description($pastDue > 0 ? "{$pastDue} בפיגור תשלום" : 'הכל בתשלום שוטף')
                 ->icon('heroicon-o-arrow-path-rounded-square')
-                ->color($pastDue > 0 ? 'warning' : 'success'),
+                ->color($pastDue > 0 ? 'warning' : 'success')
+                ->url(SubscriptionResource::getUrl()),
 
             Stat::make('הכנסה חודשית', '₪ '.number_format($mrrAgorot / 100))
                 ->description('MRR ממנויים פעילים')
                 ->icon('heroicon-o-banknotes')
-                ->color('success'),
+                ->color('success')
+                ->url(SubscriptionResource::getUrl()),
 
             Stat::make('נגבה החודש', '₪ '.number_format($collectedThisMonth / 100))
                 ->description('חיובים שהצליחו החודש')
                 ->icon('heroicon-o-credit-card')
-                ->color('primary'),
+                ->color('primary')
+                ->url(ChargeResource::getUrl()),
 
             Stat::make('פניות פתוחות', $openTickets)
                 ->description('פניות שממתינות לטיפול')
                 ->icon('heroicon-o-lifebuoy')
-                ->color($openTickets > 0 ? 'warning' : 'success'),
+                ->color($openTickets > 0 ? 'warning' : 'success')
+                ->url(TicketResource::getUrl()),
         ];
     }
 }

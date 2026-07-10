@@ -64,6 +64,14 @@ class IngestWhatsappMessageJob implements ShouldQueue
             return;
         }
 
+        // The approvals chat (owner's number or a team group) is an operations
+        // channel — regular chatter there must never open customer tickets.
+        if ($gate->ownerChatId() !== null && $chatId === $gate->ownerChatId()) {
+            $event->markProcessed();
+
+            return;
+        }
+
         $customer = $this->matchCustomer($intake, $chatId);
 
         $intake->recordInbound(

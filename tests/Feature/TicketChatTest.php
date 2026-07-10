@@ -1,0 +1,106 @@
+<?php
+
+namespace Tests\Feature;
+
+use App\Enums\MessageAuthor;
+use App\Enums\MessageChannel;
+use App\Enums\MessageDirection;
+use App\Enums\TicketChannel;
+use App\Enums\TicketStatus;
+use App\Enums\WebhookSource;
+use App\Filament\Resources\TicketResource\Pages\ViewTicket;
+use App\Jobs\IngestWhatsappMessageJob;
+use App\Jobs\SendTicketReplyJob;
+use App\Models\Customer;
+use App\Models\Ticket;
+use App\Models\User;
+use App\Models\WebhookEvent;
+use App\Services\Support\TicketIntake;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Queue;
+use Livewire\Livewire;
+use Tests\TestCase;
+
+class TicketChatTest extends TestCase
+{
+    use RefreshDatabase;
+
+    private function ticket(): Ticket
+    {
+        $customer = Customer::factory()->create(['name' => 'דנה לוי']);
+
+        $ticket = Ticket::create([
+            'customer_id' => $customer->id,
+            'channel' => TicketChannel::Whatsapp,
+            'subject' => 'האתר לא נטען',
+            'status' => TicketStatus::Open,
+            'external_thread_ref' => '972501234567@c.us',
+        ]);
+
+        $ticket->messages()->create([
+            'direction' => MessageDirection::Inbound,
+            'channel' => MessageChannel::Whatsapp,
+            'body' => 'האתר שלי לא נטען כבר שעה',
+            'author' => MessageAuthor::Customer,
+        ]);
+
+        return $ticket;
+    }
+
+    public function test_the_chat_page_shows_the_conversation(): void
+    {
+        $this->actingAs(User::factory()->create());
+        $ticket = $this->ticket();
+
+        Livewire::test(ViewTicket::class, ['record' => $ticket->id])
+            ->assertSee('דנה לוי')
+            ->assertSee('האתר שלי לא נטען כבר שעה');
+    }
+
+    public function test_send_reply_creates_an_outbound_message_and_dispatches_delivery(): void
+    {
+        Queue::fake([SendTicketReplyJob::class]);
+        $this->actingAs(User::factory()->create());
+        $ticket = $this->ticket();
+
+        Livewire::test(ViewTicket::class, ['record' => $ticket->id])
+            ->set('replyBody', 'בדקנו — האתר חזר לעבוד.')
+            ->call('sendReply');
+
+        $outbound = $ticket->messages()->where('direction', MessageDirection::Outbound)->sole();
+        $this->assertSame(MessageChannel::Whatsapp, $outbound->channel); // ticket's channel by default
+        $this->assertSame(MessageAuthor::Agent, $outbound->author);
+        Queue::assertPushed(SendTicketReplyJob::class, fn ($job) => $job->ticketMessageId === $outbound->id);
+    }
+
+    public function test_internal_note_is_saved_but_never_delivered(): void
+    {
+        Queue::fake([SendTicketReplyJob::class]);
+        $this->actingAs(User::factory()->create());
+        $ticket = $this->ticket();
+
+        Livewire::test(ViewTicket::class, ['record' => $ticket->id])
+            ->set('replyChannel', MessageChannel::InternalNote->value)
+            ->set('replyBody', 'ללקוח יש חוב פתוח — לבדוק לפני שדרוג.')
+            ->call('sendReply');
+
+        $this->assertSame(1, $ticket->messages()->where('channel', MessageChannel::InternalNote)->count());
+        Queue::assertNothingPushed();
+    }
+
+    public function test_chatter_in_the_approvals_chat_never_opens_tickets(): void
+    {
+        config([
+            'billing.waha.owner_number' => '972501112222@c.us', // an approvals group/number
+            'billing.waha.default_country_code' => '972',
+        ]);
+
+        [$event] = WebhookEvent::record(WebhookSource::Waha, 'message', 'grp-1', [
+            'payload' => ['id' => 'grp-1', 'from' => '972501112222@c.us', 'body' => 'סבבה, אני על זה'],
+        ]);
+        (new IngestWhatsappMessageJob($event->id))->handle(app(TicketIntake::class));
+
+        $this->assertSame(0, Ticket::count());
+        $this->assertNotNull($event->fresh()->processed_at);
+    }
+}
