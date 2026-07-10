@@ -40,6 +40,21 @@ class SettingsTest extends TestCase
         $this->assertSame('from-ui', config('billing.cardcom.api_password'));
     }
 
+    public function test_queued_jobs_refresh_the_settings_overlay_for_long_lived_workers(): void
+    {
+        // A setting changed in the panel AFTER a Horizon worker booted.
+        Setting::put('linet.doctype', '9');
+
+        // Simulate the worker's in-memory config having drifted stale since boot.
+        config(['billing.linet.doctype' => 'STALE']);
+
+        // Processing any job must re-apply the overlay (the provider registers a
+        // Queue::before hook at boot), so the invoice job never sends stale codes.
+        dispatch(fn () => null);
+
+        $this->assertSame('9', config('billing.linet.doctype'));
+    }
+
     public function test_blank_setting_leaves_env_config_intact(): void
     {
         config(['billing.linet.login_id' => 'env-login']);
