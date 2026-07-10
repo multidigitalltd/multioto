@@ -62,7 +62,7 @@ class ManageIntegrations extends Page implements HasForms
         ],
         'waha' => [
             'label' => 'WAHA',
-            'keys' => ['waha.base_url', 'waha.api_key', 'waha.session'],
+            'keys' => ['waha.base_url', 'waha.api_key', 'waha.session', 'waha.owner_number'],
         ],
         // Postmark / outbound-mail settings live on their own page (ManageMail),
         // which also manages the sender address and verified-sender sync.
@@ -183,6 +183,7 @@ class ManageIntegrations extends Page implements HasForms
                         TextInput::make('waha.base_url')->label('כתובת שרת (Base URL)')->placeholder('http://host.docker.internal:3000')->live(onBlur: true)->autocomplete(false),
                         TextInput::make('waha.api_key')->label('API Key')->password()->live(onBlur: true)->autocomplete('new-password'),
                         TextInput::make('waha.session')->label('שם Session')->placeholder('default')->live(onBlur: true)->autocomplete(false),
+                        TextInput::make('waha.owner_number')->label('וואטסאפ בעל העסק (לאישורים)')->placeholder('0501234567')->helperText('פעולות אוטומטיות (תשובות AI וכד׳) יישלחו למספר זה לאישור — עונים "אשר <מספר>" או "דחה <מספר>".')->live(onBlur: true)->autocomplete(false),
                     ])->columns(3)
                     ->footerActions($this->groupActions('waha')),
             ])
