@@ -159,8 +159,8 @@ class ManageIntegrations extends Page implements HasForms
                         TextInput::make('linet.key')->label('Key')->password()->live(onBlur: true)->autocomplete('new-password'),
                         TextInput::make('linet.company_id')->label('Company ID')->live(onBlur: true)->autocomplete(false),
                         TextInput::make('linet.doctype')->label('קוד סוג מסמך (חשבונית מס/קבלה)')->live(onBlur: true)->autocomplete(false),
-                        TextInput::make('linet.vat_cat_taxable')->label('קוד מע״מ — חייב')->numeric()->live(onBlur: true)->autocomplete(false),
-                        TextInput::make('linet.vat_cat_exempt')->label('קוד מע״מ — פטור')->numeric()->live(onBlur: true)->autocomplete(false),
+                        TextInput::make('linet.vat_cat_taxable')->label('קוד מע״מ — חייב')->helperText('בלינט: 1 = חייב במע״מ (ברירת המחדל הנכונה כמעט תמיד).')->numeric()->live(onBlur: true)->autocomplete(false),
+                        TextInput::make('linet.vat_cat_exempt')->label('קוד מע״מ — פטור')->helperText('בלינט: 2 = פטור/חו״ל. אלה קודי vat_cat_id — לא חשבונות הכנסה (100/102).')->numeric()->live(onBlur: true)->autocomplete(false),
                         TextInput::make('linet.payment_type')->label('קוד אמצעי תשלום (כרטיס אשראי)')->numeric()->live(onBlur: true)->autocomplete(false),
                         TextInput::make('linet.general_item_id')->label('קוד פריט כללי')->helperText('הפריט בלינט שאליו משויכת כל שורת חשבונית. ברירת מחדל: 1. שנו רק אם הפריט הכללי בחשבונכם שונה.')->live(onBlur: true)->autocomplete(false),
                     ])->columns(3)
