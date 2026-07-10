@@ -236,6 +236,26 @@ class LinetClient
     }
 
     /**
+     * Fetch the download URL for a document's PDF. The create response carries
+     * no link — Linet exposes it via print/doc/{id} with href=1, which answers
+     * {"body": "https://app.linet.org.il/download/<uuid>"} (same flow as
+     * Linet's own plugin). Returns null when Linet has no link for the id.
+     */
+    public function documentPdfUrl(string $documentId): ?string
+    {
+        $response = $this->post('/print/doc/'.rawurlencode($documentId), ['href' => 1]);
+        $json = $response->json();
+
+        if (! $this->envelopeSucceeded($json)) {
+            return null;
+        }
+
+        $url = data_get($json, 'body');
+
+        return is_string($url) && str_starts_with($url, 'http') ? $url : null;
+    }
+
+    /**
      * Validate a Linet response and return its `body` payload as an array.
      *
      * CRITICAL: Linet answers HTTP 200 even for failures. Success is signalled by

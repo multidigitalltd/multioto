@@ -2,9 +2,11 @@
 
 namespace Tests\Feature;
 
+use App\Enums\ChargeStatus;
 use App\Enums\VatCategory;
 use App\Models\Charge;
 use App\Models\Subscription;
+use App\Services\Linet\InvoiceIssuer;
 use App\Services\Linet\LinetClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -160,6 +162,44 @@ class LinetClientTest extends TestCase
         $this->expectExceptionMessage('account_id');
 
         app(LinetClient::class)->issueDocument($this->charge(), VatCategory::Taxable, 'x');
+    }
+
+    public function test_document_pdf_url_is_fetched_via_print_doc(): void
+    {
+        Http::fake([
+            '*/print/doc/4321' => Http::response(['status' => 200, 'errorCode' => 0, 'body' => 'https://app.linet.test/download/abc']),
+        ]);
+
+        $url = app(LinetClient::class)->documentPdfUrl('4321');
+
+        $this->assertSame('https://app.linet.test/download/abc', $url);
+        Http::assertSent(fn ($request) => str_contains($request->url(), '/print/doc/4321')
+            && $request->data()['href'] === 1);
+    }
+
+    public function test_issued_document_captures_the_pdf_link(): void
+    {
+        Http::fake([
+            '*/search/account' => Http::response(['status' => 200, 'body' => [['id' => 1]]]),
+            '*/create/doc' => Http::response(['status' => 200, 'body' => ['id' => 77]]),
+            '*/print/doc/77' => Http::response(['status' => 200, 'errorCode' => 0, 'body' => 'https://app.linet.test/download/xyz']),
+        ]);
+
+        $subscription = Subscription::factory()->create();
+        $charge = Charge::create([
+            'subscription_id' => $subscription->id,
+            'status' => ChargeStatus::Succeeded,
+            'amount_agorot' => 10000,
+            'vat_agorot' => 1800,
+            'total_agorot' => 11800,
+            'period_start' => now()->toDateString(),
+            'period_end' => now()->addMonth()->toDateString(),
+        ]);
+
+        $result = app(InvoiceIssuer::class)->issue($charge);
+
+        $this->assertTrue($result['ok']);
+        $this->assertSame('https://app.linet.test/download/xyz', $charge->invoice()->first()?->pdf_url);
     }
 
     public function test_connection_check_reports_ok_on_a_clean_search_response(): void
