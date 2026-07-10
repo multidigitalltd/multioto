@@ -82,6 +82,33 @@ class WahaClient
     }
 
     /**
+     * Point the WAHA session's webhook at our inbound endpoint, so incoming
+     * WhatsApp messages actually reach the system (WAHA does not push events
+     * anywhere until a webhook is configured on the session). Uses WAHA's
+     * session-update API; the session keeps its authenticated WhatsApp login.
+     */
+    public function configureInboundWebhook(string $webhookUrl): array
+    {
+        $config = config('billing.waha');
+
+        $response = Http::baseUrl($config['base_url'])
+            ->withHeaders($this->authHeaders())
+            ->timeout(20)
+            ->put('api/sessions/'.$config['session'], [
+                'config' => [
+                    'webhooks' => [[
+                        'url' => $webhookUrl,
+                        'events' => ['message'],
+                    ]],
+                ],
+            ]);
+
+        $response->throw();
+
+        return $response->json() ?? [];
+    }
+
+    /**
      * Convert a phone number to a WAHA chat id; pass JIDs through untouched.
      *
      * Strips punctuation (+, spaces, dashes) and converts a local number with a

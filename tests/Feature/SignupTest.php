@@ -3,16 +3,43 @@
 namespace Tests\Feature;
 
 use App\Enums\BusinessType;
+use App\Enums\MessageAuthor;
 use App\Enums\SubscriptionStatus;
+use App\Enums\TicketChannel;
+use App\Jobs\SendWelcomeMessageJob;
+use App\Mail\NotificationMail;
 use App\Models\Customer;
 use App\Models\Plan;
 use App\Models\Subscription;
+use App\Models\Ticket;
+use App\Services\Notifications\TemplateEngine;
+use App\Services\Waha\WahaClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
 
 class SignupTest extends TestCase
 {
     use RefreshDatabase;
+
+    /** Every required field for a valid submission; override per test. */
+    private function validPayload(Plan $plan, array $overrides = []): array
+    {
+        return array_merge([
+            'name' => 'עסק חדש',
+            'contact_name' => 'ישראל ישראלי',
+            'business_type' => BusinessType::LicensedDealer->value,
+            'email' => 'New@Example.CO.il',
+            'phone' => '0501234567',
+            'address' => 'הרצל 1, תל אביב',
+            'domain' => 'https://newbiz.co.il',
+            'plan_id' => $plan->id,
+            'payment_method' => 'credit_card',
+            'terms' => '1',
+        ], $overrides);
+    }
 
     public function test_the_public_signup_page_lists_active_plans(): void
     {
@@ -25,19 +52,17 @@ class SignupTest extends TestCase
             ->assertDontSee('מסלול כבוי');
     }
 
+    public function test_new_client_alias_reaches_the_signup_form(): void
+    {
+        $this->get('/new-client')->assertRedirect('/join');
+    }
+
     public function test_signup_creates_a_trialing_customer_and_redirects_to_card_capture(): void
     {
+        Queue::fake([SendWelcomeMessageJob::class]);
         $plan = Plan::factory()->create(['active' => true]);
 
-        $response = $this->post(route('signup.store'), [
-            'name' => 'עסק חדש',
-            'business_type' => BusinessType::LicensedDealer->value,
-            'email' => 'New@Example.CO.il',
-            'phone' => '0501234567',
-            'domain' => 'https://newbiz.co.il',
-            'plan_id' => $plan->id,
-            'terms' => '1',
-        ]);
+        $response = $this->post(route('signup.store'), $this->validPayload($plan));
 
         // Redirects to the signed Cardcom card-capture link.
         $response->assertRedirect();
@@ -47,26 +72,52 @@ class SignupTest extends TestCase
         $customer = Customer::first();
         $this->assertNotNull($customer);
         $this->assertSame('new@example.co.il', $customer->email); // normalized
+        $this->assertSame('ישראל ישראלי', $customer->contact_name);
+        $this->assertSame('הרצל 1, תל אביב', $customer->address);
+        $this->assertSame('credit_card', $customer->payment_method);
+        $this->assertNotNull($customer->terms_accepted_at); // consent record
         $this->assertSame('newbiz.co.il', $customer->sites()->value('domain')); // scheme stripped
 
         $sub = Subscription::first();
         $this->assertSame(SubscriptionStatus::Trialing, $sub->status);
         $this->assertSame($plan->id, $sub->plan_id);
         $this->assertNull($sub->token_id);
+
+        // The personal welcome goes out exactly once.
+        Queue::assertPushed(SendWelcomeMessageJob::class, 1);
+    }
+
+    public function test_bank_transfer_signup_opens_a_follow_up_ticket_instead_of_card_capture(): void
+    {
+        Queue::fake([SendWelcomeMessageJob::class]);
+        $plan = Plan::factory()->create(['active' => true]);
+
+        $response = $this->post(route('signup.store'), $this->validPayload($plan, [
+            'payment_method' => 'bank_transfer',
+        ]));
+
+        // No Cardcom hand-off — a thank-you page plus an internal follow-up ticket.
+        $response->assertRedirect(route('signup.thanks'));
+
+        $ticket = Ticket::sole();
+        $this->assertSame(TicketChannel::Manual, $ticket->channel);
+        $this->assertStringContainsString('השלמת הסדר תשלום', $ticket->subject);
+        // Internal ticket — the customer must NOT get a "we received your inquiry" ack.
+        $this->assertSame(0, $ticket->messages()->where('author', MessageAuthor::System)->count());
+
+        Queue::assertPushed(SendWelcomeMessageJob::class, 1);
     }
 
     public function test_exempt_dealer_signup_is_marked_vat_exempt(): void
     {
+        Queue::fake([SendWelcomeMessageJob::class]);
         $plan = Plan::factory()->create(['active' => true]);
 
-        $this->post(route('signup.store'), [
+        $this->post(route('signup.store'), $this->validPayload($plan, [
             'name' => 'עוסק פטור',
             'business_type' => BusinessType::ExemptDealer->value,
             'email' => 'patur@example.co.il',
-            'phone' => '0501112222',
-            'plan_id' => $plan->id,
-            'terms' => '1',
-        ])->assertRedirect();
+        ]))->assertRedirect();
 
         $this->assertTrue(Customer::first()->vat_exempt);
     }
@@ -74,7 +125,7 @@ class SignupTest extends TestCase
     public function test_signup_validates_required_fields(): void
     {
         $this->post(route('signup.store'), [])
-            ->assertSessionHasErrors(['name', 'business_type', 'email', 'phone', 'plan_id', 'terms']);
+            ->assertSessionHasErrors(['name', 'contact_name', 'business_type', 'email', 'phone', 'address', 'plan_id', 'payment_method', 'terms']);
 
         $this->assertSame(0, Customer::count());
     }
@@ -83,14 +134,8 @@ class SignupTest extends TestCase
     {
         $plan = Plan::factory()->create(['active' => false]);
 
-        $this->post(route('signup.store'), [
-            'name' => 'עסק',
-            'business_type' => BusinessType::Company->value,
-            'email' => 'x@example.co.il',
-            'phone' => '0500000000',
-            'plan_id' => $plan->id,
-            'terms' => '1',
-        ])->assertSessionHasErrors('plan_id');
+        $this->post(route('signup.store'), $this->validPayload($plan))
+            ->assertSessionHasErrors('plan_id');
 
         $this->assertSame(0, Customer::count());
     }
@@ -99,16 +144,28 @@ class SignupTest extends TestCase
     {
         $plan = Plan::factory()->create(['active' => true]);
 
-        $this->post(route('signup.store'), [
-            'name' => 'בוט',
-            'business_type' => BusinessType::Company->value,
-            'email' => 'bot@example.co.il',
-            'phone' => '0500000000',
-            'plan_id' => $plan->id,
-            'terms' => '1',
+        $this->post(route('signup.store'), $this->validPayload($plan, [
             'website' => 'http://spam.example',
-        ])->assertSessionHasErrors('website');
+        ]))->assertSessionHasErrors('website');
 
         $this->assertSame(0, Customer::count());
+    }
+
+    public function test_welcome_job_sends_email_and_whatsapp(): void
+    {
+        config(['billing.waha.base_url' => 'https://waha.test', 'billing.waha.api_key' => 'k', 'billing.waha.session' => 'default', 'mail.from.name' => 'מולטי דיגיטל']);
+        Mail::fake();
+        Http::fake(['*/api/sendText' => Http::response(['id' => 'w1'])]);
+
+        $customer = Customer::factory()->create(['contact_name' => 'דנה', 'phone' => '0501234567']);
+
+        (new SendWelcomeMessageJob($customer->id))->handle(
+            app(TemplateEngine::class),
+            app(WahaClient::class),
+        );
+
+        Mail::assertSent(NotificationMail::class, fn ($mail) => str_contains($mail->bodyText, 'דנה'));
+        Http::assertSent(fn ($request) => str_contains($request->url(), 'sendText')
+            && str_contains($request->data()['text'], 'ברוכים הבאים'));
     }
 }

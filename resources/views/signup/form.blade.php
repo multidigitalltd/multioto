@@ -147,10 +147,10 @@
             <h2>פרטי התקשרות</h2>
             <div class="row">
                 <div class="field">
-                    <label for="email">אימייל <span class="req" aria-hidden="true">*</span></label>
-                    <input type="email" id="email" name="email" value="{{ old('email') }}" required autocomplete="email"
-                        @error('email') aria-invalid="true" aria-describedby="email-error" @enderror>
-                    @error('email') <p class="error" id="email-error">{{ $message }}</p> @enderror
+                    <label for="contact_name">איש קשר <span class="req" aria-hidden="true">*</span></label>
+                    <input type="text" id="contact_name" name="contact_name" value="{{ old('contact_name') }}" required autocomplete="name"
+                        @error('contact_name') aria-invalid="true" aria-describedby="contact-error" @enderror>
+                    @error('contact_name') <p class="error" id="contact-error">{{ $message }}</p> @enderror
                 </div>
                 <div class="field">
                     <label for="phone">טלפון <span class="req" aria-hidden="true">*</span></label>
@@ -160,10 +160,43 @@
                 </div>
             </div>
 
+            <div class="row">
+                <div class="field">
+                    <label for="email">אימייל <span class="req" aria-hidden="true">*</span></label>
+                    <input type="email" id="email" name="email" value="{{ old('email') }}" required autocomplete="email"
+                        @error('email') aria-invalid="true" aria-describedby="email-error" @enderror>
+                    @error('email') <p class="error" id="email-error">{{ $message }}</p> @enderror
+                </div>
+                <div class="field">
+                    <label for="address">כתובת <span class="req" aria-hidden="true">*</span></label>
+                    <input type="text" id="address" name="address" value="{{ old('address') }}" required autocomplete="street-address"
+                        @error('address') aria-invalid="true" aria-describedby="address-error" @enderror>
+                    @error('address') <p class="error" id="address-error">{{ $message }}</p> @enderror
+                </div>
+            </div>
+
             <div class="field">
                 <label for="domain">כתובת האתר (אופציונלי)</label>
                 <input type="text" id="domain" name="domain" value="{{ old('domain') }}" placeholder="example.co.il" autocomplete="url">
             </div>
+
+            <h2>איך יבוצע התשלום?</h2>
+            <fieldset class="field" style="border:0;padding:0;margin:0 0 1rem" role="radiogroup" aria-label="בחירת אמצעי תשלום"
+                @error('payment_method') aria-invalid="true" aria-describedby="pm-error" @enderror>
+                <label class="terms" style="margin-bottom:.5rem">
+                    <input type="radio" name="payment_method" value="credit_card" required @checked(old('payment_method', 'credit_card') === 'credit_card')>
+                    <span>כרטיס אשראי — חיוב חודשי אוטומטי (הכרטיס מוזן מיד בעמוד מאובטח)</span>
+                </label>
+                <label class="terms" style="margin-bottom:.5rem">
+                    <input type="radio" name="payment_method" value="standing_order" @checked(old('payment_method') === 'standing_order')>
+                    <span>הוראת קבע בנקאית — ניצור קשר להשלמת ההסדר</span>
+                </label>
+                <label class="terms">
+                    <input type="radio" name="payment_method" value="bank_transfer" @checked(old('payment_method') === 'bank_transfer')>
+                    <span>העברה בנקאית — ניצור קשר עם פרטי החשבון</span>
+                </label>
+            </fieldset>
+            @error('payment_method') <p class="error" id="pm-error">{{ $message }}</p> @enderror
 
             <div class="field terms">
                 <input type="checkbox" id="terms" name="terms" value="1" required @checked(old('terms'))>
@@ -177,8 +210,8 @@
                 <input type="text" id="website" name="website" tabindex="-1" autocomplete="off">
             </div>
 
-            <button type="submit" @disabled($plans->isEmpty())>המשך לתשלום מאובטח ←</button>
-            <p class="secure">🔒 פרטי האשראי מוזנים בעמוד המאובטח של חברת הסליקה. איננו רואים ואיננו שומרים את מספר הכרטיס.</p>
+            <button type="submit" @disabled($plans->isEmpty())>אישור וסיום ←</button>
+            <p class="secure">🔒 פרטי אשראי לעולם אינם מוזנים באתר זה — הזנת כרטיס נעשית אך ורק בעמוד המאובטח של חברת הסליקה (קארדקום). איננו רואים ואיננו שומרים את מספר הכרטיס.</p>
         </form>
     </main>
 </body>

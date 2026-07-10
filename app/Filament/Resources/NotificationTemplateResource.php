@@ -37,6 +37,7 @@ class NotificationTemplateResource extends Resource
     public const KEY_LABELS = [
         'ticket.received' => 'אישור קבלת פנייה',
         'ticket.resolved' => 'עדכון על סיום טיפול',
+        'customer.welcome' => 'ברוכים הבאים ללקוח חדש',
     ];
 
     public static function form(Form $form): Form

@@ -32,6 +32,10 @@ class InvoiceResource extends Resource
 
     protected static ?int $navigationSort = 2;
 
+    // Invoices are reached from their charge (חשבונית PDF action) and from the
+    // customer card — a separate tab duplicated the same data, so it's hidden.
+    protected static bool $shouldRegisterNavigation = false;
+
     public static function form(Form $form): Form
     {
         return $form

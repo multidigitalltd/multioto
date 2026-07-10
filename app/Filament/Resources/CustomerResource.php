@@ -65,16 +65,30 @@ class CustomerResource extends Resource
 
                 Forms\Components\Section::make('פרטי התקשרות')
                     ->schema([
+                        Forms\Components\TextInput::make('contact_name')
+                            ->label('איש קשר')
+                            ->maxLength(120),
                         Forms\Components\TextInput::make('phone')
                             ->label('טלפון')
                             ->tel(),
                         Forms\Components\TextInput::make('email')
                             ->label('אימייל')
                             ->email(),
+                        Forms\Components\TextInput::make('address')
+                            ->label('כתובת')
+                            ->maxLength(190),
                         Forms\Components\TextInput::make('whatsapp_jid')
                             ->label('מזהה וואטסאפ')
                             ->helperText('אופציונלי — מזוהה אוטומטית מהודעות נכנסות')
                             ->maxLength(255),
+                        Forms\Components\Select::make('payment_method')
+                            ->label('אמצעי תשלום מועדף')
+                            ->options([
+                                'credit_card' => 'כרטיס אשראי',
+                                'standing_order' => 'הוראת קבע בנקאית',
+                                'bank_transfer' => 'העברה בנקאית',
+                            ])
+                            ->placeholder('—'),
                     ])->columns(2),
 
                 Forms\Components\Section::make('סטטוס והערות')
@@ -242,11 +256,21 @@ class CustomerResource extends Resource
                 ->icon('heroicon-o-identification')
                 ->schema([
                     TextEntry::make('name')->label('שם'),
+                    TextEntry::make('contact_name')->label('איש קשר')->placeholder('—'),
                     TextEntry::make('business_number')->label('ח.פ / עוסק')->placeholder('—'),
                     TextEntry::make('business_type')->label('סוג עוסק')->badge(),
                     TextEntry::make('vat_exempt')->label('מע״מ')->formatStateUsing(fn ($state): string => $state ? 'פטור' : 'חייב'),
                     TextEntry::make('email')->label('אימייל')->copyable()->placeholder('—'),
                     TextEntry::make('phone')->label('טלפון')->copyable()->placeholder('—'),
+                    TextEntry::make('address')->label('כתובת')->placeholder('—'),
+                    TextEntry::make('payment_method')->label('אמצעי תשלום')
+                        ->formatStateUsing(fn (?string $state): string => match ($state) {
+                            'credit_card' => 'כרטיס אשראי',
+                            'standing_order' => 'הוראת קבע',
+                            'bank_transfer' => 'העברה בנקאית',
+                            default => '—',
+                        })->placeholder('—'),
+                    TextEntry::make('terms_accepted_at')->label('אישור תנאים')->dateTime('d/m/Y H:i')->placeholder('—'),
                     TextEntry::make('status')->label('סטטוס')->badge(),
                     TextEntry::make('notes')->label('הערות')->placeholder('—')->columnSpanFull(),
                 ])->columns(3),

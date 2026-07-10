@@ -5,6 +5,7 @@ namespace App\Filament\Pages;
 use App\Models\Setting;
 use App\Providers\SettingsServiceProvider;
 use App\Services\Health\IntegrationHealth;
+use App\Services\Waha\WahaClient;
 use Filament\Forms\Components\Actions\Action as FormAction;
 use Filament\Forms\Components\Section;
 use Filament\Forms\Components\TextInput;
@@ -356,7 +357,54 @@ class ManageIntegrations extends Page implements HasForms
             $actions[] = $this->testAction($group);
         }
 
+        if ($group === 'waha') {
+            $actions[] = FormAction::make('waha_inbound')
+                ->label('הפעלת האזנה להודעות נכנסות')
+                ->icon('heroicon-o-arrow-down-on-square')
+                ->color('warning')
+                ->action(fn () => $this->setupWahaInbound());
+        }
+
         return $actions;
+    }
+
+    /**
+     * Wire WAHA to push incoming WhatsApp messages into this system: ensure a
+     * webhook secret exists (auto-generated, stored encrypted) and register our
+     * /webhooks/waha endpoint on the WAHA session. Without this, WAHA only
+     * SENDS — nothing arrives, so no tickets/acknowledgements can happen.
+     */
+    public function setupWahaInbound(): void
+    {
+        Log::info('ManageIntegrations: setupWahaInbound invoked');
+
+        $secret = (string) config('billing.waha.webhook_secret');
+
+        if ($secret === '') {
+            $secret = Str::random(40);
+            Setting::put('waha.webhook_secret', $secret);
+            config(['billing.waha.webhook_secret' => $secret]);
+        }
+
+        $webhookUrl = route('webhooks.waha').'?secret='.$secret;
+
+        try {
+            app(WahaClient::class)->configureInboundWebhook($webhookUrl);
+        } catch (\Throwable $e) {
+            $this->announce(
+                'הפעלת ההאזנה נכשלה',
+                Str::limit(trim($e->getMessage()) ?: class_basename($e), 150),
+                'danger',
+            );
+
+            return;
+        }
+
+        $this->announce(
+            'ההאזנה להודעות נכנסות הופעלה ✓',
+            'וואטסאפ ידווח כל הודעה נכנסת למערכת — פניות ייפתחו ויאושרו אוטומטית. שלחו הודעת בדיקה למספר העסק כדי לוודא.',
+            'success',
+        );
     }
 
     /** The per-section save button. */

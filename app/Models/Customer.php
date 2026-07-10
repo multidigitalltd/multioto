@@ -14,7 +14,8 @@ class Customer extends Model
     use HasFactory;
 
     protected $fillable = [
-        'name', 'business_number', 'business_type', 'vat_exempt', 'email', 'phone',
+        'name', 'contact_name', 'business_number', 'business_type', 'vat_exempt', 'email', 'phone',
+        'address', 'payment_method', 'terms_accepted_at',
         'whatsapp_jid', 'cardcom_account_id', 'default_token_id', 'status', 'notes',
     ];
 
@@ -24,6 +25,7 @@ class Customer extends Model
             'business_type' => BusinessType::class,
             'status' => CustomerStatus::class,
             'vat_exempt' => 'boolean',
+            'terms_accepted_at' => 'datetime',
         ];
     }
 
