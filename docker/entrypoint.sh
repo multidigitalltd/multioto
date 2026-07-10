@@ -49,6 +49,8 @@ case "${1:-web}" in
         # onboarding wizard has something to pick. Idempotent — never overwrites
         # plans the team has edited.
         php artisan app:seed-plans || true
+        # Default notification templates (idempotent, never overwrites edits).
+        php artisan app:seed-templates || true
         # Clear any stale caches but do NOT config:cache — caching would freeze
         # whatever DB_CONNECTION is in .env (sqlite by default) instead of the
         # pgsql value the compose environment injects. Reading config live keeps

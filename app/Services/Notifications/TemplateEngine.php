@@ -1,0 +1,98 @@
+<?php
+
+namespace App\Services\Notifications;
+
+use App\Models\NotificationTemplate;
+use App\Models\Ticket;
+
+/**
+ * Renders operator-editable notification templates. A DB row (seeded from
+ * DEFAULTS, edited in the panel) overrides the built-in default; a disabled
+ * row silences the notification. Placeholders use {{name}} syntax and are
+ * substituted with plain text — escaping happens at the output layer (the
+ * mail blade e()s the body; WhatsApp is plain text).
+ */
+class TemplateEngine
+{
+    /**
+     * Built-in professional Hebrew defaults. key => channel => [subject, body].
+     * Subjects apply to email only.
+     */
+    public const DEFAULTS = [
+        'ticket.received' => [
+            'email' => [
+                'subject' => 'קיבלנו את פנייתך — פנייה #{{ticket_id}}',
+                'body' => "שלום {{customer_name}},\n\nתודה שפנית אלינו! פנייתך \"{{ticket_subject}}\" התקבלה ונרשמה במערכת (מספר פנייה: #{{ticket_id}}).\nהצוות שלנו כבר בוחן את הנושא ונחזור אליך בהקדם עם עדכון.\n\nבברכה,\nצוות {{business_name}}",
+            ],
+            'whatsapp' => [
+                'subject' => null,
+                'body' => "שלום {{customer_name}} 👋\nקיבלנו את פנייתך (#{{ticket_id}}) ואנחנו כבר על זה. נעדכן אותך כאן ברגע שיש חדש.\nתודה, {{business_name}}",
+            ],
+        ],
+        'ticket.resolved' => [
+            'email' => [
+                'subject' => 'הפנייה שלך טופלה ✓ — פנייה #{{ticket_id}}',
+                'body' => "שלום {{customer_name}},\n\nשמחים לעדכן שהטיפול בפנייתך \"{{ticket_subject}}\" הושלם.\nאם משהו עדיין לא כמצופה — פשוט השב להודעה זו והפנייה תיפתח מחדש אוטומטית.\n\nתודה שבחרת בנו,\nצוות {{business_name}}",
+            ],
+            'whatsapp' => [
+                'subject' => null,
+                'body' => "שלום {{customer_name}}, הפנייה שלך (#{{ticket_id}}) טופלה ✓\nאם צריך עוד משהו — פשוט כתבו לנו כאן.\nתודה, {{business_name}}",
+            ],
+        ],
+    ];
+
+    /**
+     * Render a template for a channel ('email'|'whatsapp') with the given data.
+     * Returns ['subject' => ?string, 'body' => string], or null when the
+     * notification is disabled or unknown.
+     *
+     * @param  array<string, scalar|null>  $data
+     * @return array{subject: ?string, body: string}|null
+     */
+    public function render(string $key, string $channel, array $data): ?array
+    {
+        $row = NotificationTemplate::where('key', $key)->where('channel', $channel)->first();
+
+        if ($row !== null && ! $row->enabled) {
+            return null;
+        }
+
+        $default = self::DEFAULTS[$key][$channel] ?? null;
+        $subject = $row->subject ?? $default['subject'] ?? null;
+        $body = $row->body ?? $default['body'] ?? null;
+
+        if (blank($body)) {
+            return null;
+        }
+
+        return [
+            'subject' => $subject !== null ? $this->substitute($subject, $data) : null,
+            'body' => $this->substitute($body, $data),
+        ];
+    }
+
+    /**
+     * Standard placeholder data for a ticket notification.
+     *
+     * @return array<string, scalar|null>
+     */
+    public function ticketData(Ticket $ticket): array
+    {
+        return [
+            'customer_name' => $ticket->customer?->name ?: 'לקוח יקר',
+            'ticket_id' => $ticket->id,
+            'ticket_subject' => $ticket->subject,
+            'business_name' => config('mail.from.name') ?: config('app.name'),
+        ];
+    }
+
+    /** @param array<string, scalar|null> $data */
+    protected function substitute(string $text, array $data): string
+    {
+        foreach ($data as $name => $value) {
+            $text = str_replace('{{'.$name.'}}', (string) ($value ?? ''), $text);
+        }
+
+        return $text;
+    }
+}

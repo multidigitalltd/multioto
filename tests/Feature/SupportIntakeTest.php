@@ -67,7 +67,8 @@ class SupportIntakeTest extends TestCase
         $this->assertSame($customer->id, $ticket->customer_id);
         $this->assertSame(TicketChannel::Email, $ticket->channel);
         $this->assertSame('האתר איטי', $ticket->subject);
-        $this->assertSame(MessageDirection::Inbound, $ticket->messages()->sole()->direction);
+        // One inbound message (an automatic acknowledgement may sit beside it).
+        $this->assertSame(1, $ticket->messages()->where('direction', MessageDirection::Inbound)->count());
     }
 
     public function test_email_replies_thread_onto_the_same_ticket(): void
@@ -85,7 +86,7 @@ class SupportIntakeTest extends TestCase
         (new IngestEmailMessageJob($reply->id))->handle($intake);
 
         $this->assertSame(1, Ticket::count());
-        $this->assertSame(2, Ticket::sole()->messages()->count());
+        $this->assertSame(2, Ticket::sole()->messages()->where('direction', MessageDirection::Inbound)->count());
     }
 
     public function test_new_email_reopens_a_resolved_ticket(): void
@@ -123,7 +124,7 @@ class SupportIntakeTest extends TestCase
         $this->assertSame($customer->id, $ticket->customer_id);
         $this->assertSame(TicketChannel::Form, $ticket->channel);
         $this->assertSame('רוצה שדרוג', $ticket->subject);
-        $this->assertSame(MessageChannel::Email, $ticket->messages()->sole()->channel);
+        $this->assertSame(MessageChannel::Email, $ticket->messages()->where('direction', MessageDirection::Inbound)->sole()->channel);
     }
 
     public function test_support_form_rejects_a_honeypot_submission(): void
