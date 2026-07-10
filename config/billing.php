@@ -103,6 +103,10 @@ return [
         // Country code prepended to local numbers (leading 0 → this) when building
         // a WhatsApp chat id. Israel = 972.
         'default_country_code' => env('WAHA_DEFAULT_COUNTRY_CODE', '972'),
+
+        // The business owner's WhatsApp — receives approval requests from the
+        // automation gate and replies "אשר <id>" / "דחה <id>".
+        'owner_number' => env('WAHA_OWNER_NUMBER'),
         // Minimum seconds between outbound messages in bulk sends (block-risk mitigation).
         'broadcast_throttle_seconds' => env('WAHA_BROADCAST_THROTTLE', 30),
     ],

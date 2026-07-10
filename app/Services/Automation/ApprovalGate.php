@@ -1,0 +1,185 @@
+<?php
+
+namespace App\Services\Automation;
+
+use App\Enums\ActionStatus;
+use App\Enums\MessageAuthor;
+use App\Enums\MessageChannel;
+use App\Enums\MessageDirection;
+use App\Enums\TicketChannel;
+use App\Jobs\SendTicketReplyJob;
+use App\Models\PendingAction;
+use App\Services\Waha\WahaClient;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
+
+/**
+ * The human-approval gate for every customer-facing automated action. The AI /
+ * automation PROPOSES; the owner receives the full proposal on WhatsApp and
+ * replies "אשר <id>" or "דחה <id>" (a panel screen is the fallback). Only an
+ * approved action executes, and every decision is recorded. Approvals expire:
+ * a proposal older than MAX_AGE_DAYS is refused rather than executed late.
+ */
+class ApprovalGate
+{
+    /** A stale proposal must not execute long after its context has changed. */
+    public const MAX_AGE_DAYS = 7;
+
+    public function __construct(private WahaClient $waha) {}
+
+    /**
+     * Record a proposed action and notify the owner on WhatsApp. WhatsApp being
+     * unavailable never loses the proposal — it stays pending in the panel.
+     */
+    public function propose(
+        string $type,
+        string $summary,
+        array $payload,
+        ?int $customerId = null,
+        ?int $ticketId = null,
+        string $proposedBy = 'ai',
+    ): PendingAction {
+        $action = PendingAction::create([
+            'type' => $type,
+            'status' => ActionStatus::Pending,
+            'customer_id' => $customerId,
+            'ticket_id' => $ticketId,
+            'summary' => $summary,
+            'payload' => $payload,
+            'proposed_by' => $proposedBy,
+        ]);
+
+        $this->notifyOwner($action);
+
+        return $action;
+    }
+
+    /**
+     * Intercept an owner WhatsApp message if it is an approval command.
+     * Returns the reply text to send back to the owner, or null when the
+     * message is not an approval command (so normal ticket intake proceeds).
+     */
+    public function handleOwnerMessage(string $chatId, string $body): ?string
+    {
+        $ownerChat = $this->ownerChatId();
+
+        if ($ownerChat === null || $chatId !== $ownerChat) {
+            return null;
+        }
+
+        if (! preg_match('/^\s*(אשר|דחה)\s*#?(\d+)\s*$/u', trim($body), $m)) {
+            return null;
+        }
+
+        $action = PendingAction::find((int) $m[2]);
+
+        if (! $action) {
+            return "לא נמצאה פעולה #{$m[2]}.";
+        }
+
+        if ($action->status !== ActionStatus::Pending) {
+            return "פעולה #{$action->id} כבר טופלה (סטטוס: {$action->status->getLabel()}).";
+        }
+
+        return $m[1] === 'אשר' ? $this->approve($action) : $this->reject($action);
+    }
+
+    /** Approve + execute. Returns a human status line (for WhatsApp/panel). */
+    public function approve(PendingAction $action): string
+    {
+        if ($action->created_at->lt(now()->subDays(self::MAX_AGE_DAYS))) {
+            $action->update(['status' => ActionStatus::Rejected, 'decided_at' => now(), 'error' => 'פג תוקף — ההצעה ישנה מדי לביצוע.']);
+
+            return "פעולה #{$action->id} פגת תוקף (מעל ".self::MAX_AGE_DAYS.' ימים) ולא בוצעה.';
+        }
+
+        $action->update(['status' => ActionStatus::Approved, 'decided_at' => now()]);
+
+        try {
+            $this->execute($action);
+        } catch (\Throwable $e) {
+            $action->update(['status' => ActionStatus::Failed, 'error' => Str::limit($e->getMessage(), 300)]);
+
+            return "פעולה #{$action->id} אושרה אך הביצוע נכשל: ".Str::limit($e->getMessage(), 120);
+        }
+
+        $action->update(['status' => ActionStatus::Executed, 'executed_at' => now()]);
+
+        return "פעולה #{$action->id} אושרה ובוצעה ✓";
+    }
+
+    /** Reject without executing. */
+    public function reject(PendingAction $action): string
+    {
+        $action->update(['status' => ActionStatus::Rejected, 'decided_at' => now()]);
+
+        return "פעולה #{$action->id} נדחתה. לא בוצע דבר.";
+    }
+
+    /**
+     * Execute an approved action by type. New automation types (site fixes,
+     * content edits…) register here — this is the ONLY place automation
+     * touches the outside world, always post-approval.
+     */
+    protected function execute(PendingAction $action): void
+    {
+        match ($action->type) {
+            'ticket_reply' => $this->executeTicketReply($action),
+            default => throw new \RuntimeException("סוג פעולה לא מוכר: {$action->type}"),
+        };
+    }
+
+    /** Send an approved AI reply to the customer over the ticket's channel. */
+    protected function executeTicketReply(PendingAction $action): void
+    {
+        $ticket = $action->ticket;
+        $reply = (string) data_get($action->payload, 'reply', '');
+
+        if (! $ticket || $reply === '') {
+            throw new \RuntimeException('הפנייה או תוכן התשובה חסרים.');
+        }
+
+        $message = $ticket->messages()->create([
+            'direction' => MessageDirection::Outbound,
+            'channel' => $ticket->channel === TicketChannel::Whatsapp ? MessageChannel::Whatsapp : MessageChannel::Email,
+            'body' => $reply,
+            'author' => MessageAuthor::Ai,
+        ]);
+
+        SendTicketReplyJob::dispatch($message->id);
+    }
+
+    /** The owner's WhatsApp chat id, from settings (null = gate is panel-only). */
+    public function ownerChatId(): ?string
+    {
+        $number = (string) config('billing.waha.owner_number');
+
+        return $number !== '' ? $this->waha->normalizeChatId($number) : null;
+    }
+
+    /** WhatsApp the proposal to the owner (best-effort). */
+    protected function notifyOwner(PendingAction $action): void
+    {
+        $ownerChat = $this->ownerChatId();
+
+        if ($ownerChat === null) {
+            Log::info('ApprovalGate: owner WhatsApp not configured; action awaits panel approval', ['action_id' => $action->id]);
+
+            return;
+        }
+
+        $text = "🔔 פעולה #{$action->id} ממתינה לאישור\n\n"
+            .Str::limit($action->summary, 700)."\n\n"
+            ."✅ לאישור השיבו: אשר {$action->id}\n"
+            ."❌ לדחייה: דחה {$action->id}";
+
+        try {
+            $this->waha->sendMessage($ownerChat, $text);
+        } catch (\Throwable $e) {
+            Log::warning('ApprovalGate: owner notification failed; action awaits panel approval', [
+                'action_id' => $action->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+}

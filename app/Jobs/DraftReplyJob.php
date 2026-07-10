@@ -9,6 +9,7 @@ use App\Models\CannedResponse;
 use App\Models\Ticket;
 use App\Services\Ai\ClaudeClient;
 use App\Services\Ai\SupportToolkit;
+use App\Services\Automation\ApprovalGate;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 
@@ -96,6 +97,24 @@ class DraftReplyJob implements ShouldQueue
             ),
             'author' => MessageAuthor::Ai,
         ]);
+
+        // Route the draft through the approval gate: the owner gets the full
+        // proposed reply on WhatsApp and answers "אשר <id>" to send it to the
+        // customer (or approves from the panel). Still human-in-the-loop —
+        // only the approval channel got faster.
+        app(ApprovalGate::class)->propose(
+            type: 'ticket_reply',
+            summary: sprintf(
+                "תשובה ללקוח %s בפנייה #%d (%s):\n\n%s",
+                $ticket->customer?->name ?? 'לא מזוהה',
+                $ticket->id,
+                $ticket->subject,
+                $result['reply'],
+            ),
+            payload: ['reply' => $result['reply'], 'confidence' => $result['confidence'] ?? null],
+            customerId: $ticket->customer_id,
+            ticketId: $ticket->id,
+        );
     }
 
     /**

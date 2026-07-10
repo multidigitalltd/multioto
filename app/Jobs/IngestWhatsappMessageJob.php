@@ -6,7 +6,9 @@ use App\Enums\MessageChannel;
 use App\Enums\TicketChannel;
 use App\Models\Customer;
 use App\Models\WebhookEvent;
+use App\Services\Automation\ApprovalGate;
 use App\Services\Support\TicketIntake;
+use App\Services\Waha\WahaClient;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Str;
@@ -41,6 +43,22 @@ class IngestWhatsappMessageJob implements ShouldQueue
         $messageId = $payload['id'] ?? null;
 
         if ($chatId === '' || ($body === '' && empty($payload['hasMedia']))) {
+            $event->markProcessed();
+
+            return;
+        }
+
+        // Owner approval commands ("אשר 12" / "דחה 12") are routed to the
+        // approval gate instead of opening a ticket; the decision result is
+        // sent straight back to the owner.
+        $gate = app(ApprovalGate::class);
+
+        if (($reply = $gate->handleOwnerMessage($chatId, $body)) !== null) {
+            try {
+                app(WahaClient::class)->sendMessage($chatId, $reply);
+            } catch (\Throwable) {
+                // The decision is already recorded; the panel shows the outcome.
+            }
             $event->markProcessed();
 
             return;
