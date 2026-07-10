@@ -70,7 +70,20 @@ class LinetClient
                 return ConnectionResult::fail('לינט דחתה את פרטי ההזדהות: '.Str::limit((string) ($json['error'] ?? json_encode($json['errors'])), 100));
             }
 
-            return ConnectionResult::ok('החיבור ללינט תקין — ההזדהות התקבלה');
+            // Credentials are good — also flag missing document codes here, so
+            // the operator learns about an incomplete setup from the connection
+            // test instead of from a failed invoice later.
+            $missingCodes = collect([
+                'קוד סוג מסמך' => $config['doctype'] ?? null,
+                'קוד מע״מ — חייב' => $config['vat_cat_taxable'] ?? null,
+                'קוד אמצעי תשלום' => $config['payment_type'] ?? null,
+            ])->reject(fn ($value) => filled($value))->keys();
+
+            if ($missingCodes->isNotEmpty()) {
+                return ConnectionResult::ok('ההזדהות ללינט תקינה, אך חסרים קודים להנפקת חשבונית: '.$missingCodes->join(', ').'. מלאו ושמרו אותם.');
+            }
+
+            return ConnectionResult::ok('החיבור ללינט תקין — ההזדהות והקודים מוגדרים');
         } catch (\Throwable $e) {
             return ConnectionResult::fail('לא ניתן להתחבר ללינט: '.Str::limit(trim($e->getMessage()) ?: class_basename($e), 120));
         }

@@ -152,6 +152,19 @@ class LinetClientTest extends TestCase
         $this->assertTrue(app(LinetClient::class)->testConnection()->ok);
     }
 
+    public function test_connection_check_warns_when_document_codes_are_missing(): void
+    {
+        config(['billing.linet.doctype' => null]);
+        Http::fake(['*/search/account' => Http::response(['status' => 200, 'body' => []])]);
+
+        $result = app(LinetClient::class)->testConnection();
+
+        // Credentials work, but the operator must learn the doctype is missing
+        // here — not from a cryptic failed invoice later.
+        $this->assertTrue($result->ok);
+        $this->assertStringContainsString('קוד סוג מסמך', $result->message);
+    }
+
     public function test_connection_check_reports_failure_when_linet_rejects_the_login(): void
     {
         Http::fake(['*/search/account' => Http::response(['status' => 401, 'message' => 'invalid login'])]);
