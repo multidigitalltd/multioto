@@ -6,6 +6,7 @@ use App\Enums\ChargeStatus;
 use App\Enums\DocumentType;
 use App\Enums\VatCategory;
 use App\Models\Charge;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 
 /**
@@ -41,6 +42,18 @@ class InvoiceIssuer
 
         $vatCategory = $customer->vat_exempt ? VatCategory::Exempt : VatCategory::Taxable;
 
+        // Preflight: never call Linet with missing configuration. Linet's own
+        // errors for these cases are cryptic ("סוג מסמך לא תקין" וכד'); this
+        // names exactly which settings are absent and where to fill them.
+        $missing = $this->missingSettings($vatCategory);
+
+        if ($missing->isNotEmpty()) {
+            return [
+                'ok' => false,
+                'error' => 'הגדרות לינט חסרות: '.$missing->join(', ').'. מלאו אותן בהגדרות ← מפתחות אינטגרציות ← לינט, שמרו ונסו שוב.',
+            ];
+        }
+
         // Subscription charges describe the plan + period; one-off (manual)
         // charges carry their own free-text description.
         $description = $charge->subscription
@@ -71,5 +84,31 @@ class InvoiceIssuer
         } catch (\Throwable $e) {
             return ['ok' => false, 'error' => Str::limit(trim($e->getMessage()) ?: class_basename($e), 200)];
         }
+    }
+
+    /**
+     * Hebrew names of the Linet settings required for this document that are
+     * not configured. The exempt VAT code is only required for exempt customers.
+     *
+     * @return Collection<int, string>
+     */
+    protected function missingSettings(VatCategory $vatCategory): Collection
+    {
+        $config = config('billing.linet');
+
+        $required = [
+            'Login ID' => $config['login_id'] ?? null,
+            'Key' => $config['key'] ?? null,
+            'Company ID' => $config['company_id'] ?? null,
+            'קוד סוג מסמך' => $config['doctype'] ?? null,
+            'קוד אמצעי תשלום' => $config['payment_type'] ?? null,
+        ];
+
+        $required[$vatCategory === VatCategory::Exempt ? 'קוד מע״מ — פטור' : 'קוד מע״מ — חייב'] =
+            $vatCategory === VatCategory::Exempt
+                ? ($config['vat_cat_exempt'] ?? null)
+                : ($config['vat_cat_taxable'] ?? null);
+
+        return collect($required)->reject(fn ($value) => filled($value))->keys();
     }
 }

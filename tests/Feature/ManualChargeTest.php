@@ -257,6 +257,30 @@ class ManualChargeTest extends TestCase
         $this->assertSame(0, $vat);
     }
 
+    public function test_invoice_issuer_names_the_missing_linet_settings_before_calling_linet(): void
+    {
+        // No doctype configured — the exact scenario where Linet answers with a
+        // cryptic "invalid doctype". The issuer must name what's missing in
+        // Hebrew and never reach the network.
+        config([
+            'billing.linet.base_url' => 'https://app.linet.test/api',
+            'billing.linet.login_id' => 'lid',
+            'billing.linet.key' => 'lhash',
+            'billing.linet.company_id' => '1',
+            'billing.linet.doctype' => null,
+        ]);
+        Http::fake();
+
+        $customer = Customer::factory()->create(['vat_exempt' => false]);
+        $charge = $this->oneOffCharge($customer, ChargeStatus::Succeeded);
+
+        $result = app(InvoiceIssuer::class)->issue($charge);
+
+        $this->assertFalse($result['ok']);
+        $this->assertStringContainsString('קוד סוג מסמך', $result['error']);
+        Http::assertNothingSent();
+    }
+
     public function test_invoice_issuer_returns_the_linet_error_instead_of_failing_silently(): void
     {
         config([
