@@ -100,8 +100,9 @@ class LinetClientTest extends TestCase
             && $request->data()['account_id'] === 909);
     }
 
-    public function test_exempt_customer_uses_the_exempt_vat_category(): void
+    public function test_exempt_customer_uses_the_exempt_vat_category_and_income_account(): void
     {
+        config(['billing.linet.income_account_exempt' => 102]);
         Http::fake([
             '*/search/account' => Http::response(['status' => 200, 'body' => [['id' => 1]]]),
             '*/create/doc' => Http::response(['status' => 200, 'body' => ['id' => 1]]),
@@ -109,8 +110,24 @@ class LinetClientTest extends TestCase
 
         app(LinetClient::class)->issueDocument($this->charge(), VatCategory::Exempt, 'x');
 
+        // Linet requires a no-VAT income account on an exempt line ("No VAT
+        // income account must be selected") — verified against the live API.
         Http::assertSent(fn ($request) => str_ends_with($request->url(), '/create/doc')
-            && $request->data()['docDet'][0]['vat_cat_id'] === 2);
+            && $request->data()['docDet'][0]['vat_cat_id'] === 2
+            && $request->data()['docDet'][0]['account_id'] === 102);
+    }
+
+    public function test_taxable_line_leaves_the_item_default_income_account(): void
+    {
+        Http::fake([
+            '*/search/account' => Http::response(['status' => 200, 'body' => [['id' => 1]]]),
+            '*/create/doc' => Http::response(['status' => 200, 'body' => ['id' => 1]]),
+        ]);
+
+        app(LinetClient::class)->issueDocument($this->charge(), VatCategory::Taxable, 'x');
+
+        Http::assertSent(fn ($request) => str_ends_with($request->url(), '/create/doc')
+            && ! array_key_exists('account_id', $request->data()['docDet'][0]));
     }
 
     public function test_a_non_200_envelope_status_is_surfaced_as_an_error(): void

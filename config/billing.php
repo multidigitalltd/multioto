@@ -81,6 +81,12 @@ return [
         // rejected with "Income VAT account must match VAT percent").
         'vat_cat_taxable' => env('LINET_VAT_CAT_TAXABLE', 1),
         'vat_cat_exempt' => env('LINET_VAT_CAT_EXEMPT', 2),
+
+        // Income account for EXEMPT document lines. Linet requires a no-VAT
+        // income account on a 0%-VAT line ("No VAT income account must be
+        // selected") — taxable lines use the item's default income account.
+        // 102 is the exempt-income account in Linet's standard chart.
+        'income_account_exempt' => env('LINET_INCOME_ACCOUNT_EXEMPT', 102),
         'payment_type' => env('LINET_PAYMENT_TYPE', 3),
         'create_doc_path' => env('LINET_CREATE_DOC_PATH', '/create/doc'),
         // Linet item id used for our free-text service lines (every document line
