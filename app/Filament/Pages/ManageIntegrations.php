@@ -13,6 +13,7 @@ use Filament\Forms\Contracts\HasForms;
 use Filament\Forms\Form;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 /**
@@ -194,6 +195,10 @@ class ManageIntegrations extends Page implements HasForms
      */
     public function saveGroup(string $group): void
     {
+        // Trace that the click reached the server (no values are ever logged) —
+        // the page has a history of silent client-side failures.
+        Log::info('ManageIntegrations: saveGroup invoked', ['group' => $group]);
+
         $meta = self::GROUPS[$group] ?? null;
 
         if ($meta === null) {
@@ -263,6 +268,8 @@ class ManageIntegrations extends Page implements HasForms
      */
     public function testGroup(string $group): void
     {
+        Log::info('ManageIntegrations: testGroup invoked', ['group' => $group]);
+
         $label = self::GROUPS[$group]['label'] ?? $group;
         $healthKey = self::HEALTH_KEYS[$group] ?? null;
 
