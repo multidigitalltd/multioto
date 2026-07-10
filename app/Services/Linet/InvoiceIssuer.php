@@ -67,6 +67,17 @@ class InvoiceIssuer
         try {
             $document = $this->linet->issueDocument($charge, $vatCategory, $description);
 
+            // The create response carries no PDF link — fetch it now (best
+            // effort: a failure here must never fail an issued invoice; the
+            // download button can backfill the link later).
+            if (blank($document['pdf_url']) && filled($document['document_id'])) {
+                try {
+                    $document['pdf_url'] = $this->linet->documentPdfUrl($document['document_id']);
+                } catch (\Throwable) {
+                    $document['pdf_url'] = null;
+                }
+            }
+
             $charge->invoice()->create([
                 'customer_id' => $customer->id,
                 'linet_document_id' => $document['document_id'],

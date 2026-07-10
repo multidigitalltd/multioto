@@ -7,11 +7,14 @@ use App\Enums\VatCategory;
 use App\Filament\Resources\InvoiceResource\Pages;
 use App\Filament\Support\MoneyField;
 use App\Models\Invoice;
+use App\Services\Linet\LinetClient;
 use Filament\Forms;
 use Filament\Forms\Form;
+use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
+use Illuminate\Support\Str;
 
 class InvoiceResource extends Resource
 {
@@ -111,9 +114,11 @@ class InvoiceResource extends Resource
                     ->sortable(),
                 Tables\Columns\TextColumn::make('pdf_url')
                     ->label('PDF')
+                    ->formatStateUsing(fn () => 'פתיחה')
                     ->url(fn ($record) => $record->pdf_url)
                     ->openUrlInNewTab()
-                    ->toggleable(isToggledHiddenByDefault: true),
+                    ->placeholder('—')
+                    ->toggleable(),
                 Tables\Columns\TextColumn::make('created_at')
                     ->label('נוצר')
                     ->dateTime('d/m/Y H:i')
@@ -135,6 +140,33 @@ class InvoiceResource extends Resource
                     ->options(VatCategory::class),
             ])
             ->actions([
+                Tables\Actions\Action::make('downloadPdf')
+                    ->label('הורדת PDF')
+                    ->icon('heroicon-o-arrow-down-tray')
+                    ->color('gray')
+                    ->visible(fn (Invoice $record): bool => filled($record->linet_document_id))
+                    ->action(function (Invoice $record, LinetClient $linet) {
+                        // Backfill the download link from Linet when it wasn't
+                        // captured at issue time, then open it.
+                        if (blank($record->pdf_url)) {
+                            try {
+                                $record->update(['pdf_url' => $linet->documentPdfUrl($record->linet_document_id)]);
+                            } catch (\Throwable $e) {
+                                Notification::make()->title('שליפת קישור ה-PDF מלינט נכשלה')
+                                    ->body(Str::limit($e->getMessage(), 150))->danger()->send();
+
+                                return;
+                            }
+                        }
+
+                        if (blank($record->pdf_url)) {
+                            Notification::make()->title('לינט לא החזירה קישור למסמך הזה')->warning()->send();
+
+                            return;
+                        }
+
+                        return redirect()->away($record->pdf_url);
+                    }),
                 Tables\Actions\EditAction::make()->label('עריכה'),
             ])
             ->bulkActions([
