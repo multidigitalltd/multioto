@@ -3,6 +3,7 @@
 namespace App\Providers;
 
 use App\Models\Setting;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\ServiceProvider;
 use Throwable;
@@ -54,7 +55,22 @@ class SettingsServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
-        // Tolerate a not-yet-migrated database (fresh install, migrate step).
+        $this->applyOverlay();
+
+        // Horizon queue workers are long-lived: boot() runs once at startup, so
+        // a credential/code changed in the panel afterwards would never reach a
+        // running worker (the invoice job would keep sending the old value —
+        // e.g. an empty doctype → Linet "invalid document type"). Re-apply the
+        // overlay before every job so workers always use the current settings.
+        Queue::before(fn () => $this->applyOverlay());
+    }
+
+    /**
+     * Overlay stored settings onto config. A non-empty stored value wins over
+     * .env; blanks fall back to .env. Tolerates a not-yet-migrated database.
+     */
+    protected function applyOverlay(): void
+    {
         try {
             if (! Schema::hasTable('settings')) {
                 return;
