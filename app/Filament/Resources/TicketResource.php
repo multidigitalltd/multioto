@@ -142,6 +142,7 @@ class TicketResource extends Resource
                     ->options(TicketChannel::class),
             ])
             ->actions([
+                Tables\Actions\ViewAction::make()->label('פתח שיחה')->icon('heroicon-o-chat-bubble-left-right'),
                 Tables\Actions\EditAction::make()->label('עריכה'),
             ])
             ->bulkActions([
@@ -164,6 +165,8 @@ class TicketResource extends Resource
         return [
             'index' => Pages\ListTickets::route('/'),
             'create' => Pages\CreateTicket::route('/create'),
+            // The default record page is the chat-style conversation view.
+            'view' => Pages\ViewTicket::route('/{record}'),
             'edit' => Pages\EditTicket::route('/{record}/edit'),
         ];
     }

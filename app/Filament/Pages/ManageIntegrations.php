@@ -183,7 +183,7 @@ class ManageIntegrations extends Page implements HasForms
                         TextInput::make('waha.base_url')->label('כתובת שרת (Base URL)')->placeholder('http://host.docker.internal:3000')->live(onBlur: true)->autocomplete(false),
                         TextInput::make('waha.api_key')->label('API Key')->password()->live(onBlur: true)->autocomplete('new-password'),
                         TextInput::make('waha.session')->label('שם Session')->placeholder('default')->live(onBlur: true)->autocomplete(false),
-                        TextInput::make('waha.owner_number')->label('וואטסאפ בעל העסק (לאישורים)')->placeholder('0501234567')->helperText('פעולות אוטומטיות (תשובות AI וכד׳) יישלחו למספר זה לאישור — עונים "אשר <מספר>" או "דחה <מספר>".')->live(onBlur: true)->autocomplete(false),
+                        TextInput::make('waha.owner_number')->label('וואטסאפ לאישורים (מספר או קבוצה)')->placeholder('0501234567 או 12036…@g.us')->helperText('בקשות אישור (תשובות AI וכד׳) יישלחו לכאן — עונים "אשר <מספר>" או "דחה <מספר>". אפשר מספר אישי או מזהה קבוצה (@g.us) כדי שכל הצוות יאשר. איתור מזהה קבוצה: צרפו את מספר העסק לקבוצה, שלחו בה הודעה — המזהה יופיע בפנייה שנפתחת. הודעות רגילות בצ׳אט הזה לא פותחות פניות.')->live(onBlur: true)->autocomplete(false),
                     ])->columns(3)
                     ->footerActions($this->groupActions('waha')),
             ])
