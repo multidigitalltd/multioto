@@ -8,6 +8,7 @@ use App\Enums\MessageDirection;
 use App\Enums\TicketChannel;
 use App\Enums\TicketStatus;
 use App\Jobs\ClassifyTicketJob;
+use App\Jobs\SendTicketNotificationJob;
 use App\Models\Customer;
 use App\Models\Ticket;
 use App\Models\TicketMessage;
@@ -68,6 +69,13 @@ class TicketIntake
             // A new inbound message on a resolved/closed thread reopens it.
             if (in_array($ticket->status, [TicketStatus::Resolved, TicketStatus::Closed], true)) {
                 $ticket->update(['status' => TicketStatus::Open]);
+            }
+
+            // A brand-new ticket gets an immediate personal acknowledgement on
+            // its originating channel ("received, we're on it") — template-driven
+            // and operator-editable; the job no-ops if disabled/unreachable.
+            if ($ticket->wasRecentlyCreated) {
+                SendTicketNotificationJob::dispatch($ticket->id, 'ticket.received');
             }
 
             // Kick off optional Tier-1 AI (classification → draft reply). The

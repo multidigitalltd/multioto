@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Enums\MessageDirection;
 use App\Enums\SubscriptionStatus;
 use App\Enums\TokenStatus;
 use App\Enums\WebhookSource;
@@ -205,6 +206,8 @@ class WebhookTest extends TestCase
 
     public function test_waha_message_creates_a_ticket_and_matches_customer_by_phone(): void
     {
+        // A new ticket triggers the automatic WhatsApp acknowledgement.
+        Http::fake(['*/api/sendText' => Http::response(['id' => 'ack-1'])]);
         $customer = Customer::factory()->create(['phone' => '+972501234567', 'whatsapp_jid' => null]);
 
         $payload = [
@@ -221,16 +224,20 @@ class WebhookTest extends TestCase
         $ticket = Ticket::sole();
         $this->assertSame($customer->id, $ticket->customer_id);
         $this->assertSame('972501234567@c.us', $customer->fresh()->whatsapp_jid);
-        $this->assertSame(1, $ticket->messages()->count());
+        // The inbound message plus the automatic acknowledgement.
+        $this->assertSame(1, $ticket->messages()->where('direction', MessageDirection::Inbound)->count());
 
         // Redelivery of the same message id does not duplicate anything.
+        $messageCount = $ticket->messages()->count();
         $this->post('/webhooks/waha?secret=waha-secret', $payload)->assertOk();
         $this->assertSame(1, Ticket::count());
-        $this->assertSame(1, $ticket->messages()->count());
+        $this->assertSame($messageCount, $ticket->messages()->count());
     }
 
     public function test_waha_message_from_unknown_sender_opens_unidentified_ticket(): void
     {
+        Http::fake(['*/api/sendText' => Http::response(['id' => 'ack-2'])]);
+
         $this->post('/webhooks/waha?secret=waha-secret', [
             'event' => 'message',
             'payload' => ['id' => 'wa-msg-2', 'from' => '15550001111@c.us', 'body' => 'hello'],

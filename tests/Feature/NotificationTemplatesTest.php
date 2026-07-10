@@ -1,0 +1,96 @@
+<?php
+
+namespace Tests\Feature;
+
+use App\Enums\MessageChannel;
+use App\Enums\TicketChannel;
+use App\Enums\TicketStatus;
+use App\Jobs\SendTicketNotificationJob;
+use App\Mail\NotificationMail;
+use App\Models\Customer;
+use App\Models\NotificationTemplate;
+use App\Models\Ticket;
+use App\Services\Notifications\TemplateEngine;
+use App\Services\Support\TicketIntake;
+use App\Services\Waha\WahaClient;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Queue;
+use Tests\TestCase;
+
+class NotificationTemplatesTest extends TestCase
+{
+    use RefreshDatabase;
+
+    public function test_render_substitutes_placeholders_and_respects_overrides(): void
+    {
+        $engine = app(TemplateEngine::class);
+
+        // Built-in default renders with data substituted.
+        $rendered = $engine->render('ticket.received', 'email', [
+            'customer_name' => 'ישראל', 'ticket_id' => 7, 'ticket_subject' => 'האתר איטי', 'business_name' => 'מולטי דיגיטל',
+        ]);
+        $this->assertStringContainsString('ישראל', $rendered['body']);
+        $this->assertStringContainsString('#7', $rendered['subject']);
+
+        // An operator-edited row overrides the default.
+        NotificationTemplate::create(['key' => 'ticket.received', 'channel' => 'email', 'subject' => 'קיבלנו!', 'body' => 'היי {{customer_name}}']);
+        $this->assertSame('היי ישראל', $engine->render('ticket.received', 'email', ['customer_name' => 'ישראל'])['body']);
+
+        // Disabling a row silences the notification.
+        NotificationTemplate::where('key', 'ticket.received')->update(['enabled' => false]);
+        $this->assertNull($engine->render('ticket.received', 'email', []));
+    }
+
+    public function test_new_ticket_gets_an_acknowledgement_but_a_follow_up_message_does_not(): void
+    {
+        Queue::fake([SendTicketNotificationJob::class]);
+        $customer = Customer::factory()->create();
+        $intake = app(TicketIntake::class);
+
+        $intake->recordInbound(TicketChannel::Whatsapp, MessageChannel::Whatsapp, $customer, 'האתר נפל', threadRef: '9725@c.us', externalMessageId: 'm1');
+        Queue::assertPushed(SendTicketNotificationJob::class, fn ($job) => $job->templateKey === 'ticket.received');
+
+        // Second message on the same thread — no second acknowledgement.
+        $intake->recordInbound(TicketChannel::Whatsapp, MessageChannel::Whatsapp, $customer, 'עדכון', threadRef: '9725@c.us', externalMessageId: 'm2');
+        Queue::assertPushed(SendTicketNotificationJob::class, 1);
+    }
+
+    public function test_whatsapp_ticket_ack_is_sent_via_waha_and_recorded_as_system_message(): void
+    {
+        config(['billing.waha.base_url' => 'https://waha.test', 'billing.waha.api_key' => 'k', 'billing.waha.session' => 'default']);
+        Http::fake(['*/api/sendText' => Http::response(['id' => 'wa-1'])]);
+
+        $customer = Customer::factory()->create(['name' => 'ישראל כהן']);
+        $ticket = Ticket::create([
+            'customer_id' => $customer->id, 'channel' => TicketChannel::Whatsapp,
+            'subject' => 'תקלה', 'status' => TicketStatus::Open, 'external_thread_ref' => '972501234567@c.us',
+        ]);
+
+        (new SendTicketNotificationJob($ticket->id, 'ticket.received'))->handle(app(TemplateEngine::class), app(WahaClient::class));
+
+        Http::assertSent(fn ($request) => str_contains($request->url(), 'sendText')
+            && str_contains($request->data()['text'], 'ישראל כהן'));
+        $this->assertSame(1, $ticket->messages()->count());
+
+        // Running again (retry / duplicate dispatch) must not send twice.
+        (new SendTicketNotificationJob($ticket->id, 'ticket.received'))->handle(app(TemplateEngine::class), app(WahaClient::class));
+        $this->assertSame(1, $ticket->messages()->count());
+    }
+
+    public function test_resolving_a_ticket_emails_the_customer(): void
+    {
+        Mail::fake();
+
+        $customer = Customer::factory()->create();
+        $ticket = Ticket::create([
+            'customer_id' => $customer->id, 'channel' => TicketChannel::Email,
+            'subject' => 'בעיה במייל', 'status' => TicketStatus::Open,
+        ]);
+
+        $ticket->update(['status' => TicketStatus::Resolved]);
+        // The observer dispatches the job; on the sync queue it already ran.
+        Mail::assertSent(NotificationMail::class, fn ($mail) => str_contains($mail->bodyText, 'הושלם'));
+    }
+}
