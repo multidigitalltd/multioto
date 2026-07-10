@@ -37,6 +37,9 @@ class SettingsServiceProvider extends ServiceProvider
         'waha.api_key' => 'billing.waha.api_key',
         'waha.base_url' => 'billing.waha.base_url',
         'waha.session' => 'billing.waha.session',
+        // Auto-generated when the operator enables inbound listening — not a
+        // form field (see ManageIntegrations::setupWahaInbound).
+        'waha.webhook_secret' => 'billing.waha.webhook_secret',
         'postmark.token' => 'services.postmark.token',
         'postmark.account_token' => 'services.postmark.account_token',
         // Outbound mail identity — editable from the מייל settings screen so the

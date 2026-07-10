@@ -8,6 +8,7 @@ use App\Filament\Support\MoneyField;
 use App\Models\Charge;
 use App\Services\Cardcom\ChargeReconciler;
 use App\Services\Linet\InvoiceIssuer;
+use App\Services\Linet\LinetClient;
 use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Notifications\Notification;
@@ -196,6 +197,37 @@ class ChargeResource extends Resource
                                 ->body($result['error'].' — בדקו את קודי לינט (סוג מסמך / מע״מ / אמצעי תשלום) בהגדרות → מפתחות → לינט.')
                                 ->danger()->persistent()->send();
                         }
+                    }),
+
+                // The Linet invoice lives on the charge — open the original PDF
+                // straight from here (backfilling the link from Linet when it
+                // wasn't captured at issue time).
+                Tables\Actions\Action::make('invoicePdf')
+                    ->label('חשבונית PDF')
+                    ->icon('heroicon-o-document-arrow-down')
+                    ->color('gray')
+                    ->visible(fn (Charge $record): bool => $record->invoice()->exists())
+                    ->action(function (Charge $record, LinetClient $linet) {
+                        $invoice = $record->invoice;
+
+                        if (blank($invoice->pdf_url) && filled($invoice->linet_document_id)) {
+                            try {
+                                $invoice->update(['pdf_url' => $linet->documentPdfUrl($invoice->linet_document_id)]);
+                            } catch (\Throwable $e) {
+                                Notification::make()->title('שליפת קישור ה-PDF מלינט נכשלה')
+                                    ->body(Str::limit($e->getMessage(), 150))->danger()->send();
+
+                                return;
+                            }
+                        }
+
+                        if (blank($invoice->pdf_url)) {
+                            Notification::make()->title('לינט לא החזירה קישור למסמך הזה')->warning()->send();
+
+                            return;
+                        }
+
+                        return redirect()->away($invoice->pdf_url);
                     }),
 
                 Tables\Actions\EditAction::make()->label('עריכה'),

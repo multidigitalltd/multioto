@@ -23,12 +23,15 @@ class SignupRequest extends FormRequest
     {
         return [
             'name' => ['required', 'string', 'max:120'],
+            'contact_name' => ['required', 'string', 'max:120'],
             'business_number' => ['nullable', 'string', 'max:32'],
             'business_type' => ['required', new Enum(BusinessType::class)],
             'email' => ['required', 'email:rfc', 'max:190'],
             'phone' => ['required', 'string', 'max:32'],
+            'address' => ['required', 'string', 'max:190'],
             'domain' => ['nullable', 'string', 'max:190'],
             'plan_id' => ['required', Rule::exists('plans', 'id')->where('active', true)],
+            'payment_method' => ['required', Rule::in(['credit_card', 'standing_order', 'bank_transfer'])],
             'terms' => ['accepted'],
             // Honeypot: real users never fill this hidden field.
             'website' => ['prohibited'],
@@ -45,6 +48,9 @@ class SignupRequest extends FormRequest
             'phone.required' => 'יש להזין טלפון.',
             'plan_id.required' => 'יש לבחור מסלול.',
             'plan_id.exists' => 'המסלול שנבחר אינו זמין.',
+            'contact_name.required' => 'יש להזין איש קשר.',
+            'address.required' => 'יש להזין כתובת.',
+            'payment_method.required' => 'יש לבחור אמצעי תשלום.',
             'terms.accepted' => 'יש לאשר את תנאי השירות.',
         ];
     }
@@ -53,6 +59,9 @@ class SignupRequest extends FormRequest
     {
         return [
             'name' => 'שם',
+            'contact_name' => 'איש קשר',
+            'address' => 'כתובת',
+            'payment_method' => 'אמצעי תשלום',
             'business_number' => 'ח.פ / עוסק',
             'business_type' => 'סוג עסק',
             'email' => 'מייל',

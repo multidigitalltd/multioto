@@ -74,7 +74,9 @@ class TicketIntake
             // A brand-new ticket gets an immediate personal acknowledgement on
             // its originating channel ("received, we're on it") — template-driven
             // and operator-editable; the job no-ops if disabled/unreachable.
-            if ($ticket->wasRecentlyCreated) {
+            // Manual (team-opened) tickets are internal — the customer didn't
+            // contact us, so acknowledging would be nonsense.
+            if ($ticket->wasRecentlyCreated && $channel !== TicketChannel::Manual) {
                 SendTicketNotificationJob::dispatch($ticket->id, 'ticket.received');
             }
 

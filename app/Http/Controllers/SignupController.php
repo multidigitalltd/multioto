@@ -4,13 +4,17 @@ namespace App\Http\Controllers;
 
 use App\Enums\BusinessType;
 use App\Enums\CustomerStatus;
+use App\Enums\MessageChannel;
 use App\Enums\SiteStatus;
 use App\Enums\SubscriptionStatus;
+use App\Enums\TicketChannel;
 use App\Http\Requests\SignupRequest;
+use App\Jobs\SendWelcomeMessageJob;
 use App\Models\Customer;
 use App\Models\Plan;
 use App\Models\Site;
 use App\Models\Subscription;
+use App\Services\Support\TicketIntake;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\URL;
@@ -42,12 +46,18 @@ class SignupController extends Controller
         $customer = DB::transaction(function () use ($data, $businessType): Customer {
             $customer = Customer::create([
                 'name' => $data['name'],
+                'contact_name' => $data['contact_name'],
                 'business_number' => $data['business_number'] ?? null,
                 'business_type' => $businessType,
                 // Exempt dealers are VAT-exempt; everyone else is charged VAT.
                 'vat_exempt' => $businessType === BusinessType::ExemptDealer,
                 'email' => strtolower($data['email']),
                 'phone' => $data['phone'],
+                'address' => $data['address'],
+                'payment_method' => $data['payment_method'],
+                // The legal record of consent — set only when the box was ticked
+                // (validation enforces it), stamped server-side.
+                'terms_accepted_at' => now(),
                 'status' => CustomerStatus::Active,
             ]);
 
@@ -76,12 +86,33 @@ class SignupController extends Controller
             return $customer;
         });
 
-        // Hand off to Cardcom's hosted card page via a short-lived signed link
-        // (same route used for card updates), so no customer id is enumerable.
-        return redirect()->to(URL::temporarySignedRoute(
-            'billing.update-card',
-            now()->addHours((int) config('billing.card_update_link_ttl_hours')),
-            ['customer' => $customer->id],
-        ));
+        // Personal welcome (email + WhatsApp) — dispatched only from this
+        // explicit signup flow, never from bulk import.
+        SendWelcomeMessageJob::dispatch($customer->id);
+
+        // Credit card: hand off to Cardcom's hosted card page via a short-lived
+        // signed link (same route used for card updates), so no customer id is
+        // enumerable. No card data ever touches this system.
+        if ($data['payment_method'] === 'credit_card') {
+            return redirect()->to(URL::temporarySignedRoute(
+                'billing.update-card',
+                now()->addHours((int) config('billing.card_update_link_ttl_hours')),
+                ['customer' => $customer->id],
+            ));
+        }
+
+        // Standing order / bank transfer: the team completes the arrangement
+        // manually — open a ticket so it can't fall through the cracks.
+        app(TicketIntake::class)->recordInbound(
+            TicketChannel::Manual,
+            MessageChannel::InternalNote,
+            $customer,
+            'לקוח חדש בחר '.($data['payment_method'] === 'standing_order' ? 'הוראת קבע בנקאית' : 'העברה בנקאית')
+                .' — יש ליצור קשר ולהשלים את הסדר התשלום.',
+            externalMessageId: 'signup-payment-'.$customer->id,
+            subject: 'השלמת הסדר תשלום — '.$customer->name,
+        );
+
+        return redirect()->route('signup.thanks');
     }
 }

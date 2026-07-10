@@ -28,6 +28,9 @@ Route::get('/join', [SignupController::class, 'show'])->name('signup');
 Route::post('/join', [SignupController::class, 'store'])
     ->middleware('throttle:8,1')
     ->name('signup.store');
+// Friendly alias matching the business site's terminology.
+Route::redirect('/new-client', '/join');
+Route::view('/join/thanks', 'signup.thanks')->name('signup.thanks');
 
 /*
  | Customer-facing billing links (embedded in dunning messages).
