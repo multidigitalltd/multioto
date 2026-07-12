@@ -28,9 +28,12 @@ class ManualChargeService
      * Create a pending one-off charge and queue it against the customer's saved
      * active token.
      */
-    public function chargeSavedToken(Customer $customer, int $totalAgorot, string $description, ?string $notes = null): Charge
+    /**
+     * @param  array<int, array{name: string, qty: int, unit_price_agorot: int}>  $lines
+     */
+    public function chargeSavedToken(Customer $customer, int $totalAgorot, string $description, ?string $notes = null, array $lines = []): Charge
     {
-        $charge = $this->createPendingCharge($customer, $totalAgorot, $description, $notes);
+        $charge = $this->createPendingCharge($customer, $totalAgorot, $description, $notes, $lines);
         ProcessManualChargeJob::dispatch($charge->id);
 
         return $charge;
@@ -44,9 +47,12 @@ class ManualChargeService
      *
      * @throws \RuntimeException when Cardcom returns no payment URL (charge marked failed)
      */
-    public function createHostedPage(Customer $customer, int $totalAgorot, string $description, ?string $notes = null): array
+    /**
+     * @param  array<int, array{name: string, qty: int, unit_price_agorot: int}>  $lines
+     */
+    public function createHostedPage(Customer $customer, int $totalAgorot, string $description, ?string $notes = null, array $lines = []): array
     {
-        $charge = $this->createPendingCharge($customer, $totalAgorot, $description, $notes);
+        $charge = $this->createPendingCharge($customer, $totalAgorot, $description, $notes, $lines);
 
         try {
             $lowProfile = $this->cardcom->createChargeLowProfile(
@@ -95,7 +101,10 @@ class ManualChargeService
         return [$net, $totalAgorot - $net];
     }
 
-    private function createPendingCharge(Customer $customer, int $totalAgorot, string $description, ?string $notes = null): Charge
+    /**
+     * @param  array<int, array{name: string, qty: int, unit_price_agorot: int}>  $lines
+     */
+    private function createPendingCharge(Customer $customer, int $totalAgorot, string $description, ?string $notes = null, array $lines = []): Charge
     {
         [$net, $vat] = $this->splitVat($totalAgorot, (bool) $customer->vat_exempt);
 
@@ -109,6 +118,7 @@ class ManualChargeService
             'attempt_number' => 1,
             'description' => $description,
             'invoice_notes' => filled($notes) ? $notes : null,
+            'lines' => $lines !== [] ? $lines : null,
             'period_start' => now()->toDateString(),
             'period_end' => now()->toDateString(),
         ]);

@@ -7,6 +7,7 @@ use App\Models\Customer;
 use App\Services\Billing\ManualChargeService;
 use Filament\Forms\Components\Actions\Action as FormAction;
 use Filament\Forms\Components\Grid;
+use Filament\Forms\Components\Repeater;
 use Filament\Forms\Components\Section;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
@@ -95,15 +96,40 @@ class ManualCharge extends Page implements HasForms
                                 Toggle::make('new_vat_exempt')->label('פטור ממע״מ'),
                             ]),
 
-                        Grid::make(2)->schema([
-                            TextInput::make('amount')
-                                ->label('סכום לחיוב (₪, כולל מע״מ)')
-                                ->numeric()->prefix('₪')->step('0.01')->minValue(0.1)->inputMode('decimal')
-                                ->required(),
-                            TextInput::make('description')
-                                ->label('תיאור (יופיע בחשבונית)')
-                                ->maxLength(120)->required(),
-                        ]),
+                        Grid::make(2)
+                            // Single-line charge: hidden once the operator adds
+                            // itemised lines below (then the total is their sum).
+                            ->visible(fn (Get $get): bool => blank($get('lines')))
+                            ->schema([
+                                TextInput::make('amount')
+                                    ->label('סכום לחיוב (₪, כולל מע״מ)')
+                                    ->numeric()->prefix('₪')->step('0.01')->minValue(0.1)->inputMode('decimal')
+                                    ->required(fn (Get $get): bool => blank($get('lines'))),
+                                TextInput::make('description')
+                                    ->label('תיאור (יופיע בחשבונית)')
+                                    ->maxLength(120)->required(fn (Get $get): bool => blank($get('lines'))),
+                            ]),
+
+                        // Optional itemised invoice — several lines instead of one.
+                        // When any line is added the charge total is their sum.
+                        Repeater::make('lines')
+                            ->label('פירוט שורות לחשבונית (אופציונלי)')
+                            ->helperText('הוסיפו שורה אחת או יותר לחשבונית מפורטת. אם ריק — נעשה שימוש בסכום ובתיאור למעלה.')
+                            ->schema([
+                                TextInput::make('name')
+                                    ->label('תיאור השורה')->maxLength(120)->required()
+                                    ->columnSpan(2),
+                                TextInput::make('qty')
+                                    ->label('כמות')->numeric()->default(1)->minValue(1)->step(1)->required(),
+                                TextInput::make('unit_price')
+                                    ->label('מחיר ליחידה (₪, כולל מע״מ)')
+                                    ->numeric()->prefix('₪')->step('0.01')->minValue(0.01)->inputMode('decimal')->required(),
+                            ])
+                            ->columns(4)
+                            ->addActionLabel('הוסף שורה')
+                            ->reorderable(false)
+                            ->defaultItems(0)
+                            ->columnSpanFull(),
 
                         Textarea::make('invoice_notes')
                             ->label('הערות לחשבונית (אופציונלי)')
@@ -133,7 +159,16 @@ class ManualCharge extends Page implements HasForms
     {
         $data = $this->form->getState();
 
-        $totalAgorot = (int) round(((float) ($data['amount'] ?? 0)) * 100);
+        // Itemised lines (if any) drive the total; otherwise the single amount.
+        $lines = $this->normalizeLines($data['lines'] ?? []);
+
+        if ($lines !== []) {
+            $totalAgorot = array_sum(array_map(fn (array $l): int => $l['qty'] * $l['unit_price_agorot'], $lines));
+            $description = $lines[0]['name'];
+        } else {
+            $totalAgorot = (int) round(((float) ($data['amount'] ?? 0)) * 100);
+            $description = filled($data['description'] ?? null) ? $data['description'] : 'חיוב חד-פעמי';
+        }
 
         if ($totalAgorot <= 0) {
             Notification::make()->title('סכום לא תקין')->danger()->send();
@@ -141,7 +176,6 @@ class ManualCharge extends Page implements HasForms
             return;
         }
 
-        $description = filled($data['description'] ?? null) ? $data['description'] : 'חיוב חד-פעמי';
         $notes = filled($data['invoice_notes'] ?? null) ? trim((string) $data['invoice_notes']) : null;
 
         $customer = $this->resolveCustomer($data);
@@ -160,10 +194,29 @@ class ManualCharge extends Page implements HasForms
             && $customer->paymentTokens()->where('status', TokenStatus::Active)->exists();
 
         if ($activeToken) {
-            $this->chargeSavedToken($customer, $totalAgorot, $description, $notes);
+            $this->chargeSavedToken($customer, $totalAgorot, $description, $notes, $lines);
         } else {
-            $this->openPaymentPage($customer, $totalAgorot, $description, $notes);
+            $this->openPaymentPage($customer, $totalAgorot, $description, $notes, $lines);
         }
+    }
+
+    /**
+     * Normalise repeater rows to integer-agorot invoice lines, dropping empties.
+     *
+     * @param  array<int, array<string, mixed>>  $rows
+     * @return array<int, array{name: string, qty: int, unit_price_agorot: int}>
+     */
+    private function normalizeLines(array $rows): array
+    {
+        return collect($rows)
+            ->map(fn (array $row): array => [
+                'name' => trim((string) ($row['name'] ?? '')),
+                'qty' => max(1, (int) ($row['qty'] ?? 1)),
+                'unit_price_agorot' => (int) round(((float) ($row['unit_price'] ?? 0)) * 100),
+            ])
+            ->filter(fn (array $line): bool => $line['name'] !== '' && $line['unit_price_agorot'] > 0)
+            ->values()
+            ->all();
     }
 
     /** Existing selected customer, or a freshly created one for a walk-in. */
@@ -191,10 +244,14 @@ class ManualCharge extends Page implements HasForms
             ]);
     }
 
-    /** Charge the customer's saved active token in the queue. */
-    private function chargeSavedToken(Customer $customer, int $totalAgorot, string $description, ?string $notes = null): void
+    /**
+     * Charge the customer's saved active token in the queue.
+     *
+     * @param  array<int, array{name: string, qty: int, unit_price_agorot: int}>  $lines
+     */
+    private function chargeSavedToken(Customer $customer, int $totalAgorot, string $description, ?string $notes = null, array $lines = []): void
     {
-        app(ManualChargeService::class)->chargeSavedToken($customer, $totalAgorot, $description, $notes);
+        app(ManualChargeService::class)->chargeSavedToken($customer, $totalAgorot, $description, $notes, $lines);
 
         Notification::make()
             ->title('החיוב נשלח לעיבוד')
@@ -204,11 +261,15 @@ class ManualCharge extends Page implements HasForms
         $this->resetForm();
     }
 
-    /** Create a hosted Cardcom payment page for a customer without a saved card. */
-    private function openPaymentPage(Customer $customer, int $totalAgorot, string $description, ?string $notes = null): void
+    /**
+     * Create a hosted Cardcom payment page for a customer without a saved card.
+     *
+     * @param  array<int, array{name: string, qty: int, unit_price_agorot: int}>  $lines
+     */
+    private function openPaymentPage(Customer $customer, int $totalAgorot, string $description, ?string $notes = null, array $lines = []): void
     {
         try {
-            $result = app(ManualChargeService::class)->createHostedPage($customer, $totalAgorot, $description, $notes);
+            $result = app(ManualChargeService::class)->createHostedPage($customer, $totalAgorot, $description, $notes, $lines);
         } catch (\Throwable $e) {
             Notification::make()->title('פתיחת עמוד התשלום נכשלה')->body(Str::limit($e->getMessage(), 150))->danger()->send();
 

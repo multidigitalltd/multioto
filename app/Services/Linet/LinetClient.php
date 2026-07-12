@@ -121,6 +121,36 @@ class LinetClient
             ? ($config['income_account_exempt'] ?? null)
             : null;
 
+        // One docDet per invoice line (single-line charges yield exactly one).
+        // Unit price is VAT-inclusive (iItemWithVat = 1); the operator's note,
+        // if any, rides on the first line's description sub-field.
+        $itemId = (string) ($config['general_item_id'] ?? '1');
+        $lineAccountId = filled($lineIncomeAccount) ? (int) $lineIncomeAccount : null;
+
+        // Multi-line charges bill line-by-line; otherwise a single line using
+        // the caller's description (richer than the charge's own for
+        // subscriptions: plan name + period) and the full total.
+        $lines = filled($charge->lines)
+            ? $charge->invoiceLines()
+            : [['name' => $description, 'qty' => 1, 'unit_price_agorot' => $charge->total_agorot]];
+
+        $docDet = [];
+        foreach ($lines as $index => $line) {
+            $docDet[] = array_filter([
+                'item_id' => $itemId,
+                'name' => $line['name'],
+                'description' => $index === 0 ? (string) ($charge->invoice_notes ?? '') : '',
+                'qty' => $line['qty'],
+                'line' => $index + 1,
+                'currency_id' => 'ILS',
+                'vat_cat_id' => $vatCatId,
+                'unit_id' => 0,
+                'iItem' => round($line['unit_price_agorot'] / 100, 2),
+                'iItemWithVat' => 1,
+                'account_id' => $lineAccountId,
+            ], fn ($v) => $v !== null);
+        }
+
         $payload = [
             'doctype' => (string) $config['doctype'],
             'status' => 2, // final (non-draft) document
@@ -133,21 +163,7 @@ class LinetClient
             'email' => $customer?->email,
             'phone' => $customer?->phone,
             'refnum_ext' => "charge-{$charge->id}",
-            'docDet' => [array_filter([
-                'item_id' => (string) ($config['general_item_id'] ?? '1'),
-                'name' => $description,
-                // Optional free-text note the operator typed on a manual charge,
-                // printed under the line name on the invoice.
-                'description' => (string) ($charge->invoice_notes ?? ''),
-                'qty' => 1,
-                'line' => 1,
-                'currency_id' => 'ILS',
-                'vat_cat_id' => $vatCatId,
-                'unit_id' => 0,
-                'iItem' => $totalIls,
-                'iItemWithVat' => 1,
-                'account_id' => filled($lineIncomeAccount) ? (int) $lineIncomeAccount : null,
-            ], fn ($v) => $v !== null)],
+            'docDet' => $docDet,
             'docCheq' => [[
                 'type' => (int) $config['payment_type'],
                 'currency_id' => 'ILS',

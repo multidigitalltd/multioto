@@ -258,6 +258,62 @@ class ManualChargeTest extends TestCase
             && $request->data()['docDet'][0]['description'] === 'כולל התקנת תוסף SEO ותקופת הרצה');
     }
 
+    public function test_a_multi_line_charge_issues_a_linet_document_with_one_line_per_item(): void
+    {
+        config([
+            'billing.linet.base_url' => 'https://app.linet.test/api',
+            'billing.linet.login_id' => 'lid', 'billing.linet.key' => 'lhash',
+            'billing.linet.company_id' => '1', 'billing.linet.doctype' => '9',
+            'billing.linet.vat_cat_taxable' => 1, 'billing.linet.payment_type' => 3,
+        ]);
+        Http::fake(['*/create/doc' => Http::response(['id' => 888])]);
+
+        $customer = Customer::factory()->create(['vat_exempt' => false]);
+        $charge = Charge::create([
+            'subscription_id' => null,
+            'customer_id' => $customer->id,
+            'amount_agorot' => 25424,
+            'vat_agorot' => 4576,
+            'total_agorot' => 30000, // 2×10000 + 1×10000
+            'status' => ChargeStatus::Succeeded,
+            'attempt_number' => 1,
+            'description' => 'חבילה',
+            'lines' => [
+                ['name' => 'אחסון שנתי', 'qty' => 2, 'unit_price_agorot' => 10000],
+                ['name' => 'תוסף SEO', 'qty' => 1, 'unit_price_agorot' => 10000],
+            ],
+            'period_start' => now()->toDateString(),
+            'period_end' => now()->toDateString(),
+        ]);
+
+        (new IssueInvoiceJob($charge->id))->handle(app(InvoiceIssuer::class));
+
+        Http::assertSent(function ($request): bool {
+            if (! str_ends_with($request->url(), '/create/doc')) {
+                return false;
+            }
+            $det = $request->data()['docDet'];
+
+            return count($det) === 2
+                && $det[0]['name'] === 'אחסון שנתי' && $det[0]['qty'] === 2 && $det[0]['iItem'] === 100.0 && $det[0]['line'] === 1
+                && $det[1]['name'] === 'תוסף SEO' && $det[1]['qty'] === 1 && $det[1]['iItem'] === 100.0 && $det[1]['line'] === 2
+                // Payment (docCheq) still totals the whole charge.
+                && $request->data()['docCheq'][0]['sum'] === 300.0;
+        });
+    }
+
+    public function test_invoice_lines_fall_back_to_a_single_line_from_the_charge_total(): void
+    {
+        $customer = Customer::factory()->create();
+        $charge = $this->oneOffCharge($customer, ChargeStatus::Succeeded);
+
+        $lines = $charge->invoiceLines();
+
+        $this->assertCount(1, $lines);
+        $this->assertSame('שירות חד-פעמי', $lines[0]['name']);
+        $this->assertSame(11800, $lines[0]['unit_price_agorot']);
+    }
+
     public function test_manual_charge_service_persists_invoice_notes_on_the_charge(): void
     {
         Bus::fake([IssueInvoiceJob::class, ProcessManualChargeJob::class]);

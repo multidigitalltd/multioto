@@ -15,7 +15,7 @@ class Charge extends Model
     protected $fillable = [
         'subscription_id', 'customer_id', 'amount_agorot', 'vat_agorot', 'total_agorot', 'currency',
         'status', 'attempt_number', 'cardcom_transaction_id', 'cardcom_response_code',
-        'failure_reason', 'description', 'invoice_notes', 'cardcom_low_profile_id', 'period_start', 'period_end', 'charged_at',
+        'failure_reason', 'description', 'invoice_notes', 'lines', 'cardcom_low_profile_id', 'period_start', 'period_end', 'charged_at',
     ];
 
     protected function casts(): array
@@ -26,10 +26,41 @@ class Charge extends Model
             'total_agorot' => 'integer',
             'status' => ChargeStatus::class,
             'attempt_number' => 'integer',
+            'lines' => 'array',
             'period_start' => 'date',
             'period_end' => 'date',
             'charged_at' => 'datetime',
         ];
+    }
+
+    /**
+     * The invoice lines to bill, normalised to integer agorot. Uses the stored
+     * multi-line breakdown when present; otherwise a single line synthesised
+     * from the charge description and total — so callers never special-case.
+     *
+     * @return array<int, array{name: string, qty: int, unit_price_agorot: int}>
+     */
+    public function invoiceLines(): array
+    {
+        $lines = collect($this->lines ?? [])
+            ->map(fn (array $line): array => [
+                'name' => (string) ($line['name'] ?? ''),
+                'qty' => max(1, (int) ($line['qty'] ?? 1)),
+                'unit_price_agorot' => (int) ($line['unit_price_agorot'] ?? 0),
+            ])
+            ->filter(fn (array $line): bool => $line['name'] !== '' && $line['unit_price_agorot'] > 0)
+            ->values()
+            ->all();
+
+        if ($lines !== []) {
+            return $lines;
+        }
+
+        return [[
+            'name' => $this->description ?: 'חיוב',
+            'qty' => 1,
+            'unit_price_agorot' => $this->total_agorot,
+        ]];
     }
 
     public function subscription(): BelongsTo
