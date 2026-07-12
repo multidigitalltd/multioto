@@ -35,7 +35,7 @@ class AdminPanelProvider extends PanelProvider
             ])
             ->font('Rubik')
             ->sidebarCollapsibleOnDesktop()
-            ->navigationGroups(['ניהול', 'תמיכה', 'כספים', 'ניטור', 'הגדרות'])
+            ->navigationGroups(['תמיכה', 'כספים', 'ניהול', 'ניטור', 'הגדרות'])
             ->discoverResources(in: app_path('Filament/Resources'), for: 'App\\Filament\\Resources')
             ->discoverPages(in: app_path('Filament/Pages'), for: 'App\\Filament\\Pages')
             ->pages([
