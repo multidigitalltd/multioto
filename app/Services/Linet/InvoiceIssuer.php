@@ -65,7 +65,7 @@ class InvoiceIssuer
         // charges carry their own free-text description.
         $description = $charge->subscription
             ? sprintf('%s — %s עד %s',
-                $charge->subscription->plan->name,
+                $charge->subscription->planName(),
                 $charge->period_start->format('d/m/Y'),
                 $charge->period_end->format('d/m/Y'),
             )

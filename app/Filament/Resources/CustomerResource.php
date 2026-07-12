@@ -88,6 +88,7 @@ class CustomerResource extends Resource
                                 'credit_card' => 'כרטיס אשראי',
                                 'standing_order' => 'הוראת קבע בנקאית',
                                 'bank_transfer' => 'העברה בנקאית',
+                                'checks' => 'צ׳קים',
                             ])
                             ->placeholder('—'),
                     ])->columns(2),
@@ -269,9 +270,16 @@ class CustomerResource extends Resource
                             'credit_card' => 'כרטיס אשראי',
                             'standing_order' => 'הוראת קבע',
                             'bank_transfer' => 'העברה בנקאית',
+                            'checks' => 'צ׳קים',
                             default => '—',
                         })->placeholder('—'),
                     TextEntry::make('terms_accepted_at')->label('אישור תנאים')->dateTime('d/m/Y H:i')->placeholder('—'),
+                    // The signed consent record from /join, viewable inline (team-only route).
+                    TextEntry::make('signature_path')->label('חתימה')
+                        ->formatStateUsing(fn (): string => 'צפייה בחתימה ↗')
+                        ->url(fn (Customer $record): ?string => $record->signature_path
+                            ? route('customer.signature', $record) : null, shouldOpenInNewTab: true)
+                        ->placeholder('—'),
                     TextEntry::make('status')->label('סטטוס')->badge(),
                     TextEntry::make('notes')->label('הערות')->placeholder('—')->columnSpanFull(),
                 ])->columns(3),

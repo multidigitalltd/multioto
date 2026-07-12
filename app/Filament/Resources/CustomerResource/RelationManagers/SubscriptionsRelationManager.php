@@ -2,7 +2,9 @@
 
 namespace App\Filament\Resources\CustomerResource\RelationManagers;
 
+use App\Enums\BillingInterval;
 use App\Enums\SubscriptionStatus;
+use App\Filament\Support\MoneyField;
 use App\Jobs\ChargeSubscriptionJob;
 use App\Models\Subscription;
 use Filament\Forms;
@@ -26,7 +28,20 @@ class SubscriptionsRelationManager extends RelationManager
     public function form(Form $form): Form
     {
         return $form->schema([
-            Forms\Components\Select::make('plan_id')->label('תוכנית')->relationship('plan', 'name')->required(),
+            Forms\Components\Select::make('plan_id')->label('תוכנית קבועה')->relationship('plan', 'name')
+                ->live()
+                ->helperText('בחרו מוצר קבוע, או השאירו ריק למנוי חופשי בהתאמה אישית.'),
+            // Free-form fields — for a fully custom subscription with no fixed plan.
+            Forms\Components\TextInput::make('name')->label('שם מנוי חופשי')->maxLength(190)
+                ->visible(fn (Forms\Get $get): bool => blank($get('plan_id')))
+                ->helperText('לדוגמה: אחסון + תחזוקה חודשית'),
+            Forms\Components\Group::make([
+                // Required for a plan-less subscription — no plan price to fall back on.
+                MoneyField::make('price_agorot_override', 'מחיר (₪)')->required(),
+                Forms\Components\Select::make('billing_interval')->label('תדירות חיוב')
+                    ->options(BillingInterval::class),
+                Forms\Components\Toggle::make('vat_applies')->label('הוסף מע״מ')->default(true),
+            ])->columns(3)->visible(fn (Forms\Get $get): bool => blank($get('plan_id'))),
             Forms\Components\Select::make('site_id')->label('אתר')
                 ->relationship('site', 'domain', fn ($query, RelationManager $livewire) => $query->where('customer_id', $livewire->getOwnerRecord()->id))
                 ->helperText('אופציונלי — האתר שהמנוי מכסה.'),
@@ -41,7 +56,8 @@ class SubscriptionsRelationManager extends RelationManager
         return $table
             ->recordTitleAttribute('id')
             ->columns([
-                Tables\Columns\TextColumn::make('plan.name')->label('תוכנית'),
+                Tables\Columns\TextColumn::make('plan_name')->label('תוכנית')
+                    ->state(fn (Subscription $record): string => $record->planName()),
                 Tables\Columns\TextColumn::make('status')->label('סטטוס')->badge(),
                 Tables\Columns\TextColumn::make('next_charge_at')->label('חיוב הבא')->dateTime('d/m/Y')->placeholder('—'),
                 Tables\Columns\TextColumn::make('dunning_stage')->label('שלב דאנינג')->badge(),

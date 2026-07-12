@@ -12,6 +12,9 @@
         p { color: var(--muted); line-height: 1.7; margin: 0 0 .5rem; }
         .check { font-size: 3rem; line-height: 1; margin-bottom: 1rem; }
         @media (prefers-reduced-motion: no-preference) { .check { animation: pop .4s ease-out; } @keyframes pop { from { transform: scale(.6); opacity: 0; } } }
+        .instructions { text-align: start; background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: .75rem; padding: 1rem 1.1rem; margin-top: 1.25rem; white-space: pre-line; color: #111827; }
+        .instructions .head { font-weight: 700; margin-bottom: .35rem; }
+        .instructions a { color: var(--brand); word-break: break-all; }
     </style>
 </head>
 <body>
@@ -20,6 +23,14 @@
         <h1>הפרטים נקלטו בהצלחה!</h1>
         <p>תודה שהצטרפת אלינו. שלחנו לך מייל "ברוכים הבאים" עם כל הפרטים.</p>
         <p>ניצור איתך קשר בהקדם להשלמת הסדר התשלום שבחרת — ומשם הכול כבר רץ אוטומטית.</p>
+
+        @if (session('payment_instructions'))
+            <div class="instructions">
+                <div class="head">{{ session('payment_method_label') }} — הוראות להשלמה</div>
+                {{-- Escape first, then linkify URLs (e.g. the Kesher authorisation link). --}}
+                {!! preg_replace('~(https?://[^\s<]+)~', '<a href="$1" target="_blank" rel="noopener">$1</a>', e(session('payment_instructions'))) !!}
+            </div>
+        @endif
     </main>
 </body>
 </html>

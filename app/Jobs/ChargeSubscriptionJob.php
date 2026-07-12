@@ -60,7 +60,7 @@ class ChargeSubscriptionJob implements ShouldQueue
             $result = $cardcom->chargeToken(
                 $subscription->token,
                 $charge->total_agorot,
-                sprintf('%s — %s עד %s', $subscription->plan->name, $charge->period_start->format('d/m/Y'), $charge->period_end->format('d/m/Y')),
+                sprintf('%s — %s עד %s', $subscription->planName(), $charge->period_start->format('d/m/Y'), $charge->period_end->format('d/m/Y')),
                 sprintf('sub-%d-%s-a%d', $subscription->id, $charge->period_start->format('Ymd'), $charge->attempt_number),
             );
 
@@ -100,7 +100,7 @@ class ChargeSubscriptionJob implements ShouldQueue
             : $subscription->next_charge_at->toDateString();
 
         $periodStart = Carbon::parse($periodStart);
-        $periodEnd = $subscription->plan->billing_interval === BillingInterval::Yearly
+        $periodEnd = $subscription->billingInterval() === BillingInterval::Yearly
             ? $periodStart->copy()->addYear()
             : $periodStart->copy()->addMonth();
 

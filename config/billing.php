@@ -18,6 +18,28 @@ return [
     'card_update_link_ttl_hours' => env('CARD_UPDATE_LINK_TTL_HOURS', 72),
 
     /*
+     | Public signup form (/join). The customer fills their details, signs, and
+     | picks how they'll pay. The non-card methods show setup instructions the
+     | team can edit from הגדרות ← טופס הרשמה (overlaid onto these defaults).
+     */
+    'signup' => [
+        'instructions' => [
+            // Standing order (bank debit authorisation) — our Kesher institution
+            // code and the digital-authorisation link.
+            'standing_order' => env('SIGNUP_STANDING_ORDER_INSTRUCTIONS', implode("\n", [
+                'יש להקים בבנק הרשאה לחיוב חשבון עבור קוד מוסד 26851 — מולטי דיגיטל בע״מ.',
+                'לחלופין ניתן להקים את ההרשאה באופן דיגיטלי בקישור:',
+                'https://ultra.kesherhk.info/extern/paymentPage/311928/',
+            ])),
+            // Bank transfer — the account to transfer to. Fill the real details
+            // in הגדרות ← טופס הרשמה.
+            'bank_transfer' => env('SIGNUP_BANK_TRANSFER_INSTRUCTIONS', 'פרטי החשבון להעברה בנקאית יימסרו על ידי הצוות — מלאו אותם בהגדרות ← טופס הרשמה.'),
+            // Cheques (advance / prepayment).
+            'checks' => env('SIGNUP_CHECKS_INSTRUCTIONS', 'לתשלום בצ׳קים (מקדמה / תשלום מראש) ניצור עמכם קשר לתיאום מסירת הצ׳קים.'),
+        ],
+    ],
+
+    /*
      | Dunning state machine. Stage 0 means "healthy". A failed charge moves the
      | subscription to stage 1 immediately; each subsequent stage is entered when
      | its retry (scheduled retry_in_days after the previous stage) fails too.

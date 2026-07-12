@@ -4,6 +4,13 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{ request()->route('result') === 'success' ? 'הפרטים עודכנו בהצלחה' : 'העדכון לא הושלם' }} — מולטי דיגיטל</title>
+    {{-- Cardcom redirects the iframe here when done. Break out so the result is
+         shown full-screen instead of trapped inside the small frame. --}}
+    <script>
+        if (window.top !== window.self) {
+            window.top.location.replace(window.location.href);
+        }
+    </script>
     <style>
         :root { color-scheme: light dark; }
         body {

@@ -12,7 +12,7 @@ class BillingLinkTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_a_valid_signed_card_update_link_redirects_to_cardcom(): void
+    public function test_a_valid_signed_card_update_link_embeds_the_cardcom_iframe(): void
     {
         $this->mock(CardcomClient::class, function ($mock) {
             $mock->shouldReceive('createTokenLowProfile')->once()
@@ -23,7 +23,12 @@ class BillingLinkTest extends TestCase
 
         $url = URL::temporarySignedRoute('billing.update-card', now()->addHour(), ['customer' => $customer->id]);
 
-        $this->get($url)->assertRedirect('https://secure.cardcom.solutions/xyz');
+        // The card page is embedded in an iframe on our own page (the customer
+        // never leaves our site); the Cardcom URL is the iframe src.
+        $this->get($url)
+            ->assertOk()
+            ->assertSee('<iframe', false)
+            ->assertSee('https://secure.cardcom.solutions/xyz', false);
     }
 
     public function test_an_expired_link_is_rejected(): void

@@ -39,7 +39,7 @@ class SendDunningNotificationJob implements ShouldQueue
 
         $replacements = [
             'name' => $customer->name,
-            'plan' => $event->subscription->plan->name,
+            'plan' => $event->subscription->planName(),
             'amount' => number_format(($event->charge?->total_agorot ?? $event->subscription->totalChargeAgorot()) / 100, 2),
             'update_link' => URL::temporarySignedRoute(
                 'billing.update-card',

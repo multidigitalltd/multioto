@@ -52,7 +52,8 @@ class Collections extends Page implements HasTable
             ->query(Subscription::query()->inArrears()->with(['customer', 'plan']))
             ->columns([
                 Tables\Columns\TextColumn::make('customer.name')->label('לקוח')->searchable()->sortable()->weight('bold'),
-                Tables\Columns\TextColumn::make('plan.name')->label('תוכנית'),
+                Tables\Columns\TextColumn::make('plan_name')->label('תוכנית')
+                    ->state(fn (Subscription $record): string => $record->planName()),
                 Tables\Columns\TextColumn::make('status')
                     ->label('סטטוס')->badge()
                     ->color(fn (SubscriptionStatus $state): string => $state === SubscriptionStatus::Suspended ? 'danger' : 'warning'),

@@ -34,7 +34,7 @@ class CardCaptureLinkSender
 
         $replacements = [
             'name' => $customer->name,
-            'plan' => $subscription->plan?->name ?? '',
+            'plan' => $subscription->planName(),
             'amount' => number_format($subscription->totalChargeAgorot() / 100, 2),
             'link' => $link,
         ];

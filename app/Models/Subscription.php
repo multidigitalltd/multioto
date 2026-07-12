@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Enums\BillingInterval;
 use App\Enums\SubscriptionStatus;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -14,7 +15,8 @@ class Subscription extends Model
     use HasFactory;
 
     protected $fillable = [
-        'customer_id', 'plan_id', 'site_id', 'token_id', 'status',
+        'customer_id', 'plan_id', 'name', 'billing_interval', 'vat_applies',
+        'site_id', 'token_id', 'status',
         'current_period_start', 'current_period_end', 'next_charge_at',
         'price_agorot_override', 'dunning_stage', 'canceled_at',
     ];
@@ -23,6 +25,8 @@ class Subscription extends Model
     {
         return [
             'status' => SubscriptionStatus::class,
+            'billing_interval' => BillingInterval::class,
+            'vat_applies' => 'boolean',
             'current_period_start' => 'date',
             'current_period_end' => 'date',
             'next_charge_at' => 'datetime',
@@ -30,6 +34,20 @@ class Subscription extends Model
             'dunning_stage' => 'integer',
             'canceled_at' => 'datetime',
         ];
+    }
+
+    protected static function booted(): void
+    {
+        // A card-first customer (signed up via /join, card captured) has a saved
+        // default token but no subscription yet. When the team later adds a
+        // custom subscription, inherit that saved card so it is chargeable —
+        // otherwise the scheduler skips it (dueForCharge requires token_id).
+        static::creating(function (self $subscription): void {
+            if ($subscription->token_id === null && $subscription->customer_id !== null) {
+                $subscription->token_id = Customer::whereKey($subscription->customer_id)
+                    ->value('default_token_id');
+            }
+        });
     }
 
     public function customer(): BelongsTo
@@ -84,20 +102,49 @@ class Subscription extends Model
     }
 
     /**
-     * Effective base price in agorot: locked legacy override when set, plan price otherwise.
+     * Display name: the plan's name, or the free-form subscription name for a
+     * plan-less (fully custom) subscription. Never null so charge/invoice
+     * descriptions always have a label.
+     */
+    public function planName(): string
+    {
+        return $this->plan?->name ?? $this->name ?? 'מנוי';
+    }
+
+    /**
+     * Billing interval: the plan's when a plan is set, otherwise the free-form
+     * interval, defaulting to monthly for a custom subscription that left it blank.
+     */
+    public function billingInterval(): BillingInterval
+    {
+        return $this->plan?->billing_interval ?? $this->billing_interval ?? BillingInterval::Monthly;
+    }
+
+    /**
+     * Whether VAT is added on top of the base price: the plan's flag when a plan
+     * is set, otherwise the free-form flag (defaults to charging VAT when blank).
+     */
+    public function vatApplies(): bool
+    {
+        return $this->plan?->vat_applies ?? $this->vat_applies ?? true;
+    }
+
+    /**
+     * Effective base price in agorot: the per-subscription price (override) when
+     * set — always the case for a free-form subscription — the plan price otherwise.
      */
     public function basePriceAgorot(): int
     {
-        return $this->price_agorot_override ?? $this->plan->price_agorot;
+        return $this->price_agorot_override ?? $this->plan?->price_agorot ?? 0;
     }
 
     /**
      * VAT for this subscription in agorot. Zero when the customer is VAT-exempt
-     * or the plan price does not carry VAT on top.
+     * or the price does not carry VAT on top.
      */
     public function vatAgorot(): int
     {
-        if ($this->customer->vat_exempt || ! $this->plan->vat_applies) {
+        if ($this->customer->vat_exempt || ! $this->vatApplies()) {
             return 0;
         }
 

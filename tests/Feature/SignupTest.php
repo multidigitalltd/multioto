@@ -4,12 +4,10 @@ namespace Tests\Feature;
 
 use App\Enums\BusinessType;
 use App\Enums\MessageAuthor;
-use App\Enums\SubscriptionStatus;
 use App\Enums\TicketChannel;
 use App\Jobs\SendWelcomeMessageJob;
 use App\Mail\NotificationMail;
 use App\Models\Customer;
-use App\Models\Plan;
 use App\Models\Subscription;
 use App\Models\Ticket;
 use App\Services\Notifications\TemplateEngine;
@@ -18,14 +16,18 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
 class SignupTest extends TestCase
 {
     use RefreshDatabase;
 
+    /** A minimal valid 1×1 PNG as the canvas would produce it. */
+    private const SIGNATURE = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+
     /** Every required field for a valid submission; override per test. */
-    private function validPayload(Plan $plan, array $overrides = []): array
+    private function validPayload(array $overrides = []): array
     {
         return array_merge([
             'name' => 'עסק חדש',
@@ -35,21 +37,21 @@ class SignupTest extends TestCase
             'phone' => '0501234567',
             'address' => 'הרצל 1, תל אביב',
             'domain' => 'https://newbiz.co.il',
-            'plan_id' => $plan->id,
             'payment_method' => 'credit_card',
             'terms' => '1',
+            'signature' => self::SIGNATURE,
         ], $overrides);
     }
 
-    public function test_the_public_signup_page_lists_active_plans(): void
+    public function test_the_public_signup_page_collects_details_without_a_plan(): void
     {
-        Plan::factory()->create(['name' => 'מסלול פעיל', 'active' => true]);
-        Plan::factory()->create(['name' => 'מסלול כבוי', 'active' => false]);
-
+        // The multi-step form opens a customer + captures a card/consent; the
+        // plan is set up by the team afterwards, so no plan picker appears here.
         $this->get(route('signup'))
             ->assertOk()
-            ->assertSee('מסלול פעיל')
-            ->assertDontSee('מסלול כבוי');
+            ->assertSee('טופס פתיחת כרטיס לקוח')
+            ->assertSee('חתימה')
+            ->assertDontSee('בחירת מסלול');
     }
 
     public function test_new_client_alias_reaches_the_signup_form(): void
@@ -57,12 +59,12 @@ class SignupTest extends TestCase
         $this->get('/new-client')->assertRedirect('/join');
     }
 
-    public function test_signup_creates_a_trialing_customer_and_redirects_to_card_capture(): void
+    public function test_signup_creates_a_customer_and_redirects_to_card_capture(): void
     {
         Queue::fake([SendWelcomeMessageJob::class]);
-        $plan = Plan::factory()->create(['active' => true]);
+        Storage::fake('local');
 
-        $response = $this->post(route('signup.store'), $this->validPayload($plan));
+        $response = $this->post(route('signup.store'), $this->validPayload());
 
         // Redirects to the signed Cardcom card-capture link.
         $response->assertRedirect();
@@ -78,21 +80,53 @@ class SignupTest extends TestCase
         $this->assertNotNull($customer->terms_accepted_at); // consent record
         $this->assertSame('newbiz.co.il', $customer->sites()->value('domain')); // scheme stripped
 
-        $sub = Subscription::first();
-        $this->assertSame(SubscriptionStatus::Trialing, $sub->status);
-        $this->assertSame($plan->id, $sub->plan_id);
-        $this->assertNull($sub->token_id);
+        // The signature is stored privately as the consent record, with the IP.
+        $this->assertNotNull($customer->signature_path);
+        Storage::disk('local')->assertExists($customer->signature_path);
+        $this->assertNotNull($customer->signed_ip);
+
+        // No subscription is created here — the plan is custom and set up later.
+        $this->assertSame(0, Subscription::count());
 
         // The personal welcome goes out exactly once.
         Queue::assertPushed(SendWelcomeMessageJob::class, 1);
     }
 
+    public function test_signup_requires_a_signature(): void
+    {
+        $this->post(route('signup.store'), $this->validPayload(['signature' => '']))
+            ->assertSessionHasErrors('signature');
+
+        $this->assertSame(0, Customer::count());
+    }
+
+    public function test_signup_rejects_a_non_png_signature(): void
+    {
+        // Anything that isn't a PNG data URL (e.g. an SVG/script payload) is refused.
+        $this->post(route('signup.store'), $this->validPayload([
+            'signature' => 'data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=',
+        ]))->assertSessionHasErrors('signature');
+
+        $this->assertSame(0, Customer::count());
+    }
+
+    public function test_checks_signup_opens_a_follow_up_ticket(): void
+    {
+        Queue::fake([SendWelcomeMessageJob::class]);
+
+        $this->post(route('signup.store'), $this->validPayload(['payment_method' => 'checks']))
+            ->assertRedirect(route('signup.thanks'))
+            ->assertSessionHas('payment_instructions');
+
+        $ticket = Ticket::sole();
+        $this->assertStringContainsString('צ׳קים', $ticket->messages()->first()->body);
+    }
+
     public function test_bank_transfer_signup_opens_a_follow_up_ticket_instead_of_card_capture(): void
     {
         Queue::fake([SendWelcomeMessageJob::class]);
-        $plan = Plan::factory()->create(['active' => true]);
 
-        $response = $this->post(route('signup.store'), $this->validPayload($plan, [
+        $response = $this->post(route('signup.store'), $this->validPayload([
             'payment_method' => 'bank_transfer',
         ]));
 
@@ -111,9 +145,8 @@ class SignupTest extends TestCase
     public function test_exempt_dealer_signup_is_marked_vat_exempt(): void
     {
         Queue::fake([SendWelcomeMessageJob::class]);
-        $plan = Plan::factory()->create(['active' => true]);
 
-        $this->post(route('signup.store'), $this->validPayload($plan, [
+        $this->post(route('signup.store'), $this->validPayload([
             'name' => 'עוסק פטור',
             'business_type' => BusinessType::ExemptDealer->value,
             'email' => 'patur@example.co.il',
@@ -125,26 +158,14 @@ class SignupTest extends TestCase
     public function test_signup_validates_required_fields(): void
     {
         $this->post(route('signup.store'), [])
-            ->assertSessionHasErrors(['name', 'contact_name', 'business_type', 'email', 'phone', 'address', 'plan_id', 'payment_method', 'terms']);
-
-        $this->assertSame(0, Customer::count());
-    }
-
-    public function test_signup_rejects_an_inactive_plan(): void
-    {
-        $plan = Plan::factory()->create(['active' => false]);
-
-        $this->post(route('signup.store'), $this->validPayload($plan))
-            ->assertSessionHasErrors('plan_id');
+            ->assertSessionHasErrors(['name', 'contact_name', 'business_type', 'email', 'phone', 'address', 'payment_method', 'terms', 'signature']);
 
         $this->assertSame(0, Customer::count());
     }
 
     public function test_signup_rejects_a_honeypot_submission(): void
     {
-        $plan = Plan::factory()->create(['active' => true]);
-
-        $this->post(route('signup.store'), $this->validPayload($plan, [
+        $this->post(route('signup.store'), $this->validPayload([
             'website' => 'http://spam.example',
         ]))->assertSessionHasErrors('website');
 
