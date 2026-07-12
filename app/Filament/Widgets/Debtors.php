@@ -7,6 +7,7 @@ use App\Filament\Resources\CustomerResource;
 use App\Jobs\ChargeSubscriptionJob;
 use App\Models\Subscription;
 use App\Services\Notifications\CardCaptureLinkSender;
+use App\Support\Money;
 use Filament\Notifications\Notification;
 use Filament\Tables;
 use Filament\Tables\Table;
@@ -44,7 +45,7 @@ class Debtors extends BaseWidget
                     ->color(fn (SubscriptionStatus $state): string => $state === SubscriptionStatus::Suspended ? 'danger' : 'warning'),
                 Tables\Columns\TextColumn::make('dunning_stage')->label('שלב דאנינג')->badge(),
                 Tables\Columns\TextColumn::make('amount')->label('סכום')
-                    ->getStateUsing(fn (Subscription $record): string => '₪'.number_format($record->totalChargeAgorot() / 100, 2)),
+                    ->getStateUsing(fn (Subscription $record): string => Money::ils($record->totalChargeAgorot())),
                 Tables\Columns\TextColumn::make('next_charge_at')->label('ניסיון הבא')->dateTime('d/m/Y')->placeholder('—'),
             ])
             ->defaultSort('dunning_stage', 'desc')

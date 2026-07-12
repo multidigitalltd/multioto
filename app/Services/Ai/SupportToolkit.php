@@ -6,6 +6,7 @@ use App\Enums\ChargeStatus;
 use App\Enums\SubscriptionStatus;
 use App\Models\Charge;
 use App\Models\Customer;
+use App\Support\Money;
 use Illuminate\Support\Facades\URL;
 
 /**
@@ -74,9 +75,9 @@ class SupportToolkit
             ->get()
             ->map(function ($sub): string {
                 $next = $sub->next_charge_at?->format('d/m/Y') ?? '—';
-                $amount = number_format($sub->totalChargeAgorot() / 100, 2);
+                $amount = Money::ils($sub->totalChargeAgorot());
 
-                return "תוכנית {$sub->plan->name}: סטטוס {$sub->status->getLabel()}, חיוב הבא {$next} (₪{$amount})";
+                return "תוכנית {$sub->plan->name}: סטטוס {$sub->status->getLabel()}, חיוב הבא {$next} ({$amount})";
             })
             ->all();
     }
@@ -95,9 +96,9 @@ class SupportToolkit
 
         $out = [];
         $when = $lastCharge->charged_at?->format('d/m/Y') ?? $lastCharge->created_at->format('d/m/Y');
-        $amount = number_format($lastCharge->total_agorot / 100, 2);
+        $amount = Money::ils($lastCharge->total_agorot);
         $status = $lastCharge->status->getLabel();
-        $out[] = "חיוב אחרון: ₪{$amount} בתאריך {$when} — {$status}";
+        $out[] = "חיוב אחרון: {$amount} בתאריך {$when} — {$status}";
 
         if ($lastCharge->status === ChargeStatus::Failed) {
             $out[] = 'שים לב: החיוב האחרון נכשל.';
@@ -185,11 +186,11 @@ class SupportToolkit
             return null;
         }
 
-        $total = number_format($invoice->total_agorot / 100, 2);
+        $total = Money::ils($invoice->total_agorot);
         $date = $invoice->issued_at?->format('d/m/Y') ?? '';
         $pdf = $invoice->pdf_url ? " (קובץ: {$invoice->pdf_url})" : '';
 
-        return "מסמך {$invoice->linet_document_id}: ₪{$total} בתאריך {$date}{$pdf}";
+        return "מסמך {$invoice->linet_document_id}: {$total} בתאריך {$date}{$pdf}";
     }
 
     /**

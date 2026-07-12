@@ -12,7 +12,7 @@ class Incident extends Model
     use HasFactory;
 
     protected $fillable = [
-        'site_id', 'started_at', 'resolved_at', 'status', 'broadcast_id',
+        'site_id', 'started_at', 'resolved_at', 'status',
     ];
 
     protected function casts(): array
@@ -27,10 +27,5 @@ class Incident extends Model
     public function site(): BelongsTo
     {
         return $this->belongsTo(Site::class);
-    }
-
-    public function broadcast(): BelongsTo
-    {
-        return $this->belongsTo(Broadcast::class);
     }
 }

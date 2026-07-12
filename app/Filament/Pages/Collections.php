@@ -7,6 +7,7 @@ use App\Filament\Resources\CustomerResource;
 use App\Jobs\ChargeSubscriptionJob;
 use App\Models\Subscription;
 use App\Services\Notifications\CardCaptureLinkSender;
+use App\Support\Money;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 use Filament\Tables;
@@ -67,7 +68,7 @@ class Collections extends Page implements HasTable
                 Tables\Columns\TextColumn::make('dunning_stage')->label('שלב דאנינג')->badge()->sortable(),
                 Tables\Columns\TextColumn::make('amount')
                     ->label('סכום')
-                    ->getStateUsing(fn (Subscription $record): string => '₪'.number_format($record->totalChargeAgorot() / 100, 2)),
+                    ->getStateUsing(fn (Subscription $record): string => Money::ils($record->totalChargeAgorot())),
                 Tables\Columns\TextColumn::make('next_charge_at')->label('ניסיון הבא')->dateTime('d/m/Y H:i')->placeholder('—')->sortable(),
             ])
             ->defaultSort('dunning_stage', 'desc')
@@ -78,7 +79,7 @@ class Collections extends Page implements HasTable
                     ->color('warning')
                     ->visible(fn (Subscription $record): bool => $record->isChargeable())
                     ->requiresConfirmation()
-                    ->modalDescription(fn (Subscription $record): string => 'לחייב את '.$record->customer->name.' בסך ₪'.number_format($record->totalChargeAgorot() / 100, 2).' עכשיו?')
+                    ->modalDescription(fn (Subscription $record): string => 'לחייב את '.$record->customer->name.' בסך '.Money::ils($record->totalChargeAgorot()).' עכשיו?')
                     ->action(function (Subscription $record): void {
                         $record->update(['next_charge_at' => now()]);
                         ChargeSubscriptionJob::dispatch($record->id);

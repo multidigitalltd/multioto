@@ -9,6 +9,7 @@ use App\Filament\Resources\CustomerResource\Pages;
 use App\Filament\Resources\CustomerResource\RelationManagers;
 use App\Models\Customer;
 use App\Services\Notifications\CardCaptureLinkSender;
+use App\Support\Money;
 use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Infolists\Components\RepeatableEntry;
@@ -249,7 +250,7 @@ class CustomerResource extends Resource
      */
     public static function infolist(Infolist $infolist): Infolist
     {
-        $money = fn ($state): string => '₪'.number_format(((int) $state) / 100, 2);
+        $money = fn ($state): string => Money::ils((int) $state);
 
         return $infolist->schema([
             InfoSection::make('פרטי לקוח')

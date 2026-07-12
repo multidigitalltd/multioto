@@ -15,7 +15,7 @@ use Filament\Widgets\TableWidget as BaseWidget;
  */
 class SitesInTrouble extends BaseWidget
 {
-    protected static ?int $sort = 1;
+    protected static ?int $sort = -2;
 
     protected int|string|array $columnSpan = 'full';
 

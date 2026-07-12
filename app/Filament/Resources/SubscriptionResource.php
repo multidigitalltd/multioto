@@ -8,6 +8,7 @@ use App\Filament\Support\MoneyField;
 use App\Jobs\ChargeSubscriptionJob;
 use App\Models\Subscription;
 use App\Services\Notifications\CardCaptureLinkSender;
+use App\Support\Money;
 use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Notifications\Notification;
@@ -168,7 +169,7 @@ class SubscriptionResource extends Resource
                     ->visible(fn (Subscription $record): bool => $record->isChargeable())
                     ->requiresConfirmation()
                     ->modalHeading('חיוב מיידי')
-                    ->modalDescription(fn (Subscription $record): string => 'לחייב את '.$record->customer->name.' בסך ₪'.number_format($record->totalChargeAgorot() / 100, 2).' עכשיו? החיוב ירוץ ברקע עם כל הגנות הכפילות הרגילות.')
+                    ->modalDescription(fn (Subscription $record): string => 'לחייב את '.$record->customer->name.' בסך '.Money::ils($record->totalChargeAgorot()).' עכשיו? החיוב ירוץ ברקע עם כל הגנות הכפילות הרגילות.')
                     ->modalSubmitActionLabel('חייב עכשיו')
                     ->action(function (Subscription $record): void {
                         $record->update(['next_charge_at' => now()]);
