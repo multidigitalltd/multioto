@@ -25,7 +25,7 @@ class TicketImportTest extends TestCase
     private function rows(): array
     {
         return [
-            ['ID' => '1366', 'נושא' => 'אתר שארפן', 'כתובת דוא"ל' => 'client@example.co.il', 'Status' => 'טופל / הושלם', 'עדיפות' => 'רגיל / לטיפול בהקדם', 'Date Closed' => '2023-08-27 18:51:08', 'תוכן' => 'האתר לא נטען, אנא בדקו'],
+            ['ID' => '1366', 'נושא' => 'אתר שארפן', 'כתובת דוא"ל' => 'client@example.co.il', 'Status' => 'טופל / הושלם', 'עדיפות' => 'רגיל / לטיפול בהקדם', 'Date Closed' => '2023-08-27 18:51:08', 'תוכן' => '<p>האתר לא נטען,<br>אנא בדקו</p>'],
             ['ID' => '1367', 'נושא' => '', 'כתובת דוא"ל' => 'unknown@nowhere.test', 'Status' => 'ממתין לתשובתך', 'עדיפות' => 'sos - אתר מושבת', 'Date Closed' => '2023-09-01 10:00:00'],
         ];
     }
@@ -64,7 +64,9 @@ class TicketImportTest extends TestCase
         $first = Ticket::with('messages')->find(1366);
         $this->assertCount(1, $first->messages);
         $opening = $first->messages->first();
-        $this->assertSame('האתר לא נטען, אנא בדקו', $opening->body);
+        // The WordPress HTML body is flattened to clean text: <br> → newline, tags gone.
+        $this->assertSame("האתר לא נטען,\nאנא בדקו", $opening->body);
+        $this->assertStringNotContainsString('<', $opening->body);
         $this->assertSame(MessageDirection::Inbound, $opening->direction);
         $this->assertSame(MessageAuthor::Customer, $opening->author);
         $this->assertSame('2023-08-27', $opening->created_at->toDateString());
@@ -73,6 +75,21 @@ class TicketImportTest extends TestCase
         $second = Ticket::with('messages')->find(1367);
         $this->assertCount(1, $second->messages);
         $this->assertSame($second->subject, $second->messages->first()->body);
+    }
+
+    public function test_it_preserves_link_targets_when_flattening_html(): void
+    {
+        $rows = [[
+            'ID' => '1400',
+            'כתובת דוא"ל' => 'client@example.co.il',
+            'תוכן' => 'ראו <a href="https://client.example/admin">כאן</a> בבקשה',
+        ]];
+
+        (new TicketImporter)->import($rows);
+
+        // The href destination survives stripping, kept next to its label.
+        $body = Ticket::with('messages')->find(1400)->messages->first()->body;
+        $this->assertSame('ראו כאן (https://client.example/admin) בבקשה', $body);
     }
 
     public function test_the_import_sends_no_mail_to_customers(): void

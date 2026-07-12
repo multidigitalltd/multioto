@@ -113,7 +113,9 @@ class TicketImporter
 
             // One opening message so the ticket view has content. Use the export's
             // body column when it carries one, otherwise fall back to the subject.
-            $body = trim((string) ($row['body'] ?? ''));
+            // Legacy exports store the body as WordPress HTML, so flatten it to
+            // clean text for a readable message.
+            $body = $this->htmlToText((string) ($row['body'] ?? ''));
             $messages[] = [
                 'ticket_id' => $id,
                 'direction' => MessageDirection::Inbound->value,
@@ -184,6 +186,41 @@ class TicketImporter
             str_contains($v, 'בינוני'), str_contains($v, 'מיידי'), str_contains($v, 'גבוה') => TicketPriority::High,
             default => TicketPriority::Normal,
         };
+    }
+
+    /**
+     * Flatten a legacy WordPress HTML body to clean, readable plain text:
+     * block/break tags become line breaks, the rest is stripped, HTML entities
+     * are decoded, and runs of blank lines are collapsed. Plain text passes
+     * through effectively unchanged.
+     */
+    private function htmlToText(string $html): string
+    {
+        // Keep link destinations before stripping tags: <a href="URL">label</a>
+        // becomes "label (URL)" so agents don't lose links from legacy tickets.
+        $text = preg_replace_callback(
+            '#<a\b[^>]*\bhref\s*=\s*(["\'])(.*?)\1[^>]*>(.*?)</a>#is',
+            function (array $m): string {
+                $url = trim($m[2]);
+                $label = trim(strip_tags($m[3]));
+
+                if ($url === '' || $url === $label) {
+                    return $label !== '' ? $label : $url;
+                }
+
+                return $label !== '' ? $label.' ('.$url.')' : $url;
+            },
+            $html
+        );
+
+        $text = preg_replace('#<\s*br\s*/?\s*>#i', "\n", (string) $text);
+        $text = preg_replace('#</\s*(p|div|li|tr|h[1-6]|blockquote)\s*>#i', "\n", (string) $text);
+        $text = strip_tags((string) $text);
+        $text = html_entity_decode($text, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $text = preg_replace("/[ \t]+\n/", "\n", (string) $text);
+        $text = preg_replace("/\n{3,}/", "\n\n", (string) $text);
+
+        return trim((string) $text);
     }
 
     private function parseDate(string $value): ?Carbon
