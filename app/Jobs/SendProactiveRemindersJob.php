@@ -27,13 +27,21 @@ class SendProactiveRemindersJob implements ShouldQueue
 
     public int $tries = 1;
 
+    /** Short labels for the non-card payment methods in the digest. */
+    private const MANUAL_METHOD_LABELS = [
+        'standing_order' => 'הוראת קבע',
+        'bank_transfer' => 'העברה',
+        'checks' => 'צ׳קים',
+    ];
+
     public function handle(TeamNotifier $team): void
     {
         $renewals = $this->upcomingRenewals();
+        $manual = $this->manualCollectionDue();
         $expiring = $this->expiringCards();
         $debt = $this->openDebt();
 
-        $sections = array_filter([$renewals, $expiring, $debt]);
+        $sections = array_filter([$renewals, $manual, $expiring, $debt]);
 
         if ($sections === []) {
             return; // Nothing to nag about today.
@@ -49,6 +57,9 @@ class SendProactiveRemindersJob implements ShouldQueue
 
         $subs = Subscription::query()
             ->where('status', SubscriptionStatus::Active)
+            // Only auto-charged (card) subscriptions renew on their own; manual
+            // ones are surfaced separately in "לגבייה ידנית".
+            ->whereNotNull('token_id')
             ->whereNotNull('next_charge_at')
             ->whereBetween('next_charge_at', [now(), now()->addDays($days)])
             ->with(['customer', 'plan'])
@@ -67,6 +78,34 @@ class SendProactiveRemindersJob implements ShouldQueue
         ));
 
         return "🔄 חידושים בקרוב ({$subs->count()}):\n".$lines->implode("\n");
+    }
+
+    /**
+     * Manually-collected subscriptions (bank transfer / standing order / cheques)
+     * whose payment is now due — so a hand-collected payment can't be forgotten.
+     */
+    private function manualCollectionDue(): ?string
+    {
+        $subs = Subscription::query()
+            ->dueForManualCollection()
+            ->with(['customer', 'plan'])
+            ->orderBy('next_charge_at')
+            ->get();
+
+        if ($subs->isEmpty()) {
+            return null;
+        }
+
+        $lines = $subs->take(10)->map(fn (Subscription $s): string => sprintf('• %s — %s (%s, מ-%s)',
+            $s->customer?->name ?? 'לקוח',
+            Money::ils($s->totalChargeAgorot()),
+            self::MANUAL_METHOD_LABELS[$s->customer?->payment_method] ?? 'ידני',
+            $s->next_charge_at->format('d/m'),
+        ));
+
+        $more = $subs->count() > 10 ? "\n… ועוד ".($subs->count() - 10) : '';
+
+        return "🧾 לגבייה ידנית ({$subs->count()}) — לרשום תשלום ולהפיק חשבונית:\n".$lines->implode("\n").$more;
     }
 
     /** Active saved cards expiring this month or within the configured window. */

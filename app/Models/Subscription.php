@@ -14,6 +14,9 @@ class Subscription extends Model
 {
     use HasFactory;
 
+    /** Customer payment methods that are collected by hand (not via a saved card). */
+    public const MANUAL_PAYMENT_METHODS = ['standing_order', 'bank_transfer', 'checks'];
+
     protected $fillable = [
         'customer_id', 'plan_id', 'name', 'billing_interval', 'vat_applies',
         'site_id', 'token_id', 'status',
@@ -99,6 +102,46 @@ class Subscription extends Model
     public function scopeInArrears(Builder $query): Builder
     {
         return $query->whereIn('status', [SubscriptionStatus::PastDue, SubscriptionStatus::Suspended]);
+    }
+
+    /**
+     * Manually-collected subscriptions: no saved card and a non-card payment
+     * method (bank transfer / standing order / cheques). The scheduler never
+     * charges these (dueForCharge requires a token), so the team collects them
+     * by hand and records the payment on the "דרישות תשלום" screen.
+     */
+    public function scopeManuallyCollected(Builder $query): Builder
+    {
+        return $query
+            ->whereNull('token_id')
+            ->whereNot('status', SubscriptionStatus::Canceled)
+            ->whereHas('customer', fn (Builder $c) => $c->whereIn('payment_method', self::MANUAL_PAYMENT_METHODS));
+    }
+
+    /**
+     * Manually-collected subscriptions whose payment is due now — the team's
+     * "collect these" work list, so a bank-transfer/standing-order collection
+     * can't slip through unnoticed.
+     */
+    public function scopeDueForManualCollection(Builder $query): Builder
+    {
+        return $query
+            ->manuallyCollected()
+            ->whereNotNull('next_charge_at')
+            ->where('next_charge_at', '<=', now());
+    }
+
+    /** Whether the scheduler collects this subscription automatically (has a card). */
+    public function isAutoCharged(): bool
+    {
+        return $this->token_id !== null;
+    }
+
+    /** Whether this subscription's payment is collected by hand (no card on file). */
+    public function isManuallyCollected(): bool
+    {
+        return $this->token_id === null
+            && in_array($this->customer?->payment_method, self::MANUAL_PAYMENT_METHODS, true);
     }
 
     /**
