@@ -60,14 +60,17 @@ class ManageMail extends Page implements HasForms
 
     public function mount(): void
     {
-        $this->form->fill([
-            'mail.from_address' => config('mail.from.address'),
-            'mail.from_name' => config('mail.from.name'),
-            'mail.reply_to' => config('billing.email.support_address'),
-            'notifications.team_email' => config('billing.notifications.team_email'),
-            'notifications.reply_signature' => config('billing.notifications.reply_signature'),
-            'notifications.reply_signature_whatsapp' => config('billing.notifications.reply_signature_whatsapp'),
-        ]);
+        // Fields use nested state (mail.* → data['mail'][*]); build the fill
+        // array nested via data_set so values actually reach the fields.
+        $values = [];
+        data_set($values, 'mail.from_address', config('mail.from.address'));
+        data_set($values, 'mail.from_name', config('mail.from.name'));
+        data_set($values, 'mail.reply_to', config('billing.email.support_address'));
+        data_set($values, 'notifications.team_email', config('billing.notifications.team_email'));
+        data_set($values, 'notifications.reply_signature', config('billing.notifications.reply_signature'));
+        data_set($values, 'notifications.reply_signature_whatsapp', config('billing.notifications.reply_signature_whatsapp'));
+
+        $this->form->fill($values);
     }
 
     public function form(Form $form): Form
@@ -287,6 +290,8 @@ class ManageMail extends Page implements HasForms
 
         return $secret === ''
             ? $base.'?secret=…  (הגדירו סוד למעלה, שמרו, והכתובת המלאה תופיע כאן)'
-            : $base.'?secret='.$secret;
+            // URL-encode: a secret with reserved characters (& # + space) would
+            // otherwise reach Postmark as a different value and 403 forever.
+            : $base.'?secret='.rawurlencode($secret);
     }
 }

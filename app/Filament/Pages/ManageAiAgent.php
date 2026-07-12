@@ -3,6 +3,7 @@
 namespace App\Filament\Pages;
 
 use App\Models\Setting;
+use App\Providers\SettingsServiceProvider;
 use Filament\Forms\Components\Section;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
@@ -52,13 +53,18 @@ class ManageAiAgent extends Page implements HasForms
     {
         // Prefill everything except the secret API key with the current config
         // (which already includes any stored overrides overlaid at boot).
+        // NB: the fields use nested state (ai.* → data['ai'][*]), so the fill
+        // array must be nested too — a flat 'ai.persona' key never reaches the
+        // field and the form would render empty after a save.
         $this->form->fill([
-            'ai.enabled' => (bool) config('billing.ai.enabled'),
-            'ai.provider' => config('billing.ai.provider', 'anthropic'),
-            'ai.model' => config('billing.ai.model'),
-            'ai.base_url' => config('billing.ai.base_url'),
-            'ai.persona' => config('billing.ai.persona'),
-            'ai.rules' => config('billing.ai.rules'),
+            'ai' => [
+                'enabled' => (bool) config('billing.ai.enabled'),
+                'provider' => config('billing.ai.provider', 'anthropic'),
+                'model' => config('billing.ai.model'),
+                'base_url' => config('billing.ai.base_url'),
+                'persona' => config('billing.ai.persona'),
+                'rules' => config('billing.ai.rules'),
+            ],
         ]);
     }
 
@@ -140,9 +146,13 @@ class ManageAiAgent extends Page implements HasForms
 
         data_set($this->data, 'ai.api_key', null);
 
+        // Re-apply the overlay so the (nested) form reflects exactly what was
+        // stored, and show it back to confirm the save took.
+        (new SettingsServiceProvider(app()))->boot();
+        $this->mount();
+
         Notification::make()
             ->title('הגדרות הסוכן נשמרו')
-            ->body('אפשר לאמת את החיבור במסך "בדיקת חיבורים".')
             ->success()
             ->send();
     }
