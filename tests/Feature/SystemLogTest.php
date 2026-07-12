@@ -2,7 +2,7 @@
 
 namespace Tests\Feature;
 
-use App\Filament\Pages\SystemLogs;
+use App\Filament\Pages\SystemUpdates;
 use App\Models\SystemLog;
 use App\Models\User;
 use App\Services\Ai\ClaudeClient;
@@ -58,12 +58,12 @@ class SystemLogTest extends TestCase
     {
         $this->actingAs(User::factory()->create());
 
-        $this->assertNull(SystemLogs::getNavigationBadge());
+        $this->assertNull(SystemUpdates::getNavigationBadge());
 
         SystemLog::record('error', 'ai', 'שגיאת ספק', ['status' => 500]);
 
-        $this->assertSame('1', SystemLogs::getNavigationBadge());
+        $this->assertSame('1', SystemUpdates::getNavigationBadge());
 
-        Livewire::test(SystemLogs::class)->assertCanSeeTableRecords(SystemLog::all());
+        Livewire::test(SystemUpdates::class)->assertCanSeeTableRecords(SystemLog::all());
     }
 }

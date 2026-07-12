@@ -2,6 +2,7 @@
 
 namespace App\Filament\Pages;
 
+use App\Filament\Concerns\ParsesCsvUpload;
 use App\Jobs\SendCardCaptureLinkJob;
 use App\Services\Import\CustomerImporter;
 use Filament\Actions\Action;
@@ -26,6 +27,7 @@ use Illuminate\Support\HtmlString;
 class ImportCustomers extends Page implements HasForms
 {
     use InteractsWithForms;
+    use ParsesCsvUpload;
 
     protected static ?string $navigationIcon = 'heroicon-o-arrow-up-tray';
 
@@ -140,59 +142,5 @@ class ImportCustomers extends Page implements HasForms
             ->success()
             ->persistent()
             ->send();
-    }
-
-    /**
-     * Resolve the real filesystem path of the (not-yet-stored) uploaded CSV.
-     */
-    private function uploadedFilePath(mixed $fileState): ?string
-    {
-        $file = is_array($fileState) ? reset($fileState) : $fileState;
-
-        if ($file && method_exists($file, 'getRealPath')) {
-            $path = $file->getRealPath();
-
-            return is_string($path) && is_readable($path) ? $path : null;
-        }
-
-        return null;
-    }
-
-    /**
-     * Parse a CSV into associative rows keyed by their header. Returns null if
-     * the file can't be opened or has no header row.
-     *
-     * @return iterable<int, array<string, string>>|null
-     */
-    private function parseCsv(?string $path): ?iterable
-    {
-        if ($path === null || ! ($handle = fopen($path, 'r'))) {
-            return null;
-        }
-
-        $headers = fgetcsv($handle);
-        if ($headers === false || $headers === null) {
-            fclose($handle);
-
-            return null;
-        }
-
-        // Strip a UTF-8 BOM from the first header cell (Excel adds it).
-        $headers[0] = ltrim((string) $headers[0], "\u{FEFF}");
-        $count = count($headers);
-
-        $rows = [];
-        while (($cells = fgetcsv($handle)) !== false) {
-            if ($cells === [null] || count(array_filter($cells, fn ($v) => trim((string) $v) !== '')) === 0) {
-                continue; // blank line
-            }
-
-            $cells = array_pad(array_slice($cells, 0, $count), $count, '');
-            $rows[] = array_combine($headers, $cells);
-        }
-
-        fclose($handle);
-
-        return $rows;
     }
 }
