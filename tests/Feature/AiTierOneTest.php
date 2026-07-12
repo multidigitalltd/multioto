@@ -167,6 +167,64 @@ class AiTierOneTest extends TestCase
         Http::assertSent(fn ($request) => str_contains($request->url(), '/chat/completions'));
     }
 
+    public function test_it_uses_the_google_gemini_provider_when_selected(): void
+    {
+        config([
+            'billing.ai.enabled' => true,
+            'billing.ai.api_key' => 'g-key',
+            'billing.ai.provider' => 'google',
+            'billing.ai.base_url' => 'https://generativelanguage.googleapis.com',
+            'billing.ai.model' => 'gemini-2.5-flash',
+        ]);
+        Http::fake([
+            'https://generativelanguage.googleapis.com/*' => Http::response([
+                'candidates' => [['content' => ['parts' => [['text' => json_encode(['reply' => 'שלום מ-Gemini', 'confidence' => 'high'])]]]]],
+            ]),
+        ]);
+
+        $ticket = $this->ticketWithInbound();
+        (new DraftReplyJob($ticket->id))->handle(app(ClaudeClient::class), app(SupportToolkit::class));
+
+        $draft = $ticket->messages()->where('author', MessageAuthor::Ai)->sole();
+        $this->assertStringContainsString('שלום מ-Gemini', $draft->body);
+
+        Http::assertSent(function ($request): bool {
+            $schema = $request->data()['generationConfig']['responseSchema'] ?? [];
+
+            return str_contains($request->url(), 'gemini-2.5-flash:generateContent')
+                && ($request->header('x-goog-api-key')[0] ?? '') === 'g-key'
+                // Schema translated to Gemini's dialect: types upper-cased and
+                // additionalProperties dropped (Gemini rejects it).
+                && ($schema['type'] ?? '') === 'OBJECT'
+                && ! array_key_exists('additionalProperties', $schema)
+                && ($schema['properties']['confidence']['type'] ?? '') === 'STRING';
+        });
+    }
+
+    public function test_google_base_url_is_forgiving_of_a_pasted_openai_compat_path(): void
+    {
+        config([
+            'billing.ai.enabled' => true,
+            'billing.ai.api_key' => 'g-key',
+            'billing.ai.provider' => 'google',
+            // The operator pasted the OpenAI-compatible path by mistake.
+            'billing.ai.base_url' => 'https://generativelanguage.googleapis.com/v1beta/openai',
+            'billing.ai.model' => 'gemini-2.5-flash',
+        ]);
+        Http::fake([
+            'https://generativelanguage.googleapis.com/*' => Http::response([
+                'candidates' => [['content' => ['parts' => [['text' => json_encode(['reply' => 'ok', 'confidence' => 'low'])]]]]],
+            ]),
+        ]);
+
+        $ticket = $this->ticketWithInbound();
+        (new DraftReplyJob($ticket->id))->handle(app(ClaudeClient::class), app(SupportToolkit::class));
+
+        // Reached the native endpoint, not .../v1beta/openai/v1beta/models/...
+        Http::assertSent(fn ($request): bool => str_contains($request->url(), '/v1beta/models/gemini-2.5-flash:generateContent')
+            && ! str_contains($request->url(), '/openai/'));
+    }
+
     public function test_draft_is_skipped_when_last_message_is_not_from_customer(): void
     {
         $this->enableAi();

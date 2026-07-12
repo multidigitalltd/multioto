@@ -5,9 +5,10 @@ namespace App\Services\Ai;
 use Illuminate\Support\Facades\Http;
 
 /**
- * Thin client for the ticket-AI layer. Supports two providers behind one
- * `structured()` method: Anthropic (Claude) and any OpenAI-compatible endpoint
- * (OpenAI, Azure OpenAI, OpenRouter, or a local model server).
+ * Thin client for the ticket-AI layer. Supports three providers behind one
+ * `structured()` method: Anthropic (Claude), any OpenAI-compatible endpoint
+ * (OpenAI, Azure OpenAI, OpenRouter, or a local model server), and Google
+ * Gemini's native API.
  *
  * Kept deliberately minimal — all ticket-AI logic lives in the jobs. Returns
  * null when the layer is disabled, unconfigured, or on any failure, so callers
@@ -34,9 +35,11 @@ class ClaudeClient
         }
 
         try {
-            return config('billing.ai.provider') === 'openai'
-                ? $this->openAi($system, $prompt, $schema)
-                : $this->anthropic($system, $prompt, $schema);
+            return match (config('billing.ai.provider')) {
+                'openai' => $this->openAi($system, $prompt, $schema),
+                'google' => $this->google($system, $prompt, $schema),
+                default => $this->anthropic($system, $prompt, $schema),
+            };
         } catch (\Throwable) {
             // The AI layer is best-effort — never let it break ticket handling.
             return null;
@@ -122,6 +125,84 @@ class ClaudeClient
         $content = $response->json('choices.0.message.content');
 
         return filled($content) ? $this->decode($content) : null;
+    }
+
+    /**
+     * Google Gemini (native API): generateContent with a JSON response schema.
+     *
+     * Auth is the X-goog-api-key header; structured output is requested via
+     * generationConfig.responseSchema (an OpenAPI subset), so the model returns
+     * a JSON object matching $schema.
+     *
+     * @param  array<string, mixed>  $schema
+     * @return array<string, mixed>|null
+     */
+    private function google(string $system, string $prompt, array $schema): ?array
+    {
+        $config = config('billing.ai');
+        $model = rawurlencode((string) $config['model']);
+
+        $response = Http::baseUrl($this->googleBase($config['base_url'] ?? null))
+            ->withHeaders(['x-goog-api-key' => $config['api_key']])
+            ->timeout(60)
+            ->post("/v1beta/models/{$model}:generateContent", [
+                'systemInstruction' => ['parts' => [['text' => $system]]],
+                'contents' => [['role' => 'user', 'parts' => [['text' => $prompt]]]],
+                'generationConfig' => [
+                    'responseMimeType' => 'application/json',
+                    'responseSchema' => $this->toGeminiSchema($schema),
+                ],
+            ]);
+
+        // A safety block returns 200 with no candidates (or promptFeedback only).
+        if ($response->failed()) {
+            return null;
+        }
+
+        $text = $response->json('candidates.0.content.parts.0.text');
+
+        return filled($text) ? $this->decode($text) : null;
+    }
+
+    /**
+     * The Gemini host root. Defaults to Google's endpoint and is forgiving if the
+     * OpenAI-compatible path was pasted into the base-URL setting by mistake.
+     */
+    private function googleBase(?string $base): string
+    {
+        $base = rtrim((string) ($base ?: 'https://generativelanguage.googleapis.com'), '/');
+        $base = preg_replace('#/v1beta/openai$#', '', $base);
+
+        return $base !== '' ? $base : 'https://generativelanguage.googleapis.com';
+    }
+
+    /**
+     * Translate our JSON Schema to Gemini's responseSchema dialect: drop
+     * `additionalProperties` (unsupported), upper-case the `type` enum, and
+     * recurse into properties/items. Everything else (enum, required,
+     * description) carries over unchanged.
+     *
+     * @param  array<string, mixed>  $schema
+     * @return array<string, mixed>
+     */
+    private function toGeminiSchema(array $schema): array
+    {
+        $out = [];
+
+        foreach ($schema as $key => $value) {
+            if ($key === 'additionalProperties') {
+                continue;
+            }
+
+            $out[$key] = match (true) {
+                $key === 'type' && is_string($value) => strtoupper($value),
+                $key === 'properties' && is_array($value) => array_map(fn ($v) => $this->toGeminiSchema($v), $value),
+                $key === 'items' && is_array($value) => $this->toGeminiSchema($value),
+                default => $value,
+            };
+        }
+
+        return $out;
     }
 
     /** @return array<string, mixed>|null */
