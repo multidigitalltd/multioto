@@ -7,6 +7,7 @@ use App\Models\Customer;
 use App\Services\Billing\ManualChargeService;
 use App\Services\Notifications\TemplateEngine;
 use App\Services\Waha\WahaClient;
+use App\Support\Money;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Mail;
@@ -48,7 +49,7 @@ class SendPaymentLinkJob implements ShouldQueue
         $data = [
             'customer_name' => $customer->contact_name ?: $customer->name,
             'business_name' => config('mail.from.name') ?: config('app.name'),
-            'amount' => '₪'.number_format($this->totalAgorot / 100, 2),
+            'amount' => Money::ils($this->totalAgorot),
             'for' => $this->description !== '' ? ' עבור '.$this->description : '',
             'link' => $result['url'],
         ];

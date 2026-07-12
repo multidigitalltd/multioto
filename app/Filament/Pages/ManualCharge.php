@@ -5,6 +5,7 @@ namespace App\Filament\Pages;
 use App\Enums\TokenStatus;
 use App\Models\Customer;
 use App\Services\Billing\ManualChargeService;
+use App\Support\Money;
 use Filament\Forms\Components\Actions\Action as FormAction;
 use Filament\Forms\Components\Grid;
 use Filament\Forms\Components\Repeater;
@@ -255,7 +256,7 @@ class ManualCharge extends Page implements HasForms
 
         Notification::make()
             ->title('החיוב נשלח לעיבוד')
-            ->body("הכרטיס השמור של {$customer->name} יחויב בסך ₪".number_format($totalAgorot / 100, 2).'. עקבו אחר התוצאה בעמוד "חיובים", והחשבונית בעמוד "חשבוניות".')
+            ->body("הכרטיס השמור של {$customer->name} יחויב בסך ".Money::ils($totalAgorot).'. עקבו אחר התוצאה בעמוד "חיובים", והחשבונית בעמוד "חשבוניות".')
             ->success()->persistent()->send();
 
         $this->resetForm();

@@ -21,9 +21,9 @@ class NotificationTemplateResource extends Resource
 {
     protected static ?string $model = NotificationTemplate::class;
 
-    protected static ?string $navigationIcon = 'heroicon-o-chat-bubble-bottom-center-text';
+    protected static ?string $navigationIcon = 'heroicon-o-megaphone';
 
-    protected static ?string $navigationLabel = 'תבניות הודעות';
+    protected static ?string $navigationLabel = 'הודעות אוטומטיות';
 
     protected static ?string $modelLabel = 'תבנית הודעה';
 

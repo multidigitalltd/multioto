@@ -9,7 +9,8 @@ use App\Http\Controllers\Webhooks\EmailWebhookController;
 use App\Http\Controllers\Webhooks\WahaWebhookController;
 use Illuminate\Support\Facades\Route;
 
-Route::get('/', fn () => view('welcome'));
+// Team-only app: the root just sends visitors to the admin panel.
+Route::redirect('/', '/admin');
 
 /*
  | Public support form — the web intake channel for tickets. CSRF-protected,

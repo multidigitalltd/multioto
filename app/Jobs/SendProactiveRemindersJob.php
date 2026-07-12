@@ -7,6 +7,7 @@ use App\Enums\TokenStatus;
 use App\Models\PaymentToken;
 use App\Models\Subscription;
 use App\Services\Notifications\TeamNotifier;
+use App\Support\Money;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Carbon;
@@ -58,11 +59,11 @@ class SendProactiveRemindersJob implements ShouldQueue
             return null;
         }
 
-        $lines = $subs->map(fn (Subscription $s): string => sprintf('• %s — %s ב-%s (₪%s)',
+        $lines = $subs->map(fn (Subscription $s): string => sprintf('• %s — %s ב-%s (%s)',
             $s->customer?->name ?? 'לקוח',
             $s->plan?->name ?? 'מנוי',
             $s->next_charge_at->format('d/m'),
-            number_format($s->totalChargeAgorot() / 100, 2),
+            Money::ils($s->totalChargeAgorot()),
         ));
 
         return "🔄 חידושים בקרוב ({$subs->count()}):\n".$lines->implode("\n");
@@ -115,15 +116,15 @@ class SendProactiveRemindersJob implements ShouldQueue
 
         $total = $subs->sum(fn (Subscription $s): int => $s->totalChargeAgorot());
 
-        $lines = $subs->take(10)->map(fn (Subscription $s): string => sprintf('• %s — %s (₪%s)',
+        $lines = $subs->take(10)->map(fn (Subscription $s): string => sprintf('• %s — %s (%s)',
             $s->customer?->name ?? 'לקוח',
             $s->status->getLabel(),
-            number_format($s->totalChargeAgorot() / 100, 2),
+            Money::ils($s->totalChargeAgorot()),
         ));
 
         $more = $subs->count() > 10 ? "\n… ועוד ".($subs->count() - 10) : '';
 
-        return sprintf("💰 חוב פתוח — %d לקוחות, סה\"כ ₪%s:\n%s%s",
-            $subs->count(), number_format($total / 100, 2), $lines->implode("\n"), $more);
+        return sprintf("💰 חוב פתוח — %d לקוחות, סה\"כ %s:\n%s%s",
+            $subs->count(), Money::ils($total), $lines->implode("\n"), $more);
     }
 }

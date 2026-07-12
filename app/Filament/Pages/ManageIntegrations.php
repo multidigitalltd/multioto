@@ -39,6 +39,8 @@ class ManageIntegrations extends Page implements HasForms
 
     protected static ?string $navigationGroup = 'הגדרות';
 
+    protected static ?string $navigationLabel = 'מפתחות אינטגרציות';
+
     protected static ?string $title = 'מפתחות אינטגרציות';
 
     protected static string $view = 'filament.pages.manage-integrations';

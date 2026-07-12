@@ -6,6 +6,7 @@ use App\Filament\Resources\CustomerResource;
 use App\Jobs\SendPaymentLinkJob;
 use App\Models\Customer;
 use App\Services\Billing\ManualChargeService;
+use App\Support\Money;
 use Filament\Actions;
 use Filament\Forms;
 use Filament\Notifications\Actions\Action as NotificationAction;
@@ -111,7 +112,7 @@ class ViewCustomer extends ViewRecord
                     $service->chargeSavedToken($record, $totalAgorot, $description, $notes);
                     Notification::make()
                         ->title('החיוב נשלח לעיבוד')
-                        ->body('הכרטיס השמור של '.$record->name.' יחויב בסך ₪'.number_format($totalAgorot / 100, 2).'. עקבו בעמוד "חיובים".')
+                        ->body('הכרטיס השמור של '.$record->name.' יחויב בסך '.Money::ils($totalAgorot).'. עקבו בעמוד "חיובים".')
                         ->success()->persistent()->send();
 
                     return;
