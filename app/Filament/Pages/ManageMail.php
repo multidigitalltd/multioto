@@ -93,8 +93,15 @@ class ManageMail extends Page implements HasForms
                         TextInput::make('notifications.team_email')->label('מיילים להתראות צוות (אפשר כמה, מופרדים בפסיק)')->autocomplete(false)
                             // Accept several addresses, comma/;-separated — validate each part.
                             ->rule(fn () => function (string $attribute, $value, \Closure $fail) {
-                                if (filled($value) && ($bad = EmailList::invalid($value)) !== []) {
+                                if (blank($value)) {
+                                    return; // empty clears back to the default — allowed
+                                }
+                                if (($bad = EmailList::invalid($value)) !== []) {
                                     $fail('כתובות לא תקינות: '.implode(', ', $bad));
+                                } elseif (EmailList::parse($value) === []) {
+                                    // Non-blank but no valid address (e.g. only separators)
+                                    // — would silently disable alerts. Reject it.
+                                    $fail('יש להזין לפחות כתובת מייל תקינה אחת, או להשאיר ריק.');
                                 }
                             })
                             ->helperText('לכאן יישלחו התראות על פניות חדשות ותגובות. אפשר כמה כתובות מופרדות בפסיק. בוואטסאפ ההתראות מגיעות למספר/קבוצת האישורים שהוגדרו ב-WAHA.')

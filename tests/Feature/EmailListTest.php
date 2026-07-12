@@ -64,4 +64,16 @@ class EmailListTest extends TestCase
             ->call('save')
             ->assertHasErrors('data.notifications.team_email');
     }
+
+    public function test_the_settings_field_rejects_a_separators_only_value(): void
+    {
+        $this->actingAs(User::factory()->create());
+
+        // Only separators → no valid address; must fail rather than silently
+        // saving a value that disables team emails.
+        Livewire::test(ManageMail::class)
+            ->set('data.notifications.team_email', ' , ; ,')
+            ->call('save')
+            ->assertHasErrors('data.notifications.team_email');
+    }
 }
