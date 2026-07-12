@@ -25,7 +25,9 @@ class Branding
     {
         $path = self::logoPath();
 
-        return $path ? rtrim((string) config('app.url'), '/').Storage::disk('public')->url($path) : null;
+        // The public disk's url is configured as APP_URL.'/storage', so this is
+        // already absolute — do not prefix APP_URL again.
+        return $path ? Storage::disk('public')->url($path) : null;
     }
 
     /**

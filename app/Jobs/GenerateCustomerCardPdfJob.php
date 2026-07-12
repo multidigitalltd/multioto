@@ -46,9 +46,15 @@ class GenerateCustomerCardPdfJob implements ShouldQueue
         }
 
         $disk = Storage::disk('local');
-        $signature = $disk->exists($customer->signature_path)
-            ? 'data:image/png;base64,'.base64_encode($disk->get($customer->signature_path))
-            : null;
+
+        // The PDF is the signed consent record — never generate it without the
+        // actual signature. If the file is missing (e.g. a worker that can't see
+        // the storage yet), fail so the job retries instead of emailing a blank.
+        if (! $disk->exists($customer->signature_path)) {
+            throw new \RuntimeException("Signature file missing for customer {$customer->id}: {$customer->signature_path}");
+        }
+
+        $signature = 'data:image/png;base64,'.base64_encode($disk->get($customer->signature_path));
 
         $html = View::make('pdf.customer-card', [
             'customer' => $customer,

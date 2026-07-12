@@ -50,6 +50,24 @@ class CustomerCardPdfTest extends TestCase
         Mail::assertNothingSent();
     }
 
+    public function test_it_fails_rather_than_produce_an_unsigned_card(): void
+    {
+        Mail::fake();
+        Storage::fake('local');
+        // Path set, but the file is not on this worker's disk.
+        $customer = Customer::factory()->create(['signature_path' => 'signatures/missing.png']);
+
+        try {
+            (new GenerateCustomerCardPdfJob($customer->id))->handle();
+            $this->fail('Expected the job to throw when the signature file is missing.');
+        } catch (\RuntimeException) {
+            // Expected — the queue retries instead of emailing a blank consent doc.
+        }
+
+        $this->assertNull($customer->fresh()->signed_pdf_path);
+        Mail::assertNothingSent();
+    }
+
     public function test_the_pdf_route_requires_auth_and_serves_the_file(): void
     {
         Storage::fake('local');
