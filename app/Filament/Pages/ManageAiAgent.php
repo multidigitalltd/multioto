@@ -4,6 +4,7 @@ namespace App\Filament\Pages;
 
 use App\Filament\Concerns\PersistsSettings;
 use App\Models\Setting;
+use App\Services\Ai\ClaudeClient;
 use Filament\Forms\Components\Section;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
@@ -155,6 +156,24 @@ class ManageAiAgent extends Page implements HasForms
         Notification::make()
             ->title('הגדרות הסוכן נשמרו')
             ->success()
+            ->send();
+    }
+
+    /** Test the live connection to the AI provider and show the outcome. */
+    public function testConnection(): void
+    {
+        $this->refreshConfig();
+        $result = app(ClaudeClient::class)->testConnection();
+
+        Notification::make()
+            ->title(match ($result->state()) {
+                'ok' => 'חיבור תקין',
+                'fail' => 'בדיקת החיבור נכשלה',
+                default => 'הסוכן אינו מוגדר',
+            })
+            ->body($result->message)
+            ->{$result->ok ? 'success' : ($result->configured ? 'danger' : 'warning')}()
+            ->persistent()
             ->send();
     }
 }

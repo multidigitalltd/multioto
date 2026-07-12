@@ -8,6 +8,7 @@ use App\Enums\MessageDirection;
 use App\Enums\TicketChannel;
 use App\Enums\TicketStatus;
 use App\Filament\Resources\TicketResource;
+use App\Jobs\DraftReplyJob;
 use App\Jobs\SendTicketReplyJob;
 use App\Models\TicketMessage;
 use App\Services\Support\AttachmentStore;
@@ -124,6 +125,29 @@ class ViewTicket extends ViewRecord
     protected function getHeaderActions(): array
     {
         return [
+            // Ask the AI to draft a reply for THIS conversation now (drafts are
+            // otherwise generated only when a new customer message arrives, so
+            // an already-open ticket has none). The draft lands as an internal
+            // note for your approval — never sent. Also a quick "is the agent
+            // working?" check: a failure points you at the connection test.
+            Actions\Action::make('draftReply')
+                ->label('הכן טיוטת AI')
+                ->icon('heroicon-o-sparkles')
+                ->color('info')
+                ->visible(fn (): bool => (bool) config('billing.ai.enabled'))
+                ->action(function (): void {
+                    $before = $this->record->messages()->where('author', MessageAuthor::Ai)->count();
+                    DraftReplyJob::dispatchSync($this->record->id);
+                    $produced = $this->record->messages()->where('author', MessageAuthor::Ai)->count() > $before;
+
+                    Notification::make()
+                        ->title($produced ? 'הוכנה טיוטה' : 'לא הוכנה טיוטה')
+                        ->body($produced
+                            ? 'הטיוטה נוספה כהערה פנימית בשיחה וממתינה לאישורך.'
+                            : 'ייתכן שההודעה האחרונה אינה מהלקוח, או שהחיבור לספק ה-AI נכשל — בדקו ב"סוכן AI ← בדיקת חיבור".')
+                        ->{$produced ? 'success' : 'warning'}()
+                        ->send();
+                }),
             Actions\Action::make('resolve')
                 ->label('סמן כטופלה')
                 ->icon('heroicon-o-check-circle')

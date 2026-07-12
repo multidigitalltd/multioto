@@ -8,16 +8,19 @@ use App\Enums\MessageDirection;
 use App\Enums\TicketChannel;
 use App\Enums\TicketPriority;
 use App\Enums\TicketStatus;
+use App\Filament\Resources\TicketResource\Pages\ViewTicket;
 use App\Jobs\ClassifyTicketJob;
 use App\Jobs\DraftReplyJob;
 use App\Models\Customer;
 use App\Models\Site;
 use App\Models\Ticket;
+use App\Models\User;
 use App\Services\Ai\ClaudeClient;
 use App\Services\Ai\SupportToolkit;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
+use Livewire\Livewire;
 use Tests\TestCase;
 
 class AiTierOneTest extends TestCase
@@ -225,6 +228,27 @@ class AiTierOneTest extends TestCase
             && ! str_contains($request->url(), '/openai/'));
     }
 
+    public function test_an_internal_note_after_the_customer_message_does_not_block_drafting(): void
+    {
+        $this->enableAi();
+        $this->fakeClaude(['reply' => 'תשובה מוצעת', 'confidence' => 'medium']);
+
+        $ticket = $this->ticketWithInbound();
+        // ClassifyTicketJob writes its AI note just before dispatching the draft;
+        // that note must not look like "the agent already answered".
+        $ticket->messages()->create([
+            'direction' => MessageDirection::Outbound,
+            'channel' => MessageChannel::InternalNote,
+            'body' => '🤖 סיווג AI',
+            'author' => MessageAuthor::Ai,
+        ]);
+
+        (new DraftReplyJob($ticket->id))->handle(app(ClaudeClient::class), app(SupportToolkit::class));
+
+        // A draft was still produced despite the note being the latest message.
+        $this->assertTrue($ticket->messages()->where('body', 'like', '%טיוטת תשובה%')->exists());
+    }
+
     public function test_draft_is_skipped_when_last_message_is_not_from_customer(): void
     {
         $this->enableAi();
@@ -241,6 +265,44 @@ class AiTierOneTest extends TestCase
         (new DraftReplyJob($ticket->id))->handle(app(ClaudeClient::class), app(SupportToolkit::class));
 
         $this->assertSame(0, $ticket->messages()->where('author', MessageAuthor::Ai)->count());
+    }
+
+    public function test_connection_test_reports_unconfigured_when_disabled(): void
+    {
+        config(['billing.ai.enabled' => false]);
+
+        $this->assertFalse(app(ClaudeClient::class)->testConnection()->configured);
+    }
+
+    public function test_connection_test_reports_ok_when_the_provider_responds(): void
+    {
+        $this->enableAi();
+        $this->fakeClaude(['ok' => true]);
+
+        $this->assertTrue(app(ClaudeClient::class)->testConnection()->ok);
+    }
+
+    public function test_connection_test_reports_a_failure_on_a_provider_error(): void
+    {
+        $this->enableAi();
+        Http::fake(['https://api.anthropic.test/*' => Http::response('unauthorized', 401)]);
+
+        $result = app(ClaudeClient::class)->testConnection();
+        $this->assertFalse($result->ok);
+        $this->assertTrue($result->configured); // a real error, not "unconfigured"
+    }
+
+    public function test_manual_draft_action_creates_a_draft_on_demand(): void
+    {
+        $this->actingAs(User::factory()->create());
+        $this->enableAi();
+        $this->fakeClaude(['reply' => 'טיוטה שהוכנה ידנית', 'confidence' => 'medium']);
+
+        $ticket = $this->ticketWithInbound();
+
+        Livewire::test(ViewTicket::class, ['record' => $ticket->id])->callAction('draftReply');
+
+        $this->assertGreaterThan(0, $ticket->messages()->where('author', MessageAuthor::Ai)->count());
     }
 
     public function test_a_safety_refusal_produces_no_draft(): void

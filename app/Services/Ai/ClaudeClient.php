@@ -2,7 +2,10 @@
 
 namespace App\Services\Ai;
 
+use App\Services\Health\ConnectionResult;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 
 /**
  * Thin client for the ticket-AI layer. Supports three providers behind one
@@ -19,6 +22,39 @@ class ClaudeClient
     public function isEnabled(): bool
     {
         return (bool) config('billing.ai.enabled') && filled(config('billing.ai.api_key'));
+    }
+
+    /**
+     * Verify the AI provider is reachable and the key/model work, by asking for
+     * a trivial JSON object. Surfaces a clear reason so "the agent isn't drafting"
+     * stops being a silent mystery. The detailed HTTP error is written to the log.
+     */
+    public function testConnection(): ConnectionResult
+    {
+        if (! (bool) config('billing.ai.enabled')) {
+            return ConnectionResult::notConfigured('סוכן ה-AI כבוי — הפעילו אותו ושמרו, ואז בדקו חיבור.');
+        }
+
+        if (blank(config('billing.ai.api_key'))) {
+            return ConnectionResult::notConfigured('לא הוגדר מפתח API לסוכן.');
+        }
+
+        $result = $this->structured(
+            system: 'ענה במבנה JSON בלבד.',
+            prompt: 'החזר {"ok": true}.',
+            schema: [
+                'type' => 'object',
+                'additionalProperties' => false,
+                'properties' => ['ok' => ['type' => 'boolean']],
+                'required' => ['ok'],
+            ],
+        );
+
+        $where = config('billing.ai.provider').' · '.config('billing.ai.model');
+
+        return $result !== null
+            ? ConnectionResult::ok("החיבור לספק ה-AI תקין ✓ ({$where})")
+            : ConnectionResult::fail('הבקשה לספק ה-AI נכשלה. ודאו ספק/כתובת/מפתח/דגם נכונים (פרטי השגיאה בלוג המערכת).');
     }
 
     /**
@@ -40,10 +76,19 @@ class ClaudeClient
                 'google' => $this->google($system, $prompt, $schema),
                 default => $this->anthropic($system, $prompt, $schema),
             };
-        } catch (\Throwable) {
+        } catch (\Throwable $e) {
             // The AI layer is best-effort — never let it break ticket handling.
+            // Log so a misconfiguration is diagnosable instead of silent.
+            Log::warning('AI request threw', ['provider' => config('billing.ai.provider'), 'error' => $e->getMessage()]);
+
             return null;
         }
+    }
+
+    /** Record an HTTP-level provider failure so it can be diagnosed from the log. */
+    private function logFailure(string $provider, int $status, string $body): void
+    {
+        Log::warning('AI request failed', ['provider' => $provider, 'status' => $status, 'body' => Str::limit($body, 300)]);
     }
 
     /**
@@ -76,6 +121,10 @@ class ClaudeClient
 
         // A safety refusal returns 200 with stop_reason=refusal and no content.
         if ($response->failed() || $response->json('stop_reason') === 'refusal') {
+            if ($response->failed()) {
+                $this->logFailure('anthropic', $response->status(), $response->body());
+            }
+
             return null;
         }
 
@@ -114,6 +163,8 @@ class ClaudeClient
             ]);
 
         if ($response->failed()) {
+            $this->logFailure('openai', $response->status(), $response->body());
+
             return null;
         }
 
@@ -156,6 +207,8 @@ class ClaudeClient
 
         // A safety block returns 200 with no candidates (or promptFeedback only).
         if ($response->failed()) {
+            $this->logFailure('google', $response->status(), $response->body());
+
             return null;
         }
 
