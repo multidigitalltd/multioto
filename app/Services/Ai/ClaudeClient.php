@@ -240,7 +240,11 @@ class ClaudeClient
     private function google(string $system, string $prompt, array $schema): ?array
     {
         $config = config('billing.ai');
-        $model = rawurlencode((string) $config['model']);
+        // Gemini's endpoint is /v1beta/models/{model}:generateContent, so {model}
+        // must be the bare id ("gemini-flash-latest"). Be forgiving if a value was
+        // pasted with Google's "models/" resource prefix — otherwise Gemini rejects
+        // it with "unexpected model name format".
+        $model = rawurlencode(preg_replace('#^models/#', '', trim((string) $config['model'])));
 
         $response = Http::baseUrl($this->googleBase($config['base_url'] ?? null))
             ->withHeaders(['x-goog-api-key' => $config['api_key']])
