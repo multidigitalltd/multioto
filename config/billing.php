@@ -13,6 +13,14 @@ return [
 
     'currency' => 'ILS',
 
+    // Business branding. The uploaded logo (public disk path) is shown wherever
+    // we present to the customer — signup form, thank-you page, emails, the
+    // signed customer-card PDF — and as the admin panel brand. Editable in
+    // הגדרות ← מייל ושולח.
+    'branding' => [
+        'logo_path' => env('BRANDING_LOGO_PATH'),
+    ],
+
     // How long a signed card-update link (embedded in dunning messages) stays
     // valid. Short-lived so a forwarded/leaked message can't be reused forever.
     'card_update_link_ttl_hours' => env('CARD_UPDATE_LINK_TTL_HOURS', 72),

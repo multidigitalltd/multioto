@@ -19,6 +19,9 @@
 </head>
 <body>
     <main>
+        @if ($logo = \App\Support\Branding::logoUrl())
+            <img src="{{ $logo }}" alt="לוגו" style="max-height:3.5rem;margin-bottom:1rem;">
+        @endif
         <div class="check" aria-hidden="true">✅</div>
         <h1>הפרטים נקלטו בהצלחה!</h1>
         <p>תודה שהצטרפת אלינו. שלחנו לך מייל "ברוכים הבאים" עם כל הפרטים.</p>

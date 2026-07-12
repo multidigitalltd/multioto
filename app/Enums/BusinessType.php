@@ -9,6 +9,7 @@ enum BusinessType: string implements HasLabel
     case ExemptDealer = 'exempt_dealer';
     case LicensedDealer = 'licensed_dealer';
     case Company = 'company';
+    case Nonprofit = 'nonprofit';
 
     public function getLabel(): string
     {
@@ -16,6 +17,7 @@ enum BusinessType: string implements HasLabel
             self::ExemptDealer => 'עוסק פטור',
             self::LicensedDealer => 'עוסק מורשה',
             self::Company => 'חברה בע״מ',
+            self::Nonprofit => 'עמותה (ע.ר.)',
         };
     }
 }

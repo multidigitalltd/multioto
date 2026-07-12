@@ -3,6 +3,7 @@
 namespace App\Providers\Filament;
 
 use App\Filament\Widgets\StatsOverview;
+use App\Support\Branding;
 use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
 use Filament\Http\Middleware\DisableBladeIconComponents;
@@ -30,6 +31,9 @@ class AdminPanelProvider extends PanelProvider
             ->passwordReset()
             ->profile()
             ->brandName('מולטי דיגיטל')
+            // Show the uploaded business logo as the panel brand when one is set.
+            ->brandLogo(fn (): ?string => Branding::logoUrl())
+            ->brandLogoHeight('2rem')
             ->colors([
                 'primary' => Color::Indigo,
             ])
