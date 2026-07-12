@@ -162,8 +162,14 @@ class ManageMail extends Page implements HasForms
      */
     public function save(): void
     {
+        // Read the DEHYDRATED form state, not the raw component state: this stores
+        // any uploaded logo to the disk and returns its path string. Reading
+        // $this->data directly would hand back the file component's array state
+        // and blow up on the (string) cast ("Array to string conversion").
+        $data = $this->form->getState();
+
         foreach (self::IDENTITY_KEYS as $key) {
-            $value = data_get($this->data, $key);
+            $value = data_get($data, $key);
 
             if (filled($value)) {
                 Setting::put($key, (string) $value);
@@ -173,7 +179,7 @@ class ManageMail extends Page implements HasForms
         }
 
         foreach (self::SECRET_KEYS as $key) {
-            $value = data_get($this->data, $key);
+            $value = data_get($data, $key);
 
             if (filled($value)) {
                 Setting::put($key, (string) $value);
@@ -181,7 +187,7 @@ class ManageMail extends Page implements HasForms
         }
 
         // If Postmark is (now or already) configured, make it the active mailer.
-        if (filled(data_get($this->data, 'postmark.token')) || filled(Setting::map()['postmark.token'] ?? null)) {
+        if (filled(data_get($data, 'postmark.token')) || filled(Setting::map()['postmark.token'] ?? null)) {
             Setting::put('mail.mailer', 'postmark');
         }
 
