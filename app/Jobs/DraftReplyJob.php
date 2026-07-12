@@ -46,8 +46,14 @@ class DraftReplyJob implements ShouldQueue
             return;
         }
 
-        // Nothing to answer yet if the last message isn't from the customer.
-        $latest = $ticket->messages->first();
+        // Decide by the last message that actually went to/from the customer,
+        // ignoring internal notes (the AI classification note, an earlier draft,
+        // an agent's private note). Otherwise the classification note that
+        // ClassifyTicketJob writes just before dispatching us — or any internal
+        // note on an already-open ticket — would look like "the last message
+        // isn't from the customer" and suppress every draft. Draft only when the
+        // latest customer-facing message is still an unanswered inbound one.
+        $latest = $ticket->messages->firstWhere(fn ($m) => $m->channel !== MessageChannel::InternalNote);
         if (! $latest || $latest->direction !== MessageDirection::Inbound) {
             return;
         }

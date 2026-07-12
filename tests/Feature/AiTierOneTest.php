@@ -228,6 +228,27 @@ class AiTierOneTest extends TestCase
             && ! str_contains($request->url(), '/openai/'));
     }
 
+    public function test_an_internal_note_after_the_customer_message_does_not_block_drafting(): void
+    {
+        $this->enableAi();
+        $this->fakeClaude(['reply' => 'תשובה מוצעת', 'confidence' => 'medium']);
+
+        $ticket = $this->ticketWithInbound();
+        // ClassifyTicketJob writes its AI note just before dispatching the draft;
+        // that note must not look like "the agent already answered".
+        $ticket->messages()->create([
+            'direction' => MessageDirection::Outbound,
+            'channel' => MessageChannel::InternalNote,
+            'body' => '🤖 סיווג AI',
+            'author' => MessageAuthor::Ai,
+        ]);
+
+        (new DraftReplyJob($ticket->id))->handle(app(ClaudeClient::class), app(SupportToolkit::class));
+
+        // A draft was still produced despite the note being the latest message.
+        $this->assertTrue($ticket->messages()->where('body', 'like', '%טיוטת תשובה%')->exists());
+    }
+
     public function test_draft_is_skipped_when_last_message_is_not_from_customer(): void
     {
         $this->enableAi();
