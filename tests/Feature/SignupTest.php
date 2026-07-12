@@ -9,6 +9,7 @@ use App\Jobs\GenerateCustomerCardPdfJob;
 use App\Jobs\SendWelcomeMessageJob;
 use App\Mail\NotificationMail;
 use App\Models\Customer;
+use App\Models\Setting;
 use App\Models\Subscription;
 use App\Models\Ticket;
 use App\Services\Notifications\TemplateEngine;
@@ -54,6 +55,16 @@ class SignupTest extends TestCase
             // The tax-approval notice (file number) shows on the payment step.
             ->assertSee('516171303')
             ->assertDontSee('בחירת מסלול');
+    }
+
+    public function test_the_tax_notice_is_hidden_when_cleared(): void
+    {
+        // An explicitly-stored empty value hides the notice (not a revert to default).
+        Setting::put('signup.tax_approval_notice', '');
+
+        $this->get(route('signup'))
+            ->assertOk()
+            ->assertDontSee('516171303');
     }
 
     public function test_new_client_alias_reaches_the_signup_form(): void

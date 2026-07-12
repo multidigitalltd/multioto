@@ -40,6 +40,14 @@ class ManageSignup extends Page implements HasForms
         'signup.instructions.standing_order',
         'signup.instructions.bank_transfer',
         'signup.instructions.checks',
+    ];
+
+    /**
+     * Optional notices that may be hidden by clearing them. Unlike KEYS (which
+     * fall back to the config default when blank), an empty value here is stored
+     * verbatim so "clear to hide" actually hides it rather than reverting.
+     */
+    private const OPTIONAL_KEYS = [
         'signup.tax_approval_notice',
     ];
 
@@ -51,8 +59,14 @@ class ManageSignup extends Page implements HasForms
         // Nested state (signup.instructions.* → data['signup']['instructions'][*]);
         // build the fill array nested so values reach the fields.
         $values = [];
+        $stored = Setting::map();
         foreach (self::KEYS as $key) {
             data_set($values, $key, config('billing.'.$key));
+        }
+        // Optional notices: show the stored value verbatim (even empty) when a
+        // row exists, otherwise the config default.
+        foreach (self::OPTIONAL_KEYS as $key) {
+            data_set($values, $key, array_key_exists($key, $stored) ? $stored[$key] : config('billing.'.$key));
         }
 
         $this->form->fill($values);
@@ -99,6 +113,12 @@ class ManageSignup extends Page implements HasForms
             } else {
                 Setting::forget($key); // fall back to the config default
             }
+        }
+
+        // Optional notices persist even when blank, so clearing them hides them
+        // instead of reverting to the config default.
+        foreach (self::OPTIONAL_KEYS as $key) {
+            Setting::put($key, (string) (data_get($this->data, $key) ?? ''));
         }
 
         $this->refreshConfig();
