@@ -41,8 +41,15 @@ class MonitorSiteJob implements ShouldQueue
         $needsBody = filled($site->expected_keyword);
 
         try {
-            $request = Http::timeout((int) config('billing.monitoring.timeout_seconds'))->withoutRedirecting();
-            $response = $needsBody ? $request->get($url) : $request->head($url);
+            $request = Http::timeout((int) config('billing.monitoring.timeout_seconds'));
+            // A content check must land on the FINAL page: follow redirects
+            // (bare→www, http→https, localized landing) so the keyword search
+            // runs against real content, not a 3xx redirect body. A plain uptime
+            // probe uses HEAD without following redirects — a 3xx still counts as
+            // up (status < 500) and we skip a body we don't need.
+            $response = $needsBody
+                ? $request->get($url)
+                : $request->withoutRedirecting()->head($url);
 
             $statusCode = $response->status();
             $isUp = $statusCode < 500;

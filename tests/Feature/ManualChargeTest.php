@@ -18,6 +18,7 @@ use App\Services\Cardcom\ChargeReconciler;
 use App\Services\Linet\InvoiceIssuer;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Bus;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
@@ -279,6 +280,65 @@ class ManualChargeTest extends TestCase
         $this->assertFalse($result['ok']);
         $this->assertStringContainsString('קוד סוג מסמך', $result['error']);
         Http::assertNothingSent();
+    }
+
+    public function test_issue_is_a_no_op_when_the_charge_already_has_an_invoice(): void
+    {
+        config([
+            'billing.linet.base_url' => 'https://app.linet.test/api',
+            'billing.linet.login_id' => 'lid', 'billing.linet.key' => 'lhash',
+            'billing.linet.company_id' => '1', 'billing.linet.doctype' => '9',
+            'billing.linet.vat_cat_taxable' => 1, 'billing.linet.payment_type' => 3,
+        ]);
+        Http::fake();
+
+        $customer = Customer::factory()->create(['vat_exempt' => false]);
+        $charge = $this->oneOffCharge($customer, ChargeStatus::Succeeded);
+        $charge->invoice()->create([
+            'customer_id' => $customer->id,
+            'linet_document_id' => '111',
+            'amount_agorot' => $charge->amount_agorot,
+            'vat_agorot' => $charge->vat_agorot,
+            'total_agorot' => $charge->total_agorot,
+            'issued_at' => now(),
+        ]);
+
+        $result = app(InvoiceIssuer::class)->issue($charge->fresh());
+
+        // Already issued → success no-op, and Linet is never called again.
+        $this->assertTrue($result['ok']);
+        Http::assertNothingSent();
+        $this->assertSame(1, $charge->invoice()->count());
+    }
+
+    public function test_issue_never_calls_linet_twice_while_another_issue_holds_the_lock(): void
+    {
+        config([
+            'billing.linet.base_url' => 'https://app.linet.test/api',
+            'billing.linet.login_id' => 'lid', 'billing.linet.key' => 'lhash',
+            'billing.linet.company_id' => '1', 'billing.linet.doctype' => '9',
+            'billing.linet.vat_cat_taxable' => 1, 'billing.linet.payment_type' => 3,
+        ]);
+        Http::fake(['*/create/doc' => Http::response(['id' => 999])]);
+
+        $customer = Customer::factory()->create(['vat_exempt' => false]);
+        $charge = $this->oneOffCharge($customer, ChargeStatus::Succeeded);
+
+        // Simulate a concurrent issue already in flight (async job racing the
+        // manual button, or a double-click): the lock is held elsewhere.
+        $lock = Cache::lock("invoice-issue:{$charge->id}", 120);
+        $this->assertTrue($lock->get());
+
+        try {
+            $result = app(InvoiceIssuer::class)->issue($charge);
+        } finally {
+            $lock->release();
+        }
+
+        // Treated as a success no-op — and crucially, no second Linet document.
+        $this->assertTrue($result['ok']);
+        Http::assertNothingSent();
+        $this->assertDatabaseMissing('invoices', ['charge_id' => $charge->id]);
     }
 
     public function test_invoice_issuer_returns_the_linet_error_instead_of_failing_silently(): void

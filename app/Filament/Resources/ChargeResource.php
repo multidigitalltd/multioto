@@ -146,6 +146,13 @@ class ChargeResource extends Resource
                     ->toggleable(isToggledHiddenByDefault: true),
             ])
             ->defaultSort('created_at', 'desc')
+            // Auto-refresh: a charge that Cardcom confirms (webhook/reconcile)
+            // flips to "הצליח" on its own, the reconcile button hides, and once
+            // the invoice is issued the "הנפק חשבונית" button disappears while
+            // the PDF link appears — no manual page refresh needed. Combined with
+            // the per-charge issuance lock, an operator can't double-invoice by
+            // clicking during the async window.
+            ->poll('10s')
             ->filters([
                 Tables\Filters\SelectFilter::make('status')
                     ->label('סטטוס')

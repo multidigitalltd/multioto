@@ -58,6 +58,28 @@ class MonitoringUpgradeTest extends TestCase
         $this->assertFalse($site->openIncident()->exists());
     }
 
+    public function test_content_check_follows_redirects_to_the_final_page(): void
+    {
+        $site = Site::factory()->create([
+            'domain' => 'shop.example.com',
+            'monitor_url' => 'https://shop.example.com',
+            'expected_keyword' => 'הוסף לסל',
+        ]);
+
+        // Bare domain 301-redirects to www; only the final page carries the
+        // storefront text. Following redirects must land there — not open a
+        // false incident on the 3xx body.
+        Http::fake([
+            'https://shop.example.com' => Http::response('', 301, ['Location' => 'https://www.shop.example.com']),
+            'https://www.shop.example.com' => Http::response('<button>הוסף לסל</button>', 200),
+        ]);
+
+        MonitorSiteJob::dispatchSync($site->id);
+
+        $this->assertTrue($site->monitorChecks()->latest('checked_at')->first()->is_up);
+        $this->assertFalse($site->openIncident()->exists());
+    }
+
     public function test_ssl_expiry_alerts_the_team_once_then_re_arms_after_renewal(): void
     {
         config(['billing.monitoring.ssl_warn_days' => 14]);
