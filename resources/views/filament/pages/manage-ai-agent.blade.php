@@ -2,11 +2,18 @@
     <form wire:submit="save">
         {{ $this->form }}
 
-        <div class="mt-6">
+        <div class="mt-6 flex flex-wrap gap-3">
             <x-filament::button type="submit" icon="heroicon-o-check">
                 שמירת הגדרות הסוכן
             </x-filament::button>
+            <x-filament::button type="button" color="gray" icon="heroicon-o-signal"
+                                wire:click="testConnection" wire:loading.attr="disabled">
+                בדיקת חיבור לספק
+            </x-filament::button>
         </div>
+        <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+            שמרו את ההגדרות ואז לחצו "בדיקת חיבור" כדי לוודא שהמפתח, הספק והדגם עובדים. אם נכשל — פרטי השגיאה נכתבים ליומן המערכת.
+        </p>
     </form>
 
     <x-filament::section class="mt-6" icon="heroicon-o-shield-check">
