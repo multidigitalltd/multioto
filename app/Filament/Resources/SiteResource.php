@@ -64,6 +64,11 @@ class SiteResource extends Resource
                             ->label('ניטור פעיל')
                             ->inline(false)
                             ->required(),
+                        Forms\Components\TextInput::make('expected_keyword')
+                            ->label('מילת מפתח לבדיקת תוכן (אופציונלי)')
+                            ->helperText('אם מוגדר — האתר ייחשב תקין רק אם הטקסט הזה מופיע בעמוד. מזהה "עמוד לבן"/פריצה גם כשה-HTTP תקין.')
+                            ->maxLength(255)
+                            ->columnSpanFull(),
                     ])->columns(2),
 
                 Forms\Components\Section::make('אחסון וסטטוס')
@@ -106,6 +111,11 @@ class SiteResource extends Resource
                         SiteStatus::Active => 'success',
                         SiteStatus::Suspended => 'danger',
                     }),
+                Tables\Columns\TextColumn::make('ssl_days_left')
+                    ->label('SSL (ימים)')
+                    ->badge()
+                    ->placeholder('—')
+                    ->color(fn ($state): string => $state === null ? 'gray' : ($state <= 0 ? 'danger' : ($state <= (int) config('billing.monitoring.ssl_warn_days', 14) ? 'warning' : 'success'))),
                 Tables\Columns\TextColumn::make('hosting_ref')
                     ->label('מזהה אחסון')
                     ->searchable()
@@ -217,6 +227,8 @@ class SiteResource extends Resource
                             ->send();
                     }),
 
+                Tables\Actions\ViewAction::make()->label('ניטור'),
+
                 Tables\Actions\EditAction::make()->label('עריכה'),
             ])
             ->bulkActions([
@@ -271,6 +283,7 @@ class SiteResource extends Resource
         return [
             'index' => Pages\ListSites::route('/'),
             'create' => Pages\CreateSite::route('/create'),
+            'view' => Pages\ViewSite::route('/{record}'),
             'edit' => Pages\EditSite::route('/{record}/edit'),
         ];
     }

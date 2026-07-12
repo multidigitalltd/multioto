@@ -3,6 +3,7 @@
 use App\Enums\BroadcastStatus;
 use App\Enums\ChargeStatus;
 use App\Jobs\ChargeSubscriptionJob;
+use App\Jobs\CheckSslExpiryJob;
 use App\Jobs\MonitorSiteJob;
 use App\Jobs\ReconcileChargeJob;
 use App\Jobs\SendBroadcastJob;
@@ -49,6 +50,14 @@ Schedule::call(function () {
         ->each(fn (int $id) => MonitorSiteJob::dispatch($id));
 })->cron('*/'.(int) config('billing.monitoring.interval_minutes').' * * * *')
     ->name('monitoring:dispatch-checks')->onOneServer();
+
+// Daily TLS-certificate expiry check for every monitored site.
+Schedule::call(function () {
+    Site::query()
+        ->where('monitor_enabled', true)
+        ->pluck('id')
+        ->each(fn (int $id) => CheckSslExpiryJob::dispatch($id));
+})->dailyAt('07:00')->name('monitoring:ssl-expiry')->onOneServer();
 
 // Scheduled broadcasts.
 Schedule::call(function () {

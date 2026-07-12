@@ -175,6 +175,10 @@ return [
         'timeout_seconds' => env('MONITOR_TIMEOUT_SECONDS', 10),
         // Consecutive failed checks before an incident is opened.
         'failures_to_incident' => env('MONITOR_FAILURES_TO_INCIDENT', 2),
+        // Warn the team when a TLS certificate has this many days (or fewer) left.
+        'ssl_warn_days' => env('MONITOR_SSL_WARN_DAYS', 14),
+        // Responses slower than this (ms) are flagged as "degraded" (not down).
+        'slow_response_ms' => env('MONITOR_SLOW_RESPONSE_MS', 4000),
     ],
 
     'broadcasts' => [

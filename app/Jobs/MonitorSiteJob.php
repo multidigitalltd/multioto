@@ -37,15 +37,22 @@ class MonitorSiteJob implements ShouldQueue
 
         $url = $site->monitor_url ?: 'https://'.$site->domain;
         $startedAt = microtime(true);
+        // A content check needs the body → GET; otherwise a cheap HEAD.
+        $needsBody = filled($site->expected_keyword);
 
         try {
-            $response = Http::timeout((int) config('billing.monitoring.timeout_seconds'))
-                ->withoutRedirecting()
-                ->head($url);
+            $request = Http::timeout((int) config('billing.monitoring.timeout_seconds'))->withoutRedirecting();
+            $response = $needsBody ? $request->get($url) : $request->head($url);
 
-            $isUp = $response->status() < 500;
             $statusCode = $response->status();
-            $error = $isUp ? null : 'HTTP '.$response->status();
+            $isUp = $statusCode < 500;
+            $error = $isUp ? null : 'HTTP '.$statusCode;
+
+            // HTTP 200 but expected content missing → treat as down (WSOD/defacement).
+            if ($isUp && $needsBody && ! str_contains((string) $response->body(), (string) $site->expected_keyword)) {
+                $isUp = false;
+                $error = 'התוכן הצפוי חסר בעמוד';
+            }
         } catch (\Throwable $e) {
             $isUp = false;
             $statusCode = null;

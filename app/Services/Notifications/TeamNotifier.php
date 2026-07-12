@@ -44,22 +44,31 @@ class TeamNotifier
     protected function send(string $title, string $body, Ticket $ticket): void
     {
         $panelUrl = rtrim((string) config('app.url'), '/')."/admin/tickets/{$ticket->id}";
+        $this->alert($title, $body, $panelUrl);
+    }
 
-        // WhatsApp — the approvals number/group.
+    /**
+     * Generic team alert (not tied to a ticket) — used for SSL expiry,
+     * operational warnings, etc. WhatsApp to the approvals number/group AND
+     * the team email; each best-effort and independent.
+     */
+    public function alert(string $title, string $body, ?string $url = null): void
+    {
+        $suffix = $url !== null ? "\n\nלצפייה: {$url}" : '';
+
         if (($chat = $this->teamChat()) !== null) {
             try {
-                $this->waha->sendMessage($chat, "{$title}\n{$body}\n\nלצפייה: {$panelUrl}");
+                $this->waha->sendMessage($chat, "{$title}\n{$body}{$suffix}");
             } catch (\Throwable $e) {
-                Log::warning('TeamNotifier: WhatsApp alert failed', ['ticket_id' => $ticket->id, 'error' => $e->getMessage()]);
+                Log::warning('TeamNotifier: WhatsApp alert failed', ['error' => $e->getMessage()]);
             }
         }
 
-        // Email — the team inbox.
         if (($email = (string) config('billing.notifications.team_email')) !== '') {
             try {
-                Mail::to($email)->send(new NotificationMail($title, "{$body}\n\nלצפייה בפנייה: {$panelUrl}"));
+                Mail::to($email)->send(new NotificationMail($title, $body.$suffix));
             } catch (\Throwable $e) {
-                Log::warning('TeamNotifier: email alert failed', ['ticket_id' => $ticket->id, 'error' => $e->getMessage()]);
+                Log::warning('TeamNotifier: email alert failed', ['error' => $e->getMessage()]);
             }
         }
     }
