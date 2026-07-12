@@ -136,7 +136,9 @@ class LinetClient
             'docDet' => [array_filter([
                 'item_id' => (string) ($config['general_item_id'] ?? '1'),
                 'name' => $description,
-                'description' => '',
+                // Optional free-text note the operator typed on a manual charge,
+                // printed under the line name on the invoice.
+                'description' => (string) ($charge->invoice_notes ?? ''),
                 'qty' => 1,
                 'line' => 1,
                 'currency_id' => 'ILS',

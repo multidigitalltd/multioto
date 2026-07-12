@@ -28,9 +28,9 @@ class ManualChargeService
      * Create a pending one-off charge and queue it against the customer's saved
      * active token.
      */
-    public function chargeSavedToken(Customer $customer, int $totalAgorot, string $description): Charge
+    public function chargeSavedToken(Customer $customer, int $totalAgorot, string $description, ?string $notes = null): Charge
     {
-        $charge = $this->createPendingCharge($customer, $totalAgorot, $description);
+        $charge = $this->createPendingCharge($customer, $totalAgorot, $description, $notes);
         ProcessManualChargeJob::dispatch($charge->id);
 
         return $charge;
@@ -44,9 +44,9 @@ class ManualChargeService
      *
      * @throws \RuntimeException when Cardcom returns no payment URL (charge marked failed)
      */
-    public function createHostedPage(Customer $customer, int $totalAgorot, string $description): array
+    public function createHostedPage(Customer $customer, int $totalAgorot, string $description, ?string $notes = null): array
     {
-        $charge = $this->createPendingCharge($customer, $totalAgorot, $description);
+        $charge = $this->createPendingCharge($customer, $totalAgorot, $description, $notes);
 
         try {
             $lowProfile = $this->cardcom->createChargeLowProfile(
@@ -95,7 +95,7 @@ class ManualChargeService
         return [$net, $totalAgorot - $net];
     }
 
-    private function createPendingCharge(Customer $customer, int $totalAgorot, string $description): Charge
+    private function createPendingCharge(Customer $customer, int $totalAgorot, string $description, ?string $notes = null): Charge
     {
         [$net, $vat] = $this->splitVat($totalAgorot, (bool) $customer->vat_exempt);
 
@@ -108,6 +108,7 @@ class ManualChargeService
             'status' => ChargeStatus::Pending,
             'attempt_number' => 1,
             'description' => $description,
+            'invoice_notes' => filled($notes) ? $notes : null,
             'period_start' => now()->toDateString(),
             'period_end' => now()->toDateString(),
         ]);

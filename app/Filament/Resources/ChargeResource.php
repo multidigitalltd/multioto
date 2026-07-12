@@ -54,6 +54,11 @@ class ChargeResource extends Resource
                         Forms\Components\TextInput::make('currency')
                             ->label('מטבע')
                             ->required(),
+                        Forms\Components\Textarea::make('invoice_notes')
+                            ->label('הערות לחשבונית')
+                            ->helperText('טקסט חופשי שיודפס בשורת החשבונית. ניתן לעריכה עד להנפקת החשבונית.')
+                            ->rows(2)->maxLength(500)
+                            ->columnSpanFull(),
                     ])->columns(2),
 
                 Forms\Components\Section::make('תוצאת חיוב')

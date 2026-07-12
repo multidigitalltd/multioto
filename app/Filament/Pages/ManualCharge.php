@@ -9,6 +9,7 @@ use Filament\Forms\Components\Actions\Action as FormAction;
 use Filament\Forms\Components\Grid;
 use Filament\Forms\Components\Section;
 use Filament\Forms\Components\Select;
+use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Toggle;
 use Filament\Forms\Concerns\InteractsWithForms;
@@ -103,6 +104,12 @@ class ManualCharge extends Page implements HasForms
                                 ->label('תיאור (יופיע בחשבונית)')
                                 ->maxLength(120)->required(),
                         ]),
+
+                        Textarea::make('invoice_notes')
+                            ->label('הערות לחשבונית (אופציונלי)')
+                            ->helperText('טקסט חופשי שיודפס מתחת לשורה בחשבונית — למשל פירוט השירות או תקופה.')
+                            ->rows(2)->maxLength(500)
+                            ->columnSpanFull(),
                     ])
                     ->footerActions([
                         FormAction::make('submit')
@@ -135,6 +142,7 @@ class ManualCharge extends Page implements HasForms
         }
 
         $description = filled($data['description'] ?? null) ? $data['description'] : 'חיוב חד-פעמי';
+        $notes = filled($data['invoice_notes'] ?? null) ? trim((string) $data['invoice_notes']) : null;
 
         $customer = $this->resolveCustomer($data);
 
@@ -152,9 +160,9 @@ class ManualCharge extends Page implements HasForms
             && $customer->paymentTokens()->where('status', TokenStatus::Active)->exists();
 
         if ($activeToken) {
-            $this->chargeSavedToken($customer, $totalAgorot, $description);
+            $this->chargeSavedToken($customer, $totalAgorot, $description, $notes);
         } else {
-            $this->openPaymentPage($customer, $totalAgorot, $description);
+            $this->openPaymentPage($customer, $totalAgorot, $description, $notes);
         }
     }
 
@@ -184,9 +192,9 @@ class ManualCharge extends Page implements HasForms
     }
 
     /** Charge the customer's saved active token in the queue. */
-    private function chargeSavedToken(Customer $customer, int $totalAgorot, string $description): void
+    private function chargeSavedToken(Customer $customer, int $totalAgorot, string $description, ?string $notes = null): void
     {
-        app(ManualChargeService::class)->chargeSavedToken($customer, $totalAgorot, $description);
+        app(ManualChargeService::class)->chargeSavedToken($customer, $totalAgorot, $description, $notes);
 
         Notification::make()
             ->title('החיוב נשלח לעיבוד')
@@ -197,10 +205,10 @@ class ManualCharge extends Page implements HasForms
     }
 
     /** Create a hosted Cardcom payment page for a customer without a saved card. */
-    private function openPaymentPage(Customer $customer, int $totalAgorot, string $description): void
+    private function openPaymentPage(Customer $customer, int $totalAgorot, string $description, ?string $notes = null): void
     {
         try {
-            $result = app(ManualChargeService::class)->createHostedPage($customer, $totalAgorot, $description);
+            $result = app(ManualChargeService::class)->createHostedPage($customer, $totalAgorot, $description, $notes);
         } catch (\Throwable $e) {
             Notification::make()->title('פתיחת עמוד התשלום נכשלה')->body(Str::limit($e->getMessage(), 150))->danger()->send();
 

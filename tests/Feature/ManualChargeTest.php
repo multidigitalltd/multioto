@@ -26,7 +26,7 @@ class ManualChargeTest extends TestCase
 {
     use RefreshDatabase;
 
-    private function oneOffCharge(Customer $customer, ChargeStatus $status): Charge
+    private function oneOffCharge(Customer $customer, ChargeStatus $status, ?string $notes = null): Charge
     {
         return Charge::create([
             'subscription_id' => null,
@@ -37,6 +37,7 @@ class ManualChargeTest extends TestCase
             'status' => $status,
             'attempt_number' => 1,
             'description' => 'שירות חד-פעמי',
+            'invoice_notes' => $notes,
             'period_start' => now()->toDateString(),
             'period_end' => now()->toDateString(),
         ]);
@@ -233,6 +234,38 @@ class ManualChargeTest extends TestCase
         ]);
         Http::assertSent(fn ($request) => str_ends_with($request->url(), '/create/doc')
             && $request->data()['docDet'][0]['name'] === 'שירות חד-פעמי');
+    }
+
+    public function test_invoice_notes_are_printed_on_the_linet_line(): void
+    {
+        config([
+            'billing.linet.base_url' => 'https://app.linet.test/api',
+            'billing.linet.login_id' => 'lid', 'billing.linet.key' => 'lhash',
+            'billing.linet.company_id' => '1', 'billing.linet.doctype' => '9',
+            'billing.linet.vat_cat_taxable' => 1, 'billing.linet.payment_type' => 3,
+        ]);
+        Http::fake(['*/create/doc' => Http::response(['id' => 777])]);
+
+        $customer = Customer::factory()->create(['vat_exempt' => false]);
+        $charge = $this->oneOffCharge($customer, ChargeStatus::Succeeded, notes: 'כולל התקנת תוסף SEO ותקופת הרצה');
+
+        (new IssueInvoiceJob($charge->id))->handle(app(InvoiceIssuer::class));
+
+        // The line name stays the short description; the operator's note rides
+        // along on the line's description sub-field (a known-accepted field).
+        Http::assertSent(fn ($request) => str_ends_with($request->url(), '/create/doc')
+            && $request->data()['docDet'][0]['name'] === 'שירות חד-פעמי'
+            && $request->data()['docDet'][0]['description'] === 'כולל התקנת תוסף SEO ותקופת הרצה');
+    }
+
+    public function test_manual_charge_service_persists_invoice_notes_on_the_charge(): void
+    {
+        Bus::fake([IssueInvoiceJob::class, ProcessManualChargeJob::class]);
+
+        $customer = Customer::factory()->create(['vat_exempt' => false]);
+        $charge = app(ManualChargeService::class)->chargeSavedToken($customer, 11800, 'שירות', 'הערה חשובה');
+
+        $this->assertSame('הערה חשובה', $charge->invoice_notes);
     }
 
     public function test_manual_charge_service_splits_vat_and_queues_the_charge(): void
