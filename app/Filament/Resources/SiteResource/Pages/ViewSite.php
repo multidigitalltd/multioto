@@ -66,6 +66,34 @@ class ViewSite extends ViewRecord
             ->get();
     }
 
+    /**
+     * Response-time trend for the sparkline — the recent probes in
+     * chronological order with a bar height (percent of the window's max).
+     *
+     * @return array{max: int, points: array<int, array{ms: int, up: bool, pct: int, at: Carbon}>}
+     */
+    public function getTrendProperty(): array
+    {
+        $checks = $this->record->monitorChecks()
+            ->latest('checked_at')
+            ->limit(self::RECENT_LIMIT)
+            ->get(['checked_at', 'response_ms', 'is_up'])
+            ->reverse()
+            ->values();
+
+        $max = max(1, (int) $checks->max('response_ms'));
+
+        return [
+            'max' => $max,
+            'points' => $checks->map(fn (MonitorCheck $c): array => [
+                'ms' => (int) $c->response_ms,
+                'up' => (bool) $c->is_up,
+                'pct' => (int) round($c->response_ms / $max * 100),
+                'at' => $c->checked_at,
+            ])->all(),
+        ];
+    }
+
     public function getStatsWindowDays(): int
     {
         return self::STATS_WINDOW_DAYS;

@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Enums\IncidentStatus;
 use App\Filament\Resources\SiteResource\Pages\ViewSite;
 use App\Filament\Widgets\SitesInTrouble;
 use App\Jobs\CheckSslExpiryJob;
@@ -108,6 +109,62 @@ class MonitoringUpgradeTest extends TestCase
         CheckSslExpiryJob::dispatchSync($site->id);
         $this->assertSame(300, $site->refresh()->ssl_days_left);
         $this->assertNull($site->ssl_alerted_at);
+    }
+
+    public function test_team_is_alerted_when_a_site_goes_down(): void
+    {
+        config(['billing.monitoring.failures_to_incident' => 1]);
+
+        $site = Site::factory()->create(['domain' => 'down.example.com', 'monitor_url' => 'https://down.example.com']);
+        Http::fake(['https://down.example.com' => Http::response('', 500)]);
+
+        $team = Mockery::mock(TeamNotifier::class);
+        $team->shouldReceive('alert')->once()
+            ->withArgs(fn (string $title): bool => str_contains($title, 'לא זמין'));
+        $this->app->instance(TeamNotifier::class, $team);
+
+        MonitorSiteJob::dispatchSync($site->id);
+
+        $this->assertTrue($site->openIncident()->exists());
+    }
+
+    public function test_team_is_alerted_when_a_site_recovers(): void
+    {
+        $site = Site::factory()->create(['domain' => 'back.example.com', 'monitor_url' => 'https://back.example.com']);
+        $site->incidents()->create(['started_at' => now()->subHour(), 'status' => IncidentStatus::Open]);
+        Http::fake(['https://back.example.com' => Http::response('', 200)]);
+
+        $team = Mockery::mock(TeamNotifier::class);
+        $team->shouldReceive('alert')->once()
+            ->withArgs(fn (string $title): bool => str_contains($title, 'חזר'));
+        $this->app->instance(TeamNotifier::class, $team);
+
+        MonitorSiteJob::dispatchSync($site->id);
+
+        $this->assertFalse($site->openIncident()->exists());
+    }
+
+    public function test_team_is_alerted_once_when_a_site_is_up_but_slow(): void
+    {
+        config(['billing.monitoring.slow_response_ms' => 4000]);
+
+        $site = Site::factory()->create(['domain' => 'slow.example.com', 'monitor_url' => 'https://slow.example.com']);
+        // Seed recent successful-but-slow probes so the average clears the sof.
+        foreach (range(1, 4) as $i) {
+            $site->monitorChecks()->create(['checked_at' => now()->subMinutes($i), 'is_up' => true, 'status_code' => 200, 'response_ms' => 8000]);
+        }
+        Http::fake(['https://slow.example.com' => Http::response('', 200)]);
+
+        $team = Mockery::mock(TeamNotifier::class);
+        $team->shouldReceive('alert')->once()
+            ->withArgs(fn (string $title): bool => str_contains($title, 'איטי'));
+        $this->app->instance(TeamNotifier::class, $team);
+
+        MonitorSiteJob::dispatchSync($site->id);
+        $this->assertNotNull($site->refresh()->slow_alerted_at);
+
+        // A second slow probe must not fire a second alert (already armed).
+        MonitorSiteJob::dispatchSync($site->id);
     }
 
     public function test_sites_in_trouble_widget_visibility(): void

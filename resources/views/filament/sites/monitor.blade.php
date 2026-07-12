@@ -60,6 +60,36 @@
         </div>
     </div>
 
+    {{-- Response-time trend — one bar per recent probe (oldest → newest). --}}
+    @php $trend = $this->trend; @endphp
+    @if (count($trend['points']) > 1)
+        <div class="rounded-xl bg-white p-4 shadow-sm dark:bg-gray-800" wire:poll.30s>
+            <div class="mb-3 flex items-center justify-between">
+                <h3 class="text-sm font-semibold">מגמת זמן תגובה</h3>
+                <span class="text-xs text-gray-500 dark:text-gray-400">שיא: {{ number_format($trend['max']) }} ms</span>
+            </div>
+            <div class="flex items-end gap-0.5" style="height: 6rem;"
+                 role="img"
+                 aria-label="גרף מגמת זמני תגובה של {{ count($trend['points']) }} הבדיקות האחרונות. שיא {{ number_format($trend['max']) }} מילישניות.">
+                @foreach ($trend['points'] as $point)
+                    <div @class([
+                            'flex-1 rounded-t',
+                            'bg-danger-500' => ! $point['up'],
+                            'bg-amber-500' => $point['up'] && $point['ms'] >= $slowMs,
+                            'bg-primary-500' => $point['up'] && $point['ms'] < $slowMs,
+                        ])
+                        style="height: {{ max(3, $point['pct']) }}%;"
+                        title="{{ $point['at']->format('d/m/Y H:i') }} — {{ $point['up'] ? number_format($point['ms']).' ms' : 'נפילה' }}"></div>
+                @endforeach
+            </div>
+            <div class="mt-2 flex flex-wrap gap-4 text-xs text-gray-500 dark:text-gray-400">
+                <span class="flex items-center gap-1"><span class="inline-block h-2 w-2 rounded-full bg-primary-500"></span> תקין</span>
+                <span class="flex items-center gap-1"><span class="inline-block h-2 w-2 rounded-full bg-amber-500"></span> איטי</span>
+                <span class="flex items-center gap-1"><span class="inline-block h-2 w-2 rounded-full bg-danger-500"></span> נפילה</span>
+            </div>
+        </div>
+    @endif
+
     {{-- Recent probes. Polls so a live outage/recovery updates in place. --}}
     <div class="rounded-xl bg-white p-4 shadow-sm dark:bg-gray-800" wire:poll.30s>
         <h3 class="mb-3 text-sm font-semibold">בדיקות אחרונות</h3>

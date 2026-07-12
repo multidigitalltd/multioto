@@ -10,6 +10,7 @@ use App\Models\Site;
 use App\Models\Ticket;
 use App\Services\Automation\ApprovalGate;
 use App\Services\Hosting\SiteDiagnostics;
+use App\Services\Notifications\TeamNotifier;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Http;
@@ -27,7 +28,7 @@ class MonitorSiteJob implements ShouldQueue
 
     public function __construct(public int $siteId) {}
 
-    public function handle(): void
+    public function handle(TeamNotifier $team): void
     {
         $site = Site::with('openIncident')->find($this->siteId);
 
@@ -66,18 +67,25 @@ class MonitorSiteJob implements ShouldQueue
             $error = mb_substr($e->getMessage(), 0, 250);
         }
 
+        $responseMs = (int) ((microtime(true) - $startedAt) * 1000);
+
         $site->monitorChecks()->create([
             'checked_at' => now(),
             'is_up' => $isUp,
             'status_code' => $statusCode,
-            'response_ms' => (int) ((microtime(true) - $startedAt) * 1000),
+            'response_ms' => $responseMs,
             'error' => $error,
         ]);
 
-        $isUp ? $this->handleUp($site) : $this->handleDown($site);
+        if ($isUp) {
+            $this->handleUp($site, $team);
+            $this->evaluateResponseTime($site, $team);
+        } else {
+            $this->handleDown($site, $team, $error);
+        }
     }
 
-    protected function handleDown(Site $site): void
+    protected function handleDown(Site $site, TeamNotifier $team, ?string $error): void
     {
         if ($site->openIncident) {
             return; // Already tracked.
@@ -108,6 +116,21 @@ class MonitorSiteJob implements ShouldQueue
             'status' => TicketStatus::Open,
             'priority' => TicketPriority::Urgent,
         ]);
+
+        // Down means down — clear any lingering "slow" alert flag so recovery
+        // re-arms it cleanly.
+        if ($site->slow_alerted_at !== null) {
+            $site->update(['slow_alerted_at' => null]);
+        }
+
+        // Alert the team immediately (WhatsApp + email), independent of the
+        // ticket — a site being down is the most urgent operational event.
+        $team->alert(
+            '🔴 אתר לא זמין',
+            sprintf('האתר %s (%s) אינו מגיב.%s', $site->domain, $site->customer?->name ?? 'לקוח',
+                filled($error) ? "\nשגיאה: {$error}" : ''),
+            $this->siteUrl($site),
+        );
 
         // Auto-heal loop (still human-approved): diagnose and, if a safe
         // reversible fix is indicated, propose it to the owner on WhatsApp —
@@ -142,11 +165,63 @@ class MonitorSiteJob implements ShouldQueue
         return config('billing.hosting.driver') !== 'flywp' || filled($site->hosting_ref);
     }
 
-    protected function handleUp(Site $site): void
+    protected function handleUp(Site $site, TeamNotifier $team): void
     {
-        $site->openIncident?->update([
+        $incident = $site->openIncident;
+
+        if ($incident === null) {
+            return; // Was already up — nothing to resolve or announce.
+        }
+
+        $incident->update([
             'status' => IncidentStatus::Resolved,
             'resolved_at' => now(),
         ]);
+
+        // Recovery is as newsworthy as the outage — tell the team, with how
+        // long it was down.
+        $downFor = $incident->started_at?->diffForHumans(now(), short: true, syntax: true);
+        $team->alert(
+            '🟢 אתר חזר לפעול',
+            sprintf('האתר %s (%s) חזר לפעול תקין.%s', $site->domain, $site->customer?->name ?? 'לקוח',
+                $downFor ? "\nזמן ההשבתה: {$downFor}" : ''),
+            $this->siteUrl($site),
+        );
+    }
+
+    /**
+     * A site can be up yet degraded. When the recent average response time
+     * crosses the slow threshold, alert the team once and re-arm only after it
+     * speeds back up — mirroring the SSL-expiry alert's no-nagging behaviour.
+     */
+    protected function evaluateResponseTime(Site $site, TeamNotifier $team): void
+    {
+        $slowMs = (int) config('billing.monitoring.slow_response_ms', 4000);
+
+        // Average of the last few successful probes — one slow blip shouldn't
+        // fire an alert, sustained slowness should.
+        $avg = (int) round((float) $site->monitorChecks()
+            ->where('is_up', true)
+            ->latest('checked_at')
+            ->limit(5)
+            ->avg('response_ms'));
+
+        if ($avg >= $slowMs && $site->slow_alerted_at === null) {
+            $team->alert(
+                '🐌 אתר איטי',
+                sprintf('האתר %s (%s) זמין אך איטי — זמן תגובה ממוצע %s ms (סף %s ms).',
+                    $site->domain, $site->customer?->name ?? 'לקוח', number_format($avg), number_format($slowMs)),
+                $this->siteUrl($site),
+            );
+            $site->update(['slow_alerted_at' => now()]);
+        } elseif ($avg < $slowMs && $site->slow_alerted_at !== null) {
+            $site->update(['slow_alerted_at' => null]); // Recovered speed — re-arm.
+        }
+    }
+
+    /** Absolute URL to the site's monitoring page in the admin panel. */
+    protected function siteUrl(Site $site): string
+    {
+        return rtrim((string) config('app.url'), '/')."/admin/sites/{$site->id}";
     }
 }
