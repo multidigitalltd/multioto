@@ -6,6 +6,7 @@ use App\Enums\TicketChannel;
 use App\Enums\TicketStatus;
 use App\Models\Customer;
 use App\Models\Ticket;
+use App\Services\Automation\ManagementCommands;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
@@ -66,6 +67,27 @@ class WhatsappManagementTest extends TestCase
         // The command message itself must NOT become a customer-facing message.
         $reply = Http::recorded()->last();
         $this->assertStringContainsString('נפתחה פנייה', $reply[0]->data()['text']);
+    }
+
+    public function test_opening_by_a_local_phone_number_matches_an_e164_customer(): void
+    {
+        // Customer stored in international form; operator types the local number.
+        $customer = Customer::factory()->create(['phone' => '+972501234567']);
+
+        $this->inbound(self::MGMT, 'כרטיס 0501234567 לבדוק את האתר');
+
+        $this->assertSame($customer->id, Ticket::sole()->customer_id);
+    }
+
+    public function test_opening_the_same_command_twice_does_not_duplicate_the_ticket(): void
+    {
+        $commands = app(ManagementCommands::class);
+
+        // A job retry replays the same WAHA message id — it must reuse the ticket.
+        $commands->handle(self::MGMT, 'כרטיס +972500000000 בדיקה', 'wa-retry-1');
+        $commands->handle(self::MGMT, 'כרטיס +972500000000 בדיקה', 'wa-retry-1');
+
+        $this->assertSame(1, Ticket::count());
     }
 
     public function test_the_management_group_can_close_a_ticket_by_command(): void

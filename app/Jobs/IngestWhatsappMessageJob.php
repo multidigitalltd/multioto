@@ -57,7 +57,7 @@ class IngestWhatsappMessageJob implements ShouldQueue
         $managementChat = $gate->ownerChatId();
 
         if ($managementChat !== null && $chatId === $managementChat) {
-            $reply = app(ManagementCommands::class)->handle($chatId, $body);
+            $reply = app(ManagementCommands::class)->handle($chatId, $body, $messageId ? (string) $messageId : null);
 
             if ($reply !== null) {
                 try {
