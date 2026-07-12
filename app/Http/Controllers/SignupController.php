@@ -11,6 +11,7 @@ use App\Http\Requests\SignupRequest;
 use App\Jobs\GenerateCustomerCardPdfJob;
 use App\Jobs\SendWelcomeMessageJob;
 use App\Models\Customer;
+use App\Models\Setting;
 use App\Models\Site;
 use App\Services\Support\TicketIntake;
 use Illuminate\Http\RedirectResponse;
@@ -41,8 +42,17 @@ class SignupController extends Controller
 
     public function show(): View
     {
+        // The tax notice is optional and can be hidden by clearing it. A stored
+        // empty value means "hidden"; only fall back to the config default when
+        // no row exists (the config overlay ignores blanks, so read it directly).
+        $stored = Setting::map();
+        $taxNotice = array_key_exists('signup.tax_approval_notice', $stored)
+            ? $stored['signup.tax_approval_notice']
+            : config('billing.signup.tax_approval_notice');
+
         return view('signup.form', [
             'instructions' => config('billing.signup.instructions'),
+            'taxNotice' => $taxNotice,
         ]);
     }
 

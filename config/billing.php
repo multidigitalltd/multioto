@@ -45,6 +45,15 @@ return [
             // Cheques (advance / prepayment).
             'checks' => env('SIGNUP_CHECKS_INSTRUCTIONS', 'לתשלום בצ׳קים (מקדמה / תשלום מראש) ניצור עמכם קשר לתיאום מסירת הצ׳קים.'),
         ],
+
+        // Shown on the payment step: where to download our up-to-date
+        // bookkeeping / tax-withholding certificates. Any http(s) link becomes
+        // clickable. Editable in הגדרות ← טופס הרשמה.
+        'tax_approval_notice' => env('SIGNUP_TAX_APPROVAL_NOTICE', implode("\n", [
+            'אם דרושים לכם אישור ניהול ספרים או אישור ניכוי מס במקור — ניתן להוריד אישור עדכני בקישור:',
+            'https://taxinfo.taxes.gov.il/gmishurim/firstPage.aspx',
+            'מספר התיק שלנו: 516171303 — מולטי דיגיטל בע״מ.',
+        ])),
     ],
 
     /*

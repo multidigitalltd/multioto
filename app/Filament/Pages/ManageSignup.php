@@ -42,6 +42,15 @@ class ManageSignup extends Page implements HasForms
         'signup.instructions.checks',
     ];
 
+    /**
+     * Optional notices that may be hidden by clearing them. Unlike KEYS (which
+     * fall back to the config default when blank), an empty value here is stored
+     * verbatim so "clear to hide" actually hides it rather than reverting.
+     */
+    private const OPTIONAL_KEYS = [
+        'signup.tax_approval_notice',
+    ];
+
     /** @var array<string, mixed> */
     public array $data = [];
 
@@ -50,8 +59,14 @@ class ManageSignup extends Page implements HasForms
         // Nested state (signup.instructions.* → data['signup']['instructions'][*]);
         // build the fill array nested so values reach the fields.
         $values = [];
+        $stored = Setting::map();
         foreach (self::KEYS as $key) {
             data_set($values, $key, config('billing.'.$key));
+        }
+        // Optional notices: show the stored value verbatim (even empty) when a
+        // row exists, otherwise the config default.
+        foreach (self::OPTIONAL_KEYS as $key) {
+            data_set($values, $key, array_key_exists($key, $stored) ? $stored[$key] : config('billing.'.$key));
         }
 
         $this->form->fill($values);
@@ -75,6 +90,10 @@ class ManageSignup extends Page implements HasForms
                         Textarea::make('signup.instructions.checks')
                             ->label('צ׳קים (מקדמה / תשלום מראש)')
                             ->rows(3),
+                        Textarea::make('signup.tax_approval_notice')
+                            ->label('אישורי ניהול ספרים / ניכוי מס במקור')
+                            ->rows(3)
+                            ->helperText('כיתוב שמופיע בשלב התשלום בטופס — קישור להורדת אישורים ומספר התיק. השאירו ריק כדי לא להציג.'),
                         Placeholder::make('link')
                             ->label('קישור לטופס ההרשמה')
                             ->content(fn (): string => rtrim((string) config('app.url'), '/').'/join'),
@@ -94,6 +113,12 @@ class ManageSignup extends Page implements HasForms
             } else {
                 Setting::forget($key); // fall back to the config default
             }
+        }
+
+        // Optional notices persist even when blank, so clearing them hides them
+        // instead of reverting to the config default.
+        foreach (self::OPTIONAL_KEYS as $key) {
+            Setting::put($key, (string) (data_get($this->data, $key) ?? ''));
         }
 
         $this->refreshConfig();

@@ -64,6 +64,7 @@ class SettingsServiceProvider extends ServiceProvider
         'signup.instructions.standing_order' => 'billing.signup.instructions.standing_order',
         'signup.instructions.bank_transfer' => 'billing.signup.instructions.bank_transfer',
         'signup.instructions.checks' => 'billing.signup.instructions.checks',
+        'signup.tax_approval_notice' => 'billing.signup.tax_approval_notice',
         // Business logo (public-disk path) shown across customer-facing surfaces.
         'branding.logo_path' => 'billing.branding.logo_path',
     ];
