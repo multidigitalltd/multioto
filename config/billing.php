@@ -111,6 +111,13 @@ return [
         'broadcast_throttle_seconds' => env('WAHA_BROADCAST_THROTTLE', 30),
     ],
 
+    'notifications' => [
+        // Internal team alerts (new ticket / customer reply) go to the WhatsApp
+        // approvals number/group (billing.waha.owner_number) AND this email.
+        // Independent of the AI layer — the team is always notified.
+        'team_email' => env('NOTIFY_TEAM_EMAIL'),
+    ],
+
     'email' => [
         // Shared secret the inbound-parse provider includes on its webhook URL.
         'webhook_secret' => env('EMAIL_WEBHOOK_SECRET'),

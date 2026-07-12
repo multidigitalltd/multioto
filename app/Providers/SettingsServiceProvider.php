@@ -38,6 +38,7 @@ class SettingsServiceProvider extends ServiceProvider
         'waha.base_url' => 'billing.waha.base_url',
         'waha.session' => 'billing.waha.session',
         'waha.owner_number' => 'billing.waha.owner_number',
+        'notifications.team_email' => 'billing.notifications.team_email',
         // Auto-generated when the operator enables inbound listening — not a
         // form field (see ManageIntegrations::setupWahaInbound).
         'waha.webhook_secret' => 'billing.waha.webhook_secret',

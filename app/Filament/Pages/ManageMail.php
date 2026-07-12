@@ -42,7 +42,7 @@ class ManageMail extends Page implements HasForms
     protected static string $view = 'filament.pages.manage-mail';
 
     /** Non-secret keys pre-filled from config; secrets are always left blank. */
-    private const IDENTITY_KEYS = ['mail.from_address', 'mail.from_name', 'mail.reply_to'];
+    private const IDENTITY_KEYS = ['mail.from_address', 'mail.from_name', 'mail.reply_to', 'notifications.team_email'];
 
     private const SECRET_KEYS = ['postmark.token', 'postmark.account_token'];
 
@@ -62,6 +62,7 @@ class ManageMail extends Page implements HasForms
             'mail.from_address' => config('mail.from.address'),
             'mail.from_name' => config('mail.from.name'),
             'mail.reply_to' => config('billing.email.support_address'),
+            'notifications.team_email' => config('billing.notifications.team_email'),
         ]);
     }
 
@@ -78,7 +79,10 @@ class ManageMail extends Page implements HasForms
                             ->placeholder('Multi Digital'),
                         TextInput::make('mail.reply_to')->label('כתובת לתשובות (Reply-To / תמיכה)')->email()->autocomplete(false)
                             ->placeholder('support@multidigital.co.il'),
-                    ])->columns(3)
+                        TextInput::make('notifications.team_email')->label('מייל התראות צוות (פניות חדשות)')->email()->autocomplete(false)
+                            ->helperText('לכאן יישלחו התראות על פניות חדשות ותגובות. בוואטסאפ ההתראות מגיעות למספר/קבוצת האישורים שהוגדרו ב-WAHA.')
+                            ->placeholder('team@multidigital.co.il'),
+                    ])->columns(2)
                     ->footerActions([$this->saveAction()]),
 
                 Section::make('חיבור Postmark')
