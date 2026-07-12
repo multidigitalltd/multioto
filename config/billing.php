@@ -116,6 +116,11 @@ return [
         // approvals number/group (billing.waha.owner_number) AND this email.
         // Independent of the AI layer — the team is always notified.
         'team_email' => env('NOTIFY_TEAM_EMAIL'),
+        // Fixed signature appended to outbound support replies. Editable in
+        // הגדרות ← דואר. Email is the primary use; WhatsApp is optional and
+        // usually shorter (or empty). Blank = no signature appended.
+        'reply_signature' => env('REPLY_SIGNATURE'),
+        'reply_signature_whatsapp' => env('REPLY_SIGNATURE_WHATSAPP'),
     ],
 
     'email' => [
@@ -175,9 +180,52 @@ return [
         'timeout_seconds' => env('MONITOR_TIMEOUT_SECONDS', 10),
         // Consecutive failed checks before an incident is opened.
         'failures_to_incident' => env('MONITOR_FAILURES_TO_INCIDENT', 2),
+        // Warn the team when a TLS certificate has this many days (or fewer) left.
+        'ssl_warn_days' => env('MONITOR_SSL_WARN_DAYS', 14),
+        // Responses slower than this (ms) are flagged as "degraded" (not down).
+        'slow_response_ms' => env('MONITOR_SLOW_RESPONSE_MS', 4000),
     ],
 
     'broadcasts' => [
         'email_chunk_size' => env('BROADCAST_EMAIL_CHUNK', 50),
+    ],
+
+    'support' => [
+        // Inbound attachments (images/files a customer sends on WhatsApp or
+        // email). Stored on a PRIVATE disk and served only behind panel auth.
+        'attachments' => [
+            'disk' => env('ATTACHMENT_DISK', 'local'),
+            'max_bytes' => (int) env('ATTACHMENT_MAX_BYTES', 10 * 1024 * 1024), // 10 MB
+            // Allow-list only. Deliberately excludes SVG (scriptable) and every
+            // executable/PHP type — the extension is derived from the MIME, so a
+            // ".php" filename can never be written.
+            'allowed_mimes' => [
+                'image/jpeg' => 'jpg',
+                'image/png' => 'png',
+                'image/gif' => 'gif',
+                'image/webp' => 'webp',
+                'application/pdf' => 'pdf',
+                'text/plain' => 'txt',
+                'application/msword' => 'doc',
+                'application/vnd.openxmlformats-officedocument.wordprocessingml.document' => 'docx',
+                'application/vnd.ms-excel' => 'xls',
+                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' => 'xlsx',
+            ],
+        ],
+    ],
+
+    /*
+     | Proactive reminders — a daily internal digest to the team so nothing
+     | slips before it becomes a problem (an upcoming renewal, a card about to
+     | expire, money already owed). Internal only: the owner decides whether to
+     | contact a customer, honouring the "no customer message without approval"
+     | rule.
+     */
+    'reminders' => [
+        // Flag subscriptions whose next charge is within this many days.
+        'renewal_days' => env('REMINDER_RENEWAL_DAYS', 3),
+        // Flag saved cards expiring within this many whole months (0 = this
+        // month only; 1 = this month and next).
+        'card_expiry_months' => env('REMINDER_CARD_EXPIRY_MONTHS', 1),
     ],
 ];

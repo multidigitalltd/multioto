@@ -15,7 +15,6 @@ use App\Models\Customer;
 use App\Models\Ticket;
 use App\Models\User;
 use App\Models\WebhookEvent;
-use App\Services\Support\TicketIntake;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
 use Livewire\Livewire;
@@ -98,7 +97,7 @@ class TicketChatTest extends TestCase
         [$event] = WebhookEvent::record(WebhookSource::Waha, 'message', 'grp-1', [
             'payload' => ['id' => 'grp-1', 'from' => '972501112222@c.us', 'body' => 'סבבה, אני על זה'],
         ]);
-        (new IngestWhatsappMessageJob($event->id))->handle(app(TicketIntake::class));
+        IngestWhatsappMessageJob::dispatchSync($event->id);
 
         $this->assertSame(0, Ticket::count());
         $this->assertNotNull($event->fresh()->processed_at);

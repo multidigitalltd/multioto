@@ -8,6 +8,7 @@ use App\Services\Health\IntegrationHealth;
 use App\Services\Mail\PostmarkClient;
 use Filament\Forms\Components\Actions\Action as FormAction;
 use Filament\Forms\Components\Section;
+use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Concerns\InteractsWithForms;
 use Filament\Forms\Contracts\HasForms;
@@ -42,7 +43,7 @@ class ManageMail extends Page implements HasForms
     protected static string $view = 'filament.pages.manage-mail';
 
     /** Non-secret keys pre-filled from config; secrets are always left blank. */
-    private const IDENTITY_KEYS = ['mail.from_address', 'mail.from_name', 'mail.reply_to', 'notifications.team_email'];
+    private const IDENTITY_KEYS = ['mail.from_address', 'mail.from_name', 'mail.reply_to', 'notifications.team_email', 'notifications.reply_signature', 'notifications.reply_signature_whatsapp'];
 
     private const SECRET_KEYS = ['postmark.token', 'postmark.account_token'];
 
@@ -63,6 +64,8 @@ class ManageMail extends Page implements HasForms
             'mail.from_name' => config('mail.from.name'),
             'mail.reply_to' => config('billing.email.support_address'),
             'notifications.team_email' => config('billing.notifications.team_email'),
+            'notifications.reply_signature' => config('billing.notifications.reply_signature'),
+            'notifications.reply_signature_whatsapp' => config('billing.notifications.reply_signature_whatsapp'),
         ]);
     }
 
@@ -82,6 +85,22 @@ class ManageMail extends Page implements HasForms
                         TextInput::make('notifications.team_email')->label('מייל התראות צוות (פניות חדשות)')->email()->autocomplete(false)
                             ->helperText('לכאן יישלחו התראות על פניות חדשות ותגובות. בוואטסאפ ההתראות מגיעות למספר/קבוצת האישורים שהוגדרו ב-WAHA.')
                             ->placeholder('team@multidigital.co.il'),
+                    ])->columns(2)
+                    ->footerActions([$this->saveAction()]),
+
+                Section::make('חתימת תשובות')
+                    ->description('חתימה קבועה שתתווסף אוטומטית לסוף כל תשובה לפנייה. השורה שכתב הנציג נשארת כפי שהיא — החתימה מתווספת רק בשליחה ללקוח. השאירו ריק כדי לא להוסיף חתימה.')
+                    ->schema([
+                        Textarea::make('notifications.reply_signature')
+                            ->label('חתימה למייל')
+                            ->rows(4)
+                            ->helperText('לדוגמה: שם, תפקיד, טלפון ואתר. תופיע בתחתית כל תשובת מייל ללקוח.')
+                            ->placeholder("בברכה,\nצוות Multi Digital\n03-0000000 · multidigital.co.il"),
+                        Textarea::make('notifications.reply_signature_whatsapp')
+                            ->label('חתימה לוואטסאפ (אופציונלי)')
+                            ->rows(3)
+                            ->helperText('בדרך כלל קצרה יותר מהמייל, או ריקה.')
+                            ->placeholder('— צוות Multi Digital'),
                     ])->columns(2)
                     ->footerActions([$this->saveAction()]),
 

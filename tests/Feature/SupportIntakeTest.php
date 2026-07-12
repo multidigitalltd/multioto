@@ -61,7 +61,7 @@ class SupportIntakeTest extends TestCase
             'TextBody' => 'הדפים נטענים לאט',
         ]);
 
-        (new IngestEmailMessageJob($event->id))->handle(app(TicketIntake::class));
+        IngestEmailMessageJob::dispatchSync($event->id);
 
         $ticket = Ticket::sole();
         $this->assertSame($customer->id, $ticket->customer_id);
@@ -78,12 +78,12 @@ class SupportIntakeTest extends TestCase
         [$first] = WebhookEvent::record(WebhookSource::Email, 'inbound_message', 'm-1', [
             'MessageID' => 'm-1', 'From' => 'a@b.com', 'Subject' => 'בעיה בהתחברות', 'TextBody' => 'לא מצליח',
         ]);
-        (new IngestEmailMessageJob($first->id))->handle($intake);
+        IngestEmailMessageJob::dispatchSync($first->id);
 
         [$reply] = WebhookEvent::record(WebhookSource::Email, 'inbound_message', 'm-2', [
             'MessageID' => 'm-2', 'From' => 'a@b.com', 'Subject' => 'Re: בעיה בהתחברות', 'TextBody' => 'עדיין לא',
         ]);
-        (new IngestEmailMessageJob($reply->id))->handle($intake);
+        IngestEmailMessageJob::dispatchSync($reply->id);
 
         $this->assertSame(1, Ticket::count());
         $this->assertSame(2, Ticket::sole()->messages()->where('direction', MessageDirection::Inbound)->count());
@@ -96,13 +96,13 @@ class SupportIntakeTest extends TestCase
         [$first] = WebhookEvent::record(WebhookSource::Email, 'inbound_message', 'r-1', [
             'MessageID' => 'r-1', 'From' => 'a@b.com', 'Subject' => 'שאלה', 'TextBody' => 'מה קורה',
         ]);
-        (new IngestEmailMessageJob($first->id))->handle($intake);
+        IngestEmailMessageJob::dispatchSync($first->id);
         Ticket::sole()->update(['status' => TicketStatus::Resolved]);
 
         [$second] = WebhookEvent::record(WebhookSource::Email, 'inbound_message', 'r-2', [
             'MessageID' => 'r-2', 'From' => 'a@b.com', 'Subject' => 'Re: שאלה', 'TextBody' => 'עוד משהו',
         ]);
-        (new IngestEmailMessageJob($second->id))->handle($intake);
+        IngestEmailMessageJob::dispatchSync($second->id);
 
         $this->assertSame(TicketStatus::Open, Ticket::sole()->status);
     }

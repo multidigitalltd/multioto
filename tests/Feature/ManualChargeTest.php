@@ -18,6 +18,7 @@ use App\Services\Cardcom\ChargeReconciler;
 use App\Services\Linet\InvoiceIssuer;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Bus;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
@@ -25,7 +26,7 @@ class ManualChargeTest extends TestCase
 {
     use RefreshDatabase;
 
-    private function oneOffCharge(Customer $customer, ChargeStatus $status): Charge
+    private function oneOffCharge(Customer $customer, ChargeStatus $status, ?string $notes = null): Charge
     {
         return Charge::create([
             'subscription_id' => null,
@@ -36,6 +37,7 @@ class ManualChargeTest extends TestCase
             'status' => $status,
             'attempt_number' => 1,
             'description' => 'שירות חד-פעמי',
+            'invoice_notes' => $notes,
             'period_start' => now()->toDateString(),
             'period_end' => now()->toDateString(),
         ]);
@@ -234,6 +236,94 @@ class ManualChargeTest extends TestCase
             && $request->data()['docDet'][0]['name'] === 'שירות חד-פעמי');
     }
 
+    public function test_invoice_notes_are_printed_on_the_linet_line(): void
+    {
+        config([
+            'billing.linet.base_url' => 'https://app.linet.test/api',
+            'billing.linet.login_id' => 'lid', 'billing.linet.key' => 'lhash',
+            'billing.linet.company_id' => '1', 'billing.linet.doctype' => '9',
+            'billing.linet.vat_cat_taxable' => 1, 'billing.linet.payment_type' => 3,
+        ]);
+        Http::fake(['*/create/doc' => Http::response(['id' => 777])]);
+
+        $customer = Customer::factory()->create(['vat_exempt' => false]);
+        $charge = $this->oneOffCharge($customer, ChargeStatus::Succeeded, notes: 'כולל התקנת תוסף SEO ותקופת הרצה');
+
+        (new IssueInvoiceJob($charge->id))->handle(app(InvoiceIssuer::class));
+
+        // The line name stays the short description; the operator's note rides
+        // along on the line's description sub-field (a known-accepted field).
+        Http::assertSent(fn ($request) => str_ends_with($request->url(), '/create/doc')
+            && $request->data()['docDet'][0]['name'] === 'שירות חד-פעמי'
+            && $request->data()['docDet'][0]['description'] === 'כולל התקנת תוסף SEO ותקופת הרצה');
+    }
+
+    public function test_a_multi_line_charge_issues_a_linet_document_with_one_line_per_item(): void
+    {
+        config([
+            'billing.linet.base_url' => 'https://app.linet.test/api',
+            'billing.linet.login_id' => 'lid', 'billing.linet.key' => 'lhash',
+            'billing.linet.company_id' => '1', 'billing.linet.doctype' => '9',
+            'billing.linet.vat_cat_taxable' => 1, 'billing.linet.payment_type' => 3,
+        ]);
+        Http::fake(['*/create/doc' => Http::response(['id' => 888])]);
+
+        $customer = Customer::factory()->create(['vat_exempt' => false]);
+        $charge = Charge::create([
+            'subscription_id' => null,
+            'customer_id' => $customer->id,
+            'amount_agorot' => 25424,
+            'vat_agorot' => 4576,
+            'total_agorot' => 30000, // 2×10000 + 1×10000
+            'status' => ChargeStatus::Succeeded,
+            'attempt_number' => 1,
+            'description' => 'חבילה',
+            'lines' => [
+                ['name' => 'אחסון שנתי', 'qty' => 2, 'unit_price_agorot' => 10000],
+                ['name' => 'תוסף SEO', 'qty' => 1, 'unit_price_agorot' => 10000],
+            ],
+            'period_start' => now()->toDateString(),
+            'period_end' => now()->toDateString(),
+        ]);
+
+        (new IssueInvoiceJob($charge->id))->handle(app(InvoiceIssuer::class));
+
+        Http::assertSent(function ($request): bool {
+            if (! str_ends_with($request->url(), '/create/doc')) {
+                return false;
+            }
+            $det = $request->data()['docDet'];
+
+            return count($det) === 2
+                && $det[0]['name'] === 'אחסון שנתי' && $det[0]['qty'] === 2 && $det[0]['iItem'] === 100.0 && $det[0]['line'] === 1
+                && $det[1]['name'] === 'תוסף SEO' && $det[1]['qty'] === 1 && $det[1]['iItem'] === 100.0 && $det[1]['line'] === 2
+                // Payment (docCheq) still totals the whole charge.
+                && $request->data()['docCheq'][0]['sum'] === 300.0;
+        });
+    }
+
+    public function test_invoice_lines_fall_back_to_a_single_line_from_the_charge_total(): void
+    {
+        $customer = Customer::factory()->create();
+        $charge = $this->oneOffCharge($customer, ChargeStatus::Succeeded);
+
+        $lines = $charge->invoiceLines();
+
+        $this->assertCount(1, $lines);
+        $this->assertSame('שירות חד-פעמי', $lines[0]['name']);
+        $this->assertSame(11800, $lines[0]['unit_price_agorot']);
+    }
+
+    public function test_manual_charge_service_persists_invoice_notes_on_the_charge(): void
+    {
+        Bus::fake([IssueInvoiceJob::class, ProcessManualChargeJob::class]);
+
+        $customer = Customer::factory()->create(['vat_exempt' => false]);
+        $charge = app(ManualChargeService::class)->chargeSavedToken($customer, 11800, 'שירות', 'הערה חשובה');
+
+        $this->assertSame('הערה חשובה', $charge->invoice_notes);
+    }
+
     public function test_manual_charge_service_splits_vat_and_queues_the_charge(): void
     {
         Bus::fake([IssueInvoiceJob::class, ProcessManualChargeJob::class]);
@@ -279,6 +369,65 @@ class ManualChargeTest extends TestCase
         $this->assertFalse($result['ok']);
         $this->assertStringContainsString('קוד סוג מסמך', $result['error']);
         Http::assertNothingSent();
+    }
+
+    public function test_issue_is_a_no_op_when_the_charge_already_has_an_invoice(): void
+    {
+        config([
+            'billing.linet.base_url' => 'https://app.linet.test/api',
+            'billing.linet.login_id' => 'lid', 'billing.linet.key' => 'lhash',
+            'billing.linet.company_id' => '1', 'billing.linet.doctype' => '9',
+            'billing.linet.vat_cat_taxable' => 1, 'billing.linet.payment_type' => 3,
+        ]);
+        Http::fake();
+
+        $customer = Customer::factory()->create(['vat_exempt' => false]);
+        $charge = $this->oneOffCharge($customer, ChargeStatus::Succeeded);
+        $charge->invoice()->create([
+            'customer_id' => $customer->id,
+            'linet_document_id' => '111',
+            'amount_agorot' => $charge->amount_agorot,
+            'vat_agorot' => $charge->vat_agorot,
+            'total_agorot' => $charge->total_agorot,
+            'issued_at' => now(),
+        ]);
+
+        $result = app(InvoiceIssuer::class)->issue($charge->fresh());
+
+        // Already issued → success no-op, and Linet is never called again.
+        $this->assertTrue($result['ok']);
+        Http::assertNothingSent();
+        $this->assertSame(1, $charge->invoice()->count());
+    }
+
+    public function test_issue_never_calls_linet_twice_while_another_issue_holds_the_lock(): void
+    {
+        config([
+            'billing.linet.base_url' => 'https://app.linet.test/api',
+            'billing.linet.login_id' => 'lid', 'billing.linet.key' => 'lhash',
+            'billing.linet.company_id' => '1', 'billing.linet.doctype' => '9',
+            'billing.linet.vat_cat_taxable' => 1, 'billing.linet.payment_type' => 3,
+        ]);
+        Http::fake(['*/create/doc' => Http::response(['id' => 999])]);
+
+        $customer = Customer::factory()->create(['vat_exempt' => false]);
+        $charge = $this->oneOffCharge($customer, ChargeStatus::Succeeded);
+
+        // Simulate a concurrent issue already in flight (async job racing the
+        // manual button, or a double-click): the lock is held elsewhere.
+        $lock = Cache::lock("invoice-issue:{$charge->id}", 120);
+        $this->assertTrue($lock->get());
+
+        try {
+            $result = app(InvoiceIssuer::class)->issue($charge);
+        } finally {
+            $lock->release();
+        }
+
+        // Treated as a success no-op — and crucially, no second Linet document.
+        $this->assertTrue($result['ok']);
+        Http::assertNothingSent();
+        $this->assertDatabaseMissing('invoices', ['charge_id' => $charge->id]);
     }
 
     public function test_invoice_issuer_returns_the_linet_error_instead_of_failing_silently(): void

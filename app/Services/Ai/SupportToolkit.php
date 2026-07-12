@@ -114,23 +114,62 @@ class SupportToolkit
         return $out;
     }
 
-    /** @return array<int, string> one line per site */
+    /**
+     * One line per site, enriched with the real last-observed diagnostics the
+     * monitor already recorded (the actual HTTP code / error, SSL days-left, a
+     * slow-response flag) — so the AI answers with the concrete symptom instead
+     * of a vague "the site is down". All from the database: no live probe runs
+     * in the draft path.
+     *
+     * @return array<int, string> one line per site
+     */
     public function siteStatus(Customer $customer): array
     {
+        $warnDays = (int) config('billing.monitoring.ssl_warn_days', 14);
+
         return $customer->sites()
             ->with(['openIncident'])
             ->get()
-            ->map(function ($site): string {
+            ->map(function ($site) use ($warnDays): string {
                 $lastCheck = $site->monitorChecks()->latest('checked_at')->first();
+                $isDown = $site->openIncident !== null || ($lastCheck && ! $lastCheck->is_up);
+
+                // The concrete failure the monitor last saw.
+                $details = [];
+                if ($isDown && $lastCheck) {
+                    if ($lastCheck->status_code) {
+                        $details[] = "HTTP {$lastCheck->status_code}";
+                    }
+                    if (filled($lastCheck->error)) {
+                        $details[] = $lastCheck->error;
+                    }
+                }
+
+                // TLS certificate about to expire / already expired.
+                if ($site->ssl_days_left !== null) {
+                    if ($site->ssl_days_left <= 0) {
+                        $details[] = 'תעודת SSL פגה';
+                    } elseif ($site->ssl_days_left <= $warnDays) {
+                        $details[] = "תעודת SSL בתוקף עוד {$site->ssl_days_left} ימים";
+                    }
+                }
+
+                // Up, but responding slowly.
+                if (! $isDown && $site->slow_alerted_at !== null) {
+                    $details[] = 'זמן תגובה איטי';
+                }
 
                 if ($site->openIncident) {
                     $since = $site->openIncident->started_at?->format('d/m/Y H:i') ?? '';
+                    array_unshift($details, "תקלה פתוחה מאז {$since}");
 
-                    return "{$site->domain}: ⚠️ למטה (תקלה פתוחה מאז {$since})";
+                    return "{$site->domain}: ⚠️ למטה (".implode(', ', $details).')';
                 }
 
+                $suffix = $details !== [] ? ' ('.implode(', ', $details).')' : '';
+
                 if ($lastCheck) {
-                    return "{$site->domain}: ".($lastCheck->is_up ? '✅ פעיל' : '⚠️ לא זמין בבדיקה האחרונה');
+                    return "{$site->domain}: ".($lastCheck->is_up ? '✅ פעיל' : '⚠️ לא זמין בבדיקה האחרונה').$suffix;
                 }
 
                 return "{$site->domain}: אין נתוני ניטור עדיין";

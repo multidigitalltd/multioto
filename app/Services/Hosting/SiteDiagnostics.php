@@ -94,6 +94,12 @@ class SiteDiagnostics
         }
     }
 
+    /** Public helper: TLS certificate days-left for a domain (null if unknown). */
+    public function sslDaysLeft(string $domain): ?int
+    {
+        return $this->sslInfo($domain)['days_left'];
+    }
+
     /**
      * TLS certificate expiry for a domain (best-effort; null when unreachable).
      *

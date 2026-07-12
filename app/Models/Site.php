@@ -16,6 +16,7 @@ class Site extends Model
 
     protected $fillable = [
         'customer_id', 'domain', 'hosting_ref', 'monitor_url', 'monitor_enabled', 'status',
+        'expected_keyword', 'ssl_days_left', 'ssl_alerted_at', 'slow_alerted_at',
     ];
 
     protected function casts(): array
@@ -23,6 +24,8 @@ class Site extends Model
         return [
             'monitor_enabled' => 'boolean',
             'status' => SiteStatus::class,
+            'ssl_alerted_at' => 'datetime',
+            'slow_alerted_at' => 'datetime',
         ];
     }
 

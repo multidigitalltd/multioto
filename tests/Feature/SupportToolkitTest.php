@@ -75,6 +75,28 @@ class SupportToolkitTest extends TestCase
         $this->assertStringContainsString('למטה', $lines[0]);
     }
 
+    public function test_site_status_includes_the_real_last_observed_symptom(): void
+    {
+        $customer = Customer::factory()->create();
+        $site = Site::factory()->create([
+            'customer_id' => $customer->id,
+            'domain' => 'broken.co.il',
+            'ssl_days_left' => 0,
+        ]);
+        Incident::create(['site_id' => $site->id, 'started_at' => now()->subHour(), 'status' => IncidentStatus::Open]);
+        $site->monitorChecks()->create([
+            'checked_at' => now(), 'is_up' => false, 'status_code' => 502,
+            'response_ms' => 120, 'error' => 'Bad Gateway',
+        ]);
+
+        $line = app(SupportToolkit::class)->siteStatus($customer)[0];
+
+        // The AI now sees the concrete failure, not just "down".
+        $this->assertStringContainsString('HTTP 502', $line);
+        $this->assertStringContainsString('Bad Gateway', $line);
+        $this->assertStringContainsString('תעודת SSL פגה', $line);
+    }
+
     public function test_canceled_subscriptions_are_excluded_from_the_account_summary(): void
     {
         $customer = Customer::factory()->create();

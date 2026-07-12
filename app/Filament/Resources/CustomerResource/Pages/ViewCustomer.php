@@ -92,6 +92,8 @@ class ViewCustomer extends ViewRecord
                     ->numeric()->prefix('₪')->step('0.01')->minValue(0.1)->inputMode('decimal')->required(),
                 Forms\Components\TextInput::make('description')
                     ->label('תיאור (יופיע בחשבונית)')->default('חיוב חד-פעמי')->maxLength(120)->required(),
+                Forms\Components\Textarea::make('invoice_notes')
+                    ->label('הערות לחשבונית (אופציונלי)')->rows(2)->maxLength(500),
             ])
             ->action(function (array $data, Customer $record, ManualChargeService $service): void {
                 $totalAgorot = (int) round(((float) $data['amount']) * 100);
@@ -103,9 +105,10 @@ class ViewCustomer extends ViewRecord
                 }
 
                 $description = filled($data['description']) ? $data['description'] : 'חיוב חד-פעמי';
+                $notes = filled($data['invoice_notes'] ?? null) ? trim((string) $data['invoice_notes']) : null;
 
                 if ($service->hasActiveToken($record)) {
-                    $service->chargeSavedToken($record, $totalAgorot, $description);
+                    $service->chargeSavedToken($record, $totalAgorot, $description, $notes);
                     Notification::make()
                         ->title('החיוב נשלח לעיבוד')
                         ->body('הכרטיס השמור של '.$record->name.' יחויב בסך ₪'.number_format($totalAgorot / 100, 2).'. עקבו בעמוד "חיובים".')
@@ -116,7 +119,7 @@ class ViewCustomer extends ViewRecord
 
                 // No saved card → open a hosted payment page to enter/send.
                 try {
-                    $result = $service->createHostedPage($record, $totalAgorot, $description);
+                    $result = $service->createHostedPage($record, $totalAgorot, $description, $notes);
                 } catch (\Throwable $e) {
                     Notification::make()->title('פתיחת עמוד התשלום נכשלה')->body(Str::limit($e->getMessage(), 150))->danger()->send();
 

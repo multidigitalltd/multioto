@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Enums\MessageChannel;
 use App\Enums\TicketChannel;
 use App\Models\WebhookEvent;
+use App\Services\Support\AttachmentStore;
 use App\Services\Support\TicketIntake;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -25,7 +26,7 @@ class IngestEmailMessageJob implements ShouldQueue
 
     public function __construct(public int $webhookEventId) {}
 
-    public function handle(TicketIntake $intake): void
+    public function handle(TicketIntake $intake, AttachmentStore $attachments): void
     {
         $event = WebhookEvent::find($this->webhookEventId);
 
@@ -48,7 +49,7 @@ class IngestEmailMessageJob implements ShouldQueue
 
         $customer = $intake->matchCustomer(email: $from);
 
-        $intake->recordInbound(
+        $message = $intake->recordInbound(
             channel: TicketChannel::Email,
             messageChannel: MessageChannel::Email,
             customer: $customer,
@@ -58,7 +59,53 @@ class IngestEmailMessageJob implements ShouldQueue
             subject: $subject,
         );
 
+        // Store any attachments (Postmark sends them base64-encoded inline) and
+        // record their metadata on the just-created message. Only on first
+        // ingest — recordInbound is idempotent per external id.
+        if ($message->wasRecentlyCreated) {
+            $stored = $this->storeAttachments($attachments, $message->ticket_id, $payload['Attachments'] ?? $payload['attachments'] ?? []);
+
+            if ($stored !== []) {
+                $message->update(['attachments' => $stored]);
+            }
+        }
+
         $event->markProcessed();
+    }
+
+    /**
+     * Decode and store inbound email attachments (Postmark shape:
+     * {Name, Content: base64, ContentType, ContentLength}). Rejected files are
+     * simply skipped.
+     *
+     * @param  array<int, array<string, mixed>>  $raw
+     * @return array<int, array{name: string, mime: string, size: int, path: string, disk: string}>
+     */
+    protected function storeAttachments(AttachmentStore $store, int $ticketId, array $raw): array
+    {
+        $out = [];
+
+        foreach ($raw as $attachment) {
+            $encoded = (string) ($attachment['Content'] ?? $attachment['content'] ?? '');
+            $contents = $encoded !== '' ? base64_decode($encoded, true) : false;
+
+            if ($contents === false || $contents === '') {
+                continue;
+            }
+
+            $meta = $store->store(
+                $ticketId,
+                (string) ($attachment['Name'] ?? $attachment['name'] ?? 'file'),
+                $contents,
+                (string) ($attachment['ContentType'] ?? $attachment['content_type'] ?? '') ?: null,
+            );
+
+            if ($meta !== null) {
+                $out[] = $meta;
+            }
+        }
+
+        return $out;
     }
 
     /**

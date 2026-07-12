@@ -43,6 +43,26 @@
                         <time datetime="{{ $message->created_at->toIso8601String() }}">{{ $message->created_at->format('d/m/Y H:i') }}</time>
                     </div>
                     <div class="whitespace-pre-line">{{ $message->body }}</div>
+
+                    @if (filled($message->attachments))
+                        <div class="mt-2 flex flex-col gap-2">
+                            @foreach ($message->attachments as $i => $attachment)
+                                @php $url = route('support.attachment', ['message' => $message->id, 'index' => $i]); @endphp
+                                @if (str_starts_with($attachment['mime'] ?? '', 'image/'))
+                                    <a href="{{ $url }}" target="_blank" rel="noopener">
+                                        <img src="{{ $url }}" alt="{{ $attachment['name'] ?? 'תמונה' }}"
+                                             class="max-h-48 rounded-lg border border-gray-200 dark:border-gray-700" style="max-width: 100%;">
+                                    </a>
+                                @else
+                                    <a href="{{ $url }}" target="_blank" rel="noopener"
+                                       class="flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-xs text-primary-600 hover:underline dark:border-gray-700">
+                                        <x-filament::icon icon="heroicon-o-paper-clip" class="h-4 w-4" />
+                                        {{ $attachment['name'] ?? 'קובץ מצורף' }}
+                                    </a>
+                                @endif
+                            @endforeach
+                        </div>
+                    @endif
                 </div>
             </div>
         @empty
@@ -62,13 +82,26 @@
             </select>
         </div>
         <label for="replyBody" class="sr-only">תוכן המענה</label>
-        <textarea id="replyBody" wire:model="replyBody" rows="3" required
+        <textarea id="replyBody" wire:model="replyBody" rows="3"
                   placeholder="כתבו מענה ללקוח…"
                   class="w-full rounded-lg border-gray-300 text-sm dark:border-gray-600 dark:bg-gray-900"></textarea>
-        <div class="flex justify-end">
+
+        <div class="flex flex-wrap items-center justify-between gap-3">
+            <div class="flex items-center gap-2 text-sm">
+                <label for="replyFiles" class="flex cursor-pointer items-center gap-1 text-primary-600 hover:underline">
+                    <x-filament::icon icon="heroicon-o-paper-clip" class="h-4 w-4" />
+                    צירוף קובץ
+                </label>
+                <input id="replyFiles" type="file" wire:model="replyFiles" multiple class="hidden">
+                @if (filled($replyFiles))
+                    <span class="text-xs text-gray-500 dark:text-gray-400">{{ count($replyFiles) }} קבצים נבחרו</span>
+                @endif
+                <span wire:loading wire:target="replyFiles" class="text-xs text-gray-500">מעלה…</span>
+            </div>
             <x-filament::button type="submit" icon="heroicon-o-paper-airplane">
                 שליחה
             </x-filament::button>
         </div>
+        @error('replyFiles.*') <span class="text-xs text-danger-600">{{ $message }}</span> @enderror
     </form>
 </x-filament-panels::page>

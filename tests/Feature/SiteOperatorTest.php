@@ -92,7 +92,7 @@ class SiteOperatorTest extends TestCase
         Http::fake(['*' => Http::response('down', 502)]);
         $site = $this->site();
 
-        (new MonitorSiteJob($site->id))->handle();
+        MonitorSiteJob::dispatchSync($site->id);
 
         // Incident opened…
         $this->assertSame(1, $site->incidents()->count());

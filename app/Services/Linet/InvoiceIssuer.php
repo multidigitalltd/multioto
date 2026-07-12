@@ -7,13 +7,20 @@ use App\Enums\DocumentType;
 use App\Enums\VatCategory;
 use App\Models\Charge;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
 
 /**
  * Issues a Linet tax invoice/receipt for a successful charge and returns a
  * plain result, so both the async job and a manual "issue invoice" button can
- * surface the exact Linet error instead of failing silently. Idempotent: a
- * charge that already has an invoice is a success no-op.
+ * surface the exact Linet error instead of failing silently.
+ *
+ * Idempotent under concurrency: a charge that already has an invoice is a
+ * success no-op, and the whole issue is serialised behind a per-charge lock so
+ * a race between the async job and the manual button (or a double-click) can
+ * NEVER create two Linet documents for one transaction. The `invoices.charge_id`
+ * unique index is the last line of defence; the lock stops the duplicate Linet
+ * call before it ever happens.
  */
 class InvoiceIssuer
 {
@@ -64,7 +71,24 @@ class InvoiceIssuer
             )
             : ($charge->description ?: 'חיוב');
 
+        // Serialise issuance per charge: only one caller may talk to Linet at a
+        // time. A concurrent issue (async job racing the manual button, or a
+        // double-click) must never produce a second Linet document.
+        $lock = Cache::lock("invoice-issue:{$charge->id}", 120);
+
+        if (! $lock->get()) {
+            // Another issue is already in flight — treat as a success no-op
+            // rather than calling Linet a second time.
+            return ['ok' => true, 'error' => null];
+        }
+
         try {
+            // Re-check under the lock with a fresh read: the in-flight issue may
+            // have committed the invoice between our first check and the lock.
+            if ($charge->invoice()->exists()) {
+                return ['ok' => true, 'error' => null];
+            }
+
             $document = $this->linet->issueDocument($charge, $vatCategory, $description);
 
             // The create response carries no PDF link — fetch it now (best
@@ -94,6 +118,8 @@ class InvoiceIssuer
             return ['ok' => true, 'error' => null];
         } catch (\Throwable $e) {
             return ['ok' => false, 'error' => Str::limit(trim($e->getMessage()) ?: class_basename($e), 200)];
+        } finally {
+            $lock->release();
         }
     }
 

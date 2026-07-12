@@ -11,6 +11,7 @@ use Filament\Forms\Components\Toggle;
 use Filament\Forms\Concerns\InteractsWithForms;
 use Filament\Forms\Contracts\HasForms;
 use Filament\Forms\Form;
+use Filament\Forms\Set;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 
@@ -36,6 +37,13 @@ class ManageAiAgent extends Page implements HasForms
     protected static ?int $navigationSort = 84;
 
     protected static string $view = 'filament.pages.manage-ai-agent';
+
+    /** Default API endpoint per provider — filled in when the provider changes. */
+    private const DEFAULT_BASE_URLS = [
+        'anthropic' => 'https://api.anthropic.com',
+        'openai' => 'https://api.openai.com/v1',
+        'google' => 'https://generativelanguage.googleapis.com',
+    ];
 
     /** @var array<string, mixed> */
     public array $data = [];
@@ -67,15 +75,20 @@ class ManageAiAgent extends Page implements HasForms
                             ->options([
                                 'anthropic' => 'Anthropic (Claude)',
                                 'openai' => 'תואם-OpenAI (OpenAI / Azure / OpenRouter / מקומי)',
+                                'google' => 'Google (Gemini)',
                             ])
-                            ->required(),
+                            ->required()
+                            ->live()
+                            // Choosing a provider fills in its API endpoint, so
+                            // there's no URL to remember.
+                            ->afterStateUpdated(fn ($state, Set $set) => $set('ai.base_url', self::DEFAULT_BASE_URLS[$state] ?? null)),
                         TextInput::make('ai.model')
                             ->label('שם הדגם')
-                            ->placeholder('claude-opus-4-8 / gpt-4o / ...')
+                            ->placeholder('claude-opus-4-8 / gpt-4o / gemini-2.5-flash')
                             ->autocomplete(false),
                         TextInput::make('ai.base_url')
                             ->label('כתובת ה-API')
-                            ->helperText('אנתרופיק: https://api.anthropic.com · תואם-OpenAI: למשל https://api.openai.com/v1')
+                            ->helperText('אנתרופיק: https://api.anthropic.com · תואם-OpenAI: https://api.openai.com/v1 · Google: https://generativelanguage.googleapis.com')
                             ->autocomplete(false),
                         TextInput::make('ai.api_key')
                             ->label('מפתח API')

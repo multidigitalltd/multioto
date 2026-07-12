@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\BillingController;
 use App\Http\Controllers\SignupController;
+use App\Http\Controllers\SupportAttachmentController;
 use App\Http\Controllers\SupportFormController;
 use App\Http\Controllers\Webhooks\CardcomWebhookController;
 use App\Http\Controllers\Webhooks\EmailWebhookController;
@@ -43,6 +44,15 @@ Route::get('/billing/update-card/{customer}', [BillingController::class, 'update
 Route::view('/billing/update-card/done/{result}', 'billing.update-card-done')
     ->where('result', 'success|failed')
     ->name('billing.update-card.done');
+
+/*
+ | Inbound support attachments — served only to a signed-in team member
+ | (panel auth). Files live on a private disk; this is the sole read path.
+ */
+Route::get('/support/attachments/{message}/{index}', SupportAttachmentController::class)
+    ->middleware(['web', 'auth'])
+    ->whereNumber('index')
+    ->name('support.attachment');
 
 /*
  | Inbound webhooks. Secret verification happens inside each controller
