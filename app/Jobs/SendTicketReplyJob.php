@@ -47,7 +47,8 @@ class SendTicketReplyJob implements ShouldQueue
                 return;
             }
 
-            $response = $waha->sendMessage($chatId, $message->body);
+            $body = $this->withSignature($message->body, (string) config('billing.notifications.reply_signature_whatsapp'));
+            $response = $waha->sendMessage($chatId, $body);
             $message->update(['external_message_id' => $response['id'] ?? null]);
         } else {
             $email = $ticket->customer?->email;
@@ -56,12 +57,26 @@ class SendTicketReplyJob implements ShouldQueue
                 return;
             }
 
-            Mail::to($email)->send(new TicketReplyMail($ticket->subject, $message->body));
+            $body = $this->withSignature($message->body, (string) config('billing.notifications.reply_signature'));
+            Mail::to($email)->send(new TicketReplyMail($ticket->subject, $body));
             $message->update(['external_message_id' => 'mail-'.$message->id]);
         }
 
         if ($ticket->first_response_at === null) {
             $ticket->update(['first_response_at' => now()]);
         }
+    }
+
+    /**
+     * Append the configured reply signature to the delivered message, separated
+     * by a blank line. The stored internal message stays as the agent typed it;
+     * the signature is boilerplate added only on the way out. Empty signature =
+     * unchanged body.
+     */
+    private function withSignature(string $body, string $signature): string
+    {
+        $signature = trim($signature);
+
+        return $signature === '' ? $body : $body."\n\n".$signature;
     }
 }

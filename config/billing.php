@@ -116,6 +116,11 @@ return [
         // approvals number/group (billing.waha.owner_number) AND this email.
         // Independent of the AI layer — the team is always notified.
         'team_email' => env('NOTIFY_TEAM_EMAIL'),
+        // Fixed signature appended to outbound support replies. Editable in
+        // הגדרות ← דואר. Email is the primary use; WhatsApp is optional and
+        // usually shorter (or empty). Blank = no signature appended.
+        'reply_signature' => env('REPLY_SIGNATURE'),
+        'reply_signature_whatsapp' => env('REPLY_SIGNATURE_WHATSAPP'),
     ],
 
     'email' => [
