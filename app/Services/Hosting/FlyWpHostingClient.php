@@ -31,6 +31,37 @@ class FlyWpHostingClient implements HostingClient
         $this->toggleMaintenance($site, false);
     }
 
+    public function clearCache(Site $site): void
+    {
+        $this->action($site, 'cache_path');
+    }
+
+    public function restartSite(Site $site): void
+    {
+        $this->action($site, 'restart_path');
+    }
+
+    /**
+     * POST a configurable FlyWP action endpoint for a site. The path template
+     * lives in config so it can track FlyWP's API version without a code change.
+     */
+    protected function action(Site $site, string $configKey): void
+    {
+        if (blank($site->hosting_ref)) {
+            throw new RuntimeException("Site {$site->id} has no FlyWP hosting_ref; cannot manage on FlyWP.");
+        }
+
+        $config = config('billing.hosting.flywp');
+
+        $path = str_replace(
+            ['{server}', '{site}'],
+            [$config['server_id'], $site->hosting_ref],
+            $config[$configKey],
+        );
+
+        $this->client()->post($path)->throw();
+    }
+
     protected function toggleMaintenance(Site $site, bool $enabled): void
     {
         if (blank($site->hosting_ref)) {

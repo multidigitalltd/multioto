@@ -36,6 +36,7 @@ class PendingActionResource extends Resource
     /** Hebrew names for action types. */
     public const TYPE_LABELS = [
         'ticket_reply' => 'תשובה ללקוח',
+        'site_fix' => 'תיקון אתר',
     ];
 
     public static function getNavigationBadge(): ?string

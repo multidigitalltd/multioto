@@ -22,7 +22,22 @@ class LogHostingClient implements HostingClient
 
     public function restoreSite(Site $site): void
     {
-        Log::channel('single')->warning('HostingClient(log): restore requested', [
+        $this->record('restore', $site);
+    }
+
+    public function clearCache(Site $site): void
+    {
+        $this->record('clear-cache', $site);
+    }
+
+    public function restartSite(Site $site): void
+    {
+        $this->record('restart', $site);
+    }
+
+    private function record(string $operation, Site $site): void
+    {
+        Log::channel('single')->warning("HostingClient(log): {$operation} requested", [
             'site_id' => $site->id,
             'domain' => $site->domain,
             'hosting_ref' => $site->hosting_ref,

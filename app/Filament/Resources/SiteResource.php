@@ -7,12 +7,15 @@ use App\Filament\Resources\SiteResource\Pages;
 use App\Jobs\RestoreSiteJob;
 use App\Jobs\SuspendSiteJob;
 use App\Models\Site;
+use App\Services\Automation\ApprovalGate;
+use App\Services\Hosting\SiteDiagnostics;
 use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
+use Illuminate\Support\Str;
 
 class SiteResource extends Resource
 {
@@ -127,6 +130,54 @@ class SiteResource extends Resource
                     ->label('ניטור פעיל'),
             ])
             ->actions([
+                // Read-only WordPress diagnostics: live probe + SSL + uptime,
+                // with a suggested fix the owner can send to the approval gate.
+                Tables\Actions\Action::make('diagnose')
+                    ->label('אבחון')
+                    ->icon('heroicon-o-magnifying-glass')
+                    ->color('info')
+                    ->action(function (Site $record, SiteDiagnostics $diagnostics): void {
+                        try {
+                            $result = $diagnostics->run($record);
+                        } catch (\Throwable $e) {
+                            Notification::make()->title('האבחון נכשל')->body(Str::limit($e->getMessage(), 150))->danger()->send();
+
+                            return;
+                        }
+
+                        Notification::make()
+                            ->title('אבחון '.$record->domain.($result['healthy'] ? ' — תקין ✓' : ' — נמצאו בעיות'))
+                            ->body($result['summary']) // includes the suggested fix in Hebrew
+                            ->{$result['healthy'] ? 'success' : 'warning'}()
+                            ->persistent()
+                            ->send();
+                    }),
+
+                // Propose a reversible fix (owner approves via WhatsApp/panel).
+                Tables\Actions\Action::make('proposeFix')
+                    ->label('הצע תיקון')
+                    ->icon('heroicon-o-wrench-screwdriver')
+                    ->color('warning')
+                    ->visible(fn (Site $record): bool => self::hostingActionable($record))
+                    ->form([
+                        Forms\Components\Select::make('fix')
+                            ->label('התיקון המוצע')
+                            ->options([
+                                'clear_cache' => 'ניקוי מטמון (Cache)',
+                                'restart' => 'הפעלה מחדש של האתר',
+                                'maintenance_on' => 'הכנסה למצב תחזוקה',
+                                'maintenance_off' => 'הוצאה ממצב תחזוקה',
+                            ])
+                            ->default('clear_cache')
+                            ->required(),
+                    ])
+                    ->action(function (array $data, Site $record, ApprovalGate $gate): void {
+                        self::proposeSiteFix($gate, $record, $data['fix']);
+                        Notification::make()->title('התיקון נשלח לאישור')
+                            ->body('הבקשה תופיע ב"אישורי אוטומציה" ותישלח לוואטסאפ שלך לאישור לפני ביצוע.')
+                            ->success()->send();
+                    }),
+
                 Tables\Actions\Action::make('suspend')
                     ->label('השהה')
                     ->icon('heroicon-o-pause-circle')
@@ -190,6 +241,22 @@ class SiteResource extends Resource
         }
 
         return true;
+    }
+
+    /** Record a site-fix proposal on the approval gate (owner approves to run). */
+    protected static function proposeSiteFix(ApprovalGate $gate, Site $site, string $fix): void
+    {
+        $gate->propose(
+            type: 'site_fix',
+            summary: sprintf(
+                "תיקון אתר %s (%s): %s.\nיבוצע רק לאחר אישורך, וניתן לשחזור.",
+                $site->domain,
+                $site->customer?->name ?? 'לקוח',
+                SiteDiagnostics::FIX_LABELS[$fix] ?? $fix,
+            ),
+            payload: ['site_id' => $site->id, 'fix' => $fix],
+            customerId: $site->customer_id,
+        );
     }
 
     public static function getRelations(): array

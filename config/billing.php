@@ -129,6 +129,9 @@ return [
             // Suspend/restore via maintenance mode. {server}/{site} are substituted;
             // site is the FlyWP site id stored on sites.hosting_ref.
             'maintenance_path' => env('FLYWP_MAINTENANCE_PATH', 'servers/{server}/sites/{site}/maintenance'),
+            // Operator fixes proposed by the WordPress agent (post-approval).
+            'cache_path' => env('FLYWP_CACHE_PATH', 'servers/{server}/sites/{site}/cache/clear'),
+            'restart_path' => env('FLYWP_RESTART_PATH', 'servers/{server}/sites/{site}/restart'),
         ],
     ],
 
