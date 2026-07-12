@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\CustomerResource\Pages;
 
 use App\Filament\Resources\CustomerResource;
+use App\Jobs\SendPaymentLinkJob;
 use App\Models\Customer;
 use App\Services\Billing\ManualChargeService;
 use Filament\Actions;
@@ -26,9 +27,56 @@ class ViewCustomer extends ViewRecord
     {
         return [
             $this->chargeAction(),
+            $this->paymentLinkAction(),
             $this->cardLinkAction(),
             Actions\EditAction::make()->label('עריכה'),
         ];
+    }
+
+    /** Create a hosted payment page for an amount and send the link to the customer. */
+    private function paymentLinkAction(): Actions\Action
+    {
+        return Actions\Action::make('paymentLink')
+            ->label('שליחת קישור תשלום')
+            ->icon('heroicon-o-paper-airplane')
+            ->color('primary')
+            ->form([
+                Forms\Components\TextInput::make('amount')
+                    ->label('סכום לתשלום (₪, כולל מע״מ)')
+                    ->numeric()->prefix('₪')->step('0.01')->minValue(0.1)->inputMode('decimal')->required(),
+                Forms\Components\TextInput::make('description')
+                    ->label('עבור (יופיע ללקוח ובחשבונית)')->default('תשלום')->maxLength(120)->required(),
+                Forms\Components\Radio::make('channel')
+                    ->label('לשלוח דרך')
+                    ->options(['whatsapp' => 'וואטסאפ', 'email' => 'מייל'])
+                    ->default('whatsapp')
+                    ->required(),
+            ])
+            ->action(function (array $data, Customer $record): void {
+                $totalAgorot = (int) round(((float) $data['amount']) * 100);
+
+                if ($totalAgorot <= 0) {
+                    Notification::make()->title('סכום לא תקין')->danger()->send();
+
+                    return;
+                }
+
+                $channel = $data['channel'] ?? 'whatsapp';
+                $missing = $channel === 'email' ? blank($record->email) : (blank($record->whatsapp_jid) && blank($record->phone));
+
+                if ($missing) {
+                    Notification::make()->title('אין ללקוח פרטי '.($channel === 'email' ? 'מייל' : 'וואטסאפ'))->danger()->send();
+
+                    return;
+                }
+
+                SendPaymentLinkJob::dispatch($record->id, $totalAgorot, filled($data['description']) ? $data['description'] : 'תשלום', $channel);
+
+                Notification::make()
+                    ->title('קישור התשלום נשלח')
+                    ->body('הקישור נוצר ונשלח ל'.$record->name.' ב'.($channel === 'email' ? 'מייל' : 'וואטסאפ').'. עם התשלום ייווצר חיוב ותונפק חשבונית אוטומטית.')
+                    ->success()->send();
+            });
     }
 
     /** One-off charge for this customer — saved card now, or a hosted page link. */
