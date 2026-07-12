@@ -36,7 +36,8 @@ class SubscriptionsRelationManager extends RelationManager
                 ->visible(fn (Forms\Get $get): bool => blank($get('plan_id')))
                 ->helperText('לדוגמה: אחסון + תחזוקה חודשית'),
             Forms\Components\Group::make([
-                MoneyField::make('price_agorot_override', 'מחיר (₪)'),
+                // Required for a plan-less subscription — no plan price to fall back on.
+                MoneyField::make('price_agorot_override', 'מחיר (₪)')->required(),
                 Forms\Components\Select::make('billing_interval')->label('תדירות חיוב')
                     ->options(BillingInterval::class),
                 Forms\Components\Toggle::make('vat_applies')->label('הוסף מע״מ')->default(true),

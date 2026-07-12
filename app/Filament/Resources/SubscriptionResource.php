@@ -94,6 +94,9 @@ class SubscriptionResource extends Resource
                         Forms\Components\DateTimePicker::make('next_charge_at')
                             ->label('חיוב הבא'),
                         MoneyField::make('price_agorot_override', 'מחיר (₪)')
+                            // A plan-less subscription has no plan price to fall back on, so
+                            // a price is mandatory — otherwise the scheduler would charge ₪0.
+                            ->required(fn (Forms\Get $get): bool => blank($get('plan_id')))
                             ->helperText('חובה למנוי חופשי; בתוכנית קבועה — רק אם סוכם מחיר שונה מהתוכנית.'),
                     ])->columns(2),
 

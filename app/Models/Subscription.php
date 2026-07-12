@@ -36,6 +36,20 @@ class Subscription extends Model
         ];
     }
 
+    protected static function booted(): void
+    {
+        // A card-first customer (signed up via /join, card captured) has a saved
+        // default token but no subscription yet. When the team later adds a
+        // custom subscription, inherit that saved card so it is chargeable —
+        // otherwise the scheduler skips it (dueForCharge requires token_id).
+        static::creating(function (self $subscription): void {
+            if ($subscription->token_id === null && $subscription->customer_id !== null) {
+                $subscription->token_id = Customer::whereKey($subscription->customer_id)
+                    ->value('default_token_id');
+            }
+        });
+    }
+
     public function customer(): BelongsTo
     {
         return $this->belongsTo(Customer::class);
@@ -94,25 +108,25 @@ class Subscription extends Model
      */
     public function planName(): string
     {
-        return $this->name ?? $this->plan?->name ?? 'מנוי';
+        return $this->plan?->name ?? $this->name ?? 'מנוי';
     }
 
     /**
-     * Billing interval: the free-form interval when set, otherwise the plan's,
-     * defaulting to monthly for a custom subscription that left it blank.
+     * Billing interval: the plan's when a plan is set, otherwise the free-form
+     * interval, defaulting to monthly for a custom subscription that left it blank.
      */
     public function billingInterval(): BillingInterval
     {
-        return $this->billing_interval ?? $this->plan?->billing_interval ?? BillingInterval::Monthly;
+        return $this->plan?->billing_interval ?? $this->billing_interval ?? BillingInterval::Monthly;
     }
 
     /**
-     * Whether VAT is added on top of the base price: the free-form flag when set,
-     * otherwise the plan's (defaults to charging VAT for a blank custom subscription).
+     * Whether VAT is added on top of the base price: the plan's flag when a plan
+     * is set, otherwise the free-form flag (defaults to charging VAT when blank).
      */
     public function vatApplies(): bool
     {
-        return $this->vat_applies ?? $this->plan?->vat_applies ?? true;
+        return $this->plan?->vat_applies ?? $this->vat_applies ?? true;
     }
 
     /**
