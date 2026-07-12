@@ -184,4 +184,19 @@ return [
     'broadcasts' => [
         'email_chunk_size' => env('BROADCAST_EMAIL_CHUNK', 50),
     ],
+
+    /*
+     | Proactive reminders — a daily internal digest to the team so nothing
+     | slips before it becomes a problem (an upcoming renewal, a card about to
+     | expire, money already owed). Internal only: the owner decides whether to
+     | contact a customer, honouring the "no customer message without approval"
+     | rule.
+     */
+    'reminders' => [
+        // Flag subscriptions whose next charge is within this many days.
+        'renewal_days' => env('REMINDER_RENEWAL_DAYS', 3),
+        // Flag saved cards expiring within this many whole months (0 = this
+        // month only; 1 = this month and next).
+        'card_expiry_months' => env('REMINDER_CARD_EXPIRY_MONTHS', 1),
+    ],
 ];

@@ -7,6 +7,7 @@ use App\Jobs\CheckSslExpiryJob;
 use App\Jobs\MonitorSiteJob;
 use App\Jobs\ReconcileChargeJob;
 use App\Jobs\SendBroadcastJob;
+use App\Jobs\SendProactiveRemindersJob;
 use App\Models\Broadcast;
 use App\Models\Charge;
 use App\Models\Site;
@@ -58,6 +59,11 @@ Schedule::call(function () {
         ->pluck('id')
         ->each(fn (int $id) => CheckSslExpiryJob::dispatch($id));
 })->dailyAt('07:00')->name('monitoring:ssl-expiry')->onOneServer();
+
+// Proactive reminders: a once-a-day internal digest (renewals due, cards
+// expiring, open debt) so the owner can act before anything slips.
+Schedule::job(new SendProactiveRemindersJob)
+    ->dailyAt('08:00')->name('reminders:daily-digest')->onOneServer();
 
 // Scheduled broadcasts.
 Schedule::call(function () {
