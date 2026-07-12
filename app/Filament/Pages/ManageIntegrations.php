@@ -2,6 +2,7 @@
 
 namespace App\Filament\Pages;
 
+use App\Filament\Concerns\PersistsSettings;
 use App\Models\Setting;
 use App\Providers\SettingsServiceProvider;
 use App\Services\Health\IntegrationHealth;
@@ -34,6 +35,7 @@ use Illuminate\Support\Str;
 class ManageIntegrations extends Page implements HasForms
 {
     use InteractsWithForms;
+    use PersistsSettings;
 
     protected static ?string $navigationIcon = 'heroicon-o-key';
 
@@ -240,7 +242,7 @@ class ManageIntegrations extends Page implements HasForms
         // any connection test) sees them. Guarded so an overlay hiccup can never
         // swallow the save confirmation.
         try {
-            (new SettingsServiceProvider(app()))->boot();
+            $this->refreshConfig();
         } catch (\Throwable) {
             // Values are already persisted; the overlay refresh is best-effort.
         }
@@ -283,7 +285,7 @@ class ManageIntegrations extends Page implements HasForms
 
         // Ensure the check reads the latest stored credentials (best-effort).
         try {
-            (new SettingsServiceProvider(app()))->boot();
+            $this->refreshConfig();
         } catch (\Throwable) {
             // Fall through — the check below still runs with current config.
         }

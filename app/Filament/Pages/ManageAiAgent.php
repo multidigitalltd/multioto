@@ -2,8 +2,8 @@
 
 namespace App\Filament\Pages;
 
+use App\Filament\Concerns\PersistsSettings;
 use App\Models\Setting;
-use App\Providers\SettingsServiceProvider;
 use Filament\Forms\Components\Section;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
@@ -26,6 +26,7 @@ use Filament\Pages\Page;
 class ManageAiAgent extends Page implements HasForms
 {
     use InteractsWithForms;
+    use PersistsSettings;
 
     protected static ?string $navigationIcon = 'heroicon-o-sparkles';
 
@@ -148,7 +149,7 @@ class ManageAiAgent extends Page implements HasForms
 
         // Re-apply the overlay so the (nested) form reflects exactly what was
         // stored, and show it back to confirm the save took.
-        (new SettingsServiceProvider(app()))->boot();
+        $this->refreshConfig();
         $this->mount();
 
         Notification::make()

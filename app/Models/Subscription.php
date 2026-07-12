@@ -75,6 +75,15 @@ class Subscription extends Model
     }
 
     /**
+     * Subscriptions in arrears — past-due or suspended. The single definition of
+     * "debtor" shared by the Collections screen, the Debtors widget and reminders.
+     */
+    public function scopeInArrears(Builder $query): Builder
+    {
+        return $query->whereIn('status', [SubscriptionStatus::PastDue, SubscriptionStatus::Suspended]);
+    }
+
+    /**
      * Effective base price in agorot: locked legacy override when set, plan price otherwise.
      */
     public function basePriceAgorot(): int
