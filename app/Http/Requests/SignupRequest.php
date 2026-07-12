@@ -31,8 +31,12 @@ class SignupRequest extends FormRequest
             'phone' => ['required', 'string', 'max:32'],
             'address' => ['required', 'string', 'max:190'],
             'domain' => ['nullable', 'string', 'max:190'],
-            'payment_method' => ['required', Rule::in(['credit_card', 'standing_order', 'bank_transfer'])],
+            'payment_method' => ['required', Rule::in(['credit_card', 'standing_order', 'bank_transfer', 'checks'])],
             'terms' => ['accepted'],
+            // The drawn signature, as a PNG data URL produced by the canvas. Size
+            // is bounded so a huge/forged payload can't be stored; the format is
+            // pinned to PNG so only an image (never a script) is ever decoded.
+            'signature' => ['required', 'string', 'max:200000', 'regex:/^data:image\/png;base64,[A-Za-z0-9+\/=\r\n]+$/'],
             // Honeypot: real users never fill this hidden field.
             'website' => ['prohibited'],
         ];
@@ -50,6 +54,9 @@ class SignupRequest extends FormRequest
             'address.required' => 'יש להזין כתובת.',
             'payment_method.required' => 'יש לבחור אמצעי תשלום.',
             'terms.accepted' => 'יש לאשר את תנאי השירות.',
+            'signature.required' => 'יש לחתום בתיבת החתימה.',
+            'signature.regex' => 'החתימה אינה תקינה — נסו לחתום שוב.',
+            'signature.max' => 'החתימה גדולה מדי — נסו לחתום שוב.',
         ];
     }
 

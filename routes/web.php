@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\BillingController;
+use App\Http\Controllers\SignatureController;
 use App\Http\Controllers\SignupController;
 use App\Http\Controllers\SupportAttachmentController;
 use App\Http\Controllers\SupportFormController;
@@ -54,6 +55,11 @@ Route::get('/support/attachments/{message}/{index}', SupportAttachmentController
     ->middleware(['web', 'auth'])
     ->whereNumber('index')
     ->name('support.attachment');
+
+// Customer signup signature (consent record) — team-only, private disk.
+Route::get('/customers/{customer}/signature', SignatureController::class)
+    ->middleware(['web', 'auth'])
+    ->name('customer.signature');
 
 /*
  | Inbound webhooks. Secret verification happens inside each controller

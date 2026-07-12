@@ -15,7 +15,7 @@ class Customer extends Model
 
     protected $fillable = [
         'name', 'contact_name', 'business_number', 'business_type', 'vat_exempt', 'email', 'phone',
-        'address', 'payment_method', 'terms_accepted_at',
+        'address', 'payment_method', 'terms_accepted_at', 'signature_path', 'signed_ip',
         'whatsapp_jid', 'cardcom_account_id', 'default_token_id', 'status', 'notes',
     ];
 

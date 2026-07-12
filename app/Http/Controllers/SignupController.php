@@ -14,31 +14,44 @@ use App\Models\Site;
 use App\Services\Support\TicketIntake;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\URL;
 use Illuminate\View\View;
 
 /**
- * Public self-signup: the link the team sends to a prospect. The customer fills
- * their details and is sent to Cardcom's hosted page to enter a card. It opens a
- * new customer WITH a valid saved card — no plan is chosen here. Subscriptions
- * are custom per customer and are set up by the team afterwards; the captured
- * card is then ready to charge.
+ * Public self-signup: the multi-step "open a customer" form the team sends to a
+ * prospect. The customer fills their details, signs, and picks how they pay.
+ * It opens a new customer WITH a signed consent record — no plan is chosen here;
+ * subscriptions are custom per customer and set up by the team afterwards.
  *
- * No card data touches this controller — PCI scope stays with Cardcom.
+ * Credit-card customers then enter a card inside an embedded Cardcom iframe;
+ * standing-order / bank-transfer / cheque customers get setup instructions and
+ * an internal follow-up ticket. No card data touches this controller — PCI
+ * scope stays with Cardcom.
  */
 class SignupController extends Controller
 {
+    /** Human labels for the non-card payment methods (for the follow-up ticket). */
+    private const METHOD_LABELS = [
+        'standing_order' => 'הוראת קבע בנקאית',
+        'bank_transfer' => 'העברה בנקאית',
+        'checks' => 'צ׳קים (מקדמה / תשלום מראש)',
+    ];
+
     public function show(): View
     {
-        return view('signup.form');
+        return view('signup.form', [
+            'instructions' => config('billing.signup.instructions'),
+        ]);
     }
 
     public function store(SignupRequest $request): RedirectResponse
     {
         $data = $request->validated();
         $businessType = BusinessType::from($data['business_type']);
+        $signaturePath = $this->storeSignature($data['signature']);
 
-        $customer = DB::transaction(function () use ($data, $businessType): Customer {
+        $customer = DB::transaction(function () use ($data, $businessType, $signaturePath, $request): Customer {
             $customer = Customer::create([
                 'name' => $data['name'],
                 'contact_name' => $data['contact_name'],
@@ -50,9 +63,12 @@ class SignupController extends Controller
                 'phone' => $data['phone'],
                 'address' => $data['address'],
                 'payment_method' => $data['payment_method'],
-                // The legal record of consent — set only when the box was ticked
-                // (validation enforces it), stamped server-side.
+                // The legal record of consent — the box was ticked (validation
+                // enforces it) and the customer signed. Stamped server-side with
+                // the filer's IP.
                 'terms_accepted_at' => now(),
+                'signature_path' => $signaturePath,
+                'signed_ip' => $request->ip(),
                 'status' => CustomerStatus::Active,
             ]);
 
@@ -77,9 +93,9 @@ class SignupController extends Controller
         // explicit signup flow, never from bulk import.
         SendWelcomeMessageJob::dispatch($customer->id);
 
-        // Credit card: hand off to Cardcom's hosted card page via a short-lived
-        // signed link (same route used for card updates), so no customer id is
-        // enumerable. No card data ever touches this system.
+        // Credit card: hand off to the embedded Cardcom card page via a
+        // short-lived signed link (same route used for card updates), so no
+        // customer id is enumerable. No card data ever touches this system.
         if ($data['payment_method'] === 'credit_card') {
             return redirect()->to(URL::temporarySignedRoute(
                 'billing.update-card',
@@ -88,18 +104,40 @@ class SignupController extends Controller
             ));
         }
 
-        // Standing order / bank transfer: the team completes the arrangement
-        // manually — open a ticket so it can't fall through the cracks.
+        // Standing order / bank transfer / cheques: the team completes the
+        // arrangement manually — open a ticket so it can't fall through the
+        // cracks, and show the customer the setup instructions on the way out.
+        $label = self::METHOD_LABELS[$data['payment_method']] ?? $data['payment_method'];
+
         app(TicketIntake::class)->recordInbound(
             TicketChannel::Manual,
             MessageChannel::InternalNote,
             $customer,
-            'לקוח חדש בחר '.($data['payment_method'] === 'standing_order' ? 'הוראת קבע בנקאית' : 'העברה בנקאית')
-                .' — יש ליצור קשר ולהשלים את הסדר התשלום.',
+            'לקוח חדש בחר '.$label.' — יש ליצור קשר ולהשלים את הסדר התשלום.',
             externalMessageId: 'signup-payment-'.$customer->id,
             subject: 'השלמת הסדר תשלום — '.$customer->name,
         );
 
-        return redirect()->route('signup.thanks');
+        return redirect()->route('signup.thanks')->with([
+            'payment_method_label' => $label,
+            'payment_instructions' => config('billing.signup.instructions.'.$data['payment_method']),
+        ]);
+    }
+
+    /**
+     * Decode the canvas PNG data URL and store it on the private disk as the
+     * signed consent record. The format is pinned to PNG by validation, so only
+     * an image is ever written; the filename is derived server-side (never from
+     * user input) and lives outside the web root.
+     */
+    private function storeSignature(string $dataUrl): string
+    {
+        $base64 = substr($dataUrl, strlen('data:image/png;base64,'));
+        $binary = base64_decode(str_replace(["\r", "\n"], '', $base64), true) ?: '';
+
+        $path = 'signatures/'.now()->format('Y/m').'/'.bin2hex(random_bytes(16)).'.png';
+        Storage::disk('local')->put($path, $binary);
+
+        return $path;
     }
 }

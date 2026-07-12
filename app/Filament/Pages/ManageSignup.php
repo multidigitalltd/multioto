@@ -1,0 +1,111 @@
+<?php
+
+namespace App\Filament\Pages;
+
+use App\Filament\Concerns\PersistsSettings;
+use App\Models\Setting;
+use Filament\Forms\Components\Actions\Action as FormAction;
+use Filament\Forms\Components\Placeholder;
+use Filament\Forms\Components\Section;
+use Filament\Forms\Components\Textarea;
+use Filament\Forms\Concerns\InteractsWithForms;
+use Filament\Forms\Contracts\HasForms;
+use Filament\Forms\Form;
+use Filament\Notifications\Notification;
+use Filament\Pages\Page;
+
+/**
+ * טופס הרשמה — עריכת ההוראות שמוצגות ללקוח בטופס פתיחת הכרטיס הציבורי (/join)
+ * לכל אמצעי תשלום שאינו כרטיס אשראי: הוראת קבע (קוד מוסד + קישור הרשאה),
+ * העברה בנקאית (פרטי החשבון) וצ׳קים. הטקסטים אינם סוד — מוצגים ומולאים מראש.
+ */
+class ManageSignup extends Page implements HasForms
+{
+    use InteractsWithForms;
+    use PersistsSettings;
+
+    protected static ?string $navigationIcon = 'heroicon-o-clipboard-document-list';
+
+    protected static ?string $navigationGroup = 'הגדרות';
+
+    protected static ?string $navigationLabel = 'טופס הרשמה';
+
+    protected static ?string $title = 'טופס הרשמה — הוראות תשלום';
+
+    protected static ?int $navigationSort = 84;
+
+    protected static string $view = 'filament.pages.manage-signup';
+
+    private const KEYS = [
+        'signup.instructions.standing_order',
+        'signup.instructions.bank_transfer',
+        'signup.instructions.checks',
+    ];
+
+    /** @var array<string, mixed> */
+    public array $data = [];
+
+    public function mount(): void
+    {
+        // Nested state (signup.instructions.* → data['signup']['instructions'][*]);
+        // build the fill array nested so values reach the fields.
+        $values = [];
+        foreach (self::KEYS as $key) {
+            data_set($values, $key, config('billing.'.$key));
+        }
+
+        $this->form->fill($values);
+    }
+
+    public function form(Form $form): Form
+    {
+        return $form
+            ->schema([
+                Section::make('הוראות לפי אמצעי תשלום')
+                    ->description('הטקסט שיוצג ללקוח בטופס /join כשיבחר את אמצעי התשלום, וגם בעמוד הסיום. קישורים (http/https) יהפכו אוטומטית ללחיצים. הזנת כרטיס אשראי לא נדרשת כאן — היא נעשית ישירות מול חברת הסליקה.')
+                    ->schema([
+                        Textarea::make('signup.instructions.standing_order')
+                            ->label('הוראת קבע בנקאית')
+                            ->rows(4)
+                            ->helperText('קוד המוסד שלנו וקישור ההרשאה הדיגיטלית.'),
+                        Textarea::make('signup.instructions.bank_transfer')
+                            ->label('העברה בנקאית')
+                            ->rows(4)
+                            ->helperText('פרטי החשבון שאליו הלקוח מעביר (בנק, סניף, מספר חשבון, שם החשבון).'),
+                        Textarea::make('signup.instructions.checks')
+                            ->label('צ׳קים (מקדמה / תשלום מראש)')
+                            ->rows(3),
+                        Placeholder::make('link')
+                            ->label('קישור לטופס ההרשמה')
+                            ->content(fn (): string => rtrim((string) config('app.url'), '/').'/join'),
+                    ])->columns(1)
+                    ->footerActions([$this->saveAction()]),
+            ])
+            ->statePath('data');
+    }
+
+    public function save(): void
+    {
+        foreach (self::KEYS as $key) {
+            $value = data_get($this->data, $key);
+
+            if (filled($value)) {
+                Setting::put($key, (string) $value);
+            } else {
+                Setting::forget($key); // fall back to the config default
+            }
+        }
+
+        $this->refreshConfig();
+
+        Notification::make()->title('הוראות התשלום נשמרו')->success()->send();
+    }
+
+    protected function saveAction(): FormAction
+    {
+        return FormAction::make('save_signup')
+            ->label('שמירה')
+            ->icon('heroicon-o-check')
+            ->action(fn () => $this->save());
+    }
+}

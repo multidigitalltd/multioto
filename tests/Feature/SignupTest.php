@@ -16,11 +16,15 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
 class SignupTest extends TestCase
 {
     use RefreshDatabase;
+
+    /** A minimal valid 1×1 PNG as the canvas would produce it. */
+    private const SIGNATURE = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
 
     /** Every required field for a valid submission; override per test. */
     private function validPayload(array $overrides = []): array
@@ -35,16 +39,18 @@ class SignupTest extends TestCase
             'domain' => 'https://newbiz.co.il',
             'payment_method' => 'credit_card',
             'terms' => '1',
+            'signature' => self::SIGNATURE,
         ], $overrides);
     }
 
     public function test_the_public_signup_page_collects_details_without_a_plan(): void
     {
-        // The form opens a customer + captures a card; the plan is set up by the
-        // team afterwards, so no plan picker appears here.
+        // The multi-step form opens a customer + captures a card/consent; the
+        // plan is set up by the team afterwards, so no plan picker appears here.
         $this->get(route('signup'))
             ->assertOk()
-            ->assertSee('פרטי העסק')
+            ->assertSee('טופס פתיחת כרטיס לקוח')
+            ->assertSee('חתימה')
             ->assertDontSee('בחירת מסלול');
     }
 
@@ -56,6 +62,7 @@ class SignupTest extends TestCase
     public function test_signup_creates_a_customer_and_redirects_to_card_capture(): void
     {
         Queue::fake([SendWelcomeMessageJob::class]);
+        Storage::fake('local');
 
         $response = $this->post(route('signup.store'), $this->validPayload());
 
@@ -73,11 +80,46 @@ class SignupTest extends TestCase
         $this->assertNotNull($customer->terms_accepted_at); // consent record
         $this->assertSame('newbiz.co.il', $customer->sites()->value('domain')); // scheme stripped
 
+        // The signature is stored privately as the consent record, with the IP.
+        $this->assertNotNull($customer->signature_path);
+        Storage::disk('local')->assertExists($customer->signature_path);
+        $this->assertNotNull($customer->signed_ip);
+
         // No subscription is created here — the plan is custom and set up later.
         $this->assertSame(0, Subscription::count());
 
         // The personal welcome goes out exactly once.
         Queue::assertPushed(SendWelcomeMessageJob::class, 1);
+    }
+
+    public function test_signup_requires_a_signature(): void
+    {
+        $this->post(route('signup.store'), $this->validPayload(['signature' => '']))
+            ->assertSessionHasErrors('signature');
+
+        $this->assertSame(0, Customer::count());
+    }
+
+    public function test_signup_rejects_a_non_png_signature(): void
+    {
+        // Anything that isn't a PNG data URL (e.g. an SVG/script payload) is refused.
+        $this->post(route('signup.store'), $this->validPayload([
+            'signature' => 'data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=',
+        ]))->assertSessionHasErrors('signature');
+
+        $this->assertSame(0, Customer::count());
+    }
+
+    public function test_checks_signup_opens_a_follow_up_ticket(): void
+    {
+        Queue::fake([SendWelcomeMessageJob::class]);
+
+        $this->post(route('signup.store'), $this->validPayload(['payment_method' => 'checks']))
+            ->assertRedirect(route('signup.thanks'))
+            ->assertSessionHas('payment_instructions');
+
+        $ticket = Ticket::sole();
+        $this->assertStringContainsString('צ׳קים', $ticket->messages()->first()->body);
     }
 
     public function test_bank_transfer_signup_opens_a_follow_up_ticket_instead_of_card_capture(): void
@@ -116,7 +158,7 @@ class SignupTest extends TestCase
     public function test_signup_validates_required_fields(): void
     {
         $this->post(route('signup.store'), [])
-            ->assertSessionHasErrors(['name', 'contact_name', 'business_type', 'email', 'phone', 'address', 'payment_method', 'terms']);
+            ->assertSessionHasErrors(['name', 'contact_name', 'business_type', 'email', 'phone', 'address', 'payment_method', 'terms', 'signature']);
 
         $this->assertSame(0, Customer::count());
     }
