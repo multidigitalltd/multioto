@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Enums\BillingInterval;
 use App\Enums\ChargeStatus;
 use App\Enums\SubscriptionStatus;
 use App\Jobs\ChargeSubscriptionJob;
@@ -83,7 +84,7 @@ class ChargeSubscriptionJobTest extends TestCase
             'plan_id' => null,
             'name' => 'אחסון + תחזוקה חודשית',
             'price_agorot_override' => 12000, // ₪120
-            'billing_interval' => \App\Enums\BillingInterval::Yearly,
+            'billing_interval' => BillingInterval::Yearly,
             'vat_applies' => true,
             'next_charge_at' => now()->subHour(),
         ]);
