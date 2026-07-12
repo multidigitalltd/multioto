@@ -229,6 +229,12 @@ return [
         'email_chunk_size' => env('BROADCAST_EMAIL_CHUNK', 50),
     ],
 
+    'system' => [
+        // In-panel system log ("מערכת ועדכונים") retention: rows older than this
+        // many days are pruned nightly by the scheduler.
+        'log_retention_days' => env('SYSTEM_LOG_RETENTION_DAYS', 30),
+    ],
+
     'support' => [
         // Inbound attachments (images/files a customer sends on WhatsApp or
         // email). Stored on a PRIVATE disk and served only behind panel auth.
