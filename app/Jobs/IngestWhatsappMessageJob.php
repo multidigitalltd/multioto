@@ -7,6 +7,7 @@ use App\Enums\TicketChannel;
 use App\Models\Customer;
 use App\Models\WebhookEvent;
 use App\Services\Automation\ApprovalGate;
+use App\Services\Automation\ManagementCommands;
 use App\Services\Support\AttachmentStore;
 use App\Services\Support\TicketIntake;
 use App\Services\Waha\WahaClient;
@@ -49,25 +50,32 @@ class IngestWhatsappMessageJob implements ShouldQueue
             return;
         }
 
-        // Owner approval commands ("אשר 12" / "דחה 12") are routed to the
-        // approval gate instead of opening a ticket; the decision result is
-        // sent straight back to the owner.
+        // The management group is the team's operations channel: approvals plus
+        // full ticket management (open / list / close) run from there, and it
+        // NEVER opens a customer ticket from ordinary chatter.
         $gate = app(ApprovalGate::class);
+        $managementChat = $gate->ownerChatId();
 
-        if (($reply = $gate->handleOwnerMessage($chatId, $body)) !== null) {
-            try {
-                app(WahaClient::class)->sendMessage($chatId, $reply);
-            } catch (\Throwable) {
-                // The decision is already recorded; the panel shows the outcome.
+        if ($managementChat !== null && $chatId === $managementChat) {
+            $reply = app(ManagementCommands::class)->handle($chatId, $body);
+
+            if ($reply !== null) {
+                try {
+                    app(WahaClient::class)->sendMessage($chatId, $reply);
+                } catch (\Throwable) {
+                    // The action is already recorded; the panel shows the outcome.
+                }
             }
+
             $event->markProcessed();
 
             return;
         }
 
-        // The approvals chat (owner's number or a team group) is an operations
-        // channel — regular chatter there must never open customer tickets.
-        if ($gate->ownerChatId() !== null && $chatId === $gate->ownerChatId()) {
+        // Listen only to direct customer chats. Ignore groups, status/story
+        // broadcasts and channels (newsletters) — the only group we act on is the
+        // management group handled above.
+        if ($this->isGroupOrBroadcast($chatId)) {
             $event->markProcessed();
 
             return;
@@ -126,6 +134,17 @@ class IngestWhatsappMessageJob implements ShouldQueue
         $mime = (string) ($media['mimetype'] ?? $payload['mimetype'] ?? '') ?: null;
 
         return $store->store($ticketId, $filename, $contents, $mime);
+    }
+
+    /**
+     * Whether a WhatsApp chat id is a group, a status/story broadcast or a
+     * channel (newsletter) — anything that is not a one-to-one customer chat
+     * (which uses the "@c.us" suffix). We never open tickets from these.
+     */
+    protected function isGroupOrBroadcast(string $chatId): bool
+    {
+        return Str::endsWith($chatId, ['@g.us', '@newsletter', '@broadcast'])
+            || $chatId === 'status@broadcast';
     }
 
     /**
