@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources;
 
+use App\Enums\BillingInterval;
 use App\Enums\SubscriptionStatus;
 use App\Filament\Resources\SubscriptionResource\Pages;
 use App\Filament\Support\DebtorActions;
@@ -43,11 +44,12 @@ class SubscriptionResource extends Resource
                             ->preload()
                             ->required(),
                         Forms\Components\Select::make('plan_id')
-                            ->label('תוכנית')
+                            ->label('תוכנית קבועה')
                             ->relationship('plan', 'name')
                             ->searchable()
                             ->preload()
-                            ->required(),
+                            ->live()
+                            ->helperText('בחרו מוצר קבוע, או השאירו ריק למנוי חופשי בהתאמה אישית.'),
                         Forms\Components\Select::make('site_id')
                             ->label('אתר')
                             ->relationship('site', 'domain')
@@ -64,6 +66,25 @@ class SubscriptionResource extends Resource
                             ->required(),
                     ])->columns(2),
 
+                Forms\Components\Section::make('מנוי חופשי (התאמה אישית)')
+                    ->description('לכל לקוח מנוי משלו — מלאו כאן שם, מחיר ותדירות כשאין תוכנית קבועה מתאימה.')
+                    ->schema([
+                        Forms\Components\TextInput::make('name')
+                            ->label('שם המנוי')
+                            ->maxLength(190)
+                            ->helperText('לדוגמה: אחסון + תחזוקה חודשית'),
+                        Forms\Components\Select::make('billing_interval')
+                            ->label('תדירות חיוב')
+                            ->options(BillingInterval::class),
+                        Forms\Components\Toggle::make('vat_applies')
+                            ->label('הוסף מע״מ על המחיר')
+                            ->default(true),
+                    ])
+                    ->columns(2)
+                    // Only relevant when no fixed plan is chosen — a free-form subscription.
+                    ->visible(fn (Forms\Get $get): bool => blank($get('plan_id')))
+                    ->collapsible(),
+
                 Forms\Components\Section::make('תקופה וחיוב')
                     ->schema([
                         Forms\Components\DatePicker::make('current_period_start')
@@ -72,8 +93,8 @@ class SubscriptionResource extends Resource
                             ->label('סוף תקופה'),
                         Forms\Components\DateTimePicker::make('next_charge_at')
                             ->label('חיוב הבא'),
-                        MoneyField::make('price_agorot_override', 'מחיר מיוחד (₪)')
-                            ->helperText('רק אם סוכם מחיר שונה מהתוכנית'),
+                        MoneyField::make('price_agorot_override', 'מחיר (₪)')
+                            ->helperText('חובה למנוי חופשי; בתוכנית קבועה — רק אם סוכם מחיר שונה מהתוכנית.'),
                     ])->columns(2),
 
                 Forms\Components\Section::make('גבייה')
@@ -98,10 +119,9 @@ class SubscriptionResource extends Resource
                     ->searchable()
                     ->sortable()
                     ->weight('bold'),
-                Tables\Columns\TextColumn::make('plan.name')
+                Tables\Columns\TextColumn::make('plan_name')
                     ->label('תוכנית')
-                    ->searchable()
-                    ->sortable(),
+                    ->state(fn (Subscription $record): string => $record->planName()),
                 Tables\Columns\TextColumn::make('site.domain')
                     ->label('אתר')
                     ->searchable()

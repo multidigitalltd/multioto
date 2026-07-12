@@ -6,14 +6,11 @@ use App\Enums\BusinessType;
 use App\Enums\CustomerStatus;
 use App\Enums\MessageChannel;
 use App\Enums\SiteStatus;
-use App\Enums\SubscriptionStatus;
 use App\Enums\TicketChannel;
 use App\Http\Requests\SignupRequest;
 use App\Jobs\SendWelcomeMessageJob;
 use App\Models\Customer;
-use App\Models\Plan;
 use App\Models\Site;
-use App\Models\Subscription;
 use App\Services\Support\TicketIntake;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Support\Facades\DB;
@@ -21,10 +18,11 @@ use Illuminate\Support\Facades\URL;
 use Illuminate\View\View;
 
 /**
- * Public self-signup: the link the team sends to a prospect. The customer picks
- * a plan, fills their own details, and is then sent to Cardcom's hosted page to
- * enter a card. Card capture + subscription activation reuse the existing flow
- * (ProcessCardcomLowProfileJob), so the first charge runs once the card lands.
+ * Public self-signup: the link the team sends to a prospect. The customer fills
+ * their details and is sent to Cardcom's hosted page to enter a card. It opens a
+ * new customer WITH a valid saved card — no plan is chosen here. Subscriptions
+ * are custom per customer and are set up by the team afterwards; the captured
+ * card is then ready to charge.
  *
  * No card data touches this controller — PCI scope stays with Cardcom.
  */
@@ -32,10 +30,7 @@ class SignupController extends Controller
 {
     public function show(): View
     {
-        return view('signup.form', [
-            'plans' => Plan::where('active', true)->orderBy('price_agorot')->get(),
-            'vatRate' => (float) config('billing.vat_rate'),
-        ]);
+        return view('signup.form');
     }
 
     public function store(SignupRequest $request): RedirectResponse
@@ -61,28 +56,20 @@ class SignupController extends Controller
                 'status' => CustomerStatus::Active,
             ]);
 
-            $siteId = null;
+            // Record the site (if given) so monitoring starts right away.
             if (! empty($data['domain'])) {
                 $domain = preg_replace('#^https?://#', '', trim($data['domain']));
-                $siteId = Site::create([
+                Site::create([
                     'customer_id' => $customer->id,
                     'domain' => $domain,
                     'monitor_url' => 'https://'.ltrim($domain, '/'),
                     'monitor_enabled' => true,
                     'status' => SiteStatus::Active,
-                ])->id;
+                ]);
             }
 
-            Subscription::create([
-                'customer_id' => $customer->id,
-                'plan_id' => $data['plan_id'],
-                'site_id' => $siteId,
-                // Trialing + due now: once the card is captured the subscription
-                // activates and the first charge is collected immediately.
-                'status' => SubscriptionStatus::Trialing,
-                'next_charge_at' => now(),
-            ]);
-
+            // No subscription is created here — the customer's plan is custom and
+            // set up by the team afterwards, then the captured card is charged.
             return $customer;
         });
 

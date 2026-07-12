@@ -77,7 +77,7 @@ class SupportToolkit
                 $next = $sub->next_charge_at?->format('d/m/Y') ?? '—';
                 $amount = Money::ils($sub->totalChargeAgorot());
 
-                return "תוכנית {$sub->plan->name}: סטטוס {$sub->status->getLabel()}, חיוב הבא {$next} ({$amount})";
+                return "תוכנית {$sub->planName()}: סטטוס {$sub->status->getLabel()}, חיוב הבא {$next} ({$amount})";
             })
             ->all();
     }

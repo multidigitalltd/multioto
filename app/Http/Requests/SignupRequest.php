@@ -8,8 +8,9 @@ use Illuminate\Validation\Rule;
 use Illuminate\Validation\Rules\Enum;
 
 /**
- * Validation for the public self-signup form. The customer picks a plan and
- * enters their own details; the card itself is captured afterwards on Cardcom's
+ * Validation for the public self-signup form. The customer enters their own
+ * details; no plan is chosen here (subscriptions are custom per customer and
+ * set up by the team afterwards). The card itself is captured on Cardcom's
  * hosted page, so no card data is ever validated or stored here.
  */
 class SignupRequest extends FormRequest
@@ -30,7 +31,6 @@ class SignupRequest extends FormRequest
             'phone' => ['required', 'string', 'max:32'],
             'address' => ['required', 'string', 'max:190'],
             'domain' => ['nullable', 'string', 'max:190'],
-            'plan_id' => ['required', Rule::exists('plans', 'id')->where('active', true)],
             'payment_method' => ['required', Rule::in(['credit_card', 'standing_order', 'bank_transfer'])],
             'terms' => ['accepted'],
             // Honeypot: real users never fill this hidden field.
@@ -46,8 +46,6 @@ class SignupRequest extends FormRequest
             'email.required' => 'יש להזין כתובת מייל.',
             'email.email' => 'כתובת המייל אינה תקינה.',
             'phone.required' => 'יש להזין טלפון.',
-            'plan_id.required' => 'יש לבחור מסלול.',
-            'plan_id.exists' => 'המסלול שנבחר אינו זמין.',
             'contact_name.required' => 'יש להזין איש קשר.',
             'address.required' => 'יש להזין כתובת.',
             'payment_method.required' => 'יש לבחור אמצעי תשלום.',
@@ -67,7 +65,6 @@ class SignupRequest extends FormRequest
             'email' => 'מייל',
             'phone' => 'טלפון',
             'domain' => 'דומיין',
-            'plan_id' => 'מסלול',
         ];
     }
 }

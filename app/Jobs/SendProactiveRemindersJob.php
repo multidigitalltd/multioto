@@ -61,7 +61,7 @@ class SendProactiveRemindersJob implements ShouldQueue
 
         $lines = $subs->map(fn (Subscription $s): string => sprintf('• %s — %s ב-%s (%s)',
             $s->customer?->name ?? 'לקוח',
-            $s->plan?->name ?? 'מנוי',
+            $s->planName(),
             $s->next_charge_at->format('d/m'),
             Money::ils($s->totalChargeAgorot()),
         ));

@@ -2,6 +2,7 @@
 
 namespace App\Filament\Pages;
 
+use App\Enums\BillingInterval;
 use App\Enums\BusinessType;
 use App\Enums\CustomerStatus;
 use App\Enums\SiteStatus;
@@ -104,14 +105,28 @@ class OnboardCustomer extends Page implements HasForms
                         ->icon('heroicon-o-credit-card')
                         ->description('התוכנית והחיוב')
                         ->schema([
-                            Select::make('plan_id')->label('תוכנית')
+                            Select::make('plan_id')->label('תוכנית קבועה')
                                 ->options(Plan::where('active', true)->pluck('name', 'id'))
-                                ->required()
                                 ->live()
-                                ->helperText('מחיר ותדירות נקבעים לפי התוכנית'),
-                            TextInput::make('price_override')->label('מחיר מיוחד (₪, אופציונלי)')
+                                ->helperText('בחרו מוצר קבוע, או השאירו ריק למנוי חופשי בהתאמה אישית.'),
+                            // Free-form subscription — a custom name/interval/VAT when no plan is picked.
+                            TextInput::make('custom_name')->label('שם המנוי')
+                                ->required(fn (Get $get): bool => blank($get('plan_id')))
+                                ->visible(fn (Get $get): bool => blank($get('plan_id')))
+                                ->maxLength(190)->placeholder('אחסון + תחזוקה חודשית'),
+                            Select::make('billing_interval')->label('תדירות חיוב')
+                                ->options(BillingInterval::class)->default(BillingInterval::Monthly->value)
+                                ->visible(fn (Get $get): bool => blank($get('plan_id'))),
+                            Toggle::make('vat_applies')->label('הוסף מע״מ על המחיר')->default(true)->inline(false)
+                                ->visible(fn (Get $get): bool => blank($get('plan_id'))),
+                            TextInput::make('price_override')
+                                ->label(fn (Get $get): string => blank($get('plan_id')) ? 'מחיר (₪)' : 'מחיר מיוחד (₪, אופציונלי)')
                                 ->numeric()->minValue(0)
-                                ->helperText('רק אם סוכם מחיר שונה מהתוכנית'),
+                                ->required(fn (Get $get): bool => blank($get('plan_id')))
+                                ->live(onBlur: true)
+                                ->helperText(fn (Get $get): string => blank($get('plan_id'))
+                                    ? 'המחיר החודשי/שנתי של המנוי החופשי.'
+                                    : 'רק אם סוכם מחיר שונה מהתוכנית.'),
                             DatePicker::make('first_charge_at')->label('תאריך חיוב ראשון')
                                 ->required()->native(false)->displayFormat('d/m/Y'),
                             Toggle::make('send_card_link')->label('שלח ללקוח קישור להזנת כרטיס')
@@ -132,21 +147,29 @@ class OnboardCustomer extends Page implements HasForms
     {
         $plan = $get('plan_id') ? Plan::find($get('plan_id')) : null;
 
-        if (! $plan) {
-            return 'בחרו תוכנית כדי לראות את סכום החיוב.';
+        // Fixed plan → plan price/name/VAT; free-form → the custom fields entered here.
+        if ($plan) {
+            $label = $plan->name;
+            $agorot = filled($get('price_override'))
+                ? (int) round(((float) $get('price_override')) * 100)
+                : $plan->price_agorot;
+            $vatApplies = (bool) $plan->vat_applies;
+        } else {
+            if (blank($get('custom_name')) || blank($get('price_override'))) {
+                return 'מלאו שם ומחיר למנוי החופשי כדי לראות את סכום החיוב.';
+            }
+            $label = $get('custom_name');
+            $agorot = (int) round(((float) $get('price_override')) * 100);
+            $vatApplies = (bool) ($get('vat_applies') ?? true);
         }
 
-        $agorot = filled($get('price_override'))
-            ? (int) round(((float) $get('price_override')) * 100)
-            : $plan->price_agorot;
-
-        $vat = $get('vat_exempt') || ! $plan->vat_applies
+        $vat = $get('vat_exempt') || ! $vatApplies
             ? 0
             : (int) round($agorot * config('billing.vat_rate'));
 
         $total = number_format(($agorot + $vat) / 100, 2);
 
-        return "המנוי {$plan->name} · סה״כ לחיוב: {$total} ₪ (כולל מע״מ).";
+        return "המנוי {$label} · סה״כ לחיוב: {$total} ₪ (כולל מע״מ).";
     }
 
     public function create(): void
@@ -172,13 +195,21 @@ class OnboardCustomer extends Page implements HasForms
                 'status' => SiteStatus::Active,
             ]);
 
+            $freeForm = blank($data['plan_id'] ?? null);
+
             return Subscription::create([
                 'customer_id' => $customer->id,
-                'plan_id' => $data['plan_id'],
+                'plan_id' => $data['plan_id'] ?? null,
+                // Free-form subscription carries its own name/interval/VAT; a
+                // plan-based one leaves these null and inherits from the plan.
+                'name' => $freeForm ? ($data['custom_name'] ?? null) : null,
+                'billing_interval' => $freeForm ? ($data['billing_interval'] ?? null) : null,
+                'vat_applies' => $freeForm ? (bool) ($data['vat_applies'] ?? true) : null,
                 'site_id' => $site->id,
                 // No token yet — the customer enters their card via the link.
                 // Trialing keeps it out of the charge run until a card exists.
                 'status' => SubscriptionStatus::Trialing,
+                // The price: always required for free-form, optional override for a plan.
                 'price_agorot_override' => filled($data['price_override'] ?? null)
                     ? (int) round(((float) $data['price_override']) * 100)
                     : null,

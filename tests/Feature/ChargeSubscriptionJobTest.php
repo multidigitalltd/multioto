@@ -63,6 +63,47 @@ class ChargeSubscriptionJobTest extends TestCase
         Queue::assertPushed(IssueInvoiceJob::class, fn ($job) => $job->chargeId === $charge->id);
     }
 
+    public function test_free_form_subscription_without_a_plan_charges_its_own_price_and_vat(): void
+    {
+        Queue::fake([IssueInvoiceJob::class]);
+        $captured = null;
+        $this->mock(CardcomClient::class, function ($mock) use (&$captured) {
+            $mock->shouldReceive('chargeToken')
+                ->once()
+                ->withArgs(function ($token, $amount, $desc, $uniqueId) use (&$captured) {
+                    $captured = ['amount' => $amount, 'desc' => $desc];
+
+                    return true;
+                })
+                ->andReturn(new ChargeResult(true, 'tx-ff', '0'));
+        });
+
+        // A fully custom subscription: no plan, its own name/price/interval/VAT.
+        $subscription = Subscription::factory()->create([
+            'plan_id' => null,
+            'name' => 'אחסון + תחזוקה חודשית',
+            'price_agorot_override' => 12000, // ₪120
+            'billing_interval' => \App\Enums\BillingInterval::Yearly,
+            'vat_applies' => true,
+            'next_charge_at' => now()->subHour(),
+        ]);
+
+        ChargeSubscriptionJob::dispatchSync($subscription->id);
+
+        $charge = $subscription->charges()->sole();
+        $this->assertSame(12000, $charge->amount_agorot);
+        $this->assertSame((int) round(12000 * 0.18), $charge->vat_agorot);
+        $this->assertSame(12000 + $charge->vat_agorot, $charge->total_agorot);
+        $this->assertSame($charge->total_agorot, $captured['amount']);
+        // The free-form name is the charge description, not a plan name.
+        $this->assertStringContainsString('אחסון + תחזוקה חודשית', $captured['desc']);
+        // Yearly interval → the paid period spans a year.
+        $this->assertSame(
+            $charge->period_start->copy()->addYear()->toDateString(),
+            $charge->period_end->toDateString(),
+        );
+    }
+
     public function test_vat_exempt_customer_is_charged_without_vat(): void
     {
         Queue::fake([IssueInvoiceJob::class]);

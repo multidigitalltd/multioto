@@ -44,24 +44,11 @@
             width: 100%; padding: .7rem .8rem; font: inherit; color: inherit;
             background: transparent; border: 1px solid var(--border); border-radius: 8px;
         }
-        input:focus-visible, select:focus-visible, button:focus-visible, .plan:focus-within {
+        input:focus-visible, select:focus-visible, button:focus-visible {
             outline: 3px solid var(--brand); outline-offset: 2px;
         }
         .error { color: var(--error); font-size: .9rem; margin-top: .35rem; }
         [aria-invalid="true"] { border-color: var(--error); }
-        .plans { display: grid; gap: .75rem; }
-        .plan {
-            position: relative; border: 2px solid var(--border); border-radius: 12px;
-            padding: 1rem 1.1rem; cursor: pointer; display: flex; align-items: flex-start; gap: .75rem;
-        }
-        .plan:hover { border-color: var(--sel-border); }
-        .plan input { margin-top: .25rem; accent-color: var(--brand); width: 1.15rem; height: 1.15rem; flex-shrink: 0; }
-        .plan:has(input:checked) { border-color: var(--sel-border); background: var(--sel-bg); }
-        .plan .info { flex: 1; }
-        .plan .name { font-weight: 700; font-size: 1.05rem; }
-        .plan .desc { color: var(--muted); font-size: .9rem; }
-        .plan .price { font-weight: 800; font-size: 1.1rem; white-space: nowrap; }
-        .plan .price small { font-weight: 500; color: var(--muted); font-size: .8rem; display: block; text-align: left; }
         .row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
         @media (max-width: 32rem) { .row { grid-template-columns: 1fr; } }
         .terms { display: flex; align-items: flex-start; gap: .5rem; font-size: .95rem; color: var(--muted); }
@@ -74,7 +61,6 @@
         button:hover { filter: brightness(1.08); }
         .secure { text-align: center; color: var(--muted); font-size: .85rem; margin-top: 1rem; }
         .hp { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
-        .empty { color: var(--muted); padding: 1rem; border: 1px dashed var(--border); border-radius: 10px; }
     </style>
 </head>
 <body>
@@ -83,7 +69,7 @@
             <span class="logo">M</span>
             <h1>הצטרפות למולטי דיגיטל</h1>
         </div>
-        <p class="lead">כמה פרטים ובחירת מסלול, ומעבירים אתכם לעמוד תשלום מאובטח. שדות עם <span class="req">*</span> הם חובה.</p>
+        <p class="lead">כמה פרטים ומעבירים אתכם לעמוד מאובטח להזנת כרטיס. שדות עם <span class="req">*</span> הם חובה.</p>
 
         @if ($errors->any())
             <div class="error" role="alert" style="margin-bottom:1rem">יש לתקן את השדות המסומנים למטה.</div>
@@ -91,31 +77,6 @@
 
         <form method="POST" action="{{ route('signup.store') }}" novalidate>
             @csrf
-
-            <h2>בחירת מסלול <span class="req" aria-hidden="true">*</span></h2>
-            @if ($plans->isEmpty())
-                <p class="empty">אין כרגע מסלולים זמינים. אנא פנו אלינו ונשמח לעזור.</p>
-            @else
-                <div class="plans" role="radiogroup" aria-label="בחירת מסלול">
-                    @foreach ($plans as $plan)
-                        <label class="plan">
-                            <input type="radio" name="plan_id" value="{{ $plan->id }}"
-                                @checked(old('plan_id') == $plan->id) required>
-                            <span class="info">
-                                <span class="name">{{ $plan->name }}</span>
-                                @if ($plan->description)
-                                    <span class="desc">{{ $plan->description }}</span>
-                                @endif
-                            </span>
-                            <span class="price">
-                                ₪{{ rtrim(rtrim(number_format($plan->price_agorot / 100, 2, '.', ''), '0'), '.') }}
-                                <small>{{ $plan->vat_applies ? 'לחודש + מע״מ' : 'לחודש' }}</small>
-                            </span>
-                        </label>
-                    @endforeach
-                </div>
-                @error('plan_id') <p class="error">{{ $message }}</p> @enderror
-            @endif
 
             <h2>פרטי העסק</h2>
             <div class="field">
@@ -210,7 +171,7 @@
                 <input type="text" id="website" name="website" tabindex="-1" autocomplete="off">
             </div>
 
-            <button type="submit" @disabled($plans->isEmpty())>אישור וסיום ←</button>
+            <button type="submit">אישור וסיום ←</button>
             <p class="secure">🔒 פרטי אשראי לעולם אינם מוזנים באתר זה — הזנת כרטיס נעשית אך ורק בעמוד המאובטח של חברת הסליקה (קארדקום). איננו רואים ואיננו שומרים את מספר הכרטיס.</p>
         </form>
     </main>
