@@ -57,8 +57,8 @@ class ImportTickets extends Page implements HasForms
                             ->label('עמודות נתמכות')
                             ->content(new HtmlString(
                                 '<div style="line-height:1.9">'.
-                                '<strong>חובה:</strong> ID (מספר הכרטיס) · <strong>מומלץ:</strong> נושא, כתובת דוא״ל, Status, עדיפות, Date Closed<br>'.
-                                '<span style="color:#64748b">כרטיס משויך ללקוח לפי כתובת המייל אם קיים לקוח כזה. אין צורך בגוף ההודעה — נשמרת כותרת הפנייה.</span>'.
+                                '<strong>חובה:</strong> ID (מספר הכרטיס) · <strong>מומלץ:</strong> נושא, כתובת דוא״ל, Status, עדיפות, Date Closed, תוכן<br>'.
+                                '<span style="color:#64748b">כרטיס משויך ללקוח לפי כתובת המייל אם קיים לקוח כזה. אם יש עמודת "תוכן"/גוף הפנייה — היא נשמרת כהודעה הראשונה בכרטיס; אחרת נשמרת כותרת הפנייה. לא נשלחות הודעות ללקוחות בייבוא.</span>'.
                                 '</div>'
                             )),
                         FileUpload::make('file')
@@ -89,9 +89,27 @@ class ImportTickets extends Page implements HasForms
                 ->color('gray')
                 ->action(fn () => response()->streamDownload(function () {
                     echo "\u{FEFF}"; // BOM so Excel opens Hebrew correctly.
-                    echo "ID,נושא,\"כתובת דוא\"\"ל\",Status,עדיפות,\"Date Closed\"\n";
-                    echo "1366,\"אתר שארפן\",info@example.co.il,\"טופל / הושלם\",\"רגיל / לטיפול בהקדם\",\"2023-08-27 18:51:08\"\n";
+                    echo "ID,נושא,\"כתובת דוא\"\"ל\",Status,עדיפות,\"Date Closed\",תוכן\n";
+                    echo "1366,\"אתר שארפן\",info@example.co.il,\"טופל / הושלם\",\"רגיל / לטיפול בהקדם\",\"2023-08-27 18:51:08\",\"תוכן הפנייה אם קיים בייצוא\"\n";
                 }, 'tickets-template.csv', ['Content-Type' => 'text/csv; charset=UTF-8'])),
+
+            Action::make('deleteImported')
+                ->label('מחק ייבוא קודם')
+                ->icon('heroicon-o-trash')
+                ->color('danger')
+                ->requiresConfirmation()
+                ->modalHeading('מחיקת כל הכרטיסים שיובאו')
+                ->modalDescription('פעולה זו מוחקת את כל הכרטיסים שיובאו מהמערכת הישנה (וההודעות שלהם) — כדי לאפשר ייבוא נקי מחדש. כרטיסים שנוצרו במערכת עצמה לא ייפגעו. לא נשלחות הודעות ללקוחות.')
+                ->modalSubmitActionLabel('כן, מחק את המיובאים')
+                ->action(function (TicketImporter $importer) {
+                    $deleted = $importer->deleteImported();
+
+                    Notification::make()
+                        ->title('הייבוא הקודם נמחק')
+                        ->body("נמחקו {$deleted} כרטיסים שיובאו. אפשר לייבא מחדש.")
+                        ->success()
+                        ->send();
+                }),
         ];
     }
 

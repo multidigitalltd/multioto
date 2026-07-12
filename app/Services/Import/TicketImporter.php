@@ -2,6 +2,9 @@
 
 namespace App\Services\Import;
 
+use App\Enums\MessageAuthor;
+use App\Enums\MessageChannel;
+use App\Enums\MessageDirection;
 use App\Enums\TicketChannel;
 use App\Enums\TicketPriority;
 use App\Enums\TicketStatus;
@@ -16,9 +19,14 @@ use Illuminate\Support\Str;
  * original ticket ids so numbering is continuous, then advancing the id sequence
  * so new tickets carry on from the highest imported number.
  *
- * Each row becomes a header-only ticket (subject, status, priority, dates),
- * matched to an existing customer by email. There are no message bodies in the
- * export, so no ticket_messages are created — the ticket is the historical record.
+ * Each row becomes a ticket (subject, status, priority, dates) matched to an
+ * existing customer by email, plus one opening ticket_message so the imported
+ * conversation isn't empty — its body is the export's content/body column when
+ * present, otherwise the subject line.
+ *
+ * All writes go through raw DB inserts (never Eloquent create/save), so no model
+ * events fire and NO email or WhatsApp notification is ever sent to a customer
+ * during an import.
  */
 class TicketImporter
 {
@@ -30,6 +38,8 @@ class TicketImporter
         'status' => 'status', 'סטטוס' => 'status',
         'priority' => 'priority', 'עדיפות' => 'priority',
         'date closed' => 'date', 'date' => 'date', 'תאריך' => 'date', 'תאריך סגירה' => 'date', 'נסגר' => 'date',
+        'body' => 'body', 'content' => 'body', 'message' => 'body', 'description' => 'body', 'details' => 'body',
+        'תוכן' => 'body', 'גוף' => 'body', 'הודעה' => 'body', 'תיאור' => 'body', 'פירוט' => 'body', 'תוכן הפנייה' => 'body',
     ];
 
     /**
@@ -51,6 +61,7 @@ class TicketImporter
         $seen = Ticket::query()->pluck('id')->flip();
 
         $batch = [];
+        $messages = [];
         $line = 1;
         $now = now();
 
@@ -100,14 +111,31 @@ class TicketImporter
                 'updated_at' => $date,
             ];
 
+            // One opening message so the ticket view has content. Use the export's
+            // body column when it carries one, otherwise fall back to the subject.
+            $body = trim((string) ($row['body'] ?? ''));
+            $messages[] = [
+                'ticket_id' => $id,
+                'direction' => MessageDirection::Inbound->value,
+                'channel' => MessageChannel::Email->value,
+                'body' => $body !== '' ? $body : $subject,
+                'external_message_id' => 'legacy-'.$id,
+                'author' => MessageAuthor::Customer->value,
+                'attachments' => null,
+                'created_at' => $date,
+            ];
+
             $seen->put($id, true);
             $result->imported++;
         }
 
         if ($batch !== []) {
-            DB::transaction(function () use ($batch) {
+            DB::transaction(function () use ($batch, $messages) {
                 foreach (array_chunk($batch, 500) as $chunk) {
                     DB::table('tickets')->insert($chunk);
+                }
+                foreach (array_chunk($messages, 500) as $chunk) {
+                    DB::table('ticket_messages')->insert($chunk);
                 }
             });
         }
@@ -116,6 +144,21 @@ class TicketImporter
         $result->maxId = (int) Ticket::max('id');
 
         return $result;
+    }
+
+    /**
+     * Remove every previously imported legacy ticket (and its messages, via the
+     * foreign-key cascade) so a botched import can be redone from scratch. Returns
+     * the number of tickets deleted. Deletion is a raw query — no model events, so
+     * nothing is emailed to any customer.
+     */
+    public function deleteImported(): int
+    {
+        $deleted = DB::table('tickets')->where('external_thread_ref', 'like', 'legacy-%')->delete();
+
+        $this->advanceSequence();
+
+        return $deleted;
     }
 
     /** Map a legacy status label to our status enum. */
