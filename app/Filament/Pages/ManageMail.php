@@ -2,8 +2,8 @@
 
 namespace App\Filament\Pages;
 
+use App\Filament\Concerns\PersistsSettings;
 use App\Models\Setting;
-use App\Providers\SettingsServiceProvider;
 use App\Services\Health\IntegrationHealth;
 use App\Services\Mail\PostmarkClient;
 use Filament\Forms\Components\Actions\Action as FormAction;
@@ -30,6 +30,7 @@ use Illuminate\Support\Str;
 class ManageMail extends Page implements HasForms
 {
     use InteractsWithForms;
+    use PersistsSettings;
 
     protected static ?string $navigationIcon = 'heroicon-o-envelope';
 
@@ -173,7 +174,7 @@ class ManageMail extends Page implements HasForms
         }
 
         // Overlay the just-saved values onto config so the health check below sees them.
-        (new SettingsServiceProvider(app()))->boot();
+        $this->refreshConfig();
 
         $result = app(IntegrationHealth::class)->check('email');
 
@@ -198,7 +199,7 @@ class ManageMail extends Page implements HasForms
     public function syncSenders(): void
     {
         // Overlay whatever is currently typed/saved so the client reads it.
-        (new SettingsServiceProvider(app()))->boot();
+        $this->refreshConfig();
 
         try {
             $this->identities = app(PostmarkClient::class)->verifiedIdentities();
