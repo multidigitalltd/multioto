@@ -6,6 +6,7 @@ use App\Mail\NotificationMail;
 use App\Models\Ticket;
 use App\Models\TicketMessage;
 use App\Services\Waha\WahaClient;
+use App\Support\EmailList;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
@@ -64,9 +65,12 @@ class TeamNotifier
             }
         }
 
-        if (($email = (string) config('billing.notifications.team_email')) !== '') {
+        // The team-email setting may hold several addresses (comma/;-separated).
+        $recipients = EmailList::parse(config('billing.notifications.team_email'));
+
+        if ($recipients !== []) {
             try {
-                Mail::to($email)->send(new NotificationMail($title, $body.$suffix));
+                Mail::to($recipients)->send(new NotificationMail($title, $body.$suffix));
             } catch (\Throwable $e) {
                 Log::warning('TeamNotifier: email alert failed', ['error' => $e->getMessage()]);
             }

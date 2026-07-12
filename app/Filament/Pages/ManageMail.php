@@ -6,6 +6,7 @@ use App\Filament\Concerns\PersistsSettings;
 use App\Models\Setting;
 use App\Services\Health\IntegrationHealth;
 use App\Services\Mail\PostmarkClient;
+use App\Support\EmailList;
 use Filament\Forms\Components\Actions\Action as FormAction;
 use Filament\Forms\Components\FileUpload;
 use Filament\Forms\Components\Placeholder;
@@ -89,9 +90,22 @@ class ManageMail extends Page implements HasForms
                             ->placeholder('Multi Digital'),
                         TextInput::make('mail.reply_to')->label('כתובת לתשובות (Reply-To / תמיכה)')->email()->autocomplete(false)
                             ->placeholder('support@multidigital.co.il'),
-                        TextInput::make('notifications.team_email')->label('מייל התראות צוות (פניות חדשות)')->email()->autocomplete(false)
-                            ->helperText('לכאן יישלחו התראות על פניות חדשות ותגובות. בוואטסאפ ההתראות מגיעות למספר/קבוצת האישורים שהוגדרו ב-WAHA.')
-                            ->placeholder('team@multidigital.co.il'),
+                        TextInput::make('notifications.team_email')->label('מיילים להתראות צוות (אפשר כמה, מופרדים בפסיק)')->autocomplete(false)
+                            // Accept several addresses, comma/;-separated — validate each part.
+                            ->rule(fn () => function (string $attribute, $value, \Closure $fail) {
+                                if (blank($value)) {
+                                    return; // empty clears back to the default — allowed
+                                }
+                                if (($bad = EmailList::invalid($value)) !== []) {
+                                    $fail('כתובות לא תקינות: '.implode(', ', $bad));
+                                } elseif (EmailList::parse($value) === []) {
+                                    // Non-blank but no valid address (e.g. only separators)
+                                    // — would silently disable alerts. Reject it.
+                                    $fail('יש להזין לפחות כתובת מייל תקינה אחת, או להשאיר ריק.');
+                                }
+                            })
+                            ->helperText('לכאן יישלחו התראות על פניות חדשות ותגובות. אפשר כמה כתובות מופרדות בפסיק. בוואטסאפ ההתראות מגיעות למספר/קבוצת האישורים שהוגדרו ב-WAHA.')
+                            ->placeholder('team@multidigital.co.il, riki@m-d.co.il'),
                     ])->columns(2)
                     ->footerActions([$this->saveAction()]),
 

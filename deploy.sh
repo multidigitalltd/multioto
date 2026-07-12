@@ -21,6 +21,9 @@ fi
 echo "→ Publishing Filament assets"
 php artisan filament:assets
 
+echo "→ Linking public storage (uploaded logo etc.)"
+php artisan storage:link || true
+
 echo "→ Running database migrations"
 php artisan migrate --force
 

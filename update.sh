@@ -35,6 +35,7 @@ if [ "$MODE" = "--native" ]; then
     composer install --no-dev --optimize-autoloader --no-interaction
     [ -f package-lock.json ] && npm ci && npm run build || true
     php artisan filament:assets
+    php artisan storage:link || true
     echo "→ Applying new migrations (data preserved)"
     php artisan migrate --force
     php artisan optimize
@@ -45,6 +46,7 @@ else
     docker compose up -d --build
     echo "→ Applying new migrations (data preserved)"
     docker compose exec -T app php artisan migrate --force
+    docker compose exec -T app php artisan storage:link || true
     # Clear caches only — do NOT config:cache here. Under Docker the real
     # DB_CONNECTION (pgsql) is injected via compose environment, while .env
     # still holds the sqlite default; config:cache would freeze the wrong value,
