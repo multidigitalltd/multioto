@@ -38,6 +38,7 @@ class NotificationTemplateResource extends Resource
         'ticket.received' => 'אישור קבלת פנייה',
         'ticket.resolved' => 'עדכון על סיום טיפול',
         'customer.welcome' => 'ברוכים הבאים ללקוח חדש',
+        'payment.link' => 'קישור תשלום ללקוח',
     ];
 
     public static function form(Form $form): Form
