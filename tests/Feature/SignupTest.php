@@ -51,6 +51,8 @@ class SignupTest extends TestCase
             ->assertOk()
             ->assertSee('טופס פתיחת כרטיס לקוח')
             ->assertSee('חתימה')
+            // The tax-approval notice (file number) shows on the payment step.
+            ->assertSee('516171303')
             ->assertDontSee('בחירת מסלול');
     }
 

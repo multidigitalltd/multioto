@@ -40,6 +40,7 @@ class ManageSignup extends Page implements HasForms
         'signup.instructions.standing_order',
         'signup.instructions.bank_transfer',
         'signup.instructions.checks',
+        'signup.tax_approval_notice',
     ];
 
     /** @var array<string, mixed> */
@@ -75,6 +76,10 @@ class ManageSignup extends Page implements HasForms
                         Textarea::make('signup.instructions.checks')
                             ->label('צ׳קים (מקדמה / תשלום מראש)')
                             ->rows(3),
+                        Textarea::make('signup.tax_approval_notice')
+                            ->label('אישורי ניהול ספרים / ניכוי מס במקור')
+                            ->rows(3)
+                            ->helperText('כיתוב שמופיע בשלב התשלום בטופס — קישור להורדת אישורים ומספר התיק. השאירו ריק כדי לא להציג.'),
                         Placeholder::make('link')
                             ->label('קישור לטופס ההרשמה')
                             ->content(fn (): string => rtrim((string) config('app.url'), '/').'/join'),

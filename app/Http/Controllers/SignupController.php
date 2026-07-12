@@ -43,6 +43,7 @@ class SignupController extends Controller
     {
         return view('signup.form', [
             'instructions' => config('billing.signup.instructions'),
+            'taxNotice' => config('billing.signup.tax_approval_notice'),
         ]);
     }
 

@@ -237,6 +237,14 @@
                     {{ $instructions['bank_transfer'] ?? '' }}
                 </div>
 
+                @if (filled($taxNotice ?? null))
+                    <div class="instructions" style="border-style:dashed;">
+                        <div class="head">אישורי ניהול ספרים / ניכוי מס במקור</div>
+                        {{-- Escape first, then linkify the taxes.gov.il URL. --}}
+                        {!! preg_replace('~(https?://[^\s<]+)~', '<a href="$1" target="_blank" rel="noopener">$1</a>', e($taxNotice)) !!}
+                    </div>
+                @endif
+
                 <div class="actions">
                     <button type="button" class="ghost" data-prev="1">חזור</button>
                     <button type="button" data-next="3">לשלב הבא ←</button>
