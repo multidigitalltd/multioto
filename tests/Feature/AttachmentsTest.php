@@ -8,16 +8,23 @@ use App\Enums\MessageDirection;
 use App\Enums\TicketChannel;
 use App\Enums\TicketStatus;
 use App\Enums\WebhookSource;
+use App\Filament\Resources\TicketResource\Pages\ViewTicket;
 use App\Jobs\IngestEmailMessageJob;
 use App\Jobs\IngestWhatsappMessageJob;
+use App\Jobs\SendTicketReplyJob;
+use App\Mail\TicketReplyMail;
 use App\Models\Customer;
 use App\Models\Ticket;
 use App\Models\User;
 use App\Models\WebhookEvent;
 use App\Services\Support\AttachmentStore;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
+use Livewire\Livewire;
 use Tests\TestCase;
 
 class AttachmentsTest extends TestCase
@@ -136,6 +143,87 @@ class AttachmentsTest extends TestCase
         // Out-of-range index is a 404, not a leak.
         $this->get(route('support.attachment', ['message' => $message->id, 'index' => 5]))
             ->assertNotFound();
+    }
+
+    public function test_an_email_reply_delivers_its_attachment(): void
+    {
+        Storage::fake('local');
+        Mail::fake();
+        $path = 'attachments/1/reply.png';
+        Storage::disk('local')->put($path, base64_decode(self::PNG));
+
+        $customer = Customer::factory()->create(['email' => 'lead@example.com']);
+        $ticket = Ticket::create([
+            'customer_id' => $customer->id, 'channel' => TicketChannel::Email,
+            'subject' => 'x', 'status' => TicketStatus::Open,
+        ]);
+        $message = $ticket->messages()->create([
+            'direction' => MessageDirection::Outbound, 'channel' => MessageChannel::Email,
+            'body' => 'מצורף', 'author' => MessageAuthor::Agent,
+            'attachments' => [['name' => 'reply.png', 'mime' => 'image/png', 'size' => 68, 'path' => $path, 'disk' => 'local']],
+        ]);
+
+        SendTicketReplyJob::dispatchSync($message->id);
+
+        Mail::assertSent(TicketReplyMail::class, function (TicketReplyMail $mail) use ($path): bool {
+            return count($mail->files) === 1
+                && $mail->files[0]['path'] === $path
+                && count($mail->attachments()) === 1; // the file is actually attached
+        });
+    }
+
+    public function test_a_whatsapp_reply_sends_the_file_as_base64(): void
+    {
+        Storage::fake('local');
+        config(['billing.waha.base_url' => 'https://waha.test', 'billing.waha.api_key' => 'k', 'billing.waha.session' => 'default']);
+        $path = 'attachments/1/reply.png';
+        Storage::disk('local')->put($path, base64_decode(self::PNG));
+
+        Http::fake([
+            '*/api/sendFile' => Http::response(['id' => 'f1']),
+            '*' => Http::response(['id' => 't1']),
+        ]);
+
+        $customer = Customer::factory()->create();
+        $ticket = Ticket::create([
+            'customer_id' => $customer->id, 'channel' => TicketChannel::Whatsapp,
+            'subject' => 'x', 'status' => TicketStatus::Open, 'external_thread_ref' => '972501234567@c.us',
+        ]);
+        $message = $ticket->messages()->create([
+            'direction' => MessageDirection::Outbound, 'channel' => MessageChannel::Whatsapp,
+            'body' => 'הנה הקובץ', 'author' => MessageAuthor::Agent,
+            'attachments' => [['name' => 'reply.png', 'mime' => 'image/png', 'size' => 68, 'path' => $path, 'disk' => 'local']],
+        ]);
+
+        SendTicketReplyJob::dispatchSync($message->id);
+
+        Http::assertSent(fn ($request): bool => str_contains($request->url(), 'sendFile')
+            && ($request->data()['file']['data'] ?? '') === self::PNG
+            && ($request->data()['file']['filename'] ?? '') === 'reply.png');
+    }
+
+    public function test_agent_can_attach_a_file_to_a_reply_from_the_chat(): void
+    {
+        Storage::fake('local');
+        Queue::fake([SendTicketReplyJob::class]);
+        $this->actingAs(User::factory()->create());
+
+        $customer = Customer::factory()->create();
+        $ticket = Ticket::create([
+            'customer_id' => $customer->id, 'channel' => TicketChannel::Email,
+            'subject' => 'x', 'status' => TicketStatus::Open,
+        ]);
+
+        Livewire::test(ViewTicket::class, ['record' => $ticket->id])
+            ->set('replyBody', 'מצרף צילום מסך')
+            ->set('replyFiles', [UploadedFile::fake()->image('screenshot.jpg')])
+            ->call('sendReply');
+
+        $message = $ticket->messages()->where('direction', MessageDirection::Outbound)->sole();
+        $this->assertCount(1, $message->attachments);
+        $this->assertStringStartsWith('image/', $message->attachments[0]['mime']);
+        Storage::disk('local')->assertExists($message->attachments[0]['path']);
+        Queue::assertPushed(SendTicketReplyJob::class);
     }
 
     public function test_the_attachment_route_is_closed_to_guests(): void

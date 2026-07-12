@@ -65,6 +65,20 @@ class WahaClient
     }
 
     /**
+     * Send a file by its raw bytes (base64) — used for locally-stored reply
+     * attachments, so WAHA never needs to reach back to our server for a URL.
+     */
+    public function sendFile(string $chatId, string $filename, string $mime, string $contents, ?string $caption = null): array
+    {
+        return $this->request('api/sendFile', [
+            'chatId' => $this->normalizeChatId($chatId),
+            'file' => ['mimetype' => $mime, 'filename' => $filename, 'data' => base64_encode($contents)],
+            'caption' => $caption,
+            'session' => config('billing.waha.session'),
+        ]);
+    }
+
+    /**
      * Download inbound media by its WAHA URL (authenticated with the API key).
      * Returns the raw bytes, or null on any failure — a missing attachment must
      * never break message ingestion. Same-origin as the WAHA server only.

@@ -82,13 +82,26 @@
             </select>
         </div>
         <label for="replyBody" class="sr-only">תוכן המענה</label>
-        <textarea id="replyBody" wire:model="replyBody" rows="3" required
+        <textarea id="replyBody" wire:model="replyBody" rows="3"
                   placeholder="כתבו מענה ללקוח…"
                   class="w-full rounded-lg border-gray-300 text-sm dark:border-gray-600 dark:bg-gray-900"></textarea>
-        <div class="flex justify-end">
+
+        <div class="flex flex-wrap items-center justify-between gap-3">
+            <div class="flex items-center gap-2 text-sm">
+                <label for="replyFiles" class="flex cursor-pointer items-center gap-1 text-primary-600 hover:underline">
+                    <x-filament::icon icon="heroicon-o-paper-clip" class="h-4 w-4" />
+                    צירוף קובץ
+                </label>
+                <input id="replyFiles" type="file" wire:model="replyFiles" multiple class="hidden">
+                @if (filled($replyFiles))
+                    <span class="text-xs text-gray-500 dark:text-gray-400">{{ count($replyFiles) }} קבצים נבחרו</span>
+                @endif
+                <span wire:loading wire:target="replyFiles" class="text-xs text-gray-500">מעלה…</span>
+            </div>
             <x-filament::button type="submit" icon="heroicon-o-paper-airplane">
                 שליחה
             </x-filament::button>
         </div>
+        @error('replyFiles.*') <span class="text-xs text-danger-600">{{ $message }}</span> @enderror
     </form>
 </x-filament-panels::page>

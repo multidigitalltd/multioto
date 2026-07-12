@@ -10,6 +10,7 @@ use App\Services\Waha\WahaClient;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Storage;
 
 /**
  * Route an agent's outbound ticket message back to the customer's original
@@ -48,8 +49,22 @@ class SendTicketReplyJob implements ShouldQueue
             }
 
             $body = $this->withSignature($message->body, (string) config('billing.notifications.reply_signature_whatsapp'));
-            $response = $waha->sendMessage($chatId, $body);
-            $message->update(['external_message_id' => $response['id'] ?? null]);
+            $externalId = null;
+
+            if (trim($body) !== '') {
+                $externalId = $waha->sendMessage($chatId, $body)['id'] ?? null;
+            }
+
+            // Each attachment is sent as its own file message (base64 — WAHA
+            // never needs to reach our server).
+            foreach ($message->attachments ?? [] as $file) {
+                if (($contents = $this->fileContents($file)) !== null) {
+                    $sent = $waha->sendFile($chatId, $file['name'] ?? 'file', $file['mime'] ?? 'application/octet-stream', $contents);
+                    $externalId ??= $sent['id'] ?? null;
+                }
+            }
+
+            $message->update(['external_message_id' => $externalId]);
         } else {
             $email = $ticket->customer?->email;
 
@@ -58,7 +73,7 @@ class SendTicketReplyJob implements ShouldQueue
             }
 
             $body = $this->withSignature($message->body, (string) config('billing.notifications.reply_signature'));
-            Mail::to($email)->send(new TicketReplyMail($ticket->subject, $body));
+            Mail::to($email)->send(new TicketReplyMail($ticket->subject, $body, $message->attachments ?? []));
             $message->update(['external_message_id' => 'mail-'.$message->id]);
         }
 
@@ -78,5 +93,17 @@ class SendTicketReplyJob implements ShouldQueue
         $signature = trim($signature);
 
         return $signature === '' ? $body : $body."\n\n".$signature;
+    }
+
+    /**
+     * Read a stored attachment's bytes, or null if it's gone.
+     *
+     * @param  array{path?: string, disk?: string}  $file
+     */
+    private function fileContents(array $file): ?string
+    {
+        $disk = Storage::disk($file['disk'] ?? (string) config('billing.support.attachments.disk'));
+
+        return isset($file['path']) && $disk->exists($file['path']) ? $disk->get($file['path']) : null;
     }
 }

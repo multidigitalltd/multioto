@@ -10,10 +10,13 @@ use App\Enums\TicketStatus;
 use App\Filament\Resources\TicketResource;
 use App\Jobs\SendTicketReplyJob;
 use App\Models\TicketMessage;
+use App\Services\Support\AttachmentStore;
 use Filament\Actions;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ViewRecord;
 use Illuminate\Support\Collection;
+use Livewire\Features\SupportFileUploads\TemporaryUploadedFile;
+use Livewire\WithFileUploads;
 
 /**
  * Conversation view — the ticket as a chat (WhatsApp/email alike): message
@@ -23,6 +26,8 @@ use Illuminate\Support\Collection;
  */
 class ViewTicket extends ViewRecord
 {
+    use WithFileUploads;
+
     protected static string $resource = TicketResource::class;
 
     protected static string $view = 'filament.tickets.chat';
@@ -30,6 +35,9 @@ class ViewTicket extends ViewRecord
     public string $replyBody = '';
 
     public string $replyChannel = '';
+
+    /** @var array<int, TemporaryUploadedFile> */
+    public array $replyFiles = [];
 
     public function mount(int|string $record): void
     {
@@ -50,31 +58,67 @@ class ViewTicket extends ViewRecord
     public function sendReply(): void
     {
         $body = trim($this->replyBody);
+        $files = array_filter((array) $this->replyFiles);
 
-        if ($body === '') {
+        if ($body === '' && $files === []) {
             Notification::make()->title('אין תוכן לשליחה')->warning()->send();
 
             return;
         }
+
+        // Uploaded files must be real files within the size cap (re-checked by
+        // AttachmentStore against their sniffed MIME).
+        $maxKb = (int) round((int) config('billing.support.attachments.max_bytes', 10485760) / 1024);
+        $this->validate(['replyFiles.*' => "file|max:{$maxKb}"]);
 
         $channel = MessageChannel::tryFrom($this->replyChannel) ?? MessageChannel::InternalNote;
 
         $message = $this->record->messages()->create([
             'direction' => MessageDirection::Outbound,
             'channel' => $channel,
-            'body' => $body,
+            'body' => $body !== '' ? $body : '[קובץ מצורף]',
             'author' => MessageAuthor::Agent,
         ]);
+
+        $stored = $this->storeReplyFiles($files);
+
+        if ($stored !== []) {
+            $message->update(['attachments' => $stored]);
+        }
 
         if ($channel !== MessageChannel::InternalNote) {
             SendTicketReplyJob::dispatch($message->id);
         }
 
         $this->replyBody = '';
+        $this->replyFiles = [];
 
         Notification::make()
             ->title($channel === MessageChannel::InternalNote ? 'ההערה נשמרה' : 'המענה נשלח ללקוח')
             ->success()->send();
+    }
+
+    /**
+     * Validate + store the agent's uploaded reply files (rejected files are
+     * skipped), returning their metadata for the message.
+     *
+     * @param  array<int, TemporaryUploadedFile>  $files
+     * @return array<int, array{name: string, mime: string, size: int, path: string, disk: string}>
+     */
+    protected function storeReplyFiles(array $files): array
+    {
+        $store = app(AttachmentStore::class);
+        $stored = [];
+
+        foreach ($files as $file) {
+            $meta = $store->store($this->record->id, $file->getClientOriginalName(), $file->get(), $file->getMimeType());
+
+            if ($meta !== null) {
+                $stored[] = $meta;
+            }
+        }
+
+        return $stored;
     }
 
     protected function getHeaderActions(): array
