@@ -15,7 +15,6 @@ use App\Models\PendingAction;
 use App\Models\Ticket;
 use App\Models\WebhookEvent;
 use App\Services\Automation\ApprovalGate;
-use App\Services\Support\TicketIntake;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
@@ -79,7 +78,7 @@ class ApprovalGateTest extends TestCase
         [$event] = WebhookEvent::record(WebhookSource::Waha, 'message', 'own-1', [
             'payload' => ['id' => 'own-1', 'from' => '972501112222@c.us', 'body' => "אשר {$action->id}"],
         ]);
-        (new IngestWhatsappMessageJob($event->id))->handle(app(TicketIntake::class));
+        IngestWhatsappMessageJob::dispatchSync($event->id);
 
         $action->refresh();
         $this->assertSame(ActionStatus::Executed, $action->status);

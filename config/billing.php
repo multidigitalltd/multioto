@@ -190,6 +190,30 @@ return [
         'email_chunk_size' => env('BROADCAST_EMAIL_CHUNK', 50),
     ],
 
+    'support' => [
+        // Inbound attachments (images/files a customer sends on WhatsApp or
+        // email). Stored on a PRIVATE disk and served only behind panel auth.
+        'attachments' => [
+            'disk' => env('ATTACHMENT_DISK', 'local'),
+            'max_bytes' => (int) env('ATTACHMENT_MAX_BYTES', 10 * 1024 * 1024), // 10 MB
+            // Allow-list only. Deliberately excludes SVG (scriptable) and every
+            // executable/PHP type — the extension is derived from the MIME, so a
+            // ".php" filename can never be written.
+            'allowed_mimes' => [
+                'image/jpeg' => 'jpg',
+                'image/png' => 'png',
+                'image/gif' => 'gif',
+                'image/webp' => 'webp',
+                'application/pdf' => 'pdf',
+                'text/plain' => 'txt',
+                'application/msword' => 'doc',
+                'application/vnd.openxmlformats-officedocument.wordprocessingml.document' => 'docx',
+                'application/vnd.ms-excel' => 'xls',
+                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' => 'xlsx',
+            ],
+        ],
+    ],
+
     /*
      | Proactive reminders — a daily internal digest to the team so nothing
      | slips before it becomes a problem (an upcoming renewal, a card about to

@@ -7,6 +7,7 @@ use App\Enums\TicketChannel;
 use App\Models\Customer;
 use App\Models\WebhookEvent;
 use App\Services\Automation\ApprovalGate;
+use App\Services\Support\AttachmentStore;
 use App\Services\Support\TicketIntake;
 use App\Services\Waha\WahaClient;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -28,7 +29,7 @@ class IngestWhatsappMessageJob implements ShouldQueue
 
     public function __construct(public int $webhookEventId) {}
 
-    public function handle(TicketIntake $intake): void
+    public function handle(TicketIntake $intake, WahaClient $waha, AttachmentStore $attachments): void
     {
         $event = WebhookEvent::find($this->webhookEventId);
 
@@ -74,17 +75,57 @@ class IngestWhatsappMessageJob implements ShouldQueue
 
         $customer = $this->matchCustomer($intake, $chatId);
 
-        $intake->recordInbound(
+        $message = $intake->recordInbound(
             channel: TicketChannel::Whatsapp,
             messageChannel: MessageChannel::Whatsapp,
             customer: $customer,
             body: $body,
             threadRef: $chatId,
             externalMessageId: $messageId,
-            attachments: ! empty($payload['hasMedia']) ? ['media' => $payload['media'] ?? true] : null,
         );
 
+        // Download and store the media the customer sent (image/file), then keep
+        // its metadata on the message. First ingest only — recordInbound is
+        // idempotent per message id.
+        if ($message->wasRecentlyCreated && ! empty($payload['hasMedia'])) {
+            $stored = $this->storeMedia($waha, $attachments, $message->ticket_id, $payload);
+
+            if ($stored !== null) {
+                $message->update(['attachments' => [$stored]]);
+            }
+        }
+
         $event->markProcessed();
+    }
+
+    /**
+     * Fetch the media referenced by a WAHA message and store it. WAHA exposes it
+     * as a URL on its own server (media.url) that needs the API key; shapes vary
+     * across versions, so we read defensively. Returns null (message kept
+     * without the file) on anything unexpected.
+     *
+     * @param  array<string, mixed>  $payload
+     * @return array{name: string, mime: string, size: int, path: string, disk: string}|null
+     */
+    protected function storeMedia(WahaClient $waha, AttachmentStore $store, int $ticketId, array $payload): ?array
+    {
+        $media = is_array($payload['media'] ?? null) ? $payload['media'] : [];
+        $url = (string) ($media['url'] ?? $payload['mediaUrl'] ?? '');
+
+        if ($url === '') {
+            return null;
+        }
+
+        $contents = $waha->downloadMedia($url);
+
+        if ($contents === null) {
+            return null;
+        }
+
+        $filename = (string) ($media['filename'] ?? $payload['filename'] ?? 'whatsapp-media');
+        $mime = (string) ($media['mimetype'] ?? $payload['mimetype'] ?? '') ?: null;
+
+        return $store->store($ticketId, $filename, $contents, $mime);
     }
 
     /**

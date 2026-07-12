@@ -43,6 +43,26 @@
                         <time datetime="{{ $message->created_at->toIso8601String() }}">{{ $message->created_at->format('d/m/Y H:i') }}</time>
                     </div>
                     <div class="whitespace-pre-line">{{ $message->body }}</div>
+
+                    @if (filled($message->attachments))
+                        <div class="mt-2 flex flex-col gap-2">
+                            @foreach ($message->attachments as $i => $attachment)
+                                @php $url = route('support.attachment', ['message' => $message->id, 'index' => $i]); @endphp
+                                @if (str_starts_with($attachment['mime'] ?? '', 'image/'))
+                                    <a href="{{ $url }}" target="_blank" rel="noopener">
+                                        <img src="{{ $url }}" alt="{{ $attachment['name'] ?? 'תמונה' }}"
+                                             class="max-h-48 rounded-lg border border-gray-200 dark:border-gray-700" style="max-width: 100%;">
+                                    </a>
+                                @else
+                                    <a href="{{ $url }}" target="_blank" rel="noopener"
+                                       class="flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-xs text-primary-600 hover:underline dark:border-gray-700">
+                                        <x-filament::icon icon="heroicon-o-paper-clip" class="h-4 w-4" />
+                                        {{ $attachment['name'] ?? 'קובץ מצורף' }}
+                                    </a>
+                                @endif
+                            @endforeach
+                        </div>
+                    @endif
                 </div>
             </div>
         @empty
