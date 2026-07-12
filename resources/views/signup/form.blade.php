@@ -108,7 +108,13 @@
 </head>
 <body>
     <main>
-        <div class="logo-wrap"><span class="logo">M</span></div>
+        <div class="logo-wrap">
+            @if ($logo = \App\Support\Branding::logoUrl())
+                <img src="{{ $logo }}" alt="לוגו" style="max-height:4.5rem;max-width:70%;border-radius:.6rem;">
+            @else
+                <span class="logo">M</span>
+            @endif
+        </div>
         <h1>טופס פתיחת כרטיס לקוח</h1>
         <p class="lead">אנו מודים לך על שבחרת בנו ומתחייבים לשירות 1:1 אמין מקצועי וזמין</p>
         <p class="lead small">מילוי הפרטים בטופס זה יחסוך חתימת מסמך ידני. שדות עם <span class="req">*</span> הם חובה.</p>
@@ -145,13 +151,17 @@
                             <option value="licensed_dealer" @selected(old('business_type') === 'licensed_dealer')>עוסק מורשה</option>
                             <option value="exempt_dealer" @selected(old('business_type') === 'exempt_dealer')>עוסק פטור</option>
                             <option value="company" @selected(old('business_type') === 'company')>חברה בע״מ</option>
+                            <option value="nonprofit" @selected(old('business_type') === 'nonprofit')>עמותה (ע.ר.)</option>
                         </select>
                         @error('business_type') <p class="error" id="bt-error">{{ $message }}</p> @enderror
                     </div>
                     <div class="field">
-                        <label for="business_number">ח.פ / ע.מ</label>
+                        <label for="business_number">ח.פ / ע.מ / ע.ר</label>
                         <input type="text" id="business_number" name="business_number" value="{{ old('business_number') }}"
-                            inputmode="numeric" autocomplete="off" placeholder="ח.פ / ע.מ">
+                            inputmode="numeric" autocomplete="off" placeholder="9 ספרות"
+                            data-validate="business_number"
+                            @error('business_number') aria-invalid="true" aria-describedby="bn-error" @enderror>
+                        <p class="error" id="bn-error" @if (! $errors->has('business_number')) hidden @endif>{{ $errors->first('business_number') ?: 'ח.פ / מספר עוסק חייב להיות 9 ספרות.' }}</p>
                     </div>
                 </div>
 
@@ -166,27 +176,20 @@
                     <div class="field">
                         <label for="phone">טלפון <span class="req" aria-hidden="true">*</span></label>
                         <input type="tel" id="phone" name="phone" value="{{ old('phone') }}" required autocomplete="tel" inputmode="tel"
-                            placeholder="עדיף נייד זמין של איש הקשר"
+                            placeholder="עדיף נייד זמין (למשל 0501234567)"
+                            data-validate="phone"
                             @error('phone') aria-invalid="true" aria-describedby="phone-error" @enderror>
-                        @error('phone') <p class="error" id="phone-error">{{ $message }}</p> @enderror
+                        <p class="error" id="phone-error" @if (! $errors->has('phone')) hidden @endif>{{ $errors->first('phone') ?: 'מספר הטלפון אינו תקין.' }}</p>
                     </div>
                 </div>
 
-                <div class="row">
-                    <div class="field">
-                        <label for="email">אימייל <span class="req" aria-hidden="true">*</span></label>
-                        <input type="email" id="email" name="email" value="{{ old('email') }}" required autocomplete="email"
-                            placeholder="אימייל אליו יישלחו מסמכים וחשבוניות"
-                            @error('email') aria-invalid="true" aria-describedby="email-error" @enderror>
-                        @error('email') <p class="error" id="email-error">{{ $message }}</p> @enderror
-                    </div>
-                    <div class="field">
-                        <label for="address">כתובת <span class="req" aria-hidden="true">*</span></label>
-                        <input type="text" id="address" name="address" value="{{ old('address') }}" required autocomplete="street-address"
-                            placeholder="כתובת העסק"
-                            @error('address') aria-invalid="true" aria-describedby="address-error" @enderror>
-                        @error('address') <p class="error" id="address-error">{{ $message }}</p> @enderror
-                    </div>
+                <div class="field">
+                    <label for="email">אימייל <span class="req" aria-hidden="true">*</span></label>
+                    <input type="email" id="email" name="email" value="{{ old('email') }}" required autocomplete="email"
+                        placeholder="אימייל אליו יישלחו מסמכים וחשבוניות"
+                        data-validate="email"
+                        @error('email') aria-invalid="true" aria-describedby="email-error" @enderror>
+                    <p class="error" id="email-error" @if (! $errors->has('email')) hidden @endif>{{ $errors->first('email') ?: 'כתובת המייל אינה תקינה.' }}</p>
                 </div>
 
                 <div class="field">
@@ -295,7 +298,32 @@
                 window.scrollTo({ top: 0, behavior: 'smooth' });
             }
 
-            // Validate the required fields inside a given step before advancing.
+            // Per-field format rules (mirrors the server-side validation).
+            var FORMATS = {
+                email: { test: function (v) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v); }, error: 'email-error' },
+                phone: { test: function (v) { return /^0\d{8,9}$/.test(v.replace(/\D+/g, '')); }, error: 'phone-error' },
+                business_number: { test: function (v) { return v === '' || /^\d{9}$/.test(v.replace(/\D+/g, '')); }, error: 'bn-error' },
+            };
+
+            function setError(el, errorId, show) {
+                var box = errorId ? document.getElementById(errorId) : null;
+                if (show) { el.setAttribute('aria-invalid', 'true'); if (box) box.hidden = false; }
+                else { el.removeAttribute('aria-invalid'); if (box) box.hidden = true; }
+            }
+
+            // Check one field's format (if it has a data-validate rule). Empty,
+            // non-required fields pass; required-empty is handled by stepValid.
+            function formatValid(el) {
+                var rule = FORMATS[el.getAttribute('data-validate')];
+                if (!rule) { return true; }
+                var v = String(el.value).trim();
+                if (v === '' && !el.required) { setError(el, rule.error, false); return true; }
+                var ok = rule.test(v);
+                setError(el, rule.error, !ok);
+                return ok;
+            }
+
+            // Validate required + format for every field inside a step.
             function stepValid(step) {
                 var panel = form.querySelector('.panel[data-step="' + step + '"]');
                 var ok = true;
@@ -307,9 +335,17 @@
                         el.removeAttribute('aria-invalid');
                     }
                 });
+                panel.querySelectorAll('[data-validate]').forEach(function (el) {
+                    if (!formatValid(el)) { ok = false; }
+                });
                 if (!ok) { var f = panel.querySelector('[aria-invalid="true"]'); if (f) f.focus(); }
                 return ok;
             }
+
+            // Live feedback: re-check a field's format when the user leaves it.
+            form.querySelectorAll('[data-validate]').forEach(function (el) {
+                el.addEventListener('blur', function () { formatValid(el); });
+            });
 
             document.querySelectorAll('[data-next]').forEach(function (btn) {
                 btn.addEventListener('click', function () {

@@ -280,6 +280,11 @@ class CustomerResource extends Resource
                         ->url(fn (Customer $record): ?string => $record->signature_path
                             ? route('customer.signature', $record) : null, shouldOpenInNewTab: true)
                         ->placeholder('—'),
+                    TextEntry::make('signed_pdf_path')->label('כרטיס חתום (PDF)')
+                        ->formatStateUsing(fn (): string => 'הורדת הכרטיס ↗')
+                        ->url(fn (Customer $record): ?string => $record->signed_pdf_path
+                            ? route('customer.card-pdf', $record) : null, shouldOpenInNewTab: true)
+                        ->placeholder('—'),
                     TextEntry::make('status')->label('סטטוס')->badge(),
                     TextEntry::make('notes')->label('הערות')->placeholder('—')->columnSpanFull(),
                 ])->columns(3),

@@ -7,6 +7,7 @@ use App\Models\Setting;
 use App\Services\Health\IntegrationHealth;
 use App\Services\Mail\PostmarkClient;
 use Filament\Forms\Components\Actions\Action as FormAction;
+use Filament\Forms\Components\FileUpload;
 use Filament\Forms\Components\Placeholder;
 use Filament\Forms\Components\Section;
 use Filament\Forms\Components\Textarea;
@@ -45,7 +46,7 @@ class ManageMail extends Page implements HasForms
     protected static string $view = 'filament.pages.manage-mail';
 
     /** Non-secret keys pre-filled from config; secrets are always left blank. */
-    private const IDENTITY_KEYS = ['mail.from_address', 'mail.from_name', 'mail.reply_to', 'notifications.team_email', 'notifications.reply_signature', 'notifications.reply_signature_whatsapp'];
+    private const IDENTITY_KEYS = ['mail.from_address', 'mail.from_name', 'mail.reply_to', 'notifications.team_email', 'notifications.reply_signature', 'notifications.reply_signature_whatsapp', 'branding.logo_path'];
 
     private const SECRET_KEYS = ['postmark.token', 'postmark.account_token', 'email.webhook_secret'];
 
@@ -70,6 +71,7 @@ class ManageMail extends Page implements HasForms
         data_set($values, 'notifications.team_email', config('billing.notifications.team_email'));
         data_set($values, 'notifications.reply_signature', config('billing.notifications.reply_signature'));
         data_set($values, 'notifications.reply_signature_whatsapp', config('billing.notifications.reply_signature_whatsapp'));
+        data_set($values, 'branding.logo_path', config('billing.branding.logo_path'));
 
         $this->form->fill($values);
     }
@@ -91,6 +93,21 @@ class ManageMail extends Page implements HasForms
                             ->helperText('לכאן יישלחו התראות על פניות חדשות ותגובות. בוואטסאפ ההתראות מגיעות למספר/קבוצת האישורים שהוגדרו ב-WAHA.')
                             ->placeholder('team@multidigital.co.il'),
                     ])->columns(2)
+                    ->footerActions([$this->saveAction()]),
+
+                Section::make('לוגו העסק')
+                    ->description('הלוגו יופיע בטופס ההרשמה, בעמוד התודה, במיילים ללקוח ובכרטיס הלקוח החתום (PDF). מומלץ PNG/JPG שקוף ברזולוציה טובה.')
+                    ->schema([
+                        FileUpload::make('branding.logo_path')
+                            ->label('קובץ לוגו')
+                            ->image()
+                            ->disk('public')
+                            ->directory('branding')
+                            ->visibility('public')
+                            ->maxSize(2048)
+                            ->imageEditor()
+                            ->helperText('עד 2MB. החלפת הקובץ מעדכנת את הלוגו בכל המקומות.'),
+                    ])
                     ->footerActions([$this->saveAction()]),
 
                 Section::make('חתימת תשובות')

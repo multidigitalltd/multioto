@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Enums\BusinessType;
 use App\Enums\MessageAuthor;
 use App\Enums\TicketChannel;
+use App\Jobs\GenerateCustomerCardPdfJob;
 use App\Jobs\SendWelcomeMessageJob;
 use App\Mail\NotificationMail;
 use App\Models\Customer;
@@ -35,7 +36,6 @@ class SignupTest extends TestCase
             'business_type' => BusinessType::LicensedDealer->value,
             'email' => 'New@Example.CO.il',
             'phone' => '0501234567',
-            'address' => 'הרצל 1, תל אביב',
             'domain' => 'https://newbiz.co.il',
             'payment_method' => 'credit_card',
             'terms' => '1',
@@ -61,7 +61,7 @@ class SignupTest extends TestCase
 
     public function test_signup_creates_a_customer_and_redirects_to_card_capture(): void
     {
-        Queue::fake([SendWelcomeMessageJob::class]);
+        Queue::fake([SendWelcomeMessageJob::class, GenerateCustomerCardPdfJob::class]);
         Storage::fake('local');
 
         $response = $this->post(route('signup.store'), $this->validPayload());
@@ -75,7 +75,6 @@ class SignupTest extends TestCase
         $this->assertNotNull($customer);
         $this->assertSame('new@example.co.il', $customer->email); // normalized
         $this->assertSame('ישראל ישראלי', $customer->contact_name);
-        $this->assertSame('הרצל 1, תל אביב', $customer->address);
         $this->assertSame('credit_card', $customer->payment_method);
         $this->assertNotNull($customer->terms_accepted_at); // consent record
         $this->assertSame('newbiz.co.il', $customer->sites()->value('domain')); // scheme stripped
@@ -88,8 +87,37 @@ class SignupTest extends TestCase
         // No subscription is created here — the plan is custom and set up later.
         $this->assertSame(0, Subscription::count());
 
-        // The personal welcome goes out exactly once.
+        // The personal welcome + the signed-card PDF generation are queued.
         Queue::assertPushed(SendWelcomeMessageJob::class, 1);
+        Queue::assertPushed(GenerateCustomerCardPdfJob::class, 1);
+    }
+
+    public function test_signup_validates_field_formats(): void
+    {
+        // Bad email, non-9-digit business number, non-Israeli phone.
+        $this->post(route('signup.store'), $this->validPayload([
+            'email' => 'not-an-email',
+            'business_number' => '12345',
+            'phone' => '12345',
+        ]))->assertSessionHasErrors(['email', 'business_number', 'phone']);
+
+        $this->assertSame(0, Customer::count());
+    }
+
+    public function test_signup_accepts_a_nonprofit_and_a_dashed_phone(): void
+    {
+        Queue::fake([SendWelcomeMessageJob::class, GenerateCustomerCardPdfJob::class]);
+
+        $this->post(route('signup.store'), $this->validPayload([
+            'business_type' => BusinessType::Nonprofit->value,
+            'business_number' => '58-012-3456', // dashes stripped → 9 digits
+            'phone' => '050-123-4567',
+        ]))->assertRedirect();
+
+        $customer = Customer::sole();
+        $this->assertSame(BusinessType::Nonprofit, $customer->business_type);
+        $this->assertSame('580123456', $customer->business_number);
+        $this->assertSame('0501234567', $customer->phone);
     }
 
     public function test_signup_requires_a_signature(): void
@@ -112,7 +140,7 @@ class SignupTest extends TestCase
 
     public function test_checks_signup_opens_a_follow_up_ticket(): void
     {
-        Queue::fake([SendWelcomeMessageJob::class]);
+        Queue::fake([SendWelcomeMessageJob::class, GenerateCustomerCardPdfJob::class]);
 
         $this->post(route('signup.store'), $this->validPayload(['payment_method' => 'checks']))
             ->assertRedirect(route('signup.thanks'))
@@ -124,7 +152,7 @@ class SignupTest extends TestCase
 
     public function test_bank_transfer_signup_opens_a_follow_up_ticket_instead_of_card_capture(): void
     {
-        Queue::fake([SendWelcomeMessageJob::class]);
+        Queue::fake([SendWelcomeMessageJob::class, GenerateCustomerCardPdfJob::class]);
 
         $response = $this->post(route('signup.store'), $this->validPayload([
             'payment_method' => 'bank_transfer',
@@ -144,7 +172,7 @@ class SignupTest extends TestCase
 
     public function test_exempt_dealer_signup_is_marked_vat_exempt(): void
     {
-        Queue::fake([SendWelcomeMessageJob::class]);
+        Queue::fake([SendWelcomeMessageJob::class, GenerateCustomerCardPdfJob::class]);
 
         $this->post(route('signup.store'), $this->validPayload([
             'name' => 'עוסק פטור',
@@ -158,7 +186,7 @@ class SignupTest extends TestCase
     public function test_signup_validates_required_fields(): void
     {
         $this->post(route('signup.store'), [])
-            ->assertSessionHasErrors(['name', 'contact_name', 'business_type', 'email', 'phone', 'address', 'payment_method', 'terms', 'signature']);
+            ->assertSessionHasErrors(['name', 'contact_name', 'business_type', 'email', 'phone', 'payment_method', 'terms', 'signature']);
 
         $this->assertSame(0, Customer::count());
     }

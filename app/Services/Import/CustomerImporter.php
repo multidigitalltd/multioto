@@ -47,6 +47,8 @@ class CustomerImporter
         'exempt_dealer' => BusinessType::ExemptDealer, 'עוסק פטור' => BusinessType::ExemptDealer, 'פטור' => BusinessType::ExemptDealer,
         'licensed_dealer' => BusinessType::LicensedDealer, 'עוסק מורשה' => BusinessType::LicensedDealer, 'מורשה' => BusinessType::LicensedDealer,
         'company' => BusinessType::Company, 'חברה' => BusinessType::Company, 'בעמ' => BusinessType::Company, 'חברה בע"מ' => BusinessType::Company,
+        // normalize() strips quotes but keeps dots, so match both "ער" and "ע.ר.".
+        'nonprofit' => BusinessType::Nonprofit, 'עמותה' => BusinessType::Nonprofit, 'ער' => BusinessType::Nonprofit, 'ע.ר.' => BusinessType::Nonprofit, 'עמותה רשומה' => BusinessType::Nonprofit,
     ];
 
     /**

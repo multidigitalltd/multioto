@@ -90,6 +90,19 @@ class CustomerImporterTest extends TestCase
         $this->assertStringContainsString('תוכנית', $result->skipped[0]['reason']);
     }
 
+    public function test_it_maps_nonprofit_business_type_aliases(): void
+    {
+        $this->plan();
+
+        (new CustomerImporter)->import([
+            ['שם' => 'עמותת א', 'אימייל' => 'a@example.co.il', 'סוג עסק' => 'עמותה', 'תוכנית' => 'אחזקה עסקית'],
+            ['שם' => 'עמותת ב', 'אימייל' => 'b@example.co.il', 'סוג עסק' => 'ע.ר.', 'תוכנית' => 'אחזקה עסקית'],
+        ]);
+
+        $this->assertSame(BusinessType::Nonprofit, Customer::where('email', 'a@example.co.il')->value('business_type'));
+        $this->assertSame(BusinessType::Nonprofit, Customer::where('email', 'b@example.co.il')->value('business_type'));
+    }
+
     public function test_english_headers_also_work(): void
     {
         $this->plan();

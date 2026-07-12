@@ -8,6 +8,7 @@ use App\Enums\MessageChannel;
 use App\Enums\SiteStatus;
 use App\Enums\TicketChannel;
 use App\Http\Requests\SignupRequest;
+use App\Jobs\GenerateCustomerCardPdfJob;
 use App\Jobs\SendWelcomeMessageJob;
 use App\Models\Customer;
 use App\Models\Site;
@@ -61,7 +62,6 @@ class SignupController extends Controller
                 'vat_exempt' => $businessType === BusinessType::ExemptDealer,
                 'email' => strtolower($data['email']),
                 'phone' => $data['phone'],
-                'address' => $data['address'],
                 'payment_method' => $data['payment_method'],
                 // The legal record of consent — the box was ticked (validation
                 // enforces it) and the customer signed. Stamped server-side with
@@ -92,6 +92,11 @@ class SignupController extends Controller
         // Personal welcome (email + WhatsApp) — dispatched only from this
         // explicit signup flow, never from bulk import.
         SendWelcomeMessageJob::dispatch($customer->id);
+
+        // Generate the signed "customer card" PDF (details + signature), store it
+        // on the customer, and email it to them with a thank-you. Heavy work runs
+        // on the queue, never in this request.
+        GenerateCustomerCardPdfJob::dispatch($customer->id);
 
         // Credit card: hand off to the embedded Cardcom card page via a
         // short-lived signed link (same route used for card updates), so no

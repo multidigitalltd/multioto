@@ -35,6 +35,9 @@
 </head>
 <body>
     <main>
+        @if ($logo = \App\Support\Branding::logoUrl())
+            <div style="text-align:center;margin-bottom:.75rem;"><img src="{{ $logo }}" alt="לוגו" style="max-height:3rem;"></div>
+        @endif
         <h1>הזנת פרטי כרטיס אשראי</h1>
         <p class="lead">הזינו את פרטי הכרטיס בטופס המאובטח למטה. הכרטיס נשמר אצל חברת הסליקה בלבד.</p>
         <div class="frame-wrap">

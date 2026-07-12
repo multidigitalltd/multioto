@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\BillingController;
+use App\Http\Controllers\CustomerCardPdfController;
 use App\Http\Controllers\SignatureController;
 use App\Http\Controllers\SignupController;
 use App\Http\Controllers\SupportAttachmentController;
@@ -60,6 +61,11 @@ Route::get('/support/attachments/{message}/{index}', SupportAttachmentController
 Route::get('/customers/{customer}/signature', SignatureController::class)
     ->middleware(['web', 'auth'])
     ->name('customer.signature');
+
+// Signed customer-card PDF (details + signature) — team-only, private disk.
+Route::get('/customers/{customer}/card-pdf', CustomerCardPdfController::class)
+    ->middleware(['web', 'auth'])
+    ->name('customer.card-pdf');
 
 /*
  | Inbound webhooks. Secret verification happens inside each controller
