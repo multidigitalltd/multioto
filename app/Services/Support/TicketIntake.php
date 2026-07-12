@@ -8,6 +8,7 @@ use App\Enums\MessageDirection;
 use App\Enums\TicketChannel;
 use App\Enums\TicketStatus;
 use App\Jobs\ClassifyTicketJob;
+use App\Jobs\NotifyTeamJob;
 use App\Jobs\SendTicketNotificationJob;
 use App\Models\Customer;
 use App\Models\Ticket;
@@ -71,13 +72,22 @@ class TicketIntake
                 $ticket->update(['status' => TicketStatus::Open]);
             }
 
-            // A brand-new ticket gets an immediate personal acknowledgement on
-            // its originating channel ("received, we're on it") — template-driven
-            // and operator-editable; the job no-ops if disabled/unreachable.
-            // Manual (team-opened) tickets are internal — the customer didn't
-            // contact us, so acknowledging would be nonsense.
-            if ($ticket->wasRecentlyCreated && $channel !== TicketChannel::Manual) {
-                SendTicketNotificationJob::dispatch($ticket->id, 'ticket.received');
+            if ($ticket->wasRecentlyCreated) {
+                // A brand-new ticket gets an immediate personal acknowledgement
+                // on its originating channel ("received, we're on it") —
+                // template-driven and operator-editable; the job no-ops if
+                // disabled/unreachable. Manual (team-opened) tickets are
+                // internal, so acknowledging the customer would be nonsense.
+                if ($channel !== TicketChannel::Manual) {
+                    SendTicketNotificationJob::dispatch($ticket->id, 'ticket.received');
+                }
+
+                // Always alert the team (WhatsApp approvals number/group + email)
+                // about a new ticket — independent of the AI layer.
+                NotifyTeamJob::dispatch($ticket->id, 'new_ticket');
+            } else {
+                // A customer reply on an existing ticket — alert the team too.
+                NotifyTeamJob::dispatch($ticket->id, 'new_reply', $message->id);
             }
 
             // Kick off optional Tier-1 AI (classification → draft reply). The
