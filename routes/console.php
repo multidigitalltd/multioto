@@ -12,6 +12,7 @@ use App\Models\Broadcast;
 use App\Models\Charge;
 use App\Models\Site;
 use App\Models\Subscription;
+use App\Models\SystemLog;
 use Illuminate\Support\Facades\Schedule;
 
 /*
@@ -76,3 +77,7 @@ Schedule::call(function () {
 
 // Horizon metrics snapshot.
 Schedule::command('horizon:snapshot')->everyFiveMinutes();
+
+// Prune the in-panel system log ("מערכת ועדכונים") so it self-cleans.
+Schedule::call(fn () => SystemLog::prune((int) config('billing.system.log_retention_days', 30)))
+    ->dailyAt('03:00')->name('system:prune-logs')->onOneServer();

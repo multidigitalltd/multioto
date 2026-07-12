@@ -2,6 +2,7 @@
 
 namespace App\Services\Ai;
 
+use App\Models\SystemLog;
 use App\Services\Health\ConnectionResult;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -19,6 +20,9 @@ use Illuminate\Support\Str;
  */
 class ClaudeClient
 {
+    /** The most recent provider error (HTTP status + message), for the UI. */
+    private ?string $lastError = null;
+
     public function isEnabled(): bool
     {
         return (bool) config('billing.ai.enabled') && filled(config('billing.ai.api_key'));
@@ -39,6 +43,8 @@ class ClaudeClient
             return ConnectionResult::notConfigured('לא הוגדר מפתח API לסוכן.');
         }
 
+        $this->lastError = null;
+
         $result = $this->structured(
             system: 'ענה במבנה JSON בלבד.',
             prompt: 'החזר {"ok": true}.',
@@ -52,9 +58,16 @@ class ClaudeClient
 
         $where = config('billing.ai.provider').' · '.config('billing.ai.model');
 
-        return $result !== null
-            ? ConnectionResult::ok("החיבור לספק ה-AI תקין ✓ ({$where})")
-            : ConnectionResult::fail('הבקשה לספק ה-AI נכשלה. ודאו ספק/כתובת/מפתח/דגם נכונים (פרטי השגיאה בלוג המערכת).');
+        if ($result !== null) {
+            return ConnectionResult::ok("החיבור לספק ה-AI תקין ✓ ({$where})");
+        }
+
+        // Surface the real provider error on screen (also saved in מערכת ועדכונים).
+        $reason = $this->lastError
+            ? Str::limit($this->lastError, 300)
+            : 'הדגם החזיר תשובה ריקה או סירב.';
+
+        return ConnectionResult::fail("הבקשה לספק ה-AI נכשלה ({$where}):\n{$reason}");
     }
 
     /**
@@ -78,17 +91,53 @@ class ClaudeClient
             };
         } catch (\Throwable $e) {
             // The AI layer is best-effort — never let it break ticket handling.
-            // Log so a misconfiguration is diagnosable instead of silent.
-            Log::warning('AI request threw', ['provider' => config('billing.ai.provider'), 'error' => $e->getMessage()]);
+            // Record so a misconfiguration is diagnosable instead of silent.
+            $provider = (string) config('billing.ai.provider');
+            $this->lastError = $e->getMessage();
+            Log::warning('AI request threw', ['provider' => $provider, 'error' => $e->getMessage()]);
+            SystemLog::record('error', 'ai', "בקשת AI נכשלה ({$provider}): ".Str::limit($e->getMessage(), 200), [
+                'provider' => $provider,
+                'model' => config('billing.ai.model'),
+                'error' => Str::limit($e->getMessage(), 500),
+            ]);
 
             return null;
         }
     }
 
-    /** Record an HTTP-level provider failure so it can be diagnosed from the log. */
+    /** The most recent provider error message, or null if the last call succeeded. */
+    public function lastError(): ?string
+    {
+        return $this->lastError;
+    }
+
+    /**
+     * Record an HTTP-level provider failure — to the log AND the in-panel system
+     * log — and keep a concise reason for the UI (connection test / diagnostics).
+     */
     private function logFailure(string $provider, int $status, string $body): void
     {
+        $detail = $this->extractError($body);
+        $this->lastError = "HTTP {$status} — {$detail}";
+
         Log::warning('AI request failed', ['provider' => $provider, 'status' => $status, 'body' => Str::limit($body, 300)]);
+        SystemLog::record('error', 'ai', "בקשת AI נכשלה ({$provider}): HTTP {$status}", [
+            'provider' => $provider,
+            'model' => config('billing.ai.model'),
+            'status' => $status,
+            'detail' => Str::limit($detail, 500),
+        ]);
+    }
+
+    /** Pull the human-readable error message out of a provider error body. */
+    private function extractError(string $body): string
+    {
+        $json = json_decode($body, true);
+        $message = data_get($json, 'error.message')
+            ?? data_get($json, 'error')
+            ?? data_get($json, 'message');
+
+        return is_string($message) && $message !== '' ? $message : Str::limit($body, 200);
     }
 
     /**
