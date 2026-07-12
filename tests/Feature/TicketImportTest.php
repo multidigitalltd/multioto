@@ -77,6 +77,21 @@ class TicketImportTest extends TestCase
         $this->assertSame($second->subject, $second->messages->first()->body);
     }
 
+    public function test_it_preserves_link_targets_when_flattening_html(): void
+    {
+        $rows = [[
+            'ID' => '1400',
+            'כתובת דוא"ל' => 'client@example.co.il',
+            'תוכן' => 'ראו <a href="https://client.example/admin">כאן</a> בבקשה',
+        ]];
+
+        (new TicketImporter)->import($rows);
+
+        // The href destination survives stripping, kept next to its label.
+        $body = Ticket::with('messages')->find(1400)->messages->first()->body;
+        $this->assertSame('ראו כאן (https://client.example/admin) בבקשה', $body);
+    }
+
     public function test_the_import_sends_no_mail_to_customers(): void
     {
         Mail::fake();

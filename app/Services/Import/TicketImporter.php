@@ -196,7 +196,24 @@ class TicketImporter
      */
     private function htmlToText(string $html): string
     {
-        $text = preg_replace('#<\s*br\s*/?\s*>#i', "\n", $html);
+        // Keep link destinations before stripping tags: <a href="URL">label</a>
+        // becomes "label (URL)" so agents don't lose links from legacy tickets.
+        $text = preg_replace_callback(
+            '#<a\b[^>]*\bhref\s*=\s*(["\'])(.*?)\1[^>]*>(.*?)</a>#is',
+            function (array $m): string {
+                $url = trim($m[2]);
+                $label = trim(strip_tags($m[3]));
+
+                if ($url === '' || $url === $label) {
+                    return $label !== '' ? $label : $url;
+                }
+
+                return $label !== '' ? $label.' ('.$url.')' : $url;
+            },
+            $html
+        );
+
+        $text = preg_replace('#<\s*br\s*/?\s*>#i', "\n", (string) $text);
         $text = preg_replace('#</\s*(p|div|li|tr|h[1-6]|blockquote)\s*>#i', "\n", (string) $text);
         $text = strip_tags((string) $text);
         $text = html_entity_decode($text, ENT_QUOTES | ENT_HTML5, 'UTF-8');
