@@ -9,6 +9,8 @@ use App\Enums\MessageDirection;
 use App\Enums\TicketChannel;
 use App\Jobs\SendTicketReplyJob;
 use App\Models\PendingAction;
+use App\Models\Site;
+use App\Services\Hosting\HostingClient;
 use App\Services\Waha\WahaClient;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -125,7 +127,29 @@ class ApprovalGate
     {
         match ($action->type) {
             'ticket_reply' => $this->executeTicketReply($action),
+            'site_fix' => $this->executeSiteFix($action),
             default => throw new \RuntimeException("סוג פעולה לא מוכר: {$action->type}"),
+        };
+    }
+
+    /** Apply an approved, reversible site fix via the hosting driver. */
+    protected function executeSiteFix(PendingAction $action): void
+    {
+        $site = Site::find((int) data_get($action->payload, 'site_id'));
+        $fix = (string) data_get($action->payload, 'fix');
+
+        if (! $site) {
+            throw new \RuntimeException('האתר לא נמצא.');
+        }
+
+        $hosting = app(HostingClient::class);
+
+        match ($fix) {
+            'clear_cache' => $hosting->clearCache($site),
+            'restart' => $hosting->restartSite($site),
+            'maintenance_on' => $hosting->suspendSite($site),
+            'maintenance_off' => $hosting->restoreSite($site),
+            default => throw new \RuntimeException("תיקון לא מוכר: {$fix}"),
         };
     }
 

@@ -8,9 +8,12 @@ use App\Enums\TicketPriority;
 use App\Enums\TicketStatus;
 use App\Models\Site;
 use App\Models\Ticket;
+use App\Services\Automation\ApprovalGate;
+use App\Services\Hosting\SiteDiagnostics;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 
 /**
  * Single uptime probe for one site. Opens an incident (plus an internal
@@ -91,6 +94,38 @@ class MonitorSiteJob implements ShouldQueue
             'status' => TicketStatus::Open,
             'priority' => TicketPriority::Urgent,
         ]);
+
+        // Auto-heal loop (still human-approved): diagnose and, if a safe
+        // reversible fix is indicated, propose it to the owner on WhatsApp —
+        // "האתר נפל, להפעיל מחדש? אשר 45". Best-effort: diagnostics/proposal
+        // failing must never break incident tracking.
+        try {
+            $diagnosis = app(SiteDiagnostics::class)->run($site);
+
+            if (($fix = $diagnosis['suggested_fix']) !== null && $this->fixActionable($site)) {
+                app(ApprovalGate::class)->propose(
+                    type: 'site_fix',
+                    summary: sprintf(
+                        "האתר %s (%s) אינו זמין.\n%s\nתיקון מוצע: %s.",
+                        $site->domain,
+                        $site->customer?->name ?? 'לקוח',
+                        $diagnosis['summary'],
+                        SiteDiagnostics::FIX_LABELS[$fix] ?? $fix,
+                    ),
+                    payload: ['site_id' => $site->id, 'fix' => $fix],
+                    customerId: $site->customer_id,
+                    proposedBy: 'automation',
+                );
+            }
+        } catch (\Throwable $e) {
+            Log::warning('Auto-diagnosis/propose failed', ['site_id' => $site->id, 'error' => $e->getMessage()]);
+        }
+    }
+
+    /** The real FlyWP driver needs a linked site; 'log' always records intent. */
+    protected function fixActionable(Site $site): bool
+    {
+        return config('billing.hosting.driver') !== 'flywp' || filled($site->hosting_ref);
     }
 
     protected function handleUp(Site $site): void
