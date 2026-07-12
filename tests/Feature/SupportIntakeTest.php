@@ -9,8 +9,10 @@ use App\Enums\TicketStatus;
 use App\Enums\WebhookSource;
 use App\Jobs\IngestEmailMessageJob;
 use App\Models\Customer;
+use App\Models\Setting;
 use App\Models\Ticket;
 use App\Models\WebhookEvent;
+use App\Providers\SettingsServiceProvider;
 use App\Services\Support\TicketIntake;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
@@ -35,6 +37,24 @@ class SupportIntakeTest extends TestCase
 
         $this->post('/webhooks/email', ['From' => 'a@b.com'])->assertForbidden();
         $this->assertSame(0, WebhookEvent::count());
+    }
+
+    public function test_the_inbound_secret_set_in_the_panel_is_honoured_by_the_webhook(): void
+    {
+        // Simulate configuring the secret from הגדרות ← דואר (stored setting,
+        // overlaid onto config) with nothing in .env.
+        config(['billing.email.webhook_secret' => null]);
+        Setting::put('email.webhook_secret', 'panel-secret');
+        (new SettingsServiceProvider(app()))->boot();
+
+        Queue::fake([IngestEmailMessageJob::class]);
+        $payload = ['MessageID' => 'm-x', 'From' => 'a@b.com', 'Subject' => 's', 'TextBody' => 'hi'];
+
+        // Wrong/absent secret is still rejected; the configured one is accepted.
+        $this->post('/webhooks/email?secret=wrong', $payload)->assertForbidden();
+        $this->post('/webhooks/email?secret=panel-secret', $payload)->assertOk();
+
+        Queue::assertPushed(IngestEmailMessageJob::class, 1);
     }
 
     public function test_email_webhook_is_idempotent_and_queues_ingestion(): void

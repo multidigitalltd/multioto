@@ -7,6 +7,7 @@ use App\Providers\SettingsServiceProvider;
 use App\Services\Health\IntegrationHealth;
 use App\Services\Mail\PostmarkClient;
 use Filament\Forms\Components\Actions\Action as FormAction;
+use Filament\Forms\Components\Placeholder;
 use Filament\Forms\Components\Section;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
@@ -45,7 +46,7 @@ class ManageMail extends Page implements HasForms
     /** Non-secret keys pre-filled from config; secrets are always left blank. */
     private const IDENTITY_KEYS = ['mail.from_address', 'mail.from_name', 'mail.reply_to', 'notifications.team_email', 'notifications.reply_signature', 'notifications.reply_signature_whatsapp'];
 
-    private const SECRET_KEYS = ['postmark.token', 'postmark.account_token'];
+    private const SECRET_KEYS = ['postmark.token', 'postmark.account_token', 'email.webhook_secret'];
 
     /** @var array<string, mixed> */
     public array $data = [];
@@ -59,14 +60,17 @@ class ManageMail extends Page implements HasForms
 
     public function mount(): void
     {
-        $this->form->fill([
-            'mail.from_address' => config('mail.from.address'),
-            'mail.from_name' => config('mail.from.name'),
-            'mail.reply_to' => config('billing.email.support_address'),
-            'notifications.team_email' => config('billing.notifications.team_email'),
-            'notifications.reply_signature' => config('billing.notifications.reply_signature'),
-            'notifications.reply_signature_whatsapp' => config('billing.notifications.reply_signature_whatsapp'),
-        ]);
+        // Fields use nested state (mail.* → data['mail'][*]); build the fill
+        // array nested via data_set so values actually reach the fields.
+        $values = [];
+        data_set($values, 'mail.from_address', config('mail.from.address'));
+        data_set($values, 'mail.from_name', config('mail.from.name'));
+        data_set($values, 'mail.reply_to', config('billing.email.support_address'));
+        data_set($values, 'notifications.team_email', config('billing.notifications.team_email'));
+        data_set($values, 'notifications.reply_signature', config('billing.notifications.reply_signature'));
+        data_set($values, 'notifications.reply_signature_whatsapp', config('billing.notifications.reply_signature_whatsapp'));
+
+        $this->form->fill($values);
     }
 
     public function form(Form $form): Form
@@ -115,6 +119,19 @@ class ManageMail extends Page implements HasForms
                             ->helperText('רק לשליפת רשימת השולחים המאומתים. מ-Postmark → Account → API Tokens.'),
                     ])->columns(2)
                     ->footerActions([$this->saveAction(), $this->syncAction(), $this->testEmailAction()]),
+
+                Section::make('קליטת מיילים נכנסים (Inbound)')
+                    ->description('כדי שמייל שנשלח לכתובת התמיכה יפתח פנייה אוטומטית, Postmark צריך לדחוף (Inbound Webhook) את ההודעות לכתובת שלמטה. הגדירו סוד, שמרו, והדביקו את הכתובת המלאה ב-Postmark.')
+                    ->schema([
+                        TextInput::make('email.webhook_secret')
+                            ->label('סוד ה-Webhook הנכנס')
+                            ->password()->revealable()->autocomplete('new-password')
+                            ->helperText('מחרוזת סודית כלשהי (למשל 32 תווים אקראיים). חייבת להיות זהה למה שמופיע בכתובת שתדביקו ב-Postmark. אם ריק — כל המיילים הנכנסים נדחים.'),
+                        Placeholder::make('inbound_url')
+                            ->label('כתובת ה-Webhook להדבקה ב-Postmark')
+                            ->content(fn (): string => $this->inboundWebhookUrl()),
+                    ])->columns(1)
+                    ->footerActions([$this->saveAction()]),
             ])
             ->statePath('data');
     }
@@ -260,5 +277,21 @@ class ManageMail extends Page implements HasForms
         $base = 'Server Token נדרש לשליחה. Account Token (אופציונלי) מאפשר לסנכרן את רשימת השולחים המאומתים. השאירו ריק כדי לא לשנות מפתח קיים.';
 
         return $hasToken ? '✓ Server Token שמור במערכת. '.$base : $base;
+    }
+
+    /**
+     * The exact inbound-webhook URL to paste into Postmark, with the configured
+     * secret already embedded. Shown only in the team-only admin panel.
+     */
+    protected function inboundWebhookUrl(): string
+    {
+        $base = rtrim((string) config('app.url'), '/').'/webhooks/email';
+        $secret = (string) config('billing.email.webhook_secret');
+
+        return $secret === ''
+            ? $base.'?secret=…  (הגדירו סוד למעלה, שמרו, והכתובת המלאה תופיע כאן)'
+            // URL-encode: a secret with reserved characters (& # + space) would
+            // otherwise reach Postmark as a different value and 403 forever.
+            : $base.'?secret='.rawurlencode($secret);
     }
 }
