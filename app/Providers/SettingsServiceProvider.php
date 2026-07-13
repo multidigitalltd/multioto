@@ -60,6 +60,7 @@ class SettingsServiceProvider extends ServiceProvider
         'ai.model' => 'billing.ai.model',
         'ai.persona' => 'billing.ai.persona',
         'ai.rules' => 'billing.ai.rules',
+        'ai.style_summary' => 'billing.ai.style_summary',
         // Public signup form — payment-method setup instructions (editable text).
         'signup.instructions.standing_order' => 'billing.signup.instructions.standing_order',
         'signup.instructions.bank_transfer' => 'billing.signup.instructions.bank_transfer',
