@@ -10,6 +10,10 @@
                                 wire:click="testConnection" wire:loading.attr="disabled">
                 בדיקת חיבור לספק
             </x-filament::button>
+            <x-filament::button type="button" color="gray" icon="heroicon-o-academic-cap"
+                                wire:click="learnFromHistory" wire:loading.attr="disabled">
+                למד מתשובות קודמות
+            </x-filament::button>
         </div>
         <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
             שמרו את ההגדרות ואז לחצו "בדיקת חיבור" כדי לוודא שהמפתח, הספק והדגם עובדים. אם נכשל — פרטי השגיאה נכתבים ליומן המערכת.

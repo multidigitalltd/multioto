@@ -215,6 +215,11 @@ return [
             '- בנושאים רגישים (ביטול מנוי, סכסוך תשלום) — המלץ להעביר לנציג אנושי.',
             '- צרף קישור לעדכון כרטיס רק אם הלקוח ביקש לעדכן אמצעי תשלום.',
         ])),
+
+        // Style guide distilled from past agent replies (StyleLearner). Refreshed
+        // from the AI-agent settings page; fed into every draft so it matches how
+        // the team actually writes. Blank until first learned.
+        'style_summary' => env('AI_STYLE_SUMMARY'),
     ],
 
     'monitoring' => [

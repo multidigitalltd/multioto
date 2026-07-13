@@ -5,6 +5,7 @@ namespace App\Filament\Pages;
 use App\Filament\Concerns\PersistsSettings;
 use App\Models\Setting;
 use App\Services\Ai\ClaudeClient;
+use App\Services\Ai\StyleLearner;
 use Filament\Forms\Components\Section;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
@@ -66,6 +67,7 @@ class ManageAiAgent extends Page implements HasForms
                 'base_url' => config('billing.ai.base_url'),
                 'persona' => config('billing.ai.persona'),
                 'rules' => config('billing.ai.rules'),
+                'style_summary' => config('billing.ai.style_summary'),
             ],
         ]);
     }
@@ -119,6 +121,16 @@ class ManageAiAgent extends Page implements HasForms
                             ->rows(7)
                             ->columnSpanFull(),
                     ]),
+
+                Section::make('למידה מתשובות קודמות')
+                    ->description('הסוכן יכול לקרוא את התשובות האחרונות שלכם ללקוחות ולסכם מהן את סגנון הכתיבה — הסיכום מתווסף אוטומטית לכל טיוטה, כך שהניסוח דומה לשלכם. לחצו "למד מתשובות קודמות" כדי לרענן.')
+                    ->schema([
+                        Textarea::make('ai.style_summary')
+                            ->label('סגנון הצוות (נלמד)')
+                            ->helperText('נוצר אוטומטית מהתשובות האחרונות, וניתן לעריכה ידנית. ריק = לא בשימוש.')
+                            ->rows(6)
+                            ->columnSpanFull(),
+                    ]),
             ])
             ->statePath('data');
     }
@@ -132,7 +144,7 @@ class ManageAiAgent extends Page implements HasForms
 
         // model/base_url/persona/rules: persist when filled; clearing reverts to
         // the env/default value instead of storing an empty override.
-        foreach (['ai.model', 'ai.base_url', 'ai.persona', 'ai.rules'] as $key) {
+        foreach (['ai.model', 'ai.base_url', 'ai.persona', 'ai.rules', 'ai.style_summary'] as $key) {
             $value = data_get($this->data, $key);
             if (filled($value)) {
                 Setting::put($key, (string) $value);
@@ -155,6 +167,38 @@ class ManageAiAgent extends Page implements HasForms
 
         Notification::make()
             ->title('הגדרות הסוכן נשמרו')
+            ->success()
+            ->send();
+    }
+
+    /** Read recent agent replies, summarise their style, and load it into the form. */
+    public function learnFromHistory(): void
+    {
+        $this->refreshConfig();
+
+        if (! app(ClaudeClient::class)->isEnabled()) {
+            Notification::make()->title('הסוכן אינו מופעל')->warning()->send();
+
+            return;
+        }
+
+        $summary = app(StyleLearner::class)->refresh();
+
+        if ($summary === null) {
+            Notification::make()
+                ->title('לא נלמד סגנון')
+                ->body('צריך לפחות '.StyleLearner::MIN_REPLIES.' תשובות קודמות ללקוחות, וחיבור תקין לספק ה-AI.')
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        data_set($this->data, 'ai.style_summary', $summary);
+
+        Notification::make()
+            ->title('הסגנון נלמד ונשמר')
+            ->body('הסיכום יתווסף מעכשיו לכל טיוטה. אפשר לערוך אותו ידנית ולשמור.')
             ->success()
             ->send();
     }

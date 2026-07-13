@@ -129,11 +129,16 @@ class DraftReplyJob implements ShouldQueue
      */
     protected function systemPrompt(): string
     {
+        $style = trim((string) config('billing.ai.style_summary'));
+
         return implode("\n", array_filter([
             trim((string) config('billing.ai.persona')),
             '',
             'כללים מחייבים:',
             trim((string) config('billing.ai.rules')),
+            // Style learned from the team's past replies, so drafts match how
+            // they actually write.
+            $style !== '' ? "\nסגנון הצוות (נלמד מתשובות קודמות) — נסח בהתאם:\n{$style}" : null,
             '',
             'התשובה נשמרת כטיוטה פנימית ותעבור אישור אנושי לפני שליחה — אל תתחייב בשם החברה.',
         ], fn ($line) => $line !== null));
