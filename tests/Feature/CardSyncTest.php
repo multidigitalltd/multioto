@@ -3,11 +3,14 @@
 namespace Tests\Feature;
 
 use App\Enums\SubscriptionStatus;
+use App\Enums\WebhookSource;
 use App\Filament\Resources\CustomerResource\Pages\ViewCustomer;
 use App\Jobs\ChargeSubscriptionJob;
+use App\Jobs\ProcessCardcomLowProfileJob;
 use App\Models\Customer;
 use App\Models\Subscription;
 use App\Models\User;
+use App\Models\WebhookEvent;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
@@ -43,6 +46,26 @@ class CardSyncTest extends TestCase
         $this->assertNull($fresh->pending_card_lp_id);            // reconciled → cleared
         $this->assertSame('4321', $fresh->paymentTokens()->sole()->card_last4);
         Queue::assertPushed(ChargeSubscriptionJob::class, fn ($job) => $job->subscriptionId === $subscription->id);
+    }
+
+    public function test_the_webhook_clears_the_pending_marker_for_its_session(): void
+    {
+        Queue::fake([ChargeSubscriptionJob::class]);
+
+        $customer = Customer::factory()->create(['pending_card_lp_id' => 'lp-42']);
+        $event = WebhookEvent::record(WebhookSource::Cardcom, 'low_profile', 'lp-42', [
+            'LowProfileId' => 'lp-42',
+            'ReturnValue' => (string) $customer->id,
+            'ResponseCode' => 0,
+            'TokenInfo' => ['Token' => 'tok-wh', 'CardLast4Digits' => '9999'],
+        ])[0];
+
+        (new ProcessCardcomLowProfileJob($event->id))->handle();
+
+        // Token saved AND the stale pending marker cleared, so a later manual
+        // sync can't re-process the same session.
+        $this->assertNotNull($customer->fresh()->default_token_id);
+        $this->assertNull($customer->fresh()->pending_card_lp_id);
     }
 
     public function test_syncing_with_no_pending_request_saves_no_token(): void

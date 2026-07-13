@@ -70,6 +70,12 @@ class ProcessCardcomLowProfileJob implements ShouldQueue
                 'has_customer' => (bool) $customer,
                 'has_token' => ! empty(data_get($result, 'TokenInfo.Token')),
             ]);
+        } elseif ($lowProfileId && (string) $customer->pending_card_lp_id === (string) $lowProfileId) {
+            // The webhook handled this capture — clear the pending marker so the
+            // manual "sync card" action can't later re-process the same session
+            // (which would duplicate the token and re-charge). Only clear when it
+            // still points at THIS session, so a newer capture isn't erased.
+            $customer->update(['pending_card_lp_id' => null]);
         }
 
         $event->markProcessed();
