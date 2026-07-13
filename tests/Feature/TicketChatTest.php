@@ -8,8 +8,10 @@ use App\Enums\MessageDirection;
 use App\Enums\TicketChannel;
 use App\Enums\TicketStatus;
 use App\Enums\WebhookSource;
+use App\Filament\Resources\TicketResource\Pages\ListTickets;
 use App\Filament\Resources\TicketResource\Pages\ViewTicket;
 use App\Jobs\IngestWhatsappMessageJob;
+use App\Jobs\SendTicketNotificationJob;
 use App\Jobs\SendTicketReplyJob;
 use App\Models\Customer;
 use App\Models\Ticket;
@@ -54,6 +56,22 @@ class TicketChatTest extends TestCase
         Livewire::test(ViewTicket::class, ['record' => $ticket->id])
             ->assertSee('דנה לוי')
             ->assertSee('האתר שלי לא נטען כבר שעה');
+    }
+
+    public function test_silent_close_closes_the_ticket_without_notifying_the_customer(): void
+    {
+        Queue::fake();
+        $this->actingAs(User::factory()->create());
+        $ticket = $this->ticket();
+
+        Livewire::test(ListTickets::class)
+            ->callTableBulkAction('closeSilently', [$ticket]);
+
+        $ticket->refresh();
+        $this->assertSame(TicketStatus::Closed, $ticket->status);
+        $this->assertNotNull($ticket->resolved_at);
+        // No resolved (or any) notification is queued for the customer.
+        Queue::assertNotPushed(SendTicketNotificationJob::class);
     }
 
     public function test_send_reply_creates_an_outbound_message_and_dispatches_delivery(): void
