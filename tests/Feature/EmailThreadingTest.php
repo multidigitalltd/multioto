@@ -53,6 +53,29 @@ class EmailThreadingTest extends TestCase
         $ticket->refresh();
         $this->assertSame(TicketStatus::Open, $ticket->status);
         $this->assertSame(1, $ticket->messages()->where('direction', MessageDirection::Inbound)->count());
+        // The reply's sender fills the previously-empty contact fields.
+        $this->assertSame('Someone Random', $ticket->contact_name);
+        $this->assertSame('random@elsewhere.test', $ticket->contact_handle);
+    }
+
+    public function test_a_foreign_bracket_id_subject_is_not_treated_as_our_tag(): void
+    {
+        $ticket = Ticket::create([
+            'channel' => TicketChannel::Manual, 'subject' => 'ישן', 'status' => TicketStatus::Open,
+        ]);
+
+        // Another system's subject with a plain [#id] must NOT hijack our ticket.
+        [$event] = WebhookEvent::record(WebhookSource::Email, 'inbound_message', 'foreign-1', [
+            'MessageID' => 'foreign-1',
+            'From' => 'invoices@othertracker.test',
+            'Subject' => "חשבונית [#{$ticket->id}]",
+            'TextBody' => 'תשלום',
+        ]);
+        IngestEmailMessageJob::dispatchSync($event->id);
+
+        // A separate ticket was opened; the original was not touched.
+        $this->assertSame(2, Ticket::count());
+        $this->assertSame(0, $ticket->messages()->count());
     }
 
     public function test_outbound_reply_subject_carries_the_ticket_tag(): void
@@ -75,6 +98,6 @@ class EmailThreadingTest extends TestCase
 
         (new SendTicketReplyJob($message->id))->handle(app(WahaClient::class));
 
-        Mail::assertSent(TicketReplyMail::class, fn (TicketReplyMail $mail) => str_contains($mail->subjectLine, "[#{$ticket->id}]"));
+        Mail::assertSent(TicketReplyMail::class, fn (TicketReplyMail $mail) => str_contains($mail->subjectLine, $ticket->emailTag()));
     }
 }

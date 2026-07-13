@@ -113,10 +113,25 @@ class TicketIntake
         ?string $contactHandle = null,
         ?int $threadTicketId = null,
     ): Ticket {
-        // An explicit ticket tag ([#id] in an email subject) threads onto that
+        // An explicit ticket tag ([MD#id] in an email subject) threads onto that
         // exact ticket — even if closed (recordInbound reopens it) — regardless
         // of sender or how the ticket originated.
         if ($threadTicketId !== null && ($tagged = Ticket::find($threadTicketId)) !== null) {
+            // Fill an unidentified ticket's empty sender fields from this reply,
+            // so a manually-opened ticket stops showing as unidentified.
+            if ($tagged->customer_id === null) {
+                $fill = [];
+                if (blank($tagged->contact_name) && filled($contactName)) {
+                    $fill['contact_name'] = $contactName;
+                }
+                if (blank($tagged->contact_handle) && filled($contactHandle)) {
+                    $fill['contact_handle'] = $contactHandle;
+                }
+                if ($fill !== []) {
+                    $tagged->update($fill);
+                }
+            }
+
             return $tagged;
         }
 
