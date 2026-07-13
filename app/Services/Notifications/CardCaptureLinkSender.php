@@ -3,7 +3,6 @@
 namespace App\Services\Notifications;
 
 use App\Enums\NotificationType;
-use App\Enums\SubscriptionStatus;
 use App\Mail\DunningNotificationMail;
 use App\Models\NotificationLog;
 use App\Models\Subscription;
@@ -43,8 +42,10 @@ class CardCaptureLinkSender
         ];
 
         // A customer whose payment failed (past-due / suspended) is a debtor, not
-        // a new signup — send a debt-toned message, not the welcome one.
-        $inArrears = in_array($subscription->status, [SubscriptionStatus::PastDue, SubscriptionStatus::Suspended], true);
+        // a new signup — send a debt-toned message, not the welcome one. The card
+        // link is customer-wide, so any subscription in arrears makes this a debt
+        // message, even if the subscription we were handed happens to be active.
+        $inArrears = $customer->subscriptions()->inArrears()->exists();
         $key = $inArrears ? 'onboarding.card_capture_debt' : 'onboarding.card_capture';
         $subject = __("{$key}.subject", $replacements);
         $body = __("{$key}.body", $replacements);

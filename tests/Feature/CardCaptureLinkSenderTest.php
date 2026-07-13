@@ -68,6 +68,22 @@ class CardCaptureLinkSenderTest extends TestCase
         });
     }
 
+    public function test_a_customer_with_any_arrears_subscription_gets_the_debt_copy(): void
+    {
+        Mail::fake();
+        Http::fake(['*/api/sendText' => Http::response(['id' => 'msg-1'])]);
+
+        // One active + one past-due subscription for the same customer.
+        $active = Subscription::factory()->create(['status' => SubscriptionStatus::Active]);
+        $active->customer->update(['phone' => null, 'whatsapp_jid' => null, 'email' => 'multi@example.co']);
+        Subscription::factory()->create(['customer_id' => $active->customer_id, 'status' => SubscriptionStatus::PastDue]);
+
+        // Send on the ACTIVE subscription — the customer is still a debtor overall.
+        app(CardCaptureLinkSender::class)->send($active->load('customer', 'plan'));
+
+        Mail::assertSent(DunningNotificationMail::class, fn (DunningNotificationMail $m): bool => str_contains($m->bodyText, 'לא הצלחנו לחייב'));
+    }
+
     public function test_it_reports_a_whatsapp_failure_instead_of_claiming_success(): void
     {
         Mail::fake();
