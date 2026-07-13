@@ -3,12 +3,14 @@
 namespace App\Models;
 
 use App\Enums\BillingInterval;
+use App\Enums\ChargeStatus;
 use App\Enums\SubscriptionStatus;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Carbon;
 
 class Subscription extends Model
 {
@@ -199,5 +201,39 @@ class Subscription extends Model
             SubscriptionStatus::PastDue,
             SubscriptionStatus::Suspended,
         ], true) && $this->token_id !== null;
+    }
+
+    /**
+     * Make a subscription collectable right now WITHOUT gifting a late payer
+     * free days — bill the delayed period and keep the original monthly date.
+     *
+     * If next_charge_at is already in the past it is the real (overdue) anchor,
+     * so we leave it untouched. Otherwise (a cleared anchor at the final dunning
+     * stage, or a future one) we look for a genuine UNPAID PAST boundary — the
+     * paid-through date, else the oldest unpaid period, else the tracked period
+     * end — and pull next_charge_at back to it. Only when there is no overdue
+     * period at all (an up-to-date Active subscription being charged early) do we
+     * fall back to now(), which collects the upcoming period immediately.
+     * ChargeSubscriptionJob then bills the correct period and, on success, rolls
+     * next_charge_at to that period's end.
+     */
+    public function markDueNow(): void
+    {
+        if ($this->next_charge_at !== null && $this->next_charge_at->isPast()) {
+            return;
+        }
+
+        $anchor = $this->charges()->where('status', ChargeStatus::Succeeded)->max('period_end')
+            ?? $this->charges()->where('status', ChargeStatus::Failed)->min('period_start')
+            ?? $this->current_period_end?->toDateString();
+
+        $anchor = $anchor ? Carbon::parse($anchor)->startOfDay() : null;
+
+        // Use the anchor only if it's a real overdue boundary; a future anchor
+        // means nothing is owed yet, so an explicit "charge now" collects the
+        // next period immediately instead of silently doing nothing.
+        $this->update([
+            'next_charge_at' => $anchor && $anchor->isPast() ? $anchor : now(),
+        ]);
     }
 }

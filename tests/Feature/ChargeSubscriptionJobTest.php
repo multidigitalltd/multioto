@@ -219,6 +219,35 @@ class ChargeSubscriptionJobTest extends TestCase
         $this->assertSame(ChargeStatus::Succeeded, $pending->fresh()->status);
     }
 
+    public function test_late_payment_keeps_the_original_billing_date_and_bills_the_delayed_period(): void
+    {
+        // A debtor whose monthly charge date was 20 days ago pays late (card
+        // link / "charge now"). The collected period must start at that ORIGINAL
+        // date and the next charge must land one month after it — a late payer
+        // does not earn free days by shifting the whole cycle to "today".
+        Queue::fake([IssueInvoiceJob::class]);
+        $this->fakeCardcom(success: true);
+
+        $originalDue = now()->subDays(20)->startOfDay();
+        $subscription = Subscription::factory()->create([
+            'status' => SubscriptionStatus::PastDue,
+            'next_charge_at' => $originalDue,
+        ]);
+
+        // Simulate the card-link / "charge now" trigger.
+        $subscription->markDueNow();
+        ChargeSubscriptionJob::dispatchSync($subscription->id);
+
+        $subscription->refresh();
+        $charge = $subscription->charges()->sole();
+
+        $this->assertSame($originalDue->toDateString(), $charge->period_start->toDateString());
+        $this->assertSame($originalDue->copy()->addMonth()->toDateString(), $charge->period_end->toDateString());
+        // The anchor moved to original + 1 month, NOT to today + 1 month.
+        $this->assertSame($originalDue->copy()->addMonth()->toDateString(), $subscription->next_charge_at->toDateString());
+        $this->assertNotSame(now()->addMonth()->toDateString(), $subscription->next_charge_at->toDateString());
+    }
+
     public function test_retry_during_dunning_keeps_the_same_billing_period(): void
     {
         Queue::fake([SendDunningNotificationJob::class]);
