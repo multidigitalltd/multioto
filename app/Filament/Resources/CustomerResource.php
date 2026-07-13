@@ -8,10 +8,12 @@ use App\Enums\SubscriptionStatus;
 use App\Filament\Resources\CustomerResource\Pages;
 use App\Filament\Resources\CustomerResource\RelationManagers;
 use App\Models\Customer;
+use App\Models\Ticket;
 use App\Services\Notifications\CardCaptureLinkSender;
 use App\Support\Money;
 use Filament\Forms;
 use Filament\Forms\Form;
+use Filament\Infolists\Components\Actions\Action as InfolistAction;
 use Filament\Infolists\Components\RepeatableEntry;
 use Filament\Infolists\Components\Section as InfoSection;
 use Filament\Infolists\Components\TextEntry;
@@ -325,7 +327,10 @@ class CustomerResource extends Resource
                     RepeatableEntry::make('tickets')
                         ->hiddenLabel()
                         ->schema([
-                            TextEntry::make('subject')->label('נושא'),
+                            // Clickable — opens the full ticket (thread + reply) in a new tab.
+                            TextEntry::make('subject')->label('נושא')
+                                ->color('primary')->weight('medium')->icon('heroicon-o-arrow-top-right-on-square')
+                                ->url(fn (Ticket $record): string => TicketResource::getUrl('view', ['record' => $record]), shouldOpenInNewTab: true),
                             TextEntry::make('status')->label('סטטוס')->badge(),
                             TextEntry::make('created_at')->label('נפתחה')->dateTime('d/m/Y'),
                         ])->columns(3),
@@ -334,6 +339,18 @@ class CustomerResource extends Resource
             InfoSection::make('כרטיסים שמורים')
                 ->icon('heroicon-o-credit-card')
                 ->collapsible()
+                // Open Cardcom's hosted card page (embedded in an iframe on our
+                // route) to capture a new card — no card data ever reaches us.
+                ->headerActions([
+                    InfolistAction::make('addCard')
+                        ->label('הוספת כרטיס')
+                        ->icon('heroicon-o-plus')
+                        ->url(fn (Customer $record): string => URL::temporarySignedRoute(
+                            'billing.update-card',
+                            now()->addHours((int) config('billing.card_update_link_ttl_hours')),
+                            ['customer' => $record->id],
+                        ), shouldOpenInNewTab: true),
+                ])
                 ->schema([
                     RepeatableEntry::make('paymentTokens')
                         ->hiddenLabel()
@@ -342,7 +359,8 @@ class CustomerResource extends Resource
                             TextEntry::make('card_last4')->label('4 ספרות אחרונות')
                                 ->formatStateUsing(fn ($state): string => filled($state) ? '****'.$state : '—'),
                             TextEntry::make('status')->label('סטטוס')->badge(),
-                        ])->columns(3),
+                        ])->columns(3)
+                        ->placeholder('אין כרטיס שמור — הוסיפו כרטיס בכפתור למעלה.'),
                 ]),
         ]);
     }
