@@ -3,6 +3,24 @@
         $ticket = $this->record;
     @endphp
 
+    {{-- Legible defaults for the sanitized rich email body: keep the sender's
+         paragraphs, lists, emphasis and links readable inside the bubble. --}}
+    <style>
+        .chat-rich { word-break: break-word; }
+        .chat-rich p { margin: 0 0 .5rem; }
+        .chat-rich p:last-child { margin-bottom: 0; }
+        .chat-rich ul, .chat-rich ol { margin: .25rem 0; padding-inline-start: 1.5rem; }
+        .chat-rich ul { list-style: disc; }
+        .chat-rich ol { list-style: decimal; }
+        .chat-rich li { margin: .125rem 0; }
+        .chat-rich a { color: rgb(37 99 235); text-decoration: underline; }
+        .dark .chat-rich a { color: rgb(96 165 250); }
+        .chat-rich strong, .chat-rich b { font-weight: 700; }
+        .chat-rich em, .chat-rich i { font-style: italic; }
+        .chat-rich blockquote { margin: .25rem 0; padding-inline-start: .75rem; border-inline-start: 3px solid rgb(209 213 219); color: rgb(107 114 128); }
+        .chat-rich h1, .chat-rich h2, .chat-rich h3, .chat-rich h4 { font-weight: 700; margin: .5rem 0 .25rem; }
+    </style>
+
     {{-- Context strip: who + channel + status at a glance. --}}
     <div class="flex flex-wrap items-center gap-3 text-sm">
         <span class="font-semibold">{{ $ticket->senderName() }}</span>
@@ -31,7 +49,7 @@
 
             <div class="flex {{ $inbound ? 'justify-start' : 'justify-end' }}">
                 <div @class([
-                        'max-w-[80%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed shadow-sm',
+                        'max-w-[80%] rounded-2xl px-4 py-3 text-base leading-relaxed shadow-sm',
                         'bg-white dark:bg-gray-800' => $inbound,
                         'bg-primary-100 dark:bg-primary-900/60' => ! $inbound && ! $note,
                         'border border-dashed border-amber-400 bg-amber-50 dark:bg-amber-900/30' => $note,
@@ -42,7 +60,12 @@
                         @else <span>{{ $message->channel->getLabel() }}</span> @endif
                         <time datetime="{{ $message->created_at->toIso8601String() }}">{{ $message->created_at->format('d/m/Y H:i') }}</time>
                     </div>
-                    <div class="whitespace-pre-line">{{ $message->body }}</div>
+                    @if (filled($message->body_html))
+                        {{-- Pre-sanitized on ingest (EmailBody::toSafeHtml, allow-list) — safe to render. --}}
+                        <div class="chat-rich">{!! $message->body_html !!}</div>
+                    @else
+                        <div class="whitespace-pre-line break-words">{{ $message->body }}</div>
+                    @endif
 
                     @if (filled($message->attachments))
                         <div class="mt-2 flex flex-col gap-2">
