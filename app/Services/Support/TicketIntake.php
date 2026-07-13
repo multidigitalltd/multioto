@@ -67,8 +67,9 @@ class TicketIntake
         );
 
         if ($message->wasRecentlyCreated) {
-            // A new inbound message on a resolved/closed thread reopens it.
-            if (in_array($ticket->status, [TicketStatus::Resolved, TicketStatus::Closed], true)) {
+            // A customer reply puts the ball back with us: any non-open ticket
+            // (waiting-for-customer, on-hold, resolved, closed) returns to open.
+            if ($ticket->status !== TicketStatus::Open) {
                 $ticket->update(['status' => TicketStatus::Open]);
             }
 

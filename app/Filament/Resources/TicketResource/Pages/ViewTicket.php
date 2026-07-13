@@ -88,6 +88,20 @@ class ViewTicket extends ViewRecord
         }
 
         if ($channel !== MessageChannel::InternalNote) {
+            // The ball is now with the customer: move an active ticket to the
+            // intermediate "ממתין ללקוח" status and stamp the first response time.
+            // Terminal states (resolved/closed) are left as the agent set them.
+            $updates = [];
+            if (in_array($this->record->status, [TicketStatus::Open, TicketStatus::Pending, TicketStatus::OnHold], true)) {
+                $updates['status'] = TicketStatus::Pending;
+            }
+            if ($this->record->first_response_at === null) {
+                $updates['first_response_at'] = now();
+            }
+            if ($updates !== []) {
+                $this->record->update($updates);
+            }
+
             SendTicketReplyJob::dispatch($message->id);
         }
 

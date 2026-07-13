@@ -2,7 +2,9 @@
 
 namespace Tests\Feature;
 
+use App\Enums\MessageAuthor;
 use App\Enums\MessageChannel;
+use App\Enums\MessageDirection;
 use App\Enums\TicketChannel;
 use App\Enums\TicketStatus;
 use App\Jobs\NotifyTeamJob;
@@ -72,5 +74,47 @@ class TeamNotifierTest extends TestCase
             && str_contains($request->data()['text'], 'עסק כהן'));
         // …and email to the team.
         Mail::assertSent(NotificationMail::class, fn ($mail) => $mail->hasTo('team@multidigital.co.il'));
+    }
+
+    public function test_team_alert_includes_the_message_content(): void
+    {
+        config([
+            'billing.waha.base_url' => 'https://waha.test', 'billing.waha.api_key' => 'k',
+            'billing.waha.session' => 'default', 'billing.waha.owner_number' => '972500000000@g.us',
+            'billing.notifications.team_email' => 'team@multidigital.co.il',
+        ]);
+        Mail::fake();
+        Http::fake(['*/api/sendText' => Http::response(['id' => 'w'])]);
+
+        $customer = Customer::factory()->create(['name' => 'עסק כהן']);
+        $ticket = Ticket::create([
+            'customer_id' => $customer->id, 'channel' => TicketChannel::Whatsapp,
+            'subject' => 'תקלה באתר', 'status' => TicketStatus::Open,
+        ]);
+        $ticket->messages()->create([
+            'direction' => MessageDirection::Inbound, 'channel' => MessageChannel::Whatsapp,
+            'body' => 'הדומיין לא מתחדש ואני מודאג', 'author' => MessageAuthor::Customer,
+        ]);
+
+        app(TeamNotifier::class)->newTicket($ticket);
+
+        // The opening message text reaches both team channels.
+        Http::assertSent(fn ($request) => str_contains($request->data()['text'], 'הדומיין לא מתחדש'));
+        Mail::assertSent(NotificationMail::class, fn ($mail) => str_contains($mail->bodyText, 'הדומיין לא מתחדש'));
+    }
+
+    public function test_a_customer_reply_reopens_a_waiting_ticket(): void
+    {
+        Queue::fake();
+        $customer = Customer::factory()->create();
+        $intake = app(TicketIntake::class);
+
+        $intake->recordInbound(TicketChannel::Whatsapp, MessageChannel::Whatsapp, $customer, 'ראשונה', threadRef: '9725@c.us', externalMessageId: 'm1');
+        $ticket = Ticket::sole();
+        $ticket->update(['status' => TicketStatus::Pending]); // waiting for the customer
+
+        $intake->recordInbound(TicketChannel::Whatsapp, MessageChannel::Whatsapp, $customer, 'שנייה', threadRef: '9725@c.us', externalMessageId: 'm2');
+
+        $this->assertSame(TicketStatus::Open, $ticket->refresh()->status);
     }
 }
