@@ -11,6 +11,7 @@ use App\Jobs\DraftReplyJob;
 use App\Models\Customer;
 use App\Models\Setting;
 use App\Models\Ticket;
+use App\Providers\SettingsServiceProvider;
 use App\Services\Ai\ClaudeClient;
 use App\Services\Ai\StyleLearner;
 use App\Services\Ai\SupportToolkit;
@@ -79,7 +80,7 @@ class StyleLearnerTest extends TestCase
 
         // With no stored setting, re-applying the overlay (as Queue::before does
         // per job) must clear it — not leave the stale value in place.
-        (new \App\Providers\SettingsServiceProvider(app()))->boot();
+        (new SettingsServiceProvider(app()))->boot();
 
         $this->assertNull(config('billing.ai.style_summary'));
     }
