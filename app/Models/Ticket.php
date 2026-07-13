@@ -15,9 +15,31 @@ class Ticket extends Model
     use HasFactory;
 
     protected $fillable = [
-        'customer_id', 'channel', 'subject', 'status', 'priority', 'assignee',
-        'external_thread_ref', 'first_response_at', 'resolved_at',
+        'customer_id', 'contact_name', 'contact_handle', 'channel', 'subject',
+        'status', 'priority', 'assignee', 'external_thread_ref',
+        'first_response_at', 'resolved_at',
     ];
+
+    /**
+     * Who the ticket is from, for display: the matched customer's name, or —
+     * for an unidentified enquiry — the captured sender identity (name + email
+     * for email, pushname + phone for WhatsApp), falling back to a generic label.
+     */
+    public function senderName(): string
+    {
+        if ($this->customer) {
+            return $this->customer->name;
+        }
+
+        $name = trim((string) $this->contact_name);
+        $handle = trim((string) $this->contact_handle);
+
+        if ($name !== '' && $handle !== '') {
+            return "{$name} · {$handle}";
+        }
+
+        return $name !== '' ? $name : ($handle !== '' ? $handle : 'פונה לא מזוהה');
+    }
 
     protected function casts(): array
     {

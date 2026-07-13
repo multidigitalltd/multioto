@@ -52,8 +52,10 @@ class TicketIntake
         ?string $externalMessageId = null,
         ?string $subject = null,
         ?array $attachments = null,
+        ?string $contactName = null,
+        ?string $contactHandle = null,
     ): TicketMessage {
-        $ticket = $this->findOrCreateTicket($channel, $customer, $threadRef, $subject, $body);
+        $ticket = $this->findOrCreateTicket($channel, $customer, $threadRef, $subject, $body, $contactName, $contactHandle);
 
         $message = $ticket->messages()->firstOrCreate(
             ['external_message_id' => $externalMessageId],
@@ -106,6 +108,8 @@ class TicketIntake
         ?string $threadRef,
         ?string $subject,
         string $body,
+        ?string $contactName = null,
+        ?string $contactHandle = null,
     ): Ticket {
         if ($threadRef !== null) {
             $open = Ticket::where('external_thread_ref', $threadRef)
@@ -120,6 +124,10 @@ class TicketIntake
 
         return Ticket::create([
             'customer_id' => $customer?->id,
+            // Remember who an unidentified enquiry is from so it still shows a
+            // name/handle rather than "פונה לא מזוהה".
+            'contact_name' => $customer ? null : ($contactName ?: null),
+            'contact_handle' => $customer ? null : ($contactHandle ?: null),
             'channel' => $channel,
             'subject' => $this->buildSubject($customer, $subject, $body),
             'status' => TicketStatus::Open,

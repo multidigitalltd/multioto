@@ -5,7 +5,7 @@
 
     {{-- Context strip: who + channel + status at a glance. --}}
     <div class="flex flex-wrap items-center gap-3 text-sm">
-        <span class="font-semibold">{{ $ticket->customer?->name ?? 'פונה לא מזוהה' }}</span>
+        <span class="font-semibold">{{ $ticket->senderName() }}</span>
         <x-filament::badge>{{ $ticket->channel->getLabel() }}</x-filament::badge>
         <x-filament::badge>{{ $ticket->status->getLabel() }}</x-filament::badge>
         @if ($ticket->customer)
@@ -22,7 +22,7 @@
                 $inbound = $message->direction === \App\Enums\MessageDirection::Inbound;
                 $note = $message->channel === \App\Enums\MessageChannel::InternalNote;
                 $authorLabel = match ($message->author) {
-                    \App\Enums\MessageAuthor::Customer => $ticket->customer?->name ?? 'לקוח',
+                    \App\Enums\MessageAuthor::Customer => $ticket->customer?->name ?? ($ticket->contact_name ?: 'לקוח'),
                     \App\Enums\MessageAuthor::Agent => 'צוות',
                     \App\Enums\MessageAuthor::System => 'מערכת',
                     \App\Enums\MessageAuthor::Ai => 'סוכן AI',
