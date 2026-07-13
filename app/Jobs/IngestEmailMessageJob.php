@@ -8,6 +8,7 @@ use App\Models\Ticket;
 use App\Models\WebhookEvent;
 use App\Services\Support\AttachmentStore;
 use App\Services\Support\TicketIntake;
+use App\Support\EmailBody;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Str;
@@ -39,7 +40,13 @@ class IngestEmailMessageJob implements ShouldQueue
 
         $from = $this->normalizeEmail((string) ($payload['From'] ?? $payload['from'] ?? ''));
         $subject = trim((string) ($payload['Subject'] ?? $payload['subject'] ?? ''));
-        $body = trim((string) ($payload['TextBody'] ?? $payload['text'] ?? $payload['StrippedTextReply'] ?? ''));
+        // Keep the message's line structure: use the plain-text part, or convert
+        // the HTML part to text (block tags → newlines) when it's HTML-only, so
+        // the thread doesn't collapse into one unreadable run.
+        $body = EmailBody::toText(
+            $payload['TextBody'] ?? $payload['text'] ?? $payload['StrippedTextReply'] ?? null,
+            $payload['HtmlBody'] ?? $payload['html'] ?? null,
+        );
         $messageId = $payload['MessageID'] ?? $payload['message_id'] ?? null;
 
         if ($from === '') {
