@@ -64,7 +64,7 @@ class ImportTickets extends Page implements HasForms
                         FileUpload::make('file')
                             ->label('קובץ CSV')
                             ->acceptedFileTypes(['text/csv', 'text/plain', 'application/vnd.ms-excel', 'application/csv'])
-                            ->maxSize(65536)
+                            ->maxSize(102400)
                             ->storeFiles(false)
                             ->required(),
                     ]),
