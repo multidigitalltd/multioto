@@ -20,6 +20,7 @@ class TicketReplyMail extends Mailable
         public string $subjectLine,
         public string $bodyText,
         public array $files = [],
+        public ?string $bodyHtml = null,
     ) {}
 
     public function envelope(): Envelope

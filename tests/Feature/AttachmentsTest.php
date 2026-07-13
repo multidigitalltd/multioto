@@ -215,7 +215,7 @@ class AttachmentsTest extends TestCase
         ]);
 
         Livewire::test(ViewTicket::class, ['record' => $ticket->id])
-            ->set('replyBody', 'מצרף צילום מסך')
+            ->set('replyData.body', '<p>מצרף צילום מסך</p>')
             ->set('replyFiles', [UploadedFile::fake()->image('screenshot.jpg')])
             ->call('sendReply');
 

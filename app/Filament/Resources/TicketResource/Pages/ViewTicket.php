@@ -16,13 +16,17 @@ use App\Models\Task;
 use App\Models\TicketMessage;
 use App\Models\User;
 use App\Services\Support\AttachmentStore;
+use App\Support\EmailBody;
 use Filament\Actions;
 use Filament\Forms\Components\DateTimePicker;
+use Filament\Forms\Components\RichEditor;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
+use Filament\Forms\Form;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ViewRecord;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Str;
 use Livewire\Features\SupportFileUploads\TemporaryUploadedFile;
 use Livewire\WithFileUploads;
 
@@ -40,7 +44,8 @@ class ViewTicket extends ViewRecord
 
     protected static string $view = 'filament.tickets.chat';
 
-    public string $replyBody = '';
+    /** Rich-editor state (HTML). Kept in a Filament form so agents get a real editor. */
+    public ?array $replyData = ['body' => null];
 
     public string $replyChannel = '';
 
@@ -54,6 +59,31 @@ class ViewTicket extends ViewRecord
         $this->replyChannel = $this->record->channel === TicketChannel::Whatsapp
             ? MessageChannel::Whatsapp->value
             : MessageChannel::Email->value;
+
+        $this->replyForm->fill();
+    }
+
+    /**
+     * The reply editor — a real WYSIWYG with a deliberately small toolbar
+     * (bold/italic/lists/link). Its HTML is stored for the email/panel view and
+     * converted to WhatsApp markup on the way out, so one reply reads right on
+     * either channel.
+     */
+    public function replyForm(Form $form): Form
+    {
+        return $form
+            ->schema([
+                RichEditor::make('body')
+                    ->hiddenLabel()
+                    ->placeholder('כתבו מענה ללקוח…')
+                    ->toolbarButtons(['bold', 'italic', 'bulletList', 'orderedList', 'link', 'undo', 'redo']),
+            ])
+            ->statePath('replyData');
+    }
+
+    protected function getForms(): array
+    {
+        return array_merge(parent::getForms(), ['replyForm']);
     }
 
     /** @return Collection<int, TicketMessage> */
@@ -65,7 +95,11 @@ class ViewTicket extends ViewRecord
     /** Send the reply box content to the customer (or store an internal note). */
     public function sendReply(): void
     {
-        $body = trim($this->replyBody);
+        // The editor holds HTML; keep the plain text as the canonical body (used
+        // for search / WhatsApp base) and the sanitized HTML for the rich view.
+        $html = trim((string) ($this->replyForm->getState()['body'] ?? ''));
+        $body = EmailBody::toText(null, $html);
+        $bodyHtml = EmailBody::toSafeHtml($html);
         $files = array_filter((array) $this->replyFiles);
 
         if ($body === '' && $files === []) {
@@ -85,6 +119,7 @@ class ViewTicket extends ViewRecord
             'direction' => MessageDirection::Outbound,
             'channel' => $channel,
             'body' => $body !== '' ? $body : '[קובץ מצורף]',
+            'body_html' => $body !== '' ? $bodyHtml : null,
             'author' => MessageAuthor::Agent,
         ]);
 
@@ -112,12 +147,44 @@ class ViewTicket extends ViewRecord
             SendTicketReplyJob::dispatch($message->id);
         }
 
-        $this->replyBody = '';
+        $this->replyForm->fill();
         $this->replyFiles = [];
 
         Notification::make()
             ->title($channel === MessageChannel::InternalNote ? 'ההערה נשמרה' : 'המענה נשלח ללקוח')
             ->success()->send();
+    }
+
+    /**
+     * Load an AI draft note into the reply editor so the agent can tweak it and
+     * send it straight from the conversation — no detour through the approvals
+     * screen. The draft note stays as a record; sending is still a human action.
+     */
+    public function useDraft(int $messageId): void
+    {
+        $draft = $this->record->messages()
+            ->where('author', MessageAuthor::Ai)
+            ->whereKey($messageId)
+            ->first();
+
+        if (! $draft) {
+            return;
+        }
+
+        // Strip the "🤖 טיוטה … לפני שליחה:" preamble, keeping just the proposed
+        // reply text; fall back to the whole note if the marker isn't present.
+        $text = Str::of($draft->body)->contains("\n\n")
+            ? Str::after($draft->body, "\n\n")
+            : $draft->body;
+
+        $this->replyForm->fill(['body' => '<p>'.nl2br(e(trim($text))).'</p>']);
+
+        // Send to the customer's channel, not as an internal note.
+        $this->replyChannel = $this->record->channel === TicketChannel::Whatsapp
+            ? MessageChannel::Whatsapp->value
+            : MessageChannel::Email->value;
+
+        Notification::make()->title('הטיוטה נטענה לעריכה — בדקו ושִלחו')->success()->send();
     }
 
     /**

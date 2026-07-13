@@ -9,6 +9,7 @@ use App\Mail\TicketReplyMail;
 use App\Models\NotificationLog;
 use App\Models\TicketMessage;
 use App\Services\Waha\WahaClient;
+use App\Support\RichText;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Mail;
@@ -50,7 +51,10 @@ class SendTicketReplyJob implements ShouldQueue
                 return;
             }
 
-            $body = $this->withSignature($message->body, (string) config('billing.notifications.reply_signature_whatsapp'));
+            // Rich replies were composed as HTML — convert to WhatsApp markup so
+            // formatting survives and no raw tags reach the customer.
+            $text = filled($message->body_html) ? RichText::toWhatsapp($message->body_html) : $message->body;
+            $body = $this->withSignature($text, (string) config('billing.notifications.reply_signature_whatsapp'));
             $externalId = null;
 
             if (trim($body) !== '') {
@@ -76,9 +80,14 @@ class SendTicketReplyJob implements ShouldQueue
             }
 
             $body = $this->withSignature($message->body, (string) config('billing.notifications.reply_signature'));
+            // Deliver the agent's formatting as HTML when present (signature is
+            // appended as a plain paragraph); otherwise plain text.
+            $bodyHtml = filled($message->body_html)
+                ? $this->htmlWithSignature($message->body_html, (string) config('billing.notifications.reply_signature'))
+                : null;
             // Tag the subject so the customer's reply threads back onto this ticket.
             $subject = $ticket->subject.' '.$ticket->emailTag();
-            Mail::to($email)->send(new TicketReplyMail($subject, $body, $message->attachments ?? []));
+            Mail::to($email)->send(new TicketReplyMail($subject, $body, $message->attachments ?? [], $bodyHtml));
             $message->update(['external_message_id' => 'mail-'.$message->id]);
             NotificationLog::record('email', NotificationType::TicketReply, $email, $subject, $body, $ticket->customer?->id);
         }
@@ -99,6 +108,21 @@ class SendTicketReplyJob implements ShouldQueue
         $signature = trim($signature);
 
         return $signature === '' ? $body : $body."\n\n".$signature;
+    }
+
+    /**
+     * Append the signature to an HTML body as its own paragraph (escaped, line
+     * breaks preserved), so the delivered email keeps the agent's formatting.
+     */
+    private function htmlWithSignature(string $html, string $signature): string
+    {
+        $signature = trim($signature);
+
+        if ($signature === '') {
+            return $html;
+        }
+
+        return $html.'<p>'.nl2br(e($signature)).'</p>';
     }
 
     /**
