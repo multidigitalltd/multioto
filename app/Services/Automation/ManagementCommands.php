@@ -6,6 +6,7 @@ use App\Enums\MessageChannel;
 use App\Enums\TicketChannel;
 use App\Enums\TicketStatus;
 use App\Models\Ticket;
+use App\Services\Support\AgentReply;
 use App\Services\Support\TicketIntake;
 use Illuminate\Support\Str;
 
@@ -23,6 +24,7 @@ class ManagementCommands
     public function __construct(
         private ApprovalGate $gate,
         private TicketIntake $intake,
+        private AgentReply $reply,
     ) {}
 
     /**
@@ -48,6 +50,11 @@ class ManagementCommands
 
         if (preg_match('/^\s*סגור\s+#?(\d+)\s*$/u', $text, $m)) {
             return $this->close((int) $m[1]);
+        }
+
+        // "ענה #12 <טקסט>" / "תשובה 12 <טקסט>" — reply to the ticket's customer.
+        if (preg_match('/^\s*(?:ענה|תשובה|השב)\s+#?(\d+)\s+(.+)/us', $text, $m)) {
+            return $this->replyToTicket((int) $m[1], trim($m[2]));
         }
 
         // "כרטיס <טלפון> <תיאור>" / "פתח <טלפון> <תיאור>" — open a new ticket.
@@ -99,6 +106,30 @@ class ManagementCommands
         return "נפתחה פנייה #{$message->ticket_id} עבור {$who}.";
     }
 
+    /** Send a free-form reply to a ticket's customer from the management group. */
+    private function replyToTicket(int $ticketId, string $body): string
+    {
+        $ticket = Ticket::with('customer')->find($ticketId);
+
+        if (! $ticket) {
+            return "לא נמצאה פנייה #{$ticketId}.";
+        }
+
+        if ($ticket->status === TicketStatus::Closed) {
+            return "פנייה #{$ticketId} סגורה — פִּתחו אותה לפני מענה.";
+        }
+
+        if ($ticket->channel === TicketChannel::Whatsapp ? blank($ticket->external_thread_ref ?? $ticket->customer?->whatsapp_jid ?? $ticket->customer?->phone) : blank($ticket->customer?->email)) {
+            return "לפנייה #{$ticketId} אין כתובת ליצירת קשר — לא ניתן לשלוח.";
+        }
+
+        $this->reply->send($ticket, $body);
+
+        $who = $ticket->customer?->name ?? $ticket->senderName();
+
+        return "התשובה נשלחה ל{$who} בפנייה #{$ticketId} ✓";
+    }
+
     /** Close a ticket by id. */
     private function close(int $ticketId): string
     {
@@ -147,6 +178,7 @@ class ManagementCommands
             'פקודות ניהול זמינות בקבוצה:',
             '• *פתוחות* — רשימת הפניות הפתוחות',
             '• *כרטיס <טלפון> <תיאור>* — פתיחת פנייה חדשה',
+            '• *ענה <מספר> <טקסט>* — שליחת תשובה ללקוח של הפנייה',
             '• *סגור <מספר>* — סגירת פנייה',
             '• *אשר <מספר>* / *דחה <מספר>* — אישור/דחיית פעולה אוטומטית',
             '• *עזרה* — התפריט הזה',

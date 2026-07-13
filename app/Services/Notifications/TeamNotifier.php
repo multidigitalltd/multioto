@@ -52,7 +52,15 @@ class TeamNotifier
     protected function send(string $title, string $body, Ticket $ticket): void
     {
         $panelUrl = rtrim((string) config('app.url'), '/')."/admin/tickets/{$ticket->id}";
-        $this->alert($title, $body, $panelUrl);
+        // Tag the subject and set a Reply-To so a team member can just reply to
+        // the alert email and have it reach the customer (IngestEmailMessageJob
+        // routes a tagged reply from a known team address back out).
+        $this->alert(
+            $title.' '.$ticket->emailTag(),
+            $body."\n\n💬 להשיב ללקוח: השיבו ישירות למייל הזה, או בקבוצה — ״ענה {$ticket->id} <טקסט>״.",
+            $panelUrl,
+            replyTo: (string) config('billing.email.support_address') ?: null,
+        );
     }
 
     /**
@@ -60,7 +68,7 @@ class TeamNotifier
      * operational warnings, etc. WhatsApp to the approvals number/group AND
      * the team email; each best-effort and independent.
      */
-    public function alert(string $title, string $body, ?string $url = null): void
+    public function alert(string $title, string $body, ?string $url = null, ?string $replyTo = null): void
     {
         $suffix = $url !== null ? "\n\nלצפייה: {$url}" : '';
 
@@ -77,7 +85,7 @@ class TeamNotifier
 
         if ($recipients !== []) {
             try {
-                Mail::to($recipients)->send(new NotificationMail($title, $body.$suffix));
+                Mail::to($recipients)->send(new NotificationMail($title, $body.$suffix, $replyTo));
             } catch (\Throwable $e) {
                 Log::warning('TeamNotifier: email alert failed', ['error' => $e->getMessage()]);
             }

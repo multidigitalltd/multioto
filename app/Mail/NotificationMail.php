@@ -4,6 +4,7 @@ namespace App\Mail;
 
 use Illuminate\Bus\Queueable;
 use Illuminate\Mail\Mailable;
+use Illuminate\Mail\Mailables\Address;
 use Illuminate\Mail\Mailables\Content;
 use Illuminate\Mail\Mailables\Envelope;
 use Illuminate\Queue\SerializesModels;
@@ -20,11 +21,18 @@ class NotificationMail extends Mailable
     public function __construct(
         public string $subjectLine,
         public string $bodyText,
+        // Not named $replyTo — that clashes with Mailable's own property.
+        public ?string $replyToAddress = null,
     ) {}
 
     public function envelope(): Envelope
     {
-        return new Envelope(subject: $this->subjectLine);
+        // A Reply-To routes a team member's reply to the inbound support address,
+        // so replying to a ticket alert reaches the customer (see IngestEmailMessageJob).
+        return new Envelope(
+            subject: $this->subjectLine,
+            replyTo: $this->replyToAddress !== null ? [new Address($this->replyToAddress)] : [],
+        );
     }
 
     public function content(): Content
