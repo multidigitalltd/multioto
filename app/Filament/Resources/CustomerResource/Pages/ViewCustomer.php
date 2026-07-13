@@ -77,6 +77,18 @@ class ViewCustomer extends ViewRecord
                     return;
                 }
 
+                // Guard against a paste/report mix-up: the token capture wrote this
+                // customer's id into ReturnValue, so refuse to attach a card from a
+                // session that belongs to a different customer (or a hosted charge).
+                if ((int) ($result['ReturnValue'] ?? 0) !== $record->id) {
+                    Notification::make()
+                        ->title('העסקה אינה שייכת ללקוח זה')
+                        ->body('מזהה ה-LowProfile בקארדקום שייך ללקוח אחר או לעסקה מסוג אחר — לא בוצע סנכרון.')
+                        ->danger()->send();
+
+                    return;
+                }
+
                 $token = $tokens->storeFromLpResult($record, $result);
 
                 if ($token === null) {
