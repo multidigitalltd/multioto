@@ -90,9 +90,13 @@ class ProcessCardcomLowProfileJob implements ShouldQueue
 
         $customer->update(['default_token_id' => $token->id]);
 
-        // Point every non-canceled subscription at the fresh token. A brand-new
-        // (Trialing) subscription is activated so the scheduler starts charging
-        // it on its due date; anything stuck in dunning is retried right away.
+        // Point every non-canceled subscription at the fresh token, then collect
+        // whatever is already owed. A brand-new (Trialing) subscription is
+        // activated; a subscription in dunning (past-due / suspended) has its due
+        // date pulled to now so the outstanding debt is collected immediately. In
+        // every case, once a card is on file we charge any subscription whose due
+        // date has arrived or passed — so a debtor who just entered a card is
+        // billed straight away instead of waiting for the scheduler.
         $customer->subscriptions()
             ->whereNot('status', SubscriptionStatus::Canceled)
             ->each(function ($subscription) use ($token) {
@@ -100,18 +104,16 @@ class ProcessCardcomLowProfileJob implements ShouldQueue
 
                 if ($subscription->status === SubscriptionStatus::Trialing) {
                     $subscription->update(['status' => SubscriptionStatus::Active]);
-
-                    // Immediate-start signup: if the first charge is already due,
-                    // collect it now instead of waiting for the scheduler.
-                    if ($subscription->next_charge_at && $subscription->next_charge_at->isPast()) {
-                        ChargeSubscriptionJob::dispatch($subscription->id);
-                    }
-
-                    return;
+                } elseif (in_array($subscription->status, [SubscriptionStatus::PastDue, SubscriptionStatus::Suspended], true)) {
+                    // The debt is due now — pull the next charge forward.
+                    $subscription->update(['next_charge_at' => now()]);
                 }
 
-                if (in_array($subscription->status, [SubscriptionStatus::PastDue, SubscriptionStatus::Suspended], true)) {
-                    $subscription->update(['next_charge_at' => now()]);
+                $subscription->refresh();
+
+                if ($subscription->status !== SubscriptionStatus::Canceled
+                    && $subscription->next_charge_at
+                    && $subscription->next_charge_at->isPast()) {
                     ChargeSubscriptionJob::dispatch($subscription->id);
                 }
             });

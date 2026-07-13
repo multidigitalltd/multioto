@@ -47,7 +47,7 @@ text-align: right !important;
 <table class="inner-body" align="center" width="570" cellpadding="0" cellspacing="0" role="presentation">
 <!-- Body content -->
 <tr>
-<td class="content-cell" dir="rtl" style="direction: rtl; text-align: right;">
+<td class="content-cell" dir="rtl" style="direction: rtl !important; text-align: right !important;">
 {!! Illuminate\Mail\Markdown::parse($slot) !!}
 
 {!! $subcopy ?? '' !!}
