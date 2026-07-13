@@ -21,22 +21,6 @@ class IntegrationHealth
         private WahaClient $waha,
     ) {}
 
-    /**
-     * The integrations that can be tested, keyed by a stable slug used by the
-     * UI. label/description are Hebrew for display.
-     *
-     * @return array<string, array{label: string, description: string}>
-     */
-    public function integrations(): array
-    {
-        return [
-            'cardcom' => ['label' => 'קארדקום — סליקה', 'description' => 'מסוף וסליקת אשראי'],
-            'linet' => ['label' => 'לינט — חשבוניות', 'description' => 'הנפקת חשבוניות מס/קבלה'],
-            'waha' => ['label' => 'WAHA — וואטסאפ', 'description' => 'שליחה וקבלה של הודעות'],
-            'email' => ['label' => 'Postmark — מייל', 'description' => 'מייל יוצא ונכנס'],
-        ];
-    }
-
     public function check(string $key): ConnectionResult
     {
         return match ($key) {

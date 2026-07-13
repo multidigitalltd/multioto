@@ -10,6 +10,7 @@ use App\Filament\Resources\CustomerResource\RelationManagers;
 use App\Models\Customer;
 use App\Models\Ticket;
 use App\Services\Notifications\CardCaptureLinkSender;
+use App\Support\CardLink;
 use App\Support\Money;
 use Filament\Forms;
 use Filament\Forms\Components\Actions\Action as FormAction;
@@ -23,7 +24,6 @@ use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
-use Illuminate\Support\Facades\URL;
 use Illuminate\Support\Js;
 
 class CustomerResource extends Resource
@@ -199,11 +199,7 @@ class CustomerResource extends Resource
                     ->modalHeading('קישור מאובטח להזנת כרטיס')
                     ->modalDescription('העתיקו את הקישור ושִלחו ללקוח, או פִּתחו אותו בעצמכם כדי להזין כרטיס (הכרטיס מוזן בעמוד המאובטח של קארדקום). הקישור חתום ופג תוקף.')
                     ->fillForm(fn (Customer $record): array => [
-                        'link' => URL::temporarySignedRoute(
-                            'billing.update-card',
-                            now()->addHours((int) config('billing.card_update_link_ttl_hours')),
-                            ['customer' => $record->id],
-                        ),
+                        'link' => CardLink::for($record->id),
                     ])
                     ->form([self::cardLinkField()])
                     ->modalSubmitAction(false)
@@ -362,11 +358,7 @@ class CustomerResource extends Resource
                     InfolistAction::make('addCard')
                         ->label('הוספת כרטיס')
                         ->icon('heroicon-o-plus')
-                        ->url(fn (Customer $record): string => URL::temporarySignedRoute(
-                            'billing.update-card',
-                            now()->addHours((int) config('billing.card_update_link_ttl_hours')),
-                            ['customer' => $record->id],
-                        ), shouldOpenInNewTab: true),
+                        ->url(fn (Customer $record): string => CardLink::for($record->id), shouldOpenInNewTab: true),
                 ])
                 ->schema([
                     RepeatableEntry::make('paymentTokens')

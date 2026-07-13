@@ -48,7 +48,7 @@ class SendWelcomeMessageJob implements ShouldQueue
         }
 
         if (filled($customer->phone) && ($wa = $templates->render('customer.welcome', 'whatsapp', $data))) {
-            $recipient = $customer->whatsapp_jid ?: $customer->phone;
+            $recipient = $customer->whatsappRecipient();
             try {
                 $waha->sendMessage($recipient, $wa['body']);
                 NotificationLog::record('whatsapp', NotificationType::Welcome, $recipient, null, $wa['body'], $customer->id);

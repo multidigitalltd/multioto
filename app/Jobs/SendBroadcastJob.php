@@ -57,7 +57,7 @@ class SendBroadcastJob implements ShouldQueue
                             // "queued" so the log doesn't claim delivery that hasn't happened.
                             NotificationLog::record('email', NotificationType::Broadcast, $customer->email, $broadcast->subject, $broadcast->body, $customer->id, 'queued');
                         } else {
-                            $chatId = $customer->whatsapp_jid ?? $customer->phone;
+                            $chatId = $customer->whatsappRecipient();
                             if (! $chatId) {
                                 continue;
                             }

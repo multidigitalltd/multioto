@@ -29,6 +29,16 @@ class Customer extends Model
         ];
     }
 
+    /**
+     * The best WhatsApp destination for this customer: the stored chat id when
+     * present, otherwise the phone number. One accessor so every sender resolves
+     * the recipient the same way (an empty jid falls through to the phone).
+     */
+    public function whatsappRecipient(): ?string
+    {
+        return filled($this->whatsapp_jid) ? $this->whatsapp_jid : $this->phone;
+    }
+
     public function sites(): HasMany
     {
         return $this->hasMany(Site::class);

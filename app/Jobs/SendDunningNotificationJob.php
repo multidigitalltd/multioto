@@ -9,10 +9,10 @@ use App\Mail\DunningNotificationMail;
 use App\Models\DunningEvent;
 use App\Models\NotificationLog;
 use App\Services\Waha\WahaClient;
+use App\Support\CardLink;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Mail;
-use Illuminate\Support\Facades\URL;
 
 /**
  * Deliver a single queued dunning event on its channel (WhatsApp via WAHA, or
@@ -43,11 +43,7 @@ class SendDunningNotificationJob implements ShouldQueue
             'name' => $customer->name,
             'plan' => $event->subscription->planName(),
             'amount' => number_format(($event->charge?->total_agorot ?? $event->subscription->totalChargeAgorot()) / 100, 2),
-            'update_link' => URL::temporarySignedRoute(
-                'billing.update-card',
-                now()->addHours((int) config('billing.card_update_link_ttl_hours')),
-                ['customer' => $customer->id],
-            ),
+            'update_link' => CardLink::for($customer->id),
         ];
 
         $subject = __("dunning.{$event->template_key}.subject", $replacements);
@@ -57,7 +53,7 @@ class SendDunningNotificationJob implements ShouldQueue
         // retries with backoff; the event stays Queued so the retry actually
         // processes it. Only exhausting all tries marks it Failed (see failed()).
         if ($event->channel === DunningChannel::Whatsapp) {
-            $recipient = $customer->whatsapp_jid ?? $customer->phone;
+            $recipient = $customer->whatsappRecipient();
             $waha->sendMessage($recipient, $body);
             NotificationLog::record('whatsapp', NotificationType::Dunning, $recipient, null, $body, $customer->id);
         } else {

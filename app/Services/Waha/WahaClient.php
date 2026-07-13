@@ -52,19 +52,6 @@ class WahaClient
     }
 
     /**
-     * Send a media message (file by URL) with optional caption.
-     */
-    public function sendMedia(string $chatId, string $fileUrl, ?string $caption = null): array
-    {
-        return $this->request('api/sendFile', [
-            'chatId' => $this->normalizeChatId($chatId),
-            'file' => ['url' => $fileUrl],
-            'caption' => $caption,
-            'session' => config('billing.waha.session'),
-        ]);
-    }
-
-    /**
      * Send a file by its raw bytes (base64) — used for locally-stored reply
      * attachments, so WAHA never needs to reach back to our server for a URL.
      */

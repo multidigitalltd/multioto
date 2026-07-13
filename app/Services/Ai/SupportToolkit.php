@@ -6,8 +6,8 @@ use App\Enums\ChargeStatus;
 use App\Enums\SubscriptionStatus;
 use App\Models\Charge;
 use App\Models\Customer;
+use App\Support\CardLink;
 use App\Support\Money;
-use Illuminate\Support\Facades\URL;
 
 /**
  * Read-only facts about a customer, gathered so the AI can answer support
@@ -199,10 +199,6 @@ class SupportToolkit
      */
     public function cardUpdateLink(Customer $customer): string
     {
-        return URL::temporarySignedRoute(
-            'billing.update-card',
-            now()->addHours((int) config('billing.card_update_link_ttl_hours')),
-            ['customer' => $customer->id],
-        );
+        return CardLink::for($customer->id);
     }
 }

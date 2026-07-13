@@ -131,19 +131,6 @@ class Subscription extends Model
             ->where('next_charge_at', '<=', now());
     }
 
-    /** Whether the scheduler collects this subscription automatically (has a card). */
-    public function isAutoCharged(): bool
-    {
-        return $this->token_id !== null;
-    }
-
-    /** Whether this subscription's payment is collected by hand (no card on file). */
-    public function isManuallyCollected(): bool
-    {
-        return $this->token_id === null
-            && in_array($this->customer?->payment_method, self::MANUAL_PAYMENT_METHODS, true);
-    }
-
     /**
      * Display name: the plan's name, or the free-form subscription name for a
      * plan-less (fully custom) subscription. Never null so charge/invoice

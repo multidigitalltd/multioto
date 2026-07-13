@@ -6,13 +6,13 @@ use App\Filament\Resources\CustomerResource;
 use App\Jobs\SendPaymentLinkJob;
 use App\Models\Customer;
 use App\Services\Billing\ManualChargeService;
+use App\Support\CardLink;
 use App\Support\Money;
 use Filament\Actions;
 use Filament\Forms;
 use Filament\Notifications\Actions\Action as NotificationAction;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ViewRecord;
-use Illuminate\Support\Facades\URL;
 use Illuminate\Support\Str;
 
 /**
@@ -148,11 +148,7 @@ class ViewCustomer extends ViewRecord
             ->modalHeading('קישור מאובטח להזנת כרטיס')
             ->modalDescription('העתיקו ושִלחו ללקוח, או פִּתחו בעצמכם. הכרטיס מוזן בעמוד המאובטח של קארדקום.')
             ->fillForm(fn (Customer $record): array => [
-                'link' => URL::temporarySignedRoute(
-                    'billing.update-card',
-                    now()->addHours((int) config('billing.card_update_link_ttl_hours')),
-                    ['customer' => $record->id],
-                ),
+                'link' => CardLink::for($record->id),
             ])
             ->form([CustomerResource::cardLinkField()])
             ->modalSubmitAction(false)

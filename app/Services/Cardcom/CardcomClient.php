@@ -209,16 +209,6 @@ class CardcomClient
     }
 
     /**
-     * Fetch transaction details for status reconciliation.
-     */
-    public function getTransactionInfo(string $transactionId): array
-    {
-        return $this->request('Transactions/GetTransactionInfoById', [
-            'TranzactionId' => $transactionId,
-        ]);
-    }
-
-    /**
      * Look up a transaction by the ExternalUniqueTranId we sent when charging.
      * Used to reconcile a charge whose response we never recorded (a crashed
      * job or lost webhook) — Cardcom is the source of truth. ResponseCode 0
