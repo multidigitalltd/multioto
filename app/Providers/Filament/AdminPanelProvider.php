@@ -34,6 +34,8 @@ class AdminPanelProvider extends PanelProvider
             // Show the uploaded business logo as the panel brand when one is set.
             ->brandLogo(fn (): ?string => Branding::logoUrl())
             ->brandLogoHeight('2rem')
+            // Use the same business logo as the browser-tab favicon when set.
+            ->favicon(fn (): ?string => Branding::logoUrl())
             ->colors([
                 'primary' => Color::Indigo,
             ])
