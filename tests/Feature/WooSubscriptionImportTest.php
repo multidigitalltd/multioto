@@ -3,11 +3,14 @@
 namespace Tests\Feature;
 
 use App\Enums\SubscriptionStatus;
+use App\Filament\Pages\ImportSubscriptions;
 use App\Models\Customer;
 use App\Models\Subscription;
+use App\Models\User;
 use App\Services\Import\WooSubscriptionImporter;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Mail;
+use Livewire\Livewire;
 use Tests\TestCase;
 
 class WooSubscriptionImportTest extends TestCase
@@ -86,5 +89,24 @@ class WooSubscriptionImportTest extends TestCase
 
         $this->assertSame(0, $result->created);
         $this->assertSame(2, Subscription::count());
+    }
+
+    public function test_unreadable_xml_imports_nothing_and_reports_a_reason(): void
+    {
+        $path = tempnam(sys_get_temp_dir(), 'bad').'.xml';
+        file_put_contents($path, 'this is not xml at all');
+
+        $result = (new WooSubscriptionImporter)->import($path);
+        @unlink($path);
+
+        $this->assertSame(0, $result->created);
+        $this->assertNotEmpty($result->skipped); // the page turns this into an error notification
+    }
+
+    public function test_the_import_page_renders(): void
+    {
+        $this->actingAs(User::factory()->create());
+
+        Livewire::test(ImportSubscriptions::class)->assertOk();
     }
 }
