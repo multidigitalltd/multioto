@@ -4,7 +4,9 @@ namespace App\Jobs;
 
 use App\Enums\MessageChannel;
 use App\Enums\MessageDirection;
+use App\Enums\NotificationType;
 use App\Mail\TicketReplyMail;
+use App\Models\NotificationLog;
 use App\Models\TicketMessage;
 use App\Services\Waha\WahaClient;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -65,6 +67,7 @@ class SendTicketReplyJob implements ShouldQueue
             }
 
             $message->update(['external_message_id' => $externalId]);
+            NotificationLog::record('whatsapp', NotificationType::TicketReply, $chatId, null, $body, $ticket->customer?->id);
         } else {
             $email = $ticket->customer?->email;
 
@@ -74,8 +77,10 @@ class SendTicketReplyJob implements ShouldQueue
 
             $body = $this->withSignature($message->body, (string) config('billing.notifications.reply_signature'));
             // Tag the subject so the customer's reply threads back onto this ticket.
-            Mail::to($email)->send(new TicketReplyMail($ticket->subject.' '.$ticket->emailTag(), $body, $message->attachments ?? []));
+            $subject = $ticket->subject.' '.$ticket->emailTag();
+            Mail::to($email)->send(new TicketReplyMail($subject, $body, $message->attachments ?? []));
             $message->update(['external_message_id' => 'mail-'.$message->id]);
+            NotificationLog::record('email', NotificationType::TicketReply, $email, $subject, $body, $ticket->customer?->id);
         }
 
         if ($ticket->first_response_at === null) {

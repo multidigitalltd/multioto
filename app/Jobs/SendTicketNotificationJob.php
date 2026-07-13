@@ -5,8 +5,10 @@ namespace App\Jobs;
 use App\Enums\MessageAuthor;
 use App\Enums\MessageChannel;
 use App\Enums\MessageDirection;
+use App\Enums\NotificationType;
 use App\Enums\TicketChannel;
 use App\Mail\NotificationMail;
+use App\Models\NotificationLog;
 use App\Models\Ticket;
 use App\Services\Notifications\TemplateEngine;
 use App\Services\Waha\WahaClient;
@@ -70,6 +72,7 @@ class SendTicketNotificationJob implements ShouldQueue
 
             $waha->sendMessage($chatId, $rendered['body']);
             $this->record($ticket, MessageChannel::Whatsapp, $rendered['body'], $dedupeKey);
+            NotificationLog::record('whatsapp', NotificationType::Ticket, $chatId, null, $rendered['body'], $ticket->customer?->id);
 
             return;
         }
@@ -85,6 +88,7 @@ class SendTicketNotificationJob implements ShouldQueue
         $subject = ($rendered['subject'] ?? $ticket->subject).' '.$ticket->emailTag();
         Mail::to($email)->send(new NotificationMail($subject, $rendered['body']));
         $this->record($ticket, MessageChannel::Email, $rendered['body'], $dedupeKey);
+        NotificationLog::record('email', NotificationType::Ticket, $email, $subject, $rendered['body'], $ticket->customer?->id);
     }
 
     protected function record(Ticket $ticket, MessageChannel $channel, string $body, string $dedupeKey): void

@@ -2,8 +2,10 @@
 
 namespace App\Jobs;
 
+use App\Enums\NotificationType;
 use App\Mail\NotificationMail;
 use App\Models\Customer;
+use App\Models\NotificationLog;
 use App\Services\Billing\ManualChargeService;
 use App\Services\Notifications\TemplateEngine;
 use App\Services\Waha\WahaClient;
@@ -58,6 +60,7 @@ class SendPaymentLinkJob implements ShouldQueue
             $rendered = $templates->render('payment.link', 'email', $data);
             if ($rendered) {
                 Mail::to($customer->email)->send(new NotificationMail($rendered['subject'] ?? 'קישור לתשלום', $rendered['body']));
+                NotificationLog::record('email', NotificationType::PaymentLink, $customer->email, $rendered['subject'] ?? null, $rendered['body'], $customer->id);
             }
 
             return;
@@ -66,7 +69,9 @@ class SendPaymentLinkJob implements ShouldQueue
         if (filled($customer->whatsapp_jid) || filled($customer->phone)) {
             $rendered = $templates->render('payment.link', 'whatsapp', $data);
             if ($rendered) {
-                $waha->sendMessage($customer->whatsapp_jid ?: $customer->phone, $rendered['body']);
+                $recipient = $customer->whatsapp_jid ?: $customer->phone;
+                $waha->sendMessage($recipient, $rendered['body']);
+                NotificationLog::record('whatsapp', NotificationType::PaymentLink, $recipient, null, $rendered['body'], $customer->id);
             }
         }
     }

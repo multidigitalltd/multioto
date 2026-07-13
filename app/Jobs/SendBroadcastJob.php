@@ -5,9 +5,11 @@ namespace App\Jobs;
 use App\Enums\BroadcastChannel;
 use App\Enums\BroadcastStatus;
 use App\Enums\CustomerStatus;
+use App\Enums\NotificationType;
 use App\Mail\BroadcastMail;
 use App\Models\Broadcast;
 use App\Models\Customer;
+use App\Models\NotificationLog;
 use App\Services\Waha\WahaClient;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -51,12 +53,14 @@ class SendBroadcastJob implements ShouldQueue
                                 continue;
                             }
                             Mail::to($customer->email)->queue(new BroadcastMail($broadcast->subject, $broadcast->body));
+                            NotificationLog::record('email', NotificationType::Broadcast, $customer->email, $broadcast->subject, $broadcast->body, $customer->id);
                         } else {
                             $chatId = $customer->whatsapp_jid ?? $customer->phone;
                             if (! $chatId) {
                                 continue;
                             }
                             $waha->sendMessage($chatId, $broadcast->body);
+                            NotificationLog::record('whatsapp', NotificationType::Broadcast, $chatId, null, $broadcast->body, $customer->id);
                             sleep((int) config('billing.waha.broadcast_throttle_seconds'));
                         }
 

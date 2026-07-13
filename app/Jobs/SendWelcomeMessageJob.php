@@ -2,8 +2,10 @@
 
 namespace App\Jobs;
 
+use App\Enums\NotificationType;
 use App\Mail\NotificationMail;
 use App\Models\Customer;
+use App\Models\NotificationLog;
 use App\Services\Notifications\TemplateEngine;
 use App\Services\Waha\WahaClient;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -42,14 +44,18 @@ class SendWelcomeMessageJob implements ShouldQueue
 
         if (filled($customer->email) && ($email = $templates->render('customer.welcome', 'email', $data))) {
             Mail::to($customer->email)->send(new NotificationMail($email['subject'] ?? 'ברוכים הבאים', $email['body']));
+            NotificationLog::record('email', NotificationType::Welcome, $customer->email, $email['subject'] ?? null, $email['body'], $customer->id);
         }
 
         if (filled($customer->phone) && ($wa = $templates->render('customer.welcome', 'whatsapp', $data))) {
+            $recipient = $customer->whatsapp_jid ?: $customer->phone;
             try {
-                $waha->sendMessage($customer->whatsapp_jid ?: $customer->phone, $wa['body']);
+                $waha->sendMessage($recipient, $wa['body']);
+                NotificationLog::record('whatsapp', NotificationType::Welcome, $recipient, null, $wa['body'], $customer->id);
             } catch (\Throwable $e) {
                 // WhatsApp being down must not fail the welcome (email was sent).
                 Log::warning('Welcome WhatsApp send failed', ['customer_id' => $customer->id, 'error' => $e->getMessage()]);
+                NotificationLog::record('whatsapp', NotificationType::Welcome, $recipient, null, $wa['body'], $customer->id, 'failed', $e->getMessage());
             }
         }
     }
