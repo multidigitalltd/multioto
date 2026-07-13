@@ -98,10 +98,11 @@ class TicketChatTest extends TestCase
         $ticket = $this->ticket();
 
         Livewire::test(ViewTicket::class, ['record' => $ticket->id])
-            ->set('replyBody', 'בדקנו — האתר חזר לעבוד.')
+            ->set('replyData.body', '<p>בדקנו — האתר חזר לעבוד.</p>')
             ->call('sendReply');
 
         $outbound = $ticket->messages()->where('direction', MessageDirection::Outbound)->sole();
+        $this->assertSame('בדקנו — האתר חזר לעבוד.', $outbound->body);
         $this->assertSame(MessageChannel::Whatsapp, $outbound->channel); // ticket's channel by default
         $this->assertSame(MessageAuthor::Agent, $outbound->author);
         Queue::assertPushed(SendTicketReplyJob::class, fn ($job) => $job->ticketMessageId === $outbound->id);
@@ -120,7 +121,7 @@ class TicketChatTest extends TestCase
 
         Livewire::test(ViewTicket::class, ['record' => $ticket->id])
             ->set('replyChannel', MessageChannel::InternalNote->value)
-            ->set('replyBody', 'ללקוח יש חוב פתוח — לבדוק לפני שדרוג.')
+            ->set('replyData.body', '<p>ללקוח יש חוב פתוח — לבדוק לפני שדרוג.</p>')
             ->call('sendReply');
 
         $this->assertSame(1, $ticket->messages()->where('channel', MessageChannel::InternalNote)->count());

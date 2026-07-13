@@ -61,10 +61,20 @@
                         <time datetime="{{ $message->created_at->toIso8601String() }}">{{ $message->created_at->format('d/m/Y H:i') }}</time>
                     </div>
                     @if (filled($message->body_html))
-                        {{-- Pre-sanitized on ingest (EmailBody::toSafeHtml, allow-list) — safe to render. --}}
+                        {{-- Pre-sanitized (EmailBody::toSafeHtml, allow-list) — safe to render. --}}
                         <div class="chat-rich">{!! $message->body_html !!}</div>
                     @else
                         <div class="whitespace-pre-line break-words">{{ $message->body }}</div>
+                    @endif
+
+                    @if ($note && $message->author === \App\Enums\MessageAuthor::Ai && str_contains($message->body, 'טיוטת תשובה'))
+                        {{-- Edit the AI draft and send it straight from here — no detour to approvals. --}}
+                        <div class="mt-2">
+                            <button type="button" wire:click="useDraft({{ $message->id }})"
+                                    class="inline-flex items-center gap-1 rounded-lg border border-amber-400 px-2.5 py-1 text-xs font-semibold text-amber-700 hover:bg-amber-100 dark:text-amber-300 dark:hover:bg-amber-900/40">
+                                ✏️ ערוך ושלח
+                            </button>
+                        </div>
                     @endif
 
                     @if (filled($message->attachments))
@@ -104,10 +114,8 @@
                 <option value="{{ \App\Enums\MessageChannel::InternalNote->value }}">🔒 הערה פנימית (לא נשלחת ללקוח)</option>
             </select>
         </div>
-        <label for="replyBody" class="sr-only">תוכן המענה</label>
-        <textarea id="replyBody" wire:model="replyBody" rows="3"
-                  placeholder="כתבו מענה ללקוח…"
-                  class="w-full rounded-lg border-gray-300 text-sm dark:border-gray-600 dark:bg-gray-900"></textarea>
+        {{-- Real WYSIWYG editor (basic toolbar) — matches the formatting we now show. --}}
+        {{ $this->replyForm }}
 
         <div class="flex flex-wrap items-center justify-between gap-3">
             <div class="flex items-center gap-2 text-sm">
