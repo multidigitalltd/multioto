@@ -91,9 +91,16 @@ class TicketResource extends Resource
                     ->searchable()
                     ->weight('bold'),
                 Tables\Columns\TextColumn::make('customer.name')
-                    ->label('לקוח')
-                    ->searchable()
-                    ->sortable(),
+                    ->label('מאת')
+                    // Fall back to the captured sender identity (name + email /
+                    // pushname + phone) for an unidentified enquiry.
+                    ->state(fn (Ticket $record): string => $record->senderName())
+                    ->description(fn (Ticket $record): ?string => $record->customer_id === null ? 'לא מזוהה' : null)
+                    ->searchable(query: fn ($query, string $search) => $query->where(
+                        fn ($q) => $q->whereHas('customer', fn ($c) => $c->where('name', 'like', "%{$search}%"))
+                            ->orWhere('contact_name', 'like', "%{$search}%")
+                            ->orWhere('contact_handle', 'like', "%{$search}%"),
+                    )),
                 Tables\Columns\TextColumn::make('channel')
                     ->label('ערוץ')
                     ->badge(),

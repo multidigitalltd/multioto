@@ -24,7 +24,7 @@ class TeamNotifier
     /** A brand-new ticket landed. */
     public function newTicket(Ticket $ticket): void
     {
-        $who = $ticket->customer?->name ?? 'פונה לא מזוהה';
+        $who = $ticket->senderName();
         $title = "🆕 פנייה חדשה #{$ticket->id} ({$ticket->channel->getLabel()})";
         $body = "מ: {$who}\nנושא: {$ticket->subject}";
 
@@ -41,7 +41,7 @@ class TeamNotifier
     /** A customer replied on an existing ticket. */
     public function newReply(Ticket $ticket, TicketMessage $message): void
     {
-        $who = $ticket->customer?->name ?? 'פונה לא מזוהה';
+        $who = $ticket->senderName();
         $title = "💬 תגובה חדשה בפנייה #{$ticket->id}";
         $body = "מ: {$who}\nנושא: {$ticket->subject}\n\nתוכן:\n".Str::limit($message->body, 600);
 

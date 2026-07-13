@@ -83,6 +83,10 @@ class IngestWhatsappMessageJob implements ShouldQueue
 
         $customer = $this->matchCustomer($intake, $chatId);
 
+        // Keep the sender's identity for unidentified enquiries: WhatsApp
+        // pushname (when present) + their phone number.
+        $pushName = trim((string) ($payload['notifyName'] ?? ($payload['_data']['notifyName'] ?? '')));
+
         $message = $intake->recordInbound(
             channel: TicketChannel::Whatsapp,
             messageChannel: MessageChannel::Whatsapp,
@@ -90,6 +94,8 @@ class IngestWhatsappMessageJob implements ShouldQueue
             body: $body,
             threadRef: $chatId,
             externalMessageId: $messageId,
+            contactName: $pushName ?: null,
+            contactHandle: '+'.Str::before($chatId, '@'),
         );
 
         // Download and store the media the customer sent (image/file), then keep

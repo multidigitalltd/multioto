@@ -49,6 +49,13 @@ class IngestEmailMessageJob implements ShouldQueue
 
         $customer = $intake->matchCustomer(email: $from);
 
+        // Keep the sender's identity for unidentified enquiries: display name
+        // (from the "From" header) + the bare address.
+        $fromName = trim((string) ($payload['FromName'] ?? ($payload['FromFull']['Name'] ?? '')));
+        if ($fromName === '' && preg_match('/^\s*"?([^"<]+?)"?\s*<[^>]+>\s*$/', (string) ($payload['From'] ?? $payload['from'] ?? ''), $m)) {
+            $fromName = trim($m[1]);
+        }
+
         $message = $intake->recordInbound(
             channel: TicketChannel::Email,
             messageChannel: MessageChannel::Email,
@@ -57,6 +64,8 @@ class IngestEmailMessageJob implements ShouldQueue
             threadRef: $this->threadRef($from, $subject),
             externalMessageId: $messageId,
             subject: $subject,
+            contactName: $fromName ?: null,
+            contactHandle: $from,
         );
 
         // Store any attachments (Postmark sends them base64-encoded inline) and
