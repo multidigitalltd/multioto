@@ -6,6 +6,7 @@ use App\Services\Import\WooSubscriptionImporter;
 use Filament\Forms\Components\FileUpload;
 use Filament\Forms\Components\Placeholder;
 use Filament\Forms\Components\Section;
+use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\Toggle;
 use Filament\Forms\Concerns\InteractsWithForms;
 use Filament\Forms\Contracts\HasForms;
@@ -64,8 +65,11 @@ class ImportSubscriptions extends Page implements HasForms
                             // reports a clear error if the file isn't valid XML.
                             ->maxSize(102400)
                             ->storeFiles(false)
-                            ->required()
                             ->helperText('קובץ ייצוא WordPress/WooCommerce בפורמט XML (WXR).'),
+                        Textarea::make('xml')
+                            ->label('או — הדביקו כאן את תוכן ה-XML')
+                            ->rows(6)
+                            ->helperText('אם העלאת הקובץ נכשלת (מגבלת שרת), פִּתחו את קובץ ה-XML בעורך טקסט, העתיקו הכול (Ctrl+A, Ctrl+C) והדביקו כאן. עוקף את מגבלת ההעלאה.'),
                         Toggle::make('force')
                             ->label('הוסף מנוי גם ללקוח שכבר קיים לו מנוי')
                             ->helperText('בדרך כלל להשאיר כבוי — כך אפשר להריץ שוב את אותו קובץ בלי כפילויות')
@@ -78,15 +82,22 @@ class ImportSubscriptions extends Page implements HasForms
     public function import(WooSubscriptionImporter $importer): void
     {
         $data = $this->form->getState();
+        $force = (bool) ($data['force'] ?? false);
 
+        // Prefer an uploaded file; fall back to pasted XML content (which isn't
+        // subject to the server's file-upload size limit).
         $path = $this->uploadedFilePath($data['file'] ?? null);
-        if ($path === null) {
-            Notification::make()->title('לא ניתן לקרוא את הקובץ')->danger()->send();
+        $pasted = trim((string) ($data['xml'] ?? ''));
+
+        if ($path !== null) {
+            $result = $importer->import($path, $force);
+        } elseif ($pasted !== '') {
+            $result = $importer->importString($pasted, $force);
+        } else {
+            Notification::make()->title('העלו קובץ XML או הדביקו את תוכנו')->danger()->send();
 
             return;
         }
-
-        $result = $importer->import($path, (bool) ($data['force'] ?? false));
 
         $this->form->fill(['force' => false]);
 
