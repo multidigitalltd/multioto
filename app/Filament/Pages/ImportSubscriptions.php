@@ -58,10 +58,14 @@ class ImportSubscriptions extends Page implements HasForms
                             )),
                         FileUpload::make('file')
                             ->label('קובץ XML')
-                            ->acceptedFileTypes(['text/xml', 'application/xml', 'text/plain'])
+                            // No MIME allow-list: WordPress WXR files sniff
+                            // inconsistently across browsers/servers and would be
+                            // rejected. The importer validates the content and
+                            // reports a clear error if the file isn't valid XML.
                             ->maxSize(102400)
                             ->storeFiles(false)
-                            ->required(),
+                            ->required()
+                            ->helperText('קובץ ייצוא WordPress/WooCommerce בפורמט XML (WXR).'),
                         Toggle::make('force')
                             ->label('הוסף מנוי גם ללקוח שכבר קיים לו מנוי')
                             ->helperText('בדרך כלל להשאיר כבוי — כך אפשר להריץ שוב את אותו קובץ בלי כפילויות')
