@@ -21,8 +21,7 @@ class ImportLegacyTickets extends Command
 
     protected $signature = 'tickets:import
         {path : Path to the CSV file to import}
-        {--delete-existing : Remove previously imported legacy tickets first}
-        {--no-skip-duplicates : Insert rows even if the ticket id already exists}';
+        {--delete-existing : Remove previously imported legacy tickets first}';
 
     protected $description = 'Import legacy support tickets from a CSV file on disk (no HTTP upload needed).';
 
@@ -38,21 +37,28 @@ class ImportLegacyTickets extends Command
             return self::FAILURE;
         }
 
-        if ($this->option('delete-existing')) {
-            $deleted = $importer->deleteImported();
-            $this->warn("נמחקו {$deleted} כרטיסים שיובאו קודם.");
-        }
-
+        // Validate the file fully BEFORE any destructive step, so --delete-existing
+        // can never wipe the previous import when the CSV is unreadable or empty.
         $rows = $this->parseCsv($path);
         if ($rows === null) {
             $this->error('לא ניתן לקרוא את ה-CSV (חסרות כותרות?).');
 
             return self::FAILURE;
         }
+        if ($rows === []) {
+            $this->error('הקובץ אינו מכיל שורות לייבוא — לא בוצע שינוי.');
+
+            return self::FAILURE;
+        }
+
+        if ($this->option('delete-existing')) {
+            $deleted = $importer->deleteImported();
+            $this->warn("נמחקו {$deleted} כרטיסים שיובאו קודם.");
+        }
 
         $this->info('מייבא '.count($rows).' שורות...');
 
-        $result = $importer->import($rows, ! $this->option('no-skip-duplicates'));
+        $result = $importer->import($rows);
 
         $this->info("הושלם: יובאו {$result->importedCount()} כרטיסים ({$result->matched} שויכו ללקוח).");
         if ($result->maxId) {
