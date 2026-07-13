@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Customer;
 use App\Services\Cardcom\CardcomClient;
+use App\Support\CardcomWebhook;
 use Illuminate\View\View;
 
 /**
@@ -25,7 +26,7 @@ class BillingController extends Controller
             $customer->id,
             route('billing.update-card.done', ['result' => 'success']),
             route('billing.update-card.done', ['result' => 'failed']),
-            route('webhooks.cardcom', ['secret' => config('billing.cardcom.webhook_secret')]),
+            CardcomWebhook::url(),
         );
 
         // Remember this session so the team can reconcile the card manually if

@@ -23,6 +23,7 @@ class SettingsServiceProvider extends ServiceProvider
         'cardcom.terminal_number' => 'billing.cardcom.terminal_number',
         'cardcom.api_name' => 'billing.cardcom.api_name',
         'cardcom.api_password' => 'billing.cardcom.api_password',
+        'cardcom.webhook_secret' => 'billing.cardcom.webhook_secret',
         'linet.login_id' => 'billing.linet.login_id',
         'linet.key' => 'billing.linet.key',
         'linet.company_id' => 'billing.linet.company_id',

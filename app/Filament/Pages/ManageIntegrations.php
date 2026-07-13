@@ -7,7 +7,9 @@ use App\Models\Setting;
 use App\Providers\SettingsServiceProvider;
 use App\Services\Health\IntegrationHealth;
 use App\Services\Waha\WahaClient;
+use App\Support\CardcomWebhook;
 use Filament\Forms\Components\Actions\Action as FormAction;
+use Filament\Forms\Components\Placeholder;
 use Filament\Forms\Components\Section;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Concerns\InteractsWithForms;
@@ -16,6 +18,7 @@ use Filament\Forms\Form;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\HtmlString;
 use Illuminate\Support\Str;
 
 /**
@@ -155,6 +158,13 @@ class ManageIntegrations extends Page implements HasForms
                         TextInput::make('cardcom.terminal_number')->label('מספר מסוף')->live(onBlur: true)->autocomplete(false),
                         TextInput::make('cardcom.api_name')->label('API Name')->live(onBlur: true)->autocomplete(false),
                         TextInput::make('cardcom.api_password')->label('API Password')->password()->live(onBlur: true)->autocomplete('new-password'),
+                        Placeholder::make('cardcom_webhook_url')
+                            ->label('כתובת Webhook (WebHookUrl)')
+                            ->content(fn (): HtmlString => new HtmlString(
+                                '<code style="user-select:all;word-break:break-all;font-size:.8rem">'.e(CardcomWebhook::url()).'</code>'
+                            ))
+                            ->helperText('נשלחת לקארדקום אוטומטית בכל הזנת כרטיס/חיוב — אין חובה להגדיר ידנית. אפשר גם להדביק אותה בקארדקום: ניהול → הגדרות מסוף → "אינדיקטור / Webhook", כגיבוי.')
+                            ->columnSpanFull(),
                     ])->columns(3)
                     ->footerActions($this->groupActions('cardcom')),
 

@@ -8,6 +8,7 @@ use App\Jobs\ProcessManualChargeJob;
 use App\Models\Charge;
 use App\Models\Customer;
 use App\Services\Cardcom\CardcomClient;
+use App\Support\CardcomWebhook;
 use Illuminate\Support\Str;
 
 /**
@@ -64,7 +65,7 @@ class ManualChargeService
                 $customer->phone,
                 route('billing.update-card.done', ['result' => 'success']),
                 route('billing.update-card.done', ['result' => 'failed']),
-                route('webhooks.cardcom', ['secret' => config('billing.cardcom.webhook_secret')]),
+                CardcomWebhook::url(),
             );
         } catch (\Throwable $e) {
             $charge->update(['status' => ChargeStatus::Failed, 'failure_reason' => 'יצירת עמוד תשלום נכשלה']);
