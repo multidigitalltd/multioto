@@ -32,7 +32,9 @@ class DebtorActions
             ->modalDescription(fn (Subscription $record): string => 'לחייב את '.$record->customer->name.' בסך '.Money::ils($record->totalChargeAgorot()).' עכשיו? החיוב ירוץ ברקע עם כל הגנות הכפילות הרגילות.')
             ->modalSubmitActionLabel('חייב עכשיו')
             ->action(function (Subscription $record): void {
-                $record->update(['next_charge_at' => now()]);
+                // Collect now without moving the billing anchor forward, so a late
+                // payer is billed for the delayed period (no free days).
+                $record->markDueNow();
                 ChargeSubscriptionJob::dispatch($record->id);
                 Notification::make()->title('החיוב נשלח לביצוע')->body('התוצאה תופיע במסך "חיובים".')->success()->send();
             });

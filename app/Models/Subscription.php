@@ -3,12 +3,14 @@
 namespace App\Models;
 
 use App\Enums\BillingInterval;
+use App\Enums\ChargeStatus;
 use App\Enums\SubscriptionStatus;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Carbon;
 
 class Subscription extends Model
 {
@@ -199,5 +201,32 @@ class Subscription extends Model
             SubscriptionStatus::PastDue,
             SubscriptionStatus::Suspended,
         ], true) && $this->token_id !== null;
+    }
+
+    /**
+     * Make an arrears subscription collectable right now WITHOUT moving its
+     * billing anchor forward — a late payer must be billed for the delayed
+     * period and keep the original monthly charge date, never earn free days.
+     *
+     * If next_charge_at is already in the past it is the real (overdue) anchor,
+     * so we leave it untouched. Only a missing next_charge_at (the final dunning
+     * stage clears it) or a still-future one is pulled back — to the true unpaid
+     * boundary (last paid-through date, else the oldest unpaid period), never to
+     * "now" when a truthful date exists. ChargeSubscriptionJob then collects the
+     * correct period, and on success rolls next_charge_at to that period's end.
+     */
+    public function markDueNow(): void
+    {
+        if ($this->next_charge_at !== null && $this->next_charge_at->isPast()) {
+            return;
+        }
+
+        $anchor = $this->charges()->where('status', ChargeStatus::Succeeded)->max('period_end')
+            ?? $this->charges()->where('status', ChargeStatus::Failed)->min('period_start')
+            ?? $this->current_period_end?->toDateString();
+
+        $this->update([
+            'next_charge_at' => $anchor ? Carbon::parse($anchor)->startOfDay() : now(),
+        ]);
     }
 }

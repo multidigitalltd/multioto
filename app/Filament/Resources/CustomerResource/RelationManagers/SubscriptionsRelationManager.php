@@ -88,7 +88,9 @@ class SubscriptionsRelationManager extends RelationManager
                     ->visible(fn (Subscription $record): bool => $record->isChargeable())
                     ->requiresConfirmation()
                     ->action(function (Subscription $record): void {
-                        $record->update(['next_charge_at' => now()]);
+                        // Collect now without moving the billing anchor forward
+                        // (a late payer must not earn free days).
+                        $record->markDueNow();
                         ChargeSubscriptionJob::dispatch($record->id);
                         Notification::make()->title('החיוב נשלח לביצוע')->success()->send();
                     }),

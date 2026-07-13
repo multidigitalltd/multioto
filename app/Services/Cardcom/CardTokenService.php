@@ -71,8 +71,10 @@ class CardTokenService
                 if ($subscription->status === SubscriptionStatus::Trialing) {
                     $subscription->update(['status' => SubscriptionStatus::Active]);
                 } elseif (in_array($subscription->status, [SubscriptionStatus::PastDue, SubscriptionStatus::Suspended], true)) {
-                    // The debt is due now — pull the next charge forward.
-                    $subscription->update(['next_charge_at' => now()]);
+                    // The debt is due now — make it collectable immediately, but
+                    // WITHOUT moving the billing anchor forward, so a late payer is
+                    // billed for the delayed period and keeps the original date.
+                    $subscription->markDueNow();
                 }
 
                 $subscription->refresh();

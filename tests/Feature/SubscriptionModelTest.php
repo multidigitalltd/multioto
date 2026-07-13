@@ -3,6 +3,8 @@
 namespace Tests\Feature;
 
 use App\Enums\BillingInterval;
+use App\Enums\ChargeStatus;
+use App\Enums\SubscriptionStatus;
 use App\Models\Customer;
 use App\Models\PaymentToken;
 use App\Models\Plan;
@@ -89,5 +91,43 @@ class SubscriptionModelTest extends TestCase
         $this->assertSame(BillingInterval::Yearly, $subscription->billingInterval());
         $this->assertFalse($subscription->vatApplies());
         $this->assertSame(24000, $subscription->basePriceAgorot());
+    }
+
+    public function test_mark_due_now_leaves_an_already_overdue_anchor_untouched(): void
+    {
+        // A past next_charge_at IS the real overdue anchor — pulling it to "now"
+        // would gift the late payer free days, so it must be left as-is.
+        $original = now()->subDays(15)->startOfDay();
+        $subscription = Subscription::factory()->create([
+            'status' => SubscriptionStatus::PastDue,
+            'next_charge_at' => $original,
+        ]);
+
+        $subscription->markDueNow();
+
+        $this->assertSame($original->toDateTimeString(), $subscription->fresh()->next_charge_at->toDateTimeString());
+    }
+
+    public function test_mark_due_now_restores_a_cleared_anchor_to_the_paid_through_date(): void
+    {
+        // A suspended subscription (final dunning stage cleared next_charge_at)
+        // must become collectable at the date its paid coverage ended — not now.
+        $paidThrough = now()->subDays(40)->startOfDay();
+        $subscription = Subscription::factory()->create([
+            'status' => SubscriptionStatus::Suspended,
+            'next_charge_at' => null,
+        ]);
+        $subscription->charges()->create([
+            'amount_agorot' => 10000, 'vat_agorot' => 1800, 'total_agorot' => 11800,
+            'currency' => config('billing.currency'), 'status' => ChargeStatus::Succeeded,
+            'attempt_number' => 1,
+            'period_start' => $paidThrough->copy()->subMonth(),
+            'period_end' => $paidThrough,
+            'charged_at' => $paidThrough,
+        ]);
+
+        $subscription->markDueNow();
+
+        $this->assertSame($paidThrough->toDateString(), $subscription->fresh()->next_charge_at->toDateString());
     }
 }
