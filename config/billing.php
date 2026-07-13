@@ -244,6 +244,15 @@ return [
     ],
 
     'support' => [
+        // Auto follow-up for a ticket stuck "waiting for customer" (Pending):
+        // after reminder_days of silence the customer gets one reminder, and
+        // after close_days it is auto-closed. Set enabled=false to switch off.
+        'pending_followup' => [
+            'enabled' => (bool) env('SUPPORT_PENDING_FOLLOWUP', true),
+            'reminder_days' => (int) env('SUPPORT_PENDING_REMINDER_DAYS', 3),
+            'close_days' => (int) env('SUPPORT_PENDING_CLOSE_DAYS', 7),
+        ],
+
         // Inbound attachments (images/files a customer sends on WhatsApp or
         // email). Stored on a PRIVATE disk and served only behind panel auth.
         'attachments' => [

@@ -14,6 +14,27 @@ use App\Models\Ticket;
  */
 class TicketObserver
 {
+    /**
+     * Maintain the "waiting for customer" clock: stamp pending_since when the
+     * ticket enters Pending (and clear any prior reminder), and clear both when
+     * it leaves Pending (e.g. the customer replied). Runs before save so the
+     * columns persist in the same write.
+     */
+    public function saving(Ticket $ticket): void
+    {
+        if (! $ticket->isDirty('status')) {
+            return;
+        }
+
+        if ($ticket->status === TicketStatus::Pending) {
+            $ticket->pending_since = now();
+            $ticket->pending_reminded_at = null;
+        } else {
+            $ticket->pending_since = null;
+            $ticket->pending_reminded_at = null;
+        }
+    }
+
     public function updated(Ticket $ticket): void
     {
         if ($ticket->wasChanged('status') && $ticket->status === TicketStatus::Resolved) {

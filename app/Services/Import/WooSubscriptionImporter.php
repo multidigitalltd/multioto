@@ -64,6 +64,11 @@ class WooSubscriptionImporter
                 continue; // dropped by request — cancelled subscriptions are not imported
             }
 
+            // Stable per-subscription key so a repeat upload is idempotent, yet a
+            // customer with several subscriptions gets every one of them.
+            $postId = (int) $wp->post_id;
+            $externalRef = $postId > 0 ? 'woo-'.$postId : null;
+
             $meta = [];
             foreach ($wp->postmeta as $pm) {
                 $meta[(string) $pm->meta_key] = (string) $pm->meta_value;
@@ -91,14 +96,17 @@ class WooSubscriptionImporter
 
             $customer = Customer::query()->whereRaw('lower(email) = ?', [$email])->first();
 
-            if ($customer && $customer->subscriptions()->exists() && ! $force) {
-                $result->skip("ללקוח {$email} כבר קיים מנוי — דולג");
+            // Skip only this exact subscription if it was already imported — a
+            // customer's other subscriptions are still brought in.
+            if ($externalRef !== null && ! $force
+                && Subscription::query()->where('external_ref', $externalRef)->exists()) {
+                $result->skip("מנוי {$externalRef} כבר יובא — דולג");
 
                 continue;
             }
 
             try {
-                DB::transaction(function () use (&$customer, $result, $name, $person, $company, $email, $meta, $vatExempt, $baseAgorot, $nextCharge, $onHold) {
+                DB::transaction(function () use (&$customer, $result, $externalRef, $name, $person, $company, $email, $meta, $vatExempt, $baseAgorot, $nextCharge, $onHold) {
                     if (! $customer) {
                         $customer = Customer::create([
                             'name' => $name,
@@ -114,8 +122,7 @@ class WooSubscriptionImporter
                         $result->customersMatched++;
                     }
 
-                    Subscription::create([
-                        'customer_id' => $customer->id,
+                    $attributes = [
                         'plan_id' => null,
                         'name' => $onHold ? 'מנוי חודשי (חוב פתוח מהמערכת הישנה)' : 'מנוי חודשי',
                         'billing_interval' => BillingInterval::Monthly,
@@ -123,7 +130,18 @@ class WooSubscriptionImporter
                         'status' => SubscriptionStatus::Trialing,
                         'price_agorot_override' => $baseAgorot,
                         'next_charge_at' => $nextCharge ?? now()->startOfDay(),
-                    ]);
+                    ];
+
+                    // Keyed on external_ref so a --force re-run updates the same
+                    // row instead of colliding on the unique index.
+                    if ($externalRef !== null) {
+                        Subscription::updateOrCreate(
+                            ['external_ref' => $externalRef],
+                            ['customer_id' => $customer->id] + $attributes,
+                        );
+                    } else {
+                        Subscription::create(['customer_id' => $customer->id] + $attributes);
+                    }
                     $result->created++;
 
                     if ($onHold) {

@@ -18,7 +18,7 @@ class Subscription extends Model
     public const MANUAL_PAYMENT_METHODS = ['standing_order', 'bank_transfer', 'checks'];
 
     protected $fillable = [
-        'customer_id', 'plan_id', 'name', 'billing_interval', 'vat_applies',
+        'customer_id', 'plan_id', 'external_ref', 'name', 'billing_interval', 'vat_applies',
         'site_id', 'token_id', 'status',
         'current_period_start', 'current_period_end', 'next_charge_at',
         'price_agorot_override', 'dunning_stage', 'canceled_at',

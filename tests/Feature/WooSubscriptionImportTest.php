@@ -80,15 +80,37 @@ class WooSubscriptionImportTest extends TestCase
         Mail::assertNothingSent();
     }
 
-    public function test_it_skips_customers_that_already_have_a_subscription(): void
+    public function test_reimporting_the_same_export_is_idempotent_per_subscription(): void
     {
         $path = $this->wxr();
         (new WooSubscriptionImporter)->import($path);
         $result = (new WooSubscriptionImporter)->import($path);
         @unlink($path);
 
+        // Same post ids → nothing new; the two subscriptions are not duplicated.
         $this->assertSame(0, $result->created);
         $this->assertSame(2, Subscription::count());
+    }
+
+    public function test_a_customer_with_several_subscriptions_gets_all_of_them(): void
+    {
+        // Two shop_subscriptions for one email, distinct post ids.
+        $item = fn (int $id, string $total) => '<item><title>sub</title>'
+            .'<wp:post_id>'.$id.'</wp:post_id>'
+            .'<wp:post_type>shop_subscription</wp:post_type><wp:status>wc-active</wp:status>'
+            .'<wp:postmeta><wp:meta_key>_billing_email</wp:meta_key><wp:meta_value>multi@example.com</wp:meta_value></wp:postmeta>'
+            .'<wp:postmeta><wp:meta_key>_order_total</wp:meta_key><wp:meta_value>'.$total.'</wp:meta_value></wp:postmeta>'
+            .'</item>';
+        $xml = '<?xml version="1.0" encoding="UTF-8"?><rss version="2.0" xmlns:wp="http://wordpress.org/export/1.2/"><channel>'
+            .$item(201, '118.00').$item(202, '236.00').'</channel></rss>';
+
+        $result = (new WooSubscriptionImporter)->importString($xml);
+
+        $this->assertSame(2, $result->created);
+        $this->assertSame(1, $result->customersCreated);   // one customer...
+        $this->assertSame(1, $result->customersMatched);    // ...matched on the second row
+        $this->assertSame(1, Customer::where('email', 'multi@example.com')->count());
+        $this->assertSame(2, Subscription::whereHas('customer', fn ($q) => $q->where('email', 'multi@example.com'))->count());
     }
 
     public function test_unreadable_xml_imports_nothing_and_reports_a_reason(): void

@@ -33,6 +33,7 @@ class SendTicketNotificationJob implements ShouldQueue
     public function __construct(
         public int $ticketId,
         public string $templateKey,
+        public ?string $dedupeTag = null,
     ) {}
 
     public function handle(TemplateEngine $templates, WahaClient $waha): void
@@ -44,8 +45,12 @@ class SendTicketNotificationJob implements ShouldQueue
         }
 
         // Idempotency across retries/duplicate dispatches: one notification of
-        // a given kind per ticket per status-cycle is enough.
-        $dedupeKey = "notify-{$this->templateKey}-{$ticket->id}-".($ticket->status->value ?? '');
+        // a given kind per ticket per status-cycle is enough. A caller that can
+        // legitimately re-notify within the same status (e.g. a reminder each
+        // time a ticket re-enters Pending) passes a dedupeTag to distinguish
+        // one cycle from the next.
+        $dedupeKey = "notify-{$this->templateKey}-{$ticket->id}-".($ticket->status->value ?? '')
+            .($this->dedupeTag !== null ? "-{$this->dedupeTag}" : '');
 
         if ($ticket->messages()->where('external_message_id', $dedupeKey)->exists()) {
             return;
