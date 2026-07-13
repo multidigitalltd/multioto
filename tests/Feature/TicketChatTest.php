@@ -58,6 +58,23 @@ class TicketChatTest extends TestCase
             ->assertSee('האתר שלי לא נטען כבר שעה');
     }
 
+    public function test_the_chat_renders_the_sanitized_rich_html_of_an_email(): void
+    {
+        $this->actingAs(User::factory()->create());
+        $ticket = $this->ticket();
+        $ticket->messages()->create([
+            'direction' => MessageDirection::Inbound,
+            'channel' => MessageChannel::Email,
+            'body' => 'שורה מודגשת',
+            'body_html' => '<p>שורה <strong>מודגשת</strong></p>',
+            'author' => MessageAuthor::Customer,
+        ]);
+
+        // The rich markup renders as HTML (assertSeeHtml does not escape).
+        Livewire::test(ViewTicket::class, ['record' => $ticket->id])
+            ->assertSeeHtml('<strong>מודגשת</strong>');
+    }
+
     public function test_silent_close_closes_the_ticket_without_notifying_the_customer(): void
     {
         Queue::fake();

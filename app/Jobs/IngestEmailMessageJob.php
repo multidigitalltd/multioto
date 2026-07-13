@@ -43,10 +43,14 @@ class IngestEmailMessageJob implements ShouldQueue
         // Keep the message's line structure: use the plain-text part, or convert
         // the HTML part to text (block tags → newlines) when it's HTML-only, so
         // the thread doesn't collapse into one unreadable run.
+        $html = $payload['HtmlBody'] ?? $payload['html'] ?? null;
         $body = EmailBody::toText(
             $payload['TextBody'] ?? $payload['text'] ?? $payload['StrippedTextReply'] ?? null,
-            $payload['HtmlBody'] ?? $payload['html'] ?? null,
+            $html,
         );
+        // Display-only sanitized rich rendering, so the conversation view keeps
+        // the email's formatting instead of a flattened run of text.
+        $bodyHtml = EmailBody::toSafeHtml($html);
         $messageId = $payload['MessageID'] ?? $payload['message_id'] ?? null;
 
         if ($from === '') {
@@ -69,6 +73,7 @@ class IngestEmailMessageJob implements ShouldQueue
             messageChannel: MessageChannel::Email,
             customer: $customer,
             body: $body,
+            bodyHtml: $bodyHtml,
             threadRef: $this->threadRef($from, $subject),
             externalMessageId: $messageId,
             subject: $subject,

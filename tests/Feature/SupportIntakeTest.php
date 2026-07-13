@@ -91,6 +91,26 @@ class SupportIntakeTest extends TestCase
         $this->assertSame(1, $ticket->messages()->where('direction', MessageDirection::Inbound)->count());
     }
 
+    public function test_inbound_email_keeps_a_sanitized_rich_html_rendering(): void
+    {
+        [$event] = WebhookEvent::record(WebhookSource::Email, 'inbound_message', 'msg-html', [
+            'MessageID' => 'msg-html',
+            'From' => 'a@b.com',
+            'Subject' => 'עיצוב',
+            'TextBody' => "שורה ראשונה\nשורה שנייה",
+            'HtmlBody' => '<p>שורה <strong>מודגשת</strong></p><script>alert(1)</script>',
+        ]);
+
+        IngestEmailMessageJob::dispatchSync($event->id);
+
+        $message = Ticket::sole()->messages()->where('direction', MessageDirection::Inbound)->sole();
+        // Plain text stays canonical (AI / reply / search); the rich HTML is
+        // stored sanitized for display.
+        $this->assertSame("שורה ראשונה\nשורה שנייה", $message->body);
+        $this->assertStringContainsString('<strong>מודגשת</strong>', $message->body_html);
+        $this->assertStringNotContainsString('script', $message->body_html);
+    }
+
     public function test_email_replies_thread_onto_the_same_ticket(): void
     {
         $intake = app(TicketIntake::class);

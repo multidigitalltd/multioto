@@ -55,6 +55,7 @@ class TicketIntake
         ?string $contactName = null,
         ?string $contactHandle = null,
         ?int $threadTicketId = null,
+        ?string $bodyHtml = null,
     ): TicketMessage {
         $ticket = $this->findOrCreateTicket($channel, $customer, $threadRef, $subject, $body, $contactName, $contactHandle, $threadTicketId);
 
@@ -64,6 +65,7 @@ class TicketIntake
                 'direction' => MessageDirection::Inbound,
                 'channel' => $messageChannel,
                 'body' => $body !== '' ? $body : '[ללא תוכן טקסט]',
+                'body_html' => $bodyHtml,
                 'author' => MessageAuthor::Customer,
                 'attachments' => $attachments,
             ],
