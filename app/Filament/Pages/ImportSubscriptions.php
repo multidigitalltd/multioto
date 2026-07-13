@@ -86,12 +86,23 @@ class ImportSubscriptions extends Page implements HasForms
 
         $this->form->fill(['force' => false]);
 
+        // Nothing imported (unreadable/empty XML, or every row skipped) must read
+        // as a failure with the real reason — never a green "done" toast.
+        if ($result->created === 0) {
+            $reason = $result->skipped[0] ?? 'לא נמצאו מנויים בקובץ. ודאו שזהו קובץ ייצוא WXR/XML של WooCommerce.';
+
+            Notification::make()->title('לא יובאו מנויים')->body($reason)->danger()->persistent()->send();
+
+            return;
+        }
+
         $body = "נוצרו {$result->created} מנויים (לקוחות חדשים: {$result->customersCreated}, קיימים: {$result->customersMatched}).";
         if ($result->debtors !== []) {
             $body .= "\nבחוב (בהמתנה): ".implode(' · ', array_slice($result->debtors, 0, 10));
         }
         if ($result->skipped !== []) {
-            $body .= "\nדולגו ".count($result->skipped).'.';
+            $lines = implode("\n", array_slice($result->skipped, 0, 6));
+            $body .= "\nדולגו ".count($result->skipped).":\n".$lines;
         }
 
         Notification::make()->title('הייבוא הושלם')->body($body)->success()->persistent()->send();
