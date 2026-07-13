@@ -20,11 +20,6 @@ class MyTasks extends BaseWidget
 
     protected static ?string $heading = 'המשימות שלי';
 
-    public static function canView(): bool
-    {
-        return Task::query()->open()->where('assigned_to', auth()->id())->exists();
-    }
-
     public function table(Table $table): Table
     {
         return $table

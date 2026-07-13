@@ -30,8 +30,11 @@ class EmailBrandingTest extends TestCase
         // NOT a data: URI, which mail clients like Gmail block).
         $this->assertStringContainsString('/branding/logo', $html);
         $this->assertStringNotContainsString('data:image/png;base64,', $html);
-        // The whole email is laid out right-to-left for Hebrew.
+        // The whole email is laid out right-to-left for Hebrew — and the RTL
+        // alignment must be an inline !important style, so it survives the CSS
+        // inliner and the mail client stripping <style>/<body> (Gmail).
         $this->assertStringContainsString('dir="rtl"', $html);
+        $this->assertStringContainsString('text-align: right !important', $html);
         // The configurable footer, and not the framework's default line.
         $this->assertStringContainsString('multidigital.co.il', $html);
         $this->assertStringNotContainsString('All rights reserved', $html);

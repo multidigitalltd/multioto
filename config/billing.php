@@ -273,6 +273,8 @@ return [
                 'image/png' => 'png',
                 'image/gif' => 'gif',
                 'image/webp' => 'webp',
+                'image/heic' => 'heic',   // iPhone photos
+                'image/heif' => 'heif',
                 'application/pdf' => 'pdf',
                 'text/plain' => 'txt',
                 'application/msword' => 'doc',
