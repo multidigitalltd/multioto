@@ -6,6 +6,8 @@ use App\Filament\Resources\CustomerResource;
 use App\Jobs\SendPaymentLinkJob;
 use App\Models\Customer;
 use App\Services\Billing\ManualChargeService;
+use App\Services\Cardcom\CardcomClient;
+use App\Services\Cardcom\CardTokenService;
 use App\Support\CardLink;
 use App\Support\Money;
 use Filament\Actions;
@@ -30,8 +32,64 @@ class ViewCustomer extends ViewRecord
             $this->chargeAction(),
             $this->paymentLinkAction(),
             $this->cardLinkAction(),
+            $this->syncCardAction(),
             Actions\EditAction::make()->label('עריכה'),
         ];
+    }
+
+    /**
+     * Reconcile a card the customer entered via the link but that never synced
+     * (a lost completion webhook): fetch the last card-capture session from
+     * Cardcom and, if it holds a token, save it and collect any debt now.
+     */
+    private function syncCardAction(): Actions\Action
+    {
+        return Actions\Action::make('syncCard')
+            ->label('בדיקת כרטיס בקארדקום')
+            ->icon('heroicon-o-arrow-path')
+            ->color('gray')
+            ->requiresConfirmation()
+            ->modalHeading('בדיקת כרטיס מול קארדקום')
+            ->modalDescription('נבדוק מול קארדקום אם הלקוח הזין כרטיס בקישור שטרם נשמר במערכת, ונסנכרן אותו (כולל גביית חוב פתוח אם יש).')
+            ->modalSubmitActionLabel('בדוק וסנכרן')
+            ->action(function (Customer $record, CardcomClient $cardcom, CardTokenService $tokens): void {
+                $lpId = $record->pending_card_lp_id;
+
+                if (blank($lpId)) {
+                    Notification::make()
+                        ->title('אין בקשת כרטיס ממתינה')
+                        ->body('לא נמצאה בקשה פתוחה. שִלחו/פִּתחו ללקוח קישור להזנת כרטיס, ולאחר שימלא — בדקו שוב כאן.')
+                        ->warning()->send();
+
+                    return;
+                }
+
+                try {
+                    $result = $cardcom->getLpResult((string) $lpId);
+                } catch (\Throwable $e) {
+                    Notification::make()->title('הבדיקה מול קארדקום נכשלה')->body(Str::limit($e->getMessage(), 150))->danger()->send();
+
+                    return;
+                }
+
+                $token = $tokens->storeFromLpResult($record, $result);
+
+                if ($token === null) {
+                    Notification::make()
+                        ->title('לא נמצא כרטיס חדש בקארדקום')
+                        ->body('ייתכן שהלקוח עדיין לא סיים להזין את הכרטיס, או שההזנה נכשלה. נסו שוב מאוחר יותר.')
+                        ->warning()->send();
+
+                    return;
+                }
+
+                $record->update(['pending_card_lp_id' => null]);
+
+                Notification::make()
+                    ->title('הכרטיס סונכרן ✓')
+                    ->body('נשמר כרטיס '.($token->card_last4 ? '****'.$token->card_last4 : '').'. אם היה חוב פתוח — נשלח לגבייה כעת.')
+                    ->success()->persistent()->send();
+            });
     }
 
     /** Create a hosted payment page for an amount and send the link to the customer. */

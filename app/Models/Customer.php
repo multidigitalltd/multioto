@@ -16,7 +16,7 @@ class Customer extends Model
     protected $fillable = [
         'name', 'contact_name', 'business_number', 'business_type', 'vat_exempt', 'email', 'phone',
         'address', 'payment_method', 'terms_accepted_at', 'signature_path', 'signed_ip', 'signed_pdf_path',
-        'whatsapp_jid', 'cardcom_account_id', 'default_token_id', 'status', 'notes',
+        'whatsapp_jid', 'cardcom_account_id', 'pending_card_lp_id', 'default_token_id', 'status', 'notes',
     ];
 
     protected function casts(): array
