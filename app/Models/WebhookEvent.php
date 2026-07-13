@@ -43,9 +43,11 @@ class WebhookEvent extends Model
             ]), true];
         }
 
+        // Idempotency is scoped by source: the same external_id from two different
+        // providers is two distinct events, not a duplicate.
         $event = self::firstOrCreate(
-            ['external_id' => $externalId],
-            ['source' => $source, 'event_type' => $eventType, 'payload' => $payload],
+            ['source' => $source, 'external_id' => $externalId],
+            ['event_type' => $eventType, 'payload' => $payload],
         );
 
         return [$event, $event->wasRecentlyCreated];

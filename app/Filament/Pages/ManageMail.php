@@ -116,12 +116,16 @@ class ManageMail extends Page implements HasForms
                         FileUpload::make('branding.logo_path')
                             ->label('קובץ לוגו')
                             ->image()
+                            // Raster only: an SVG is scriptable and the logo is served
+                            // inline from a public URL and embedded in emails, so an
+                            // SVG logo would be a stored-XSS vector.
+                            ->acceptedFileTypes(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
                             ->disk('public')
                             ->directory('branding')
                             ->visibility('public')
                             ->maxSize(2048)
                             ->imageEditor()
-                            ->helperText('עד 2MB. החלפת הקובץ מעדכנת את הלוגו בכל המקומות, כולל ראש המיילים.'),
+                            ->helperText('PNG / JPG / WEBP / GIF עד 2MB. החלפת הקובץ מעדכנת את הלוגו בכל המקומות, כולל ראש המיילים.'),
                         Textarea::make('branding.email_footer')
                             ->label('כותרת תחתונה למיילים (Footer)')
                             ->rows(3)
