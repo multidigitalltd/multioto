@@ -29,7 +29,7 @@ class CustomerCardMail extends Mailable
 
     public function content(): Content
     {
-        return new Content(view: 'mail.customer-card', with: [
+        return new Content(markdown: 'mail.customer-card', with: [
             'name' => $this->customerName,
         ]);
     }

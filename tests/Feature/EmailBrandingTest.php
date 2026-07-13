@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Mail\NotificationMail;
 use App\Mail\TicketReplyMail;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Storage;
@@ -32,6 +33,27 @@ class EmailBrandingTest extends TestCase
         $this->assertStringNotContainsString('All rights reserved', $html);
         // The reply body is present.
         $this->assertStringContainsString('זה נראה שהכל עובד תקין.', $html);
+    }
+
+    public function test_view_based_notification_email_also_gets_the_branded_layout(): void
+    {
+        // Lifecycle/welcome/payment-link emails use NotificationMail (a view-based
+        // mailable) — it must carry the same logo header and footer.
+        Storage::fake('public');
+        Storage::disk('public')->put('branding/logo.png', base64_decode(
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC'
+        ));
+        config([
+            'billing.branding.logo_path' => 'branding/logo.png',
+            'billing.branding.email_footer' => 'Multi Digital · multidigital.co.il',
+        ]);
+
+        $html = (new NotificationMail('ברוכים הבאים', 'תודה שנרשמת אלינו.'))->render();
+
+        $this->assertStringContainsString('data:image/png;base64,', $html);
+        $this->assertStringContainsString('multidigital.co.il', $html);
+        $this->assertStringNotContainsString('All rights reserved', $html);
+        $this->assertStringContainsString('תודה שנרשמת אלינו.', $html);
     }
 
     public function test_footer_falls_back_to_the_sender_name_when_unset(): void
