@@ -2,7 +2,9 @@
 
 namespace App\Providers;
 
+use App\Models\Task;
 use App\Models\Ticket;
+use App\Observers\TaskObserver;
 use App\Observers\TicketObserver;
 use App\Services\Hosting\FlyWpHostingClient;
 use App\Services\Hosting\HostingClient;
@@ -41,5 +43,6 @@ class AppServiceProvider extends ServiceProvider
 
         // Lifecycle notifications (e.g. "your ticket was resolved").
         Ticket::observe(TicketObserver::class);
+        Task::observe(TaskObserver::class);
     }
 }

@@ -9,6 +9,7 @@ use App\Jobs\MonitorSiteJob;
 use App\Jobs\ReconcileChargeJob;
 use App\Jobs\SendBroadcastJob;
 use App\Jobs\SendProactiveRemindersJob;
+use App\Jobs\SendTaskRemindersJob;
 use App\Models\Broadcast;
 use App\Models\Charge;
 use App\Models\Site;
@@ -71,6 +72,12 @@ Schedule::job(new SendProactiveRemindersJob)
 // of silence, then auto-close after close_days. Timings in config/billing.php.
 Schedule::job(new FollowUpPendingTicketsJob)
     ->dailyAt('09:00')->name('support:pending-followup')->onOneServer();
+
+// Daily task reminders: email each team member their open tasks due today or
+// overdue (once per task; the clock resets on reschedule/reopen).
+Schedule::job(new SendTaskRemindersJob)
+    ->dailyAt((string) config('billing.support.task_reminders.time', '08:30'))
+    ->name('support:task-reminders')->onOneServer();
 
 // Scheduled broadcasts.
 Schedule::call(function () {
