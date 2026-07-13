@@ -130,4 +130,20 @@ class SubscriptionModelTest extends TestCase
 
         $this->assertSame($paidThrough->toDateString(), $subscription->fresh()->next_charge_at->toDateString());
     }
+
+    public function test_mark_due_now_charges_an_up_to_date_active_subscription_immediately(): void
+    {
+        // "Charge now" on an Active subscription that is paid ahead (nothing
+        // overdue) must collect the upcoming period at once — not sit at a future
+        // date and silently no-op.
+        $subscription = Subscription::factory()->create([
+            'status' => SubscriptionStatus::Active,
+            'current_period_end' => now()->addMonth()->toDateString(),
+            'next_charge_at' => now()->addMonth(),
+        ]);
+
+        $subscription->markDueNow();
+
+        $this->assertTrue($subscription->fresh()->next_charge_at->isPast());
+    }
 }

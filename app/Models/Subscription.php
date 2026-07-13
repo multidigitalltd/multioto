@@ -204,16 +204,18 @@ class Subscription extends Model
     }
 
     /**
-     * Make an arrears subscription collectable right now WITHOUT moving its
-     * billing anchor forward — a late payer must be billed for the delayed
-     * period and keep the original monthly charge date, never earn free days.
+     * Make a subscription collectable right now WITHOUT gifting a late payer
+     * free days — bill the delayed period and keep the original monthly date.
      *
      * If next_charge_at is already in the past it is the real (overdue) anchor,
-     * so we leave it untouched. Only a missing next_charge_at (the final dunning
-     * stage clears it) or a still-future one is pulled back — to the true unpaid
-     * boundary (last paid-through date, else the oldest unpaid period), never to
-     * "now" when a truthful date exists. ChargeSubscriptionJob then collects the
-     * correct period, and on success rolls next_charge_at to that period's end.
+     * so we leave it untouched. Otherwise (a cleared anchor at the final dunning
+     * stage, or a future one) we look for a genuine UNPAID PAST boundary — the
+     * paid-through date, else the oldest unpaid period, else the tracked period
+     * end — and pull next_charge_at back to it. Only when there is no overdue
+     * period at all (an up-to-date Active subscription being charged early) do we
+     * fall back to now(), which collects the upcoming period immediately.
+     * ChargeSubscriptionJob then bills the correct period and, on success, rolls
+     * next_charge_at to that period's end.
      */
     public function markDueNow(): void
     {
@@ -225,8 +227,13 @@ class Subscription extends Model
             ?? $this->charges()->where('status', ChargeStatus::Failed)->min('period_start')
             ?? $this->current_period_end?->toDateString();
 
+        $anchor = $anchor ? Carbon::parse($anchor)->startOfDay() : null;
+
+        // Use the anchor only if it's a real overdue boundary; a future anchor
+        // means nothing is owed yet, so an explicit "charge now" collects the
+        // next period immediately instead of silently doing nothing.
         $this->update([
-            'next_charge_at' => $anchor ? Carbon::parse($anchor)->startOfDay() : now(),
+            'next_charge_at' => $anchor && $anchor->isPast() ? $anchor : now(),
         ]);
     }
 }
