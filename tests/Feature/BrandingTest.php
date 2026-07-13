@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Support\Branding;
+use Filament\Facades\Filament;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
@@ -32,5 +33,21 @@ class BrandingTest extends TestCase
 
         $this->assertNull(Branding::logoUrl());
         $this->assertNull(Branding::logoDataUri());
+    }
+
+    public function test_the_panel_favicon_follows_the_business_logo(): void
+    {
+        $panel = Filament::getPanel('admin');
+
+        // No logo → no custom favicon (Filament falls back to the default).
+        config(['billing.branding.logo_path' => null]);
+        $this->assertNull($panel->getFavicon());
+
+        // Logo set → the favicon is that logo's URL.
+        Storage::fake('public');
+        Storage::disk('public')->put('branding/logo.png', 'x');
+        config(['billing.branding.logo_path' => 'branding/logo.png']);
+
+        $this->assertSame(Branding::logoUrl(), $panel->getFavicon());
     }
 }
