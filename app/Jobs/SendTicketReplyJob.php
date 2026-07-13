@@ -73,7 +73,8 @@ class SendTicketReplyJob implements ShouldQueue
             }
 
             $body = $this->withSignature($message->body, (string) config('billing.notifications.reply_signature'));
-            Mail::to($email)->send(new TicketReplyMail($ticket->subject, $body, $message->attachments ?? []));
+            // Tag the subject so the customer's reply threads back onto this ticket.
+            Mail::to($email)->send(new TicketReplyMail($ticket->subject.' '.$ticket->emailTag(), $body, $message->attachments ?? []));
             $message->update(['external_message_id' => 'mail-'.$message->id]);
         }
 

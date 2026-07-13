@@ -54,8 +54,9 @@ class TicketIntake
         ?array $attachments = null,
         ?string $contactName = null,
         ?string $contactHandle = null,
+        ?int $threadTicketId = null,
     ): TicketMessage {
-        $ticket = $this->findOrCreateTicket($channel, $customer, $threadRef, $subject, $body, $contactName, $contactHandle);
+        $ticket = $this->findOrCreateTicket($channel, $customer, $threadRef, $subject, $body, $contactName, $contactHandle, $threadTicketId);
 
         $message = $ticket->messages()->firstOrCreate(
             ['external_message_id' => $externalMessageId],
@@ -110,7 +111,15 @@ class TicketIntake
         string $body,
         ?string $contactName = null,
         ?string $contactHandle = null,
+        ?int $threadTicketId = null,
     ): Ticket {
+        // An explicit ticket tag ([#id] in an email subject) threads onto that
+        // exact ticket — even if closed (recordInbound reopens it) — regardless
+        // of sender or how the ticket originated.
+        if ($threadTicketId !== null && ($tagged = Ticket::find($threadTicketId)) !== null) {
+            return $tagged;
+        }
+
         if ($threadRef !== null) {
             $open = Ticket::where('external_thread_ref', $threadRef)
                 ->where('status', '!=', TicketStatus::Closed)

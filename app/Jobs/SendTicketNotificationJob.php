@@ -76,7 +76,9 @@ class SendTicketNotificationJob implements ShouldQueue
             return;
         }
 
-        Mail::to($email)->send(new NotificationMail($rendered['subject'] ?? $ticket->subject, $rendered['body']));
+        // Tag the subject so a reply to this acknowledgement threads onto the ticket.
+        $subject = ($rendered['subject'] ?? $ticket->subject).' '.$ticket->emailTag();
+        Mail::to($email)->send(new NotificationMail($subject, $rendered['body']));
         $this->record($ticket, MessageChannel::Email, $rendered['body'], $dedupeKey);
     }
 

@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Enums\MessageChannel;
 use App\Enums\TicketChannel;
+use App\Models\Ticket;
 use App\Models\WebhookEvent;
 use App\Services\Support\AttachmentStore;
 use App\Services\Support\TicketIntake;
@@ -66,6 +67,8 @@ class IngestEmailMessageJob implements ShouldQueue
             subject: $subject,
             contactName: $fromName ?: null,
             contactHandle: $from,
+            // A reply keeps our [#id] tag in the subject → thread onto that ticket.
+            threadTicketId: Ticket::idFromSubject($subject),
         );
 
         // Store any attachments (Postmark sends them base64-encoded inline) and
