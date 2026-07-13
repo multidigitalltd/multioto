@@ -244,16 +244,6 @@ class LinetClient
     }
 
     /**
-     * Look up a document by id via the search endpoint.
-     */
-    public function getDocument(string $documentId): array
-    {
-        $response = $this->post('/search/doc', ['id' => $documentId]);
-
-        return $this->unwrap($response);
-    }
-
-    /**
      * Fetch the download URL for a document's PDF. The create response carries
      * no link — Linet exposes it via print/doc/{id} with href=1, which answers
      * {"body": "https://app.linet.org.il/download/<uuid>"} (same flow as

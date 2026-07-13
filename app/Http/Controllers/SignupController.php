@@ -14,10 +14,10 @@ use App\Models\Customer;
 use App\Models\Setting;
 use App\Models\Site;
 use App\Services\Support\TicketIntake;
+use App\Support\CardLink;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Facades\URL;
 use Illuminate\View\View;
 
 /**
@@ -112,11 +112,7 @@ class SignupController extends Controller
         // short-lived signed link (same route used for card updates), so no
         // customer id is enumerable. No card data ever touches this system.
         if ($data['payment_method'] === 'credit_card') {
-            return redirect()->to(URL::temporarySignedRoute(
-                'billing.update-card',
-                now()->addHours((int) config('billing.card_update_link_ttl_hours')),
-                ['customer' => $customer->id],
-            ));
+            return redirect()->to(CardLink::for($customer->id));
         }
 
         // Standing order / bank transfer / cheques: the team completes the

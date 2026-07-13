@@ -7,8 +7,8 @@ use App\Mail\DunningNotificationMail;
 use App\Models\NotificationLog;
 use App\Models\Subscription;
 use App\Services\Waha\WahaClient;
+use App\Support\CardLink;
 use Illuminate\Support\Facades\Mail;
-use Illuminate\Support\Facades\URL;
 use Illuminate\Support\Str;
 
 /**
@@ -28,11 +28,7 @@ class CardCaptureLinkSender
     {
         $customer = $subscription->customer;
 
-        $link = URL::temporarySignedRoute(
-            'billing.update-card',
-            now()->addHours((int) config('billing.card_update_link_ttl_hours')),
-            ['customer' => $customer->id],
-        );
+        $link = CardLink::for($customer->id);
 
         $replacements = [
             'name' => $customer->name,
@@ -53,7 +49,7 @@ class CardCaptureLinkSender
         $sent = [];
         $failed = [];
 
-        $whatsappTo = $customer->whatsapp_jid ?? $customer->phone;
+        $whatsappTo = $customer->whatsappRecipient();
 
         if (filled($whatsappTo)) {
             try {

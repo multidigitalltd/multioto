@@ -69,7 +69,7 @@ class SendPaymentLinkJob implements ShouldQueue
         if (filled($customer->whatsapp_jid) || filled($customer->phone)) {
             $rendered = $templates->render('payment.link', 'whatsapp', $data);
             if ($rendered) {
-                $recipient = $customer->whatsapp_jid ?: $customer->phone;
+                $recipient = $customer->whatsappRecipient();
                 $waha->sendMessage($recipient, $rendered['body']);
                 NotificationLog::record('whatsapp', NotificationType::PaymentLink, $recipient, null, $rendered['body'], $customer->id);
             }
