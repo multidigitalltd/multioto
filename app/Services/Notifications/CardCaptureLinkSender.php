@@ -40,8 +40,15 @@ class CardCaptureLinkSender
             'amount' => number_format($subscription->totalChargeAgorot() / 100, 2),
             'link' => $link,
         ];
-        $subject = __('onboarding.card_capture.subject', $replacements);
-        $body = __('onboarding.card_capture.body', $replacements);
+
+        // A customer whose payment failed (past-due / suspended) is a debtor, not
+        // a new signup — send a debt-toned message, not the welcome one. The card
+        // link is customer-wide, so any subscription in arrears makes this a debt
+        // message, even if the subscription we were handed happens to be active.
+        $inArrears = $customer->subscriptions()->inArrears()->exists();
+        $key = $inArrears ? 'onboarding.card_capture_debt' : 'onboarding.card_capture';
+        $subject = __("{$key}.subject", $replacements);
+        $body = __("{$key}.body", $replacements);
 
         $sent = [];
         $failed = [];
