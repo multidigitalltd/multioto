@@ -28,6 +28,12 @@ class BillingController extends Controller
             route('webhooks.cardcom', ['secret' => config('billing.cardcom.webhook_secret')]),
         );
 
+        // Remember this session so the team can reconcile the card manually if
+        // the completion webhook is lost (see the "sync card" panel action).
+        if (! empty($lowProfile['low_profile_id'])) {
+            $customer->update(['pending_card_lp_id' => $lowProfile['low_profile_id']]);
+        }
+
         return view('billing.card-iframe', [
             'cardUrl' => $lowProfile['url'],
         ]);

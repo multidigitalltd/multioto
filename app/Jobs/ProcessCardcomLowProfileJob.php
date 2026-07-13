@@ -3,12 +3,12 @@
 namespace App\Jobs;
 
 use App\Enums\ChargeStatus;
-use App\Enums\SubscriptionStatus;
 use App\Enums\TokenStatus;
 use App\Models\Charge;
 use App\Models\Customer;
 use App\Models\WebhookEvent;
 use App\Services\Cardcom\CardcomClient;
+use App\Services\Cardcom\CardTokenService;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Log;
@@ -57,66 +57,20 @@ class ProcessCardcomLowProfileJob implements ShouldQueue
         }
 
         $responseCode = (string) ($result['ResponseCode'] ?? '0');
-        $tokenInfo = $result['TokenInfo'] ?? [];
         $customerId = (int) ($result['ReturnValue'] ?? $payload['ReturnValue'] ?? 0);
         $customer = Customer::find($customerId);
 
-        if ($responseCode !== '0' || ! $customer || empty($tokenInfo['Token'])) {
+        $token = $customer ? app(CardTokenService::class)->storeFromLpResult($customer, $result) : null;
+
+        if ($token === null) {
             Log::warning('Cardcom low profile webhook without a usable token', [
                 'webhook_event_id' => $event->id,
                 'low_profile_id' => $lowProfileId,
                 'response_code' => $responseCode,
                 'has_customer' => (bool) $customer,
-                'has_token' => ! empty($tokenInfo['Token']),
+                'has_token' => ! empty(data_get($result, 'TokenInfo.Token')),
             ]);
-            $event->markProcessed();
-
-            return;
         }
-
-        $token = $customer->paymentTokens()->create([
-            'cardcom_token' => $tokenInfo['Token'],
-            'card_last4' => isset($tokenInfo['CardLast4Digits']) ? (string) $tokenInfo['CardLast4Digits'] : null,
-            'card_brand' => $tokenInfo['CardBrand'] ?? null,
-            'expiry_month' => $tokenInfo['CardMonth'] ?? null,
-            'expiry_year' => $tokenInfo['CardYear'] ?? null,
-            'status' => TokenStatus::Active,
-        ]);
-
-        $customer->paymentTokens()
-            ->whereKeyNot($token->id)
-            ->where('status', TokenStatus::Active)
-            ->update(['status' => TokenStatus::Replaced]);
-
-        $customer->update(['default_token_id' => $token->id]);
-
-        // Point every non-canceled subscription at the fresh token, then collect
-        // whatever is already owed. A brand-new (Trialing) subscription is
-        // activated; a subscription in dunning (past-due / suspended) has its due
-        // date pulled to now so the outstanding debt is collected immediately. In
-        // every case, once a card is on file we charge any subscription whose due
-        // date has arrived or passed — so a debtor who just entered a card is
-        // billed straight away instead of waiting for the scheduler.
-        $customer->subscriptions()
-            ->whereNot('status', SubscriptionStatus::Canceled)
-            ->each(function ($subscription) use ($token) {
-                $subscription->update(['token_id' => $token->id]);
-
-                if ($subscription->status === SubscriptionStatus::Trialing) {
-                    $subscription->update(['status' => SubscriptionStatus::Active]);
-                } elseif (in_array($subscription->status, [SubscriptionStatus::PastDue, SubscriptionStatus::Suspended], true)) {
-                    // The debt is due now — pull the next charge forward.
-                    $subscription->update(['next_charge_at' => now()]);
-                }
-
-                $subscription->refresh();
-
-                if ($subscription->status !== SubscriptionStatus::Canceled
-                    && $subscription->next_charge_at
-                    && $subscription->next_charge_at->isPast()) {
-                    ChargeSubscriptionJob::dispatch($subscription->id);
-                }
-            });
 
         $event->markProcessed();
     }
