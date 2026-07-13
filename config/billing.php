@@ -275,6 +275,8 @@ return [
                 'image/webp' => 'webp',
                 'image/heic' => 'heic',   // iPhone photos
                 'image/heif' => 'heif',
+                'image/heic-sequence' => 'heic',   // finfo reports these for HEIF sequences
+                'image/heif-sequence' => 'heif',
                 'application/pdf' => 'pdf',
                 'text/plain' => 'txt',
                 'application/msword' => 'doc',
