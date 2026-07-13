@@ -16,7 +16,7 @@ enum TicketStatus: string implements HasLabel
     {
         return match ($this) {
             self::Open => 'פתוח',
-            self::Pending => 'ממתין',
+            self::Pending => 'ממתין ללקוח',
             self::OnHold => 'בהמתנה',
             self::Resolved => 'טופל',
             self::Closed => 'סגור',

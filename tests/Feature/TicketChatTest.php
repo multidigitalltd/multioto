@@ -88,6 +88,11 @@ class TicketChatTest extends TestCase
         $this->assertSame(MessageChannel::Whatsapp, $outbound->channel); // ticket's channel by default
         $this->assertSame(MessageAuthor::Agent, $outbound->author);
         Queue::assertPushed(SendTicketReplyJob::class, fn ($job) => $job->ticketMessageId === $outbound->id);
+
+        // The ball is now with the customer: status moves to "ממתין ללקוח".
+        $ticket->refresh();
+        $this->assertSame(TicketStatus::Pending, $ticket->status);
+        $this->assertNotNull($ticket->first_response_at);
     }
 
     public function test_internal_note_is_saved_but_never_delivered(): void

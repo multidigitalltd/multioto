@@ -28,6 +28,13 @@ class TeamNotifier
         $title = "🆕 פנייה חדשה #{$ticket->id} ({$ticket->channel->getLabel()})";
         $body = "מ: {$who}\nנושא: {$ticket->subject}";
 
+        // Include the opening message so the team sees what was written without
+        // opening the panel.
+        $opening = $ticket->messages()->orderBy('id')->value('body');
+        if (filled($opening)) {
+            $body .= "\n\nתוכן:\n".Str::limit((string) $opening, 600);
+        }
+
         $this->send($title, $body, $ticket);
     }
 
@@ -36,7 +43,7 @@ class TeamNotifier
     {
         $who = $ticket->customer?->name ?? 'פונה לא מזוהה';
         $title = "💬 תגובה חדשה בפנייה #{$ticket->id}";
-        $body = "מ: {$who}\nנושא: {$ticket->subject}\n\n".Str::limit($message->body, 300);
+        $body = "מ: {$who}\nנושא: {$ticket->subject}\n\nתוכן:\n".Str::limit($message->body, 600);
 
         $this->send($title, $body, $ticket);
     }
