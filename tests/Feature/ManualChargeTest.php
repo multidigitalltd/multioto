@@ -103,11 +103,13 @@ class ManualChargeTest extends TestCase
         $result = app(CardcomClient::class)->createChargeLowProfile(42, 11800, 'שירות חד-פעמי', 'דני', 'a@b.co', '+97250', 's', 'f', 'w');
 
         $this->assertSame('LP999', $result['low_profile_id']);
-        // No Document by default — Linet is the invoicer (§7).
+        // No Document by default — Linet is the invoicer (§7) — but the item text
+        // is still shown to the card holder via ProductName.
         Http::assertSent(fn ($request) => str_contains($request->url(), 'LowProfile/Create')
             && ($request->data()['Operation'] ?? null) === 'ChargeOnly'
             && ($request->data()['Amount'] ?? null) == 118.0
             && ($request->data()['ReturnValue'] ?? null) === 'charge:42'
+            && ($request->data()['ProductName'] ?? null) === 'שירות חד-פעמי'
             && ! array_key_exists('Document', $request->data()));
     }
 
