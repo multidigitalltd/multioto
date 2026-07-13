@@ -4,6 +4,7 @@ use App\Enums\BroadcastStatus;
 use App\Enums\ChargeStatus;
 use App\Jobs\ChargeSubscriptionJob;
 use App\Jobs\CheckSslExpiryJob;
+use App\Jobs\FollowUpPendingTicketsJob;
 use App\Jobs\MonitorSiteJob;
 use App\Jobs\ReconcileChargeJob;
 use App\Jobs\SendBroadcastJob;
@@ -65,6 +66,11 @@ Schedule::call(function () {
 // expiring, open debt) so the owner can act before anything slips.
 Schedule::job(new SendProactiveRemindersJob)
     ->dailyAt('08:00')->name('reminders:daily-digest')->onOneServer();
+
+// Chase tickets stuck "waiting for customer": remind once after reminder_days
+// of silence, then auto-close after close_days. Timings in config/billing.php.
+Schedule::job(new FollowUpPendingTicketsJob)
+    ->dailyAt('09:00')->name('support:pending-followup')->onOneServer();
 
 // Scheduled broadcasts.
 Schedule::call(function () {

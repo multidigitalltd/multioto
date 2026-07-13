@@ -17,7 +17,7 @@ class Ticket extends Model
     protected $fillable = [
         'customer_id', 'contact_name', 'contact_handle', 'channel', 'subject',
         'status', 'priority', 'assignee', 'external_thread_ref',
-        'first_response_at', 'resolved_at',
+        'first_response_at', 'resolved_at', 'pending_since', 'pending_reminded_at',
     ];
 
     /**
@@ -73,6 +73,8 @@ class Ticket extends Model
             'priority' => TicketPriority::class,
             'first_response_at' => 'datetime',
             'resolved_at' => 'datetime',
+            'pending_since' => 'datetime',
+            'pending_reminded_at' => 'datetime',
         ];
     }
 
