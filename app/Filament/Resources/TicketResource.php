@@ -12,6 +12,7 @@ use Filament\Forms\Form;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Collection;
 
 class TicketResource extends Resource
 {
@@ -147,6 +148,21 @@ class TicketResource extends Resource
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([
+                    // Close tickets in bulk without ever notifying the customer.
+                    // Only "טופל" (Resolved) triggers the resolved notification;
+                    // this sets "סגור" (Closed) via a query update, so no model
+                    // event — and therefore no message — is fired.
+                    Tables\Actions\BulkAction::make('closeSilently')
+                        ->label('סגירה שקטה (ללא הודעה ללקוח)')
+                        ->icon('heroicon-o-check-circle')
+                        ->color('gray')
+                        ->requiresConfirmation()
+                        ->modalHeading('סגירת פניות ללא הודעה')
+                        ->modalDescription('הפניות שנבחרו ייסגרו מבלי לשלוח שום הודעה ללקוח.')
+                        ->successNotificationTitle('הפניות נסגרו')
+                        ->deselectRecordsAfterCompletion()
+                        ->action(fn (Collection $records) => Ticket::whereKey($records->modelKeys())
+                            ->update(['status' => TicketStatus::Closed->value, 'resolved_at' => now()])),
                     Tables\Actions\DeleteBulkAction::make()->label('מחיקה'),
                 ]),
             ])
