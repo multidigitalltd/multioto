@@ -5,14 +5,21 @@ namespace App\Filament\Resources\TicketResource\Pages;
 use App\Enums\MessageAuthor;
 use App\Enums\MessageChannel;
 use App\Enums\MessageDirection;
+use App\Enums\TaskStatus;
 use App\Enums\TicketChannel;
+use App\Enums\TicketPriority;
 use App\Enums\TicketStatus;
 use App\Filament\Resources\TicketResource;
 use App\Jobs\DraftReplyJob;
 use App\Jobs\SendTicketReplyJob;
+use App\Models\Task;
 use App\Models\TicketMessage;
+use App\Models\User;
 use App\Services\Support\AttachmentStore;
 use Filament\Actions;
+use Filament\Forms\Components\DateTimePicker;
+use Filament\Forms\Components\Select;
+use Filament\Forms\Components\TextInput;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ViewRecord;
 use Illuminate\Support\Collection;
@@ -173,7 +180,47 @@ class ViewTicket extends ViewRecord
                     $this->record->update(['status' => TicketStatus::Resolved]);
                     Notification::make()->title('הפנייה סומנה כטופלה — הלקוח עודכן')->success()->send();
                 }),
+            $this->convertToTaskAction(),
             Actions\EditAction::make()->label('עריכת פרטים'),
         ];
+    }
+
+    /**
+     * Turn this ticket into a team task — prefilled with the ticket's subject,
+     * customer and a link back to the ticket, assigned to the current user by
+     * default. The ticket itself is untouched.
+     */
+    private function convertToTaskAction(): Actions\Action
+    {
+        return Actions\Action::make('convertToTask')
+            ->label('צור משימה')
+            ->icon('heroicon-o-clipboard-document-check')
+            ->color('gray')
+            ->fillForm(fn (): array => [
+                'title' => $this->record->subject,
+                'assigned_to' => auth()->id(),
+                'priority' => TicketPriority::Normal,
+            ])
+            ->form([
+                TextInput::make('title')->label('כותרת')->required()->maxLength(255),
+                Select::make('assigned_to')->label('אחראי')
+                    ->options(User::orderBy('name')->pluck('name', 'id'))->searchable()->placeholder('ללא שיוך'),
+                Select::make('priority')->label('עדיפות')
+                    ->options(TicketPriority::class)->default(TicketPriority::Normal)->required(),
+                DateTimePicker::make('due_at')->label('מועד יעד')->seconds(false)->native(false),
+            ])
+            ->action(function (array $data): void {
+                Task::create([
+                    'title' => $data['title'],
+                    'assigned_to' => $data['assigned_to'] ?? null,
+                    'priority' => $data['priority'],
+                    'due_at' => $data['due_at'] ?? null,
+                    'customer_id' => $this->record->customer_id,
+                    'ticket_id' => $this->record->id,
+                    'status' => TaskStatus::Open,
+                ]);
+
+                Notification::make()->title('נוצרה משימה מהפנייה')->success()->send();
+            });
     }
 }

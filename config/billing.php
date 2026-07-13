@@ -253,6 +253,13 @@ return [
             'close_days' => (int) env('SUPPORT_PENDING_CLOSE_DAYS', 7),
         ],
 
+        // Daily email reminder to a team member about their open tasks that are
+        // due today or overdue. Set enabled=false to switch off.
+        'task_reminders' => [
+            'enabled' => (bool) env('SUPPORT_TASK_REMINDERS', true),
+            'time' => (string) env('SUPPORT_TASK_REMINDER_TIME', '08:30'),
+        ],
+
         // Inbound attachments (images/files a customer sends on WhatsApp or
         // email). Stored on a PRIVATE disk and served only behind panel auth.
         'attachments' => [
