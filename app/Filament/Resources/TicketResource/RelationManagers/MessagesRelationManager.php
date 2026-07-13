@@ -74,7 +74,17 @@ class MessagesRelationManager extends RelationManager
                     ->color(fn (MessageDirection $state) => $state === MessageDirection::Inbound ? 'gray' : 'success'),
                 Tables\Columns\TextColumn::make('channel')->label('ערוץ')->badge(),
                 Tables\Columns\TextColumn::make('author')->label('מאת')->badge(),
-                Tables\Columns\TextColumn::make('body')->label('תוכן')->wrap()->limit(120),
+                // Preserve the message's line breaks (email/WhatsApp arrive with
+                // real newlines) instead of collapsing them into one run.
+                Tables\Columns\TextColumn::make('body')->label('תוכן')->wrap()
+                    ->extraAttributes(['style' => 'white-space: pre-line;'])
+                    ->limit(600),
+                // Inbound files a customer sent — openable/downloadable links.
+                Tables\Columns\TextColumn::make('attachments')
+                    ->label('קבצים')
+                    ->placeholder('—')
+                    ->html()
+                    ->formatStateUsing(fn (?array $state, TicketMessage $record): string => self::attachmentLinks($record)),
                 Tables\Columns\TextColumn::make('created_at')->label('מתי')->dateTime('d/m/Y H:i'),
             ])
             ->headerActions([
@@ -129,6 +139,26 @@ class MessagesRelationManager extends RelationManager
             ])
             ->actions([])
             ->bulkActions([]);
+    }
+
+    /**
+     * Render a message's attachments as safe, openable links (name + URL both
+     * escaped) to the signed, team-only attachment route. Empty when none.
+     */
+    protected static function attachmentLinks(TicketMessage $message): string
+    {
+        if (blank($message->attachments)) {
+            return '';
+        }
+
+        $links = [];
+        foreach ($message->attachments as $i => $attachment) {
+            $url = route('support.attachment', ['message' => $message->id, 'index' => $i]);
+            $name = e($attachment['name'] ?? 'קובץ מצורף');
+            $links[] = '<a href="'.e($url).'" target="_blank" rel="noopener" class="text-primary-600 underline">📎 '.$name.'</a>';
+        }
+
+        return implode('<br>', $links);
     }
 
     /**
