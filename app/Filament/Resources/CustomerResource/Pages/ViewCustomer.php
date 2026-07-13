@@ -48,17 +48,22 @@ class ViewCustomer extends ViewRecord
             ->label('בדיקת כרטיס בקארדקום')
             ->icon('heroicon-o-arrow-path')
             ->color('gray')
-            ->requiresConfirmation()
             ->modalHeading('בדיקת כרטיס מול קארדקום')
-            ->modalDescription('נבדוק מול קארדקום אם הלקוח הזין כרטיס בקישור שטרם נשמר במערכת, ונסנכרן אותו (כולל גביית חוב פתוח אם יש).')
+            ->modalDescription('נבדוק מול קארדקום אם הלקוח הזין כרטיס שטרם נשמר במערכת, ונסנכרן אותו (כולל גביית חוב פתוח אם יש).')
+            ->fillForm(fn (Customer $record): array => ['low_profile_id' => $record->pending_card_lp_id])
+            ->form([
+                Forms\Components\TextInput::make('low_profile_id')
+                    ->label('מזהה עסקה מקארדקום (LowProfileId)')
+                    ->helperText('נטען אוטומטית אם יש בקשה ממתינה. אם הלקוח כבר מילא ואין בקשה — הדביקו כאן את מזהה ה-LowProfile מדוח/הודעת קארדקום.'),
+            ])
             ->modalSubmitActionLabel('בדוק וסנכרן')
-            ->action(function (Customer $record, CardcomClient $cardcom, CardTokenService $tokens): void {
-                $lpId = $record->pending_card_lp_id;
+            ->action(function (array $data, Customer $record, CardcomClient $cardcom, CardTokenService $tokens): void {
+                $lpId = trim((string) ($data['low_profile_id'] ?? '')) ?: $record->pending_card_lp_id;
 
                 if (blank($lpId)) {
                     Notification::make()
-                        ->title('אין בקשת כרטיס ממתינה')
-                        ->body('לא נמצאה בקשה פתוחה. שִלחו/פִּתחו ללקוח קישור להזנת כרטיס, ולאחר שימלא — בדקו שוב כאן.')
+                        ->title('חסר מזהה עסקה')
+                        ->body('אין בקשת כרטיס ממתינה. שִלחו/פִּתחו ללקוח קישור להזנת כרטיס, או הדביקו כאן את מזהה ה-LowProfile מקארדקום.')
                         ->warning()->send();
 
                     return;
@@ -68,6 +73,18 @@ class ViewCustomer extends ViewRecord
                     $result = $cardcom->getLpResult((string) $lpId);
                 } catch (\Throwable $e) {
                     Notification::make()->title('הבדיקה מול קארדקום נכשלה')->body(Str::limit($e->getMessage(), 150))->danger()->send();
+
+                    return;
+                }
+
+                // Guard against a paste/report mix-up: the token capture wrote this
+                // customer's id into ReturnValue, so refuse to attach a card from a
+                // session that belongs to a different customer (or a hosted charge).
+                if ((int) ($result['ReturnValue'] ?? 0) !== $record->id) {
+                    Notification::make()
+                        ->title('העסקה אינה שייכת ללקוח זה')
+                        ->body('מזהה ה-LowProfile בקארדקום שייך ללקוח אחר או לעסקה מסוג אחר — לא בוצע סנכרון.')
+                        ->danger()->send();
 
                     return;
                 }

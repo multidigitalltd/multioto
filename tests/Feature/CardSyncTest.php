@@ -24,14 +24,13 @@ class CardSyncTest extends TestCase
     public function test_syncing_reconciles_a_card_and_collects_the_debt(): void
     {
         Queue::fake([ChargeSubscriptionJob::class]);
+        $this->actingAs(User::factory()->create());
+        $customer = Customer::factory()->create(['pending_card_lp_id' => 'lp-xyz']);
         Http::fake(['*/LowProfile/GetLpResult' => Http::response([
             'ResponseCode' => 0,
+            'ReturnValue' => (string) $customer->id,
             'TokenInfo' => ['Token' => 'tok-sync', 'CardLast4Digits' => '4321'],
         ])]);
-
-        $this->actingAs(User::factory()->create());
-
-        $customer = Customer::factory()->create(['pending_card_lp_id' => 'lp-xyz']);
         $subscription = Subscription::factory()->create([
             'customer_id' => $customer->id,
             'status' => SubscriptionStatus::PastDue,
@@ -68,6 +67,44 @@ class CardSyncTest extends TestCase
         $this->assertNull($customer->fresh()->pending_card_lp_id);
     }
 
+    public function test_a_pasted_low_profile_id_reconciles_a_card_with_no_pending_request(): void
+    {
+        Queue::fake([ChargeSubscriptionJob::class]);
+        $this->actingAs(User::factory()->create());
+        // No pending request — the team pastes the id from the Cardcom report.
+        $customer = Customer::factory()->create(['pending_card_lp_id' => null]);
+        Http::fake(['*/LowProfile/GetLpResult' => Http::response([
+            'ResponseCode' => 0,
+            'ReturnValue' => (string) $customer->id,   // capture belongs to this customer
+            'TokenInfo' => ['Token' => 'tok-paste', 'CardLast4Digits' => '5555'],
+        ])]);
+
+        Livewire::test(ViewCustomer::class, ['record' => $customer->getRouteKey()])
+            ->callAction('syncCard', ['low_profile_id' => 'lp-from-cardcom']);
+
+        $this->assertNotNull($customer->fresh()->default_token_id);
+        $this->assertSame('5555', $customer->fresh()->paymentTokens()->sole()->card_last4);
+    }
+
+    public function test_a_pasted_id_belonging_to_another_customer_is_rejected(): void
+    {
+        $this->actingAs(User::factory()->create());
+        $customer = Customer::factory()->create(['pending_card_lp_id' => null]);
+        // The Cardcom session was created for a DIFFERENT customer id.
+        Http::fake(['*/LowProfile/GetLpResult' => Http::response([
+            'ResponseCode' => 0,
+            'ReturnValue' => (string) ($customer->id + 999),
+            'TokenInfo' => ['Token' => 'tok-wrong', 'CardLast4Digits' => '0000'],
+        ])]);
+
+        Livewire::test(ViewCustomer::class, ['record' => $customer->getRouteKey()])
+            ->callAction('syncCard', ['low_profile_id' => 'lp-someone-else']);
+
+        // No card attached to the wrong customer.
+        $this->assertNull($customer->fresh()->default_token_id);
+        $this->assertSame(0, $customer->paymentTokens()->count());
+    }
+
     public function test_syncing_with_no_pending_request_saves_no_token(): void
     {
         $this->actingAs(User::factory()->create());
@@ -82,9 +119,11 @@ class CardSyncTest extends TestCase
 
     public function test_syncing_when_the_customer_has_not_entered_a_card_yet(): void
     {
-        Http::fake(['*/LowProfile/GetLpResult' => Http::response(['ResponseCode' => 0, 'TokenInfo' => []])]);
         $this->actingAs(User::factory()->create());
         $customer = Customer::factory()->create(['pending_card_lp_id' => 'lp-pending']);
+        Http::fake(['*/LowProfile/GetLpResult' => Http::response([
+            'ResponseCode' => 0, 'ReturnValue' => (string) $customer->id, 'TokenInfo' => [],
+        ])]);
 
         Livewire::test(ViewCustomer::class, ['record' => $customer->getRouteKey()])
             ->callAction('syncCard');
