@@ -152,4 +152,31 @@ class TicketImportTest extends TestCase
 
         Livewire::test(ImportTickets::class)->assertOk();
     }
+
+    public function test_the_artisan_command_imports_from_a_file_without_emailing(): void
+    {
+        Mail::fake();
+        Customer::factory()->create(['email' => 'client@example.co.il']);
+
+        $csv = "\u{FEFF}ID,נושא,\"כתובת דוא\"\"ל\",Status,עדיפות,תאריך,תוכן\n"
+            .'1366,"אתר שארפן",client@example.co.il,"טופל / הושלם","רגיל","2023-08-27 18:51:08","<p>שלום</p>"'."\n";
+        $path = tempnam(sys_get_temp_dir(), 'tix').'.csv';
+        file_put_contents($path, $csv);
+
+        $this->artisan('tickets:import', ['path' => $path, '--delete-existing' => true])
+            ->assertSuccessful();
+
+        @unlink($path);
+
+        $ticket = Ticket::with('messages')->find(1366);
+        $this->assertNotNull($ticket);
+        $this->assertSame(TicketStatus::Closed, $ticket->status);
+        $this->assertSame('שלום', $ticket->messages->first()->body);
+        Mail::assertNothingSent();
+    }
+
+    public function test_the_artisan_command_fails_on_a_missing_file(): void
+    {
+        $this->artisan('tickets:import', ['path' => '/no/such/file.csv'])->assertFailed();
+    }
 }
