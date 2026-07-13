@@ -2,6 +2,8 @@
 
 namespace App\Filament\Resources\CustomerResource\RelationManagers;
 
+use App\Filament\Resources\SiteResource;
+use App\Models\Site;
 use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Resources\RelationManagers\RelationManager;
@@ -48,6 +50,14 @@ class SitesRelationManager extends RelationManager
                 Tables\Actions\CreateAction::make()->label('אתר חדש'),
             ])
             ->actions([
+                // Open the site's monitoring page (uptime, response times, SSL,
+                // recent probes) straight from the customer card.
+                Tables\Actions\Action::make('monitor')
+                    ->label('ניטור')
+                    ->icon('heroicon-o-chart-bar')
+                    ->color('gray')
+                    ->url(fn (Site $record): string => SiteResource::getUrl('view', ['record' => $record]))
+                    ->openUrlInNewTab(),
                 Tables\Actions\EditAction::make()->label('עריכה'),
                 Tables\Actions\DeleteAction::make()->label('מחיקה'),
             ]);

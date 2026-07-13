@@ -8,6 +8,7 @@ use App\Enums\SubscriptionStatus;
 use App\Filament\Resources\CustomerResource\Pages;
 use App\Filament\Resources\CustomerResource\RelationManagers;
 use App\Models\Customer;
+use App\Models\Site;
 use App\Models\Ticket;
 use App\Services\Notifications\CardCaptureLinkSender;
 use App\Support\CardLink;
@@ -327,9 +328,16 @@ class CustomerResource extends Resource
                     RepeatableEntry::make('sites')
                         ->hiddenLabel()
                         ->schema([
-                            TextEntry::make('domain')->label('דומיין'),
+                            // Clickable — opens the site's monitoring page (uptime,
+                            // response times, SSL, recent probes) in a new tab.
+                            TextEntry::make('domain')->label('דומיין')
+                                ->color('primary')->weight('medium')->icon('heroicon-o-chart-bar')
+                                ->url(fn (Site $record): string => SiteResource::getUrl('view', ['record' => $record]), shouldOpenInNewTab: true),
                             TextEntry::make('status')->label('סטטוס')->badge(),
-                            TextEntry::make('monitor_url')->label('ניטור')->placeholder('—'),
+                            TextEntry::make('id')->label('ניטור')
+                                ->formatStateUsing(fn (): string => 'צפייה בניטור ↗')
+                                ->color('primary')
+                                ->url(fn (Site $record): string => SiteResource::getUrl('view', ['record' => $record]), shouldOpenInNewTab: true),
                         ])->columns(3),
                 ]),
 
