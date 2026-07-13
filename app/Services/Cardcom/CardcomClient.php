@@ -95,6 +95,10 @@ class CardcomClient
             'SuccessRedirectUrl' => $successUrl,
             'FailedRedirectUrl' => $failureUrl,
             'WebHookUrl' => $webhookUrl,
+            // Item text shown to the card holder on the hosted page. Cardcom
+            // renders ProductName when no Document is sent (our default), so this
+            // preserves the label the Document used to carry.
+            'ProductName' => 'עדכון אמצעי תשלום',
             // Validate the card with a J5 authorization (not J2 simple check).
             // Cards that require an authorization query reject J2 with code
             // 60000042 ("ישנה חובת יציאה לשאילתא"); J5 performs the query.
@@ -138,6 +142,9 @@ class CardcomClient
             'SuccessRedirectUrl' => $successUrl,
             'FailedRedirectUrl' => $failureUrl,
             'WebHookUrl' => $webhookUrl,
+            // Shown to the card holder on the hosted page when no Document is
+            // sent (our default) — otherwise the charge would be text-less.
+            'ProductName' => $description,
             'Document' => $this->buildDocument($name, $email, $phone, $description, $amountNis),
         ], fn ($v) => $v !== null), withApiPassword: false);
 

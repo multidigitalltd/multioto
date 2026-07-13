@@ -87,16 +87,18 @@ return [
         // Shared secret we embed in Low Profile return/webhook URLs for origin verification.
         'webhook_secret' => env('CARDCOM_WEBHOOK_SECRET'),
 
-        // Some Cardcom terminals REQUIRE a Document object on every request and
-        // reject one without it (error 5046 "No InvoiceHead data was send").
-        // We therefore attach a document. Its type controls what Cardcom emits:
-        //  - 'Order' (default) — a NON-fiscal order document. Satisfies the
-        //    terminal without issuing a tax invoice, so Linet stays the invoicer.
+        // Whether to attach a Cardcom Document object, and of what type. Linet is
+        // our invoicer (§7), so by DEFAULT we send NO document — terminals without
+        // the documents module reject any Document with "אין הרשאה לביצוע סוג
+        // עיסקה, או אין מודול מסמכים". Opt in only if your terminal needs it:
+        //  - '' (default) — send NO Document at all. Cardcom issues nothing;
+        //    Linet stays the sole invoicer. Use this unless a terminal forces one.
+        //  - 'Order' — a NON-fiscal order document. Only for terminals that REJECT
+        //    a request without a document (error 5046 "No InvoiceHead data was
+        //    send"); still non-fiscal, so Linet remains the invoicer.
         //  - 'Auto' / 'TaxInvoiceAndReceipt' — let Cardcom issue the fiscal
         //    invoice itself (then you'd disable Linet issuance to avoid duplicates).
-        //  - '' (empty) — send NO Document at all (only for terminals that don't
-        //    require one).
-        'document_type' => env('CARDCOM_DOCUMENT_TYPE', 'Order'),
+        'document_type' => env('CARDCOM_DOCUMENT_TYPE', ''),
     ],
 
     'linet' => [
