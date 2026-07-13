@@ -48,10 +48,34 @@ class Branding
     }
 
     /**
-     * The logo inlined as a data: URI — required by the PDF renderer and safe
-     * for emails, since neither can reliably fetch a remote asset.
+     * The logo inlined as a data: URI — required by the PDF renderer, which
+     * cannot fetch a remote asset. NOT for emails: mail clients (Gmail) block
+     * data: URIs, so emails must use a hosted URL (see logoEmailUrl()).
      */
     public static function logoDataUri(): ?string
+    {
+        $file = self::logoFile();
+
+        return $file === null ? null : 'data:'.$file['mime'].';base64,'.base64_encode($file['contents']);
+    }
+
+    /**
+     * Absolute, always-public URL to the logo for use in emails — served by the
+     * dedicated branding.logo route rather than the storage symlink, so it
+     * resolves even where /storage isn't publicly served. Null when no logo.
+     */
+    public static function logoEmailUrl(): ?string
+    {
+        return self::logoPath() !== null ? route('branding.logo') : null;
+    }
+
+    /**
+     * The raw logo bytes + mime, or null when none is uploaded. Shared by the
+     * data-URI (PDF) and the public logo route (email).
+     *
+     * @return array{contents: string, mime: string}|null
+     */
+    public static function logoFile(): ?array
     {
         $path = self::logoPath();
 
@@ -60,8 +84,10 @@ class Branding
         }
 
         $disk = Storage::disk('public');
-        $mime = $disk->mimeType($path) ?: 'image/png';
 
-        return 'data:'.$mime.';base64,'.base64_encode($disk->get($path));
+        return [
+            'contents' => $disk->get($path),
+            'mime' => $disk->mimeType($path) ?: 'image/png',
+        ];
     }
 }

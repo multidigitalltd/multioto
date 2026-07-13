@@ -53,7 +53,9 @@ class SendBroadcastJob implements ShouldQueue
                                 continue;
                             }
                             Mail::to($customer->email)->queue(new BroadcastMail($broadcast->subject, $broadcast->body));
-                            NotificationLog::record('email', NotificationType::Broadcast, $customer->email, $broadcast->subject, $broadcast->body, $customer->id);
+                            // Broadcast emails are queued, not sent inline — record as
+                            // "queued" so the log doesn't claim delivery that hasn't happened.
+                            NotificationLog::record('email', NotificationType::Broadcast, $customer->email, $broadcast->subject, $broadcast->body, $customer->id, 'queued');
                         } else {
                             $chatId = $customer->whatsapp_jid ?? $customer->phone;
                             if (! $chatId) {

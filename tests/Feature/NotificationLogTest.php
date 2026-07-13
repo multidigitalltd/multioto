@@ -2,14 +2,19 @@
 
 namespace Tests\Feature;
 
+use App\Enums\BroadcastChannel;
+use App\Enums\BroadcastStatus;
+use App\Enums\CustomerStatus;
 use App\Enums\DunningChannel;
 use App\Enums\DunningStatus;
 use App\Enums\NotificationType;
 use App\Filament\Resources\NotificationLogResource;
 use App\Filament\Resources\NotificationLogResource\Pages\ListNotificationLogs;
+use App\Jobs\SendBroadcastJob;
 use App\Jobs\SendDunningNotificationJob;
 use App\Jobs\SendPaymentLinkJob;
 use App\Jobs\SendWelcomeMessageJob;
+use App\Models\Broadcast;
 use App\Models\Customer;
 use App\Models\DunningEvent;
 use App\Models\NotificationLog;
@@ -92,6 +97,28 @@ class NotificationLogTest extends TestCase
         $this->assertSame('email', $log->channel);
         $this->assertSame('payer@example.com', $log->recipient);
         $this->assertStringContainsString('pay.example/abc', (string) $log->body);
+    }
+
+    public function test_a_queued_broadcast_email_is_recorded_as_queued_not_sent(): void
+    {
+        $customer = Customer::factory()->create([
+            'email' => 'list@example.com',
+            'status' => CustomerStatus::Active,
+        ]);
+        $broadcast = Broadcast::create([
+            'subject' => 'עדכון חשוב',
+            'body' => 'שלום לכולם',
+            'channel' => BroadcastChannel::Email,
+            'segment' => ['status' => CustomerStatus::Active->value],
+            'status' => BroadcastStatus::Scheduled,
+        ]);
+
+        (new SendBroadcastJob($broadcast->id))->handle(app(WahaClient::class));
+
+        $log = NotificationLog::where('type', NotificationType::Broadcast)
+            ->where('customer_id', $customer->id)->sole();
+        // Emails are only queued here — the log must not claim delivery.
+        $this->assertSame('queued', $log->status);
     }
 
     public function test_the_log_page_renders_and_records_are_read_only(): void

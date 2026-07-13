@@ -53,6 +53,21 @@ class NotificationLogResource extends Resource
         return ['email' => 'אימייל', 'whatsapp' => 'וואטסאפ'];
     }
 
+    /** @return array<string, string> */
+    private static function statusLabels(): array
+    {
+        return ['sent' => 'נשלח', 'queued' => 'בתור', 'failed' => 'נכשל'];
+    }
+
+    private static function statusColor(string $state): string
+    {
+        return match ($state) {
+            'sent' => 'success',
+            'queued' => 'warning',
+            default => 'danger',
+        };
+    }
+
     public static function table(Table $table): Table
     {
         $channels = self::channelLabels();
@@ -90,8 +105,8 @@ class NotificationLogResource extends Resource
                 Tables\Columns\TextColumn::make('status')
                     ->label('סטטוס')
                     ->badge()
-                    ->color(fn (string $state): string => $state === 'sent' ? 'success' : 'danger')
-                    ->formatStateUsing(fn (string $state): string => $state === 'sent' ? 'נשלח' : 'נכשל'),
+                    ->color(fn (string $state): string => self::statusColor($state))
+                    ->formatStateUsing(fn (string $state): string => self::statusLabels()[$state] ?? $state),
             ])
             ->defaultSort('sent_at', 'desc')
             ->filters([
@@ -103,7 +118,7 @@ class NotificationLogResource extends Resource
                     ->options($channels),
                 Tables\Filters\SelectFilter::make('status')
                     ->label('סטטוס')
-                    ->options(['sent' => 'נשלח', 'failed' => 'נכשל']),
+                    ->options(self::statusLabels()),
                 Tables\Filters\Filter::make('sent_at')
                     ->form([
                         DatePicker::make('from')->label('מתאריך'),
@@ -134,7 +149,7 @@ class NotificationLogResource extends Resource
                         ->formatStateUsing(fn (string $state): string => $channels[$state] ?? $state),
                     TextEntry::make('recipient')->label('נמען')->copyable()->placeholder('—'),
                     TextEntry::make('status')->label('סטטוס')
-                        ->formatStateUsing(fn (string $state): string => $state === 'sent' ? 'נשלח ✓' : 'נכשל ✗'),
+                        ->formatStateUsing(fn (string $state): string => self::statusLabels()[$state] ?? $state),
                     TextEntry::make('error')->label('שגיאה')->placeholder('—')->columnSpanFull(),
                 ])->columns(3),
             InfoSection::make('תוכן ההודעה')

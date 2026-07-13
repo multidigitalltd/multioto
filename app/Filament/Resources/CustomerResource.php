@@ -12,6 +12,7 @@ use App\Models\Ticket;
 use App\Services\Notifications\CardCaptureLinkSender;
 use App\Support\Money;
 use Filament\Forms;
+use Filament\Forms\Components\Actions\Action as FormAction;
 use Filament\Forms\Form;
 use Filament\Infolists\Components\Actions\Action as InfolistAction;
 use Filament\Infolists\Components\RepeatableEntry;
@@ -23,6 +24,7 @@ use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
 use Illuminate\Support\Facades\URL;
+use Illuminate\Support\Js;
 
 class CustomerResource extends Resource
 {
@@ -203,12 +205,7 @@ class CustomerResource extends Resource
                             ['customer' => $record->id],
                         ),
                     ])
-                    ->form([
-                        Forms\Components\TextInput::make('link')
-                            ->label('קישור')
-                            ->readOnly()
-                            ->columnSpanFull(),
-                    ])
+                    ->form([self::cardLinkField()])
                     ->modalSubmitAction(false)
                     ->modalCancelActionLabel('סגור'),
 
@@ -222,6 +219,26 @@ class CustomerResource extends Resource
             ])
             ->emptyStateHeading('אין לקוחות עדיין')
             ->emptyStateDescription('הקימו לקוח חדש דרך "לקוח חדש" בתפריט.');
+    }
+
+    /**
+     * The signed card-capture link shown in the "copy link" modals (both the
+     * table row action and the customer page), with a one-click copy button —
+     * so the team can grab the link without hand-selecting the text.
+     */
+    public static function cardLinkField(): Forms\Components\TextInput
+    {
+        return Forms\Components\TextInput::make('link')
+            ->label('קישור')
+            ->readOnly()
+            ->columnSpanFull()
+            ->suffixAction(
+                fn (?string $state): FormAction => FormAction::make('copyLink')
+                    ->icon('heroicon-m-clipboard-document')
+                    ->tooltip('העתקה')
+                    ->extraAttributes(['x-on:click' => 'navigator.clipboard?.writeText('.Js::from((string) $state).')'])
+                    ->action(fn () => Notification::make()->title('הקישור הועתק')->success()->send()),
+            );
     }
 
     /**

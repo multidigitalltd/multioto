@@ -2,7 +2,7 @@
 {{-- Header: the business logo when one is uploaded, otherwise the sender name. --}}
 <x-slot:header>
 <x-mail::header :url="config('app.url')">
-@php($logo = \App\Support\Branding::logoDataUri())
+@php($logo = \App\Support\Branding::logoEmailUrl())
 @if ($logo)
 <img src="{{ $logo }}" alt="{{ config('mail.from.name') ?: config('app.name') }}" style="max-height: 48px; width: auto; border: none;">
 @else
