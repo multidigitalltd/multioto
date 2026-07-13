@@ -103,6 +103,19 @@ class WooSubscriptionImportTest extends TestCase
         $this->assertNotEmpty($result->skipped); // the page turns this into an error notification
     }
 
+    public function test_it_imports_from_pasted_xml_content(): void
+    {
+        $path = $this->wxr();
+        $content = (string) file_get_contents($path);
+        @unlink($path);
+
+        $result = (new WooSubscriptionImporter)->importString($content);
+
+        // Same outcome as a file import: cancelled skipped, the rest created.
+        $this->assertSame(2, $result->created);
+        $this->assertSame(2, Subscription::count());
+    }
+
     public function test_the_import_page_renders(): void
     {
         $this->actingAs(User::factory()->create());

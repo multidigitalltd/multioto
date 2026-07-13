@@ -29,13 +29,24 @@ use Illuminate\Support\Facades\DB;
  */
 class WooSubscriptionImporter
 {
+    /** Import from a WXR file on disk. */
     public function import(string $xmlPath, bool $force = false): WooSubscriptionImportResult
+    {
+        return $this->fromXml(@simplexml_load_file($xmlPath), $force);
+    }
+
+    /** Import from raw WXR content (pasted into the panel — bypasses file upload). */
+    public function importString(string $content, bool $force = false): WooSubscriptionImportResult
+    {
+        return $this->fromXml(@simplexml_load_string($content), $force);
+    }
+
+    private function fromXml(\SimpleXMLElement|false $xml, bool $force): WooSubscriptionImportResult
     {
         $result = new WooSubscriptionImportResult;
 
-        $xml = @simplexml_load_file($xmlPath);
         if ($xml === false || ! isset($xml->channel)) {
-            $result->skip('לא ניתן לקרוא את קובץ ה-XML');
+            $result->skip('לא ניתן לקרוא את תוכן ה-XML');
 
             return $result;
         }
