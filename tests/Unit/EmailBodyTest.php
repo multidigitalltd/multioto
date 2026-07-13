@@ -93,4 +93,29 @@ class EmailBodyTest extends TestCase
         // Sanitizes down to text only → nothing richer than the plain body.
         $this->assertNull(EmailBody::toSafeHtml('<script>alert(1)</script>'));
     }
+
+    public function test_safe_html_drops_all_remote_loading_media(): void
+    {
+        $html = '<p>שלום</p>'
+            .'<video src="https://tracker/x.mp4" poster="https://tracker/p.jpg"></video>'
+            .'<audio src="https://tracker/a.mp3"></audio>'
+            .'<picture><source srcset="https://tracker/s.jpg"></picture>'
+            .'<track src="https://tracker/c.vtt">';
+
+        $out = EmailBody::toSafeHtml($html);
+
+        $this->assertStringContainsString('שלום', $out);
+        foreach (['video', 'audio', 'source', 'track', 'picture', 'tracker'] as $needle) {
+            $this->assertStringNotContainsString($needle, $out);
+        }
+    }
+
+    public function test_safe_html_falls_back_to_plain_body_when_too_large_to_render(): void
+    {
+        // Over the sanitizer input cap → null, so the caller shows the full
+        // plain body instead of a silently truncated rich one.
+        $huge = '<p>'.str_repeat('א', 600_000).'</p>';
+
+        $this->assertNull(EmailBody::toSafeHtml($huge));
+    }
 }

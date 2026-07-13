@@ -44,6 +44,15 @@ class EmailBody
     }
 
     /**
+     * Beyond this input size we don't render a rich body. The sanitizer would
+     * otherwise silently truncate its input (default 20 KB), which — since the
+     * view prefers body_html — would show the agent only the start of a long
+     * email. Well above any real message, so we simply fall back to the full
+     * plain-text body instead of a clipped rich one.
+     */
+    private const MAX_HTML_BYTES = 500_000;
+
+    /**
      * A sanitized, display-only HTML rendering of the email — or null when the
      * email carried no HTML part (the caller then falls back to the plain text).
      *
@@ -51,9 +60,10 @@ class EmailBody
      * through Symfony's allow-list HtmlSanitizer, which keeps formatting tags
      * (paragraphs, <br>, bold/italic, lists, links, blockquotes) and strips
      * everything dangerous — scripts, inline styles, event handlers and
-     * javascript: URLs. Inline images are dropped too, so remote tracking pixels
-     * never load; genuine attachments are shown separately. The result is safe
-     * to echo with {!! !!}.
+     * javascript: URLs. Every remote-loading media element (img/video/audio/
+     * source/track/picture) is dropped as well, so tracking pixels and other
+     * attacker-controlled URLs never load; genuine attachments are shown
+     * separately. The result is safe to echo with {!! !!}.
      */
     public static function toSafeHtml(?string $html): ?string
     {
@@ -61,10 +71,24 @@ class EmailBody
             return null;
         }
 
+        // Don't render a body the sanitizer would truncate — the plain body is
+        // complete, so fall back to it rather than show a clipped message.
+        if (strlen($html) > self::MAX_HTML_BYTES) {
+            return null;
+        }
+
         $config = (new HtmlSanitizerConfig)
             ->allowSafeElements()
+            // Drop everything that can fetch a remote resource (tracking pixels,
+            // attacker URLs). Attachments are rendered separately from metadata.
             ->blockElement('img')
+            ->blockElement('picture')
+            ->blockElement('source')
+            ->blockElement('video')
+            ->blockElement('audio')
+            ->blockElement('track')
             ->allowLinkSchemes(['https', 'http', 'mailto', 'tel'])
+            ->withMaxInputLength(self::MAX_HTML_BYTES)
             ->forceAttribute('a', 'rel', 'noopener nofollow noreferrer')
             ->forceAttribute('a', 'target', '_blank');
 
