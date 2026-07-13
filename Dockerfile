@@ -8,6 +8,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && pecl install redis && docker-php-ext-enable redis \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# Raise PHP upload/runtime limits (large legacy-import CSVs via `php artisan serve`).
+COPY docker/php.ini /usr/local/etc/php/conf.d/zz-multioto.ini
+
 # Composer.
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
