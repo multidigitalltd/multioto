@@ -47,7 +47,7 @@ class ManageMail extends Page implements HasForms
     protected static string $view = 'filament.pages.manage-mail';
 
     /** Non-secret keys pre-filled from config; secrets are always left blank. */
-    private const IDENTITY_KEYS = ['mail.from_address', 'mail.from_name', 'mail.reply_to', 'notifications.team_email', 'notifications.reply_signature', 'notifications.reply_signature_whatsapp', 'branding.logo_path'];
+    private const IDENTITY_KEYS = ['mail.from_address', 'mail.from_name', 'mail.reply_to', 'notifications.team_email', 'notifications.reply_signature', 'notifications.reply_signature_whatsapp', 'branding.logo_path', 'branding.email_footer'];
 
     private const SECRET_KEYS = ['postmark.token', 'postmark.account_token', 'email.webhook_secret'];
 
@@ -73,6 +73,7 @@ class ManageMail extends Page implements HasForms
         data_set($values, 'notifications.reply_signature', config('billing.notifications.reply_signature'));
         data_set($values, 'notifications.reply_signature_whatsapp', config('billing.notifications.reply_signature_whatsapp'));
         data_set($values, 'branding.logo_path', config('billing.branding.logo_path'));
+        data_set($values, 'branding.email_footer', config('billing.branding.email_footer'));
 
         $this->form->fill($values);
     }
@@ -109,8 +110,8 @@ class ManageMail extends Page implements HasForms
                     ])->columns(2)
                     ->footerActions([$this->saveAction()]),
 
-                Section::make('לוגו העסק')
-                    ->description('הלוגו יופיע בטופס ההרשמה, בעמוד התודה, במיילים ללקוח ובכרטיס הלקוח החתום (PDF). מומלץ PNG/JPG שקוף ברזולוציה טובה.')
+                Section::make('לוגו וכותרת תחתונה למיילים')
+                    ->description('הלוגו מופיע בראש כל מייל ללקוח (במקום שם המערכת), וגם בטופס ההרשמה, עמוד התודה וכרטיס הלקוח החתום. הכותרת התחתונה מופיעה בתחתית כל מייל (במקום "כל הזכויות שמורות").')
                     ->schema([
                         FileUpload::make('branding.logo_path')
                             ->label('קובץ לוגו')
@@ -120,7 +121,12 @@ class ManageMail extends Page implements HasForms
                             ->visibility('public')
                             ->maxSize(2048)
                             ->imageEditor()
-                            ->helperText('עד 2MB. החלפת הקובץ מעדכנת את הלוגו בכל המקומות.'),
+                            ->helperText('עד 2MB. החלפת הקובץ מעדכנת את הלוגו בכל המקומות, כולל ראש המיילים.'),
+                        Textarea::make('branding.email_footer')
+                            ->label('כותרת תחתונה למיילים (Footer)')
+                            ->rows(3)
+                            ->helperText('מופיעה בתחתית כל מייל ללקוח. השאירו ריק לברירת מחדל עם שם העסק והשנה.')
+                            ->placeholder("Multi Digital · multidigital.co.il · 03-0000000\nרח׳ הדוגמה 1, תל אביב"),
                     ])
                     ->footerActions([$this->saveAction()]),
 

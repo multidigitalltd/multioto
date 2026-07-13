@@ -19,6 +19,9 @@ return [
     // הגדרות ← מייל ושולח.
     'branding' => [
         'logo_path' => env('BRANDING_LOGO_PATH'),
+        // Footer shown at the bottom of every customer email. Blank → a default
+        // built from the sender name and current year. Editable in הגדרות ← מייל.
+        'email_footer' => env('BRANDING_EMAIL_FOOTER'),
     ],
 
     // How long a signed card-update link (embedded in dunning messages) stays

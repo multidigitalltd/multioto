@@ -67,6 +67,7 @@ class SettingsServiceProvider extends ServiceProvider
         'signup.tax_approval_notice' => 'billing.signup.tax_approval_notice',
         // Business logo (public-disk path) shown across customer-facing surfaces.
         'branding.logo_path' => 'billing.branding.logo_path',
+        'branding.email_footer' => 'billing.branding.email_footer',
     ];
 
     public function boot(): void
