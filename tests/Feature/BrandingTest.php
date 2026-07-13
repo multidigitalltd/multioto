@@ -35,6 +35,17 @@ class BrandingTest extends TestCase
         $this->assertNull(Branding::logoDataUri());
     }
 
+    public function test_email_footer_uses_the_setting_or_a_sensible_default(): void
+    {
+        config(['billing.branding.email_footer' => null, 'mail.from.name' => 'Multi Digital']);
+        $footer = Branding::emailFooter();
+        $this->assertStringContainsString('Multi Digital', $footer);
+        $this->assertStringContainsString((string) date('Y'), $footer);
+
+        config(['billing.branding.email_footer' => 'רחוב הדוגמה 1 · 03-0000000']);
+        $this->assertSame('רחוב הדוגמה 1 · 03-0000000', Branding::emailFooter());
+    }
+
     public function test_the_panel_favicon_follows_the_business_logo(): void
     {
         $panel = Filament::getPanel('admin');

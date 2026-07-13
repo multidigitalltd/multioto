@@ -31,6 +31,23 @@ class Branding
     }
 
     /**
+     * The footer shown at the bottom of every customer email. Uses the value
+     * configured in settings, falling back to a copyright line built from the
+     * sender name and current year.
+     */
+    public static function emailFooter(): string
+    {
+        $custom = config('billing.branding.email_footer');
+        if (filled($custom)) {
+            return (string) $custom;
+        }
+
+        $name = config('mail.from.name') ?: config('app.name');
+
+        return '© '.date('Y').' '.$name.'. כל הזכויות שמורות.';
+    }
+
+    /**
      * The logo inlined as a data: URI — required by the PDF renderer and safe
      * for emails, since neither can reliably fetch a remote asset.
      */
