@@ -4,8 +4,10 @@ namespace App\Jobs;
 
 use App\Enums\DunningChannel;
 use App\Enums\DunningStatus;
+use App\Enums\NotificationType;
 use App\Mail\DunningNotificationMail;
 use App\Models\DunningEvent;
+use App\Models\NotificationLog;
 use App\Services\Waha\WahaClient;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -55,9 +57,12 @@ class SendDunningNotificationJob implements ShouldQueue
         // retries with backoff; the event stays Queued so the retry actually
         // processes it. Only exhausting all tries marks it Failed (see failed()).
         if ($event->channel === DunningChannel::Whatsapp) {
-            $waha->sendMessage($customer->whatsapp_jid ?? $customer->phone, $body);
+            $recipient = $customer->whatsapp_jid ?? $customer->phone;
+            $waha->sendMessage($recipient, $body);
+            NotificationLog::record('whatsapp', NotificationType::Dunning, $recipient, null, $body, $customer->id);
         } else {
             Mail::to($customer->email)->send(new DunningNotificationMail($subject, $body));
+            NotificationLog::record('email', NotificationType::Dunning, $customer->email, $subject, $body, $customer->id);
         }
 
         $event->update(['status' => DunningStatus::Sent, 'sent_at' => now()]);

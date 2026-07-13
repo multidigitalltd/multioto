@@ -2,8 +2,10 @@
 
 namespace App\Jobs;
 
+use App\Enums\NotificationType;
 use App\Mail\CustomerCardMail;
 use App\Models\Customer;
+use App\Models\NotificationLog;
 use App\Support\Branding;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -82,6 +84,7 @@ class GenerateCustomerCardPdfJob implements ShouldQueue
         // Thank-you email with the signed card attached (skip if no address).
         if (filled($customer->email)) {
             Mail::to($customer->email)->send(new CustomerCardMail($customer->name, $pdf));
+            NotificationLog::record('email', NotificationType::CustomerCard, $customer->email, 'כרטיס הלקוח החתום שלך', 'כרטיס לקוח חתום (PDF) נשלח כמצורף.', $customer->id);
         }
     }
 }

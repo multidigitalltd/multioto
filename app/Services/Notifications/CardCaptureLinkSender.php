@@ -2,7 +2,9 @@
 
 namespace App\Services\Notifications;
 
+use App\Enums\NotificationType;
 use App\Mail\DunningNotificationMail;
+use App\Models\NotificationLog;
 use App\Models\Subscription;
 use App\Services\Waha\WahaClient;
 use Illuminate\Support\Facades\Mail;
@@ -50,8 +52,10 @@ class CardCaptureLinkSender
             try {
                 $this->waha->sendMessage($whatsappTo, $body);
                 $sent[] = 'וואטסאפ';
+                NotificationLog::record('whatsapp', NotificationType::CardLink, $whatsappTo, null, $body, $customer->id);
             } catch (\Throwable $e) {
                 $failed[] = 'וואטסאפ: '.$this->reason($e);
+                NotificationLog::record('whatsapp', NotificationType::CardLink, $whatsappTo, null, $body, $customer->id, 'failed', $e->getMessage());
             }
         }
 
@@ -59,8 +63,10 @@ class CardCaptureLinkSender
             try {
                 Mail::to($customer->email)->send(new DunningNotificationMail($subject, $body));
                 $sent[] = 'אימייל';
+                NotificationLog::record('email', NotificationType::CardLink, $customer->email, $subject, $body, $customer->id);
             } catch (\Throwable $e) {
                 $failed[] = 'אימייל: '.$this->reason($e);
+                NotificationLog::record('email', NotificationType::CardLink, $customer->email, $subject, $body, $customer->id, 'failed', $e->getMessage());
             }
         }
 

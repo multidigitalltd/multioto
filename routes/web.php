@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\BillingController;
+use App\Http\Controllers\BrandingController;
 use App\Http\Controllers\CustomerCardPdfController;
 use App\Http\Controllers\SignatureController;
 use App\Http\Controllers\SignupController;
@@ -13,6 +14,10 @@ use Illuminate\Support\Facades\Route;
 
 // Team-only app: the root just sends visitors to the admin panel.
 Route::redirect('/', '/admin');
+
+// Public business logo — a stable hosted URL for emails (which can't use
+// data: URIs) and other public surfaces. Cached; 404 when no logo is set.
+Route::get('/branding/logo', [BrandingController::class, 'logo'])->name('branding.logo');
 
 /*
  | Public support form — the web intake channel for tickets. CSRF-protected,

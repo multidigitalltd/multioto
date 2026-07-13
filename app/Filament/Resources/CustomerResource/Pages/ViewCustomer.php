@@ -154,9 +154,7 @@ class ViewCustomer extends ViewRecord
                     ['customer' => $record->id],
                 ),
             ])
-            ->form([
-                Forms\Components\TextInput::make('link')->label('קישור')->readOnly()->columnSpanFull(),
-            ])
+            ->form([CustomerResource::cardLinkField()])
             ->modalSubmitAction(false)
             ->modalCancelActionLabel('סגור');
     }

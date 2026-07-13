@@ -26,8 +26,12 @@ class EmailBrandingTest extends TestCase
 
         $html = (new TicketReplyMail('נושא הפנייה', 'זה נראה שהכל עובד תקין.'))->render();
 
-        // Logo image at the top instead of the plain app-name text.
-        $this->assertStringContainsString('data:image/png;base64,', $html);
+        // Logo image at the top, served from the public logo route (a hosted URL —
+        // NOT a data: URI, which mail clients like Gmail block).
+        $this->assertStringContainsString('/branding/logo', $html);
+        $this->assertStringNotContainsString('data:image/png;base64,', $html);
+        // The whole email is laid out right-to-left for Hebrew.
+        $this->assertStringContainsString('dir="rtl"', $html);
         // The configurable footer, and not the framework's default line.
         $this->assertStringContainsString('multidigital.co.il', $html);
         $this->assertStringNotContainsString('All rights reserved', $html);
@@ -50,10 +54,28 @@ class EmailBrandingTest extends TestCase
 
         $html = (new NotificationMail('ברוכים הבאים', 'תודה שנרשמת אלינו.'))->render();
 
-        $this->assertStringContainsString('data:image/png;base64,', $html);
+        $this->assertStringContainsString('/branding/logo', $html);
+        $this->assertStringContainsString('dir="rtl"', $html);
         $this->assertStringContainsString('multidigital.co.il', $html);
         $this->assertStringNotContainsString('All rights reserved', $html);
         $this->assertStringContainsString('תודה שנרשמת אלינו.', $html);
+    }
+
+    public function test_the_public_logo_route_serves_the_image_and_404s_without_one(): void
+    {
+        Storage::fake('public');
+        config(['billing.branding.logo_path' => null]);
+
+        $this->get(route('branding.logo'))->assertNotFound();
+
+        Storage::disk('public')->put('branding/logo.png', base64_decode(
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC'
+        ));
+        config(['billing.branding.logo_path' => 'branding/logo.png']);
+
+        $response = $this->get(route('branding.logo'));
+        $response->assertOk();
+        $this->assertSame('image/png', $response->headers->get('Content-Type'));
     }
 
     public function test_footer_falls_back_to_the_sender_name_when_unset(): void
