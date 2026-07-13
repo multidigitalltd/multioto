@@ -25,6 +25,20 @@ class CardcomWebhookSecretTest extends TestCase
         $this->assertSame($secret, config('billing.cardcom.webhook_secret'));
     }
 
+    public function test_a_second_generation_reuses_the_stored_secret(): void
+    {
+        config(['billing.cardcom.webhook_secret' => null]);
+        $first = CardcomWebhook::secret();
+
+        // Simulate a fresh request (config back to unset) — must read the stored
+        // one, never mint a different secret that would strand an issued URL.
+        config(['billing.cardcom.webhook_secret' => null]);
+        $second = CardcomWebhook::secret();
+
+        $this->assertSame($first, $second);
+        $this->assertSame(1, Setting::query()->where('key', 'cardcom.webhook_secret')->count());
+    }
+
     public function test_it_keeps_a_configured_secret(): void
     {
         config(['billing.cardcom.webhook_secret' => 'preset-secret']);

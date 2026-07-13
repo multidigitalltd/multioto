@@ -21,7 +21,17 @@ class CardcomWebhook
         $secret = (string) config('billing.cardcom.webhook_secret');
 
         if ($secret === '') {
-            $secret = Str::random(40);
+            // Atomic across concurrent workers: the first insert wins on the
+            // (unique) key and everyone else reads that same value back, so we
+            // never hand Cardcom a secret that a later request then overwrites.
+            $secret = (string) Setting::createOrFirst(
+                ['key' => 'cardcom.webhook_secret'],
+                ['value' => Str::random(40)],
+            )->value;
+
+            // Bust the settings cache so the config overlay (which the webhook
+            // controller reads) reflects the stored secret. Idempotent — every
+            // worker writes the same winning value.
             Setting::put('cardcom.webhook_secret', $secret);
             config(['billing.cardcom.webhook_secret' => $secret]);
         }
