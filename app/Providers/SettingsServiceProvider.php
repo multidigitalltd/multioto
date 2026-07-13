@@ -104,5 +104,13 @@ class SettingsServiceProvider extends ServiceProvider
                 config([$configPath => $stored[$settingKey]]);
             }
         }
+
+        // The learned AI style is documented as "empty = unused", so when it is
+        // cleared it must not linger in a long-running worker (the overlay is
+        // re-applied per job via Queue::before, and add-only overlays never
+        // reset a removed key). Force it back to empty when there's no setting.
+        if (blank($stored['ai.style_summary'] ?? null)) {
+            config(['billing.ai.style_summary' => null]);
+        }
     }
 }

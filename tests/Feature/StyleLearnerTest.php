@@ -72,6 +72,18 @@ class StyleLearnerTest extends TestCase
         $this->assertNull(app(StyleLearner::class)->refresh());
     }
 
+    public function test_clearing_the_style_resets_live_config_on_overlay(): void
+    {
+        // A long-running worker may already hold the old style in memory.
+        config(['billing.ai.style_summary' => 'STALE_STYLE']);
+
+        // With no stored setting, re-applying the overlay (as Queue::before does
+        // per job) must clear it — not leave the stale value in place.
+        (new \App\Providers\SettingsServiceProvider(app()))->boot();
+
+        $this->assertNull(config('billing.ai.style_summary'));
+    }
+
     public function test_the_learned_style_flows_into_the_draft_prompt(): void
     {
         $this->enableAi();
