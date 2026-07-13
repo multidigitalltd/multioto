@@ -34,6 +34,10 @@ services:
       # Shared with the host deploy watcher: the panel drops a deploy-request
       # flag here and reads back the version/status the watcher writes.
       - ./ops:/app/ops
+      # Raised PHP upload/runtime limits, mounted so they apply on every
+      # `docker compose up` (container recreate) — not only a full image
+      # rebuild — so large import uploads work right after any deploy.
+      - ./docker/php.ini:/usr/local/etc/php/conf.d/zz-multioto.ini:ro
     depends_on:
       - postgres
       - redis
