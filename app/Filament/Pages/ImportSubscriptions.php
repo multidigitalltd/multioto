@@ -49,7 +49,7 @@ class ImportSubscriptions extends Page implements HasForms
         return $form
             ->schema([
                 Section::make('העלאת קובץ הייצוא')
-                    ->description('קובץ ייצוא של וורדפרס/ווקומרס (WXR / XML) עם המנויים. מבוטלים לא ייובאו; מנויים בהמתנה ייובאו ויסומנו כחוב פתוח.')
+                    ->description('קובץ ייצוא של וורדפרס/ווקומרס — WXR/XML או CSV של מנויי WooCommerce. מבוטלים לא ייובאו; מנויים בהמתנה ייובאו ויסומנו כחוב פתוח.')
                     ->schema([
                         Placeholder::make('info')
                             ->label('מה נשמר')
@@ -58,18 +58,18 @@ class ImportSubscriptions extends Page implements HasForms
                                 '<span style="color:#64748b">המנויים נכנסים כ"ממתין לכרטיס" — לא נגבים עד שמוזן כרטיס, ואז רק בתאריך החידוש. לא נשלחות הודעות ללקוחות בייבוא.</span></div>'
                             )),
                         FileUpload::make('file')
-                            ->label('קובץ XML')
-                            // No MIME allow-list: WordPress WXR files sniff
-                            // inconsistently across browsers/servers and would be
-                            // rejected. The importer validates the content and
-                            // reports a clear error if the file isn't valid XML.
+                            ->label('קובץ XML או CSV')
+                            // No MIME allow-list: WordPress WXR / WooCommerce CSV
+                            // files sniff inconsistently across browsers/servers and
+                            // would be rejected. The importer validates the content
+                            // and reports a clear error if it isn't valid.
                             ->maxSize(102400)
                             ->storeFiles(false)
-                            ->helperText('קובץ ייצוא WordPress/WooCommerce בפורמט XML (WXR).'),
+                            ->helperText('קובץ ייצוא WordPress/WooCommerce בפורמט XML (WXR) או CSV של מנויים.'),
                         Textarea::make('xml')
-                            ->label('או — הדביקו כאן את תוכן ה-XML')
+                            ->label('או — הדביקו כאן את תוכן הקובץ (XML או CSV)')
                             ->rows(6)
-                            ->helperText('אם העלאת הקובץ נכשלת (מגבלת שרת), פִּתחו את קובץ ה-XML בעורך טקסט, העתיקו הכול (Ctrl+A, Ctrl+C) והדביקו כאן. עוקף את מגבלת ההעלאה.'),
+                            ->helperText('אם העלאת הקובץ נכשלת (מגבלת שרת), פִּתחו את הקובץ בעורך טקסט, העתיקו הכול (Ctrl+A, Ctrl+C) והדביקו כאן. עוקף את מגבלת ההעלאה.'),
                         Toggle::make('force')
                             ->label('הוסף מנוי גם ללקוח שכבר קיים לו מנוי')
                             ->helperText('בדרך כלל להשאיר כבוי — כך אפשר להריץ שוב את אותו קובץ בלי כפילויות')
@@ -90,11 +90,11 @@ class ImportSubscriptions extends Page implements HasForms
         $pasted = trim((string) ($data['xml'] ?? ''));
 
         if ($path !== null) {
-            $result = $importer->import($path, $force);
+            $result = $importer->ingestFile($path, $force);
         } elseif ($pasted !== '') {
-            $result = $importer->importString($pasted, $force);
+            $result = $importer->ingest($pasted, $force);
         } else {
-            Notification::make()->title('העלו קובץ XML או הדביקו את תוכנו')->danger()->send();
+            Notification::make()->title('העלו קובץ XML/CSV או הדביקו את תוכנו')->danger()->send();
 
             return;
         }
@@ -104,7 +104,7 @@ class ImportSubscriptions extends Page implements HasForms
         // Nothing imported (unreadable/empty XML, or every row skipped) must read
         // as a failure with the real reason — never a green "done" toast.
         if ($result->created === 0) {
-            $reason = $result->skipped[0] ?? 'לא נמצאו מנויים בקובץ. ודאו שזהו קובץ ייצוא WXR/XML של WooCommerce.';
+            $reason = $result->skipped[0] ?? 'לא נמצאו מנויים בקובץ. ודאו שזהו קובץ ייצוא WXR/XML או CSV של WooCommerce.';
 
             Notification::make()->title('לא יובאו מנויים')->body($reason)->danger()->persistent()->send();
 

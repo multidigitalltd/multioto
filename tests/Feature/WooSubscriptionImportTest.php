@@ -138,6 +138,41 @@ class WooSubscriptionImportTest extends TestCase
         $this->assertSame(2, Subscription::count());
     }
 
+    public function test_it_imports_from_a_woocommerce_subscriptions_csv(): void
+    {
+        // Real WooCommerce Subscriptions CSV shape (subset of columns).
+        $csv = "subscription_id,status,first_name,last_name,email,phone,company,recurring_total,tax_total,next_payment_date\n"
+            ."2817,active,פרסום,עובד,office@proved.co.il,0555700523,,69.62,10.62,\"2026-07-27 13:12:14\"\n"
+            ."3197,cancelled,ישראל,לינדר,l6313838@gmail.com,,,69.62,10.62,\n";
+
+        $result = (new WooSubscriptionImporter)->ingest($csv);
+
+        // Cancelled dropped; the active subscription imported.
+        $this->assertSame(1, $result->created);
+        $this->assertSame(1, $result->customersCreated);
+        $this->assertNull(Customer::where('email', 'l6313838@gmail.com')->first());
+
+        // Base = recurring_total − tax_total = 59.00, renewal date preserved.
+        $sub = Subscription::whereHas('customer', fn ($q) => $q->where('email', 'office@proved.co.il'))->sole();
+        $this->assertSame(5900, $sub->price_agorot_override);
+        $this->assertTrue($sub->vat_applies);
+        $this->assertSame(SubscriptionStatus::Trialing, $sub->status);
+        $this->assertSame('2026-07-27', $sub->next_charge_at->toDateString());
+        $this->assertSame('woo-2817', $sub->external_ref);
+    }
+
+    public function test_reimporting_the_same_csv_is_idempotent(): void
+    {
+        $csv = "subscription_id,status,first_name,last_name,email,recurring_total,tax_total,next_payment_date\n"
+            ."2817,active,פרסום,עובד,office@proved.co.il,69.62,10.62,\"2026-07-27 13:12:14\"\n";
+
+        (new WooSubscriptionImporter)->ingest($csv);
+        $result = (new WooSubscriptionImporter)->ingest($csv);
+
+        $this->assertSame(0, $result->created);
+        $this->assertSame(1, Subscription::count());
+    }
+
     public function test_the_import_page_renders(): void
     {
         $this->actingAs(User::factory()->create());

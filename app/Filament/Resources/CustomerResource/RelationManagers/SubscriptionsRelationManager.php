@@ -25,6 +25,13 @@ class SubscriptionsRelationManager extends RelationManager
 
     protected static ?string $title = 'מנויים';
 
+    // Keep the table interactive on the customer's view page too (Filament makes
+    // relation managers read-only on ViewRecord pages by default).
+    public function isReadOnly(): bool
+    {
+        return false;
+    }
+
     public function form(Form $form): Form
     {
         return $form->schema([
