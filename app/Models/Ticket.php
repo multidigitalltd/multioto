@@ -41,6 +41,30 @@ class Ticket extends Model
         return $name !== '' ? $name : ($handle !== '' ? $handle : 'פונה לא מזוהה');
     }
 
+    /**
+     * Machine-readable tag appended to outbound email subjects so a reply — from
+     * the customer OR an agent, on any subject, and regardless of how the ticket
+     * originated — threads back onto this ticket instead of opening a new one.
+     */
+    public function emailTag(): string
+    {
+        return "[MD#{$this->id}]";
+    }
+
+    /**
+     * Extract a ticket id from an inbound subject's [MD#123] tag, if present.
+     * The "MD" namespace prevents a foreign system's plain [#123] subject from
+     * being mistaken for one of our ticket tags.
+     */
+    public static function idFromSubject(?string $subject): ?int
+    {
+        if ($subject !== null && preg_match('/\[MD#(\d+)\]/', $subject, $m)) {
+            return (int) $m[1];
+        }
+
+        return null;
+    }
+
     protected function casts(): array
     {
         return [
