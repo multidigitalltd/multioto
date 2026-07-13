@@ -68,6 +68,25 @@ class CardSyncTest extends TestCase
         $this->assertNull($customer->fresh()->pending_card_lp_id);
     }
 
+    public function test_a_pasted_low_profile_id_reconciles_a_card_with_no_pending_request(): void
+    {
+        Queue::fake([ChargeSubscriptionJob::class]);
+        Http::fake(['*/LowProfile/GetLpResult' => Http::response([
+            'ResponseCode' => 0,
+            'TokenInfo' => ['Token' => 'tok-paste', 'CardLast4Digits' => '5555'],
+        ])]);
+
+        $this->actingAs(User::factory()->create());
+        // No pending request — the team pastes the id from the Cardcom report.
+        $customer = Customer::factory()->create(['pending_card_lp_id' => null]);
+
+        Livewire::test(ViewCustomer::class, ['record' => $customer->getRouteKey()])
+            ->callAction('syncCard', ['low_profile_id' => 'lp-from-cardcom']);
+
+        $this->assertNotNull($customer->fresh()->default_token_id);
+        $this->assertSame('5555', $customer->fresh()->paymentTokens()->sole()->card_last4);
+    }
+
     public function test_syncing_with_no_pending_request_saves_no_token(): void
     {
         $this->actingAs(User::factory()->create());
