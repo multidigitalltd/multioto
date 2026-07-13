@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\TicketResource\Pages;
 
+use App\Enums\ActionStatus;
 use App\Enums\MessageAuthor;
 use App\Enums\MessageChannel;
 use App\Enums\MessageDirection;
@@ -12,6 +13,7 @@ use App\Enums\TicketStatus;
 use App\Filament\Resources\TicketResource;
 use App\Jobs\DraftReplyJob;
 use App\Jobs\SendTicketReplyJob;
+use App\Models\PendingAction;
 use App\Models\Task;
 use App\Models\TicketMessage;
 use App\Models\User;
@@ -144,6 +146,14 @@ class ViewTicket extends ViewRecord
                 $this->record->update($updates);
             }
 
+            // A manual reply supersedes any pending AI reply proposal for this
+            // ticket — cancel it so a later WhatsApp/panel approval can't send the
+            // original draft as a duplicate second reply.
+            PendingAction::where('ticket_id', $this->record->id)
+                ->where('type', 'ticket_reply')
+                ->where('status', ActionStatus::Pending)
+                ->update(['status' => ActionStatus::Rejected, 'decided_at' => now(), 'error' => 'בוטלה — נשלחה תשובה ידנית מהשיחה.']);
+
             SendTicketReplyJob::dispatch($message->id);
         }
 
@@ -164,6 +174,10 @@ class ViewTicket extends ViewRecord
     {
         $draft = $this->record->messages()
             ->where('author', MessageAuthor::Ai)
+            ->where('channel', MessageChannel::InternalNote)
+            // Only an actual draft REPLY — never a classification/priority note,
+            // which must never be loaded into the customer-facing editor.
+            ->where('body', 'like', '%טיוטת תשובה%')
             ->whereKey($messageId)
             ->first();
 

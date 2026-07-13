@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Enums\ActionStatus;
 use App\Enums\MessageAuthor;
 use App\Enums\MessageChannel;
 use App\Enums\MessageDirection;
@@ -11,6 +12,7 @@ use App\Filament\Resources\TicketResource\Pages\ViewTicket;
 use App\Jobs\SendTicketReplyJob;
 use App\Mail\TicketReplyMail;
 use App\Models\Customer;
+use App\Models\PendingAction;
 use App\Models\Ticket;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -112,5 +114,51 @@ class RichReplyTest extends TestCase
             ->assertSet('replyChannel', MessageChannel::Email->value)
             ->assertSet('replyData.body', fn ($body) => str_contains((string) $body, 'שלום, הבעיה טופלה.')
                 && ! str_contains((string) $body, 'לאישור לפני שליחה'));
+    }
+
+    public function test_use_draft_never_loads_a_non_draft_ai_note(): void
+    {
+        $this->actingAs(User::factory()->create());
+
+        $customer = Customer::factory()->create();
+        $ticket = Ticket::create([
+            'customer_id' => $customer->id, 'channel' => TicketChannel::Email,
+            'subject' => 'x', 'status' => TicketStatus::Open,
+        ]);
+        // A classification note the AI writes — must NOT be loadable into the editor.
+        $note = $ticket->messages()->create([
+            'direction' => MessageDirection::Outbound, 'channel' => MessageChannel::InternalNote,
+            'body' => '🏷️ סיווג: חיוב · עדיפות: גבוהה',
+            'author' => MessageAuthor::Ai,
+        ]);
+
+        Livewire::test(ViewTicket::class, ['record' => $ticket->id])
+            ->call('useDraft', $note->id)
+            ->assertSet('replyData.body', fn ($body) => blank($body));
+    }
+
+    public function test_sending_a_reply_cancels_a_pending_ai_reply_approval(): void
+    {
+        Http::fake(['*/api/sendText' => Http::response(['id' => 'w1'])]);
+        config(['billing.waha.base_url' => 'https://waha.test', 'billing.waha.api_key' => 'k', 'billing.waha.session' => 'default']);
+        $this->actingAs(User::factory()->create());
+
+        $customer = Customer::factory()->create();
+        $ticket = Ticket::create([
+            'customer_id' => $customer->id, 'channel' => TicketChannel::Whatsapp,
+            'subject' => 'x', 'status' => TicketStatus::Open, 'external_thread_ref' => '972501234567@c.us',
+        ]);
+        $action = PendingAction::create([
+            'type' => 'ticket_reply', 'status' => ActionStatus::Pending,
+            'customer_id' => $customer->id, 'ticket_id' => $ticket->id,
+            'summary' => 'AI reply', 'payload' => ['reply' => 'draft'], 'proposed_by' => 'ai',
+        ]);
+
+        Livewire::test(ViewTicket::class, ['record' => $ticket->id])
+            ->set('replyData.body', '<p>תשובה ידנית</p>')
+            ->call('sendReply');
+
+        // The stale AI proposal is cancelled so it can't be sent as a duplicate.
+        $this->assertSame(ActionStatus::Rejected, $action->fresh()->status);
     }
 }

@@ -67,7 +67,7 @@
                         <div class="whitespace-pre-line break-words">{{ $message->body }}</div>
                     @endif
 
-                    @if ($note && $message->author === \App\Enums\MessageAuthor::Ai)
+                    @if ($note && $message->author === \App\Enums\MessageAuthor::Ai && str_contains($message->body, 'טיוטת תשובה'))
                         {{-- Edit the AI draft and send it straight from here — no detour to approvals. --}}
                         <div class="mt-2">
                             <button type="button" wire:click="useDraft({{ $message->id }})"
