@@ -44,7 +44,12 @@ class FollowUpPendingTicketsJob implements ShouldQueue
                 }
 
                 if ($silentDays >= $reminderDays && $ticket->pending_reminded_at === null) {
-                    SendTicketNotificationJob::dispatch($ticket->id, 'ticket.reminder');
+                    // Tag the notification with this pending cycle so a ticket that
+                    // has gone Pending → replied → Pending again is reminded afresh
+                    // (the status-only dedupe would otherwise swallow it).
+                    SendTicketNotificationJob::dispatch(
+                        $ticket->id, 'ticket.reminder', 'cycle-'.$ticket->pending_since->getTimestamp(),
+                    );
                     $ticket->update(['pending_reminded_at' => now()]);
                 }
             });

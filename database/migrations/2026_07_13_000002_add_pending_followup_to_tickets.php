@@ -2,6 +2,7 @@
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 /**
@@ -18,6 +19,14 @@ return new class extends Migration
             $table->dateTime('pending_since')->nullable()->after('first_response_at');
             $table->dateTime('pending_reminded_at')->nullable()->after('pending_since');
         });
+
+        // Backfill the clock for tickets already waiting on a customer, so the
+        // new reminder/auto-close flow reaches them without a manual status
+        // toggle. updated_at best approximates when they went Pending.
+        DB::table('tickets')
+            ->where('status', 'pending')
+            ->whereNull('pending_since')
+            ->update(['pending_since' => DB::raw('updated_at')]);
     }
 
     public function down(): void
