@@ -9,9 +9,12 @@ use App\Enums\MessageDirection;
 use App\Enums\TicketChannel;
 use App\Enums\TicketStatus;
 use App\Jobs\SendTicketReplyJob;
+use App\Models\Customer;
 use App\Models\PendingAction;
 use App\Models\Ticket;
 use App\Models\TicketMessage;
+use App\Services\Waha\WahaClient;
+use App\Support\EmailBody;
 
 /**
  * Send an agent's reply to a ticket's customer from OUTSIDE the panel — an email
@@ -21,6 +24,50 @@ use App\Models\TicketMessage;
  */
 class AgentReply
 {
+    public function __construct(private WahaClient $waha) {}
+
+    /**
+     * Proactively open a NEW conversation with a customer and send the first
+     * message in one step — the "פנה ללקוח" flow (customer card + tickets list +
+     * the "פנה" group command all route here). $html is the rich message body;
+     * $channel is 'whatsapp' or 'email'. Throws a RuntimeException (Hebrew) when
+     * the customer can't be reached on that channel or the body is empty.
+     */
+    public function openConversation(Customer $customer, string $channel, string $subject, string $html): Ticket
+    {
+        $whatsapp = $channel !== 'email';
+
+        $reachable = $whatsapp
+            ? (filled($customer->whatsapp_jid) || filled($customer->phone))
+            : filled($customer->email);
+
+        if (! $reachable) {
+            throw new \RuntimeException('אין ללקוח פרטי '.($whatsapp ? 'וואטסאפ' : 'מייל'));
+        }
+
+        $body = EmailBody::toText(null, trim($html));
+
+        if ($body === '') {
+            throw new \RuntimeException('אין תוכן לשליחה');
+        }
+
+        $ticket = Ticket::create([
+            'customer_id' => $customer->id,
+            'channel' => $whatsapp ? TicketChannel::Whatsapp : TicketChannel::Email,
+            'subject' => filled($subject) ? $subject : 'פנייה מהצוות',
+            'status' => TicketStatus::Open,
+            // Store the customer's chat id so their WhatsApp reply threads back
+            // onto THIS ticket instead of opening a new one.
+            'external_thread_ref' => $whatsapp
+                ? $this->waha->normalizeChatId((string) ($customer->whatsapp_jid ?? $customer->phone))
+                : null,
+        ]);
+
+        $this->send($ticket, $body, EmailBody::toSafeHtml(trim($html)));
+
+        return $ticket;
+    }
+
     /**
      * Record and deliver an outbound reply on the ticket's own channel, move the
      * ticket to "waiting for customer", stamp the first response, and cancel any

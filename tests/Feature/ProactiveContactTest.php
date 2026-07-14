@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Enums\MessageDirection;
 use App\Enums\TicketChannel;
 use App\Filament\Resources\CustomerResource\Pages\ViewCustomer;
+use App\Filament\Resources\TicketResource\Pages\ListTickets;
 use App\Mail\TicketReplyMail;
 use App\Models\Customer;
 use App\Models\Ticket;
@@ -67,6 +68,28 @@ class ProactiveContactTest extends TestCase
         $ticket = Ticket::where('customer_id', $customer->id)->sole();
         $this->assertSame(TicketChannel::Email, $ticket->channel);
         Mail::assertSent(TicketReplyMail::class);
+    }
+
+    public function test_contact_customer_from_the_tickets_list(): void
+    {
+        config(['billing.waha.base_url' => 'https://waha.test', 'billing.waha.api_key' => 'k', 'billing.waha.session' => 'default']);
+        Http::fake(['*/api/sendText' => Http::response(['id' => 'w1'])]);
+        $this->actingAs(User::factory()->create());
+
+        $customer = Customer::factory()->create(['phone' => '+972501234567', 'whatsapp_jid' => '972501234567@c.us']);
+
+        Livewire::test(ListTickets::class)
+            ->callAction('contactCustomer', [
+                'customer_id' => $customer->id,
+                'channel' => 'whatsapp',
+                'subject' => 'שאלה',
+                'message' => '<p>שלום, יש לנו שאלה</p>',
+            ]);
+
+        $ticket = Ticket::where('customer_id', $customer->id)->sole();
+        $this->assertSame('972501234567@c.us', $ticket->external_thread_ref);
+        $out = $ticket->messages()->where('direction', MessageDirection::Outbound)->sole();
+        $this->assertSame('שלום, יש לנו שאלה', $out->body);
     }
 
     public function test_contact_customer_refuses_when_the_channel_is_unreachable(): void
