@@ -9,6 +9,7 @@ use App\Jobs\FollowUpPendingTicketsJob;
 use App\Jobs\MonitorSiteJob;
 use App\Jobs\ReconcileChargeJob;
 use App\Jobs\SendBroadcastJob;
+use App\Jobs\SendDemandRemindersJob;
 use App\Jobs\SendProactiveRemindersJob;
 use App\Jobs\SendTaskRemindersJob;
 use App\Models\Broadcast;
@@ -36,13 +37,16 @@ Schedule::call(function () {
 // Reconcile manual charges left "pending": if Cardcom actually charged the card
 // but we never recorded the result (lost webhook / crashed job), finalise the
 // charge and issue its invoice. Cardcom is the source of truth; a card is never
-// re-charged. Covers both saved-token and hosted (walk-in) charges.
+// re-charged. Covers saved-token and hosted (walk-in) charges/demands. A bounded
+// age window gives the webhook a moment first and stops chasing an abandoned
+// (e.g. never-paid) demand forever.
 Schedule::call(function () {
     Charge::query()
         ->where('status', ChargeStatus::Pending)
         ->whereNull('subscription_id')       // manual/one-off charges only
         ->whereNotNull('customer_id')
-        ->where('created_at', '<=', now()->subMinute())
+        ->where('created_at', '<=', now()->subMinutes((int) config('billing.cardcom.reconcile_after_minutes', 15)))
+        ->where('created_at', '>=', now()->subDays((int) config('billing.cardcom.reconcile_max_age_days', 14)))
         ->pluck('id')
         ->each(fn (int $id) => ReconcileChargeJob::dispatch($id));
 })->everyThreeMinutes()->name('billing:reconcile-pending-charges')->onOneServer();
@@ -81,6 +85,11 @@ Schedule::job(new SendProactiveRemindersJob)
 // of silence, then auto-close after close_days. Timings in config/billing.php.
 Schedule::job(new FollowUpPendingTicketsJob)
     ->dailyAt('09:00')->name('support:pending-followup')->onOneServer();
+
+// Chase unpaid payment demands: after the quiet interval, resend the request
+// (link/transfer) up to the configured maximum, then stop.
+Schedule::job(new SendDemandRemindersJob)
+    ->dailyAt('10:00')->name('billing:demand-reminders')->onOneServer();
 
 // Daily task reminders: email each team member their open tasks due today or
 // overdue (once per task; the clock resets on reschedule/reopen).

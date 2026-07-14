@@ -49,6 +49,16 @@ class TemplateEngine
                 'body' => "שלום {{customer_name}} 👋\nפירוט התשלום המבוקש:\n{{items}}\nסה״כ: {{amount}} (כולל מע״מ)\n\n{{payment_options}}\n\nתודה, {{business_name}}",
             ],
         ],
+        'payment.reminder' => [
+            'email' => [
+                'subject' => 'תזכורת לתשלום — {{business_name}}',
+                'body' => "שלום {{customer_name}},\n\nתזכורת ידידותית — טרם נקלט תשלום עבור:\n{{items}}\nסה״כ לתשלום: {{amount}} (כולל מע״מ)\n\n{{payment_options}}\n\nאם כבר שילמת — תודה, ואפשר להתעלם מהודעה זו.\nצוות {{business_name}}",
+            ],
+            'whatsapp' => [
+                'subject' => null,
+                'body' => "שלום {{customer_name}} 👋\nתזכורת — טרם נקלט תשלום עבור:\n{{items}}\nסה״כ: {{amount}} (כולל מע״מ)\n\n{{payment_options}}\n\nאם כבר שילמת — תודה! {{business_name}}",
+            ],
+        ],
         'ticket.resolved' => [
             'email' => [
                 'subject' => 'הפנייה שלך טופלה ✓ — פנייה #{{ticket_id}}',

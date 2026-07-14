@@ -16,6 +16,7 @@ class Charge extends Model
         'subscription_id', 'customer_id', 'amount_agorot', 'vat_agorot', 'total_agorot', 'currency',
         'status', 'attempt_number', 'cardcom_transaction_id', 'cardcom_response_code',
         'failure_reason', 'description', 'invoice_notes', 'lines', 'cardcom_low_profile_id', 'cardcom_pay_url',
+        'demand_sent_at', 'demand_channel', 'demand_reminder_count',
         'proforma_document_id', 'proforma_pdf_url', 'period_start', 'period_end', 'charged_at',
     ];
 
@@ -28,6 +29,8 @@ class Charge extends Model
             'status' => ChargeStatus::class,
             'attempt_number' => 'integer',
             'lines' => 'array',
+            'demand_sent_at' => 'datetime',
+            'demand_reminder_count' => 'integer',
             'period_start' => 'date',
             'period_end' => 'date',
             'charged_at' => 'datetime',
