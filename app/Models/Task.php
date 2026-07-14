@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Enums\TaskStatus;
 use App\Enums\TicketPriority;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -44,6 +45,23 @@ class Task extends Model
     public function scopeDue(Builder $query): Builder
     {
         return $query->open()->whereNotNull('due_at')->where('due_at', '<=', now());
+    }
+
+    /**
+     * All open tasks for a print/email report — eager-loaded and ordered by due
+     * date (undated last). Shared by the "print" and "email" list actions so the
+     * two reports always list exactly the same tasks in the same order.
+     *
+     * @return Collection<int, static>
+     */
+    public static function openForReport(): Collection
+    {
+        return static::query()->open()
+            ->with(['assignee', 'customer'])
+            ->orderByRaw('due_at is null')
+            ->orderBy('due_at')
+            ->orderByDesc('priority')
+            ->get();
     }
 
     public function assignee(): BelongsTo

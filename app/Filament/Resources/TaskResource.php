@@ -88,8 +88,11 @@ class TaskResource extends Resource
                 Tables\Filters\Filter::make('mine')
                     ->label('המשימות שלי')
                     ->query(fn (Builder $query): Builder => $query->where('assigned_to', auth()->id())),
-                Tables\Filters\SelectFilter::make('status')->label('סטטוס')->options(TaskStatus::class),
-                Tables\Filters\SelectFilter::make('priority')->label('עדיפות')->options(TicketPriority::class),
+                // Multi-select so the team can watch several statuses at once;
+                // defaults to the live work list (open + in progress).
+                Tables\Filters\SelectFilter::make('status')->label('סטטוס')->options(TaskStatus::class)
+                    ->multiple()->default([TaskStatus::Open->value, TaskStatus::InProgress->value]),
+                Tables\Filters\SelectFilter::make('priority')->label('עדיפות')->options(TicketPriority::class)->multiple(),
                 Tables\Filters\Filter::make('overdue')
                     ->label('באיחור')
                     ->query(fn (Builder $query): Builder => $query->where('status', '!=', TaskStatus::Done)

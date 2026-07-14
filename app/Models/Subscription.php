@@ -144,6 +144,23 @@ class Subscription extends Model
     }
 
     /**
+     * Human label for a charge/invoice line: the plan name, and — when the
+     * subscription is tied to a site — which site it's for. Keeps the operator
+     * (and the customer's invoice) from having to guess which site a recurring
+     * charge covers. The billing period dates are added by the caller.
+     */
+    public function chargeLabel(): string
+    {
+        $label = $this->planName();
+
+        if (filled($this->site?->domain)) {
+            $label .= ' — עבור אתר '.$this->site->domain;
+        }
+
+        return $label;
+    }
+
+    /**
      * Billing interval: the plan's when a plan is set, otherwise the free-form
      * interval, defaulting to monthly for a custom subscription that left it blank.
      */

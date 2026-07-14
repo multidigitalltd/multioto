@@ -147,12 +147,14 @@ class TicketResource extends Resource
                 Tables\Filters\SelectFilter::make('status')
                     ->label('סטטוס')
                     ->options(TicketStatus::class)
-                    // Default to the open queue — the team's live work list.
-                    // Clear the filter to see resolved/closed tickets too.
-                    ->default(TicketStatus::Open->value),
+                    // Multi-select (choose several at once); defaults to the open
+                    // queue. Clear the filter to see resolved/closed tickets too.
+                    ->multiple()
+                    ->default([TicketStatus::Open->value]),
                 Tables\Filters\SelectFilter::make('priority')
                     ->label('עדיפות')
-                    ->options(TicketPriority::class),
+                    ->options(TicketPriority::class)
+                    ->multiple(),
                 Tables\Filters\SelectFilter::make('channel')
                     ->label('ערוץ')
                     ->options(TicketChannel::class),
