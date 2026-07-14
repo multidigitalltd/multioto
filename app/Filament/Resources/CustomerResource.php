@@ -345,7 +345,7 @@ class CustomerResource extends Resource
                 ->icon('heroicon-o-lifebuoy')
                 ->collapsible()
                 ->schema([
-                    RepeatableEntry::make('tickets')
+                    RepeatableEntry::make('recentTickets')
                         ->hiddenLabel()
                         ->schema([
                             // Clickable — opens the full ticket (thread + reply) in a new tab.

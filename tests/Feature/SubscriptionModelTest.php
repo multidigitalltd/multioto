@@ -93,6 +93,23 @@ class SubscriptionModelTest extends TestCase
         $this->assertSame(24000, $subscription->basePriceAgorot());
     }
 
+    public function test_cancel_stops_billing_and_keeps_the_record(): void
+    {
+        $subscription = Subscription::factory()->create([
+            'status' => SubscriptionStatus::Active,
+            'next_charge_at' => now()->addMonth(),
+        ]);
+
+        $subscription->cancel();
+        $subscription->refresh();
+
+        $this->assertSame(SubscriptionStatus::Canceled, $subscription->status);
+        $this->assertNotNull($subscription->canceled_at);
+        $this->assertNull($subscription->next_charge_at);
+        // The row is kept, not deleted.
+        $this->assertDatabaseHas('subscriptions', ['id' => $subscription->id]);
+    }
+
     public function test_mark_due_now_leaves_an_already_overdue_anchor_untouched(): void
     {
         // A past next_charge_at IS the real overdue anchor — pulling it to "now"
