@@ -28,6 +28,7 @@ class SettingsServiceProvider extends ServiceProvider
         'linet.key' => 'billing.linet.key',
         'linet.company_id' => 'billing.linet.company_id',
         'linet.doctype' => 'billing.linet.doctype',
+        'linet.doctype_proforma' => 'billing.linet.doctype_proforma',
         'linet.vat_cat_taxable' => 'billing.linet.vat_cat_taxable',
         'linet.vat_cat_exempt' => 'billing.linet.vat_cat_exempt',
         'linet.payment_type' => 'billing.linet.payment_type',

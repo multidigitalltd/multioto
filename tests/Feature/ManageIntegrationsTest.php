@@ -27,6 +27,7 @@ class ManageIntegrationsTest extends TestCase
                 'linet.key' => 'KEY',
                 'linet.company_id' => '3',
                 'linet.doctype' => '9',
+                'linet.doctype_proforma' => '30',
                 'linet.vat_cat_taxable' => '100',
                 'linet.vat_cat_exempt' => '102',
                 'linet.payment_type' => '3',
@@ -38,7 +39,12 @@ class ManageIntegrationsTest extends TestCase
         $this->assertSame('KEY', $m['linet.key'] ?? null);
         $this->assertSame('3', $m['linet.company_id'] ?? null);
         $this->assertSame('9', $m['linet.doctype'] ?? null);
+        $this->assertSame('30', $m['linet.doctype_proforma'] ?? null);
         $this->assertSame('100', $m['linet.vat_cat_taxable'] ?? null);
+
+        // The saved proforma code overlays onto config for the issuer to use.
+        (new SettingsServiceProvider(app()))->boot();
+        $this->assertSame('30', config('billing.linet.doctype_proforma'));
     }
 
     public function test_non_secret_settings_are_shown_on_load_but_secrets_are_hidden(): void

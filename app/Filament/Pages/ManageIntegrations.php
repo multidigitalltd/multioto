@@ -61,7 +61,7 @@ class ManageIntegrations extends Page implements HasForms
         ],
         'linet' => [
             'label' => 'לינט',
-            'keys' => ['linet.login_id', 'linet.key', 'linet.company_id', 'linet.doctype', 'linet.vat_cat_taxable', 'linet.vat_cat_exempt', 'linet.payment_type', 'linet.general_item_id', 'linet.income_account_exempt'],
+            'keys' => ['linet.login_id', 'linet.key', 'linet.company_id', 'linet.doctype', 'linet.doctype_proforma', 'linet.vat_cat_taxable', 'linet.vat_cat_exempt', 'linet.payment_type', 'linet.general_item_id', 'linet.income_account_exempt'],
         ],
         'flywp' => [
             'label' => 'FlyWP',
@@ -175,6 +175,7 @@ class ManageIntegrations extends Page implements HasForms
                         TextInput::make('linet.key')->label('Key')->password()->live(onBlur: true)->autocomplete('new-password'),
                         TextInput::make('linet.company_id')->label('Company ID')->live(onBlur: true)->autocomplete(false),
                         TextInput::make('linet.doctype')->label('קוד סוג מסמך (חשבונית מס/קבלה)')->live(onBlur: true)->autocomplete(false),
+                        TextInput::make('linet.doctype_proforma')->label('קוד סוג מסמך (חשבונית עסקה)')->helperText('קוד "חשבונית עסקה" (פרו-פורמה) מלינט — מונפק בעת יצירת דרישת תשלום. השאירו ריק כדי לא להנפיק פרו-פורמה.')->live(onBlur: true)->autocomplete(false),
                         TextInput::make('linet.vat_cat_taxable')->label('קוד מע״מ — חייב')->helperText('בלינט: 1 = חייב במע״מ (ברירת המחדל הנכונה כמעט תמיד).')->numeric()->live(onBlur: true)->autocomplete(false),
                         TextInput::make('linet.vat_cat_exempt')->label('קוד מע״מ — פטור')->helperText('בלינט: 2 = פטור/חו״ל. אלה קודי vat_cat_id — חשבונות ההכנסה (100/102) מוגדרים בנפרד.')->numeric()->live(onBlur: true)->autocomplete(false),
                         TextInput::make('linet.payment_type')->label('קוד אמצעי תשלום (כרטיס אשראי)')->numeric()->live(onBlur: true)->autocomplete(false),
