@@ -54,10 +54,21 @@ class WahaClient
     /**
      * Send a file by its raw bytes (base64) — used for locally-stored reply
      * attachments, so WAHA never needs to reach back to our server for a URL.
+     *
+     * WAHA routes media by type: images and videos have dedicated endpoints and
+     * on some engines (e.g. NOWEB) an image sent through /api/sendFile is
+     * rejected or arrives broken, so pick the endpoint from the MIME type and
+     * fall back to the generic document endpoint for everything else.
      */
     public function sendFile(string $chatId, string $filename, string $mime, string $contents, ?string $caption = null): array
     {
-        return $this->request('api/sendFile', [
+        $endpoint = match (true) {
+            str_starts_with($mime, 'image/') => 'api/sendImage',
+            str_starts_with($mime, 'video/') => 'api/sendVideo',
+            default => 'api/sendFile',
+        };
+
+        return $this->request($endpoint, [
             'chatId' => $this->normalizeChatId($chatId),
             'file' => ['mimetype' => $mime, 'filename' => $filename, 'data' => base64_encode($contents)],
             'caption' => $caption,
