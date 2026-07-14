@@ -80,12 +80,20 @@
                     @if (filled($message->attachments))
                         <div class="mt-2 flex flex-col gap-2">
                             @foreach ($message->attachments as $i => $attachment)
-                                @php $url = route('support.attachment', ['message' => $message->id, 'index' => $i]); @endphp
-                                @if (str_starts_with($attachment['mime'] ?? '', 'image/'))
+                                @php
+                                    $url = route('support.attachment', ['message' => $message->id, 'index' => $i]);
+                                    $mime = $attachment['mime'] ?? '';
+                                @endphp
+                                @if (str_starts_with($mime, 'image/'))
                                     <a href="{{ $url }}" target="_blank" rel="noopener">
                                         <img src="{{ $url }}" alt="{{ $attachment['name'] ?? 'תמונה' }}"
                                              class="max-h-48 rounded-lg border border-gray-200 dark:border-gray-700" style="max-width: 100%;">
                                     </a>
+                                @elseif (str_starts_with($mime, 'audio/'))
+                                    <audio controls preload="none" src="{{ $url }}" class="w-full max-w-xs"></audio>
+                                @elseif (str_starts_with($mime, 'video/'))
+                                    <video controls preload="none" src="{{ $url }}"
+                                           class="max-h-64 rounded-lg border border-gray-200 dark:border-gray-700" style="max-width: 100%;"></video>
                                 @else
                                     <a href="{{ $url }}" target="_blank" rel="noopener"
                                        class="flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-xs text-primary-600 hover:underline dark:border-gray-700">

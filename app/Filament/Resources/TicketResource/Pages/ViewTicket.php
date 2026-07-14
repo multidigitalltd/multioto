@@ -150,6 +150,20 @@ class ViewTicket extends ViewRecord
         $maxKb = (int) round((int) config('billing.support.attachments.max_bytes', 10485760) / 1024);
         $this->validate(['replyFiles.*' => "file|max:{$maxKb}"]);
 
+        // Store files first so we can tell the agent up front if any were rejected
+        // (unsupported type) — otherwise a dropped file sends silently.
+        $stored = $this->storeReplyFiles($files);
+        $rejected = count($files) - count($stored);
+
+        if ($body === '' && $stored === []) {
+            Notification::make()
+                ->title('לא ניתן לשלוח')
+                ->body($files !== [] ? 'הקבצים שנבחרו אינם נתמכים — נסו פורמט אחר.' : 'אין תוכן לשליחה.')
+                ->warning()->send();
+
+            return;
+        }
+
         $channel = MessageChannel::tryFrom($this->replyChannel) ?? MessageChannel::InternalNote;
 
         $message = $this->record->messages()->create([
@@ -159,8 +173,6 @@ class ViewTicket extends ViewRecord
             'body_html' => $body !== '' ? $bodyHtml : null,
             'author' => MessageAuthor::Agent,
         ]);
-
-        $stored = $this->storeReplyFiles($files);
 
         if ($stored !== []) {
             $message->update(['attachments' => $stored]);
@@ -197,6 +209,7 @@ class ViewTicket extends ViewRecord
 
         Notification::make()
             ->title($channel === MessageChannel::InternalNote ? 'ההערה נשמרה' : 'המענה נשלח ללקוח')
+            ->body($rejected > 0 ? "שימו לב: {$rejected} קבצים לא צורפו (סוג קובץ לא נתמך)." : null)
             ->success()->send();
     }
 

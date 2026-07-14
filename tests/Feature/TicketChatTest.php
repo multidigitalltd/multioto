@@ -19,6 +19,7 @@ use App\Models\Ticket;
 use App\Models\User;
 use App\Models\WebhookEvent;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Queue;
 use Livewire\Livewire;
 use Tests\TestCase;
@@ -130,6 +131,23 @@ class TicketChatTest extends TestCase
         $ticket->refresh();
         $this->assertSame(TicketStatus::Pending, $ticket->status);
         $this->assertNotNull($ticket->first_response_at);
+    }
+
+    public function test_a_reply_with_only_an_unsupported_file_warns_and_sends_nothing(): void
+    {
+        Queue::fake([SendTicketReplyJob::class]);
+        $this->actingAs(User::factory()->create());
+        $ticket = $this->ticket();
+
+        // An executable is rejected by AttachmentStore; with no text, nothing is
+        // sent and the agent is warned instead of a file silently vanishing.
+        Livewire::test(ViewTicket::class, ['record' => $ticket->id])
+            ->set('replyChannel', MessageChannel::Email->value)
+            ->set('replyFiles', [UploadedFile::fake()->create('malware.exe', 5)])
+            ->call('sendReply');
+
+        $this->assertSame(0, $ticket->messages()->where('direction', MessageDirection::Outbound)->count());
+        Queue::assertNothingPushed();
     }
 
     public function test_internal_note_is_saved_but_never_delivered(): void
