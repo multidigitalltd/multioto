@@ -4,6 +4,8 @@ use App\Http\Controllers\Auth\TwoFactorChallengeController;
 use App\Http\Controllers\BillingController;
 use App\Http\Controllers\BrandingController;
 use App\Http\Controllers\CustomerCardPdfController;
+use App\Http\Controllers\Portal\PortalAuthController;
+use App\Http\Controllers\Portal\PortalController;
 use App\Http\Controllers\SignatureController;
 use App\Http\Controllers\SignupController;
 use App\Http\Controllers\SupportAttachmentController;
@@ -100,6 +102,31 @@ Route::get('/customers/{customer}/signature', SignatureController::class)
 Route::get('/customers/{customer}/card-pdf', CustomerCardPdfController::class)
     ->middleware(['web', 'auth'])
     ->name('customer.card-pdf');
+
+/*
+ | Customer self-service portal — a password-less area (magic-link sign-in) for
+ | customers to view invoices, check ticket status and replace their card.
+ | Sign-in and the signed magic link are public; everything else is gated by the
+ | portal.customer session guard, which scopes every query to the signed-in
+ | customer.
+ */
+Route::prefix('portal')->group(function () {
+    Route::get('/login', [PortalAuthController::class, 'show'])->name('portal.login');
+    Route::post('/login', [PortalAuthController::class, 'sendLink'])
+        ->middleware('throttle:6,1')
+        ->name('portal.login.send');
+    Route::get('/auth/{customer}', [PortalAuthController::class, 'authenticate'])
+        ->middleware(['signed', 'throttle:10,1'])
+        ->name('portal.auth');
+    Route::post('/logout', [PortalAuthController::class, 'logout'])->name('portal.logout');
+
+    Route::middleware('portal.customer')->group(function () {
+        Route::get('/', [PortalController::class, 'dashboard'])->name('portal.dashboard');
+        Route::get('/invoices', [PortalController::class, 'invoices'])->name('portal.invoices');
+        Route::get('/tickets', [PortalController::class, 'tickets'])->name('portal.tickets');
+        Route::get('/card', [PortalController::class, 'updateCard'])->name('portal.card');
+    });
+});
 
 /*
  | Inbound webhooks. Secret verification happens inside each controller
