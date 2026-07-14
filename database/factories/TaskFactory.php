@@ -17,7 +17,6 @@ class TaskFactory extends Factory
         return [
             'title' => fake()->sentence(4),
             'description' => fake()->optional()->paragraph(),
-            'assigned_to' => null,
             'customer_id' => null,
             'ticket_id' => null,
             'status' => TaskStatus::Open,

@@ -63,7 +63,7 @@ class TaskTest extends TestCase
         Livewire::test(ViewTicket::class, ['record' => $ticket->id])
             ->callAction('convertToTask', [
                 'title' => 'לבדוק את הדומיין',
-                'assigned_to' => $user->id,
+                'assignees' => [$user->id],
                 'priority' => TicketPriority::High->value,
             ]);
 
@@ -71,31 +71,43 @@ class TaskTest extends TestCase
         $this->assertSame('לבדוק את הדומיין', $task->title);
         $this->assertSame($ticket->id, $task->ticket_id);
         $this->assertSame($customer->id, $task->customer_id);
-        $this->assertSame($user->id, $task->assigned_to);
+        $this->assertTrue($task->assignees->contains($user->id));
     }
 
-    public function test_the_reminder_job_emails_the_assignee_their_due_tasks_once(): void
+    public function test_the_reminder_job_emails_every_assignee_their_due_tasks_once(): void
     {
         Mail::fake();
 
-        $user = User::factory()->create(['email' => 'agent@example.co']);
-        $due = Task::factory()->create([
-            'assigned_to' => $user->id,
-            'due_at' => now()->subDay(),
-            'status' => TaskStatus::Open,
-        ]);
+        // A shared task assigned to two team members reminds both of them.
+        $a = User::factory()->create(['email' => 'a@example.co']);
+        $b = User::factory()->create(['email' => 'b@example.co']);
+        $due = Task::factory()->create(['due_at' => now()->subDay(), 'status' => TaskStatus::Open]);
+        $due->assignees()->attach([$a->id, $b->id]);
+
         // Not due yet — must be left alone.
-        Task::factory()->create(['assigned_to' => $user->id, 'due_at' => now()->addWeek()]);
+        Task::factory()->create(['due_at' => now()->addWeek()])->assignees()->attach($a->id);
 
         (new SendTaskRemindersJob)->handle();
 
-        Mail::assertSent(NotificationMail::class, fn (NotificationMail $m): bool => str_contains($m->bodyText, $due->title));
+        Mail::assertSent(NotificationMail::class, fn (NotificationMail $m): bool => $m->hasTo('a@example.co') && str_contains($m->bodyText, $due->title));
+        Mail::assertSent(NotificationMail::class, fn (NotificationMail $m): bool => $m->hasTo('b@example.co') && str_contains($m->bodyText, $due->title));
         $this->assertNotNull($due->fresh()->reminded_at);
 
         // A second run does not re-notify (already reminded).
         Mail::fake();
         (new SendTaskRemindersJob)->handle();
         Mail::assertNothingSent();
+    }
+
+    public function test_subtask_progress_counts_completed_items(): void
+    {
+        $task = Task::factory()->create(['subtasks' => [
+            ['title' => 'לגבות', 'done' => true],
+            ['title' => 'לעדכן DNS', 'done' => false],
+            ['title' => 'לבדוק SSL', 'done' => true],
+        ]]);
+
+        $this->assertSame([2, 3], $task->subtaskProgress());
     }
 
     public function test_the_tasks_screen_renders(): void

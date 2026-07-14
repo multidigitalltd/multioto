@@ -9,18 +9,20 @@ use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
 /**
  * An internal team task. Optionally linked to the customer and/or ticket it
- * concerns, assigned to a team member, with a due date; the assignee is
- * reminded (in-panel + email) while it is open and due.
+ * concerns, assigned to one or more team members, with a due date and an
+ * optional checklist of sub-tasks; assignees are reminded (in-panel + email)
+ * while it is open and due.
  */
 class Task extends Model
 {
     use HasFactory;
 
     protected $fillable = [
-        'title', 'description', 'assigned_to', 'customer_id', 'ticket_id',
+        'title', 'description', 'subtasks', 'customer_id', 'ticket_id',
         'status', 'priority', 'due_at', 'completed_at', 'reminded_at',
     ];
 
@@ -29,6 +31,7 @@ class Task extends Model
         return [
             'status' => TaskStatus::class,
             'priority' => TicketPriority::class,
+            'subtasks' => 'array',
             'due_at' => 'datetime',
             'completed_at' => 'datetime',
             'reminded_at' => 'datetime',
@@ -57,16 +60,30 @@ class Task extends Model
     public static function openForReport(): Collection
     {
         return static::query()->open()
-            ->with(['assignee', 'customer'])
+            ->with(['assignees', 'customer'])
             ->orderByRaw('due_at is null')
             ->orderBy('due_at')
             ->orderByDesc('priority')
             ->get();
     }
 
-    public function assignee(): BelongsTo
+    /** The team members this task is assigned to (may be several). */
+    public function assignees(): BelongsToMany
     {
-        return $this->belongsTo(User::class, 'assigned_to');
+        return $this->belongsToMany(User::class);
+    }
+
+    /**
+     * Checklist progress as [done, total]. Sub-tasks are stored as
+     * [{title, done}] on the subtasks JSON column.
+     *
+     * @return array{0: int, 1: int}
+     */
+    public function subtaskProgress(): array
+    {
+        $items = collect($this->subtasks ?? []);
+
+        return [$items->where('done', true)->count(), $items->count()];
     }
 
     public function customer(): BelongsTo

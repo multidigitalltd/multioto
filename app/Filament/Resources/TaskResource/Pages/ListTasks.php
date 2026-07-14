@@ -70,10 +70,14 @@ class ListTasks extends ListRecords
     private function tasksBody(Collection $tasks): string
     {
         $lines = $tasks->map(function (Task $task): string {
+            $assignees = $task->assignees->pluck('name')->implode(', ');
+            [$done, $total] = $task->subtaskProgress();
+
             $parts = array_filter([
                 'עדיפות: '.($task->priority?->getLabel() ?? '—'),
-                'אחראי: '.($task->assignee?->name ?? 'ללא'),
+                'אחראים: '.($assignees !== '' ? $assignees : 'ללא'),
                 filled($task->customer?->name) ? 'לקוח: '.$task->customer->name : null,
+                $total > 0 ? "תת-משימות: {$done}/{$total}" : null,
                 'יעד: '.($task->due_at?->format('d/m/Y') ?? '—').($task->due_at && $task->due_at->isPast() ? ' (באיחור)' : ''),
             ]);
 
