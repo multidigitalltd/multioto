@@ -40,7 +40,8 @@ class EmailAgentReplyTest extends TestCase
         [$event] = WebhookEvent::record(WebhookSource::Email, 'inbound_message', 'agent-reply-1', [
             'MessageID' => 'agent-reply-1',
             'From' => 'Agent <agent@multi.digital>',
-            'Subject' => "Re: שאלה {$ticket->emailTag()}",
+            // The signed token proves the reply is to our team alert.
+            'Subject' => "Re: שאלה {$ticket->emailTag()} {$ticket->agentReplyTag()}",
             'StrippedTextReply' => 'הנה התשובה שלנו, טופל.',
             'TextBody' => "הנה התשובה שלנו, טופל.\n\n> ההודעה המקורית של הלקוח",
         ]);
@@ -54,6 +55,27 @@ class EmailAgentReplyTest extends TestCase
         $this->assertSame('הנה התשובה שלנו, טופל.', $out->body);
         $this->assertSame(0, $ticket->messages()->where('direction', MessageDirection::Inbound)->count());
         Mail::assertSent(TicketReplyMail::class);
+    }
+
+    public function test_a_spoofed_reply_without_the_signed_token_is_not_sent_to_the_customer(): void
+    {
+        Mail::fake();
+        User::factory()->create(['email' => 'agent@multi.digital']);
+        $ticket = $this->ticket();
+
+        // Attacker knows a team address + the ticket tag, but NOT the signed
+        // token (it only exists in the team's alert email). Must not go out.
+        [$event] = WebhookEvent::record(WebhookSource::Email, 'inbound_message', 'spoof-1', [
+            'MessageID' => 'spoof-1',
+            'From' => 'agent@multi.digital',
+            'Subject' => "Re: שאלה {$ticket->emailTag()}",
+            'TextBody' => 'תוכן זדוני שנשלח בשם החברה',
+        ]);
+
+        IngestEmailMessageJob::dispatchSync($event->id);
+
+        $this->assertSame(0, $ticket->messages()->where('direction', MessageDirection::Outbound)->count());
+        Mail::assertNotSent(TicketReplyMail::class);
     }
 
     public function test_a_non_team_email_reply_is_treated_as_a_customer_message(): void

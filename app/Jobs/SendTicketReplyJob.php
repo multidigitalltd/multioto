@@ -43,9 +43,13 @@ class SendTicketReplyJob implements ShouldQueue
         $ticket = $message->ticket;
 
         if ($message->channel === MessageChannel::Whatsapp) {
-            $chatId = $ticket->external_thread_ref
-                ?? $ticket->customer?->whatsapp_jid
-                ?? $ticket->customer?->phone;
+            // Use external_thread_ref only when it's a real chat id (a WhatsApp
+            // JID contains '@'); a Manual ticket's ref (e.g. "mgmt-…") is not one,
+            // so fall back to the customer's saved WhatsApp/phone.
+            $ref = $ticket->external_thread_ref;
+            $chatId = (filled($ref) && str_contains($ref, '@'))
+                ? $ref
+                : ($ticket->customer?->whatsapp_jid ?? $ticket->customer?->phone);
 
             if (! $chatId) {
                 return;

@@ -53,10 +53,11 @@ class TeamNotifier
     {
         $panelUrl = rtrim((string) config('app.url'), '/')."/admin/tickets/{$ticket->id}";
         // Tag the subject and set a Reply-To so a team member can just reply to
-        // the alert email and have it reach the customer (IngestEmailMessageJob
-        // routes a tagged reply from a known team address back out).
+        // the alert email and have it reach the customer. The signed agentReplyTag
+        // authenticates that reply (IngestEmailMessageJob rejects a reply without
+        // it), so a spoofed From alone can't push a message to the customer.
         $this->alert(
-            $title.' '.$ticket->emailTag(),
+            $title.' '.$ticket->emailTag().' '.$ticket->agentReplyTag(),
             $body."\n\n💬 להשיב ללקוח: השיבו ישירות למייל הזה, או בקבוצה — ״ענה {$ticket->id} <טקסט>״.",
             $panelUrl,
             replyTo: (string) config('billing.email.support_address') ?: null,

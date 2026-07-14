@@ -119,7 +119,7 @@ class ManagementCommands
             return "פנייה #{$ticketId} סגורה — פִּתחו אותה לפני מענה.";
         }
 
-        if ($ticket->channel === TicketChannel::Whatsapp ? blank($ticket->external_thread_ref ?? $ticket->customer?->whatsapp_jid ?? $ticket->customer?->phone) : blank($ticket->customer?->email)) {
+        if (! $this->reply->canReach($ticket)) {
             return "לפנייה #{$ticketId} אין כתובת ליצירת קשר — לא ניתן לשלוח.";
         }
 

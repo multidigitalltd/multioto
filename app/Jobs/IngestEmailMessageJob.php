@@ -61,13 +61,15 @@ class IngestEmailMessageJob implements ShouldQueue
             return;
         }
 
-        // A tagged reply from a KNOWN TEAM ADDRESS is an agent answering the
-        // ticket by email (they just replied to the alert). Route it back out to
-        // the customer instead of recording it as an inbound customer message.
-        // Only real team users can do this — a spoofed non-team sender falls
-        // through to normal customer intake.
+        // An agent answering the ticket by email (they replied to the alert):
+        // route it back out to the customer instead of recording it as inbound.
+        // Authorisation needs BOTH the signed token that only the team's alert
+        // email carries (unforgeable — HMAC on the app secret) AND a known team
+        // From. A spoofed From without the token falls through to customer intake.
         $threadTicketId = Ticket::idFromSubject($subject);
-        if ($threadTicketId !== null && User::query()->whereRaw('lower(email) = ?', [$from])->exists()) {
+        if ($threadTicketId !== null
+            && Ticket::agentReplyTokenMatches($threadTicketId, $subject)
+            && User::query()->whereRaw('lower(email) = ?', [$from])->exists()) {
             $ticket = Ticket::find($threadTicketId);
 
             if ($ticket) {

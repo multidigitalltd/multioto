@@ -30,9 +30,7 @@ class AgentReply
     {
         $message = $ticket->messages()->create([
             'direction' => MessageDirection::Outbound,
-            'channel' => $ticket->channel === TicketChannel::Whatsapp
-                ? MessageChannel::Whatsapp
-                : MessageChannel::Email,
+            'channel' => $this->channelFor($ticket),
             'body' => $body,
             'body_html' => $bodyHtml,
             'author' => MessageAuthor::Agent,
@@ -58,5 +56,44 @@ class AgentReply
         SendTicketReplyJob::dispatch($message->id);
 
         return $message;
+    }
+
+    /**
+     * The channel to answer on. A ticket that came in over a real customer
+     * channel is answered there; a Manual ticket (opened by the team, e.g. the
+     * group "כרטיס" command) is answered on WhatsApp when we can reach the
+     * customer there — the usual phone-first workflow — otherwise by email.
+     */
+    public function channelFor(Ticket $ticket): MessageChannel
+    {
+        if ($ticket->channel === TicketChannel::Whatsapp) {
+            return MessageChannel::Whatsapp;
+        }
+
+        if ($ticket->channel === TicketChannel::Email) {
+            return MessageChannel::Email;
+        }
+
+        $customer = $ticket->customer;
+
+        return $customer && (filled($customer->whatsapp_jid) || filled($customer->phone))
+            ? MessageChannel::Whatsapp
+            : MessageChannel::Email;
+    }
+
+    /** Whether we actually have an address to deliver a reply to. */
+    public function canReach(Ticket $ticket): bool
+    {
+        $customer = $ticket->customer;
+
+        if ($this->channelFor($ticket) === MessageChannel::Whatsapp) {
+            $ref = $ticket->external_thread_ref;
+
+            return (filled($ref) && str_contains($ref, '@'))
+                || filled($customer?->whatsapp_jid)
+                || filled($customer?->phone);
+        }
+
+        return filled($customer?->email);
     }
 }
