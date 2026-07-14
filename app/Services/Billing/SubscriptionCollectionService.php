@@ -7,6 +7,7 @@ use App\Enums\ChargeStatus;
 use App\Enums\SubscriptionStatus;
 use App\Jobs\IssueInvoiceJob;
 use App\Jobs\RestoreSiteJob;
+use App\Jobs\SendMonthlyMonitoringReportJob;
 use App\Models\Charge;
 use App\Models\Subscription;
 use Illuminate\Support\Carbon;
@@ -97,6 +98,10 @@ class SubscriptionCollectionService
 
                 // Issue the Linet invoice for the recorded payment (idempotent).
                 IssueInvoiceJob::dispatch($charge->id);
+
+                // The billing day drives the customer's monthly monitoring report
+                // (no-op unless enabled; once per month).
+                SendMonthlyMonitoringReportJob::dispatch($subscription->customer_id);
 
                 return $charge;
             });

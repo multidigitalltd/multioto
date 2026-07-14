@@ -153,5 +153,10 @@ class ChargeSubscriptionJob implements ShouldQueue
         if ($wasSuspended && $subscription->site_id) {
             RestoreSiteJob::dispatch($subscription->site_id);
         }
+
+        // The billing day is the natural cadence for the customer's monthly
+        // monitoring report (no-op unless the feature is enabled; sent at most
+        // once per month).
+        SendMonthlyMonitoringReportJob::dispatch($subscription->customer_id);
     }
 }

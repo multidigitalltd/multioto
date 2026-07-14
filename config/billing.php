@@ -240,6 +240,17 @@ return [
         'domain_warn_days' => env('MONITOR_DOMAIN_WARN_DAYS', 30),
         // Responses slower than this (ms) are flagged as "degraded" (not down).
         'slow_response_ms' => env('MONITOR_SLOW_RESPONSE_MS', 4000),
+
+        // Monthly monitoring report emailed to the customer on their billing day.
+        'monthly_report' => [
+            // Off by default — turn on once the team is happy with the content.
+            'enabled' => env('MONITOR_MONTHLY_REPORT_ENABLED', false),
+            // Auto-send only when EVERY site met this uptime %. Below it the report
+            // waits for manual approval, so a bad month never auto-mails a customer.
+            'auto_uptime_threshold' => env('MONITOR_MONTHLY_REPORT_THRESHOLD', 99.9),
+            // The reporting window (days) the report summarises.
+            'window_days' => env('MONITOR_MONTHLY_REPORT_WINDOW_DAYS', 30),
+        ],
     ],
 
     'broadcasts' => [
