@@ -71,4 +71,47 @@ class PaymentLinkTest extends TestCase
 
         Mail::assertSent(NotificationMail::class, fn ($mail) => str_contains($mail->bodyText, 'secure.cardcom.test/lp/XYZ'));
     }
+
+    public function test_a_single_line_request_still_details_the_product_and_amount(): void
+    {
+        Mail::fake();
+        Http::fake(['*/LowProfile/Create' => Http::response(['ResponseCode' => 0, 'Url' => 'https://secure.cardcom.test/lp/ONE', 'LowProfileId' => 'LP3'])]);
+
+        $customer = Customer::factory()->create(['email' => 'pay@example.co.il']);
+
+        (new SendPaymentLinkJob($customer->id, 5000, 'ייעוץ SEO', 'email'))
+            ->handle(app(ManualChargeService::class), app(TemplateEngine::class), app(WahaClient::class));
+
+        // Even without structured items, the email spells out the product as a
+        // detail line with its price — not buried in prose.
+        Mail::assertSent(NotificationMail::class, fn ($mail) => str_contains($mail->bodyText, '• ייעוץ SEO — ₪50.00')
+            && str_contains($mail->bodyText, 'סה״כ לתשלום: ₪50.00'));
+    }
+
+    public function test_line_items_are_itemised_in_the_request_and_ride_to_the_charge(): void
+    {
+        Mail::fake();
+        Http::fake(['*/LowProfile/Create' => Http::response(['ResponseCode' => 0, 'Url' => 'https://secure.cardcom.test/lp/MANY', 'LowProfileId' => 'LP4'])]);
+
+        $customer = Customer::factory()->create(['email' => 'pay@example.co.il']);
+        $lines = [
+            ['name' => 'אחסון שנתי', 'qty' => 2, 'unit_price_agorot' => 10000],
+            ['name' => 'תוסף SEO', 'qty' => 1, 'unit_price_agorot' => 8000],
+        ];
+
+        (new SendPaymentLinkJob($customer->id, 28000, 'חבילה', 'email', $lines))
+            ->handle(app(ManualChargeService::class), app(TemplateEngine::class), app(WahaClient::class));
+
+        // The customer sees a per-product breakdown, with qty × unit for a
+        // multiple, and the charge carries the same lines for the Linet invoice.
+        Mail::assertSent(NotificationMail::class, function ($mail): bool {
+            return str_contains($mail->bodyText, '• אחסון שנתי — 2 × ₪100.00 = ₪200.00')
+                && str_contains($mail->bodyText, '• תוסף SEO — ₪80.00')
+                && str_contains($mail->bodyText, 'סה״כ לתשלום: ₪280.00');
+        });
+
+        $charge = Charge::sole();
+        $this->assertSame(28000, $charge->total_agorot);
+        $this->assertSame($lines, $charge->lines);
+    }
 }

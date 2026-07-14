@@ -41,12 +41,12 @@ class TemplateEngine
         ],
         'payment.link' => [
             'email' => [
-                'subject' => 'קישור לתשלום — {{business_name}}',
-                'body' => "שלום {{customer_name}},\n\nלהלן קישור מאובטח לתשלום על סך {{amount}}{{for}}:\n{{link}}\n\nהתשלום מתבצע בעמוד המאובטח של חברת הסליקה — פרטי האשראי אינם נשמרים אצלנו.\n\nתודה,\nצוות {{business_name}}",
+                'subject' => 'בקשת תשלום — {{business_name}}',
+                'body' => "שלום {{customer_name}},\n\nלהלן פירוט התשלום המבוקש:\n{{items}}\nסה״כ לתשלום: {{amount}} (כולל מע״מ)\n\nלתשלום מאובטח, בקישור הבא:\n{{link}}\n\nהתשלום מתבצע בעמוד המאובטח של חברת הסליקה — פרטי האשראי אינם נשמרים אצלנו.\n\nתודה,\nצוות {{business_name}}",
             ],
             'whatsapp' => [
                 'subject' => null,
-                'body' => "שלום {{customer_name}} 👋\nקישור מאובטח לתשלום על סך {{amount}}{{for}}:\n{{link}}\n\nהתשלום בעמוד המאובטח של חברת הסליקה. תודה, {{business_name}}",
+                'body' => "שלום {{customer_name}} 👋\nפירוט התשלום המבוקש:\n{{items}}\nסה״כ: {{amount}} (כולל מע״מ)\n\nלתשלום מאובטח:\n{{link}}\n\nהתשלום בעמוד המאובטח של חברת הסליקה. תודה, {{business_name}}",
             ],
         ],
         'ticket.resolved' => [

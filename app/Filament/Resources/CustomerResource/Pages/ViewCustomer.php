@@ -167,11 +167,28 @@ class ViewCustomer extends ViewRecord
             ->icon('heroicon-o-paper-airplane')
             ->color('primary')
             ->form([
-                Forms\Components\TextInput::make('amount')
-                    ->label('סכום לתשלום (₪, כולל מע״מ)')
-                    ->numeric()->prefix('₪')->step('0.01')->minValue(0.1)->inputMode('decimal')->required(),
                 Forms\Components\TextInput::make('description')
                     ->label('עבור (יופיע ללקוח ובחשבונית)')->default('תשלום')->maxLength(120)->required(),
+                // Optional per-product breakdown. When items are added the total
+                // is computed from them and the customer's request itemises each
+                // product; leave empty to send a single amount for the description.
+                Forms\Components\Repeater::make('items')
+                    ->label('פירוט פריטים (אופציונלי)')
+                    ->helperText('הוסיפו פריטים כדי שהלקוח יראה פירוט לפי מוצר. אם ריק — נשלח הסכום שלמטה.')
+                    ->schema([
+                        Forms\Components\TextInput::make('name')->label('פריט')->maxLength(120)->required()->columnSpan(2),
+                        Forms\Components\TextInput::make('qty')->label('כמות')->numeric()->default(1)->minValue(1)->required(),
+                        Forms\Components\TextInput::make('unit_price')->label('מחיר ליח׳ (₪, כולל מע״מ)')
+                            ->numeric()->prefix('₪')->step('0.01')->minValue(0)->inputMode('decimal')->required(),
+                    ])
+                    ->columns(4)
+                    ->addActionLabel('הוסף פריט')
+                    ->default([]),
+                Forms\Components\TextInput::make('amount')
+                    ->label('סכום לתשלום (₪, כולל מע״מ)')
+                    ->helperText('בשימוש רק כשאין פירוט פריטים.')
+                    ->numeric()->prefix('₪')->step('0.01')->minValue(0)->inputMode('decimal')
+                    ->requiredWithout('items'),
                 Forms\Components\Radio::make('channel')
                     ->label('לשלוח דרך')
                     ->options(['whatsapp' => 'וואטסאפ', 'email' => 'מייל'])
@@ -179,7 +196,13 @@ class ViewCustomer extends ViewRecord
                     ->required(),
             ])
             ->action(function (array $data, Customer $record): void {
-                $totalAgorot = (int) round(((float) $data['amount']) * 100);
+                // Structured items win: the total is their sum, and each rides
+                // through to the charge so the Linet invoice itemises identically.
+                $lines = $this->paymentLines($data['items'] ?? []);
+
+                $totalAgorot = $lines !== []
+                    ? array_sum(array_map(fn (array $l): int => $l['qty'] * $l['unit_price_agorot'], $lines))
+                    : (int) round(((float) ($data['amount'] ?? 0)) * 100);
 
                 if ($totalAgorot <= 0) {
                     Notification::make()->title('סכום לא תקין')->danger()->send();
@@ -196,13 +219,33 @@ class ViewCustomer extends ViewRecord
                     return;
                 }
 
-                SendPaymentLinkJob::dispatch($record->id, $totalAgorot, filled($data['description']) ? $data['description'] : 'תשלום', $channel);
+                SendPaymentLinkJob::dispatch($record->id, $totalAgorot, filled($data['description']) ? $data['description'] : 'תשלום', $channel, $lines);
 
                 Notification::make()
                     ->title('קישור התשלום נשלח')
                     ->body('הקישור נוצר ונשלח ל'.$record->name.' ב'.($channel === 'email' ? 'מייל' : 'וואטסאפ').'. עם התשלום ייווצר חיוב ותונפק חשבונית אוטומטית.')
                     ->success()->send();
             });
+    }
+
+    /**
+     * Normalise the payment-link items repeater into charge line rows (agorot),
+     * dropping blank rows. Returns [] when nothing usable was entered.
+     *
+     * @param  array<int, array{name?: string, qty?: mixed, unit_price?: mixed}>  $items
+     * @return array<int, array{name: string, qty: int, unit_price_agorot: int}>
+     */
+    private function paymentLines(array $items): array
+    {
+        return collect($items)
+            ->map(fn (array $item): array => [
+                'name' => trim((string) ($item['name'] ?? '')),
+                'qty' => max(1, (int) ($item['qty'] ?? 1)),
+                'unit_price_agorot' => (int) round(((float) ($item['unit_price'] ?? 0)) * 100),
+            ])
+            ->filter(fn (array $line): bool => $line['name'] !== '' && $line['unit_price_agorot'] > 0)
+            ->values()
+            ->all();
     }
 
     /** One-off charge for this customer — saved card now, or a hosted page link. */

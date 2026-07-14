@@ -1,5 +1,5 @@
 <x-mail::message>
-<div dir="rtl" style="text-align: right !important; direction: rtl !important;">
+<div dir="rtl">
 @if (filled($bodyHtml))
 {{-- Pre-sanitized by EmailBody::toSafeHtml (allow-list) before it reached here. --}}
 {!! $bodyHtml !!}
