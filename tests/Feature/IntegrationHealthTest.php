@@ -40,9 +40,8 @@ class IntegrationHealthTest extends TestCase
         $this->assertTrue($result->ok);
 
         // A token-only request must NOT carry ApiPassword (only refunds/doc
-        // creation use it). By default it carries NO Document either — Linet is
-        // our invoicer (§7), and terminals without the documents module reject
-        // any Document ("אין הרשאה לביצוע סוג עיסקה, או אין מודול מסמכים").
+        // creation use it). It DOES carry a Document — our terminal mandates one
+        // (5046), and the default 'Auto' type lets Cardcom pick a supported one.
         Http::assertSent(function ($request) {
             $body = $request->data();
 
@@ -51,20 +50,30 @@ class IntegrationHealthTest extends TestCase
                 && array_key_exists('Amount', $body)
                 && ($body['ISOCoinId'] ?? null) === 1
                 && $body['TerminalNumber'] === 1000
-                && ! array_key_exists('Document', $body);
+                && ($body['Document']['DocumentTypeToCreate'] ?? null) === 'Auto';
         });
     }
 
-    public function test_cardcom_attaches_a_document_only_when_a_type_is_configured(): void
+    public function test_cardcom_document_type_is_configurable(): void
     {
-        // Opt-in path: a terminal that mandates a document (error 5046) can set
-        // CARDCOM_DOCUMENT_TYPE — then, and only then, we attach a non-fiscal one.
+        // The type is overridable per terminal (e.g. a non-fiscal 'Order').
         config(['billing.cardcom.terminal_number' => '1000', 'billing.cardcom.api_name' => 'test', 'billing.cardcom.document_type' => 'Order']);
         Http::fake(['*/LowProfile/Create' => Http::response(['ResponseCode' => 0, 'Url' => 'https://secure.cardcom.solutions/x'])]);
 
         $this->health()->check('cardcom');
 
         Http::assertSent(fn ($request) => ($request->data()['Document']['DocumentTypeToCreate'] ?? null) === 'Order');
+    }
+
+    public function test_cardcom_can_disable_the_document(): void
+    {
+        // A terminal that doesn't require a document can opt out entirely.
+        config(['billing.cardcom.terminal_number' => '1000', 'billing.cardcom.api_name' => 'test', 'billing.cardcom.document_type' => '']);
+        Http::fake(['*/LowProfile/Create' => Http::response(['ResponseCode' => 0, 'Url' => 'https://secure.cardcom.solutions/x'])]);
+
+        $this->health()->check('cardcom');
+
+        Http::assertSent(fn ($request) => ! array_key_exists('Document', $request->data()));
     }
 
     public function test_cardcom_reports_failure_on_nonzero_response_code(): void
