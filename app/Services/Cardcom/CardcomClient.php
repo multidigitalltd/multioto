@@ -115,8 +115,21 @@ class CardcomClient
             ),
         ], fn ($v) => $v !== null), withApiPassword: false);
 
+        $url = (string) ($response['Url'] ?? '');
+
+        // No URL means Cardcom rejected the request — the customer would otherwise
+        // be framing a broken/404 page. Log the exact reason so it's diagnosable.
+        if (blank($url)) {
+            Log::warning('Cardcom LowProfile/Create (token) returned no URL', [
+                'customer_id' => $customerId,
+                'response_code' => $response['ResponseCode'] ?? null,
+                'description' => $response['Description'] ?? null,
+                'response' => $response,
+            ]);
+        }
+
         return [
-            'url' => $response['Url'] ?? '',
+            'url' => $url,
             'low_profile_id' => $response['LowProfileId'] ?? '',
         ];
     }
