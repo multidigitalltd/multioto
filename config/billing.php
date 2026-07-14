@@ -37,6 +37,14 @@ return [
     // option. Free text (account name, bank/branch, account number, or an IBAN).
     'bank_transfer_details' => env('BANK_TRANSFER_DETAILS'),
 
+    // Automatic follow-up on an unpaid payment demand: after `interval_days` of
+    // silence resend the request (link/transfer), up to `max_reminders` times,
+    // then stop. Set max_reminders to 0 to disable reminders entirely.
+    'demands' => [
+        'reminder_interval_days' => (int) env('DEMAND_REMINDER_INTERVAL_DAYS', 3),
+        'max_reminders' => (int) env('DEMAND_MAX_REMINDERS', 2),
+    ],
+
     /*
      | Public signup form (/join). The customer fills their details, signs, and
      | picks how they'll pay. The non-card methods show setup instructions the
@@ -113,6 +121,14 @@ return [
         //  - 'TaxInvoiceAndReceipt' — a fiscal invoice+receipt from Cardcom (then
         //    disable Linet issuance to avoid duplicate invoices).
         'document_type' => env('CARDCOM_DOCUMENT_TYPE', ''),
+
+        // Automatic reconciliation of charges stuck on "ממתין" (a lost completion
+        // webhook). A hosted charge/demand is looked up against Cardcom once it's
+        // at least `reconcile_after_minutes` old (give the webhook a chance first)
+        // and until it's `reconcile_max_age_days` old (then stop chasing it). Only
+        // a CONFIRMED success finalises the charge — a card is never re-charged.
+        'reconcile_after_minutes' => (int) env('CARDCOM_RECONCILE_AFTER_MINUTES', 15),
+        'reconcile_max_age_days' => (int) env('CARDCOM_RECONCILE_MAX_AGE_DAYS', 14),
     ],
 
     'linet' => [
