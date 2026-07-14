@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Jobs\ProcessCardcomLowProfileJob;
 use App\Models\Setting;
+use App\Models\WebhookEvent;
 use App\Support\CardcomWebhook;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
@@ -59,5 +60,29 @@ class CardcomWebhookSecretTest extends TestCase
         // The generated secret actually satisfies the fail-closed endpoint.
         $this->post('/webhooks/cardcom?secret=abc123', ['LowProfileId' => 'lp-x'])->assertOk();
         $this->post('/webhooks/cardcom?secret=wrong', ['LowProfileId' => 'lp-x'])->assertForbidden();
+    }
+
+    public function test_the_secret_is_never_stored_in_the_recorded_payload(): void
+    {
+        Queue::fake([ProcessCardcomLowProfileJob::class]);
+        config(['billing.cardcom.webhook_secret' => 'abc123']);
+
+        $this->post('/webhooks/cardcom?secret=abc123', ['LowProfileId' => 'lp-secret'])->assertOk();
+
+        // The shared secret must not be persisted to the DB (recoverable from
+        // backups/logs would let anyone forge a completion webhook).
+        $payload = WebhookEvent::query()->latest('id')->first()->payload;
+        $this->assertArrayNotHasKey('secret', $payload);
+        $this->assertSame('lp-secret', $payload['LowProfileId']);
+    }
+
+    public function test_the_secret_is_accepted_via_a_header(): void
+    {
+        Queue::fake([ProcessCardcomLowProfileJob::class]);
+        config(['billing.cardcom.webhook_secret' => 'abc123']);
+
+        // Header route keeps the secret out of URLs/access logs entirely.
+        $this->postJson('/webhooks/cardcom', ['LowProfileId' => 'lp-h'], ['X-Webhook-Secret' => 'abc123'])->assertOk();
+        $this->postJson('/webhooks/cardcom', ['LowProfileId' => 'lp-h'], ['X-Webhook-Secret' => 'nope'])->assertForbidden();
     }
 }

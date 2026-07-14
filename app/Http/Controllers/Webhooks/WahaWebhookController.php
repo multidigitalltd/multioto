@@ -15,13 +15,16 @@ use Illuminate\Http\Response;
  */
 class WahaWebhookController extends Controller
 {
+    use VerifiesWebhookSecret;
+
     public function __invoke(Request $request): Response
     {
         // Fail closed: a blank/unset secret must never mean "accept everything".
+        // Secret may arrive via an X-Webhook-Secret header or the legacy query.
         $secret = (string) config('billing.waha.webhook_secret');
 
         abort_unless(
-            $secret !== '' && hash_equals($secret, (string) $request->query('secret')),
+            $secret !== '' && hash_equals($secret, $this->providedSecret($request)),
             403,
         );
 
@@ -33,7 +36,8 @@ class WahaWebhookController extends Controller
             WebhookSource::Waha,
             $eventType,
             $request->input('payload.id') ?? $request->input('id'),
-            $request->all(),
+            // Never persist the shared secret into webhook_events.payload.
+            $request->except('secret'),
         );
 
         if ($fresh && $eventType === 'message') {
