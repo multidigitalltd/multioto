@@ -9,6 +9,7 @@ use App\Models\Charge;
 use App\Models\Customer;
 use App\Services\Cardcom\CardcomClient;
 use App\Support\CardcomWebhook;
+use App\Support\PaymentLink;
 use Illuminate\Support\Str;
 
 /**
@@ -79,9 +80,30 @@ class ManualChargeService
             throw new \RuntimeException('קארדקום לא החזירה עמוד תשלום');
         }
 
-        $charge->update(['cardcom_low_profile_id' => $lowProfile['low_profile_id']]);
+        // Store the raw Cardcom page so our own signed gateway can redirect to it
+        // (and stop redirecting once the demand is paid or canceled).
+        $charge->update([
+            'cardcom_low_profile_id' => $lowProfile['low_profile_id'],
+            'cardcom_pay_url' => $lowProfile['url'],
+        ]);
 
-        return ['charge' => $charge, 'url' => $lowProfile['url']];
+        return [
+            'charge' => $charge,
+            'url' => $lowProfile['url'],           // the raw Cardcom page (team "open now")
+            'pay_url' => PaymentLink::for($charge->id), // the cancelable link we hand the customer
+        ];
+    }
+
+    /**
+     * Create a pending demand with no payment page — used when the customer will
+     * pay by bank transfer, so there is still a charge to track and issue a
+     * proforma against, but no Cardcom link.
+     *
+     * @param  array<int, array{name: string, qty: int, unit_price_agorot: int}>  $lines
+     */
+    public function createDemand(Customer $customer, int $totalAgorot, string $description, ?string $notes = null, array $lines = [], ?bool $vatExempt = null): Charge
+    {
+        return $this->createPendingCharge($customer, $totalAgorot, $description, $notes, $lines, $vatExempt);
     }
 
     /**

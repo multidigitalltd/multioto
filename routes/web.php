@@ -53,6 +53,12 @@ Route::view('/billing/update-card/done/{result}', 'billing.update-card-done')
     ->where('result', 'success|failed')
     ->name('billing.update-card.done');
 
+// Payment-demand link: our own signed URL that redirects to the Cardcom page
+// while payable, so a canceled demand can show "לא פעיל" instead of forwarding.
+Route::get('/billing/pay/{charge}', [BillingController::class, 'pay'])
+    ->middleware(['signed', 'throttle:30,1'])
+    ->name('billing.pay');
+
 /*
  | Inbound support attachments — served only to a signed-in team member
  | (panel auth). Files live on a private disk; this is the sole read path.

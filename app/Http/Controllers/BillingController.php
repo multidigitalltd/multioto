@@ -2,10 +2,13 @@
 
 namespace App\Http\Controllers;
 
+use App\Enums\ChargeStatus;
+use App\Models\Charge;
 use App\Models\Customer;
 use App\Services\Cardcom\CardcomClient;
 use App\Support\CardcomWebhook;
 use Illuminate\Contracts\View\View;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
@@ -58,5 +61,28 @@ class BillingController extends Controller
         return view('billing.card-iframe', [
             'cardUrl' => $cardUrl,
         ]);
+    }
+
+    /**
+     * Customer-facing payment-demand link. Redirects to the demand's Cardcom
+     * hosted page while it is still payable; a paid, canceled or otherwise
+     * closed demand shows a clear "this link is no longer active" page rather
+     * than forwarding to a stale payment screen. Signed + throttled, so a
+     * charge id can't be enumerated.
+     */
+    public function pay(Charge $charge): View|RedirectResponse
+    {
+        // Only a pending demand with a real Cardcom page is payable. Anything
+        // else — already paid, canceled, or never got a page — is inactive.
+        $payable = $charge->status === ChargeStatus::Pending
+            && Str::startsWith((string) $charge->cardcom_pay_url, 'https://');
+
+        if (! $payable) {
+            return view('billing.pay-inactive', [
+                'paid' => $charge->status === ChargeStatus::Succeeded,
+            ]);
+        }
+
+        return redirect()->away($charge->cardcom_pay_url);
     }
 }

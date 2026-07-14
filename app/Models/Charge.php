@@ -15,7 +15,8 @@ class Charge extends Model
     protected $fillable = [
         'subscription_id', 'customer_id', 'amount_agorot', 'vat_agorot', 'total_agorot', 'currency',
         'status', 'attempt_number', 'cardcom_transaction_id', 'cardcom_response_code',
-        'failure_reason', 'description', 'invoice_notes', 'lines', 'cardcom_low_profile_id', 'period_start', 'period_end', 'charged_at',
+        'failure_reason', 'description', 'invoice_notes', 'lines', 'cardcom_low_profile_id', 'cardcom_pay_url',
+        'proforma_document_id', 'proforma_pdf_url', 'period_start', 'period_end', 'charged_at',
     ];
 
     protected function casts(): array

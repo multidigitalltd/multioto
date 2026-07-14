@@ -10,6 +10,7 @@ use App\Enums\DunningStatus;
 use App\Enums\NotificationType;
 use App\Filament\Resources\NotificationLogResource;
 use App\Filament\Resources\NotificationLogResource\Pages\ListNotificationLogs;
+use App\Jobs\IssueProformaJob;
 use App\Jobs\SendBroadcastJob;
 use App\Jobs\SendDunningNotificationJob;
 use App\Jobs\SendPaymentLinkJob;
@@ -24,6 +25,7 @@ use App\Services\Billing\ManualChargeService;
 use App\Services\Notifications\TemplateEngine;
 use App\Services\Waha\WahaClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Mail;
 use Livewire\Livewire;
@@ -81,14 +83,15 @@ class NotificationLogTest extends TestCase
 
     public function test_a_payment_link_email_is_recorded(): void
     {
+        // A transfer-only demand needs no Cardcom page — it still records the
+        // payment-request notification (the recording is what's under test).
+        Bus::fake([IssueProformaJob::class]);
+        config(['billing.bank_transfer_details' => 'בנק לאומי · חשבון 12345']);
+
         $customer = Customer::factory()->create(['email' => 'payer@example.com']);
 
-        // Stub the hosted-page creation so no real Cardcom call happens.
-        $service = \Mockery::mock(ManualChargeService::class);
-        $service->shouldReceive('createHostedPage')->andReturn(['url' => 'https://pay.example/abc']);
-
-        (new SendPaymentLinkJob($customer->id, 11800, 'תשלום', 'email'))->handle(
-            $service,
+        (new SendPaymentLinkJob($customer->id, 11800, 'תשלום', 'email', [], ['transfer']))->handle(
+            app(ManualChargeService::class),
             app(TemplateEngine::class),
             app(WahaClient::class),
         );
@@ -96,7 +99,7 @@ class NotificationLogTest extends TestCase
         $log = NotificationLog::where('type', NotificationType::PaymentLink)->sole();
         $this->assertSame('email', $log->channel);
         $this->assertSame('payer@example.com', $log->recipient);
-        $this->assertStringContainsString('pay.example/abc', (string) $log->body);
+        $this->assertStringContainsString('בנק לאומי', (string) $log->body);
     }
 
     public function test_a_queued_broadcast_email_is_recorded_as_queued_not_sent(): void

@@ -9,6 +9,7 @@ enum ChargeStatus: string implements HasLabel
     case Pending = 'pending';
     case Succeeded = 'succeeded';
     case Failed = 'failed';
+    case Canceled = 'canceled';
 
     public function getLabel(): string
     {
@@ -16,6 +17,7 @@ enum ChargeStatus: string implements HasLabel
             self::Pending => 'ממתין',
             self::Succeeded => 'הצליח',
             self::Failed => 'נכשל',
+            self::Canceled => 'בוטל',
         };
     }
 }
