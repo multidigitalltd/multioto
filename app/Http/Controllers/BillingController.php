@@ -9,6 +9,7 @@ use App\Services\Cardcom\CardcomClient;
 use App\Support\CardcomWebhook;
 use Illuminate\Contracts\View\View;
 use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
@@ -25,8 +26,15 @@ class BillingController extends Controller
      * the signup flow and the card-update links in dunning messages (signed, so
      * it can't be enumerated to probe customer ids).
      */
-    public function updateCard(Customer $customer, CardcomClient $cardcom): View
+    public function updateCard(Customer $customer, Request $request, CardcomClient $cardcom): View
     {
+        // The link carries a revocation nonce. Its signature is still valid after
+        // the team cancels it, but the token no longer matches — so a canceled
+        // card link shows "אינו פעיל" instead of opening a card page.
+        if (! hash_equals((string) $customer->card_link_token, (string) $request->query('token'))) {
+            return view('billing.card-inactive');
+        }
+
         try {
             $lowProfile = $cardcom->createTokenLowProfile(
                 $customer->id,

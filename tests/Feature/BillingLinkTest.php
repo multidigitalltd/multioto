@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\Customer;
 use App\Services\Cardcom\CardcomClient;
+use App\Support\CardLink;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\URL;
 use Tests\TestCase;
@@ -21,14 +22,29 @@ class BillingLinkTest extends TestCase
 
         $customer = Customer::factory()->create();
 
-        $url = URL::temporarySignedRoute('billing.update-card', now()->addHour(), ['customer' => $customer->id]);
-
         // The card page is embedded in an iframe on our own page (the customer
         // never leaves our site); the Cardcom URL is the iframe src.
-        $this->get($url)
+        $this->get(CardLink::for($customer->id))
             ->assertOk()
             ->assertSee('<iframe', false)
             ->assertSee('https://secure.cardcom.solutions/xyz', false);
+    }
+
+    public function test_a_revoked_card_link_shows_an_inactive_page(): void
+    {
+        // Cardcom must NEVER be reached for a canceled link.
+        $this->mock(CardcomClient::class, fn ($mock) => $mock->shouldNotReceive('createTokenLowProfile'));
+
+        $customer = Customer::factory()->create();
+        $link = CardLink::for($customer->id);
+
+        // The team cancels outstanding card links (rotates the nonce).
+        $customer->revokeCardLinks();
+
+        $this->get($link)
+            ->assertOk()
+            ->assertDontSee('<iframe', false)
+            ->assertSee('הקישור אינו פעיל');
     }
 
     public function test_a_cardcom_failure_shows_a_friendly_message_not_a_broken_frame(): void
