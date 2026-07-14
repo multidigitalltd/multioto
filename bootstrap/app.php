@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Middleware\EnsurePortalCustomer;
 use App\Http\Middleware\SecurityHeaders;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
@@ -18,6 +19,9 @@ return Application::configure(basePath: dirname(__DIR__))
 
         // Baseline security response headers on every request.
         $middleware->append(SecurityHeaders::class);
+
+        // Session guard for the customer self-service portal.
+        $middleware->alias(['portal.customer' => EnsurePortalCustomer::class]);
 
         // Guests hitting an `auth`-guarded web route (e.g. a support attachment)
         // are sent to the admin panel's login, not an undefined `login` route.
