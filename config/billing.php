@@ -96,21 +96,23 @@ return [
         // Shared secret we embed in Low Profile return/webhook URLs for origin verification.
         'webhook_secret' => env('CARDCOM_WEBHOOK_SECRET'),
 
-        // Whether to attach a Cardcom Document object, and of what type. Our
-        // terminal REQUIRES a document on every Low Profile request — omitting it
-        // fails with 5046 "No InvoiceHead data was send" — but rejects the fixed
-        // 'Order' type. 'Auto' lets Cardcom pick a document type the terminal
-        // actually supports (Cardcom's own recommendation for 5046), so it's the
-        // default. Options:
-        //  - 'Auto' (default) — Cardcom selects the document type per terminal
-        //    config. Satisfies terminals that mandate a document.
-        //  - 'Order' — a NON-fiscal order document (only if the terminal supports it).
+        // Whether to attach a Cardcom Document object, and of what type. This
+        // account has NO Cardcom documents module — invoicing is done entirely
+        // in Linet — so we send NO Document by default. Asking Cardcom for one
+        // fails with "אין מודול מסמכים" ('Auto' resolves to an Invoice the
+        // account can't create). The card-holder still sees the charge via the
+        // top-level ProductName, and Linet issues the real tax invoice.
+        //
+        // If your terminal is configured to MANDATE a document you'll get error
+        // 5046 ("No InvoiceHead data was send") instead — turn off the terminal's
+        // automatic-document setting in Cardcom (since Linet is the invoicer),
+        // rather than turning a document back on here. Options:
+        //  - '' (default) — send NO Document. Correct when Linet is the invoicer.
+        //  - 'Auto' — Cardcom picks the type (needs a Cardcom documents module).
+        //  - 'Order' — a NON-fiscal order document (needs the module too).
         //  - 'TaxInvoiceAndReceipt' — a fiscal invoice+receipt from Cardcom (then
         //    disable Linet issuance to avoid duplicate invoices).
-        //  - '' — send NO Document (only for terminals that don't require one).
-        // NOTE: with a document type set, Cardcom may issue its own document on a
-        // real (non-zero) charge — decide whether Cardcom or Linet is the invoicer.
-        'document_type' => env('CARDCOM_DOCUMENT_TYPE', 'Auto'),
+        'document_type' => env('CARDCOM_DOCUMENT_TYPE', ''),
     ],
 
     'linet' => [
