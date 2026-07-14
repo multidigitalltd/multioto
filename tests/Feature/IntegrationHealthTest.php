@@ -40,8 +40,9 @@ class IntegrationHealthTest extends TestCase
         $this->assertTrue($result->ok);
 
         // A token-only request must NOT carry ApiPassword (only refunds/doc
-        // creation use it). It DOES carry a Document — our terminal mandates one
-        // (5046), and the default 'Auto' type lets Cardcom pick a supported one.
+        // creation use it), and by default NO Document — this account has no
+        // Cardcom documents module (Linet invoices), so a Document would fail
+        // with "אין מודול מסמכים".
         Http::assertSent(function ($request) {
             $body = $request->data();
 
@@ -50,7 +51,7 @@ class IntegrationHealthTest extends TestCase
                 && array_key_exists('Amount', $body)
                 && ($body['ISOCoinId'] ?? null) === 1
                 && $body['TerminalNumber'] === 1000
-                && ($body['Document']['DocumentTypeToCreate'] ?? null) === 'Auto';
+                && ! array_key_exists('Document', $body);
         });
     }
 

@@ -62,13 +62,13 @@ class ManualChargeTest extends TestCase
         $this->assertSame('987654', $charge->cardcom_transaction_id);
         Bus::assertDispatched(IssueInvoiceJob::class);
 
-        // The charge hit Cardcom with the saved token and a Document — our
-        // terminal mandates one (5046), and 'Auto' lets Cardcom pick a supported
-        // type. The card number never leaves Cardcom.
+        // The charge hit Cardcom with the saved token and NO Document — this
+        // account has no Cardcom documents module (Linet invoices), so a Document
+        // would fail with "אין מודול מסמכים". The card number never leaves Cardcom.
         Http::assertSent(fn ($request) => str_contains($request->url(), 'Transactions/Transaction')
             && ($request->data()['Token'] ?? null) === $token->cardcom_token
             && ($request->data()['ExternalUniqTranId'] ?? null) === "manual-{$charge->id}"
-            && ($request->data()['Document']['DocumentTypeToCreate'] ?? null) === 'Auto');
+            && ! array_key_exists('Document', $request->data()));
     }
 
     public function test_manual_charge_fails_gracefully_when_the_customer_has_no_token(): void
@@ -97,7 +97,7 @@ class ManualChargeTest extends TestCase
         Bus::assertNotDispatched(IssueInvoiceJob::class);
     }
 
-    public function test_hosted_charge_low_profile_is_built_with_charge_only_and_a_document(): void
+    public function test_hosted_charge_low_profile_is_built_with_charge_only_and_no_document(): void
     {
         config(['billing.cardcom.terminal_number' => '1000', 'billing.cardcom.api_name' => 'test']);
         Http::fake(['*/LowProfile/Create' => Http::response(['ResponseCode' => 0, 'Url' => 'https://secure.cardcom.solutions/lp', 'LowProfileId' => 'LP999'])]);
@@ -105,12 +105,14 @@ class ManualChargeTest extends TestCase
         $result = app(CardcomClient::class)->createChargeLowProfile(42, 11800, 'שירות חד-פעמי', 'דני', 'a@b.co', '+97250', 's', 'f', 'w');
 
         $this->assertSame('LP999', $result['low_profile_id']);
-        // The terminal mandates a document (5046); 'Auto' is the default type.
+        // No Document by default — this account has no Cardcom documents module
+        // (Linet invoices); the label rides on the top-level ProductName instead.
         Http::assertSent(fn ($request) => str_contains($request->url(), 'LowProfile/Create')
             && ($request->data()['Operation'] ?? null) === 'ChargeOnly'
             && ($request->data()['Amount'] ?? null) == 118.0
             && ($request->data()['ReturnValue'] ?? null) === 'charge:42'
-            && ($request->data()['Document']['DocumentTypeToCreate'] ?? null) === 'Auto');
+            && ($request->data()['ProductName'] ?? null) === 'שירות חד-פעמי'
+            && ! array_key_exists('Document', $request->data()));
     }
 
     public function test_hosted_walk_in_charge_is_finalised_by_the_webhook(): void

@@ -48,8 +48,9 @@ class CardcomClient
                 'WebHookUrl' => url('/'), // required by the spec even for a token-only test
                 // J5 authorization (not J2) — matches the real token-capture flow.
                 'AdvancedDefinition' => ['JValidateType' => 5],
-                // Terminals that mandate a document reject a request without one
-                // (error 5046). This session is discarded, so nothing is issued.
+                // Document only when explicitly configured — by default this
+                // account has no Cardcom documents module, so none is sent (Linet
+                // invoices). This session is discarded regardless.
                 'Document' => $this->buildDocument('בדיקת חיבור', null, null, 'בדיקת חיבור', 0),
             ], fn ($v) => $v !== null), withApiPassword: false);
 
@@ -103,9 +104,8 @@ class CardcomClient
             // Cards that require an authorization query reject J2 with code
             // 60000042 ("ישנה חובת יציאה לשאילתא"); J5 performs the query.
             'AdvancedDefinition' => ['JValidateType' => 5],
-            // Terminals that mandate a document reject a token-only request
-            // without one (error 5046). Type comes from config — 'Order' keeps
-            // it non-fiscal so Linet stays the invoicer.
+            // No Document by default (this account has no Cardcom documents
+            // module — Linet invoices). Only sent if document_type is configured.
             'Document' => $this->buildDocument(
                 $customer?->name,
                 $customer?->email,
@@ -157,8 +157,8 @@ class CardcomClient
             'SuccessRedirectUrl' => $successUrl,
             'FailedRedirectUrl' => $failureUrl,
             'WebHookUrl' => $webhookUrl,
-            // Shown to the card holder on the hosted page when no Document is
-            // sent (our default) — otherwise the charge would be text-less.
+            // Shown to the card holder on the hosted page (no Document is sent by
+            // default — this account invoices via Linet, not Cardcom).
             'ProductName' => $description,
             'Document' => $this->buildDocument($name, $email, $phone, $description, $amountNis),
         ], fn ($v) => $v !== null), withApiPassword: false);
@@ -281,10 +281,11 @@ class CardcomClient
      */
     /**
      * Build the Cardcom Document object, or null when documents are disabled
-     * (config document_type empty). The type is configurable: 'Order' (default)
-     * is non-fiscal — it satisfies terminals that mandate a document (avoiding
-     * error 5046) without issuing a tax invoice, so Linet remains the invoicer.
-     * Set it to 'Auto'/'TaxInvoiceAndReceipt' to let Cardcom issue the invoice.
+     * (config document_type empty — the default). This account has no Cardcom
+     * documents module, so no Document is sent and Linet remains the invoicer;
+     * asking Cardcom for one fails with "אין מודול מסמכים". Set document_type to
+     * 'Auto'/'TaxInvoiceAndReceipt' only on an account that has the module and
+     * should let Cardcom issue the invoice.
      *
      * @return array<string, mixed>|null
      */
@@ -312,7 +313,8 @@ class CardcomClient
     protected function hintForCode(string $code): string
     {
         return match ($code) {
-            '5046' => ' — המסוף דורש נתוני מסמך. אנחנו כבר שולחים אובייקט Document; אם השגיאה נמשכת, ייתכן שסוג המסמך אינו נתמך במסוף — נסו לשנות את CARDCOM_DOCUMENT_TYPE (למשל ל-Auto) או שלחו לי את התשובה הגולמית.',
+            // No documents module here — we deliberately send no Document.
+            '5046' => ' — המסוף מוגדר להפיק מסמך אוטומטית, אך לחשבון אין מודול מסמכים בקארדקום (החשבוניות מונפקות בלינט). כבו את הפקת המסמך האוטומטית בהגדרות המסוף בקארדקום.',
             default => '',
         };
     }
