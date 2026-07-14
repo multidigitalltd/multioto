@@ -212,7 +212,7 @@ class AttachmentsTest extends TestCase
         });
     }
 
-    public function test_a_whatsapp_reply_sends_the_file_as_base64(): void
+    public function test_a_whatsapp_reply_sends_an_image_via_the_image_endpoint(): void
     {
         Storage::fake('local');
         config(['billing.waha.base_url' => 'https://waha.test', 'billing.waha.api_key' => 'k', 'billing.waha.session' => 'default']);
@@ -220,7 +220,7 @@ class AttachmentsTest extends TestCase
         Storage::disk('local')->put($path, base64_decode(self::PNG));
 
         Http::fake([
-            '*/api/sendFile' => Http::response(['id' => 'f1']),
+            '*/api/sendImage' => Http::response(['id' => 'f1']),
             '*' => Http::response(['id' => 't1']),
         ]);
 
@@ -237,9 +237,41 @@ class AttachmentsTest extends TestCase
 
         SendTicketReplyJob::dispatchSync($message->id);
 
-        Http::assertSent(fn ($request): bool => str_contains($request->url(), 'sendFile')
+        // An image goes through /api/sendImage (not /api/sendFile), so it renders
+        // inline on WhatsApp instead of failing/arriving as a broken document.
+        Http::assertSent(fn ($request): bool => str_contains($request->url(), 'sendImage')
             && ($request->data()['file']['data'] ?? '') === self::PNG
             && ($request->data()['file']['filename'] ?? '') === 'reply.png');
+        Http::assertNotSent(fn ($request): bool => str_contains($request->url(), 'sendFile'));
+    }
+
+    public function test_a_whatsapp_reply_sends_a_document_via_the_file_endpoint(): void
+    {
+        Storage::fake('local');
+        config(['billing.waha.base_url' => 'https://waha.test', 'billing.waha.api_key' => 'k', 'billing.waha.session' => 'default']);
+        $path = 'attachments/1/report.pdf';
+        Storage::disk('local')->put($path, '%PDF-1.4 fake');
+
+        Http::fake([
+            '*/api/sendFile' => Http::response(['id' => 'f1']),
+            '*' => Http::response(['id' => 't1']),
+        ]);
+
+        $customer = Customer::factory()->create();
+        $ticket = Ticket::create([
+            'customer_id' => $customer->id, 'channel' => TicketChannel::Whatsapp,
+            'subject' => 'x', 'status' => TicketStatus::Open, 'external_thread_ref' => '972501234567@c.us',
+        ]);
+        $message = $ticket->messages()->create([
+            'direction' => MessageDirection::Outbound, 'channel' => MessageChannel::Whatsapp,
+            'body' => 'הנה הקובץ', 'author' => MessageAuthor::Agent,
+            'attachments' => [['name' => 'report.pdf', 'mime' => 'application/pdf', 'size' => 13, 'path' => $path, 'disk' => 'local']],
+        ]);
+
+        SendTicketReplyJob::dispatchSync($message->id);
+
+        Http::assertSent(fn ($request): bool => str_contains($request->url(), 'sendFile')
+            && ($request->data()['file']['filename'] ?? '') === 'report.pdf');
     }
 
     public function test_agent_can_attach_a_file_to_a_reply_from_the_chat(): void

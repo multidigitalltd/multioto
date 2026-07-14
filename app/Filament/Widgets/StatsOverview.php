@@ -41,7 +41,10 @@ class StatsOverview extends BaseWidget
             ->where('charged_at', '>=', Carbon::now()->startOfMonth())
             ->sum('total_agorot');
 
-        $openTickets = Ticket::whereIn('status', [TicketStatus::Open, TicketStatus::Pending])->count();
+        // Only tickets awaiting OUR action count as "needs handling" — a ticket
+        // in "ממתין ללקוח" (Pending) is waiting on the customer, so it is not a
+        // task on the team's plate even though it is not yet closed.
+        $openTickets = Ticket::where('status', TicketStatus::Open)->count();
         $pastDue = Subscription::where('status', SubscriptionStatus::PastDue)->count();
         $openTasks = Task::whereIn('status', [TaskStatus::Open, TaskStatus::InProgress])->count();
 

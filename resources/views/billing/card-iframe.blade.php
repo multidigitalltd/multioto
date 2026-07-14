@@ -17,20 +17,27 @@
         body {
             margin: 0; min-height: 100vh; background: var(--bg); color: var(--fg);
             font-family: "Rubik", system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
-            display: flex; justify-content: center; align-items: flex-start; padding: 1.5rem 1rem;
+            display: flex; justify-content: center; align-items: flex-start;
+            padding: clamp(.5rem, 3vw, 1.5rem);
         }
         main {
-            background: var(--card); width: 100%; max-width: 34rem; border-radius: 16px;
-            padding: clamp(1rem, 4vw, 1.75rem); box-shadow: 0 4px 24px rgb(0 0 0 / .1);
+            background: var(--card); width: 100%; max-width: 48rem; border-radius: 16px;
+            padding: clamp(.75rem, 3vw, 1.75rem); box-shadow: 0 4px 24px rgb(0 0 0 / .1);
         }
-        h1 { font-size: 1.3rem; margin: 0 0 .35rem; text-align: center; }
+        h1 { font-size: clamp(1.1rem, 4vw, 1.3rem); margin: 0 0 .35rem; text-align: center; }
         p.lead { color: var(--muted); margin: 0 0 1rem; text-align: center; font-size: .95rem; }
         .frame-wrap {
             position: relative; border: 1px solid var(--border); border-radius: 12px; overflow: hidden;
-            min-height: 32rem; background: var(--card);
+            background: var(--card);
         }
-        iframe { width: 100%; height: 40rem; border: 0; display: block; }
+        /* Fill most of the viewport height so the hosted card form has room to
+           breathe and never renders in a cramped, unreadable strip. */
+        iframe { width: 100%; height: clamp(30rem, 80vh, 52rem); border: 0; display: block; }
         .secure { text-align: center; color: var(--muted); font-size: .85rem; margin-top: 1rem; }
+        @media (max-width: 30rem) {
+            main { border-radius: 12px; }
+            p.lead { font-size: .9rem; }
+        }
     </style>
 </head>
 <body>

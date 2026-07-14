@@ -12,6 +12,7 @@ use App\Services\Waha\WahaClient;
 use App\Support\RichText;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Storage;
 
@@ -66,11 +67,23 @@ class SendTicketReplyJob implements ShouldQueue
             }
 
             // Each attachment is sent as its own file message (base64 — WAHA
-            // never needs to reach our server).
+            // never needs to reach our server). One failing file is logged and
+            // skipped rather than aborting the whole reply — otherwise the text,
+            // already sent above, would be re-sent as a duplicate on retry.
             foreach ($message->attachments ?? [] as $file) {
-                if (($contents = $this->fileContents($file)) !== null) {
+                if (($contents = $this->fileContents($file)) === null) {
+                    continue;
+                }
+
+                try {
                     $sent = $waha->sendFile($chatId, $file['name'] ?? 'file', $file['mime'] ?? 'application/octet-stream', $contents);
                     $externalId ??= $sent['id'] ?? null;
+                } catch (\Throwable $e) {
+                    Log::warning('SendTicketReplyJob: WhatsApp attachment failed', [
+                        'ticket' => $ticket->id,
+                        'file' => $file['name'] ?? null,
+                        'error' => $e->getMessage(),
+                    ]);
                 }
             }
 
