@@ -13,6 +13,7 @@ use App\Enums\TicketStatus;
 use App\Filament\Resources\TicketResource;
 use App\Jobs\DraftReplyJob;
 use App\Jobs\SendTicketReplyJob;
+use App\Models\CannedResponse;
 use App\Models\PendingAction;
 use App\Models\Task;
 use App\Models\TicketMessage;
@@ -25,6 +26,8 @@ use Filament\Forms\Components\RichEditor;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Form;
+use Filament\Forms\Get;
+use Filament\Forms\Set;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ViewRecord;
 use Illuminate\Support\Collection;
@@ -75,12 +78,44 @@ class ViewTicket extends ViewRecord
     {
         return $form
             ->schema([
+                // Insert a saved response template into the editor. Picking one
+                // appends its text (placeholders filled) to whatever's already
+                // typed, then resets so the same template can be re-picked.
+                Select::make('canned')
+                    ->hiddenLabel()
+                    ->placeholder('הוספת תבנית מענה…')
+                    ->options(fn (): array => CannedResponse::orderBy('title')->pluck('title', 'id')->all())
+                    ->searchable()
+                    ->live()
+                    ->dehydrated(false)
+                    ->visible(fn (): bool => CannedResponse::exists())
+                    ->afterStateUpdated(function ($state, Set $set, Get $get): void {
+                        if (! $state || ! ($canned = CannedResponse::find($state))) {
+                            return;
+                        }
+
+                        $html = '<p>'.nl2br(e($this->applyPlaceholders((string) $canned->body))).'</p>';
+                        $existing = trim((string) ($get('body') ?? ''));
+                        $set('body', $existing !== '' ? $existing.$html : $html);
+                        $set('canned', null);
+                    }),
                 RichEditor::make('body')
                     ->hiddenLabel()
                     ->placeholder('כתבו מענה ללקוח…')
                     ->toolbarButtons(['bold', 'italic', 'bulletList', 'orderedList', 'link', 'undo', 'redo']),
             ])
             ->statePath('replyData');
+    }
+
+    /** Fill the common template placeholders from this ticket's context. */
+    private function applyPlaceholders(string $body): string
+    {
+        return strtr($body, [
+            '{{customer_name}}' => $this->record->customer?->name ?? 'לקוח יקר',
+            '{{ticket_id}}' => (string) $this->record->id,
+            '{{ticket_subject}}' => (string) $this->record->subject,
+            '{{business_name}}' => config('mail.from.name') ?: config('app.name'),
+        ]);
     }
 
     protected function getForms(): array

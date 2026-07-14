@@ -29,13 +29,21 @@ class ViewCustomer extends ViewRecord
 
     protected function getHeaderActions(): array
     {
+        // Keep only the two most-used actions inline; the rest live in a "עוד
+        // פעולות" dropdown so the row of buttons stops crowding the customer name
+        // and breadcrumbs (they get their own line).
         return [
             $this->contactCustomerAction(),
             $this->chargeAction(),
-            $this->paymentLinkAction(),
-            $this->cardLinkAction(),
-            $this->syncCardAction(),
-            Actions\EditAction::make()->label('עריכה'),
+            Actions\ActionGroup::make([
+                $this->paymentLinkAction(),
+                $this->cardLinkAction(),
+                $this->syncCardAction(),
+                Actions\EditAction::make()->label('עריכה'),
+            ])
+                ->label('עוד פעולות')
+                ->icon('heroicon-m-ellipsis-horizontal')
+                ->button(),
         ];
     }
 
