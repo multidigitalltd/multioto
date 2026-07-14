@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Agent\AgentPluginController;
 use App\Http\Controllers\Auth\TwoFactorChallengeController;
 use App\Http\Controllers\BillingController;
 use App\Http\Controllers\BrandingController;
@@ -126,6 +127,22 @@ Route::prefix('portal')->group(function () {
         Route::get('/tickets', [PortalController::class, 'tickets'])->name('portal.tickets');
         Route::get('/card', [PortalController::class, 'updateCard'])->name('portal.card');
     });
+});
+
+/*
+ | Companion-plugin remote-update channel. The site's plugin checks in with its
+ | per-site bearer token to learn about a newer version and gets a short-lived
+ | signed link to download it — so a new plugin version is shipped once and every
+ | site updates itself. The download is authenticated by the signature alone.
+ */
+Route::prefix('agent')->group(function () {
+    Route::get('/plugin/update', [AgentPluginController::class, 'update'])
+        ->middleware(['agent.site', 'throttle:60,1'])
+        ->name('agent.plugin.update');
+    Route::get('/plugin/download/{version}', [AgentPluginController::class, 'download'])
+        ->middleware(['signed', 'throttle:30,1'])
+        ->where('version', '[0-9]+\.[0-9]+\.[0-9]+')
+        ->name('agent.plugin.download');
 });
 
 /*
