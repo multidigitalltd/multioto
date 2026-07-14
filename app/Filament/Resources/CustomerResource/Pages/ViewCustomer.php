@@ -2,19 +2,14 @@
 
 namespace App\Filament\Resources\CustomerResource\Pages;
 
-use App\Enums\TicketChannel;
-use App\Enums\TicketStatus;
 use App\Filament\Resources\CustomerResource;
 use App\Jobs\SendPaymentLinkJob;
 use App\Models\Customer;
-use App\Models\Ticket;
 use App\Services\Billing\ManualChargeService;
 use App\Services\Cardcom\CardcomClient;
 use App\Services\Cardcom\CardTokenService;
 use App\Services\Support\AgentReply;
-use App\Services\Waha\WahaClient;
 use App\Support\CardLink;
-use App\Support\EmailBody;
 use App\Support\Money;
 use Filament\Actions;
 use Filament\Forms;
@@ -72,42 +67,18 @@ class ViewCustomer extends ViewRecord
                     ->required(),
             ])
             ->action(function (array $data, Customer $record, AgentReply $agentReply): void {
-                $channel = $data['channel'] ?? 'whatsapp';
-                $missing = $channel === 'email'
-                    ? blank($record->email)
-                    : (blank($record->whatsapp_jid) && blank($record->phone));
-
-                if ($missing) {
-                    Notification::make()->title('אין ללקוח פרטי '.($channel === 'email' ? 'מייל' : 'וואטסאפ'))->danger()->send();
-
-                    return;
-                }
-
-                $html = trim((string) $data['message']);
-                $body = EmailBody::toText(null, $html);
-
-                if ($body === '') {
-                    Notification::make()->title('אין תוכן לשליחה')->warning()->send();
+                try {
+                    $ticket = $agentReply->openConversation(
+                        $record,
+                        $data['channel'] ?? 'whatsapp',
+                        (string) ($data['subject'] ?? ''),
+                        (string) $data['message'],
+                    );
+                } catch (\RuntimeException $e) {
+                    Notification::make()->title($e->getMessage())->danger()->send();
 
                     return;
                 }
-
-                // For WhatsApp, store the customer's chat id as the thread ref so
-                // their reply lands back on THIS ticket (IngestWhatsappMessageJob
-                // threads by chat id) instead of opening a separate one.
-                $threadRef = $channel === 'email'
-                    ? null
-                    : app(WahaClient::class)->normalizeChatId((string) ($record->whatsapp_jid ?? $record->phone));
-
-                $ticket = Ticket::create([
-                    'customer_id' => $record->id,
-                    'channel' => $channel === 'email' ? TicketChannel::Email : TicketChannel::Whatsapp,
-                    'subject' => filled($data['subject']) ? $data['subject'] : 'פנייה מהצוות',
-                    'status' => TicketStatus::Open,
-                    'external_thread_ref' => $threadRef,
-                ]);
-
-                $agentReply->send($ticket, $body, EmailBody::toSafeHtml($html));
 
                 Notification::make()
                     ->title('ההודעה נשלחה ללקוח')
