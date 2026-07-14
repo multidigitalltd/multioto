@@ -8,11 +8,15 @@ use App\Enums\MessageChannel;
 use App\Enums\MessageDirection;
 use App\Enums\TicketChannel;
 use App\Jobs\SendTicketReplyJob;
+use App\Mail\MonitoringReportMail;
+use App\Models\Customer;
 use App\Models\PendingAction;
 use App\Models\Site;
 use App\Services\Hosting\HostingClient;
+use App\Services\Monitoring\MonitoringReport;
 use App\Services\Waha\WahaClient;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
 
 /**
@@ -128,8 +132,24 @@ class ApprovalGate
         match ($action->type) {
             'ticket_reply' => $this->executeTicketReply($action),
             'site_fix' => $this->executeSiteFix($action),
+            'monitoring_report' => $this->executeMonitoringReport($action),
             default => throw new \RuntimeException("סוג פעולה לא מוכר: {$action->type}"),
         };
+    }
+
+    /** Send an approved monthly monitoring report to the customer. */
+    protected function executeMonitoringReport(PendingAction $action): void
+    {
+        $customer = Customer::find((int) data_get($action->payload, 'customer_id'));
+
+        if (! $customer || blank($customer->email)) {
+            throw new \RuntimeException('הלקוח או כתובת המייל חסרים.');
+        }
+
+        // Recompute at send time so the approved report reflects current data.
+        $report = app(MonitoringReport::class)->for($customer);
+
+        Mail::to($customer->email)->send(new MonitoringReportMail($customer, $report));
     }
 
     /** Apply an approved, reversible site fix via the hosting driver. */
