@@ -59,7 +59,7 @@ class StatsOverview extends BaseWidget
                 ->color($pastDue > 0 ? 'warning' : 'success')
                 ->url(SubscriptionResource::getUrl()),
 
-            Stat::make('הכנסה חודשית', '₪ '.number_format($mrrAgorot / 100))
+            Stat::make('הכנסה חודשית צפויה', '₪ '.number_format($mrrAgorot / 100))
                 ->description('MRR ממנויים פעילים')
                 ->icon('heroicon-o-banknotes')
                 ->color('success')

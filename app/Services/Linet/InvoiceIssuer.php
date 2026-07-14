@@ -31,7 +31,7 @@ class InvoiceIssuer
      */
     public function issue(Charge $charge): array
     {
-        $charge->loadMissing(['subscription.customer', 'subscription.plan', 'customer', 'invoice']);
+        $charge->loadMissing(['subscription.customer', 'subscription.plan', 'subscription.site', 'customer', 'invoice']);
 
         if ($charge->status !== ChargeStatus::Succeeded) {
             return ['ok' => false, 'error' => 'החיוב אינו במצב "הצליח" — אי אפשר להנפיק חשבונית.'];
@@ -69,7 +69,7 @@ class InvoiceIssuer
         // charges carry their own free-text description.
         $description = $charge->subscription
             ? sprintf('%s — %s עד %s',
-                $charge->subscription->planName(),
+                $charge->subscription->chargeLabel(),
                 $charge->period_start->format('d/m/Y'),
                 $charge->period_end->format('d/m/Y'),
             )

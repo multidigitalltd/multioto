@@ -7,6 +7,7 @@ use App\Http\Controllers\SignatureController;
 use App\Http\Controllers\SignupController;
 use App\Http\Controllers\SupportAttachmentController;
 use App\Http\Controllers\SupportFormController;
+use App\Http\Controllers\TasksPrintController;
 use App\Http\Controllers\Webhooks\CardcomWebhookController;
 use App\Http\Controllers\Webhooks\EmailWebhookController;
 use App\Http\Controllers\Webhooks\WahaWebhookController;
@@ -67,6 +68,11 @@ Route::get('/support/attachments/{message}/{index}', SupportAttachmentController
     ->middleware(['web', 'auth'])
     ->whereNumber('index')
     ->name('support.attachment');
+
+// Print-friendly list of all open tasks — team-only (panel auth).
+Route::get('/tasks/print', TasksPrintController::class)
+    ->middleware(['web', 'auth'])
+    ->name('tasks.print');
 
 // Customer signup signature (consent record) — team-only, private disk.
 Route::get('/customers/{customer}/signature', SignatureController::class)

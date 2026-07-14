@@ -105,4 +105,39 @@ class TaskTest extends TestCase
 
         Livewire::test(ListTasks::class)->assertOk()->assertCountTableRecords(3);
     }
+
+    public function test_the_print_page_lists_open_tasks_only(): void
+    {
+        $this->actingAs(User::factory()->create());
+        Task::factory()->create(['title' => 'לתקן דומיין', 'status' => TaskStatus::Open]);
+        Task::factory()->create(['title' => 'בעבודה עכשיו', 'status' => TaskStatus::InProgress]);
+        Task::factory()->create(['title' => 'כבר הושלמה', 'status' => TaskStatus::Done]);
+
+        $this->get(route('tasks.print'))
+            ->assertOk()
+            ->assertSee('לתקן דומיין')
+            ->assertSee('בעבודה עכשיו')
+            ->assertDontSee('כבר הושלמה');
+    }
+
+    public function test_the_print_page_is_team_only(): void
+    {
+        // A guest is redirected to log in — the open-task list is team-only.
+        $this->get(route('tasks.print'))->assertRedirect();
+    }
+
+    public function test_emailing_open_tasks_sends_the_list(): void
+    {
+        Mail::fake();
+        $this->actingAs(User::factory()->create());
+        Task::factory()->create(['title' => 'לחדש SSL', 'status' => TaskStatus::Open]);
+        Task::factory()->create(['title' => 'כבר הושלמה', 'status' => TaskStatus::Done]);
+
+        Livewire::test(ListTasks::class)
+            ->callAction('emailOpen', ['email' => 'ops@multidigital.co.il']);
+
+        Mail::assertSent(NotificationMail::class, fn ($mail) => $mail->hasTo('ops@multidigital.co.il')
+            && str_contains($mail->bodyText, 'לחדש SSL')
+            && ! str_contains($mail->bodyText, 'כבר הושלמה'));
+    }
 }

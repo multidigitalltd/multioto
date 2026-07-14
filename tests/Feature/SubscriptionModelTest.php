@@ -8,6 +8,7 @@ use App\Enums\SubscriptionStatus;
 use App\Models\Customer;
 use App\Models\PaymentToken;
 use App\Models\Plan;
+use App\Models\Site;
 use App\Models\Subscription;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -15,6 +16,24 @@ use Tests\TestCase;
 class SubscriptionModelTest extends TestCase
 {
     use RefreshDatabase;
+
+    public function test_charge_label_names_the_plan_and_the_site_when_tied_to_one(): void
+    {
+        $customer = Customer::factory()->create();
+        $plan = Plan::factory()->create(['name' => 'אחסון פרו']);
+        $site = Site::factory()->create(['customer_id' => $customer->id, 'domain' => 'example.co.il']);
+
+        $withSite = Subscription::factory()->create([
+            'customer_id' => $customer->id, 'plan_id' => $plan->id, 'site_id' => $site->id,
+        ]);
+        $this->assertSame('אחסון פרו — עבור אתר example.co.il', $withSite->chargeLabel());
+
+        // No site → just the plan name (a one-off/site-less subscription).
+        $noSite = Subscription::factory()->create([
+            'customer_id' => $customer->id, 'plan_id' => $plan->id, 'site_id' => null,
+        ]);
+        $this->assertSame('אחסון פרו', $noSite->chargeLabel());
+    }
 
     public function test_a_new_subscription_inherits_the_customers_saved_card(): void
     {

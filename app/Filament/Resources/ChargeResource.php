@@ -15,6 +15,7 @@ use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Str;
 
 class ChargeResource extends Resource
@@ -97,6 +98,7 @@ class ChargeResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
+            ->modifyQueryUsing(fn (Builder $query) => $query->with(['subscription.plan', 'subscription.site', 'subscription.customer', 'customer']))
             ->columns([
                 Tables\Columns\TextColumn::make('customer_name')
                     ->label('לקוח')
@@ -104,6 +106,14 @@ class ChargeResource extends Resource
                     // manual/one-off charges link the customer directly.
                     ->getStateUsing(fn (Charge $record): ?string => $record->subscription?->customer?->name ?? $record->customer?->name)
                     ->weight('bold'),
+                Tables\Columns\TextColumn::make('description_label')
+                    ->label('עבור')
+                    // A subscription charge shows the plan and, when tied to a site,
+                    // "עבור אתר <domain>"; a one-off charge shows its own description.
+                    ->getStateUsing(fn (Charge $record): string => $record->subscription
+                        ? $record->subscription->chargeLabel()
+                        : ($record->description ?: '—'))
+                    ->wrap()->toggleable(),
                 Tables\Columns\TextColumn::make('total_agorot')
                     ->label('סה״כ')
                     ->money('ILS', divideBy: 100)
@@ -124,6 +134,11 @@ class ChargeResource extends Resource
                     ->label('תחילת תקופה')
                     ->date('d/m/Y')
                     ->sortable(),
+                Tables\Columns\TextColumn::make('period_end')
+                    ->label('סוף תקופה')
+                    ->date('d/m/Y')
+                    ->sortable()
+                    ->toggleable(),
                 Tables\Columns\TextColumn::make('charged_at')
                     ->label('חויב')
                     ->dateTime('d/m/Y H:i')
@@ -162,7 +177,8 @@ class ChargeResource extends Resource
             ->filters([
                 Tables\Filters\SelectFilter::make('status')
                     ->label('סטטוס')
-                    ->options(ChargeStatus::class),
+                    ->options(ChargeStatus::class)
+                    ->multiple(),
             ])
             ->actions([
                 // Recover a charge stuck on "ממתין": ask Cardcom directly whether
