@@ -137,6 +137,11 @@ class ManualCharge extends Page implements HasForms
                             ->helperText('טקסט חופשי שיודפס מתחת לשורה בחשבונית — למשל פירוט השירות או תקופה.')
                             ->rows(2)->maxLength(500)
                             ->columnSpanFull(),
+
+                        Toggle::make('vat_exempt')
+                            ->label('פטור ממע״מ')
+                            ->helperText('סמנו אם החיוב הספציפי הזה פטור ממע״מ (מבטל את חישוב המע״מ והחשבונית תונפק כפטורה).')
+                            ->columnSpanFull(),
                     ])
                     ->footerActions([
                         FormAction::make('submit')
@@ -194,10 +199,12 @@ class ManualCharge extends Page implements HasForms
         $activeToken = ! $viaNewCustomer
             && $customer->paymentTokens()->where('status', TokenStatus::Active)->exists();
 
+        $vatExempt = (bool) ($data['vat_exempt'] ?? false);
+
         if ($activeToken) {
-            $this->chargeSavedToken($customer, $totalAgorot, $description, $notes, $lines);
+            $this->chargeSavedToken($customer, $totalAgorot, $description, $notes, $lines, $vatExempt);
         } else {
-            $this->openPaymentPage($customer, $totalAgorot, $description, $notes, $lines);
+            $this->openPaymentPage($customer, $totalAgorot, $description, $notes, $lines, $vatExempt);
         }
     }
 
@@ -250,9 +257,9 @@ class ManualCharge extends Page implements HasForms
      *
      * @param  array<int, array{name: string, qty: int, unit_price_agorot: int}>  $lines
      */
-    private function chargeSavedToken(Customer $customer, int $totalAgorot, string $description, ?string $notes = null, array $lines = []): void
+    private function chargeSavedToken(Customer $customer, int $totalAgorot, string $description, ?string $notes = null, array $lines = [], bool $vatExempt = false): void
     {
-        app(ManualChargeService::class)->chargeSavedToken($customer, $totalAgorot, $description, $notes, $lines);
+        app(ManualChargeService::class)->chargeSavedToken($customer, $totalAgorot, $description, $notes, $lines, $vatExempt);
 
         Notification::make()
             ->title('החיוב נשלח לעיבוד')
@@ -267,10 +274,10 @@ class ManualCharge extends Page implements HasForms
      *
      * @param  array<int, array{name: string, qty: int, unit_price_agorot: int}>  $lines
      */
-    private function openPaymentPage(Customer $customer, int $totalAgorot, string $description, ?string $notes = null, array $lines = []): void
+    private function openPaymentPage(Customer $customer, int $totalAgorot, string $description, ?string $notes = null, array $lines = [], bool $vatExempt = false): void
     {
         try {
-            $result = app(ManualChargeService::class)->createHostedPage($customer, $totalAgorot, $description, $notes, $lines);
+            $result = app(ManualChargeService::class)->createHostedPage($customer, $totalAgorot, $description, $notes, $lines, $vatExempt);
         } catch (\Throwable $e) {
             Notification::make()->title('פתיחת עמוד התשלום נכשלה')->body(Str::limit($e->getMessage(), 150))->danger()->send();
 

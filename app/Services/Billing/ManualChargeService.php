@@ -32,9 +32,9 @@ class ManualChargeService
     /**
      * @param  array<int, array{name: string, qty: int, unit_price_agorot: int}>  $lines
      */
-    public function chargeSavedToken(Customer $customer, int $totalAgorot, string $description, ?string $notes = null, array $lines = []): Charge
+    public function chargeSavedToken(Customer $customer, int $totalAgorot, string $description, ?string $notes = null, array $lines = [], ?bool $vatExempt = null): Charge
     {
-        $charge = $this->createPendingCharge($customer, $totalAgorot, $description, $notes, $lines);
+        $charge = $this->createPendingCharge($customer, $totalAgorot, $description, $notes, $lines, $vatExempt);
         ProcessManualChargeJob::dispatch($charge->id);
 
         return $charge;
@@ -51,9 +51,9 @@ class ManualChargeService
     /**
      * @param  array<int, array{name: string, qty: int, unit_price_agorot: int}>  $lines
      */
-    public function createHostedPage(Customer $customer, int $totalAgorot, string $description, ?string $notes = null, array $lines = []): array
+    public function createHostedPage(Customer $customer, int $totalAgorot, string $description, ?string $notes = null, array $lines = [], ?bool $vatExempt = null): array
     {
-        $charge = $this->createPendingCharge($customer, $totalAgorot, $description, $notes, $lines);
+        $charge = $this->createPendingCharge($customer, $totalAgorot, $description, $notes, $lines, $vatExempt);
 
         try {
             $lowProfile = $this->cardcom->createChargeLowProfile(
@@ -105,9 +105,10 @@ class ManualChargeService
     /**
      * @param  array<int, array{name: string, qty: int, unit_price_agorot: int}>  $lines
      */
-    private function createPendingCharge(Customer $customer, int $totalAgorot, string $description, ?string $notes = null, array $lines = []): Charge
+    private function createPendingCharge(Customer $customer, int $totalAgorot, string $description, ?string $notes = null, array $lines = [], ?bool $vatExempt = null): Charge
     {
-        [$net, $vat] = $this->splitVat($totalAgorot, (bool) $customer->vat_exempt);
+        // Per-charge exemption overrides the customer's default when set.
+        [$net, $vat] = $this->splitVat($totalAgorot, $vatExempt ?? (bool) $customer->vat_exempt);
 
         return Charge::create([
             'subscription_id' => null,

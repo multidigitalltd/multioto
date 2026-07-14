@@ -11,6 +11,7 @@ use App\Models\Customer;
 use App\Models\Subscription;
 use App\Models\User;
 use App\Models\WebhookEvent;
+use App\Services\Cardcom\CardTokenService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
@@ -115,6 +116,24 @@ class CardSyncTest extends TestCase
 
         $this->assertNull($customer->fresh()->default_token_id);
         $this->assertSame(0, $customer->paymentTokens()->count());
+    }
+
+    public function test_the_saved_card_takes_its_brand_and_last4_from_tranzaction_info(): void
+    {
+        Queue::fake([ChargeSubscriptionJob::class]);
+        $customer = Customer::factory()->create();
+
+        // Cardcom carries the card brand + last-4 on TranzactionInfo, NOT on
+        // TokenInfo — the saved card must still show "ויזה עסקי · 6829".
+        $token = app(CardTokenService::class)->storeFromLpResult($customer, [
+            'ResponseCode' => 0,
+            'TokenInfo' => ['Token' => 'tok-tran'],
+            'TranzactionInfo' => ['Last4CardDigits' => 6829, 'CardName' => 'ויזה עסקי'],
+        ]);
+
+        $this->assertNotNull($token);
+        $this->assertSame('6829', $token->card_last4);
+        $this->assertSame('ויזה עסקי', $token->card_brand);
     }
 
     public function test_syncing_when_the_customer_has_not_entered_a_card_yet(): void
