@@ -2,6 +2,7 @@
 
 namespace App\Filament\Pages;
 
+use App\Filament\Concerns\AdminOnly;
 use App\Filament\Concerns\PersistsSettings;
 use App\Models\Setting;
 use App\Services\Health\IntegrationHealth;
@@ -31,6 +32,7 @@ use Illuminate\Support\Str;
  */
 class ManageMail extends Page implements HasForms
 {
+    use AdminOnly;
     use InteractsWithForms;
     use PersistsSettings;
 

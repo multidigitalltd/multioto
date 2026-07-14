@@ -2,6 +2,7 @@
 
 namespace App\Filament\Pages;
 
+use App\Filament\Concerns\AdminOnly;
 use App\Filament\Concerns\PersistsSettings;
 use App\Models\Setting;
 use App\Services\Ai\ClaudeClient;
@@ -27,6 +28,7 @@ use Filament\Pages\Page;
  */
 class ManageAiAgent extends Page implements HasForms
 {
+    use AdminOnly;
     use InteractsWithForms;
     use PersistsSettings;
 

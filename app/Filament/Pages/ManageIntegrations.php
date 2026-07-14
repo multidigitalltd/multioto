@@ -2,6 +2,7 @@
 
 namespace App\Filament\Pages;
 
+use App\Filament\Concerns\AdminOnly;
 use App\Filament\Concerns\PersistsSettings;
 use App\Models\Setting;
 use App\Providers\SettingsServiceProvider;
@@ -37,6 +38,7 @@ use Illuminate\Support\Str;
  */
 class ManageIntegrations extends Page implements HasForms
 {
+    use AdminOnly;
     use InteractsWithForms;
     use PersistsSettings;
 

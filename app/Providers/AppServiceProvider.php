@@ -9,6 +9,9 @@ use App\Observers\TicketObserver;
 use App\Services\Hosting\FlyWpHostingClient;
 use App\Services\Hosting\HostingClient;
 use App\Services\Hosting\LogHostingClient;
+use Illuminate\Auth\Events\Login;
+use Illuminate\Auth\Events\Logout;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\URL;
 use Illuminate\Support\ServiceProvider;
 
@@ -44,5 +47,11 @@ class AppServiceProvider extends ServiceProvider
         // Lifecycle notifications (e.g. "your ticket was resolved").
         Ticket::observe(TicketObserver::class);
         Task::observe(TaskObserver::class);
+
+        // A fresh password login must earn a fresh one-time code: clear any
+        // previous 2FA confirmation so the challenge middleware fires again.
+        // Logout wipes it too, so a shared browser can't inherit confirmation.
+        Event::listen(Login::class, fn () => session()->forget('two_factor.confirmed'));
+        Event::listen(Logout::class, fn () => session()->forget('two_factor.confirmed'));
     }
 }

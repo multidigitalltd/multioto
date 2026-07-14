@@ -2,6 +2,9 @@
 
 namespace App\Filament\Resources;
 
+use App\Enums\TwoFactorChannel;
+use App\Enums\UserRole;
+use App\Filament\Concerns\AdminOnly;
 use App\Filament\Resources\UserResource\Pages;
 use App\Models\User;
 use Filament\Forms;
@@ -10,11 +13,14 @@ use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Password;
 
 class UserResource extends Resource
 {
+    use AdminOnly;
+
     protected static ?string $model = User::class;
 
     protected static ?string $navigationIcon = 'heroicon-o-user-circle';
@@ -55,6 +61,42 @@ class UserResource extends Resource
                             ->required(fn (string $operation) => $operation === 'create')
                             ->minLength(8)
                             ->helperText('בעריכה — השאירו ריק כדי לא לשנות'),
+                        Forms\Components\Select::make('role')
+                            ->label('הרשאה')
+                            ->options(UserRole::class)
+                            ->default(UserRole::Agent)
+                            ->required()
+                            ->native(false)
+                            ->helperText('מנהל — גישה מלאה כולל הגדרות וניהול צוות. נציג — תפעול יומיומי בלבד.')
+                            // Never allow the last admin to be demoted — that would
+                            // lock everyone out of settings and team management.
+                            ->rule(fn (?User $record): \Closure => function (string $attribute, $value, \Closure $fail) use ($record): void {
+                                if ($record?->isAdmin() && $value !== UserRole::Admin->value
+                                    && User::where('role', UserRole::Admin)->whereKeyNot($record->getKey())->doesntExist()) {
+                                    $fail('חייב להישאר לפחות מנהל אחד במערכת.');
+                                }
+                            }),
+                        Forms\Components\TextInput::make('phone')
+                            ->label('טלפון')
+                            ->tel()
+                            ->maxLength(30)
+                            ->helperText('נדרש לקבלת קוד כניסה חד-פעמי בוואטסאפ.'),
+                    ])->columns(2),
+
+                Forms\Components\Section::make('אימות דו-שלבי (2FA)')
+                    ->description('בכניסה, לאחר הסיסמה, יישלח קוד חד-פעמי שיש להזין כדי להיכנס.')
+                    ->schema([
+                        Forms\Components\Toggle::make('two_factor_enabled')
+                            ->label('דרוש קוד כניסה חד-פעמי')
+                            ->live(),
+                        Forms\Components\Select::make('two_factor_channel')
+                            ->label('ערוץ שליחת הקוד')
+                            ->options(TwoFactorChannel::class)
+                            ->default(TwoFactorChannel::Email)
+                            ->native(false)
+                            ->required(fn (Forms\Get $get): bool => (bool) $get('two_factor_enabled'))
+                            ->visible(fn (Forms\Get $get): bool => (bool) $get('two_factor_enabled'))
+                            ->helperText('לוואטסאפ — יש למלא מספר טלפון בפרטי המשתמש.'),
                     ])->columns(2),
             ]);
     }
@@ -72,6 +114,16 @@ class UserResource extends Resource
                     ->label('אימייל')
                     ->searchable()
                     ->icon('heroicon-m-envelope'),
+                Tables\Columns\TextColumn::make('role')
+                    ->label('הרשאה')
+                    ->badge(),
+                Tables\Columns\IconColumn::make('two_factor_enabled')
+                    ->label('2FA')
+                    ->boolean()
+                    ->trueIcon('heroicon-o-lock-closed')
+                    ->falseIcon('heroicon-o-lock-open')
+                    ->trueColor('success')
+                    ->falseColor('gray'),
                 Tables\Columns\TextColumn::make('created_at')
                     ->label('נוצר')
                     ->date('d/m/Y')
@@ -102,7 +154,16 @@ class UserResource extends Resource
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([
-                    Tables\Actions\DeleteBulkAction::make()->label('מחיקה'),
+                    Tables\Actions\DeleteBulkAction::make()
+                        ->label('מחיקה')
+                        // Never let a member delete their own account in a batch —
+                        // this keeps at least one admin (you) in the system.
+                        ->before(function (Tables\Actions\DeleteBulkAction $action, Collection $records): void {
+                            if ($records->contains(fn (User $user): bool => $user->is(auth()->user()))) {
+                                Notification::make()->title('אי אפשר למחוק את המשתמש שלך')->danger()->send();
+                                $action->cancel();
+                            }
+                        }),
                 ]),
             ])
             ->emptyStateHeading('אין משתמשים');
