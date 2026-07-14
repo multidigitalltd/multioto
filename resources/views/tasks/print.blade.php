@@ -40,8 +40,9 @@
             <thead>
                 <tr>
                     <th>כותרת</th>
-                    <th>אחראי</th>
+                    <th>אחראים</th>
                     <th>לקוח</th>
+                    <th>תת-משימות</th>
                     <th>עדיפות</th>
                     <th>סטטוס</th>
                     <th>מועד יעד</th>
@@ -50,10 +51,12 @@
             <tbody>
                 @foreach ($tasks as $task)
                     @php($overdue = $task->due_at && $task->due_at->isPast())
+                    @php([$done, $total] = $task->subtaskProgress())
                     <tr>
                         <td>{{ $task->title }}</td>
-                        <td>{{ $task->assignee?->name ?? '—' }}</td>
+                        <td>{{ $task->assignees->pluck('name')->implode(', ') ?: '—' }}</td>
                         <td>{{ $task->customer?->name ?? '—' }}</td>
+                        <td>{{ $total > 0 ? "{$done}/{$total}" : '—' }}</td>
                         <td>{{ $task->priority?->getLabel() ?? '—' }}</td>
                         <td>{{ $task->status?->getLabel() ?? '—' }}</td>
                         <td class="{{ $overdue ? 'overdue' : '' }}">

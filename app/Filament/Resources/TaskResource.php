@@ -50,8 +50,21 @@ class TaskResource extends Resource
                         ->label('כותרת')->required()->maxLength(255)->columnSpanFull(),
                     Forms\Components\Textarea::make('description')
                         ->label('תיאור')->rows(3)->columnSpanFull(),
-                    Forms\Components\Select::make('assigned_to')
-                        ->label('אחראי')->relationship('assignee', 'name')->searchable()->preload()
+                    // A checklist of small items that get ticked off one by one.
+                    Forms\Components\Repeater::make('subtasks')
+                        ->label('תת-משימות')
+                        ->schema([
+                            Forms\Components\TextInput::make('title')->label('פריט')->required()->columnSpan(3),
+                            Forms\Components\Toggle::make('done')->label('בוצע')->default(false)->inline(false),
+                        ])
+                        ->columns(4)
+                        ->addActionLabel('הוסף תת-משימה')
+                        ->reorderable()
+                        ->collapsed(false)
+                        ->default([])
+                        ->columnSpanFull(),
+                    Forms\Components\Select::make('assignees')
+                        ->label('אחראים')->relationship('assignees', 'name')->multiple()->searchable()->preload()
                         ->placeholder('ללא שיוך'),
                     Forms\Components\Select::make('status')
                         ->label('סטטוס')->options(TaskStatus::class)->default(TaskStatus::Open)->required(),
@@ -72,11 +85,17 @@ class TaskResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
-            ->modifyQueryUsing(fn (Builder $query) => $query->with(['assignee', 'customer']))
+            ->modifyQueryUsing(fn (Builder $query) => $query->with(['assignees', 'customer']))
             ->columns([
                 Tables\Columns\TextColumn::make('title')->label('כותרת')->searchable()->wrap()->weight('medium'),
-                Tables\Columns\TextColumn::make('assignee.name')->label('אחראי')->placeholder('ללא')->searchable(),
+                Tables\Columns\TextColumn::make('assignees.name')->label('אחראים')->badge()->placeholder('ללא'),
                 Tables\Columns\TextColumn::make('customer.name')->label('לקוח')->placeholder('—')->toggleable(),
+                Tables\Columns\TextColumn::make('subtasks_progress')->label('תת-משימות')
+                    ->getStateUsing(function (Task $record): string {
+                        [$done, $total] = $record->subtaskProgress();
+
+                        return $total > 0 ? "{$done}/{$total} ✓" : '—';
+                    })->toggleable(),
                 Tables\Columns\TextColumn::make('priority')->label('עדיפות')->badge(),
                 Tables\Columns\TextColumn::make('status')->label('סטטוס')->badge(),
                 Tables\Columns\TextColumn::make('due_at')->label('יעד')->dateTime('d/m/Y')->placeholder('—')->sortable()
@@ -87,7 +106,7 @@ class TaskResource extends Resource
             ->filters([
                 Tables\Filters\Filter::make('mine')
                     ->label('המשימות שלי')
-                    ->query(fn (Builder $query): Builder => $query->where('assigned_to', auth()->id())),
+                    ->query(fn (Builder $query): Builder => $query->whereHas('assignees', fn (Builder $q) => $q->whereKey(auth()->id()))),
                 // Multi-select so the team can watch several statuses at once;
                 // defaults to the live work list (open + in progress).
                 Tables\Filters\SelectFilter::make('status')->label('סטטוס')->options(TaskStatus::class)

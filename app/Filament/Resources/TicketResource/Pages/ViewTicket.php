@@ -327,27 +327,27 @@ class ViewTicket extends ViewRecord
             ->color('gray')
             ->fillForm(fn (): array => [
                 'title' => $this->record->subject,
-                'assigned_to' => auth()->id(),
+                'assignees' => [auth()->id()],
                 'priority' => TicketPriority::Normal,
             ])
             ->form([
                 TextInput::make('title')->label('כותרת')->required()->maxLength(255),
-                Select::make('assigned_to')->label('אחראי')
-                    ->options(User::orderBy('name')->pluck('name', 'id'))->searchable()->placeholder('ללא שיוך'),
+                Select::make('assignees')->label('אחראים')
+                    ->options(User::orderBy('name')->pluck('name', 'id'))->multiple()->searchable()->placeholder('ללא שיוך'),
                 Select::make('priority')->label('עדיפות')
                     ->options(TicketPriority::class)->default(TicketPriority::Normal)->required(),
                 DateTimePicker::make('due_at')->label('מועד יעד')->seconds(false)->native(false),
             ])
             ->action(function (array $data): void {
-                Task::create([
+                $task = Task::create([
                     'title' => $data['title'],
-                    'assigned_to' => $data['assigned_to'] ?? null,
                     'priority' => $data['priority'],
                     'due_at' => $data['due_at'] ?? null,
                     'customer_id' => $this->record->customer_id,
                     'ticket_id' => $this->record->id,
                     'status' => TaskStatus::Open,
                 ]);
+                $task->assignees()->sync(array_filter((array) ($data['assignees'] ?? [])));
 
                 Notification::make()->title('נוצרה משימה מהפנייה')->success()->send();
             });

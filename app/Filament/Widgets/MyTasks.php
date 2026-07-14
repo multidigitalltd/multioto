@@ -26,7 +26,7 @@ class MyTasks extends BaseWidget
             ->query(
                 Task::query()
                     ->open()
-                    ->where('assigned_to', auth()->id())
+                    ->whereHas('assignees', fn ($q) => $q->whereKey(auth()->id()))
                     ->with('customer')
                     ->orderByRaw('due_at is null')
                     ->orderBy('due_at')

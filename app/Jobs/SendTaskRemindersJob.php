@@ -26,28 +26,37 @@ class SendTaskRemindersJob implements ShouldQueue
             return;
         }
 
-        Task::query()
-            ->due()
-            ->whereNull('reminded_at')
-            ->whereNotNull('assigned_to')
-            ->with('assignee')
-            ->get()
-            ->groupBy('assigned_to')
-            ->each(function ($tasks): void {
-                $assignee = $tasks->first()->assignee;
+        $due = Task::query()->due()->whereNull('reminded_at')->with('assignees')->get();
 
-                if ($assignee instanceof User && filled($assignee->email)) {
-                    Mail::to($assignee->email)->send(new NotificationMail(
-                        $this->subject($tasks->count()),
-                        $this->body($assignee, $tasks),
-                    ));
-                }
+        // Fan a task out to each of its assignees — a shared task reminds everyone
+        // it's on. Build one bucket of tasks per team member.
+        $perAssignee = [];
+        foreach ($due as $task) {
+            foreach ($task->assignees as $user) {
+                $perAssignee[$user->id]['user'] = $user;
+                $perAssignee[$user->id]['tasks'][] = $task;
+            }
+        }
 
-                // Mark reminded regardless of email presence, so a member without
-                // an address isn't retried every day (the in-panel widget still
-                // shows the task).
-                Task::whereKey($tasks->pluck('id'))->update(['reminded_at' => now()]);
-            });
+        foreach ($perAssignee as $entry) {
+            $user = $entry['user'];
+            $tasks = collect($entry['tasks']);
+
+            if ($user instanceof User && filled($user->email)) {
+                Mail::to($user->email)->send(new NotificationMail(
+                    $this->subject($tasks->count()),
+                    $this->body($user, $tasks),
+                ));
+            }
+        }
+
+        // Mark every reminded task (had at least one assignee) so it isn't retried
+        // daily; the in-panel widget still shows it. Unassigned tasks are skipped
+        // and re-evaluated next run.
+        $reminded = $due->filter(fn (Task $task): bool => $task->assignees->isNotEmpty())->pluck('id');
+        if ($reminded->isNotEmpty()) {
+            Task::whereKey($reminded)->update(['reminded_at' => now()]);
+        }
     }
 
     private function subject(int $count): string
