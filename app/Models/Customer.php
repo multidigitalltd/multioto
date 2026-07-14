@@ -64,6 +64,12 @@ class Customer extends Model
         return $this->hasMany(Ticket::class);
     }
 
+    /** Tickets newest-first — for the customer card's "פניות" list. */
+    public function recentTickets(): HasMany
+    {
+        return $this->tickets()->latest();
+    }
+
     public function invoices(): HasMany
     {
         return $this->hasMany(Invoice::class);

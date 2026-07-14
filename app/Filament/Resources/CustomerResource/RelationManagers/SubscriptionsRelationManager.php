@@ -95,6 +95,25 @@ class SubscriptionsRelationManager extends RelationManager
                         Notification::make()->title('החיוב נשלח לביצוע')->success()->send();
                     }),
                 Tables\Actions\EditAction::make()->label('עריכה'),
+                // Cancel keeps the subscription (and its billing history) but stops
+                // future charges — the usual way to end a subscription.
+                Tables\Actions\Action::make('cancel')
+                    ->label('ביטול מנוי')
+                    ->icon('heroicon-o-x-circle')
+                    ->color('danger')
+                    ->visible(fn (Subscription $record): bool => $record->status !== SubscriptionStatus::Canceled)
+                    ->requiresConfirmation()
+                    ->modalHeading('ביטול מנוי')
+                    ->modalDescription('המנוי יבוטל ולא יחויב יותר. ההיסטוריה והחיובים נשמרים. אפשר להפעיל מחדש דרך עריכה.')
+                    ->action(function (Subscription $record): void {
+                        $record->cancel();
+                        Notification::make()->title('המנוי בוטל')->success()->send();
+                    }),
+                // Delete removes the record entirely — for a subscription opened by
+                // mistake. Cancel is preferred for a real subscription.
+                Tables\Actions\DeleteAction::make()
+                    ->label('מחיקה')
+                    ->modalDescription('מחיקה מוחלטת של המנוי. לביטול מנוי פעיל עדיף להשתמש ב״ביטול מנוי״ כדי לשמור היסטוריה.'),
             ]);
     }
 }

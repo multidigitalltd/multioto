@@ -217,6 +217,19 @@ class Subscription extends Model
      * ChargeSubscriptionJob then bills the correct period and, on success, rolls
      * next_charge_at to that period's end.
      */
+    /**
+     * Cancel the subscription: stop billing but keep it on record (its charges
+     * and history stay intact). Use delete only to remove one created in error.
+     */
+    public function cancel(): void
+    {
+        $this->update([
+            'status' => SubscriptionStatus::Canceled,
+            'canceled_at' => now(),
+            'next_charge_at' => null,
+        ]);
+    }
+
     public function markDueNow(): void
     {
         if ($this->next_charge_at !== null && $this->next_charge_at->isPast()) {
