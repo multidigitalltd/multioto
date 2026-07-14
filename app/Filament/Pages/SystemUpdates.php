@@ -2,6 +2,7 @@
 
 namespace App\Filament\Pages;
 
+use App\Filament\Concerns\AdminOnly;
 use App\Models\SystemLog;
 use App\Services\System\DeployManager;
 use Filament\Actions\Action;
@@ -20,6 +21,7 @@ use Illuminate\Support\Facades\Auth;
  */
 class SystemUpdates extends Page implements HasTable
 {
+    use AdminOnly;
     use InteractsWithTable;
 
     protected static ?string $navigationIcon = 'heroicon-o-arrow-path';

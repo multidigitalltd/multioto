@@ -2,6 +2,7 @@
 
 namespace App\Filament\Pages;
 
+use App\Filament\Concerns\AdminOnly;
 use App\Filament\Concerns\PersistsSettings;
 use App\Models\Setting;
 use Filament\Forms\Components\Actions\Action as FormAction;
@@ -21,6 +22,7 @@ use Filament\Pages\Page;
  */
 class ManageSignup extends Page implements HasForms
 {
+    use AdminOnly;
     use InteractsWithForms;
     use PersistsSettings;
 

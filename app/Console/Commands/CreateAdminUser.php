@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Enums\UserRole;
 use App\Models\User;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Hash;
@@ -50,7 +51,7 @@ class CreateAdminUser extends Command
 
         $user = User::updateOrCreate(
             ['email' => $email],
-            ['name' => $name, 'password' => Hash::make($plain)],
+            ['name' => $name, 'password' => Hash::make($plain), 'role' => UserRole::Admin],
         );
 
         $this->info($user->wasRecentlyCreated

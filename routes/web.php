@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Auth\TwoFactorChallengeController;
 use App\Http\Controllers\BillingController;
 use App\Http\Controllers\BrandingController;
 use App\Http\Controllers\CustomerCardPdfController;
@@ -68,6 +69,22 @@ Route::get('/support/attachments/{message}/{index}', SupportAttachmentController
     ->middleware(['web', 'auth'])
     ->whereNumber('index')
     ->name('support.attachment');
+
+/*
+ | One-time-code (2FA) challenge. Deliberately OUTSIDE the admin panel so the
+ | panel's EnsureTwoFactorConfirmed middleware never applies here — otherwise a
+ | member owing a code would be redirected in a loop. Auth-only: the member is
+ | already logged in by password and now confirms the code.
+ */
+Route::middleware(['web', 'auth'])->group(function () {
+    Route::get('/two-factor', [TwoFactorChallengeController::class, 'show'])->name('two-factor.challenge');
+    Route::post('/two-factor', [TwoFactorChallengeController::class, 'store'])
+        ->middleware('throttle:20,1')
+        ->name('two-factor.verify');
+    Route::post('/two-factor/resend', [TwoFactorChallengeController::class, 'resend'])
+        ->middleware('throttle:10,1')
+        ->name('two-factor.resend');
+});
 
 // Print-friendly list of all open tasks — team-only (panel auth).
 Route::get('/tasks/print', TasksPrintController::class)
