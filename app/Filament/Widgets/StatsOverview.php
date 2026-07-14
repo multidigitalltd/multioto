@@ -4,14 +4,17 @@ namespace App\Filament\Widgets;
 
 use App\Enums\ChargeStatus;
 use App\Enums\SubscriptionStatus;
+use App\Enums\TaskStatus;
 use App\Enums\TicketStatus;
 use App\Filament\Resources\ChargeResource;
 use App\Filament\Resources\CustomerResource;
 use App\Filament\Resources\SubscriptionResource;
+use App\Filament\Resources\TaskResource;
 use App\Filament\Resources\TicketResource;
 use App\Models\Charge;
 use App\Models\Customer;
 use App\Models\Subscription;
+use App\Models\Task;
 use App\Models\Ticket;
 use Filament\Widgets\StatsOverviewWidget as BaseWidget;
 use Filament\Widgets\StatsOverviewWidget\Stat;
@@ -40,6 +43,7 @@ class StatsOverview extends BaseWidget
 
         $openTickets = Ticket::whereIn('status', [TicketStatus::Open, TicketStatus::Pending])->count();
         $pastDue = Subscription::where('status', SubscriptionStatus::PastDue)->count();
+        $openTasks = Task::whereIn('status', [TaskStatus::Open, TaskStatus::InProgress])->count();
 
         // Every tile links to the screen showing what it counts.
         return [
@@ -72,6 +76,12 @@ class StatsOverview extends BaseWidget
                 ->icon('heroicon-o-lifebuoy')
                 ->color($openTickets > 0 ? 'warning' : 'success')
                 ->url(TicketResource::getUrl()),
+
+            Stat::make('משימות פתוחות', $openTasks)
+                ->description('משימות צוות שממתינות לביצוע')
+                ->icon('heroicon-o-clipboard-document-check')
+                ->color($openTasks > 0 ? 'warning' : 'success')
+                ->url(TaskResource::getUrl()),
         ];
     }
 }
