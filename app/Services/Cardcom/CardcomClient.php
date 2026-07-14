@@ -117,10 +117,12 @@ class CardcomClient
 
         $url = (string) ($response['Url'] ?? '');
 
-        // No URL means Cardcom rejected the request — the customer would otherwise
-        // be framing a broken/404 page. Log the exact reason so it's diagnosable.
-        if (blank($url)) {
-            Log::warning('Cardcom LowProfile/Create (token) returned no URL', [
+        // A rejected request returns no absolute URL — often a RELATIVE error path
+        // like "/SuccessAndFailDealPage/...?massage=5046" that, if framed, resolves
+        // against our own domain and 404s. Treat anything that isn't a real https
+        // page as a failure, and log the exact reason so it's diagnosable.
+        if (! Str::startsWith($url, 'https://')) {
+            Log::warning('Cardcom LowProfile/Create (token) returned no usable URL', [
                 'customer_id' => $customerId,
                 'response_code' => $response['ResponseCode'] ?? null,
                 'description' => $response['Description'] ?? null,
