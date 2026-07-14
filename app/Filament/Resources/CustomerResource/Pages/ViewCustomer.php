@@ -335,10 +335,7 @@ class ViewCustomer extends ViewRecord
             ->color('gray')
             ->modalHeading('קישור מאובטח להזנת כרטיס')
             ->modalDescription('העתיקו ושִלחו ללקוח, או פִּתחו בעצמכם. הכרטיס מוזן בעמוד המאובטח של קארדקום.')
-            ->fillForm(fn (Customer $record): array => [
-                'link' => CardLink::for($record->id),
-            ])
-            ->form([CustomerResource::cardLinkField()])
+            ->modalContent(fn (Customer $record) => view('forms.copyable-link', ['link' => CardLink::for($record->id)]))
             ->extraModalFooterActions([
                 // Void every card link already sent to this customer: the old
                 // links stop working and a fresh one must be generated.

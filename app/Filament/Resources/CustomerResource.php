@@ -14,7 +14,6 @@ use App\Services\Notifications\CardCaptureLinkSender;
 use App\Support\CardLink;
 use App\Support\Money;
 use Filament\Forms;
-use Filament\Forms\Components\Actions\Action as FormAction;
 use Filament\Forms\Form;
 use Filament\Infolists\Components\Actions\Action as InfolistAction;
 use Filament\Infolists\Components\RepeatableEntry;
@@ -198,10 +197,7 @@ class CustomerResource extends Resource
                     ->color('gray')
                     ->modalHeading('קישור מאובטח להזנת כרטיס')
                     ->modalDescription('העתיקו את הקישור ושִלחו ללקוח, או פִּתחו אותו בעצמכם כדי להזין כרטיס (הכרטיס מוזן בעמוד המאובטח של קארדקום). הקישור חתום ופג תוקף.')
-                    ->fillForm(fn (Customer $record): array => [
-                        'link' => CardLink::for($record->id),
-                    ])
-                    ->form([self::cardLinkField()])
+                    ->modalContent(fn (Customer $record) => view('forms.copyable-link', ['link' => CardLink::for($record->id)]))
                     ->modalSubmitAction(false)
                     ->modalCancelActionLabel('סגור'),
 
@@ -215,34 +211,6 @@ class CustomerResource extends Resource
             ])
             ->emptyStateHeading('אין לקוחות עדיין')
             ->emptyStateDescription('הקימו לקוח חדש דרך "לקוח חדש" בתפריט.');
-    }
-
-    /**
-     * The signed card-capture link shown in the "copy link" modals (both the
-     * table row action and the customer page), with a one-click copy button —
-     * so the team can grab the link without hand-selecting the text.
-     */
-    public static function cardLinkField(): Forms\Components\TextInput
-    {
-        return Forms\Components\TextInput::make('link')
-            ->label('קישור')
-            ->readOnly()
-            ->columnSpanFull()
-            ->suffixAction(
-                FormAction::make('copyLink')
-                    ->icon('heroicon-m-clipboard-document')
-                    ->tooltip('העתקה')
-                    // Read the LIVE input value at click time (walk up to the
-                    // nearest ancestor holding an input) rather than baking the
-                    // state at render — in a modal the render-time state is often
-                    // empty, which is why the old copy "succeeded" but copied
-                    // nothing. execCommand covers non-secure contexts (plain http).
-                    ->extraAttributes(['x-on:click' => 'let n=$el;while(n&&!(n.querySelector&&n.querySelector("input,textarea")))n=n.parentElement;'
-                        .'const i=n&&n.querySelector("input,textarea");const t=i?i.value:"";if(!t)return;'
-                        .'const fb=()=>{try{i.focus();i.select();i.setSelectionRange(0,99999);document.execCommand("copy")}catch(e){}};'
-                        .'if(navigator.clipboard&&window.isSecureContext){navigator.clipboard.writeText(t).catch(fb)}else{fb()}'])
-                    ->action(fn () => Notification::make()->title('הקישור הועתק')->success()->send()),
-            );
     }
 
     /**
