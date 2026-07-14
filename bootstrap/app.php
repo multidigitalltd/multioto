@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Middleware\AuthenticatesAgentSite;
 use App\Http\Middleware\EnsurePortalCustomer;
 use App\Http\Middleware\SecurityHeaders;
 use Illuminate\Foundation\Application;
@@ -20,8 +21,13 @@ return Application::configure(basePath: dirname(__DIR__))
         // Baseline security response headers on every request.
         $middleware->append(SecurityHeaders::class);
 
-        // Session guard for the customer self-service portal.
-        $middleware->alias(['portal.customer' => EnsurePortalCustomer::class]);
+        // Route middleware aliases:
+        // - portal.customer: session guard for the customer self-service portal.
+        // - agent.site: per-site token auth for the companion plugin's update channel.
+        $middleware->alias([
+            'portal.customer' => EnsurePortalCustomer::class,
+            'agent.site' => AuthenticatesAgentSite::class,
+        ]);
 
         // Guests hitting an `auth`-guarded web route (e.g. a support attachment)
         // are sent to the admin panel's login, not an undefined `login` route.

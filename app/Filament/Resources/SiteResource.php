@@ -81,6 +81,37 @@ class SiteResource extends Resource
                             ->options(SiteStatus::class)
                             ->required(),
                     ])->columns(2),
+
+                // Connection to the AI site agent (MCP). Admin-only: it holds the
+                // endpoint and the per-site secret we present to the site.
+                Forms\Components\Section::make('חיבור סוכן AI')
+                    ->description('חיבור MCP לאתר — הפעולות עצמן תמיד עוברות אישור מנהל.')
+                    ->visible(fn (): bool => auth()->user()?->isAdmin() ?? false)
+                    ->schema([
+                        Forms\Components\Toggle::make('mcp_enabled')
+                            ->label('חיבור פעיל')
+                            ->inline(false),
+                        Forms\Components\Select::make('environment')
+                            ->label('סביבה')
+                            ->options(['production' => 'ייצור', 'staging' => 'סטייג׳ינג'])
+                            ->default('production')
+                            ->native(false),
+                        Forms\Components\TextInput::make('mcp_endpoint')
+                            ->label('כתובת MCP')
+                            ->url()
+                            ->maxLength(255)
+                            ->columnSpanFull(),
+                        Forms\Components\TextInput::make('mcp_secret')
+                            ->label('מפתח MCP')
+                            ->password()
+                            ->maxLength(255)
+                            ->helperText('בעריכה — השאירו ריק כדי לא לשנות.')
+                            // Never render the stored secret back into the form;
+                            // a blank field means "leave unchanged".
+                            ->formatStateUsing(fn (): ?string => null)
+                            ->dehydrated(fn ($state): bool => filled($state))
+                            ->columnSpanFull(),
+                    ])->columns(2),
             ]);
     }
 
@@ -227,6 +258,29 @@ class SiteResource extends Resource
                             ->send();
                     }),
 
+                // Issue a fresh per-site connection token for the companion
+                // plugin. Shown once — installed into the site's plugin config —
+                // and rotating it revokes the previous one. Admin-only.
+                Tables\Actions\Action::make('generateAgentToken')
+                    ->label('טוקן חיבור')
+                    ->icon('heroicon-o-key')
+                    ->color('gray')
+                    ->visible(fn (): bool => auth()->user()?->isAdmin() ?? false)
+                    ->requiresConfirmation()
+                    ->modalHeading('יצירת טוקן חיבור לאתר')
+                    ->modalDescription('ייווצר טוקן חדש עבור התוסף באתר. אם כבר קיים טוקן — הוא יבוטל. הטוקן יוצג פעם אחת בלבד.')
+                    ->modalSubmitActionLabel('צור טוקן')
+                    ->action(function (Site $record): void {
+                        $token = $record->generateAgentToken();
+
+                        Notification::make()
+                            ->title('הטוקן נוצר — העתיקו אותו עכשיו')
+                            ->body('התקינו בתוסף באתר. לא ניתן לשחזר אותו מאוחר יותר:'."\n\n".$token)
+                            ->success()
+                            ->persistent()
+                            ->send();
+                    }),
+
                 Tables\Actions\ViewAction::make()->label('ניטור'),
 
                 Tables\Actions\EditAction::make()->label('עריכה'),
@@ -274,7 +328,8 @@ class SiteResource extends Resource
     public static function getRelations(): array
     {
         return [
-            //
+            SiteResource\RelationManagers\MemoriesRelationManager::class,
+            SiteResource\RelationManagers\ChangesRelationManager::class,
         ];
     }
 
