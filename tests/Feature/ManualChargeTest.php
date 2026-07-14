@@ -8,9 +8,11 @@ use App\Enums\WebhookSource;
 use App\Jobs\IssueInvoiceJob;
 use App\Jobs\ProcessCardcomLowProfileJob;
 use App\Jobs\ProcessManualChargeJob;
+use App\Mail\NotificationMail;
 use App\Models\Charge;
 use App\Models\Customer;
 use App\Models\PaymentToken;
+use App\Models\Subscription;
 use App\Models\WebhookEvent;
 use App\Services\Billing\ManualChargeService;
 use App\Services\Cardcom\CardcomClient;
@@ -20,6 +22,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Mail;
 use Tests\TestCase;
 
 class ManualChargeTest extends TestCase
@@ -347,6 +350,88 @@ class ManualChargeTest extends TestCase
         [$net, $vat] = $service->splitVat(11800, true);
         $this->assertSame(11800, $net);
         $this->assertSame(0, $vat);
+    }
+
+    public function test_a_per_charge_vat_exemption_overrides_the_customer_flag(): void
+    {
+        Bus::fake([IssueInvoiceJob::class, ProcessManualChargeJob::class]);
+        config(['billing.vat_rate' => 0.18]);
+
+        // The customer is normally taxable, but this one-off charge is marked
+        // exempt (e.g. a foreign customer) — the whole amount is net, no VAT.
+        $customer = Customer::factory()->create(['vat_exempt' => false]);
+        $charge = app(ManualChargeService::class)->chargeSavedToken($customer, 11800, 'שירות פטור', vatExempt: true);
+
+        $this->assertSame(11800, $charge->amount_agorot);
+        $this->assertSame(0, $charge->vat_agorot);
+        $this->assertSame(11800, $charge->total_agorot);
+    }
+
+    public function test_a_taxable_charge_overrides_an_exempt_customer_flag(): void
+    {
+        Bus::fake([IssueInvoiceJob::class, ProcessManualChargeJob::class]);
+        config(['billing.vat_rate' => 0.18]);
+
+        // Opposite direction: an exempt customer, but this charge is taxable.
+        $customer = Customer::factory()->create(['vat_exempt' => true]);
+        $charge = app(ManualChargeService::class)->chargeSavedToken($customer, 11800, 'שירות חייב', vatExempt: false);
+
+        $this->assertSame(10000, $charge->amount_agorot);
+        $this->assertSame(1800, $charge->vat_agorot);
+    }
+
+    public function test_a_one_off_charge_invoice_emails_the_team_a_copy(): void
+    {
+        Mail::fake();
+        config([
+            'billing.linet.base_url' => 'https://app.linet.test/api',
+            'billing.linet.login_id' => 'lid', 'billing.linet.key' => 'lhash',
+            'billing.linet.company_id' => '1', 'billing.linet.doctype' => '9',
+            'billing.linet.vat_cat_taxable' => 1, 'billing.linet.payment_type' => 3,
+            'billing.notifications.team_email' => 'ops@multidigital.co.il',
+        ]);
+        Http::fake(['*/create/doc' => Http::response(['id' => 321, 'pdf' => 'https://app.linet.test/doc/321.pdf'])]);
+
+        $customer = Customer::factory()->create(['vat_exempt' => false]);
+        $charge = $this->oneOffCharge($customer, ChargeStatus::Succeeded);
+
+        (new IssueInvoiceJob($charge->id))->handle(app(InvoiceIssuer::class));
+
+        // Linet emails the customer; the team also gets a copy for a one-off.
+        Mail::assertSent(NotificationMail::class, fn ($mail) => $mail->hasTo('ops@multidigital.co.il'));
+    }
+
+    public function test_a_subscription_charge_invoice_does_not_email_the_team(): void
+    {
+        Mail::fake();
+        config([
+            'billing.linet.base_url' => 'https://app.linet.test/api',
+            'billing.linet.login_id' => 'lid', 'billing.linet.key' => 'lhash',
+            'billing.linet.company_id' => '1', 'billing.linet.doctype' => '9',
+            'billing.linet.vat_cat_taxable' => 1, 'billing.linet.payment_type' => 3,
+            'billing.notifications.team_email' => 'ops@multidigital.co.il',
+        ]);
+        Http::fake(['*/create/doc' => Http::response(['id' => 654])]);
+
+        $customer = Customer::factory()->create(['vat_exempt' => false]);
+        $subscription = Subscription::factory()->create(['customer_id' => $customer->id]);
+        $charge = Charge::create([
+            'subscription_id' => $subscription->id,
+            'customer_id' => $customer->id,
+            'amount_agorot' => 10000,
+            'vat_agorot' => 1800,
+            'total_agorot' => 11800,
+            'status' => ChargeStatus::Succeeded,
+            'attempt_number' => 1,
+            'description' => 'מנוי',
+            'period_start' => now()->toDateString(),
+            'period_end' => now()->toDateString(),
+        ]);
+
+        (new IssueInvoiceJob($charge->id))->handle(app(InvoiceIssuer::class));
+
+        // A recurring subscription invoice is routine — no team copy.
+        Mail::assertNothingSent();
     }
 
     public function test_invoice_issuer_names_the_missing_linet_settings_before_calling_linet(): void

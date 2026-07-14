@@ -35,7 +35,15 @@ class CardTokenService
             return null;
         }
 
-        return $this->store($customer, $tokenInfo);
+        // The card's last-4 and brand live on TranzactionInfo, NOT TokenInfo —
+        // merge them in so the saved card shows "ויזה · 6829" and not a blank.
+        $tran = $result['TranzactionInfo'] ?? [];
+        $cardInfo = array_merge($tokenInfo, [
+            'CardLast4Digits' => $tran['Last4CardDigits'] ?? $tran['Last4CardDigitsString'] ?? $tokenInfo['CardLast4Digits'] ?? null,
+            'CardBrand' => $tran['CardName'] ?? $tran['Brand'] ?? $tokenInfo['CardBrand'] ?? null,
+        ]);
+
+        return $this->store($customer, $cardInfo);
     }
 
     /**

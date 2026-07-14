@@ -47,7 +47,11 @@ class InvoiceIssuer
             return ['ok' => false, 'error' => 'לא נמצא לקוח משויך לחיוב.'];
         }
 
-        $vatCategory = $customer->vat_exempt ? VatCategory::Exempt : VatCategory::Taxable;
+        // Follow the CHARGE, not the customer flag: a per-charge exemption (a
+        // manual charge marked "פטור ממע״מ") sets vat_agorot to 0, and the
+        // invoice must match. For a normal charge this is identical to the
+        // customer's flag (exempt customer → 0 VAT → exempt invoice).
+        $vatCategory = $charge->vat_agorot <= 0 ? VatCategory::Exempt : VatCategory::Taxable;
 
         // Preflight: never call Linet with missing configuration. Linet's own
         // errors for these cases are cryptic ("סוג מסמך לא תקין" וכד'); this

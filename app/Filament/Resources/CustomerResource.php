@@ -233,7 +233,13 @@ class CustomerResource extends Resource
                 fn (?string $state): FormAction => FormAction::make('copyLink')
                     ->icon('heroicon-m-clipboard-document')
                     ->tooltip('העתקה')
-                    ->extraAttributes(['x-on:click' => 'navigator.clipboard?.writeText('.Js::from((string) $state).')'])
+                    // Robust copy: the async Clipboard API only works in a secure
+                    // context, so fall back to a hidden textarea + execCommand.
+                    // (The old navigator.clipboard?.writeText() silently no-op'd
+                    // while the notification still claimed success.)
+                    ->extraAttributes(['x-on:click' => 'const t='.Js::from((string) $state).';'
+                        .'const fb=()=>{const a=document.createElement("textarea");a.value=t;a.style.position="fixed";a.style.opacity="0";document.body.appendChild(a);a.focus();a.select();try{document.execCommand("copy")}catch(e){}a.remove()};'
+                        .'if(navigator.clipboard&&window.isSecureContext){navigator.clipboard.writeText(t).catch(fb)}else{fb()}'])
                     ->action(fn () => Notification::make()->title('הקישור הועתק')->success()->send()),
             );
     }
