@@ -330,6 +330,11 @@ return [
                 'image/heif-sequence' => 'heif',
                 'application/pdf' => 'pdf',
                 'text/plain' => 'txt',
+                // CSV sniffs as text/csv on some libmagic versions and text/plain
+                // on others; the text/plain case keeps the ".csv" via the sender
+                // extension (see AttachmentStore::resolveExtension).
+                'text/csv' => 'csv',
+                'application/csv' => 'csv',
                 'application/msword' => 'doc',
                 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' => 'docx',
                 'application/vnd.ms-excel' => 'xls',

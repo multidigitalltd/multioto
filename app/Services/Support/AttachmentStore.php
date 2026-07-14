@@ -42,7 +42,7 @@ class AttachmentStore
             return null;
         }
 
-        $extension = $allowed[$mime];
+        $extension = $this->resolveExtension($mime, $allowed[$mime], $filename);
         $path = sprintf('attachments/%d/%s.%s', $ticketId, (string) Str::uuid(), $extension);
 
         Storage::disk($config['disk'])->put($path, $contents);
@@ -54,6 +54,27 @@ class AttachmentStore
             'path' => $path,
             'disk' => $config['disk'],
         ];
+    }
+
+    /**
+     * The stored extension. Defaults to the MIME-derived one (the security-safe
+     * mapping), but keeps the sender's original extension when it's a known-safe
+     * text format — many of them (csv, tsv, ics, vcf, log…) all sniff as
+     * text/plain, so a customer's ".csv" would otherwise land as ".txt". Only
+     * the text/plain family is widened, and only to a fixed allow-list, so a
+     * "invoice.php" can still never be written.
+     */
+    protected function resolveExtension(string $mime, string $mimeExtension, string $filename): string
+    {
+        if ($mime === 'text/plain') {
+            $original = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
+
+            if (in_array($original, ['txt', 'csv', 'tsv', 'log', 'md', 'vcf', 'ics'], true)) {
+                return $original;
+            }
+        }
+
+        return $mimeExtension;
     }
 
     /** Real MIME from the file contents (null when finfo is unavailable). */

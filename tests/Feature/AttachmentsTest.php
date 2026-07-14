@@ -59,6 +59,46 @@ class AttachmentsTest extends TestCase
         $this->assertStringEndsWith('.png', $meta['name']);
     }
 
+    public function test_a_csv_is_stored_as_csv_not_txt(): void
+    {
+        Storage::fake('local');
+
+        // Real CSV bytes — however libmagic sniffs them (text/csv or text/plain),
+        // the file must be stored as ".csv", not the ".txt" the customer reported.
+        $meta = app(AttachmentStore::class)->store(1, 'report.csv', "name,amount\nDana,100\n", 'text/csv');
+
+        $this->assertNotNull($meta);
+        $this->assertStringEndsWith('.csv', $meta['path']);
+        $this->assertStringEndsWith('.csv', $meta['name']);
+    }
+
+    public function test_a_plain_text_sniff_keeps_a_safe_sender_extension(): void
+    {
+        Storage::fake('local');
+
+        // Bytes that sniff as text/plain but arrived as ".csv" keep the ".csv"
+        // (the exact case the customer hit — the widening allow-list).
+        $meta = app(AttachmentStore::class)->store(1, 'notes.csv', "hello world\n", 'text/plain');
+
+        $this->assertNotNull($meta);
+        $this->assertSame('text/plain', $meta['mime']);
+        $this->assertStringEndsWith('.csv', $meta['path']);
+        $this->assertStringEndsWith('.csv', $meta['name']);
+    }
+
+    public function test_a_plain_text_file_with_a_dangerous_extension_falls_back_to_txt(): void
+    {
+        Storage::fake('local');
+
+        // Allowed content (text/plain) but a non-safe extension → stored as .txt,
+        // never .php. The text-extension widening is a fixed allow-list.
+        $meta = app(AttachmentStore::class)->store(1, 'shell.php', "just some text\n", 'text/plain');
+
+        $this->assertNotNull($meta);
+        $this->assertStringEndsWith('.txt', $meta['path']);
+        $this->assertStringEndsWith('.txt', $meta['name']);
+    }
+
     public function test_inbound_email_attachment_is_decoded_and_stored(): void
     {
         Storage::fake('local');
