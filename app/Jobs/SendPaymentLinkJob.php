@@ -4,7 +4,6 @@ namespace App\Jobs;
 
 use App\Enums\NotificationType;
 use App\Mail\NotificationMail;
-use App\Models\Charge;
 use App\Models\Customer;
 use App\Models\NotificationLog;
 use App\Services\Billing\ManualChargeService;

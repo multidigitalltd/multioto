@@ -16,13 +16,17 @@ use Illuminate\Http\Response;
  */
 class CardcomWebhookController extends Controller
 {
+    use VerifiesWebhookSecret;
+
     public function __invoke(Request $request): Response
     {
         // Fail closed: a blank/unset secret must never mean "accept everything".
+        // Accept the secret from a header (preferred — stays out of URLs/logs) or
+        // the legacy ?secret= query param.
         $secret = (string) config('billing.cardcom.webhook_secret');
 
         abort_unless(
-            $secret !== '' && hash_equals($secret, (string) $request->query('secret')),
+            $secret !== '' && hash_equals($secret, $this->providedSecret($request)),
             403,
         );
 
@@ -30,7 +34,8 @@ class CardcomWebhookController extends Controller
             WebhookSource::Cardcom,
             'low_profile_completed',
             $request->input('LowProfileId'),
-            $request->all(),
+            // Never persist the shared secret into webhook_events.payload.
+            $request->except('secret'),
         );
 
         if ($fresh) {
