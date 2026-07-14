@@ -12,6 +12,7 @@ use App\Services\Billing\ManualChargeService;
 use App\Services\Cardcom\CardcomClient;
 use App\Services\Cardcom\CardTokenService;
 use App\Services\Support\AgentReply;
+use App\Services\Waha\WahaClient;
 use App\Support\CardLink;
 use App\Support\EmailBody;
 use App\Support\Money;
@@ -91,11 +92,19 @@ class ViewCustomer extends ViewRecord
                     return;
                 }
 
+                // For WhatsApp, store the customer's chat id as the thread ref so
+                // their reply lands back on THIS ticket (IngestWhatsappMessageJob
+                // threads by chat id) instead of opening a separate one.
+                $threadRef = $channel === 'email'
+                    ? null
+                    : app(WahaClient::class)->normalizeChatId((string) ($record->whatsapp_jid ?? $record->phone));
+
                 $ticket = Ticket::create([
                     'customer_id' => $record->id,
                     'channel' => $channel === 'email' ? TicketChannel::Email : TicketChannel::Whatsapp,
                     'subject' => filled($data['subject']) ? $data['subject'] : 'פנייה מהצוות',
                     'status' => TicketStatus::Open,
+                    'external_thread_ref' => $threadRef,
                 ]);
 
                 $agentReply->send($ticket, $body, EmailBody::toSafeHtml($html));

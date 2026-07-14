@@ -36,6 +36,8 @@ class ProactiveContactTest extends TestCase
 
         $ticket = Ticket::where('customer_id', $customer->id)->sole();
         $this->assertSame(TicketChannel::Whatsapp, $ticket->channel);
+        // The chat id is stored so the customer's reply threads back onto this ticket.
+        $this->assertSame('972501234567@c.us', $ticket->external_thread_ref);
 
         $out = $ticket->messages()->where('direction', MessageDirection::Outbound)->sole();
         $this->assertSame('מה שלומך?', $out->body);
