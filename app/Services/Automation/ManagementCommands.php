@@ -57,6 +57,12 @@ class ManagementCommands
             return $this->replyToTicket((int) $m[1], trim($m[2]));
         }
 
+        // "פנה <טלפון> <טקסט>" — proactively message a customer (opens a ticket
+        // AND sends). Checked before "כרטיס", which only opens an internal ticket.
+        if (preg_match('/^\s*פנה\s+(\+?[0-9\-]{6,})\s+(.+)/us', $text, $m)) {
+            return $this->contactCustomer($m[1], trim($m[2]));
+        }
+
         // "כרטיס <טלפון> <תיאור>" / "פתח <טלפון> <תיאור>" — open a new ticket.
         if (preg_match('/^\s*(?:כרטיס|פתח)\s+(\+?[0-9\-]{6,})\s+(.+)/us', $text, $m)) {
             return $this->open($m[1], trim($m[2]), $messageId);
@@ -65,6 +71,44 @@ class ManagementCommands
         // Not a recognised command — never open a ticket from the management
         // group; nudge the owner to the command list instead.
         return $this->help();
+    }
+
+    /**
+     * Proactively reach out to a customer by phone: open a WhatsApp ticket AND
+     * send the message in one step (matches the "פנה ללקוח" panel action). The
+     * customer's reply threads back onto this ticket.
+     */
+    private function contactCustomer(string $phone, string $body): string
+    {
+        $digits = preg_replace('/\D+/', '', $phone) ?? '';
+        if (str_starts_with($digits, '0')) {
+            $digits = (string) config('billing.waha.default_country_code', '972').substr($digits, 1);
+        }
+
+        if ($digits === '') {
+            return 'מספר טלפון לא תקין.';
+        }
+
+        $e164 = '+'.$digits;
+        $customer = $this->intake->matchCustomer(phone: $phone)
+            ?? $this->intake->matchCustomer(phone: $e164);
+
+        $ticket = Ticket::create([
+            'customer_id' => $customer?->id,
+            'contact_handle' => $customer ? null : $e164,
+            'channel' => TicketChannel::Whatsapp,
+            'subject' => 'פנייה יזומה מהצוות'.($customer ? ' — '.$customer->name : ''),
+            'status' => TicketStatus::Open,
+            // The customer's WhatsApp chat — delivery target AND the thread the
+            // customer's reply lands on.
+            'external_thread_ref' => $digits.'@c.us',
+        ]);
+
+        $this->reply->send($ticket, $body);
+
+        $who = $customer?->name ?? $e164;
+
+        return "ההודעה נשלחה ל{$who} ✓ (פנייה #{$ticket->id})";
     }
 
     /** Open a new ticket for the customer matched by phone (or unidentified). */
@@ -177,6 +221,7 @@ class ManagementCommands
         return implode("\n", [
             'פקודות ניהול זמינות בקבוצה:',
             '• *פתוחות* — רשימת הפניות הפתוחות',
+            '• *פנה <טלפון> <טקסט>* — פנייה יזומה ללקוח (פותח פנייה ושולח)',
             '• *כרטיס <טלפון> <תיאור>* — פתיחת פנייה חדשה',
             '• *ענה <מספר> <טקסט>* — שליחת תשובה ללקוח של הפנייה',
             '• *סגור <מספר>* — סגירת פנייה',

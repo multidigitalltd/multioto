@@ -148,6 +148,24 @@ class WhatsappManagementTest extends TestCase
         );
     }
 
+    public function test_the_group_can_proactively_message_a_customer(): void
+    {
+        $customer = Customer::factory()->create(['phone' => '+972501234567']);
+
+        $this->inbound(self::MGMT, 'פנה +972501234567 יש לנו שאלה לגבי האתר שלך');
+
+        // A ticket was opened for the customer and the message delivered to them.
+        $ticket = Ticket::where('customer_id', $customer->id)->sole();
+        $this->assertSame(TicketChannel::Whatsapp, $ticket->channel);
+        $out = $ticket->messages()->where('direction', MessageDirection::Outbound)->sole();
+        $this->assertSame('יש לנו שאלה לגבי האתר שלך', $out->body);
+        $this->assertTrue(
+            Http::recorded()->contains(fn ($pair) => ($pair[0]->data()['chatId'] ?? null) === '972501234567@c.us'
+                && str_contains($pair[0]->data()['text'] ?? '', 'יש לנו שאלה')),
+            'The proactive message was not delivered to the customer chat.'
+        );
+    }
+
     public function test_a_reply_to_a_missing_ticket_is_reported(): void
     {
         $this->inbound(self::MGMT, 'ענה 9999 שלום');

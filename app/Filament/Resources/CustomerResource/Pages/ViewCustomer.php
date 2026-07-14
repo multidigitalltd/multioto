@@ -2,13 +2,18 @@
 
 namespace App\Filament\Resources\CustomerResource\Pages;
 
+use App\Enums\TicketChannel;
+use App\Enums\TicketStatus;
 use App\Filament\Resources\CustomerResource;
 use App\Jobs\SendPaymentLinkJob;
 use App\Models\Customer;
+use App\Models\Ticket;
 use App\Services\Billing\ManualChargeService;
 use App\Services\Cardcom\CardcomClient;
 use App\Services\Cardcom\CardTokenService;
+use App\Services\Support\AgentReply;
 use App\Support\CardLink;
+use App\Support\EmailBody;
 use App\Support\Money;
 use Filament\Actions;
 use Filament\Forms;
@@ -29,12 +34,77 @@ class ViewCustomer extends ViewRecord
     protected function getHeaderActions(): array
     {
         return [
+            $this->contactCustomerAction(),
             $this->chargeAction(),
             $this->paymentLinkAction(),
             $this->cardLinkAction(),
             $this->syncCardAction(),
             Actions\EditAction::make()->label('עריכה'),
         ];
+    }
+
+    /**
+     * Proactively reach out to the customer: open a support ticket AND send the
+     * first message in one step, so the team can ask the customer something and
+     * the reply threads back onto the same ticket. Uses the shared AgentReply so
+     * it behaves exactly like any other outbound reply.
+     */
+    private function contactCustomerAction(): Actions\Action
+    {
+        return Actions\Action::make('contactCustomer')
+            ->label('פנה ללקוח')
+            ->icon('heroicon-o-chat-bubble-left-ellipsis')
+            ->color('info')
+            ->form([
+                Forms\Components\Radio::make('channel')
+                    ->label('לשלוח דרך')
+                    ->options(['whatsapp' => 'וואטסאפ', 'email' => 'מייל'])
+                    ->default(fn (Customer $record): string => filled($record->whatsapp_jid) || filled($record->phone) ? 'whatsapp' : 'email')
+                    ->required()
+                    ->live(),
+                Forms\Components\TextInput::make('subject')
+                    ->label('נושא (כותרת הפנייה / שורת הנושא במייל)')
+                    ->default('פנייה מהצוות')->maxLength(120)->required(),
+                Forms\Components\RichEditor::make('message')
+                    ->label('ההודעה ללקוח')
+                    ->toolbarButtons(['bold', 'italic', 'bulletList', 'orderedList', 'link'])
+                    ->required(),
+            ])
+            ->action(function (array $data, Customer $record, AgentReply $agentReply): void {
+                $channel = $data['channel'] ?? 'whatsapp';
+                $missing = $channel === 'email'
+                    ? blank($record->email)
+                    : (blank($record->whatsapp_jid) && blank($record->phone));
+
+                if ($missing) {
+                    Notification::make()->title('אין ללקוח פרטי '.($channel === 'email' ? 'מייל' : 'וואטסאפ'))->danger()->send();
+
+                    return;
+                }
+
+                $html = trim((string) $data['message']);
+                $body = EmailBody::toText(null, $html);
+
+                if ($body === '') {
+                    Notification::make()->title('אין תוכן לשליחה')->warning()->send();
+
+                    return;
+                }
+
+                $ticket = Ticket::create([
+                    'customer_id' => $record->id,
+                    'channel' => $channel === 'email' ? TicketChannel::Email : TicketChannel::Whatsapp,
+                    'subject' => filled($data['subject']) ? $data['subject'] : 'פנייה מהצוות',
+                    'status' => TicketStatus::Open,
+                ]);
+
+                $agentReply->send($ticket, $body, EmailBody::toSafeHtml($html));
+
+                Notification::make()
+                    ->title('ההודעה נשלחה ללקוח')
+                    ->body("נפתחה פנייה #{$ticket->id} — תשובת הלקוח תיכנס לאותה שיחה.")
+                    ->success()->send();
+            });
     }
 
     /**
