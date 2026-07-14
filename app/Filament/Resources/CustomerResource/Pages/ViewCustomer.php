@@ -305,18 +305,20 @@ class ViewCustomer extends ViewRecord
                     return;
                 }
 
+                // Hand out OUR cancelable gateway link (not the raw Cardcom URL),
+                // so a link sent to the customer can later be voided.
                 Notification::make()
                     ->title('ללקוח אין כרטיס שמור — נוצר עמוד תשלום')
-                    ->body('פִּתחו את עמוד התשלום להזנת כרטיס, או העתיקו ושִלחו את הקישור ללקוח: '.$result['url'])
+                    ->body('פִּתחו את עמוד התשלום להזנת כרטיס, או העתיקו ושִלחו את הקישור ללקוח: '.$result['pay_url'])
                     ->success()->persistent()
                     ->actions([
-                        NotificationAction::make('open')->label('פתח עמוד תשלום')->url($result['url'], shouldOpenInNewTab: true),
+                        NotificationAction::make('open')->label('פתח עמוד תשלום')->url($result['pay_url'], shouldOpenInNewTab: true),
                     ])
                     ->send();
             });
     }
 
-    /** Show the signed card-capture link to copy/open. */
+    /** Show the signed card-capture link to copy/open, with an option to void it. */
     private function cardLinkAction(): Actions\Action
     {
         return Actions\Action::make('cardLink')
@@ -329,6 +331,21 @@ class ViewCustomer extends ViewRecord
                 'link' => CardLink::for($record->id),
             ])
             ->form([CustomerResource::cardLinkField()])
+            ->extraModalFooterActions([
+                // Void every card link already sent to this customer: the old
+                // links stop working and a fresh one must be generated.
+                Actions\Action::make('revokeCardLink')
+                    ->label('בטל קישורים קיימים')
+                    ->color('danger')
+                    ->icon('heroicon-o-x-circle')
+                    ->requiresConfirmation()
+                    ->modalHeading('ביטול קישורי כרטיס')
+                    ->modalDescription('כל קישור להזנת כרטיס שכבר נשלח ללקוח יפסיק לעבוד ויציג "אינו פעיל". יצירת קישור חדש תיצור קישור פעיל.')
+                    ->action(function (Customer $record): void {
+                        $record->revokeCardLinks();
+                        Notification::make()->title('הקישורים בוטלו — קישורים קודמים אינם פעילים עוד')->success()->send();
+                    }),
+            ])
             ->modalSubmitAction(false)
             ->modalCancelActionLabel('סגור');
     }

@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Str;
 
 class Customer extends Model
 {
@@ -16,7 +17,7 @@ class Customer extends Model
     protected $fillable = [
         'name', 'contact_name', 'business_number', 'business_type', 'vat_exempt', 'email', 'phone',
         'address', 'payment_method', 'terms_accepted_at', 'signature_path', 'signed_ip', 'signed_pdf_path',
-        'whatsapp_jid', 'cardcom_account_id', 'pending_card_lp_id', 'default_token_id', 'status', 'notes',
+        'whatsapp_jid', 'cardcom_account_id', 'pending_card_lp_id', 'card_link_token', 'default_token_id', 'status', 'notes',
         'monitoring_report_sent_at',
     ];
 
@@ -39,6 +40,26 @@ class Customer extends Model
     public function whatsappRecipient(): ?string
     {
         return filled($this->whatsapp_jid) ? $this->whatsapp_jid : $this->phone;
+    }
+
+    /**
+     * The nonce every card-capture link for this customer carries. Generated on
+     * first use and stable thereafter, so all outstanding links share it —
+     * until revokeCardLinks() rotates it, which invalidates them all at once.
+     */
+    public function cardLinkToken(): string
+    {
+        if (blank($this->card_link_token)) {
+            $this->forceFill(['card_link_token' => Str::random(40)])->save();
+        }
+
+        return $this->card_link_token;
+    }
+
+    /** Revoke every outstanding card-capture link by rotating the nonce. */
+    public function revokeCardLinks(): void
+    {
+        $this->forceFill(['card_link_token' => Str::random(40)])->save();
     }
 
     public function sites(): HasMany
