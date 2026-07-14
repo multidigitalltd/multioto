@@ -98,6 +98,47 @@ class LinetClient
     public function issueDocument(Charge $charge, VatCategory $vatCategory, string $description): array
     {
         $config = config('billing.linet');
+        $totalIls = round($charge->total_agorot / 100, 2);
+
+        // A tax invoice/receipt records the payment, so it carries a docCheq.
+        $payload = $this->buildDocumentPayload($charge, $vatCategory, $description, (string) $config['doctype'], "charge-{$charge->id}");
+        $payload['docCheq'] = [[
+            'type' => (int) $config['payment_type'],
+            'currency_id' => 'ILS',
+            'sum' => $totalIls,
+            'doc_sum' => $totalIls,
+            'line' => 1,
+        ]];
+
+        return $this->createDocument($payload);
+    }
+
+    /**
+     * Issue a proforma / "חשבונית עסקה" — a NON-fiscal demand for payment issued
+     * when a payment demand is created (before any money moves). Same line
+     * breakdown as the tax invoice, but with no docCheq (nothing is paid yet).
+     *
+     * @return array{document_id: string, pdf_url: ?string, allocation_number: ?string}
+     */
+    public function issueProforma(Charge $charge, VatCategory $vatCategory, string $description): array
+    {
+        $config = config('billing.linet');
+
+        $payload = $this->buildDocumentPayload($charge, $vatCategory, $description, (string) $config['doctype_proforma'], "proforma-charge-{$charge->id}");
+
+        return $this->createDocument($payload);
+    }
+
+    /**
+     * Build the common Linet document payload (account, lines, header) for a
+     * given document type. Callers add a docCheq for documents that record a
+     * payment (tax invoice) and omit it for a demand (proforma).
+     *
+     * @return array<string, mixed>
+     */
+    protected function buildDocumentPayload(Charge $charge, VatCategory $vatCategory, string $description, string $doctype, string $refnumExt): array
+    {
+        $config = config('billing.linet');
         // One-off (manual) charges have no subscription — resolve the customer
         // directly in that case.
         $customer = $charge->subscription?->customer ?? $charge->customer;
@@ -105,10 +146,6 @@ class LinetClient
         $vatCatId = $vatCategory === VatCategory::Exempt
             ? $config['vat_cat_exempt']
             : $config['vat_cat_taxable'];
-
-        // Unit price INCLUDING VAT (iItemWithVat = 1). Linet derives the VAT
-        // breakdown from the category, keeping our integer-agorot total exact.
-        $totalIls = round($charge->total_agorot / 100, 2);
 
         // Linet ties every document to an account — resolve (or create) it by
         // e-mail first, exactly as Linet's own plugin does.
@@ -152,7 +189,7 @@ class LinetClient
         }
 
         $payload = [
-            'doctype' => (string) $config['doctype'],
+            'doctype' => $doctype,
             'status' => 2, // final (non-draft) document
             'currency_id' => 'ILS',
             'country_id' => 'IL',
@@ -162,22 +199,26 @@ class LinetClient
             'company' => $customer?->name,
             'email' => $customer?->email,
             'phone' => $customer?->phone,
-            'refnum_ext' => "charge-{$charge->id}",
+            'refnum_ext' => $refnumExt,
             'docDet' => $docDet,
-            'docCheq' => [[
-                'type' => (int) $config['payment_type'],
-                'currency_id' => 'ILS',
-                'sum' => $totalIls,
-                'doc_sum' => $totalIls,
-                'line' => 1,
-            ]],
         ];
 
         if ($accountId !== null) {
             $payload['account_id'] = $accountId;
         }
 
-        $response = $this->post($config['create_doc_path'] ?? '/create/doc', $payload);
+        return $payload;
+    }
+
+    /**
+     * POST a document payload to Linet and normalise the created-document fields.
+     *
+     * @param  array<string, mixed>  $payload
+     * @return array{document_id: string, pdf_url: ?string, allocation_number: ?string}
+     */
+    protected function createDocument(array $payload): array
+    {
+        $response = $this->post(config('billing.linet.create_doc_path') ?? '/create/doc', $payload);
 
         $body = $this->unwrap($response); // throws on HTTP or envelope-status failure
 

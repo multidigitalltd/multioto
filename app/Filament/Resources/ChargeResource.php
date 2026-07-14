@@ -115,6 +115,7 @@ class ChargeResource extends Resource
                         ChargeStatus::Succeeded => 'success',
                         ChargeStatus::Pending => 'warning',
                         ChargeStatus::Failed => 'danger',
+                        ChargeStatus::Canceled => 'gray',
                     }),
                 Tables\Columns\TextColumn::make('attempt_number')
                     ->label('ניסיון')
@@ -189,6 +190,29 @@ class ChargeResource extends Resource
                             'failed' => Notification::make()->title('החיוב סומן ככשל')->warning()->send(),
                             default => Notification::make()->title('קארדקום עדיין לא מדווחת על חיוב')->body('ייתכן שהתשלום לא הושלם. נסו שוב בעוד כמה רגעים.')->warning()->send(),
                         };
+                    }),
+
+                // Void a pending payment demand: its link stops working (our
+                // gateway shows "לא פעיל") and it no longer shows as owed.
+                Tables\Actions\Action::make('cancelDemand')
+                    ->label('בטל דרישה')
+                    ->icon('heroicon-o-x-circle')
+                    ->color('gray')
+                    ->requiresConfirmation()
+                    ->modalHeading('ביטול דרישת תשלום')
+                    ->modalDescription('הקישור שנשלח ללקוח יפסיק לעבוד ויציג "לא פעיל". לא ניתן לבטל אם התשלום כבר בוצע.')
+                    ->visible(fn (Charge $record): bool => $record->status === ChargeStatus::Pending && $record->subscription_id === null)
+                    ->action(function (Charge $record): void {
+                        // Re-read under the click: never cancel a demand that was
+                        // paid in the meantime.
+                        if ($record->fresh()->status !== ChargeStatus::Pending) {
+                            Notification::make()->title('לא ניתן לבטל — הסטטוס השתנה')->warning()->send();
+
+                            return;
+                        }
+
+                        $record->update(['status' => ChargeStatus::Canceled, 'failure_reason' => 'הדרישה בוטלה ידנית']);
+                        Notification::make()->title('הדרישה בוטלה — הקישור אינו פעיל עוד')->success()->send();
                     }),
 
                 // Issue (or retry) the Linet invoice for a succeeded charge and

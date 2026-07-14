@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Enums\NotificationType;
 use App\Mail\NotificationMail;
+use App\Models\Charge;
 use App\Models\Customer;
 use App\Models\NotificationLog;
 use App\Services\Billing\ManualChargeService;
@@ -15,12 +16,13 @@ use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Mail;
 
 /**
- * Create a hosted Cardcom payment page for an ad-hoc amount and send the link
- * to the customer over the chosen channel (WhatsApp / email). The card is
- * entered only on Cardcom's page; when paid, the existing webhook finalises the
- * charge and issues the Linet invoice — so a link payment behaves exactly like
- * any other one-off charge. Runs on the queue: creating the page is a network
- * call that must never block the request.
+ * Send a payment demand to a customer over WhatsApp / email. A demand can offer
+ * a secure card link (a hosted Cardcom page reached through our own cancelable
+ * gateway), bank-transfer details, or both, and — when a proforma document type
+ * is configured — issues a Linet "חשבונית עסקה" up front. When paid, the
+ * existing webhook finalises the charge and issues the fiscal tax invoice, so a
+ * link payment behaves like any other one-off charge. Runs on the queue:
+ * creating the page and issuing documents are network calls.
  */
 class SendPaymentLinkJob implements ShouldQueue
 {
@@ -32,6 +34,7 @@ class SendPaymentLinkJob implements ShouldQueue
 
     /**
      * @param  array<int, array{name: string, qty: int, unit_price_agorot: int}>  $lines
+     * @param  array<int, string>  $methods  subset of ['link', 'transfer']
      */
     public function __construct(
         public int $customerId,
@@ -39,6 +42,7 @@ class SendPaymentLinkJob implements ShouldQueue
         public string $description,
         public string $channel, // whatsapp | email
         public array $lines = [],
+        public array $methods = ['link'],
     ) {}
 
     public function handle(ManualChargeService $service, TemplateEngine $templates, WahaClient $waha): void
@@ -49,25 +53,49 @@ class SendPaymentLinkJob implements ShouldQueue
             return;
         }
 
-        // A pending charge + hosted page (throws on Cardcom failure → job retries).
-        // Line items ride along so the eventual Linet invoice itemises identically
-        // to the breakdown the customer sees in this payment request.
-        $result = $service->createHostedPage($customer, $this->totalAgorot, $this->description, null, $this->lines);
+        $wantsLink = in_array('link', $this->methods, true);
+        $wantsTransfer = in_array('transfer', $this->methods, true);
+
+        // A demand always creates a pending charge to track it and hang a
+        // proforma off. With a card link, that charge also gets a hosted Cardcom
+        // page reached through our cancelable gateway; a transfer-only demand
+        // has no page. Line items ride along so the Linet documents itemise
+        // identically to the breakdown the customer sees here.
+        if ($wantsLink) {
+            $result = $service->createHostedPage($customer, $this->totalAgorot, $this->description, null, $this->lines);
+            $charge = $result['charge'];
+            $payUrl = $result['pay_url'];
+        } else {
+            $charge = $service->createDemand($customer, $this->totalAgorot, $this->description, null, $this->lines);
+            $payUrl = null;
+        }
+
+        // Issue the proforma (חשבונית עסקה) up front — no-op when no proforma
+        // document type is configured. Linet emails it to the customer directly.
+        IssueProformaJob::dispatch($charge->id);
 
         $data = [
             'customer_name' => $customer->contact_name ?: $customer->name,
             'business_name' => config('mail.from.name') ?: config('app.name'),
             'amount' => Money::ils($this->totalAgorot),
             'items' => $this->itemsBlock(),
-            // Kept for any operator template still using the old inline {{for}}.
+            'payment_options' => $this->paymentOptions($payUrl, $wantsTransfer),
+            // Individual fields kept for any operator template still using them.
+            'link' => (string) $payUrl,
+            'bank_transfer' => (string) config('billing.bank_transfer_details'),
             'for' => $this->description !== '' ? ' עבור '.$this->description : '',
-            'link' => $result['url'],
         ];
 
+        $this->deliver($customer, $templates, $waha, $data);
+    }
+
+    /** Render and send the demand over the chosen channel. */
+    protected function deliver(Customer $customer, TemplateEngine $templates, WahaClient $waha, array $data): void
+    {
         if ($this->channel === 'email' && filled($customer->email)) {
             $rendered = $templates->render('payment.link', 'email', $data);
             if ($rendered) {
-                Mail::to($customer->email)->send(new NotificationMail($rendered['subject'] ?? 'קישור לתשלום', $rendered['body']));
+                Mail::to($customer->email)->send(new NotificationMail($rendered['subject'] ?? 'בקשת תשלום', $rendered['body']));
                 NotificationLog::record('email', NotificationType::PaymentLink, $customer->email, $rendered['subject'] ?? null, $rendered['body'], $customer->id);
             }
 
@@ -82,6 +110,27 @@ class SendPaymentLinkJob implements ShouldQueue
                 NotificationLog::record('whatsapp', NotificationType::PaymentLink, $recipient, null, $rendered['body'], $customer->id);
             }
         }
+    }
+
+    /**
+     * Compose the payment-options section: a secure card link and/or bank
+     * transfer details, each only when that method was chosen (and configured).
+     */
+    protected function paymentOptions(?string $payUrl, bool $wantsTransfer): string
+    {
+        $sections = [];
+
+        if (filled($payUrl)) {
+            $sections[] = "לתשלום מאובטח בכרטיס אשראי:\n{$payUrl}\nהתשלום מתבצע בעמוד המאובטח של חברת הסליקה — פרטי האשראי אינם נשמרים אצלנו.";
+        }
+
+        $bank = (string) config('billing.bank_transfer_details');
+        if ($wantsTransfer && filled($bank)) {
+            $sections[] = "לתשלום בהעברה בנקאית:\n{$bank}";
+        }
+
+        // A demand with no usable method still reads sensibly.
+        return $sections !== [] ? implode("\n\n", $sections) : 'לפרטי תשלום — השיבו להודעה זו ונשמח לעזור.';
     }
 
     /**

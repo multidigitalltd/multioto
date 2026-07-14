@@ -28,6 +28,15 @@ return [
     // valid. Short-lived so a forwarded/leaked message can't be reused forever.
     'card_update_link_ttl_hours' => env('CARD_UPDATE_LINK_TTL_HOURS', 72),
 
+    // How long a payment-demand link stays valid. Longer than a card-update link
+    // — a demand may sit unpaid for a while — but still bounded. A canceled
+    // demand stops working immediately regardless of this TTL.
+    'payment_link_ttl_hours' => env('PAYMENT_LINK_TTL_HOURS', 24 * 14),
+
+    // Bank-transfer details shown on a payment demand that offers a transfer
+    // option. Free text (account name, bank/branch, account number, or an IBAN).
+    'bank_transfer_details' => env('BANK_TRANSFER_DETAILS'),
+
     /*
      | Public signup form (/join). The customer fills their details, signs, and
      | picks how they'll pay. The non-card methods show setup instructions the
@@ -123,6 +132,10 @@ return [
         //  - vat_cat_taxable / vat_cat_exempt: VAT category ids (taxable vs exempt)
         //  - payment_type: docCheq payment method (e.g. credit card)
         'doctype' => env('LINET_DOCTYPE'),
+        // Document-type code for a proforma / "חשבונית עסקה" — a NON-fiscal demand
+        // for payment issued when a payment demand is created (before payment).
+        // Leave unset to skip proforma issuance entirely (demands still go out).
+        'doctype_proforma' => env('LINET_DOCTYPE_PROFORMA'),
         // Linet vat_cat_id values. Linet's own plugin hardcodes 1 = taxable,
         // 2 = exempt/abroad — verified against the live API (other codes are
         // rejected with "Income VAT account must match VAT percent").

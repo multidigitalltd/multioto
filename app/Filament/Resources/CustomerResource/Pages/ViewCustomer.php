@@ -189,6 +189,14 @@ class ViewCustomer extends ViewRecord
                     ->helperText('בשימוש רק כשאין פירוט פריטים.')
                     ->numeric()->prefix('₪')->step('0.01')->minValue(0)->inputMode('decimal')
                     ->requiredWithout('items'),
+                Forms\Components\CheckboxList::make('methods')
+                    ->label('אמצעי תשלום בדרישה')
+                    ->options(['link' => 'קישור לתשלום בכרטיס', 'transfer' => 'העברה בנקאית'])
+                    ->default(['link'])
+                    ->helperText(blank(config('billing.bank_transfer_details')) ? 'להעברה בנקאית — מלאו את פרטי החשבון בהגדרות (BANK_TRANSFER_DETAILS).' : null)
+                    ->minItems(1)
+                    ->required()
+                    ->columns(2),
                 Forms\Components\Radio::make('channel')
                     ->label('לשלוח דרך')
                     ->options(['whatsapp' => 'וואטסאפ', 'email' => 'מייל'])
@@ -219,7 +227,9 @@ class ViewCustomer extends ViewRecord
                     return;
                 }
 
-                SendPaymentLinkJob::dispatch($record->id, $totalAgorot, filled($data['description']) ? $data['description'] : 'תשלום', $channel, $lines);
+                $methods = array_values($data['methods'] ?? ['link']);
+
+                SendPaymentLinkJob::dispatch($record->id, $totalAgorot, filled($data['description']) ? $data['description'] : 'תשלום', $channel, $lines, $methods);
 
                 Notification::make()
                     ->title('קישור התשלום נשלח')
