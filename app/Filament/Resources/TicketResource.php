@@ -86,6 +86,11 @@ class TicketResource extends Resource
     {
         return $table
             ->columns([
+                Tables\Columns\TextColumn::make('id')
+                    ->label('מס׳')
+                    ->prefix('#')
+                    ->sortable()
+                    ->searchable(isIndividual: true),
                 Tables\Columns\TextColumn::make('subject')
                     ->label('נושא')
                     ->searchable()
@@ -141,7 +146,10 @@ class TicketResource extends Resource
             ->filters([
                 Tables\Filters\SelectFilter::make('status')
                     ->label('סטטוס')
-                    ->options(TicketStatus::class),
+                    ->options(TicketStatus::class)
+                    // Default to the open queue — the team's live work list.
+                    // Clear the filter to see resolved/closed tickets too.
+                    ->default(TicketStatus::Open->value),
                 Tables\Filters\SelectFilter::make('priority')
                     ->label('עדיפות')
                     ->options(TicketPriority::class),
@@ -151,6 +159,18 @@ class TicketResource extends Resource
             ])
             ->actions([
                 Tables\Actions\ViewAction::make()->label('פתח שיחה')->icon('heroicon-o-chat-bubble-left-right'),
+                // Quick "mark as resolved" straight from the list — the customer
+                // gets the automatic "טופל" update on their channel (model event),
+                // exactly like resolving from inside the conversation.
+                Tables\Actions\Action::make('resolve')
+                    ->label('סמן כטופל')
+                    ->icon('heroicon-o-check-circle')
+                    ->color('success')
+                    ->visible(fn (Ticket $record): bool => ! in_array($record->status, [TicketStatus::Resolved, TicketStatus::Closed], true))
+                    ->requiresConfirmation()
+                    ->modalHeading('סימון הפנייה כטופלה')
+                    ->modalDescription('הלקוח יקבל אוטומטית עדכון שהטיפול הושלם, בערוץ שממנו פנה.')
+                    ->action(fn (Ticket $record) => $record->update(['status' => TicketStatus::Resolved])),
                 Tables\Actions\EditAction::make()->label('עריכה'),
             ])
             ->bulkActions([

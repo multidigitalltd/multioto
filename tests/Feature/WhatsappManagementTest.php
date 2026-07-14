@@ -2,6 +2,8 @@
 
 namespace Tests\Feature;
 
+use App\Enums\MessageChannel;
+use App\Enums\MessageDirection;
 use App\Enums\TicketChannel;
 use App\Enums\TicketStatus;
 use App\Models\Customer;
@@ -101,6 +103,57 @@ class WhatsappManagementTest extends TestCase
         $this->inbound(self::MGMT, "סגור {$ticket->id}");
 
         $this->assertSame(TicketStatus::Closed, $ticket->fresh()->status);
+    }
+
+    public function test_the_management_group_can_reply_to_a_ticket(): void
+    {
+        $customer = Customer::factory()->create(['whatsapp_jid' => '972501234567@c.us']);
+        $ticket = Ticket::create([
+            'customer_id' => $customer->id, 'channel' => TicketChannel::Whatsapp,
+            'subject' => 'בעיה', 'status' => TicketStatus::Open,
+            'external_thread_ref' => '972501234567@c.us',
+        ]);
+
+        $this->inbound(self::MGMT, "ענה {$ticket->id} הבעיה טופלה, תודה");
+
+        // An outbound agent message was recorded and delivered to the customer.
+        $out = $ticket->messages()->where('direction', MessageDirection::Outbound)->sole();
+        $this->assertSame('הבעיה טופלה, תודה', $out->body);
+        $this->assertTrue(
+            Http::recorded()->contains(fn ($pair) => ($pair[0]->data()['chatId'] ?? null) === '972501234567@c.us'
+                && str_contains($pair[0]->data()['text'] ?? '', 'הבעיה טופלה, תודה')),
+            'The reply was not delivered to the customer chat.'
+        );
+    }
+
+    public function test_a_group_reply_to_a_phone_only_manual_ticket_goes_over_whatsapp(): void
+    {
+        // Opened by the group "כרטיס" command → Manual channel, phone-only customer.
+        $customer = Customer::factory()->create(['phone' => '+972501234567', 'email' => null]);
+        $ticket = Ticket::create([
+            'customer_id' => $customer->id, 'channel' => TicketChannel::Manual,
+            'subject' => 'נפתח מהקבוצה', 'status' => TicketStatus::Open,
+            'external_thread_ref' => 'mgmt-abc',
+        ]);
+
+        $this->inbound(self::MGMT, "ענה {$ticket->id} שלחנו טכנאי, נחזור אליך");
+
+        $out = $ticket->messages()->where('direction', MessageDirection::Outbound)->sole();
+        $this->assertSame(MessageChannel::Whatsapp, $out->channel);
+        // Delivered to the customer's phone-derived chat, NOT the "mgmt-abc" ref.
+        $this->assertTrue(
+            Http::recorded()->contains(fn ($pair) => ($pair[0]->data()['chatId'] ?? null) === '972501234567@c.us'
+                && str_contains($pair[0]->data()['text'] ?? '', 'שלחנו טכנאי')),
+            'The reply was not delivered to the customer WhatsApp chat.'
+        );
+    }
+
+    public function test_a_reply_to_a_missing_ticket_is_reported(): void
+    {
+        $this->inbound(self::MGMT, 'ענה 9999 שלום');
+
+        $reply = Http::recorded()->last();
+        $this->assertStringContainsString('לא נמצאה פנייה', $reply[0]->data()['text']);
     }
 
     public function test_management_chatter_never_opens_a_ticket(): void

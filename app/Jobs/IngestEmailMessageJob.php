@@ -5,7 +5,9 @@ namespace App\Jobs;
 use App\Enums\MessageChannel;
 use App\Enums\TicketChannel;
 use App\Models\Ticket;
+use App\Models\User;
 use App\Models\WebhookEvent;
+use App\Services\Support\AgentReply;
 use App\Services\Support\AttachmentStore;
 use App\Services\Support\TicketIntake;
 use App\Support\EmailBody;
@@ -28,7 +30,7 @@ class IngestEmailMessageJob implements ShouldQueue
 
     public function __construct(public int $webhookEventId) {}
 
-    public function handle(TicketIntake $intake, AttachmentStore $attachments): void
+    public function handle(TicketIntake $intake, AttachmentStore $attachments, AgentReply $agentReply): void
     {
         $event = WebhookEvent::find($this->webhookEventId);
 
@@ -59,6 +61,34 @@ class IngestEmailMessageJob implements ShouldQueue
             return;
         }
 
+        // An agent answering the ticket by email (they replied to the alert):
+        // route it back out to the customer instead of recording it as inbound.
+        // Authorisation needs BOTH the signed token that only the team's alert
+        // email carries (unforgeable — HMAC on the app secret) AND a known team
+        // From. A spoofed From without the token falls through to customer intake.
+        $threadTicketId = Ticket::idFromSubject($subject);
+        if ($threadTicketId !== null
+            && Ticket::agentReplyTokenMatches($threadTicketId, $subject)
+            && User::query()->whereRaw('lower(email) = ?', [$from])->exists()) {
+            $ticket = Ticket::find($threadTicketId);
+
+            if ($ticket) {
+                // Prefer the stripped reply (the agent's new text only, without
+                // the quoted thread) so the customer doesn't get the history back.
+                $agentBody = EmailBody::toText(
+                    $payload['StrippedTextReply'] ?? $payload['TextBody'] ?? $payload['text'] ?? null,
+                    $html,
+                );
+
+                if ($agentBody !== '') {
+                    $agentReply->send($ticket, $agentBody);
+                    $event->markProcessed();
+
+                    return;
+                }
+            }
+        }
+
         $customer = $intake->matchCustomer(email: $from);
 
         // Keep the sender's identity for unidentified enquiries: display name
@@ -80,7 +110,7 @@ class IngestEmailMessageJob implements ShouldQueue
             contactName: $fromName ?: null,
             contactHandle: $from,
             // A reply keeps our [#id] tag in the subject → thread onto that ticket.
-            threadTicketId: Ticket::idFromSubject($subject),
+            threadTicketId: $threadTicketId,
         );
 
         // Store any attachments (Postmark sends them base64-encoded inline) and

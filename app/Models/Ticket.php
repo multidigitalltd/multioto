@@ -65,6 +65,38 @@ class Ticket extends Model
         return null;
     }
 
+    /**
+     * A signed marker added ONLY to the team's alert email for this ticket. When
+     * an agent replies to that alert the marker returns in the subject, and it
+     * authenticates the reply: the token is an HMAC keyed on the app secret, so
+     * it can't be forged from a guessed ticket id + a spoofed team From header
+     * (the From alone is sender-controlled). Only recipients of the alert — the
+     * team — ever see a valid token.
+     */
+    public function agentReplyTag(): string
+    {
+        return '[MDK:'.self::agentReplyToken($this->id).']';
+    }
+
+    /** The HMAC token for a ticket id (16 hex chars). */
+    public static function agentReplyToken(int $id): string
+    {
+        return substr(hash_hmac('sha256', 'agent-reply:'.$id, (string) config('app.key')), 0, 16);
+    }
+
+    /**
+     * Verify a subject carries the correct signed agent-reply token for the
+     * given ticket id. Constant-time compare; false when the marker is absent.
+     */
+    public static function agentReplyTokenMatches(int $id, ?string $subject): bool
+    {
+        if ($subject === null || ! preg_match('/\[MDK:([a-f0-9]{16})\]/', $subject, $m)) {
+            return false;
+        }
+
+        return hash_equals(self::agentReplyToken($id), $m[1]);
+    }
+
     protected function casts(): array
     {
         return [
