@@ -13,6 +13,7 @@ use App\Filament\Resources\TicketResource\Pages\ViewTicket;
 use App\Jobs\IngestWhatsappMessageJob;
 use App\Jobs\SendTicketNotificationJob;
 use App\Jobs\SendTicketReplyJob;
+use App\Models\CannedResponse;
 use App\Models\Customer;
 use App\Models\Ticket;
 use App\Models\User;
@@ -89,6 +90,24 @@ class TicketChatTest extends TestCase
         $this->assertNotNull($ticket->resolved_at);
         // No resolved (or any) notification is queued for the customer.
         Queue::assertNotPushed(SendTicketNotificationJob::class);
+    }
+
+    public function test_a_canned_response_is_inserted_into_the_reply_editor_with_placeholders_filled(): void
+    {
+        $this->actingAs(User::factory()->create());
+        $ticket = $this->ticket(); // customer "דנה לוי"
+        $canned = CannedResponse::create([
+            'title' => 'עדכון טיפול',
+            'body' => 'שלום {{customer_name}}, בנוגע לפנייה #{{ticket_id}} — הטיפול בעיצומו.',
+        ]);
+
+        Livewire::test(ViewTicket::class, ['record' => $ticket->id])
+            ->set('replyData.canned', $canned->id)
+            // The template text (placeholders filled) lands in the editor…
+            ->assertSet('replyData.body', fn ($body): bool => str_contains((string) $body, 'שלום דנה לוי')
+                && str_contains((string) $body, '#'.$ticket->id))
+            // …and the picker resets so it can be used again.
+            ->assertSet('replyData.canned', null);
     }
 
     public function test_send_reply_creates_an_outbound_message_and_dispatches_delivery(): void

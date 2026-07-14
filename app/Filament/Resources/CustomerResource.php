@@ -25,7 +25,6 @@ use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
-use Illuminate\Support\Js;
 
 class CustomerResource extends Resource
 {
@@ -230,15 +229,17 @@ class CustomerResource extends Resource
             ->readOnly()
             ->columnSpanFull()
             ->suffixAction(
-                fn (?string $state): FormAction => FormAction::make('copyLink')
+                FormAction::make('copyLink')
                     ->icon('heroicon-m-clipboard-document')
                     ->tooltip('העתקה')
-                    // Robust copy: the async Clipboard API only works in a secure
-                    // context, so fall back to a hidden textarea + execCommand.
-                    // (The old navigator.clipboard?.writeText() silently no-op'd
-                    // while the notification still claimed success.)
-                    ->extraAttributes(['x-on:click' => 'const t='.Js::from((string) $state).';'
-                        .'const fb=()=>{const a=document.createElement("textarea");a.value=t;a.style.position="fixed";a.style.opacity="0";document.body.appendChild(a);a.focus();a.select();try{document.execCommand("copy")}catch(e){}a.remove()};'
+                    // Read the LIVE input value at click time (walk up to the
+                    // nearest ancestor holding an input) rather than baking the
+                    // state at render — in a modal the render-time state is often
+                    // empty, which is why the old copy "succeeded" but copied
+                    // nothing. execCommand covers non-secure contexts (plain http).
+                    ->extraAttributes(['x-on:click' => 'let n=$el;while(n&&!(n.querySelector&&n.querySelector("input,textarea")))n=n.parentElement;'
+                        .'const i=n&&n.querySelector("input,textarea");const t=i?i.value:"";if(!t)return;'
+                        .'const fb=()=>{try{i.focus();i.select();i.setSelectionRange(0,99999);document.execCommand("copy")}catch(e){}};'
                         .'if(navigator.clipboard&&window.isSecureContext){navigator.clipboard.writeText(t).catch(fb)}else{fb()}'])
                     ->action(fn () => Notification::make()->title('הקישור הועתק')->success()->send()),
             );
