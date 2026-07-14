@@ -3,6 +3,7 @@
 use App\Enums\BroadcastStatus;
 use App\Enums\ChargeStatus;
 use App\Jobs\ChargeSubscriptionJob;
+use App\Jobs\CheckDomainExpiryJob;
 use App\Jobs\CheckSslExpiryJob;
 use App\Jobs\FollowUpPendingTicketsJob;
 use App\Jobs\MonitorSiteJob;
@@ -62,6 +63,14 @@ Schedule::call(function () {
         ->pluck('id')
         ->each(fn (int $id) => CheckSslExpiryJob::dispatch($id));
 })->dailyAt('07:00')->name('monitoring:ssl-expiry')->onOneServer();
+
+// Daily domain-registration expiry check (RDAP) for every monitored site.
+Schedule::call(function () {
+    Site::query()
+        ->where('monitor_enabled', true)
+        ->pluck('id')
+        ->each(fn (int $id) => CheckDomainExpiryJob::dispatch($id));
+})->dailyAt('07:15')->name('monitoring:domain-expiry')->onOneServer();
 
 // Proactive reminders: a once-a-day internal digest (renewals due, cards
 // expiring, open debt) so the owner can act before anything slips.

@@ -234,6 +234,10 @@ return [
         'failures_to_incident' => env('MONITOR_FAILURES_TO_INCIDENT', 2),
         // Warn the team when a TLS certificate has this many days (or fewer) left.
         'ssl_warn_days' => env('MONITOR_SSL_WARN_DAYS', 14),
+        // Warn the team when the DOMAIN registration has this many days (or fewer)
+        // left — a lapsed domain takes the whole site down. Longer than SSL since
+        // domain renewal is slower/manual.
+        'domain_warn_days' => env('MONITOR_DOMAIN_WARN_DAYS', 30),
         // Responses slower than this (ms) are flagged as "degraded" (not down).
         'slow_response_ms' => env('MONITOR_SLOW_RESPONSE_MS', 4000),
     ],
