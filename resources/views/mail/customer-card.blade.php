@@ -1,5 +1,5 @@
 <x-mail::message>
-<div dir="rtl" style="text-align: right !important; direction: rtl !important;">
+<div dir="rtl">
 {{-- The logo now comes from the shared mail header; no inline logo here. --}}
 <p>שלום {{ $name }},</p>
 <p>תודה על פתיחת הכרטיס אצלנו! 🎉</p>

@@ -64,6 +64,23 @@ class EmailBrandingTest extends TestCase
         $this->assertStringContainsString('תודה שנרשמת אלינו.', $html);
     }
 
+    public function test_every_email_is_right_aligned_by_the_shared_theme(): void
+    {
+        // The single mail theme (vendor/mail/html/themes/default.css) governs the
+        // look of ALL emails. Its paragraphs align right, so no email should ever
+        // ship a `text-align: left` — the old cause of Hebrew mail rendering LTR.
+        $notification = (new NotificationMail('נושא', "שלום דני,\nהפנייה שלך נסגרה.\nתודה"))->render();
+        $ticket = (new TicketReplyMail('נושא', 'תוכן התשובה.'))->render();
+
+        // Neither email may ship a left-aligned rule anywhere.
+        $this->assertStringNotContainsString('text-align: left', $notification);
+        $this->assertStringNotContainsString('text-align: left', $ticket);
+
+        // A multi-line body's paragraph carries the theme's right-aligned inline
+        // style, so it survives a client stripping <style> blocks (Gmail).
+        $this->assertMatchesRegularExpression('/<p[^>]*text-align: right/', $notification);
+    }
+
     public function test_the_public_logo_route_serves_the_image_and_404s_without_one(): void
     {
         Storage::fake('public');

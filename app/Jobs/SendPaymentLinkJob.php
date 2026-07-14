@@ -30,11 +30,15 @@ class SendPaymentLinkJob implements ShouldQueue
 
     public array $backoff = [30];
 
+    /**
+     * @param  array<int, array{name: string, qty: int, unit_price_agorot: int}>  $lines
+     */
     public function __construct(
         public int $customerId,
         public int $totalAgorot,
         public string $description,
         public string $channel, // whatsapp | email
+        public array $lines = [],
     ) {}
 
     public function handle(ManualChargeService $service, TemplateEngine $templates, WahaClient $waha): void
@@ -46,12 +50,16 @@ class SendPaymentLinkJob implements ShouldQueue
         }
 
         // A pending charge + hosted page (throws on Cardcom failure → job retries).
-        $result = $service->createHostedPage($customer, $this->totalAgorot, $this->description);
+        // Line items ride along so the eventual Linet invoice itemises identically
+        // to the breakdown the customer sees in this payment request.
+        $result = $service->createHostedPage($customer, $this->totalAgorot, $this->description, null, $this->lines);
 
         $data = [
             'customer_name' => $customer->contact_name ?: $customer->name,
             'business_name' => config('mail.from.name') ?: config('app.name'),
             'amount' => Money::ils($this->totalAgorot),
+            'items' => $this->itemsBlock(),
+            // Kept for any operator template still using the old inline {{for}}.
             'for' => $this->description !== '' ? ' עבור '.$this->description : '',
             'link' => $result['url'],
         ];
@@ -74,5 +82,30 @@ class SendPaymentLinkJob implements ShouldQueue
                 NotificationLog::record('whatsapp', NotificationType::PaymentLink, $recipient, null, $rendered['body'], $customer->id);
             }
         }
+    }
+
+    /**
+     * A plain-text itemised breakdown of the request — one bullet per product,
+     * with quantity × unit price when a line has more than one. Falls back to a
+     * single line from the description + total when no items were supplied, so a
+     * simple "amount + description" demand still reads as a clear detail line.
+     */
+    protected function itemsBlock(): string
+    {
+        if ($this->lines === []) {
+            $name = $this->description !== '' ? $this->description : 'תשלום';
+
+            return '• '.$name.' — '.Money::ils($this->totalAgorot);
+        }
+
+        return collect($this->lines)->map(function (array $line): string {
+            $qty = (int) ($line['qty'] ?? 1);
+            $unit = (int) ($line['unit_price_agorot'] ?? 0);
+            $name = (string) ($line['name'] ?? 'פריט');
+
+            return $qty > 1
+                ? sprintf('• %s — %d × %s = %s', $name, $qty, Money::ils($unit), Money::ils($qty * $unit))
+                : sprintf('• %s — %s', $name, Money::ils($unit));
+        })->implode("\n");
     }
 }
