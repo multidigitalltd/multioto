@@ -39,6 +39,14 @@ return [
     // and management commands are unaffected.
     'notify_owner_whatsapp' => (bool) env('AGENT_NOTIFY_OWNER_WHATSAPP', true),
 
+    // Master kill-switch for EXECUTING internal system actions the agent proposes
+    // from the command console (billing/payments, invoices, tasks, suspend/restore).
+    // Defaults OFF: even an APPROVED system action will not run until an admin turns
+    // this on. Proposing always works, so you can review what the agent would do
+    // before enabling execution. Separate from actions_enabled (which governs
+    // changes on customer WordPress sites).
+    'system_actions_enabled' => (bool) env('AGENT_SYSTEM_ACTIONS_ENABLED', false),
+
     'plugin' => [
         // The current version of the companion plugin we ship. A site reporting
         // an older version is told to update itself from the download channel —

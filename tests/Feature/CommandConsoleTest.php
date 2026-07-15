@@ -147,7 +147,7 @@ class CommandConsoleTest extends TestCase
 
         $interpreter = Mockery::mock(CommandInterpreter::class);
         $interpreter->shouldReceive('run')->once()
-            ->with('תנקה קאש באתר example.co.il', Mockery::any())
+            ->with('תנקה קאש באתר example.co.il', Mockery::any(), Mockery::any())
             ->andReturn($result);
         $this->app->instance(CommandInterpreter::class, $interpreter);
 

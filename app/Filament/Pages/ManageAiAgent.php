@@ -77,6 +77,7 @@ class ManageAiAgent extends Page implements HasForms
                 'actions_enabled' => (bool) config('agent.actions_enabled'),
                 'auto_investigate_tickets' => (bool) config('agent.auto_investigate_tickets'),
                 'notify_owner_whatsapp' => (bool) config('agent.notify_owner_whatsapp'),
+                'system_actions_enabled' => (bool) config('agent.system_actions_enabled'),
             ],
         ]);
     }
@@ -134,6 +135,9 @@ class ManageAiAgent extends Page implements HasForms
                         Toggle::make('agent.auto_investigate_tickets')
                             ->label('בדיקת אתר אוטומטית בפניות חדשות')
                             ->helperText('בפנייה חדשה של לקוח עם אתר מחובר — הסוכן יבדוק את האתר לבד ויוסיף הערת מערכת עם המלצה. כל תיקון עדיין ממתין לאישור.'),
+                        Toggle::make('agent.system_actions_enabled')
+                            ->label('אפשר ביצוע פעולות מערכת')
+                            ->helperText('פעולות פנימיות שהסוכן מציע ממסוף הפקודות (גבייה, חשבוניות, משימות, השעיה/שחזור). כשכבוי — ההצעות נוצרות וממתינות באישורים אך לא מתבצעות. כל פעולה עוברת אישור בכל מקרה.'),
                     ]),
 
                 Section::make('הוראות למענה לפניות (תשובות ללקוח)')
@@ -182,6 +186,7 @@ class ManageAiAgent extends Page implements HasForms
         Setting::put('agent.actions_enabled', data_get($this->data, 'agent.actions_enabled') ? '1' : '0');
         Setting::put('agent.auto_investigate_tickets', data_get($this->data, 'agent.auto_investigate_tickets') ? '1' : '0');
         Setting::put('agent.notify_owner_whatsapp', data_get($this->data, 'agent.notify_owner_whatsapp') ? '1' : '0');
+        Setting::put('agent.system_actions_enabled', data_get($this->data, 'agent.system_actions_enabled') ? '1' : '0');
 
         // model/base_url/persona/rules: persist when filled; clearing reverts to
         // the env/default value instead of storing an empty override.

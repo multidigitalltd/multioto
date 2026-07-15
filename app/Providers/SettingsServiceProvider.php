@@ -72,6 +72,8 @@ class SettingsServiceProvider extends ServiceProvider
         'agent.auto_investigate_tickets' => 'agent.auto_investigate_tickets',
         // Push AI/automation proposals to the owner's WhatsApp group for approval.
         'agent.notify_owner_whatsapp' => 'agent.notify_owner_whatsapp',
+        // Master switch for executing internal system actions from the console.
+        'agent.system_actions_enabled' => 'agent.system_actions_enabled',
         // Public signup form — payment-method setup instructions (editable text).
         'signup.instructions.standing_order' => 'billing.signup.instructions.standing_order',
         'signup.instructions.bank_transfer' => 'billing.signup.instructions.bank_transfer',

@@ -7,6 +7,7 @@ use App\Enums\MessageChannel;
 use App\Enums\TicketStatus;
 use App\Jobs\InvestigateSiteJob;
 use App\Models\AgentCommand;
+use App\Models\Customer;
 use App\Models\Site;
 use App\Models\Ticket;
 use App\Services\Ai\ClaudeClient;
@@ -36,14 +37,26 @@ class CommandInterpreter
         private ApprovalGate $gate,
     ) {}
 
-    /** Interpret one instruction and act on it, recording the whole thing. */
-    public function run(string $instruction, ?int $userId = null): AgentCommand
+    /**
+     * Interpret one instruction and act on it, recording the whole thing.
+     *
+     * $continues is a prior command that ended "needs clarification": the new
+     * instruction is treated as the operator's answer and MERGED with the prior
+     * text, so an unclear command is refined and continued instead of restarted.
+     */
+    public function run(string $instruction, ?int $userId = null, ?AgentCommand $continues = null): AgentCommand
     {
         $instruction = trim($instruction);
 
+        // Carry the earlier attempt's full text so the clarification completes it
+        // (and further clarifications keep accumulating context).
+        $effective = $continues && $instruction !== ''
+            ? trim($continues->instruction."\n\nהבהרה מהמפעיל: ".$instruction)
+            : $instruction;
+
         $command = AgentCommand::create([
             'user_id' => $userId,
-            'instruction' => $instruction,
+            'instruction' => $effective,
             'outcome' => AgentCommandOutcome::Unclear,
         ]);
 
@@ -56,7 +69,7 @@ class CommandInterpreter
         }
 
         try {
-            $parsed = $this->classify($instruction);
+            $parsed = $this->classify($effective);
         } catch (\Throwable $e) {
             return $this->finish($command, AgentCommandOutcome::Failed, 'הבנת ההוראה נכשלה: '.Str::limit($e->getMessage(), 160));
         }
@@ -66,10 +79,11 @@ class CommandInterpreter
         return match ($parsed['intent'] ?? 'unknown') {
             'ticket_reply' => $this->handleTicketReply($command, $parsed),
             'site_operation' => $this->handleSiteOperation($command, $parsed),
+            'system_action' => $this->handleSystemAction($command, $parsed),
             default => $this->finish(
                 $command,
                 AgentCommandOutcome::Unclear,
-                trim((string) ($parsed['clarification'] ?? '')) ?: 'לא הצלחתי להבין את ההוראה. נסחו מחדש — למשל "תענה ל<לקוח> בכרטיס הפתוח ש..." או "תנקה קאש באתר <דומיין>".',
+                trim((string) ($parsed['clarification'] ?? '')) ?: 'לא הצלחתי להבין את ההוראה. נסחו מחדש — למשל "תענה ל<לקוח> בכרטיס הפתוח ש...", "תנקה קאש באתר <דומיין>", או "תשלח דרישת תשלום ל<לקוח> על <סכום>".',
             ),
         };
     }
@@ -82,31 +96,41 @@ class CommandInterpreter
      */
     private function classify(string $instruction): array
     {
+        $operations = SystemActionCatalog::promptList();
+
         $result = $this->ai->structured(
-            system: <<<'PROMPT'
+            system: <<<PROMPT
                 אתה מנתב פקודות למסוף התפעול של Multi Digital. המפעיל כותב הוראה חופשית בעברית ואתה מסווג אותה בלבד — אינך מבצע דבר.
 
                 סוגי כוונה (intent):
-                - "ticket_reply": מענה/תשובה ללקוח בפנייה (למשל "תענה למשה שאנחנו על זה", "תעדכן את דנה שהתקלה טופלה").
-                - "site_operation": פעולה או בדיקה על אתר וורדפרס (למשל "תנקה קאש באתר X", "תבדוק למה האתר איטי", "תפעיל מצב תחזוקה").
-                - "unknown": לא ברור, לא שייך, או חסר מידע קריטי.
+                - "ticket_reply": מענה/תשובה ללקוח בפנייה (למשל "תענה למשה שאנחנו על זה").
+                - "site_operation": פעולה או בדיקה על אתר וורדפרס (למשל "תנקה קאש באתר X", "תבדוק למה האתר איטי").
+                - "system_action": פעולה פנימית במערכת (גבייה, חשבוניות, משימות, אתרים/מנויים) — לא מענה ללקוח ולא בדיקת אתר.
+                - "unknown": לא ברור או לא שייך.
+
+                כשה-intent הוא system_action, קבע operation לאחת מהפעולות הבאות:
+                {$operations}
 
                 חוקים:
-                - customer_name: שם הלקוח או איש הקשר אם הוזכר (למשל "משה"), אחרת null.
-                - ticket_id: מספר פנייה אם צוין במפורש (מספר בלבד), אחרת null.
+                - customer_name: שם הלקוח/איש הקשר אם הוזכר, אחרת null.
+                - ticket_id: מספר פנייה אם צוין (מספר בלבד), אחרת null.
                 - site_domain: דומיין האתר אם הוזכר (ללא https://), אחרת null.
-                - detail: תמצית ברורה של מה לעשות — לגבי מענה: מה למסור ללקוח; לגבי אתר: מטרת הפעולה/הבדיקה.
-                - clarification: אם intent הוא unknown או שחסר מידע לזיהוי היעד, כתוב בעברית מה חסר וכיצד לנסח.
+                - amount_ils: סכום בשקלים אם הוזכר (מספר בלבד, למשל 300), אחרת null.
+                - operation: מזהה הפעולה הפנימית (מהרשימה) כאשר intent=system_action, אחרת null.
+                - detail: תמצית ברורה של מה לעשות (לגבי מענה: מה למסור ללקוח; לגבי משימה: כותרת המשימה; לגבי חיוב: על מה התשלום).
+                - clarification: אם חסר מידע קריטי (למשל סכום/לקוח), כתוב בעברית בדיוק מה חסר, כשאלה קצרה שהמפעיל יוכל לענות עליה.
                 PROMPT,
             prompt: $instruction,
             schema: [
                 'type' => 'object',
                 'additionalProperties' => false,
                 'properties' => [
-                    'intent' => ['type' => 'string', 'enum' => ['ticket_reply', 'site_operation', 'unknown']],
+                    'intent' => ['type' => 'string', 'enum' => ['ticket_reply', 'site_operation', 'system_action', 'unknown']],
+                    'operation' => ['type' => ['string', 'null']],
                     'customer_name' => ['type' => ['string', 'null']],
                     'ticket_id' => ['type' => ['integer', 'null']],
                     'site_domain' => ['type' => ['string', 'null']],
+                    'amount_ils' => ['type' => ['number', 'null']],
                     'detail' => ['type' => 'string'],
                     'clarification' => ['type' => ['string', 'null']],
                 ],
@@ -202,6 +226,152 @@ class CommandInterpreter
             AgentCommandOutcome::Dispatched,
             "הסוכן בודק את {$site->domain} ({$goal}). הבדיקה רצה ברקע (קריאה בלבד); כל פעולה שתידרש תוגש לאישור במסך האישורים.",
         );
+    }
+
+    /**
+     * Resolve an internal system operation into an approval-gate proposal. When a
+     * required parameter is missing (which customer? how much?), it finishes as
+     * "needs clarification" with a specific question — the operator's next reply
+     * continues it (see run()'s $continues).
+     */
+    private function handleSystemAction(AgentCommand $command, array $parsed): AgentCommand
+    {
+        $operation = (string) ($parsed['operation'] ?? '');
+
+        if (! SystemActionCatalog::has($operation)) {
+            return $this->finish($command, AgentCommandOutcome::Unclear,
+                trim((string) ($parsed['clarification'] ?? '')) ?: 'לא זיהיתי איזו פעולה פנימית לבצע. נסחו מחדש (למשל "תשלח דרישת תשלום ל<לקוח> על <סכום>").');
+        }
+
+        $detail = trim((string) ($parsed['detail'] ?? ''));
+        $needsMoney = fn (): ?int => filled($parsed['amount_ils'] ?? null) && (float) $parsed['amount_ils'] > 0
+            ? (int) round((float) $parsed['amount_ils'] * 100)
+            : null;
+
+        return match ($operation) {
+            'open_task' => $this->proposeSystemAction($command, 'open_task',
+                ['title' => $detail ?: 'משימה חדשה'] + $this->maybeCustomer($parsed),
+                'משימה חדשה: '.($detail ?: 'ללא כותרת')),
+
+            'send_payment_request' => $this->proposePaymentRequest($command, $parsed, $detail, $needsMoney()),
+
+            'mark_collected' => $this->proposeForCustomer($command, 'mark_collected', $parsed,
+                fn (Customer $c): string => "סימון תשלום בוצע + חשבונית עבור {$c->name}"),
+
+            'suspend_site' => $this->proposeForSite($command, 'suspend_site', $parsed, 'השעיית אתר'),
+            'restore_site' => $this->proposeForSite($command, 'restore_site', $parsed, 'שחזור אתר מהשעיה'),
+
+            default => $this->finish($command, AgentCommandOutcome::Unclear, 'הפעולה אינה נתמכת עדיין.'),
+        };
+    }
+
+    /** open_task: an optional customer, resolved leniently (skipped if ambiguous). */
+    private function maybeCustomer(array $parsed): array
+    {
+        [$customer] = $this->resolveCustomer($parsed['customer_name'] ?? null);
+
+        return $customer ? ['customer_id' => $customer->id] : [];
+    }
+
+    /** send_payment_request: needs a customer AND an amount; asks for whichever is missing. */
+    private function proposePaymentRequest(AgentCommand $command, array $parsed, string $detail, ?int $agorot): AgentCommand
+    {
+        [$customer, $error] = $this->resolveCustomer($parsed['customer_name'] ?? null);
+        if (! $customer) {
+            return $this->finish($command, AgentCommandOutcome::Unclear, $error);
+        }
+
+        if ($agorot === null) {
+            return $this->finish($command, AgentCommandOutcome::Unclear, "כמה לגבות מ{$customer->name}? ציינו סכום בשקלים.");
+        }
+
+        $command->customer_id = $customer->id;
+        $description = $detail !== '' ? $detail : 'תשלום';
+        $ils = number_format($agorot / 100, 2);
+
+        return $this->propose($command, 'send_payment_request',
+            ['customer_id' => $customer->id, 'amount_agorot' => $agorot, 'description' => $description, 'channel' => 'whatsapp'],
+            "דרישת תשלום ל{$customer->name} על ₪{$ils} — {$description}");
+    }
+
+    /** An operation that only needs a resolved customer (e.g. mark_collected). */
+    private function proposeForCustomer(AgentCommand $command, string $operation, array $parsed, callable $summary): AgentCommand
+    {
+        [$customer, $error] = $this->resolveCustomer($parsed['customer_name'] ?? null);
+        if (! $customer) {
+            return $this->finish($command, AgentCommandOutcome::Unclear, $error);
+        }
+
+        $command->customer_id = $customer->id;
+
+        return $this->propose($command, $operation, ['customer_id' => $customer->id], $summary($customer));
+    }
+
+    /** An operation that needs a resolved site (suspend/restore). */
+    private function proposeForSite(AgentCommand $command, string $operation, array $parsed, string $label): AgentCommand
+    {
+        [$site, $error] = $this->resolveSite($parsed['site_domain'] ?? null, $parsed['customer_name'] ?? null);
+        if (! $site) {
+            return $this->finish($command, AgentCommandOutcome::Unclear, $error);
+        }
+
+        $command->site_id = $site->id;
+        $command->customer_id = $site->customer_id;
+
+        return $this->propose($command, $operation, ['site_id' => $site->id], "{$label}: {$site->domain}");
+    }
+
+    /** open_task convenience wrapper (no entity resolution needed beyond the optional customer). */
+    private function proposeSystemAction(AgentCommand $command, string $operation, array $payload, string $summary): AgentCommand
+    {
+        $command->customer_id = $payload['customer_id'] ?? null;
+
+        return $this->propose($command, $operation, $payload, $summary);
+    }
+
+    /** File a system_action proposal for approval and record it on the command. */
+    private function propose(AgentCommand $command, string $operation, array $payload, string $summary): AgentCommand
+    {
+        $action = $this->gate->propose(
+            type: 'system_action',
+            summary: "🛠️ פעולת מערכת — {$summary}",
+            payload: ['operation' => $operation] + $payload + ['source' => 'command_console'],
+            customerId: $command->customer_id,
+            proposedBy: 'console',
+        );
+
+        $command->pending_action_id = $action->id;
+
+        $gate = config('agent.system_actions_enabled')
+            ? 'לאישור וביצוע'
+            : 'לאישור (שימו לב: ביצוע פעולות מערכת כבוי — הפעילו בהגדרות סוכן AI)';
+
+        return $this->finish($command, AgentCommandOutcome::Proposed,
+            "{$summary} — הוגש {$gate} (#{$action->id}) במסך אישורי האוטומציה.");
+    }
+
+    /**
+     * Resolve which customer the instruction is about, by name/contact.
+     *
+     * @return array{0: ?Customer, 1: string} [customer, error]
+     */
+    private function resolveCustomer(?string $name): array
+    {
+        $name = trim((string) $name);
+        if ($name === '') {
+            return [null, 'לא זוהה לקוח. ציינו שם לקוח.'];
+        }
+
+        $customers = Customer::query()
+            ->where('name', 'like', "%{$name}%")
+            ->orWhere('contact_name', 'like', "%{$name}%")
+            ->get();
+
+        return match ($customers->count()) {
+            0 => [null, "לא נמצא לקוח בשם \"{$name}\"."],
+            1 => [$customers->first(), ''],
+            default => [null, "נמצאו כמה לקוחות שמתאימים ל\"{$name}\". דייקו את השם."],
+        };
     }
 
     /**
