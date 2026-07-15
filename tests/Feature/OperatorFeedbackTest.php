@@ -10,6 +10,7 @@ use App\Enums\TicketChannel;
 use App\Enums\TicketStatus;
 use App\Filament\Resources\PendingActionResource\Pages\ListPendingActions;
 use App\Filament\Resources\TicketResource\Pages\ViewTicket;
+use App\Jobs\SendTicketReplyJob;
 use App\Models\Customer;
 use App\Models\PendingAction;
 use App\Models\Setting;
@@ -19,6 +20,7 @@ use App\Services\Ai\ClaudeClient;
 use App\Services\Ai\StyleLearner;
 use App\Services\Automation\ApprovalGate;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Queue;
 use Livewire\Livewire;
 use Mockery;
 use Tests\TestCase;
@@ -79,6 +81,40 @@ class OperatorFeedbackTest extends TestCase
             ->assertNotified();
 
         $this->assertSame(ActionStatus::Failed, $p1->fresh()->status);
+    }
+
+    public function test_edit_reply_sends_the_operators_edited_text(): void
+    {
+        Queue::fake();
+        $this->actingAs(User::factory()->create());
+        $ticket = Ticket::create([
+            'customer_id' => Customer::factory()->create()->id,
+            'channel' => TicketChannel::Email,
+            'subject' => 'x',
+            'status' => TicketStatus::Open,
+        ]);
+        $action = PendingAction::create([
+            'type' => 'ticket_reply',
+            'status' => ActionStatus::Pending,
+            'customer_id' => $ticket->customer_id,
+            'ticket_id' => $ticket->id,
+            'summary' => "תשובה ללקוח בפנייה #{$ticket->id}:\n\nהטקסט המקורי של הבינה",
+            'payload' => ['reply' => 'הטקסט המקורי של הבינה'],
+            'proposed_by' => 'ai',
+        ]);
+
+        Livewire::test(ListPendingActions::class)
+            ->callTableAction('editReply', $action, ['reply' => 'הטקסט הערוך שאושר']);
+
+        $action->refresh();
+        $this->assertSame(ActionStatus::Executed, $action->status);
+        $this->assertSame('הטקסט הערוך שאושר', data_get($action->payload, 'reply'));
+        $this->assertTrue((bool) data_get($action->payload, 'edited_by_operator'));
+
+        // The message actually queued to the customer carries the edited text.
+        $sent = $ticket->messages()->latest('id')->first();
+        $this->assertSame('הטקסט הערוך שאושר', $sent->body);
+        Queue::assertPushed(SendTicketReplyJob::class);
     }
 
     public function test_bulk_reject_rejects_the_selected_pending_actions(): void
