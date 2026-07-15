@@ -271,6 +271,32 @@ return [
         // from the AI-agent settings page; fed into every draft so it matches how
         // the team actually writes. Blank until first learned.
         'style_summary' => env('AI_STYLE_SUMMARY'),
+
+        // Token prices in USD per 1,000,000 tokens, as [input, output]. Used only
+        // to estimate spend for the AI-agent dashboard — the provider's invoice is
+        // the source of truth. Matched by the most-specific key contained in the
+        // model name; '*' is the fallback for anything unlisted. Update when a
+        // provider changes prices. (Prices as of mid-2026.)
+        'pricing' => [
+            'gemini-2.5-flash-lite' => [0.10, 0.40],
+            'gemini-2.5-flash' => [0.30, 2.50],
+            'gemini-2.5-pro' => [1.25, 10.00],
+            'gemini-3.1-flash-lite' => [0.25, 1.50],
+            'gemini-3.5-flash' => [1.50, 9.00],
+            // Rolling aliases now resolve to the 3.x line (Google shut the 2.5
+            // Flash models down mid-2026): flash-latest → 3.5 Flash,
+            // flash-lite-latest → 3.1 Flash-Lite.
+            'gemini-flash-lite' => [0.25, 1.50],
+            'gemini-flash' => [1.50, 9.00],
+            'gemini-pro' => [1.25, 10.00],
+            'gpt-4o-mini' => [0.15, 0.60],
+            'gpt-4.1-mini' => [0.40, 1.60],
+            'gpt-4o' => [2.50, 10.00],
+            'claude-opus' => [15.00, 75.00],
+            'claude-sonnet' => [3.00, 15.00],
+            'claude-haiku' => [0.80, 4.00],
+            '*' => [1.00, 5.00],
+        ],
     ],
 
     'monitoring' => [

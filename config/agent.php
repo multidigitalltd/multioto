@@ -32,6 +32,13 @@ return [
     // Off by default (it costs model tokens per ticket); turn on in the panel.
     'auto_investigate_tickets' => (bool) env('AGENT_AUTO_INVESTIGATE_TICKETS', false),
 
+    // Whether AI/automation proposals are pushed to the owner's WhatsApp group
+    // for approval. On by default (the fast "אשר <id>" path). Turning it off
+    // keeps proposals in the panel approvals inbox only — nothing is lost, the
+    // group just stops receiving the agent's proposals. Manual WhatsApp intake
+    // and management commands are unaffected.
+    'notify_owner_whatsapp' => (bool) env('AGENT_NOTIFY_OWNER_WHATSAPP', true),
+
     'plugin' => [
         // The current version of the companion plugin we ship. A site reporting
         // an older version is told to update itself from the download channel —

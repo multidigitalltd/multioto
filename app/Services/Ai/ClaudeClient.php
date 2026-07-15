@@ -2,8 +2,10 @@
 
 namespace App\Services\Ai;
 
+use App\Models\AiUsage;
 use App\Models\SystemLog;
 use App\Services\Health\ConnectionResult;
+use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -185,6 +187,8 @@ class ClaudeClient
                 return null;
             }
 
+            $this->recordUsage($response);
+
             if ($response->json('stop_reason') === 'refusal') {
                 return null;
             }
@@ -255,6 +259,8 @@ class ClaudeClient
                 return null;
             }
 
+            $this->recordUsage($response);
+
             $message = (array) $response->json('choices.0.message', []);
             $toolCalls = array_values((array) ($message['tool_calls'] ?? []));
 
@@ -319,6 +325,8 @@ class ClaudeClient
                 return null;
             }
 
+            $this->recordUsage($response);
+
             $parts = (array) $response->json('candidates.0.content.parts', []);
             $contents[] = ['role' => 'model', 'parts' => $parts];
 
@@ -379,6 +387,37 @@ class ClaudeClient
         ]);
     }
 
+    /**
+     * Record the token usage of one successful provider response for the cost
+     * dashboard. Each provider reports usage under a different key; a missing
+     * count is simply recorded as zero (the request itself is still counted).
+     */
+    private function recordUsage(Response $response): void
+    {
+        [$input, $output] = match (config('billing.ai.provider')) {
+            'openai' => [
+                (int) $response->json('usage.prompt_tokens', 0),
+                (int) $response->json('usage.completion_tokens', 0),
+            ],
+            'google' => [
+                (int) $response->json('usageMetadata.promptTokenCount', 0),
+                // Everything billed beyond the prompt (candidates + any thinking).
+                max(0, (int) $response->json('usageMetadata.totalTokenCount', 0) - (int) $response->json('usageMetadata.promptTokenCount', 0)),
+            ],
+            default => [
+                (int) $response->json('usage.input_tokens', 0),
+                (int) $response->json('usage.output_tokens', 0),
+            ],
+        };
+
+        AiUsage::record(
+            (string) config('billing.ai.provider'),
+            (string) config('billing.ai.model'),
+            $input,
+            $output,
+        );
+    }
+
     /** Pull the human-readable error message out of a provider error body. */
     private function extractError(string $body): string
     {
@@ -427,6 +466,8 @@ class ClaudeClient
             return null;
         }
 
+        $this->recordUsage($response);
+
         foreach ($response->json('content', []) as $block) {
             if (($block['type'] ?? null) === 'text' && filled($block['text'] ?? null)) {
                 return $this->decode($block['text']);
@@ -466,6 +507,8 @@ class ClaudeClient
 
             return null;
         }
+
+        $this->recordUsage($response);
 
         // A refusal comes back as a `refusal` field on the message.
         if (filled($response->json('choices.0.message.refusal'))) {
@@ -514,6 +557,8 @@ class ClaudeClient
 
             return null;
         }
+
+        $this->recordUsage($response);
 
         $text = $response->json('candidates.0.content.parts.0.text');
 

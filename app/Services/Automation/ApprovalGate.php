@@ -206,6 +206,12 @@ class ApprovalGate
     /** WhatsApp the proposal to the owner (best-effort). */
     protected function notifyOwner(PendingAction $action): void
     {
+        // The team can silence agent proposals on WhatsApp from the panel — the
+        // proposal still waits in the approvals inbox, the group just doesn't get it.
+        if (! config('agent.notify_owner_whatsapp', true)) {
+            return;
+        }
+
         $ownerChat = $this->ownerChatId();
 
         if ($ownerChat === null) {
