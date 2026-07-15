@@ -41,6 +41,9 @@ class AdminPanelProvider extends PanelProvider
                 'primary' => Color::Indigo,
             ])
             ->font('Rubik')
+            // In-panel notification bell (new task assigned, a site incident…) —
+            // always visible in the panel, independent of WhatsApp/email config.
+            ->databaseNotifications()
             ->sidebarCollapsibleOnDesktop()
             ->navigationGroups(['תמיכה', 'כספים', 'ניהול', 'הגדרות'])
             ->discoverResources(in: app_path('Filament/Resources'), for: 'App\\Filament\\Resources')

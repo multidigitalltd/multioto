@@ -13,6 +13,7 @@ use App\Enums\TicketStatus;
 use App\Filament\Resources\TicketResource;
 use App\Jobs\DraftReplyJob;
 use App\Jobs\InvestigateTicketJob;
+use App\Jobs\NotifyTaskCreatedJob;
 use App\Jobs\SendTicketReplyJob;
 use App\Models\CannedResponse;
 use App\Models\PendingAction;
@@ -383,6 +384,9 @@ class ViewTicket extends ViewRecord
                     'status' => TaskStatus::Open,
                 ]);
                 $task->assignees()->sync(array_filter((array) ($data['assignees'] ?? [])));
+
+                // Notify the assignees (or managers if none) — same as any new task.
+                NotifyTaskCreatedJob::dispatch($task->id);
 
                 Notification::make()->title('נוצרה משימה מהפנייה')->success()->send();
             });
