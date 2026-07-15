@@ -33,7 +33,7 @@ class SiteActions
             ->icon('heroicon-o-sparkles')
             ->color('info')
             ->visible(fn (Site $record): bool => $record->mcp_enabled
-                && app(ClaudeClient::class)->isEnabled()
+                && app(ClaudeClient::class)->supportsAgent()
                 && self::isAdmin())
             ->form([
                 Forms\Components\Textarea::make('goal')
