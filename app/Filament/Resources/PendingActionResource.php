@@ -40,6 +40,7 @@ class PendingActionResource extends Resource
         'ticket_reply' => 'תשובה ללקוח',
         'site_fix' => 'תיקון אתר',
         'site_action' => 'פעולת AI באתר',
+        'system_action' => 'פעולת מערכת',
         'monitoring_report' => 'דוח ניטור ללקוח',
     ];
 

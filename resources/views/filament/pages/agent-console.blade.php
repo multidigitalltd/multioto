@@ -19,9 +19,13 @@
         <ul class="list-disc space-y-1 pe-5 text-sm text-gray-600 dark:text-gray-300">
             <li>תענה למשה בכרטיס הפתוח שאנחנו על זה ונחזור אליו היום.</li>
             <li>תעדכן את הלקוח בפנייה 148 שהתקלה טופלה.</li>
-            <li>תנקה קאש באתר example.co.il.</li>
-            <li>תבדוק למה האתר של דנה איטי.</li>
+            <li>תנקה קאש באתר example.co.il · תבדוק למה האתר של דנה איטי.</li>
+            <li>תשלח דרישת תשלום למשה על 300 ש״ח עבור אחסון שנתי.</li>
+            <li>תסמן תשלום בוצע לדנה · תשעה את האתר של רון · תפתח משימה להתקשר ליוסי.</li>
         </ul>
+        <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+            אם חסר לסוכן מידע (למשל סכום) — הוא ישאל, ואפשר פשוט לענות בשורה הבאה כדי להמשיך.
+        </p>
     </x-filament::section>
 
     {{-- Console history: what was asked and what came of it. --}}

@@ -2,6 +2,8 @@
 
 namespace App\Filament\Concerns;
 
+use App\Enums\AgentCommandOutcome;
+use App\Models\AgentCommand;
 use App\Services\Agent\CommandInterpreter;
 use Filament\Notifications\Notification;
 
@@ -22,7 +24,15 @@ trait RunsAgentCommands
             return;
         }
 
-        $command = app(CommandInterpreter::class)->run($instruction, auth()->id());
+        // If my last command needed clarification, treat this one as the answer
+        // and continue it instead of starting over.
+        $last = AgentCommand::query()
+            ->where('user_id', auth()->id())
+            ->latest('id')
+            ->first();
+        $continues = $last?->outcome === AgentCommandOutcome::Unclear ? $last : null;
+
+        $command = app(CommandInterpreter::class)->run($instruction, auth()->id(), $continues);
 
         Notification::make()
             ->title($command->outcome->getLabel())
