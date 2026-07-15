@@ -18,6 +18,7 @@ class TicketMessage extends Model
 
     protected $fillable = [
         'ticket_id', 'direction', 'channel', 'body', 'body_html', 'external_message_id', 'author', 'attachments',
+        'quality_rating',
     ];
 
     protected function casts(): array
@@ -27,8 +28,21 @@ class TicketMessage extends Model
             'channel' => MessageChannel::class,
             'author' => MessageAuthor::class,
             'attachments' => 'array',
+            'quality_rating' => 'integer',
             'created_at' => 'datetime',
         ];
+    }
+
+    /**
+     * Whether this message is a reply the team can rate 1–10 — a sent agent
+     * answer or an AI draft. Inbound/customer and system messages are not rated.
+     */
+    public function isRateable(): bool
+    {
+        $sentAgentReply = $this->channel !== MessageChannel::InternalNote && $this->author === MessageAuthor::Agent;
+        $aiDraft = $this->author === MessageAuthor::Ai && str_contains((string) $this->body, 'טיוטת תשובה');
+
+        return $sentAgentReply || $aiDraft;
     }
 
     public function ticket(): BelongsTo

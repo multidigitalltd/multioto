@@ -252,6 +252,21 @@ class ViewTicket extends ViewRecord
     }
 
     /**
+     * Score a reply (an AI draft or a sent answer) 1–10. The score feeds the
+     * style learner, so future drafts lean on the highly-rated replies.
+     */
+    public function rateMessage(int $messageId, int $score): void
+    {
+        $score = max(1, min(10, $score));
+        $message = $this->record->messages()->whereKey($messageId)->first();
+
+        if ($message && $message->isRateable()) {
+            $message->update(['quality_rating' => $score]);
+            Notification::make()->title("הדירוג נשמר ({$score}/10) — הסוכן ילמד מזה")->success()->send();
+        }
+    }
+
+    /**
      * Validate + store the agent's uploaded reply files (rejected files are
      * skipped), returning their metadata for the message.
      *

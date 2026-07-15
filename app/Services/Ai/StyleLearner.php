@@ -32,28 +32,47 @@ class StyleLearner
             return null;
         }
 
-        $replies = TicketMessage::query()
+        // Ratings only ever land on rateable replies, so a rated row IS a reply.
+        // Learn primarily from the highly-rated ones, avoid the low-rated ones,
+        // and fill the baseline with recent (unrated) team replies.
+        $good = TicketMessage::query()
+            ->where('quality_rating', '>=', 7)
+            ->latest('id')->limit($sample)
+            ->get(['body', 'quality_rating']);
+
+        $poor = TicketMessage::query()
+            ->whereNotNull('quality_rating')->where('quality_rating', '<=', 4)
+            ->latest('id')->limit(10)
+            ->get(['body', 'quality_rating']);
+
+        $recent = TicketMessage::query()
             ->where('direction', MessageDirection::Outbound)
             ->where('author', MessageAuthor::Agent)
             ->where('channel', '!=', MessageChannel::InternalNote)
-            ->latest('id')
-            ->limit($sample)
+            ->whereNull('quality_rating')
+            ->latest('id')->limit($sample)
             ->pluck('body')
             ->map(fn ($body) => trim((string) $body))
-            ->filter()
-            ->all();
+            ->filter();
 
-        if (count($replies) < self::MIN_REPLIES) {
+        // Need enough positive/neutral material to learn a style from.
+        if ($good->count() + $recent->count() < self::MIN_REPLIES) {
             return null;
         }
 
-        $examples = collect($replies)
-            ->map(fn ($body) => '— '.Str::limit($body, 500))
-            ->implode("\n");
+        $rated = fn ($m): string => '— (דירוג '.$m->quality_rating.'/10) '.Str::limit(trim((string) $m->body), 500);
+
+        $prompt = "תשובות שדורגו גבוה — למד מהן בעיקר:\n".($good->map($rated)->implode("\n") ?: '(אין עדיין)');
+        if ($recent->isNotEmpty()) {
+            $prompt .= "\n\nתשובות אחרונות של הצוות:\n".$recent->map(fn ($b) => '— '.Str::limit($b, 500))->implode("\n");
+        }
+        if ($poor->isNotEmpty()) {
+            $prompt .= "\n\nתשובות שדורגו נמוך — הימנע מהדפוסים האלה:\n".$poor->map($rated)->implode("\n");
+        }
 
         $result = $this->claude->structured(
-            system: 'אתה מנתח סגנון כתיבה של צוות תמיכה. סכם בקצרה (עד 8 נקודות) את הטון, הניסוחים החוזרים, הפתיחות והחתימות וכללי הסגנון שאפשר ללמוד מהתשובות. כתוב בעברית, תמציתי, כהנחיה לסוכן שינסח באותו סגנון בדיוק.',
-            prompt: "אלה התשובות האחרונות של הצוות ללקוחות:\n\n{$examples}",
+            system: 'אתה מנתח סגנון כתיבה של צוות תמיכה. סכם בקצרה (עד 8 נקודות) את הטון, הניסוחים החוזרים, הפתיחות והחתימות וכללי הסגנון. תן משקל רב יותר לתשובות שדורגו גבוה והימנע מדפוסים של תשובות שדורגו נמוך. כתוב בעברית, תמציתי, כהנחיה לסוכן שינסח באותו סגנון בדיוק.',
+            prompt: $prompt,
             schema: [
                 'type' => 'object',
                 'additionalProperties' => false,
