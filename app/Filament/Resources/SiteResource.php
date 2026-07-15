@@ -4,11 +4,13 @@ namespace App\Filament\Resources;
 
 use App\Enums\SiteStatus;
 use App\Filament\Resources\SiteResource\Pages;
+use App\Jobs\InvestigateSiteJob;
 use App\Jobs\RestoreSiteJob;
 use App\Jobs\SuspendSiteJob;
 use App\Models\Site;
 use App\Services\Agent\SiteConnector;
 use App\Services\Agent\SiteToolCatalog;
+use App\Services\Ai\ClaudeClient;
 use App\Services\Automation\ApprovalGate;
 use App\Services\Hosting\SiteDiagnostics;
 use Filament\Forms;
@@ -258,6 +260,29 @@ class SiteResource extends Resource
                             ->title('השחזור נשלח לביצוע')
                             ->success()
                             ->send();
+                    }),
+
+                // Let the AI investigate the site (read-only) and file any fix as
+                // an approval proposal. Runs in the background; admin-only.
+                Tables\Actions\Action::make('aiInvestigate')
+                    ->label('אבחון AI')
+                    ->icon('heroicon-o-sparkles')
+                    ->color('info')
+                    ->visible(fn (Site $record): bool => $record->mcp_enabled
+                        && app(ClaudeClient::class)->isEnabled()
+                        && (auth()->user()?->isAdmin() ?? false))
+                    ->form([
+                        Forms\Components\Textarea::make('goal')
+                            ->label('מה לבדוק?')
+                            ->rows(2)
+                            ->default('אבחן את האתר וזהה תקלות. אם נדרש תיקון — הצע פעולה אחת לאישור.'),
+                    ])
+                    ->action(function (array $data, Site $record): void {
+                        InvestigateSiteJob::dispatch($record->id, (string) ($data['goal'] ?? 'אבחן את האתר.'));
+
+                        Notification::make()->title('האבחון רץ ברקע')
+                            ->body('הסיכום יופיע בזיכרון האתר, והצעות תיקון (אם יהיו) ב"אישורי אוטומציה" לאישורך.')
+                            ->success()->send();
                     }),
 
                 // Propose an MCP tool call on this site — goes through the same
