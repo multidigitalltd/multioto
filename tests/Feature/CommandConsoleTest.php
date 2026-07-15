@@ -7,6 +7,7 @@ use App\Enums\AgentCommandOutcome;
 use App\Enums\TicketChannel;
 use App\Enums\TicketStatus;
 use App\Filament\Pages\AgentConsole;
+use App\Filament\Widgets\AgentCommandWidget;
 use App\Jobs\InvestigateSiteJob;
 use App\Models\AgentCommand;
 use App\Models\Customer;
@@ -151,6 +152,24 @@ class CommandConsoleTest extends TestCase
         $this->app->instance(CommandInterpreter::class, $interpreter);
 
         Livewire::test(AgentConsole::class)
+            ->set('data.instruction', 'תנקה קאש באתר example.co.il')
+            ->call('run')
+            ->assertNotified();
+    }
+
+    public function test_the_embedded_command_widget_sends_to_the_interpreter(): void
+    {
+        config(['billing.ai.enabled' => true]); // the widget is gated on the AI being on
+        $this->actingAs(User::factory()->create());
+
+        $result = new AgentCommand(['instruction' => 'x', 'result' => 'הוגשה לאישור']);
+        $result->outcome = AgentCommandOutcome::Proposed;
+
+        $interpreter = Mockery::mock(CommandInterpreter::class);
+        $interpreter->shouldReceive('run')->once()->andReturn($result);
+        $this->app->instance(CommandInterpreter::class, $interpreter);
+
+        Livewire::test(AgentCommandWidget::class)
             ->set('data.instruction', 'תנקה קאש באתר example.co.il')
             ->call('run')
             ->assertNotified();
