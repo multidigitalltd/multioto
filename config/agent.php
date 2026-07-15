@@ -14,6 +14,11 @@ return [
     |
     */
 
+    // Master kill-switch for executing actions on sites. Defaults OFF: even an
+    // approved site_action will not run until an admin turns this on (after the
+    // security review). Proposing and read-only connection tests stay available.
+    'actions_enabled' => (bool) env('AGENT_ACTIONS_ENABLED', false),
+
     'plugin' => [
         // The current version of the companion plugin we ship. A site reporting
         // an older version is told to update itself from the download channel —

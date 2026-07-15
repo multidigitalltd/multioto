@@ -33,6 +33,8 @@ class SiteChangeJournal
         ?string $initiatedBy = null,
         ?PendingAction $pendingAction = null,
         SiteChangeStatus $status = SiteChangeStatus::Applied,
+        ?string $revertTool = null,
+        ?array $revertArguments = null,
     ): SiteChange {
         return $site->changes()->create([
             'summary' => $summary,
@@ -43,6 +45,8 @@ class SiteChangeJournal
             'initiated_by' => $initiatedBy,
             'pending_action_id' => $pendingAction?->id,
             'status' => $status,
+            'revert_tool' => $revertTool,
+            'revert_arguments' => $revertArguments,
         ]);
     }
 

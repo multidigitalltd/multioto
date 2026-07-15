@@ -63,6 +63,8 @@ class SettingsServiceProvider extends ServiceProvider
         'ai.persona' => 'billing.ai.persona',
         'ai.rules' => 'billing.ai.rules',
         'ai.style_summary' => 'billing.ai.style_summary',
+        // Master kill-switch for the AI site agent's actions on sites.
+        'agent.actions_enabled' => 'agent.actions_enabled',
         // Public signup form — payment-method setup instructions (editable text).
         'signup.instructions.standing_order' => 'billing.signup.instructions.standing_order',
         'signup.instructions.bank_transfer' => 'billing.signup.instructions.bank_transfer',

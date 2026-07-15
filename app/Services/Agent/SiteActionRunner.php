@@ -5,6 +5,7 @@ namespace App\Services\Agent;
 use App\Enums\SiteChangeStatus;
 use App\Models\PendingAction;
 use App\Models\Site;
+use App\Models\SiteChange;
 use Illuminate\Support\Str;
 
 /**
@@ -34,6 +35,12 @@ class SiteActionRunner
             throw new \RuntimeException('האתר או הכלי חסרים בהצעה.');
         }
 
+        // Master kill-switch — approved or not, nothing runs on any site while
+        // the site agent is turned off.
+        if (! config('agent.actions_enabled')) {
+            throw new \RuntimeException('מנגנון פעולות ה-AI כבוי (kill-switch). יש להפעיל אותו בהגדרות הסוכן.');
+        }
+
         if (! $site->mcp_enabled || blank($site->mcp_endpoint)) {
             throw new \RuntimeException("חיבור ה-AI לאתר {$site->domain} כבוי או לא מוגדר.");
         }
@@ -61,9 +68,20 @@ class SiteActionRunner
 
         $output = $this->mcp->textContent($result);
 
+        // A successful revert closes the original change in the journal.
+        if (($revertsId = data_get($action->payload, 'reverts_change_id')) !== null) {
+            if ($original = SiteChange::where('site_id', $site->id)->find((int) $revertsId)) {
+                $this->journal->markReverted($original);
+            }
+        }
+
         // Journal state-changing tools only — a read leaves nothing to undo and
-        // would drown the change history in noise.
+        // would drown the change history in noise. The optional `revert` recipe
+        // (an inverse tool + arguments) is stored so the change can be rolled
+        // back live later.
         if ($this->catalog->tier($tool) >= 1) {
+            $revert = (array) data_get($action->payload, 'revert', []);
+
             $this->journal->record(
                 $site,
                 summary: Str::limit($action->summary, 250),
@@ -73,6 +91,8 @@ class SiteActionRunner
                 afterState: Str::limit($output, 2000) ?: null,
                 initiatedBy: $action->proposed_by,
                 pendingAction: $action,
+                revertTool: filled($revert['tool'] ?? null) ? (string) $revert['tool'] : null,
+                revertArguments: isset($revert['arguments']) ? (array) $revert['arguments'] : null,
             );
         }
 
