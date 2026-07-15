@@ -143,6 +143,13 @@ Route::prefix('agent')->group(function () {
         ->middleware(['signed', 'throttle:30,1'])
         ->where('version', '[0-9]+\.[0-9]+\.[0-9]+')
         ->name('agent.plugin.download');
+
+    // Admin-only download of the current plugin build (the copy shipped in the
+    // repo), so a manager can grab the ZIP straight from the panel to install on
+    // a customer's site. Guarded by the panel login + an admin check.
+    Route::get('/plugin/latest', [AgentPluginController::class, 'latest'])
+        ->middleware(['web', 'auth', 'throttle:30,1'])
+        ->name('agent.plugin.latest');
 });
 
 /*

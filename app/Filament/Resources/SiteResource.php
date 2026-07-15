@@ -104,17 +104,49 @@ class SiteResource extends Resource
                             ->label('כתובת MCP')
                             ->url()
                             ->maxLength(255)
+                            // Pre-fill the conventional endpoint for an existing
+                            // site so the field, the DB and the "connection codes"
+                            // modal all agree on one value.
+                            ->afterStateHydrated(function (Forms\Set $set, ?string $state, ?Site $record): void {
+                                if (blank($state) && $record !== null && filled($record->domain)) {
+                                    $set('mcp_endpoint', $record->conventionalMcpEndpoint());
+                                }
+                            })
                             ->columnSpanFull(),
                         Forms\Components\TextInput::make('mcp_secret')
                             ->label('מפתח MCP')
                             ->password()
                             ->maxLength(255)
-                            ->helperText('בעריכה — השאירו ריק כדי לא לשנות.')
+                            ->helperText('נוצר אוטומטית ב"קודי חיבור לתוסף". בעריכה — השאירו ריק כדי לא לשנות.')
                             // Never render the stored secret back into the form;
                             // a blank field means "leave unchanged".
                             ->formatStateUsing(fn (): ?string => null)
                             ->dehydrated(fn ($state): bool => filled($state))
                             ->columnSpanFull(),
+
+                        // Where a manager sets up the connection: grab the plugin
+                        // and copy the ready-made codes into the site — no need to
+                        // invent a secret or a token.
+                        Forms\Components\Actions::make([
+                            Forms\Components\Actions\Action::make('downloadPlugin')
+                                ->label('הורד תוסף (גרסה אחרונה)')
+                                ->icon('heroicon-o-arrow-down-tray')
+                                ->color('gray')
+                                ->url(fn (): string => route('agent.plugin.latest'))
+                                ->openUrlInNewTab(),
+                            Forms\Components\Actions\Action::make('connectionCodes')
+                                ->label('קודי חיבור לתוסף')
+                                ->icon('heroicon-o-clipboard-document')
+                                ->color('primary')
+                                // Needs a saved site to generate/store codes against.
+                                ->visible(fn (?Site $record): bool => $record !== null)
+                                ->modalHeading(fn (?Site $record): string => 'קודי חיבור — '.($record?->domain ?? ''))
+                                ->modalSubmitAction(false)
+                                ->modalCancelActionLabel('סגור')
+                                ->modalContent(fn (Site $record) => view('filament.agent-credentials', [
+                                    'data' => $record->ensureAgentCredentials(),
+                                ])),
+                        ])->columnSpanFull(),
                     ])->columns(2),
             ]);
     }
@@ -364,21 +396,46 @@ class SiteResource extends Resource
                 // Issue a fresh per-site connection token for the companion
                 // plugin. Shown once — installed into the site's plugin config —
                 // and rotating it revokes the previous one. Admin-only.
+                // The ready-made connection codes (endpoint, secret, token) to
+                // copy straight into the site's plugin — generated once, then
+                // re-displayable any time. Admin-only.
+                Tables\Actions\Action::make('connectionCodes')
+                    ->label('קודי חיבור')
+                    ->icon('heroicon-o-clipboard-document')
+                    ->color('primary')
+                    ->visible(fn (): bool => auth()->user()?->isAdmin() ?? false)
+                    ->modalHeading(fn (Site $record): string => 'קודי חיבור — '.$record->domain)
+                    ->modalSubmitAction(false)
+                    ->modalCancelActionLabel('סגור')
+                    ->modalContent(fn (Site $record) => view('filament.agent-credentials', [
+                        'data' => $record->ensureAgentCredentials(),
+                    ])),
+
+                // Download the current plugin build to install on a site. Admin-only.
+                Tables\Actions\Action::make('downloadPlugin')
+                    ->label('הורד תוסף')
+                    ->icon('heroicon-o-arrow-down-tray')
+                    ->color('gray')
+                    ->visible(fn (): bool => auth()->user()?->isAdmin() ?? false)
+                    ->url(fn (): string => route('agent.plugin.latest'))
+                    ->openUrlInNewTab(),
+
+                // Rotate the site's connection token — revokes the previous one.
                 Tables\Actions\Action::make('generateAgentToken')
-                    ->label('טוקן חיבור')
+                    ->label('טוקן חדש')
                     ->icon('heroicon-o-key')
                     ->color('gray')
                     ->visible(fn (): bool => auth()->user()?->isAdmin() ?? false)
                     ->requiresConfirmation()
-                    ->modalHeading('יצירת טוקן חיבור לאתר')
-                    ->modalDescription('ייווצר טוקן חדש עבור התוסף באתר. אם כבר קיים טוקן — הוא יבוטל. הטוקן יוצג פעם אחת בלבד.')
-                    ->modalSubmitActionLabel('צור טוקן')
+                    ->modalHeading('החלפת טוקן חיבור לאתר')
+                    ->modalDescription('ייווצר טוקן חדש עבור התוסף באתר. הטוקן הקודם יבוטל — יש לעדכן את התוסף בטוקן החדש.')
+                    ->modalSubmitActionLabel('צור טוקן חדש')
                     ->action(function (Site $record): void {
                         $token = $record->generateAgentToken();
 
                         Notification::make()
-                            ->title('הטוקן נוצר — העתיקו אותו עכשיו')
-                            ->body('התקינו בתוסף באתר. לא ניתן לשחזר אותו מאוחר יותר:'."\n\n".$token)
+                            ->title('נוצר טוקן חדש — עדכנו אותו בתוסף')
+                            ->body('הטוקן הקודם בוטל. הטוקן החדש (זמין גם ב"קודי חיבור"):'."\n\n".$token)
                             ->success()
                             ->persistent()
                             ->send();

@@ -8,6 +8,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\URL;
+use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 /**
@@ -53,6 +54,26 @@ class AgentPluginController extends Controller
         abort_unless($disk->exists($path), 404);
 
         return $disk->download($path, "md-agent-{$version}.zip", [
+            'Content-Type' => 'application/zip',
+        ]);
+    }
+
+    /**
+     * Admin download of the current plugin build shipped in the repo, so a
+     * manager can install it on a customer's site straight from the panel. Not
+     * part of the site-facing update channel — authenticated by the panel login
+     * plus an admin check.
+     */
+    public function latest(Request $request): BinaryFileResponse
+    {
+        abort_unless($request->user()?->isAdmin() ?? false, 403);
+
+        $version = (string) config('agent.plugin.current_version');
+        $path = base_path("wordpress-plugin/releases/multioto-agent-{$version}.zip");
+
+        abort_unless(is_file($path), 404, 'קובץ התוסף אינו זמין בשרת. יש לבנות אותו עם wordpress-plugin/build.sh.');
+
+        return response()->download($path, "multioto-agent-{$version}.zip", [
             'Content-Type' => 'application/zip',
         ]);
     }
