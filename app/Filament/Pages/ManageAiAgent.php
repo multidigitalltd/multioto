@@ -71,6 +71,9 @@ class ManageAiAgent extends Page implements HasForms
                 'rules' => config('billing.ai.rules'),
                 'style_summary' => config('billing.ai.style_summary'),
             ],
+            'agent' => [
+                'actions_enabled' => (bool) config('agent.actions_enabled'),
+            ],
         ]);
     }
 
@@ -110,6 +113,14 @@ class ManageAiAgent extends Page implements HasForms
                             ->helperText('נשמר מוצפן. השאירו ריק כדי לא לשנות.'),
                     ])->columns(2),
 
+                Section::make('פעולות באתרים (Kill-Switch)')
+                    ->description('כשכבוי — הסוכן לא מבצע שום פעולה על אתרים, גם אם אושרה. מפעילים רק אחרי בדיקת אבטחה. כל פעולה תמיד עוברת אישור מנהל בנוסף.')
+                    ->schema([
+                        Toggle::make('agent.actions_enabled')
+                            ->label('אפשר ביצוע פעולות על אתרים')
+                            ->helperText('מתג-חירום ראשי. כיבוי חוסם מיידית כל ביצוע על כל האתרים.'),
+                    ]),
+
                 Section::make('הוראות הסוכן')
                     ->description('כאן קובעים מה מותר ומה אסור. השאירו ריק כדי לחזור לברירת המחדל.')
                     ->schema([
@@ -143,6 +154,7 @@ class ManageAiAgent extends Page implements HasForms
         // Non-secret fields: persist the (prefilled/edited) value.
         Setting::put('ai.enabled', data_get($this->data, 'ai.enabled') ? '1' : '0');
         Setting::put('ai.provider', (string) (data_get($this->data, 'ai.provider') ?: 'anthropic'));
+        Setting::put('agent.actions_enabled', data_get($this->data, 'agent.actions_enabled') ? '1' : '0');
 
         // model/base_url/persona/rules: persist when filled; clearing reverts to
         // the env/default value instead of storing an empty override.

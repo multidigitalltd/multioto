@@ -18,6 +18,13 @@ class SiteActionTest extends TestCase
 {
     use RefreshDatabase;
 
+    protected function setUp(): void
+    {
+        parent::setUp();
+        // The kill-switch defaults OFF; these tests exercise the enabled path.
+        config(['agent.actions_enabled' => true]);
+    }
+
     private function connectedSite(array $attributes = []): Site
     {
         return Site::factory()->create([
@@ -176,5 +183,64 @@ class SiteActionTest extends TestCase
         $this->assertSame(ActionStatus::Rejected, $action->fresh()->status);
         Http::assertNothingSent();
         $this->assertSame(0, SiteChange::count());
+    }
+
+    public function test_the_kill_switch_blocks_execution_even_after_approval(): void
+    {
+        config(['agent.actions_enabled' => false]);
+        $site = $this->connectedSite();
+        Http::fake(); // must never be called
+        $action = $this->proposal($site, 'wp_cache_flush');
+
+        $reply = app(ApprovalGate::class)->approve($action);
+
+        $this->assertStringContainsString('נכשל', $reply);
+        $this->assertSame(ActionStatus::Failed, $action->fresh()->status);
+        Http::assertNothingSent();
+    }
+
+    public function test_a_recorded_revert_recipe_enables_a_gated_live_rollback(): void
+    {
+        $site = $this->connectedSite();
+        $this->fakeToolCall('updated');
+
+        // Apply a change that knows how to undo itself.
+        $apply = PendingAction::create([
+            'type' => 'site_action',
+            'status' => ActionStatus::Pending,
+            'customer_id' => $site->customer_id,
+            'summary' => 'עדכון תוסף',
+            'payload' => [
+                'site_id' => $site->id,
+                'tool' => 'wp_plugin_update',
+                'arguments' => ['plugin' => 'elementor', 'version' => '3.21'],
+                'revert' => ['tool' => 'wp_plugin_update', 'arguments' => ['plugin' => 'elementor', 'version' => '3.20']],
+            ],
+            'proposed_by' => 'ai',
+        ]);
+        app(ApprovalGate::class)->approve($apply);
+
+        $change = SiteChange::sole();
+        $this->assertTrue($change->isRevertable());
+        $this->assertSame('wp_plugin_update', $change->revert_tool);
+
+        // Approving the inverse action rolls the original change back.
+        $revert = PendingAction::create([
+            'type' => 'site_action',
+            'status' => ActionStatus::Pending,
+            'customer_id' => $site->customer_id,
+            'summary' => 'שחזור',
+            'payload' => [
+                'site_id' => $site->id,
+                'tool' => (string) $change->revert_tool,
+                'arguments' => (array) $change->revert_arguments,
+                'reverts_change_id' => $change->id,
+            ],
+            'proposed_by' => 'team',
+        ]);
+        app(ApprovalGate::class)->approve($revert);
+
+        $this->assertSame(SiteChangeStatus::Reverted, $change->fresh()->status);
+        $this->assertNotNull($change->fresh()->reverted_at);
     }
 }

@@ -137,9 +137,12 @@ class AgentFoundationTest extends TestCase
             arguments: ['plugin' => 'elementor'],
             beforeState: '3.20',
             initiatedBy: 'ai',
+            revertTool: 'wp_plugin_update',
+            revertArguments: ['plugin' => 'elementor', 'version' => '3.20'],
         );
 
         $this->assertSame(SiteChangeStatus::Applied, $change->fresh()->status);
+        // Revertable because it carries an inverse recipe.
         $this->assertTrue($change->isRevertable());
 
         $journal->markReverted($change);
