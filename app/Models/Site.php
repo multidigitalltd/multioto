@@ -23,8 +23,8 @@ class Site extends Model
         'mcp_capabilities', 'mcp_last_seen_at', 'agent_plugin_version',
     ];
 
-    /** Never mass-assign the agent token — it is set only via generateAgentToken(). */
-    protected $hidden = ['mcp_secret', 'agent_token'];
+    /** Never mass-assign or expose the agent token / secrets. */
+    protected $hidden = ['mcp_secret', 'agent_token', 'agent_token_plain'];
 
     protected function casts(): array
     {
@@ -36,6 +36,7 @@ class Site extends Model
             'domain_expiry_at' => 'date',
             'domain_alerted_at' => 'datetime',
             'mcp_secret' => 'encrypted',
+            'agent_token_plain' => 'encrypted',
             'mcp_enabled' => 'boolean',
             'mcp_capabilities' => 'array',
             'mcp_last_seen_at' => 'datetime',
@@ -43,16 +44,66 @@ class Site extends Model
     }
 
     /**
-     * Issue a fresh per-site token, storing only its hash. The plaintext is
-     * returned once (to be installed in the site's plugin) and is never
-     * recoverable afterwards — rotating it revokes the previous one.
+     * Issue a fresh per-site token. Its hash authenticates the plugin's
+     * check-ins; an encrypted copy is kept so the panel can re-display the code
+     * for copying into the site's plugin. Rotating it revokes the previous one.
      */
     public function generateAgentToken(): string
     {
         $token = Str::random(48);
-        $this->forceFill(['agent_token' => hash('sha256', $token)])->save();
+        $this->forceFill([
+            'agent_token' => hash('sha256', $token),
+            'agent_token_plain' => $token,
+        ])->save();
 
         return $token;
+    }
+
+    /**
+     * Make sure the site has a full, usable set of connection codes and return
+     * them ready to copy into the companion plugin: panel URL, MCP endpoint,
+     * MCP secret and update token. Missing pieces are generated (a random secret,
+     * the conventional endpoint, a fresh token) so a manager never has to invent
+     * anything — the panel is the single source of truth. The "connection active"
+     * toggle is left untouched — enabling stays an explicit choice.
+     */
+    public function ensureAgentCredentials(): array
+    {
+        if (blank($this->mcp_endpoint)) {
+            $this->mcp_endpoint = $this->conventionalMcpEndpoint();
+        }
+
+        if (blank($this->mcp_secret)) {
+            $this->mcp_secret = Str::random(40);
+        }
+
+        if ($this->isDirty()) {
+            $this->save();
+        }
+
+        // Only mint a token when the site has none at all. If a hash already
+        // exists but no retrievable copy (a site connected before this column),
+        // we must NOT rotate on read — that would 401 the plugin already
+        // installed with the old token. Such a token is simply unrecoverable
+        // for display; rotating it is an explicit action ("טוקן חדש").
+        if (blank($this->agent_token) && blank($this->agent_token_plain)) {
+            $this->generateAgentToken();
+        }
+
+        return [
+            'panel_url' => rtrim((string) config('app.url'), '/'),
+            'mcp_endpoint' => (string) $this->mcp_endpoint,
+            'mcp_secret' => (string) $this->mcp_secret,
+            // Empty when a pre-existing token can't be shown — the view then
+            // tells the manager to rotate rather than showing a blank box.
+            'update_token' => (string) $this->agent_token_plain,
+        ];
+    }
+
+    /** The MCP endpoint the companion plugin exposes for a given domain. */
+    public function conventionalMcpEndpoint(): string
+    {
+        return 'https://'.$this->domain.'/wp-json/md-agent/v1/mcp';
     }
 
     /** Resolve a site by the plaintext token its plugin presents (constant-time). */
