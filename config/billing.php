@@ -165,7 +165,15 @@ return [
         // selected") — taxable lines use the item's default income account.
         // 102 is the exempt-income account in Linet's standard chart.
         'income_account_exempt' => env('LINET_INCOME_ACCOUNT_EXEMPT', 102),
+        // docCheq payment-method codes per how the customer pays. The default
+        // (payment_type) is credit card; manual payers get their own Linet code
+        // so the tax invoice records the real method. Both fall back to
+        // payment_type when left unset.
+        //  - payment_type_bank_transfer: העברה בנקאית
+        //  - payment_type_standing_order: הו״ק בנקאית (מס״ב)
         'payment_type' => env('LINET_PAYMENT_TYPE', 3),
+        'payment_type_bank_transfer' => env('LINET_PAYMENT_TYPE_BANK_TRANSFER'),
+        'payment_type_standing_order' => env('LINET_PAYMENT_TYPE_STANDING_ORDER'),
         'create_doc_path' => env('LINET_CREATE_DOC_PATH', '/create/doc'),
         // Linet item id used for our free-text service lines (every document line
         // must reference an item). Linet's own plugin defaults the general item

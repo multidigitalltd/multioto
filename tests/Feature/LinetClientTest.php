@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Enums\ChargeStatus;
 use App\Enums\VatCategory;
 use App\Models\Charge;
+use App\Models\Customer;
 use App\Models\Subscription;
 use App\Services\Linet\InvoiceIssuer;
 use App\Services\Linet\LinetClient;
@@ -82,6 +83,40 @@ class LinetClientTest extends TestCase
                 && $body['docCheq'][0]['sum'] === 118.0
                 && $body['docCheq'][0]['type'] === 3;
         });
+    }
+
+    private function chargeForMethod(?string $method): Charge
+    {
+        $customer = Customer::factory()->create(['payment_method' => $method]);
+        $subscription = Subscription::factory()->create(['customer_id' => $customer->id]);
+
+        return Charge::create([
+            'subscription_id' => $subscription->id,
+            'amount_agorot' => 10000, 'vat_agorot' => 1800, 'total_agorot' => 11800,
+            'period_start' => now()->toDateString(), 'period_end' => now()->addMonth()->toDateString(),
+        ]);
+    }
+
+    public function test_doccheq_uses_the_payment_code_matching_how_the_customer_pays(): void
+    {
+        config([
+            'billing.linet.payment_type_bank_transfer' => 7,
+            'billing.linet.payment_type_standing_order' => 8,
+        ]);
+        Http::fake([
+            '*/search/account' => Http::response(['status' => 200, 'body' => [['id' => 77]]]),
+            '*/create/doc' => Http::response(['status' => 200, 'body' => ['id' => 1]]),
+        ]);
+
+        $client = app(LinetClient::class);
+        $client->issueDocument($this->chargeForMethod('bank_transfer'), VatCategory::Taxable, 'x');
+        $client->issueDocument($this->chargeForMethod('standing_order'), VatCategory::Taxable, 'x');
+        $client->issueDocument($this->chargeForMethod('credit_card'), VatCategory::Taxable, 'x');
+
+        // Bank transfer → 7, standing order → 8, credit card → default 3.
+        Http::assertSent(fn ($r) => str_ends_with($r->url(), '/create/doc') && $r->data()['docCheq'][0]['type'] === 7);
+        Http::assertSent(fn ($r) => str_ends_with($r->url(), '/create/doc') && $r->data()['docCheq'][0]['type'] === 8);
+        Http::assertSent(fn ($r) => str_ends_with($r->url(), '/create/doc') && $r->data()['docCheq'][0]['type'] === 3);
     }
 
     public function test_missing_account_is_created_before_the_document(): void

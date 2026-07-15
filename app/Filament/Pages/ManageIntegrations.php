@@ -63,7 +63,7 @@ class ManageIntegrations extends Page implements HasForms
         ],
         'linet' => [
             'label' => 'לינט',
-            'keys' => ['linet.login_id', 'linet.key', 'linet.company_id', 'linet.doctype', 'linet.doctype_proforma', 'linet.vat_cat_taxable', 'linet.vat_cat_exempt', 'linet.payment_type', 'linet.general_item_id', 'linet.income_account_exempt'],
+            'keys' => ['linet.login_id', 'linet.key', 'linet.company_id', 'linet.doctype', 'linet.doctype_proforma', 'linet.vat_cat_taxable', 'linet.vat_cat_exempt', 'linet.payment_type', 'linet.payment_type_bank_transfer', 'linet.payment_type_standing_order', 'linet.general_item_id', 'linet.income_account_exempt'],
         ],
         'flywp' => [
             'label' => 'FlyWP',
@@ -181,6 +181,8 @@ class ManageIntegrations extends Page implements HasForms
                         TextInput::make('linet.vat_cat_taxable')->label('קוד מע״מ — חייב')->helperText('בלינט: 1 = חייב במע״מ (ברירת המחדל הנכונה כמעט תמיד).')->numeric()->live(onBlur: true)->autocomplete(false),
                         TextInput::make('linet.vat_cat_exempt')->label('קוד מע״מ — פטור')->helperText('בלינט: 2 = פטור/חו״ל. אלה קודי vat_cat_id — חשבונות ההכנסה (100/102) מוגדרים בנפרד.')->numeric()->live(onBlur: true)->autocomplete(false),
                         TextInput::make('linet.payment_type')->label('קוד אמצעי תשלום (כרטיס אשראי)')->numeric()->live(onBlur: true)->autocomplete(false),
+                        TextInput::make('linet.payment_type_bank_transfer')->label('קוד אמצעי תשלום (העברה בנקאית)')->helperText('קוד אמצעי התשלום בלינט להעברה בנקאית. ריק = ישתמש בקוד ברירת המחדל.')->numeric()->live(onBlur: true)->autocomplete(false),
+                        TextInput::make('linet.payment_type_standing_order')->label('קוד אמצעי תשלום (הו״ק בנקאית / מס״ב)')->helperText('קוד אמצעי התשלום בלינט להוראת קבע בנקאית (מס״ב). ריק = ישתמש בקוד ברירת המחדל.')->numeric()->live(onBlur: true)->autocomplete(false),
                         TextInput::make('linet.general_item_id')->label('קוד פריט כללי')->helperText('הפריט בלינט שאליו משויכת כל שורת חשבונית. ברירת מחדל: 1. שנו רק אם הפריט הכללי בחשבונכם שונה.')->live(onBlur: true)->autocomplete(false),
                         TextInput::make('linet.income_account_exempt')->label('חשבון הכנסה — פטור')->helperText('חשבון הכנסות פטורות בלינט (בדרך כלל 102). נדרש רק בחשבוניות ללקוח פטור ממע״מ; שורה חייבת משתמשת בחשבון של הפריט (100).')->numeric()->live(onBlur: true)->autocomplete(false),
                     ])->columns(3)
