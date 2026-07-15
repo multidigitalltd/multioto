@@ -35,9 +35,11 @@ class SiteAgent
             return null;
         }
 
+        // Only tools the site itself declares read-only (MCP readOnlyHint) may be
+        // offered as reads — never a tool that merely has a read-ish name.
         $readTools = collect((array) data_get($site->mcp_capabilities, 'tools', []))
             ->pluck('name')
-            ->filter(fn ($name): bool => filled($name) && $this->catalog->tier((string) $name) === 0)
+            ->filter(fn ($name): bool => filled($name) && $this->catalog->isReadOnly($site, (string) $name))
             ->values();
 
         return $this->ai->converse(
@@ -100,8 +102,10 @@ class SiteAgent
     /** Run a read-only tool live and return its output to the model. */
     private function runRead(Site $site, string $tool, array $arguments): array
     {
-        // Enforce read-only at execution: the model can only reach tier-0 tools.
-        if ($tool === '' || $this->catalog->tier($tool) !== 0) {
+        // Enforce read-only at execution, default-deny: the tool must be one the
+        // site declared read-only. This is the ONLY path that skips approval, so
+        // a mutating tool can never slip through on a read-ish name.
+        if ($tool === '' || ! $this->catalog->isReadOnly($site, $tool)) {
             return ['content' => "הכלי {$tool} אינו כלי קריאה ולכן חסום כאן. להצעת שינוי השתמש ב-propose_action.", 'is_error' => true];
         }
 
@@ -137,7 +141,7 @@ class SiteAgent
 
         $action = $this->gate->propose(
             type: 'site_action',
-            summary: "🤖 הצעת AI לאתר {$site->domain} ({$this->catalog->tierLabel($tool)})\n".Str::limit($summary, 400)."\nכלי: {$tool}",
+            summary: "🤖 הצעת AI לאתר {$site->domain} ({$this->catalog->resolveTierLabel($site, $tool)})\n".Str::limit($summary, 400)."\nכלי: {$tool}",
             payload: $payload,
             customerId: $site->customer_id,
             proposedBy: 'ai',

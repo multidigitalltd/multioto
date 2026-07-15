@@ -37,8 +37,8 @@ class SiteAgentTest extends TestCase
             'mcp_endpoint' => 'https://site.test/wp-json/md-agent/mcp',
             'mcp_secret' => 'site-secret',
             'mcp_capabilities' => ['tools' => [
-                ['name' => 'wp_plugin_list', 'description' => 'List plugins'],
-                ['name' => 'wp_plugin_update', 'description' => 'Update a plugin'],
+                ['name' => 'wp_plugin_list', 'description' => 'List plugins', 'read_only' => true, 'destructive' => false],
+                ['name' => 'wp_plugin_update', 'description' => 'Update a plugin', 'read_only' => false, 'destructive' => false],
             ]],
         ]);
     }
@@ -122,6 +122,34 @@ class SiteAgentTest extends TestCase
 
         // The destructive proposal was refused by the toolset — nothing queued.
         $this->assertSame(0, PendingAction::where('type', 'site_action')->count());
+    }
+
+    public function test_a_mutating_tool_with_a_read_ish_name_is_refused_on_the_read_path(): void
+    {
+        // "search_replace" contains the tier-0 substring "search" but is NOT
+        // annotated read-only — the classic mass DB-rewrite. It must NOT execute
+        // via site_read (the path that skips approval + the kill-switch).
+        $site = Site::factory()->create([
+            'mcp_enabled' => true,
+            'mcp_endpoint' => 'https://site.test/wp-json/md-agent/mcp',
+            'mcp_secret' => 's',
+            'mcp_capabilities' => ['tools' => [
+                ['name' => 'search_replace', 'description' => 'Mass DB rewrite', 'read_only' => false, 'destructive' => true],
+            ]],
+        ]);
+
+        $this->fakeClaude([
+            ['stop_reason' => 'tool_use', 'content' => [
+                ['type' => 'tool_use', 'id' => 'tu_1', 'name' => 'site_read', 'input' => ['tool' => 'search_replace', 'arguments' => ['from' => 'a', 'to' => 'b']]],
+            ]],
+            ['stop_reason' => 'end_turn', 'content' => [['type' => 'text', 'text' => 'נחסם.']]],
+        ]);
+
+        app(SiteAgent::class)->investigate($site, 'החלף מחרוזת');
+
+        // The read was refused — the destructive tool was never called on the site.
+        Http::assertNotSent(fn (Request $r): bool => str_contains($r->url(), 'site.test')
+            && ($r->data()['method'] ?? '') === 'tools/call');
     }
 
     public function test_investigate_returns_null_when_the_site_is_not_connected(): void
