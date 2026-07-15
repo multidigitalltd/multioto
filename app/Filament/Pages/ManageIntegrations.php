@@ -102,6 +102,17 @@ class ManageIntegrations extends Page implements HasForms
         'waha.api_key',
     ];
 
+    /**
+     * Optional non-secret keys that MAY be cleared back to their default. saveGroup
+     * only persists filled values (so blanking a secret never wipes it), so a key
+     * whose form says "empty = default" must be listed here to actually be
+     * removed on clear. Never put a secret or a required credential here.
+     */
+    public const CLEARABLE_KEYS = [
+        'linet.payment_type_bank_transfer',
+        'linet.payment_type_standing_order',
+    ];
+
     /** @var array<string, mixed> */
     public array $data = [];
 
@@ -250,6 +261,10 @@ class ManageIntegrations extends Page implements HasForms
 
             if (filled($value)) {
                 Setting::put($key, (string) $value);
+            } elseif (in_array($key, self::CLEARABLE_KEYS, true)) {
+                // An optional code the operator blanked → remove the override so
+                // it falls back to the default (RESET_ON_CLEAR reverts config too).
+                Setting::forget($key);
             }
         }
 

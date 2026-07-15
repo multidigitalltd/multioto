@@ -47,6 +47,28 @@ class ManageIntegrationsTest extends TestCase
         $this->assertSame('30', config('billing.linet.doctype_proforma'));
     }
 
+    public function test_clearing_an_optional_linet_payment_code_reverts_to_the_default(): void
+    {
+        $this->actingAs(User::factory()->create());
+        Http::fake(['*/search/account' => Http::response(['status' => 200, 'body' => []])]);
+
+        // A custom bank-transfer code is saved…
+        Setting::put('linet.payment_type_bank_transfer', '7');
+        (new SettingsServiceProvider(app()))->boot();
+        $this->assertSame('7', config('billing.linet.payment_type_bank_transfer'));
+
+        // …then blanked in the form. The override must be removed (not kept).
+        Livewire::test(ManageIntegrations::class)
+            ->fillForm(['linet.payment_type_bank_transfer' => ''])
+            ->call('saveGroup', 'linet');
+
+        $this->assertArrayNotHasKey('linet.payment_type_bank_transfer', Setting::map());
+
+        // And a worker re-applying the overlay sees the default (null), not '7'.
+        (new SettingsServiceProvider(app()))->boot();
+        $this->assertNull(config('billing.linet.payment_type_bank_transfer'));
+    }
+
     public function test_non_secret_settings_are_shown_on_load_but_secrets_are_hidden(): void
     {
         $this->actingAs(User::factory()->create());
