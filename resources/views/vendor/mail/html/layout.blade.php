@@ -23,12 +23,16 @@ width: 100% !important;
 }
 }
 
-/* Hebrew is right-to-left: flip direction and alignment across the whole email
-   chrome (the body text already sets dir on its own, but the header, footer and
-   content cell come from the framework layout and default to LTR). */
-body, .content-cell, .inner-body, .header, .footer, .subcopy {
+/* Hebrew is right-to-left: flip direction and alignment for the reading
+   surfaces (body copy, content cell, subcopy). The logo header and the footer
+   stay centered — forcing them right is what pushed the logo off to the side. */
+body, .content-cell, .inner-body, .subcopy {
 direction: rtl !important;
 text-align: right !important;
+}
+.header, .footer {
+direction: rtl !important;
+text-align: center !important;
 }
 </style>
 {!! $head ?? '' !!}
