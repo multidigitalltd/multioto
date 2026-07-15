@@ -210,9 +210,9 @@ class SiteAgentTest extends TestCase
 
         $i = 0;
         $responses = [
-            // Turn 1: Gemini asks to read the plugin list (functionCall part).
+            // Turn 1: Gemini asks to read the plugin list (functionCall with an id).
             ['candidates' => [['content' => ['parts' => [
-                ['functionCall' => ['name' => 'site_read', 'args' => ['tool' => 'wp_plugin_list']]],
+                ['functionCall' => ['id' => 'fc_1', 'name' => 'site_read', 'args' => ['tool' => 'wp_plugin_list']]],
             ]]]]],
             // Turn 2: it proposes an update.
             ['candidates' => [['content' => ['parts' => [
@@ -238,6 +238,10 @@ class SiteAgentTest extends TestCase
         $action = PendingAction::where('type', 'site_action')->sole();
         $this->assertSame('wp_plugin_update', data_get($action->payload, 'tool'));
         $this->assertSame(ActionStatus::Pending, $action->status);
+
+        // The functionResponse echoes the originating call id (parallel-call safe).
+        Http::assertSent(fn (Request $r): bool => str_contains($r->url(), 'gemini.test')
+            && data_get($r->data(), 'contents.2.parts.0.functionResponse.id') === 'fc_1');
     }
 
     public function test_investigate_job_logs_a_clear_reason_when_the_ai_is_off(): void

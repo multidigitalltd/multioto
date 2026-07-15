@@ -334,10 +334,14 @@ class ClaudeClient
             foreach ($calls as $part) {
                 $fc = (array) $part['functionCall'];
                 $out = $handler((string) ($fc['name'] ?? ''), (array) ($fc['args'] ?? []));
-                $responseParts[] = ['functionResponse' => [
+                // Echo back the call id when Gemini supplies one (parallel calls,
+                // incl. several to the same function) so each response correlates
+                // to its originating call; omit it otherwise.
+                $responseParts[] = ['functionResponse' => array_filter([
+                    'id' => $fc['id'] ?? null,
                     'name' => (string) ($fc['name'] ?? ''),
                     'response' => ['result' => (string) ($out['content'] ?? '')],
-                ]];
+                ], fn ($v): bool => $v !== null)];
             }
 
             $contents[] = ['role' => 'user', 'parts' => $responseParts];
