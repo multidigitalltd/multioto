@@ -109,11 +109,13 @@ class Site extends Model
      */
     public function conventionalMcpEndpoint(): string
     {
-        $host = preg_replace('#^https?://#i', '', (string) $this->domain); // drop scheme
-        $host = explode('/', (string) $host, 2)[0];                        // drop any path
-        $host = trim((string) $host);
+        // Drop the scheme and any trailing slash, but KEEP the path: a WordPress
+        // install in a subdirectory (example.com/blog) exposes its REST root at
+        // /blog/wp-json/…, so the path must survive.
+        $base = preg_replace('#^https?://#i', '', (string) $this->domain);
+        $base = trim(rtrim((string) $base, '/'));
 
-        return 'https://'.$host.'/wp-json/md-agent/v1/mcp';
+        return 'https://'.$base.'/wp-json/md-agent/v1/mcp';
     }
 
     /** Resolve a site by the plaintext token its plugin presents (constant-time). */

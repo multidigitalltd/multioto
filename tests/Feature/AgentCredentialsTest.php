@@ -46,6 +46,11 @@ class AgentCredentialsTest extends TestCase
 
         $bare = Site::factory()->make(['domain' => 'multidigital.co.il']);
         $this->assertSame('https://multidigital.co.il/wp-json/md-agent/v1/mcp', $bare->conventionalMcpEndpoint());
+
+        // A WordPress install in a subdirectory keeps its path — its REST root
+        // lives under that path.
+        $subdir = Site::factory()->make(['domain' => 'https://example.com/blog']);
+        $this->assertSame('https://example.com/blog/wp-json/md-agent/v1/mcp', $subdir->conventionalMcpEndpoint());
     }
 
     public function test_ensure_agent_credentials_heals_a_doubled_scheme_endpoint(): void
