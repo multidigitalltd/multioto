@@ -16,6 +16,7 @@ use App\Jobs\SendTicketReplyJob;
 use App\Models\CannedResponse;
 use App\Models\Customer;
 use App\Models\Ticket;
+use App\Models\TicketMessage;
 use App\Models\User;
 use App\Models\WebhookEvent;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -75,6 +76,43 @@ class TicketChatTest extends TestCase
         // The rich markup renders as HTML (assertSeeHtml does not escape).
         Livewire::test(ViewTicket::class, ['record' => $ticket->id])
             ->assertSeeHtml('<strong>מודגשת</strong>');
+    }
+
+    public function test_legacy_or_malformed_body_html_is_sanitised_at_render(): void
+    {
+        $this->actingAs(User::factory()->create());
+        $ticket = $this->ticket();
+        // A legacy row stored raw, malformed email HTML (unclosed tags, <font>,
+        // a script). Rendered as-is it would corrupt the component's DOM and
+        // break the reply editor; it must be balanced and stripped at render.
+        $message = $ticket->messages()->create([
+            'direction' => MessageDirection::Inbound,
+            'channel' => MessageChannel::Email,
+            'body' => 'שלום יש בעיה',
+            'body_html' => '<div><p>שלום<div>יש <b>בעיה</b><script>alert(1)</script><font>x</font>',
+            'author' => MessageAuthor::Customer,
+        ]);
+
+        $safe = strtolower((string) $message->safeBodyHtml());
+        $this->assertNotSame('', $safe);
+        // Dangerous markup is stripped…
+        $this->assertStringNotContainsString('<script', $safe);
+        $this->assertStringContainsString('בעיה', $message->safeBodyHtml());
+        // …and — the property that actually fixes the editor — the tags are
+        // balanced: the unclosed <div>/<p> in the input come out matched, so the
+        // browser can't re-parent the component and break Livewire.
+        $this->assertSame(substr_count($safe, '<div'), substr_count($safe, '</div>'));
+        $this->assertSame(substr_count($safe, '<p'), substr_count($safe, '</p>'));
+        // Idempotent: re-sanitising already-safe HTML changes nothing.
+        $this->assertSame(
+            $message->safeBodyHtml(),
+            (new TicketMessage(['body_html' => $message->safeBodyHtml()]))->safeBodyHtml(),
+        );
+
+        // The page still renders, with the script neutralised.
+        Livewire::test(ViewTicket::class, ['record' => $ticket->id])
+            ->assertOk()
+            ->assertDontSeeHtml('<script>alert(1)</script>');
     }
 
     public function test_silent_close_closes_the_ticket_without_notifying_the_customer(): void

@@ -60,9 +60,11 @@
                         @else <span>{{ $message->channel->getLabel() }}</span> @endif
                         <time datetime="{{ $message->created_at->toIso8601String() }}">{{ $message->created_at->format('d/m/Y H:i') }}</time>
                     </div>
-                    @if (filled($message->body_html))
-                        {{-- Pre-sanitized (EmailBody::toSafeHtml, allow-list) — safe to render. --}}
-                        <div class="chat-rich">{!! $message->body_html !!}</div>
+                    @php $safeHtml = $message->safeBodyHtml(); @endphp
+                    @if (filled($safeHtml))
+                        {{-- Re-sanitized at render (allow-list, balanced) — safe even for
+                             legacy/raw rows, so malformed HTML can't corrupt the DOM. --}}
+                        <div class="chat-rich">{!! $safeHtml !!}</div>
                     @else
                         <div class="whitespace-pre-line break-words">{{ $message->body }}</div>
                     @endif

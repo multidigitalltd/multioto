@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Enums\MessageAuthor;
 use App\Enums\MessageChannel;
 use App\Enums\MessageDirection;
+use App\Support\EmailBody;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -33,5 +34,17 @@ class TicketMessage extends Model
     public function ticket(): BelongsTo
     {
         return $this->belongsTo(Ticket::class);
+    }
+
+    /**
+     * Display-safe rich body, or null when there is nothing to show. The stored
+     * `body_html` is run through the allow-list sanitizer at render time too:
+     * it is idempotent for already-clean rows, but it also balances and secures
+     * any legacy/raw HTML — malformed markup (unclosed tags) would otherwise
+     * corrupt the Livewire component's DOM and break the reply editor.
+     */
+    public function safeBodyHtml(): ?string
+    {
+        return EmailBody::toSafeHtml($this->body_html);
     }
 }
