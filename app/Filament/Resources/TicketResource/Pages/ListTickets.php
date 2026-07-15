@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\TicketResource\Pages;
 
 use App\Filament\Resources\TicketResource;
+use App\Filament\Widgets\AgentCommandWidget;
 use App\Models\Customer;
 use App\Services\Support\AgentReply;
 use Filament\Actions;
@@ -19,6 +20,14 @@ class ListTickets extends ListRecords
         return [
             $this->contactCustomerAction(),
             Actions\CreateAction::make(),
+        ];
+    }
+
+    /** The compact agent command bar, above the tickets list. */
+    protected function getHeaderWidgets(): array
+    {
+        return [
+            AgentCommandWidget::class,
         ];
     }
 

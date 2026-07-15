@@ -2,13 +2,12 @@
 
 namespace App\Filament\Pages;
 
+use App\Filament\Concerns\RunsAgentCommands;
 use App\Models\AgentCommand;
-use App\Services\Agent\CommandInterpreter;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Concerns\InteractsWithForms;
 use Filament\Forms\Contracts\HasForms;
 use Filament\Forms\Form;
-use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 use Illuminate\Support\Collection;
 
@@ -20,6 +19,7 @@ use Illuminate\Support\Collection;
 class AgentConsole extends Page implements HasForms
 {
     use InteractsWithForms;
+    use RunsAgentCommands;
 
     protected static ?string $navigationIcon = 'heroicon-o-command-line';
 
@@ -65,22 +65,8 @@ class AgentConsole extends Page implements HasForms
     /** Interpret the instruction and act on it (propose / dispatch / clarify). */
     public function run(): void
     {
-        $instruction = trim((string) ($this->form->getState()['instruction'] ?? ''));
-
-        if ($instruction === '') {
-            return;
-        }
-
-        $command = app(CommandInterpreter::class)->run($instruction, auth()->id());
-
+        $this->dispatchAgentCommand((string) ($this->form->getState()['instruction'] ?? ''));
         $this->form->fill();
-
-        Notification::make()
-            ->title($command->outcome->getLabel())
-            ->body($command->result)
-            ->{$command->outcome->value === 'failed' ? 'danger' : ($command->outcome->value === 'unclear' ? 'warning' : 'success')}()
-            ->persistent()
-            ->send();
     }
 
     /**

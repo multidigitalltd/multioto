@@ -538,6 +538,12 @@ class ClaudeClient
      * recurse into properties/items. Everything else (enum, required,
      * description) carries over unchanged.
      *
+     * A nullable union `type` — e.g. ["string","null"], the cross-provider way
+     * OpenAI/Anthropic mark an optional field — is NOT valid in Gemini's dialect
+     * (it wants a single scalar type). Collapse it to the primary type plus
+     * `nullable: true`, otherwise Gemini rejects the whole request with HTTP 400
+     * and the call returns null.
+     *
      * @param  array<string, mixed>  $schema
      * @return array<string, mixed>
      */
@@ -547,6 +553,18 @@ class ClaudeClient
 
         foreach ($schema as $key => $value) {
             if ($key === 'additionalProperties') {
+                continue;
+            }
+
+            if ($key === 'type' && is_array($value)) {
+                // Union type (nullable): keep the first non-null type, and mark
+                // the field nullable if "null" was one of the options.
+                $named = array_values(array_filter($value, fn ($t): bool => strtolower((string) $t) !== 'null'));
+                $out['type'] = strtoupper((string) ($named[0] ?? 'string'));
+                if (count($named) !== count($value)) {
+                    $out['nullable'] = true;
+                }
+
                 continue;
             }
 
