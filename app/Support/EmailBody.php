@@ -80,9 +80,12 @@ class EmailBody
         $config = (new HtmlSanitizerConfig)
             ->allowSafeElements()
             // Never keep document-structure tags — a nested <html>/<body> would
-            // corrupt the panel's DOM (see the wrapper strip below).
+            // corrupt the panel's DOM (see the wrapper strip below). <html>/<body>
+            // are unwrapped (keep their content); <head> is dropped WHOLE — its
+            // children are metadata (<link>/<meta>/<title>) that must never reach
+            // the chat body, or a <link rel="stylesheet"> could load a remote URL.
             ->blockElement('html')
-            ->blockElement('head')
+            ->dropElement('head')
             ->blockElement('body')
             // Drop everything that can fetch a remote resource (tracking pixels,
             // attacker URLs). Attachments are rendered separately from metadata.
@@ -103,10 +106,13 @@ class EmailBody
         // when the email is a full document (not a fragment). Rendered inside our
         // Livewire component, a nested <body>/<html> makes the browser re-parent
         // the whole page — duplicating the Alpine/Livewire runtime ("multiple
-        // instances running") and breaking the panel. These tags are structure
-        // only; drop them while keeping their content. Belt-and-suspenders: the
-        // config also blocks them, but the regex guarantees it on every version.
-        $clean = trim((string) preg_replace('#</?(?:html|head|body)\b[^>]*>#i', '', $clean));
+        // instances running") and breaking the panel. Belt-and-suspenders on top
+        // of the config above, guaranteed on every sanitizer version:
+        //   1) drop any surviving <head>…</head> WHOLE — its metadata children
+        //      (<link>/<meta>/<title>) must never reach the chat body;
+        //   2) strip the structure-only <html>/<body> tags, keeping their content.
+        $clean = (string) preg_replace('#<head\b[^>]*>.*?</head>#is', '', $clean);
+        $clean = trim((string) preg_replace('#</?(?:html|body|head)\b[^>]*>#i', '', $clean));
 
         // strip_tags(): a document that sanitizes down to whitespace/text-only
         // adds nothing over the plain-text body, so skip it.

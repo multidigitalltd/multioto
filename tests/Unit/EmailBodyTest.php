@@ -116,7 +116,7 @@ class EmailBodyTest extends TestCase
         // <html>/<body> rendered inside the panel re-parents the DOM and
         // duplicates the Alpine/Livewire runtime — the wrapper must be dropped
         // while its content survives.
-        $html = "<html>\n<body lang=\"EN-US\" link=\"#467886\">\n<div><p dir=\"RTL\">שלום</p></div>\n</body>\n</html>";
+        $html = "<html>\n<head><title>נושא</title><link rel=\"stylesheet\" href=\"https://tracker/x.css\"><meta name=\"x\" content=\"y\"></head>\n<body lang=\"EN-US\" link=\"#467886\">\n<div><p dir=\"RTL\">שלום</p></div>\n</body>\n</html>";
 
         $out = (string) EmailBody::toSafeHtml($html);
 
@@ -124,6 +124,11 @@ class EmailBodyTest extends TestCase
         $this->assertStringNotContainsString('<html', $out);
         $this->assertStringNotContainsString('<body', $out);
         $this->assertStringNotContainsString('</body>', $out);
+        // <head> and everything in it (title/link/meta) is gone — no remote CSS
+        // or tracking URL can reach the chat body.
+        $this->assertStringNotContainsString('<head', $out);
+        $this->assertStringNotContainsString('tracker', $out);
+        $this->assertStringNotContainsString('נושא', $out);
     }
 
     public function test_safe_html_falls_back_to_plain_body_when_too_large_to_render(): void
