@@ -32,6 +32,8 @@ class SettingsServiceProvider extends ServiceProvider
         'linet.vat_cat_taxable' => 'billing.linet.vat_cat_taxable',
         'linet.vat_cat_exempt' => 'billing.linet.vat_cat_exempt',
         'linet.payment_type' => 'billing.linet.payment_type',
+        'linet.payment_type_bank_transfer' => 'billing.linet.payment_type_bank_transfer',
+        'linet.payment_type_standing_order' => 'billing.linet.payment_type_standing_order',
         'linet.general_item_id' => 'billing.linet.general_item_id',
         'linet.income_account_exempt' => 'billing.linet.income_account_exempt',
         'flywp.api_token' => 'billing.hosting.flywp.api_token',
@@ -92,6 +94,10 @@ class SettingsServiceProvider extends ServiceProvider
         'ai.model' => 'billing.ai.model',
         'ai.base_url' => 'billing.ai.base_url',
         'ai.style_summary' => 'billing.ai.style_summary',
+        // Optional Linet payment codes: clearing them must revert to the default
+        // (credit-card payment_type), not leave the old code in a running worker.
+        'linet.payment_type_bank_transfer' => 'billing.linet.payment_type_bank_transfer',
+        'linet.payment_type_standing_order' => 'billing.linet.payment_type_standing_order',
     ];
 
     /** Pristine config-file defaults for RESET_ON_CLEAR keys, memoized once. */

@@ -100,10 +100,14 @@ class LinetClient
         $config = config('billing.linet');
         $totalIls = round($charge->total_agorot / 100, 2);
 
-        // A tax invoice/receipt records the payment, so it carries a docCheq.
+        // A tax invoice/receipt records the payment, so it carries a docCheq —
+        // with the Linet payment-method code that matches how the customer pays.
         $payload = $this->buildDocumentPayload($charge, $vatCategory, $description, (string) $config['doctype'], "charge-{$charge->id}");
+        // Charges are usually created via the subscription (customer_id unset),
+        // so fall back to the subscription's customer for the payment method.
+        $method = $charge->customer?->payment_method ?? $charge->subscription?->customer?->payment_method;
         $payload['docCheq'] = [[
-            'type' => (int) $config['payment_type'],
+            'type' => $this->paymentTypeFor($method),
             'currency_id' => 'ILS',
             'sum' => $totalIls,
             'doc_sum' => $totalIls,
@@ -111,6 +115,25 @@ class LinetClient
         ]];
 
         return $this->createDocument($payload);
+    }
+
+    /**
+     * The Linet docCheq payment-method code for how the customer pays. Manual
+     * methods (bank transfer, standing order / מס״ב) use their own configured
+     * code when set; everything else — and any unset code — uses the default
+     * (credit-card) payment_type.
+     */
+    protected function paymentTypeFor(?string $method): int
+    {
+        $config = config('billing.linet');
+
+        $code = match ($method) {
+            'bank_transfer' => $config['payment_type_bank_transfer'] ?? null,
+            'standing_order' => $config['payment_type_standing_order'] ?? null,
+            default => null,
+        };
+
+        return (int) (filled($code) ? $code : $config['payment_type']);
     }
 
     /**
