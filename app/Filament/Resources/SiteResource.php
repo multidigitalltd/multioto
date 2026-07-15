@@ -7,6 +7,7 @@ use App\Filament\Resources\SiteResource\Pages;
 use App\Jobs\RestoreSiteJob;
 use App\Jobs\SuspendSiteJob;
 use App\Models\Site;
+use App\Services\Agent\SiteConnector;
 use App\Services\Automation\ApprovalGate;
 use App\Services\Hosting\SiteDiagnostics;
 use Filament\Forms;
@@ -255,6 +256,24 @@ class SiteResource extends Resource
                         Notification::make()
                             ->title('השחזור נשלח לביצוע')
                             ->success()
+                            ->send();
+                    }),
+
+                // Live MCP handshake: verify the site's agent connection and
+                // refresh its cached tool list. Admin-only, read-only.
+                Tables\Actions\Action::make('testMcp')
+                    ->label('בדוק חיבור AI')
+                    ->icon('heroicon-o-signal')
+                    ->color('info')
+                    ->visible(fn (Site $record): bool => ($record->mcp_enabled || filled($record->mcp_endpoint))
+                        && (auth()->user()?->isAdmin() ?? false))
+                    ->action(function (Site $record, SiteConnector $connector): void {
+                        $result = $connector->testConnection($record);
+
+                        Notification::make()
+                            ->title('חיבור סוכן AI — '.$record->domain)
+                            ->body($result->message)
+                            ->{$result->ok ? 'success' : 'warning'}()
                             ->send();
                     }),
 
