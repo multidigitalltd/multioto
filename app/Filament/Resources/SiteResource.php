@@ -4,13 +4,10 @@ namespace App\Filament\Resources;
 
 use App\Enums\SiteStatus;
 use App\Filament\Resources\SiteResource\Pages;
-use App\Jobs\InvestigateSiteJob;
+use App\Filament\Support\SiteActions;
 use App\Jobs\RestoreSiteJob;
 use App\Jobs\SuspendSiteJob;
 use App\Models\Site;
-use App\Services\Agent\SiteConnector;
-use App\Services\Agent\SiteToolCatalog;
-use App\Services\Ai\ClaudeClient;
 use App\Services\Automation\ApprovalGate;
 use App\Services\Hosting\SiteDiagnostics;
 use Filament\Forms;
@@ -222,239 +219,118 @@ class SiteResource extends Resource
                     ->label('ניטור פעיל'),
             ])
             ->actions([
-                // Read-only WordPress diagnostics: live probe + SSL + uptime,
-                // with a suggested fix the owner can send to the approval gate.
-                Tables\Actions\Action::make('diagnose')
-                    ->label('אבחון')
-                    ->icon('heroicon-o-magnifying-glass')
-                    ->color('info')
-                    ->action(function (Site $record, SiteDiagnostics $diagnostics): void {
-                        try {
-                            $result = $diagnostics->run($record);
-                        } catch (\Throwable $e) {
-                            Notification::make()->title('האבחון נכשל')->body(Str::limit($e->getMessage(), 150))->danger()->send();
+                // Hosting & maintenance — grouped into one dropdown to keep the row tidy.
+                Tables\Actions\ActionGroup::make([
+                    // Read-only WordPress diagnostics: live probe + SSL + uptime,
+                    // with a suggested fix the owner can send to the approval gate.
+                    Tables\Actions\Action::make('diagnose')
+                        ->label('אבחון')
+                        ->icon('heroicon-o-magnifying-glass')
+                        ->color('info')
+                        ->action(function (Site $record, SiteDiagnostics $diagnostics): void {
+                            try {
+                                $result = $diagnostics->run($record);
+                            } catch (\Throwable $e) {
+                                Notification::make()->title('האבחון נכשל')->body(Str::limit($e->getMessage(), 150))->danger()->send();
 
-                            return;
-                        }
+                                return;
+                            }
 
-                        Notification::make()
-                            ->title('אבחון '.$record->domain.($result['healthy'] ? ' — תקין ✓' : ' — נמצאו בעיות'))
-                            ->body($result['summary']) // includes the suggested fix in Hebrew
-                            ->{$result['healthy'] ? 'success' : 'warning'}()
-                            ->persistent()
-                            ->send();
-                    }),
+                            Notification::make()
+                                ->title('אבחון '.$record->domain.($result['healthy'] ? ' — תקין ✓' : ' — נמצאו בעיות'))
+                                ->body($result['summary']) // includes the suggested fix in Hebrew
+                                ->{$result['healthy'] ? 'success' : 'warning'}()
+                                ->persistent()
+                                ->send();
+                        }),
 
-                // Propose a reversible fix (owner approves via WhatsApp/panel).
-                Tables\Actions\Action::make('proposeFix')
-                    ->label('הצע תיקון')
+                    // Propose a reversible fix (owner approves via WhatsApp/panel).
+                    Tables\Actions\Action::make('proposeFix')
+                        ->label('הצע תיקון')
+                        ->icon('heroicon-o-wrench-screwdriver')
+                        ->color('warning')
+                        ->visible(fn (Site $record): bool => self::hostingActionable($record))
+                        ->form([
+                            Forms\Components\Select::make('fix')
+                                ->label('התיקון המוצע')
+                                ->options([
+                                    'clear_cache' => 'ניקוי מטמון (Cache)',
+                                    'restart' => 'הפעלה מחדש של האתר',
+                                    'maintenance_on' => 'הכנסה למצב תחזוקה',
+                                    'maintenance_off' => 'הוצאה ממצב תחזוקה',
+                                ])
+                                ->default('clear_cache')
+                                ->required(),
+                        ])
+                        ->action(function (array $data, Site $record, ApprovalGate $gate): void {
+                            self::proposeSiteFix($gate, $record, $data['fix']);
+                            Notification::make()->title('התיקון נשלח לאישור')
+                                ->body('הבקשה תופיע ב"אישורי אוטומציה" ותישלח לוואטסאפ שלך לאישור לפני ביצוע.')
+                                ->success()->send();
+                        }),
+
+                    Tables\Actions\Action::make('suspend')
+                        ->label('השהה')
+                        ->icon('heroicon-o-pause-circle')
+                        ->color('danger')
+                        ->visible(fn (Site $record): bool => $record->status === SiteStatus::Active
+                            && self::hostingActionable($record))
+                        ->requiresConfirmation()
+                        ->modalHeading('השהיית אתר')
+                        ->modalDescription(fn (Site $record): string => "להשהות את {$record->domain}? האתר יעבור למצב תחזוקה אצל ספק האחסון.")
+                        ->modalSubmitActionLabel('השהה')
+                        ->action(function (Site $record): void {
+                            SuspendSiteJob::dispatch($record->id);
+
+                            Notification::make()
+                                ->title('ההשהיה נשלחה לביצוע')
+                                ->body('הסטטוס יתעדכן תוך רגעים.')
+                                ->success()
+                                ->send();
+                        }),
+
+                    Tables\Actions\Action::make('restore')
+                        ->label('שחזר')
+                        ->icon('heroicon-o-play-circle')
+                        ->color('success')
+                        ->visible(fn (Site $record): bool => $record->status === SiteStatus::Suspended
+                            && self::hostingActionable($record))
+                        ->requiresConfirmation()
+                        ->modalHeading('שחזור אתר')
+                        ->modalDescription(fn (Site $record): string => "לשחזר את {$record->domain} לפעילות מלאה?")
+                        ->modalSubmitActionLabel('שחזר')
+                        ->action(function (Site $record): void {
+                            RestoreSiteJob::dispatch($record->id);
+
+                            Notification::make()
+                                ->title('השחזור נשלח לביצוע')
+                                ->success()
+                                ->send();
+                        }),
+                ])
+                    ->label('תחזוקה ואירוח')
                     ->icon('heroicon-o-wrench-screwdriver')
-                    ->color('warning')
-                    ->visible(fn (Site $record): bool => self::hostingActionable($record))
-                    ->form([
-                        Forms\Components\Select::make('fix')
-                            ->label('התיקון המוצע')
-                            ->options([
-                                'clear_cache' => 'ניקוי מטמון (Cache)',
-                                'restart' => 'הפעלה מחדש של האתר',
-                                'maintenance_on' => 'הכנסה למצב תחזוקה',
-                                'maintenance_off' => 'הוצאה ממצב תחזוקה',
-                            ])
-                            ->default('clear_cache')
-                            ->required(),
-                    ])
-                    ->action(function (array $data, Site $record, ApprovalGate $gate): void {
-                        self::proposeSiteFix($gate, $record, $data['fix']);
-                        Notification::make()->title('התיקון נשלח לאישור')
-                            ->body('הבקשה תופיע ב"אישורי אוטומציה" ותישלח לוואטסאפ שלך לאישור לפני ביצוע.')
-                            ->success()->send();
-                    }),
+                    ->button()
+                    ->color('gray'),
 
-                Tables\Actions\Action::make('suspend')
-                    ->label('השהה')
-                    ->icon('heroicon-o-pause-circle')
-                    ->color('danger')
-                    ->visible(fn (Site $record): bool => $record->status === SiteStatus::Active
-                        && self::hostingActionable($record))
-                    ->requiresConfirmation()
-                    ->modalHeading('השהיית אתר')
-                    ->modalDescription(fn (Site $record): string => "להשהות את {$record->domain}? האתר יעבור למצב תחזוקה אצל ספק האחסון.")
-                    ->modalSubmitActionLabel('השהה')
-                    ->action(function (Site $record): void {
-                        SuspendSiteJob::dispatch($record->id);
+                // Day-to-day agent actions stay visible.
+                SiteActions::aiInvestigate(),
+                SiteActions::proposeMcpAction(),
 
-                        Notification::make()
-                            ->title('ההשהיה נשלחה לביצוע')
-                            ->body('הסטטוס יתעדכן תוך רגעים.')
-                            ->success()
-                            ->send();
-                    }),
-
-                Tables\Actions\Action::make('restore')
-                    ->label('שחזר')
-                    ->icon('heroicon-o-play-circle')
-                    ->color('success')
-                    ->visible(fn (Site $record): bool => $record->status === SiteStatus::Suspended
-                        && self::hostingActionable($record))
-                    ->requiresConfirmation()
-                    ->modalHeading('שחזור אתר')
-                    ->modalDescription(fn (Site $record): string => "לשחזר את {$record->domain} לפעילות מלאה?")
-                    ->modalSubmitActionLabel('שחזר')
-                    ->action(function (Site $record): void {
-                        RestoreSiteJob::dispatch($record->id);
-
-                        Notification::make()
-                            ->title('השחזור נשלח לביצוע')
-                            ->success()
-                            ->send();
-                    }),
-
-                // Let the AI investigate the site (read-only) and file any fix as
-                // an approval proposal. Runs in the background; admin-only.
-                Tables\Actions\Action::make('aiInvestigate')
-                    ->label('אבחון AI')
-                    ->icon('heroicon-o-sparkles')
-                    ->color('info')
-                    ->visible(fn (Site $record): bool => $record->mcp_enabled
-                        && app(ClaudeClient::class)->isEnabled()
-                        && (auth()->user()?->isAdmin() ?? false))
-                    ->form([
-                        Forms\Components\Textarea::make('goal')
-                            ->label('מה לבדוק?')
-                            ->rows(2)
-                            ->default('אבחן את האתר וזהה תקלות. אם נדרש תיקון — הצע פעולה אחת לאישור.'),
-                    ])
-                    ->action(function (array $data, Site $record): void {
-                        InvestigateSiteJob::dispatch($record->id, (string) ($data['goal'] ?? 'אבחן את האתר.'));
-
-                        Notification::make()->title('האבחון רץ ברקע')
-                            ->body('הסיכום יופיע בזיכרון האתר, והצעות תיקון (אם יהיו) ב"אישורי אוטומציה" לאישורך.')
-                            ->success()->send();
-                    }),
-
-                // Propose an MCP tool call on this site — goes through the same
-                // approval gate as every automated action (manager approves on
-                // WhatsApp or in the panel before anything runs). Admin-only.
-                Tables\Actions\Action::make('proposeMcpAction')
-                    ->label('פעולת AI')
-                    ->icon('heroicon-o-cpu-chip')
-                    ->color('warning')
-                    ->visible(fn (Site $record): bool => $record->mcp_enabled
-                        && filled(data_get($record->mcp_capabilities, 'tools'))
-                        && (auth()->user()?->isAdmin() ?? false))
-                    ->form(fn (Site $record): array => [
-                        Forms\Components\Select::make('tool')
-                            ->label('כלי')
-                            ->options(collect((array) data_get($record->mcp_capabilities, 'tools', []))
-                                ->mapWithKeys(function (array $tool) use ($record): array {
-                                    $name = (string) ($tool['name'] ?? '');
-                                    $tier = app(SiteToolCatalog::class)->resolveTierLabel($record, $name);
-
-                                    return [$name => "{$name} ({$tier})"];
-                                })->all())
-                            ->required()
-                            ->searchable(),
-                        Forms\Components\Textarea::make('arguments')
-                            ->label('פרמטרים (JSON)')
-                            ->rows(3)
-                            ->placeholder('{"plugin": "elementor"}')
-                            ->rule(fn (): \Closure => function (string $attribute, $value, \Closure $fail): void {
-                                if (filled($value) && ! is_array(json_decode((string) $value, true))) {
-                                    $fail('הפרמטרים חייבים להיות JSON תקין.');
-                                }
-                            }),
-                    ])
-                    ->action(function (array $data, Site $record, ApprovalGate $gate): void {
-                        $catalog = app(SiteToolCatalog::class);
-                        $tool = (string) $data['tool'];
-
-                        if (! $catalog->allowedOn($record, $tool)) {
-                            Notification::make()->title('הכלי מסווג כהרסני ומותר רק באתר סטייג׳ינג')->danger()->send();
-
-                            return;
-                        }
-
-                        $arguments = filled($data['arguments'] ?? null) ? (array) json_decode((string) $data['arguments'], true) : [];
-                        $argsText = $arguments === [] ? 'ללא פרמטרים' : json_encode($arguments, JSON_UNESCAPED_UNICODE);
-
-                        $gate->propose(
-                            type: 'site_action',
-                            summary: "🤖 פעולת AI באתר {$record->domain}\nכלי: {$tool} ({$catalog->resolveTierLabel($record, $tool)})\nפרמטרים: {$argsText}",
-                            payload: ['site_id' => $record->id, 'tool' => $tool, 'arguments' => $arguments],
-                            customerId: $record->customer_id,
-                            proposedBy: 'team',
-                        );
-
-                        Notification::make()->title('הפעולה נשלחה לאישור')
-                            ->body('תופיע ב"אישורי אוטומציה" ותישלח לוואטסאפ לאישור לפני ביצוע.')
-                            ->success()->send();
-                    }),
-
-                // Live MCP handshake: verify the site's agent connection and
-                // refresh its cached tool list. Admin-only, read-only.
-                Tables\Actions\Action::make('testMcp')
-                    ->label('בדוק חיבור AI')
-                    ->icon('heroicon-o-signal')
-                    ->color('info')
-                    ->visible(fn (Site $record): bool => ($record->mcp_enabled || filled($record->mcp_endpoint))
-                        && (auth()->user()?->isAdmin() ?? false))
-                    ->action(function (Site $record, SiteConnector $connector): void {
-                        $result = $connector->testConnection($record);
-
-                        Notification::make()
-                            ->title('חיבור סוכן AI — '.$record->domain)
-                            ->body($result->message)
-                            ->{$result->ok ? 'success' : 'warning'}()
-                            ->send();
-                    }),
-
-                // Issue a fresh per-site connection token for the companion
-                // plugin. Shown once — installed into the site's plugin config —
-                // and rotating it revokes the previous one. Admin-only.
-                // The ready-made connection codes (endpoint, secret, token) to
-                // copy straight into the site's plugin — generated once, then
-                // re-displayable any time. Admin-only.
-                Tables\Actions\Action::make('connectionCodes')
-                    ->label('קודי חיבור')
-                    ->icon('heroicon-o-clipboard-document')
-                    ->color('primary')
-                    ->visible(fn (): bool => auth()->user()?->isAdmin() ?? false)
-                    ->modalHeading(fn (Site $record): string => 'קודי חיבור — '.$record->domain)
-                    ->modalSubmitAction(false)
-                    ->modalCancelActionLabel('סגור')
-                    ->modalContent(fn (Site $record) => view('filament.agent-credentials', [
-                        'data' => $record->ensureAgentCredentials(),
-                    ])),
-
-                // Download the current plugin build to install on a site. Admin-only.
-                Tables\Actions\Action::make('downloadPlugin')
-                    ->label('הורד תוסף')
-                    ->icon('heroicon-o-arrow-down-tray')
+                // One-time connection setup — tucked into a single dropdown, since
+                // it's done once per site: codes to copy, the plugin download, the
+                // live connection test, and token rotation.
+                Tables\Actions\ActionGroup::make([
+                    SiteActions::testMcp(),
+                    SiteActions::connectionCodes(),
+                    SiteActions::downloadPlugin(),
+                    SiteActions::generateAgentToken(),
+                ])
+                    ->label('חיבור לתוסף')
+                    ->icon('heroicon-o-link')
+                    ->button()
                     ->color('gray')
-                    ->visible(fn (): bool => auth()->user()?->isAdmin() ?? false)
-                    ->url(fn (): string => route('agent.plugin.latest'))
-                    ->openUrlInNewTab(),
-
-                // Rotate the site's connection token — revokes the previous one.
-                Tables\Actions\Action::make('generateAgentToken')
-                    ->label('טוקן חדש')
-                    ->icon('heroicon-o-key')
-                    ->color('gray')
-                    ->visible(fn (): bool => auth()->user()?->isAdmin() ?? false)
-                    ->requiresConfirmation()
-                    ->modalHeading('החלפת טוקן חיבור לאתר')
-                    ->modalDescription('ייווצר טוקן חדש עבור התוסף באתר. הטוקן הקודם יבוטל — יש לעדכן את התוסף בטוקן החדש.')
-                    ->modalSubmitActionLabel('צור טוקן חדש')
-                    ->action(function (Site $record): void {
-                        $token = $record->generateAgentToken();
-
-                        Notification::make()
-                            ->title('נוצר טוקן חדש — עדכנו אותו בתוסף')
-                            ->body('הטוקן הקודם בוטל. הטוקן החדש (זמין גם ב"קודי חיבור"):'."\n\n".$token)
-                            ->success()
-                            ->persistent()
-                            ->send();
-                    }),
+                    ->visible(fn (): bool => auth()->user()?->isAdmin() ?? false),
 
                 Tables\Actions\ViewAction::make()->label('ניטור'),
 
