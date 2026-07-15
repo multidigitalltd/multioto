@@ -10,6 +10,7 @@ use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 
 /**
@@ -103,7 +104,61 @@ class PendingActionResource extends Resource
                         Notification::make()->title($gate->reject($record->fresh()))->send();
                     }),
             ])
-            ->bulkActions([]);
+            ->bulkActions([
+                // Clear a batch of pending approvals in one go — approve & run, or
+                // reject. Only pending rows are acted on; the rest are skipped.
+                Tables\Actions\BulkAction::make('approveSelected')
+                    ->label('אשר ובצע')
+                    ->icon('heroicon-o-check-circle')
+                    ->color('success')
+                    ->requiresConfirmation()
+                    ->modalHeading('אישור וביצוע מספר פעולות')
+                    ->modalDescription('כל הפעולות הממתינות שנבחרו יאושרו ויבוצעו. פעולות שכבר טופלו יידלגו.')
+                    ->deselectRecordsAfterCompletion()
+                    ->action(fn (Collection $records, ApprovalGate $gate) => self::runBatch($records, fn ($a) => $gate->approve($a), 'אושרו ובוצעו')),
+                Tables\Actions\BulkAction::make('rejectSelected')
+                    ->label('דחה')
+                    ->icon('heroicon-o-x-circle')
+                    ->color('danger')
+                    ->requiresConfirmation()
+                    ->modalHeading('דחיית מספר פעולות')
+                    ->deselectRecordsAfterCompletion()
+                    ->action(fn (Collection $records, ApprovalGate $gate) => self::runBatch($records, fn ($a) => $gate->reject($a), 'נדחו')),
+            ]);
+    }
+
+    /**
+     * Apply $handler to each still-pending action in the selection and report a
+     * single summary (done / skipped / failed) — one notification for the batch.
+     *
+     * @param  Collection<int, PendingAction>  $records
+     */
+    private static function runBatch(Collection $records, callable $handler, string $verb): void
+    {
+        $done = 0;
+        $skipped = 0;
+        $failed = 0;
+
+        foreach ($records as $action) {
+            if ($action->fresh()->status !== ActionStatus::Pending) {
+                $skipped++;
+
+                continue;
+            }
+
+            try {
+                $handler($action->fresh());
+                $done++;
+            } catch (\Throwable) {
+                $failed++;
+            }
+        }
+
+        Notification::make()
+            ->title("{$done} פעולות {$verb}")
+            ->body(trim(($skipped ? "{$skipped} דילוג (לא ממתינות). " : '').($failed ? "{$failed} נכשלו." : '')) ?: null)
+            ->{$failed ? 'warning' : 'success'}()
+            ->send();
     }
 
     public static function getPages(): array

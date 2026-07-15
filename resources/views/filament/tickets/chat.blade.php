@@ -106,6 +106,27 @@
                             @endforeach
                         </div>
                     @endif
+
+                    @if ($message->isRateable())
+                        {{-- Rate the reply 1–10; feeds the AI style learner so
+                             future drafts lean on the highly-rated answers. --}}
+                        <div class="mt-2 flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+                            <span>דירוג איכות (1–10):</span>
+                            <select
+                                class="rounded border-gray-300 bg-white py-0.5 text-xs dark:border-gray-600 dark:bg-gray-900"
+                                wire:change="rateMessage({{ $message->id }}, $event.target.value)"
+                                aria-label="דירוג איכות התשובה"
+                            >
+                                <option value="">—</option>
+                                @for ($n = 1; $n <= 10; $n++)
+                                    <option value="{{ $n }}" @selected($message->quality_rating === $n)>{{ $n }}</option>
+                                @endfor
+                            </select>
+                            @if ($message->quality_rating)
+                                <span class="font-semibold text-primary-600 dark:text-primary-400">{{ $message->quality_rating }}/10 ✓</span>
+                            @endif
+                        </div>
+                    @endif
                 </div>
             </div>
         @empty
