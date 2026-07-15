@@ -10,6 +10,7 @@ use App\Models\Ticket;
 use App\Services\Agent\SiteAgent;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 
 /**
@@ -42,10 +43,22 @@ class InvestigateTicketJob implements ShouldQueue
             return;
         }
 
-        $site = $this->connectedSite($ticket);
+        $sites = $this->connectedSites($ticket);
 
-        if (! $site) {
+        if ($sites->isEmpty()) {
             $this->note($ticket, '🤖 בדיקת סוכן AI: ללקוח אין אתר מחובר לסוכן, ולכן אין מה לבדוק אוטומטית באתר.');
+
+            return;
+        }
+
+        $site = $this->siteForTicket($ticket, $sites);
+
+        // Multiple connected sites and the ticket doesn't name one — don't guess
+        // which site to touch. Ask the team to run the check from the right site.
+        if (! $site) {
+            $domains = $sites->pluck('domain')->implode(', ');
+            $this->note($ticket, "🤖 בדיקת סוכן AI: ללקוח כמה אתרים מחוברים ({$domains}) והפנייה לא מציינת באיזה מדובר. "
+                .'הפעל "בדיקת סוכן AI" מעמוד האתר הספציפי.');
 
             return;
         }
@@ -65,15 +78,39 @@ class InvestigateTicketJob implements ShouldQueue
         );
     }
 
-    /** The customer's connected (MCP-enabled) site, if any. */
-    private function connectedSite(Ticket $ticket): ?Site
+    /** The customer's connected (MCP-enabled) sites. */
+    private function connectedSites(Ticket $ticket): Collection
     {
         return $ticket->customer
-            ?->sites()
-            ->where('mcp_enabled', true)
-            ->whereNotNull('mcp_endpoint')
-            ->latest('mcp_last_seen_at')
-            ->first();
+            ? $ticket->customer->sites()
+                ->where('mcp_enabled', true)
+                ->whereNotNull('mcp_endpoint')
+                ->get()
+            : collect();
+    }
+
+    /**
+     * Pick the site the ticket is actually about. One connected site → it. More
+     * than one → only when the ticket text names exactly one of their domains;
+     * otherwise null (don't guess which site to operate on).
+     *
+     * @param  Collection<int, Site>  $sites
+     */
+    private function siteForTicket(Ticket $ticket, Collection $sites): ?Site
+    {
+        if ($sites->count() === 1) {
+            return $sites->first();
+        }
+
+        $haystack = Str::lower($ticket->subject.' '.(string) $ticket->messages()
+            ->where('direction', MessageDirection::Inbound)
+            ->latest('created_at')
+            ->value('body'));
+
+        $named = $sites->filter(fn (Site $s): bool => filled($s->domain)
+            && str_contains($haystack, Str::lower($s->domain)))->values();
+
+        return $named->count() === 1 ? $named->first() : null;
     }
 
     /** Turn the ticket into an investigation goal for the agent. */
