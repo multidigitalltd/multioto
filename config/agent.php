@@ -19,6 +19,13 @@ return [
     // security review). Proposing and read-only connection tests stay available.
     'actions_enabled' => (bool) env('AGENT_ACTIONS_ENABLED', false),
 
+    // When a monitoring incident opens on an MCP-connected site, dispatch the AI
+    // operator to investigate it (read-only) and file any fix as a manager-approval
+    // proposal. This only controls whether the AI *looks* — a proposal still needs
+    // manager approval AND the kill-switch above to ever run. Costs model tokens,
+    // so it can be turned off independently.
+    'auto_investigate' => (bool) env('AGENT_AUTO_INVESTIGATE', true),
+
     'plugin' => [
         // The current version of the companion plugin we ship. A site reporting
         // an older version is told to update itself from the download channel —

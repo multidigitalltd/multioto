@@ -6,6 +6,7 @@ use App\Enums\IncidentStatus;
 use App\Filament\Resources\SiteResource\Pages\ViewSite;
 use App\Filament\Widgets\SitesInTrouble;
 use App\Jobs\CheckSslExpiryJob;
+use App\Jobs\InvestigateSiteJob;
 use App\Jobs\MonitorSiteJob;
 use App\Models\Site;
 use App\Models\User;
@@ -13,6 +14,7 @@ use App\Services\Hosting\SiteDiagnostics;
 use App\Services\Notifications\TeamNotifier;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
 use Livewire\Livewire;
 use Mockery;
 use Tests\TestCase;
@@ -165,6 +167,86 @@ class MonitoringUpgradeTest extends TestCase
 
         // A second slow probe must not fire a second alert (already armed).
         MonitorSiteJob::dispatchSync($site->id);
+    }
+
+    public function test_an_incident_on_a_connected_site_dispatches_the_ai_operator(): void
+    {
+        config([
+            'billing.monitoring.failures_to_incident' => 1,
+            'agent.auto_investigate' => true,
+        ]);
+        Queue::fake([InvestigateSiteJob::class]);
+
+        $site = Site::factory()->create([
+            'domain' => 'connected.example.com',
+            'monitor_url' => 'https://connected.example.com',
+            'mcp_enabled' => true,
+            'mcp_endpoint' => 'https://connected.example.com/wp-json/md-agent/v1/mcp',
+            'mcp_secret' => 'site-secret',
+        ]);
+        Http::fake(['https://connected.example.com' => Http::response('', 500)]);
+        $this->silenceTeamAndDiagnostics();
+
+        MonitorSiteJob::dispatchSync($site->id);
+
+        $this->assertTrue($site->openIncident()->exists());
+        Queue::assertPushed(InvestigateSiteJob::class, fn (InvestigateSiteJob $job): bool => $job->siteId === $site->id
+            && str_contains($job->goal, 'incident #'));
+    }
+
+    public function test_an_incident_on_an_unconnected_site_does_not_dispatch_the_ai_operator(): void
+    {
+        config(['billing.monitoring.failures_to_incident' => 1]);
+        Queue::fake([InvestigateSiteJob::class]);
+
+        $site = Site::factory()->create([
+            'domain' => 'plain.example.com',
+            'monitor_url' => 'https://plain.example.com',
+            'mcp_enabled' => false,
+        ]);
+        Http::fake(['https://plain.example.com' => Http::response('', 500)]);
+        $this->silenceTeamAndDiagnostics();
+
+        MonitorSiteJob::dispatchSync($site->id);
+
+        $this->assertTrue($site->openIncident()->exists());
+        Queue::assertNotPushed(InvestigateSiteJob::class);
+    }
+
+    public function test_auto_investigate_can_be_switched_off(): void
+    {
+        config([
+            'billing.monitoring.failures_to_incident' => 1,
+            'agent.auto_investigate' => false,
+        ]);
+        Queue::fake([InvestigateSiteJob::class]);
+
+        $site = Site::factory()->create([
+            'domain' => 'muted.example.com',
+            'monitor_url' => 'https://muted.example.com',
+            'mcp_enabled' => true,
+            'mcp_endpoint' => 'https://muted.example.com/wp-json/md-agent/v1/mcp',
+            'mcp_secret' => 'site-secret',
+        ]);
+        Http::fake(['https://muted.example.com' => Http::response('', 500)]);
+        $this->silenceTeamAndDiagnostics();
+
+        MonitorSiteJob::dispatchSync($site->id);
+
+        $this->assertTrue($site->openIncident()->exists());
+        Queue::assertNotPushed(InvestigateSiteJob::class);
+    }
+
+    /** Keep the down-path side effects (team alert + legacy diagnosis) inert. */
+    private function silenceTeamAndDiagnostics(): void
+    {
+        $team = Mockery::mock(TeamNotifier::class);
+        $team->shouldReceive('alert')->zeroOrMoreTimes();
+        $this->app->instance(TeamNotifier::class, $team);
+
+        $diagnostics = Mockery::mock(SiteDiagnostics::class);
+        $diagnostics->shouldReceive('run')->andReturn(['summary' => '', 'suggested_fix' => null]);
+        $this->app->instance(SiteDiagnostics::class, $diagnostics);
     }
 
     public function test_sites_in_trouble_widget_visibility(): void
