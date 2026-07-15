@@ -69,7 +69,9 @@ class Site extends Model
      */
     public function ensureAgentCredentials(): array
     {
-        if (blank($this->mcp_endpoint)) {
+        // Generate when missing, and self-heal a malformed endpoint (e.g. a
+        // doubled scheme from a domain saved with "https://").
+        if (blank($this->mcp_endpoint) || substr_count((string) $this->mcp_endpoint, '://') > 1) {
             $this->mcp_endpoint = $this->conventionalMcpEndpoint();
         }
 
@@ -100,10 +102,18 @@ class Site extends Model
         ];
     }
 
-    /** The MCP endpoint the companion plugin exposes for a given domain. */
+    /**
+     * The MCP endpoint the companion plugin exposes for this site. The `domain`
+     * column may hold a bare host or a full URL (it accepts a URL in the form),
+     * so reduce it to just the host — otherwise we'd build https://https://…
+     */
     public function conventionalMcpEndpoint(): string
     {
-        return 'https://'.$this->domain.'/wp-json/md-agent/v1/mcp';
+        $host = preg_replace('#^https?://#i', '', (string) $this->domain); // drop scheme
+        $host = explode('/', (string) $host, 2)[0];                        // drop any path
+        $host = trim((string) $host);
+
+        return 'https://'.$host.'/wp-json/md-agent/v1/mcp';
     }
 
     /** Resolve a site by the plaintext token its plugin presents (constant-time). */

@@ -19,6 +19,7 @@ use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
+use Illuminate\Support\Js;
 use Illuminate\Support\Str;
 
 class SiteResource extends Resource
@@ -106,12 +107,26 @@ class SiteResource extends Resource
                             ->maxLength(255)
                             // Pre-fill the conventional endpoint for an existing
                             // site so the field, the DB and the "connection codes"
-                            // modal all agree on one value.
+                            // modal all agree on one value. Also self-heal a
+                            // malformed value (e.g. a doubled scheme).
                             ->afterStateHydrated(function (Forms\Set $set, ?string $state, ?Site $record): void {
-                                if (blank($state) && $record !== null && filled($record->domain)) {
+                                $malformed = filled($state) && substr_count((string) $state, '://') > 1;
+                                if (($malformed || blank($state)) && $record !== null && filled($record->domain)) {
                                     $set('mcp_endpoint', $record->conventionalMcpEndpoint());
                                 }
                             })
+                            ->suffixAction(
+                                Forms\Components\Actions\Action::make('copyMcpEndpoint')
+                                    ->icon('heroicon-m-clipboard-document')
+                                    ->tooltip('העתק')
+                                    ->action(function (?string $state, $livewire): void {
+                                        if (blank($state)) {
+                                            return;
+                                        }
+                                        $livewire->js('window.navigator.clipboard.writeText('.Js::from($state).')');
+                                        Notification::make()->title('כתובת MCP הועתקה')->success()->send();
+                                    }),
+                            )
                             ->columnSpanFull(),
                         Forms\Components\TextInput::make('mcp_secret')
                             ->label('מפתח MCP')
