@@ -148,7 +148,11 @@ class PendingActionResource extends Resource
 
             try {
                 $handler($action->fresh());
-                $done++;
+                // approve() swallows execution errors and marks the row Failed
+                // (returning a message, not throwing), so judge by the final
+                // status — not by the call returning.
+                $final = $action->fresh()->status;
+                in_array($final, [ActionStatus::Executed, ActionStatus::Rejected], true) ? $done++ : $failed++;
             } catch (\Throwable) {
                 $failed++;
             }

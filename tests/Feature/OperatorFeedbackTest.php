@@ -57,6 +57,30 @@ class OperatorFeedbackTest extends TestCase
             ->callTableBulkAction('approveSelected', [$p1, $p2, $already]);
     }
 
+    public function test_bulk_approve_counts_a_failed_action_as_failed_not_done(): void
+    {
+        $this->actingAs(User::factory()->create());
+        $customer = Customer::factory()->create();
+        $p1 = $this->pending($customer);
+
+        // ApprovalGate swallows execution errors: it marks the row Failed and
+        // returns a message rather than throwing. The batch must judge by the
+        // final status, so this counts as failed — not done.
+        $gate = Mockery::mock(ApprovalGate::class);
+        $gate->shouldReceive('approve')->once()->andReturnUsing(function (PendingAction $a): string {
+            $a->update(['status' => ActionStatus::Failed]);
+
+            return 'הפעולה נכשלה';
+        });
+        $this->app->instance(ApprovalGate::class, $gate);
+
+        Livewire::test(ListPendingActions::class)
+            ->callTableBulkAction('approveSelected', [$p1])
+            ->assertNotified();
+
+        $this->assertSame(ActionStatus::Failed, $p1->fresh()->status);
+    }
+
     public function test_bulk_reject_rejects_the_selected_pending_actions(): void
     {
         $this->actingAs(User::factory()->create());

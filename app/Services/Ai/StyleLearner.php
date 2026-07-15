@@ -60,7 +60,7 @@ class StyleLearner
             return null;
         }
 
-        $rated = fn ($m): string => '— (דירוג '.$m->quality_rating.'/10) '.Str::limit(trim((string) $m->body), 500);
+        $rated = fn ($m): string => '— (דירוג '.$m->quality_rating.'/10) '.Str::limit(self::cleanReply((string) $m->body), 500);
 
         $prompt = "תשובות שדורגו גבוה — למד מהן בעיקר:\n".($good->map($rated)->implode("\n") ?: '(אין עדיין)');
         if ($recent->isNotEmpty()) {
@@ -90,5 +90,21 @@ class StyleLearner
         config(['billing.ai.style_summary' => $summary]); // live for the current request
 
         return $summary;
+    }
+
+    /**
+     * The customer-facing reply text only. A rated AI draft is stored as an
+     * internal note with a "🤖 טיוטת תשובה … לפני שליחה:" preamble; strip it
+     * (like ViewTicket::useDraft) so the learner never absorbs approval metadata.
+     */
+    private static function cleanReply(string $body): string
+    {
+        $body = trim($body);
+
+        if (str_contains($body, 'טיוטת תשובה') && str_contains($body, "\n\n")) {
+            $body = trim(Str::after($body, "\n\n"));
+        }
+
+        return $body;
     }
 }
