@@ -157,6 +157,23 @@ class MonitorSiteJob implements ShouldQueue
         } catch (\Throwable $e) {
             Log::warning('Auto-diagnosis/propose failed', ['site_id' => $site->id, 'error' => $e->getMessage()]);
         }
+
+        // Connected sites also get a full AI investigation over MCP: the operator
+        // reads the site's real state (plugins, error log, health) and files any
+        // fix as a manager-approval proposal — nothing runs without approval and
+        // the kill-switch. Heavy (several model + MCP calls), so it goes on the
+        // queue and never blocks incident tracking.
+        if ($site->mcp_enabled && config('agent.auto_investigate')) {
+            InvestigateSiteJob::dispatch(
+                $site->id,
+                sprintf(
+                    'האתר %s אינו זמין (incident #%d)%s. חקור את הסיבה בעזרת כלי הקריאה והצע תיקון בטוח אם נדרש.',
+                    $site->domain,
+                    $incident->id,
+                    filled($error) ? " — שגיאה: {$error}" : '',
+                ),
+            );
+        }
     }
 
     /** The real FlyWP driver needs a linked site; 'log' always records intent. */

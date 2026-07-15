@@ -28,5 +28,13 @@ rm -f "$zip_path"
 # Zip from the plugin's parent so the archive contains multioto-agent/... at the root.
 ( cd "$here" && zip -rq "$zip_path" "multioto-agent" -x '*.DS_Store' )
 
+# Keep a tracked, human-named copy under releases/ so the current build is always
+# downloadable straight from the repo (dist/ is gitignored). Commit this on a
+# version bump so the download matches the source.
+releases_dir="$here/releases"
+mkdir -p "$releases_dir"
+cp -f "$zip_path" "$releases_dir/multioto-agent-$version.zip"
+
 echo "Built $zip_path"
+echo "Tracked copy: releases/multioto-agent-$version.zip (commit on a version bump)"
 echo "Upload to the platform plugin disk as: agent-plugin/$version.zip"
