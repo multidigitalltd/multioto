@@ -8,6 +8,7 @@ use App\Enums\MessageDirection;
 use App\Enums\TicketChannel;
 use App\Enums\TicketStatus;
 use App\Jobs\ClassifyTicketJob;
+use App\Jobs\InvestigateTicketJob;
 use App\Jobs\NotifyTeamJob;
 use App\Jobs\SendTicketNotificationJob;
 use App\Models\Customer;
@@ -91,6 +92,13 @@ class TicketIntake
                 // Always alert the team (WhatsApp approvals number/group + email)
                 // about a new ticket — independent of the AI layer.
                 NotifyTeamJob::dispatch($ticket->id, 'new_ticket');
+
+                // Optionally let the site agent look at the customer's connected
+                // site right away and post a "what to do" system note (off by
+                // default — costs model tokens; toggled in the AI-agent settings).
+                if (config('agent.auto_investigate_tickets')) {
+                    InvestigateTicketJob::dispatch($ticket->id);
+                }
             } else {
                 // A customer reply on an existing ticket — alert the team too.
                 NotifyTeamJob::dispatch($ticket->id, 'new_reply', $message->id);

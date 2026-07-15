@@ -62,9 +62,12 @@ class SettingsServiceProvider extends ServiceProvider
         'ai.model' => 'billing.ai.model',
         'ai.persona' => 'billing.ai.persona',
         'ai.rules' => 'billing.ai.rules',
+        'ai.site_rules' => 'billing.ai.site_rules',
         'ai.style_summary' => 'billing.ai.style_summary',
         // Master kill-switch for the AI site agent's actions on sites.
         'agent.actions_enabled' => 'agent.actions_enabled',
+        // Auto-run the site agent when a new ticket opens for a connected customer.
+        'agent.auto_investigate_tickets' => 'agent.auto_investigate_tickets',
         // Public signup form — payment-method setup instructions (editable text).
         'signup.instructions.standing_order' => 'billing.signup.instructions.standing_order',
         'signup.instructions.bank_transfer' => 'billing.signup.instructions.bank_transfer',
@@ -74,6 +77,23 @@ class SettingsServiceProvider extends ServiceProvider
         'branding.logo_path' => 'billing.branding.logo_path',
         'branding.email_footer' => 'billing.branding.email_footer',
     ];
+
+    /**
+     * Editable text overrides that must revert to their config-file default when
+     * the admin clears the field — otherwise a long-running worker keeps the old
+     * value (add-only overlays never reset a removed key). Setting key => config.
+     */
+    public const RESET_ON_CLEAR = [
+        'ai.persona' => 'billing.ai.persona',
+        'ai.rules' => 'billing.ai.rules',
+        'ai.site_rules' => 'billing.ai.site_rules',
+        'ai.model' => 'billing.ai.model',
+        'ai.base_url' => 'billing.ai.base_url',
+        'ai.style_summary' => 'billing.ai.style_summary',
+    ];
+
+    /** Pristine config-file defaults for RESET_ON_CLEAR keys, memoized once. */
+    private static array $pristine = [];
 
     public function boot(): void
     {
@@ -103,18 +123,29 @@ class SettingsServiceProvider extends ServiceProvider
             return;
         }
 
+        // Remember the pristine config-file defaults ONCE, before any overlay
+        // mutates them — so a cleared override can revert to the real default.
+        foreach (self::RESET_ON_CLEAR as $configPath) {
+            if (! array_key_exists($configPath, self::$pristine)) {
+                self::$pristine[$configPath] = config($configPath);
+            }
+        }
+
         foreach (self::MAP as $settingKey => $configPath) {
             if (filled($stored[$settingKey] ?? null)) {
                 config([$configPath => $stored[$settingKey]]);
             }
         }
 
-        // The learned AI style is documented as "empty = unused", so when it is
-        // cleared it must not linger in a long-running worker (the overlay is
-        // re-applied per job via Queue::before, and add-only overlays never
-        // reset a removed key). Force it back to empty when there's no setting.
-        if (blank($stored['ai.style_summary'] ?? null)) {
-            config(['billing.ai.style_summary' => null]);
+        // Add-only overlays never reset a removed key, so in a long-running
+        // worker (overlay re-applied per job via Queue::before) a cleared field
+        // would keep its previous custom value. Revert each cleared override to
+        // its config-file default — e.g. clearing ai.site_rules must bring back
+        // the default site rules, not leave the removed instructions in force.
+        foreach (self::RESET_ON_CLEAR as $settingKey => $configPath) {
+            if (blank($stored[$settingKey] ?? null)) {
+                config([$configPath => self::$pristine[$configPath]]);
+            }
         }
     }
 }

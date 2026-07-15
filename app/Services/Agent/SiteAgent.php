@@ -156,7 +156,9 @@ class SiteAgent
             ->map(fn ($value, $key): string => "- {$key}: {$value}")
             ->implode("\n");
 
-        $rules = trim((string) config('billing.ai.rules'));
+        // Site-operation rules — separate from the customer-reply rules. Fall
+        // back to the general rules if the site-specific set was cleared.
+        $rules = trim((string) (config('billing.ai.site_rules') ?: config('billing.ai.rules')));
 
         return trim(<<<PROMPT
             אתה עוזר תפעול לאתרי וורדפרס של Multi Digital. תפקידך לאבחן את האתר {$site->domain} ולתקן תקלות.
