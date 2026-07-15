@@ -47,6 +47,29 @@ class ManageIntegrationsTest extends TestCase
         $this->assertSame('30', config('billing.linet.doctype_proforma'));
     }
 
+    public function test_saving_the_new_linet_payment_codes_persists_them(): void
+    {
+        $this->actingAs(User::factory()->create());
+        Http::fake(['*/search/account' => Http::response(['status' => 200, 'body' => []])]);
+
+        Livewire::test(ManageIntegrations::class)
+            ->fillForm([
+                'linet.doctype_proforma' => '1',
+                'linet.payment_type_bank_transfer' => '4',
+                'linet.payment_type_standing_order' => '28',
+            ])
+            ->call('saveGroup', 'linet');
+
+        $m = Setting::map();
+        $this->assertSame('1', $m['linet.doctype_proforma'] ?? null);
+        $this->assertSame('4', $m['linet.payment_type_bank_transfer'] ?? null);
+        $this->assertSame('28', $m['linet.payment_type_standing_order'] ?? null);
+
+        (new SettingsServiceProvider(app()))->boot();
+        $this->assertSame('4', config('billing.linet.payment_type_bank_transfer'));
+        $this->assertSame('28', config('billing.linet.payment_type_standing_order'));
+    }
+
     public function test_clearing_an_optional_linet_payment_code_reverts_to_the_default(): void
     {
         $this->actingAs(User::factory()->create());
