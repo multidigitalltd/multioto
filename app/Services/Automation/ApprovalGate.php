@@ -12,6 +12,7 @@ use App\Mail\MonitoringReportMail;
 use App\Models\Customer;
 use App\Models\PendingAction;
 use App\Models\Site;
+use App\Services\Agent\SiteActionRunner;
 use App\Services\Hosting\HostingClient;
 use App\Services\Monitoring\MonitoringReport;
 use App\Services\Waha\WahaClient;
@@ -132,6 +133,7 @@ class ApprovalGate
         match ($action->type) {
             'ticket_reply' => $this->executeTicketReply($action),
             'site_fix' => $this->executeSiteFix($action),
+            'site_action' => app(SiteActionRunner::class)->run($action),
             'monitoring_report' => $this->executeMonitoringReport($action),
             default => throw new \RuntimeException("סוג פעולה לא מוכר: {$action->type}"),
         };

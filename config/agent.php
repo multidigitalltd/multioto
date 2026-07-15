@@ -36,4 +36,20 @@ return [
         'timeout_seconds' => (int) env('AGENT_MCP_TIMEOUT', 30),
     ],
 
+    /*
+    | Risk tiers for site tools, matched by name substring (first match wins,
+    | highest tier checked first). Unknown tools default to tier 2 — "a change" —
+    | so a tool we never classified still requires explicit human approval and
+    | is never treated as read-only.
+    |
+    |   0 read-only · 1 safe/reversible · 2 change · 3 destructive
+    |
+    | Tier-3 tools only ever run on staging sites.
+    */
+    'risk' => [
+        3 => ['exec', 'eval', 'sql', 'db_write', 'file_write', 'file_edit', 'delete', 'drop', 'remove'],
+        1 => ['cache', 'restart', 'maintenance', 'transient'],
+        0 => ['list', 'get', 'read', 'health', 'status', 'log', 'info', 'check', 'search'],
+    ],
+
 ];

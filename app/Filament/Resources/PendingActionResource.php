@@ -37,6 +37,8 @@ class PendingActionResource extends Resource
     public const TYPE_LABELS = [
         'ticket_reply' => 'תשובה ללקוח',
         'site_fix' => 'תיקון אתר',
+        'site_action' => 'פעולת AI באתר',
+        'monitoring_report' => 'דוח ניטור ללקוח',
     ];
 
     public static function getNavigationBadge(): ?string

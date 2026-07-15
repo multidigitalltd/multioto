@@ -8,6 +8,7 @@ use App\Jobs\RestoreSiteJob;
 use App\Jobs\SuspendSiteJob;
 use App\Models\Site;
 use App\Services\Agent\SiteConnector;
+use App\Services\Agent\SiteToolCatalog;
 use App\Services\Automation\ApprovalGate;
 use App\Services\Hosting\SiteDiagnostics;
 use Filament\Forms;
@@ -257,6 +258,64 @@ class SiteResource extends Resource
                             ->title('השחזור נשלח לביצוע')
                             ->success()
                             ->send();
+                    }),
+
+                // Propose an MCP tool call on this site — goes through the same
+                // approval gate as every automated action (manager approves on
+                // WhatsApp or in the panel before anything runs). Admin-only.
+                Tables\Actions\Action::make('proposeMcpAction')
+                    ->label('פעולת AI')
+                    ->icon('heroicon-o-cpu-chip')
+                    ->color('warning')
+                    ->visible(fn (Site $record): bool => $record->mcp_enabled
+                        && filled(data_get($record->mcp_capabilities, 'tools'))
+                        && (auth()->user()?->isAdmin() ?? false))
+                    ->form(fn (Site $record): array => [
+                        Forms\Components\Select::make('tool')
+                            ->label('כלי')
+                            ->options(collect((array) data_get($record->mcp_capabilities, 'tools', []))
+                                ->mapWithKeys(function (array $tool): array {
+                                    $name = (string) ($tool['name'] ?? '');
+                                    $tier = app(SiteToolCatalog::class)->tierLabel($name);
+
+                                    return [$name => "{$name} ({$tier})"];
+                                })->all())
+                            ->required()
+                            ->searchable(),
+                        Forms\Components\Textarea::make('arguments')
+                            ->label('פרמטרים (JSON)')
+                            ->rows(3)
+                            ->placeholder('{"plugin": "elementor"}')
+                            ->rule(fn (): \Closure => function (string $attribute, $value, \Closure $fail): void {
+                                if (filled($value) && ! is_array(json_decode((string) $value, true))) {
+                                    $fail('הפרמטרים חייבים להיות JSON תקין.');
+                                }
+                            }),
+                    ])
+                    ->action(function (array $data, Site $record, ApprovalGate $gate): void {
+                        $catalog = app(SiteToolCatalog::class);
+                        $tool = (string) $data['tool'];
+
+                        if (! $catalog->allowedOn($record, $tool)) {
+                            Notification::make()->title('הכלי מסווג כהרסני ומותר רק באתר סטייג׳ינג')->danger()->send();
+
+                            return;
+                        }
+
+                        $arguments = filled($data['arguments'] ?? null) ? (array) json_decode((string) $data['arguments'], true) : [];
+                        $argsText = $arguments === [] ? 'ללא פרמטרים' : json_encode($arguments, JSON_UNESCAPED_UNICODE);
+
+                        $gate->propose(
+                            type: 'site_action',
+                            summary: "🤖 פעולת AI באתר {$record->domain}\nכלי: {$tool} ({$catalog->tierLabel($tool)})\nפרמטרים: {$argsText}",
+                            payload: ['site_id' => $record->id, 'tool' => $tool, 'arguments' => $arguments],
+                            customerId: $record->customer_id,
+                            proposedBy: 'team',
+                        );
+
+                        Notification::make()->title('הפעולה נשלחה לאישור')
+                            ->body('תופיע ב"אישורי אוטומציה" ותישלח לוואטסאפ לאישור לפני ביצוע.')
+                            ->success()->send();
                     }),
 
                 // Live MCP handshake: verify the site's agent connection and
