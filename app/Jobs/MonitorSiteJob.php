@@ -6,11 +6,15 @@ use App\Enums\IncidentStatus;
 use App\Enums\TicketChannel;
 use App\Enums\TicketPriority;
 use App\Enums\TicketStatus;
+use App\Enums\UserRole;
 use App\Models\Site;
 use App\Models\Ticket;
+use App\Models\User;
 use App\Services\Automation\ApprovalGate;
 use App\Services\Hosting\SiteDiagnostics;
 use App\Services\Notifications\TeamNotifier;
+use Filament\Notifications\Actions\Action;
+use Filament\Notifications\Notification;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Http;
@@ -132,6 +136,15 @@ class MonitorSiteJob implements ShouldQueue
             $this->siteUrl($site),
         );
 
+        // Also raise the in-panel bell for the managers — always visible in the
+        // panel even when WhatsApp/email aren't set up.
+        $this->notifyAdminsInPanel(
+            "🔴 האתר {$site->domain} אינו זמין",
+            sprintf('לקוח: %s%s', $site->customer?->name ?? '—', filled($error) ? " · שגיאה: {$error}" : ''),
+            'danger',
+            $this->siteUrl($site),
+        );
+
         // Auto-heal loop (still human-approved): diagnose and, if a safe
         // reversible fix is indicated, propose it to the owner on WhatsApp —
         // "האתר נפל, להפעיל מחדש? אשר 45". Best-effort: diagnostics/proposal
@@ -204,6 +217,31 @@ class MonitorSiteJob implements ShouldQueue
                 $downFor ? "\nזמן ההשבתה: {$downFor}" : ''),
             $this->siteUrl($site),
         );
+
+        $this->notifyAdminsInPanel(
+            "🟢 האתר {$site->domain} חזר לפעול",
+            sprintf('לקוח: %s%s', $site->customer?->name ?? '—', $downFor ? " · זמן השבתה: {$downFor}" : ''),
+            'success',
+            $this->siteUrl($site),
+        );
+    }
+
+    /** Raise the in-panel notification bell for every manager (admin). */
+    protected function notifyAdminsInPanel(string $title, string $body, string $color, string $url): void
+    {
+        $admins = User::where('role', UserRole::Admin)->get();
+
+        if ($admins->isEmpty()) {
+            return;
+        }
+
+        Notification::make()
+            ->title($title)
+            ->body($body)
+            ->icon('heroicon-o-globe-alt')
+            ->color($color)
+            ->actions([Action::make('view')->label('פתח אתר')->url($url)])
+            ->sendToDatabase($admins);
     }
 
     /**
