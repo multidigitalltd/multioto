@@ -81,9 +81,12 @@ class Site extends Model
             $this->save();
         }
 
-        // The token lives outside the fillable/dirty set (forceFill); ensure it
-        // exists separately.
-        if (blank($this->agent_token_plain)) {
+        // Only mint a token when the site has none at all. If a hash already
+        // exists but no retrievable copy (a site connected before this column),
+        // we must NOT rotate on read — that would 401 the plugin already
+        // installed with the old token. Such a token is simply unrecoverable
+        // for display; rotating it is an explicit action ("טוקן חדש").
+        if (blank($this->agent_token) && blank($this->agent_token_plain)) {
             $this->generateAgentToken();
         }
 
@@ -91,6 +94,8 @@ class Site extends Model
             'panel_url' => rtrim((string) config('app.url'), '/'),
             'mcp_endpoint' => (string) $this->mcp_endpoint,
             'mcp_secret' => (string) $this->mcp_secret,
+            // Empty when a pre-existing token can't be shown — the view then
+            // tells the manager to rotate rather than showing a blank box.
             'update_token' => (string) $this->agent_token_plain,
         ];
     }

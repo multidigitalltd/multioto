@@ -47,6 +47,23 @@ class AgentCredentialsTest extends TestCase
         $this->assertSame($first['mcp_endpoint'], $second['mcp_endpoint']);
     }
 
+    public function test_ensure_agent_credentials_never_rotates_a_pre_existing_token_on_view(): void
+    {
+        // A site connected before agent_token_plain existed: it has a hash but no
+        // retrievable copy. Opening the codes modal must NOT rotate it — that
+        // would 401 the plugin already installed with the old token.
+        $site = Site::factory()->create();
+        $site->forceFill(['agent_token' => hash('sha256', 'legacy-token'), 'agent_token_plain' => null])->save();
+
+        $codes = $site->ensureAgentCredentials();
+
+        // Hash is untouched; the old token still authenticates.
+        $this->assertSame(hash('sha256', 'legacy-token'), $site->fresh()->agent_token);
+        $this->assertTrue(Site::forAgentToken('legacy-token')->is($site));
+        // The token can't be shown — the view handles this (empty string).
+        $this->assertSame('', $codes['update_token']);
+    }
+
     public function test_generate_agent_token_stores_hash_and_retrievable_copy(): void
     {
         $site = Site::factory()->create();

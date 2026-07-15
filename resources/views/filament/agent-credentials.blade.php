@@ -14,8 +14,13 @@
             ['label' => 'כתובת הפאנל', 'value' => $data['panel_url'], 'hint' => 'שדה "כתובת הפאנל" בתוסף'],
             ['label' => 'כתובת MCP', 'value' => $data['mcp_endpoint'], 'hint' => 'נכתב אוטומטית גם בפאנל'],
             ['label' => 'מפתח MCP', 'value' => $data['mcp_secret'], 'hint' => 'שדה "מפתח MCP" בתוסף — זהה לפאנל'],
-            ['label' => 'טוקן עדכון', 'value' => $data['update_token'], 'hint' => 'שדה "טוקן עדכון" בתוסף'],
         ];
+
+        // A token created before it was stored retrievably can't be shown again —
+        // never rotate on view; guide the manager to rotate explicitly instead.
+        if (filled($data['update_token'])) {
+            $fields[] = ['label' => 'טוקן עדכון', 'value' => $data['update_token'], 'hint' => 'שדה "טוקן עדכון" בתוסף'];
+        }
     @endphp
 
     @foreach ($fields as $field)
@@ -54,7 +59,14 @@
         </div>
     @endforeach
 
+    @if (blank($data['update_token']))
+        <div class="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
+            <strong>טוקן עדכון:</strong> לאתר כבר קיים טוקן שנוצר בעבר ואינו ניתן לשחזור להצגה.
+            אם צריך להתקין/לחבר מחדש — לחצו "טוקן חדש" כדי לייצר טוקן להעתקה (הטוקן הקודם יבוטל).
+        </div>
+    @endif
+
     <p class="text-xs text-gray-400">
-        הערכים נשמרים בפאנל — אפשר לחזור ולהעתיק אותם בכל עת. יצירת "טוקן חיבור" חדש תבטל את הקודם.
+        הערכים נשמרים בפאנל — אפשר לחזור ולהעתיק אותם בכל עת. יצירת "טוקן חדש" תבטל את הקודם.
     </p>
 </div>
