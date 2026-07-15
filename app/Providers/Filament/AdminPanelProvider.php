@@ -18,10 +18,25 @@ use Illuminate\Cookie\Middleware\EncryptCookies;
 use Illuminate\Foundation\Http\Middleware\VerifyCsrfToken;
 use Illuminate\Routing\Middleware\SubstituteBindings;
 use Illuminate\Session\Middleware\StartSession;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\View\Middleware\ShareErrorsFromSession;
 
 class AdminPanelProvider extends PanelProvider
 {
+    /**
+     * Whether the notifications table exists yet — guards the in-panel bell so a
+     * not-yet-migrated database (new code deployed before `migrate` ran) can't
+     * 500 every page. Any DB hiccup is treated as "not ready" (bell off, panel up).
+     */
+    protected function notificationsTableReady(): bool
+    {
+        try {
+            return Schema::hasTable('notifications');
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
     public function panel(Panel $panel): Panel
     {
         return $panel
@@ -43,7 +58,10 @@ class AdminPanelProvider extends PanelProvider
             ->font('Rubik')
             // In-panel notification bell (new task assigned, a site incident…) —
             // always visible in the panel, independent of WhatsApp/email config.
-            ->databaseNotifications()
+            // The bell queries the notifications table on EVERY page, so only
+            // enable it once that table exists — otherwise a deploy that ships
+            // new code before its migrations run would 500 every panel page.
+            ->when($this->notificationsTableReady(), fn (Panel $panel): Panel => $panel->databaseNotifications())
             ->sidebarCollapsibleOnDesktop()
             ->navigationGroups(['תמיכה', 'כספים', 'ניהול', 'הגדרות'])
             ->discoverResources(in: app_path('Filament/Resources'), for: 'App\\Filament\\Resources')
