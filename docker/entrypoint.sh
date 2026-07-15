@@ -54,6 +54,11 @@ case "${1:-web}" in
         # Symlink public/storage so uploaded assets (e.g. the business logo on
         # the public disk) are web-accessible. Idempotent.
         php artisan storage:link || true
+        # Republish Filament's front-end assets on every boot so the served
+        # JS/CSS always match the installed package version. Without this, assets
+        # that drifted (an image rebuilt on a newer Filament, or stale committed
+        # copies) leave rich-text editors as a collapsed box under a dead toolbar.
+        php artisan filament:assets || true
         # Clear any stale caches but do NOT config:cache — caching would freeze
         # whatever DB_CONNECTION is in .env (sqlite by default) instead of the
         # pgsql value the compose environment injects. Reading config live keeps
