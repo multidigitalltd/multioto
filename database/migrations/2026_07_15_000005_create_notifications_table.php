@@ -21,7 +21,10 @@ return new class extends Migration
             $table->uuid('id')->primary();
             $table->string('type');
             $table->morphs('notifiable');
-            $table->text('data');
+            // JSON, not text: Filament queries the bell with where('data->format',
+            // 'filament'), which on PostgreSQL needs a json column (the ->> operator
+            // is undefined on text). On SQLite/MySQL json maps to text transparently.
+            $table->json('data');
             $table->timestamp('read_at')->nullable();
             $table->timestamps();
         });
