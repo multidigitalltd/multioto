@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\CustomerResource\RelationManagers;
 
 use App\Filament\Resources\SiteResource;
+use App\Filament\Support\SiteActions;
 use App\Models\Site;
 use Filament\Forms;
 use Filament\Forms\Form;
@@ -58,6 +59,22 @@ class SitesRelationManager extends RelationManager
                     ->color('gray')
                     ->url(fn (Site $record): string => SiteResource::getUrl('view', ['record' => $record]))
                     ->openUrlInNewTab(),
+
+                // Everything you need for a site, straight from the customer card:
+                // an AI diagnosis, and the one-time connection setup in a dropdown.
+                SiteActions::aiInvestigate(),
+                Tables\Actions\ActionGroup::make([
+                    SiteActions::testMcp(),
+                    SiteActions::connectionCodes(),
+                    SiteActions::downloadPlugin(),
+                    SiteActions::generateAgentToken(),
+                ])
+                    ->label('חיבור לתוסף')
+                    ->icon('heroicon-o-link')
+                    ->button()
+                    ->color('gray')
+                    ->visible(fn (): bool => auth()->user()?->isAdmin() ?? false),
+
                 Tables\Actions\EditAction::make()->label('עריכה'),
                 Tables\Actions\DeleteAction::make()->label('מחיקה'),
             ]);
