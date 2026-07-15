@@ -29,6 +29,16 @@ class ClaudeClient
     }
 
     /**
+     * Whether the AGENTIC layer (tool use → converse()) can run. Tool use is
+     * implemented for all three providers (Anthropic, OpenAI-compatible, Google
+     * Gemini), so this is simply "the AI layer is on and configured".
+     */
+    public function supportsAgent(): bool
+    {
+        return $this->isEnabled();
+    }
+
+    /**
      * Verify the AI provider is reachable and the key/model work, by asking for
      * a trivial JSON object. Surfaces a clear reason so "the agent isn't drafting"
      * stops being a silent mystery. The detailed HTTP error is written to the log.
@@ -126,72 +136,213 @@ class ClaudeClient
      */
     public function converse(string $system, string $prompt, array $tools, callable $handler, int $maxTurns = 6): ?string
     {
-        // Tool use is implemented for the Anthropic Messages API only; other
-        // providers fall back to no agentic capability.
-        if (! $this->isEnabled() || config('billing.ai.provider', 'anthropic') !== 'anthropic') {
+        if (! $this->isEnabled()) {
             return null;
         }
 
+        try {
+            return match (config('billing.ai.provider', 'anthropic')) {
+                'openai' => $this->converseOpenai($system, $prompt, $tools, $handler, $maxTurns),
+                'google' => $this->converseGoogle($system, $prompt, $tools, $handler, $maxTurns),
+                default => $this->converseAnthropic($system, $prompt, $tools, $handler, $maxTurns),
+            };
+        } catch (\Throwable $e) {
+            $this->lastError = $e->getMessage();
+            Log::warning('AI converse threw', ['provider' => config('billing.ai.provider'), 'error' => $e->getMessage()]);
+
+            return null;
+        }
+    }
+
+    /**
+     * Anthropic Messages API tool-use loop.
+     *
+     * @param  list<array<string, mixed>>  $tools
+     * @param  callable(string, array<string, mixed>): array{content: string, is_error?: bool}  $handler
+     */
+    private function converseAnthropic(string $system, string $prompt, array $tools, callable $handler, int $maxTurns): ?string
+    {
         $config = config('billing.ai');
         $messages = [['role' => 'user', 'content' => $prompt]];
 
-        try {
-            for ($turn = 0; $turn < $maxTurns; $turn++) {
-                $response = Http::baseUrl($config['base_url'])
-                    ->withHeaders(['x-api-key' => $config['api_key'], 'anthropic-version' => '2023-06-01'])
-                    ->timeout(90)
-                    ->post('/v1/messages', [
-                        'model' => $config['model'],
-                        'max_tokens' => 2048,
-                        'system' => $system,
-                        'thinking' => ['type' => 'adaptive'],
-                        'output_config' => ['effort' => $config['effort']],
-                        'tools' => $tools,
-                        'messages' => $messages,
-                    ]);
+        for ($turn = 0; $turn < $maxTurns; $turn++) {
+            $response = Http::baseUrl($config['base_url'])
+                ->withHeaders(['x-api-key' => $config['api_key'], 'anthropic-version' => '2023-06-01'])
+                ->timeout(90)
+                ->post('/v1/messages', [
+                    'model' => $config['model'],
+                    'max_tokens' => 2048,
+                    'system' => $system,
+                    'thinking' => ['type' => 'adaptive'],
+                    'output_config' => ['effort' => $config['effort']],
+                    'tools' => $tools,
+                    'messages' => $messages,
+                ]);
 
-                if ($response->failed()) {
-                    $this->logFailure('anthropic', $response->status(), $response->body());
+            if ($response->failed()) {
+                $this->logFailure('anthropic', $response->status(), $response->body());
 
-                    return null;
-                }
-
-                if ($response->json('stop_reason') === 'refusal') {
-                    return null;
-                }
-
-                $content = (array) $response->json('content', []);
-                // Echo the assistant turn back unchanged (thinking blocks included).
-                $messages[] = ['role' => 'assistant', 'content' => $content];
-
-                $toolUses = array_values(array_filter($content, fn ($b): bool => ($b['type'] ?? null) === 'tool_use'));
-
-                // No tool calls → the model is done; return its text.
-                if ($toolUses === []) {
-                    return $this->joinText($content);
-                }
-
-                $results = [];
-                foreach ($toolUses as $call) {
-                    $out = $handler((string) ($call['name'] ?? ''), (array) ($call['input'] ?? []));
-                    $results[] = [
-                        'type' => 'tool_result',
-                        'tool_use_id' => $call['id'] ?? '',
-                        'content' => (string) ($out['content'] ?? ''),
-                        'is_error' => (bool) ($out['is_error'] ?? false),
-                    ];
-                }
-
-                $messages[] = ['role' => 'user', 'content' => $results];
+                return null;
             }
-        } catch (\Throwable $e) {
-            $this->lastError = $e->getMessage();
-            Log::warning('AI converse threw', ['error' => $e->getMessage()]);
 
-            return null;
+            if ($response->json('stop_reason') === 'refusal') {
+                return null;
+            }
+
+            $content = (array) $response->json('content', []);
+            // Echo the assistant turn back unchanged (thinking blocks included).
+            $messages[] = ['role' => 'assistant', 'content' => $content];
+
+            $toolUses = array_values(array_filter($content, fn ($b): bool => ($b['type'] ?? null) === 'tool_use'));
+
+            if ($toolUses === []) {
+                return $this->joinText($content);
+            }
+
+            $results = [];
+            foreach ($toolUses as $call) {
+                $out = $handler((string) ($call['name'] ?? ''), (array) ($call['input'] ?? []));
+                $results[] = [
+                    'type' => 'tool_result',
+                    'tool_use_id' => $call['id'] ?? '',
+                    'content' => (string) ($out['content'] ?? ''),
+                    'is_error' => (bool) ($out['is_error'] ?? false),
+                ];
+            }
+
+            $messages[] = ['role' => 'user', 'content' => $results];
         }
 
-        // Turn cap reached without a final answer.
+        return null;
+    }
+
+    /**
+     * OpenAI-compatible chat/completions tool-use loop (function calling).
+     *
+     * @param  list<array<string, mixed>>  $tools  Anthropic-style tool defs (name/description/input_schema).
+     * @param  callable(string, array<string, mixed>): array{content: string, is_error?: bool}  $handler
+     */
+    private function converseOpenai(string $system, string $prompt, array $tools, callable $handler, int $maxTurns): ?string
+    {
+        $config = config('billing.ai');
+        $functions = array_map(fn (array $t): array => [
+            'type' => 'function',
+            'function' => [
+                'name' => (string) ($t['name'] ?? ''),
+                'description' => (string) ($t['description'] ?? ''),
+                'parameters' => $t['input_schema'] ?? ['type' => 'object', 'properties' => (object) []],
+            ],
+        ], $tools);
+
+        $messages = [
+            ['role' => 'system', 'content' => $system],
+            ['role' => 'user', 'content' => $prompt],
+        ];
+
+        for ($turn = 0; $turn < $maxTurns; $turn++) {
+            $response = Http::baseUrl(rtrim((string) $config['base_url'], '/'))
+                ->withToken($config['api_key'])
+                ->timeout(90)
+                ->post('/chat/completions', [
+                    'model' => $config['model'],
+                    'messages' => $messages,
+                    'tools' => $functions,
+                ]);
+
+            if ($response->failed()) {
+                $this->logFailure('openai', $response->status(), $response->body());
+
+                return null;
+            }
+
+            $message = (array) $response->json('choices.0.message', []);
+            $toolCalls = array_values((array) ($message['tool_calls'] ?? []));
+
+            // Echo the assistant turn back — with its tool_calls when present.
+            $assistant = ['role' => 'assistant', 'content' => $message['content'] ?? ''];
+            if ($toolCalls !== []) {
+                $assistant['tool_calls'] = $toolCalls;
+            }
+            $messages[] = $assistant;
+
+            if ($toolCalls === []) {
+                $text = (string) ($message['content'] ?? '');
+
+                return $text !== '' ? $text : null;
+            }
+
+            foreach ($toolCalls as $call) {
+                $args = json_decode((string) data_get($call, 'function.arguments', '{}'), true);
+                $out = $handler((string) data_get($call, 'function.name', ''), is_array($args) ? $args : []);
+                $messages[] = [
+                    'role' => 'tool',
+                    'tool_call_id' => (string) ($call['id'] ?? ''),
+                    'content' => (string) ($out['content'] ?? ''),
+                ];
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Google Gemini (native API) tool-use loop (function calling).
+     *
+     * @param  list<array<string, mixed>>  $tools  Anthropic-style tool defs (name/description/input_schema).
+     * @param  callable(string, array<string, mixed>): array{content: string, is_error?: bool}  $handler
+     */
+    private function converseGoogle(string $system, string $prompt, array $tools, callable $handler, int $maxTurns): ?string
+    {
+        $config = config('billing.ai');
+        $model = rawurlencode(preg_replace('#^models/#', '', trim((string) $config['model'])));
+        $declarations = array_map(fn (array $t): array => array_filter([
+            'name' => (string) ($t['name'] ?? ''),
+            'description' => (string) ($t['description'] ?? ''),
+            'parameters' => isset($t['input_schema']) ? $this->toGeminiSchema((array) $t['input_schema']) : null,
+        ], fn ($v): bool => $v !== null), $tools);
+
+        $contents = [['role' => 'user', 'parts' => [['text' => $prompt]]]];
+
+        for ($turn = 0; $turn < $maxTurns; $turn++) {
+            $response = Http::baseUrl($this->googleBase($config['base_url'] ?? null))
+                ->withHeaders(['x-goog-api-key' => $config['api_key']])
+                ->timeout(90)
+                ->post("/v1beta/models/{$model}:generateContent", [
+                    'systemInstruction' => ['parts' => [['text' => $system]]],
+                    'contents' => $contents,
+                    'tools' => [['functionDeclarations' => array_values($declarations)]],
+                ]);
+
+            if ($response->failed()) {
+                $this->logFailure('google', $response->status(), $response->body());
+
+                return null;
+            }
+
+            $parts = (array) $response->json('candidates.0.content.parts', []);
+            $contents[] = ['role' => 'model', 'parts' => $parts];
+
+            $calls = array_values(array_filter($parts, fn ($p): bool => isset($p['functionCall'])));
+
+            if ($calls === []) {
+                $text = collect($parts)->pluck('text')->filter()->implode("\n");
+
+                return $text !== '' ? $text : null;
+            }
+
+            $responseParts = [];
+            foreach ($calls as $part) {
+                $fc = (array) $part['functionCall'];
+                $out = $handler((string) ($fc['name'] ?? ''), (array) ($fc['args'] ?? []));
+                $responseParts[] = ['functionResponse' => [
+                    'name' => (string) ($fc['name'] ?? ''),
+                    'response' => ['result' => (string) ($out['content'] ?? '')],
+                ]];
+            }
+
+            $contents[] = ['role' => 'user', 'parts' => $responseParts];
+        }
+
         return null;
     }
 

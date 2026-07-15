@@ -19,6 +19,7 @@ use App\Models\PendingAction;
 use App\Models\Task;
 use App\Models\TicketMessage;
 use App\Models\User;
+use App\Services\Ai\ClaudeClient;
 use App\Services\Support\AttachmentStore;
 use App\Support\EmailBody;
 use Filament\Actions;
@@ -307,7 +308,7 @@ class ViewTicket extends ViewRecord
                 ->label('בדיקת סוכן AI לאתר')
                 ->icon('heroicon-o-globe-alt')
                 ->color('info')
-                ->visible(fn (): bool => (bool) config('billing.ai.enabled')
+                ->visible(fn (): bool => app(ClaudeClient::class)->supportsAgent()
                     && (bool) $this->record->customer?->sites()->where('mcp_enabled', true)->exists())
                 ->action(function (): void {
                     InvestigateTicketJob::dispatch($this->record->id);

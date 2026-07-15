@@ -3,8 +3,10 @@
 namespace Tests\Feature;
 
 use App\Enums\ActionStatus;
+use App\Jobs\InvestigateSiteJob;
 use App\Models\PendingAction;
 use App\Models\Site;
+use App\Models\SystemLog;
 use App\Services\Agent\SiteAgent;
 use App\Services\Ai\ClaudeClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -187,6 +189,71 @@ class SiteAgentTest extends TestCase
         Http::assertNothingSent();
     }
 
+    public function test_supports_agent_whenever_the_ai_layer_is_configured(): void
+    {
+        config(['billing.ai.enabled' => true, 'billing.ai.api_key' => 'k']);
+        foreach (['anthropic', 'openai', 'google'] as $provider) {
+            config(['billing.ai.provider' => $provider]);
+            $this->assertTrue(app(ClaudeClient::class)->supportsAgent(), "agent should run on {$provider}");
+        }
+
+        config(['billing.ai.api_key' => '']);
+        $this->assertFalse(app(ClaudeClient::class)->supportsAgent());
+    }
+
+    public function test_the_agent_reads_and_proposes_over_google_gemini(): void
+    {
+        // Prove the tool-use loop works on a non-Anthropic provider (Gemini),
+        // which is what the team wants for cheaper tokens.
+        config(['billing.ai.provider' => 'google', 'billing.ai.base_url' => 'https://gemini.test']);
+        $site = $this->connectedSite();
+
+        $i = 0;
+        $responses = [
+            // Turn 1: Gemini asks to read the plugin list (functionCall part).
+            ['candidates' => [['content' => ['parts' => [
+                ['functionCall' => ['name' => 'site_read', 'args' => ['tool' => 'wp_plugin_list']]],
+            ]]]]],
+            // Turn 2: it proposes an update.
+            ['candidates' => [['content' => ['parts' => [
+                ['functionCall' => ['name' => 'propose_action', 'args' => [
+                    'tool' => 'wp_plugin_update', 'arguments' => ['plugin' => 'elementor'], 'summary' => 'עדכון Elementor',
+                ]]],
+            ]]]]],
+            // Turn 3: final text.
+            ['candidates' => [['content' => ['parts' => [['text' => 'הצעתי עדכון ל-Elementor.']]]]]],
+        ];
+        Http::fake([
+            'gemini.test/*' => function () use (&$i, $responses) {
+                return Http::response($responses[$i++] ?? end($responses));
+            },
+            'site.test/*' => fn (Request $r) => isset(json_decode($r->body(), true)['id'])
+                ? Http::response(['jsonrpc' => '2.0', 'id' => json_decode($r->body(), true)['id'], 'result' => ['content' => [['type' => 'text', 'text' => 'elementor 3.20']], 'isError' => false]])
+                : Http::response('', 202),
+        ]);
+
+        $summary = app(SiteAgent::class)->investigate($site, 'בדוק תוספים.');
+
+        $this->assertStringContainsString('Elementor', (string) $summary);
+        $action = PendingAction::where('type', 'site_action')->sole();
+        $this->assertSame('wp_plugin_update', data_get($action->payload, 'tool'));
+        $this->assertSame(ActionStatus::Pending, $action->status);
+    }
+
+    public function test_investigate_job_logs_a_clear_reason_when_the_ai_is_off(): void
+    {
+        config(['billing.ai.enabled' => false]);
+        $site = $this->connectedSite();
+        Http::fake();
+
+        InvestigateSiteJob::dispatchSync($site->id, 'בדוק');
+
+        $log = SystemLog::where('level', 'warning')->latest('id')->first();
+        $this->assertNotNull($log);
+        $this->assertStringContainsString('לא הניב תוצאה', $log->message);
+        $this->assertStringContainsString('כבוי', $log->message);
+    }
+
     public function test_converse_returns_null_on_a_refusal(): void
     {
         Http::fake(['api.anthropic.test/*' => Http::response(['stop_reason' => 'refusal', 'content' => []])]);
@@ -195,12 +262,33 @@ class SiteAgentTest extends TestCase
         $this->assertNull($result);
     }
 
-    public function test_converse_is_disabled_for_non_anthropic_providers(): void
+    public function test_converse_runs_a_tool_loop_on_openai(): void
     {
-        config(['billing.ai.provider' => 'openai']);
-        Http::fake();
+        config(['billing.ai.provider' => 'openai', 'billing.ai.base_url' => 'https://openai.test/v1']);
 
-        $this->assertNull(app(ClaudeClient::class)->converse('sys', 'hi', [], fn () => ['content' => '']));
-        Http::assertNothingSent();
+        $i = 0;
+        $responses = [
+            // Turn 1: the model calls a tool (function calling).
+            ['choices' => [['message' => ['content' => null, 'tool_calls' => [
+                ['id' => 'call_1', 'type' => 'function', 'function' => ['name' => 'ping', 'arguments' => '{"x":1}']],
+            ]]]]],
+            // Turn 2: final text.
+            ['choices' => [['message' => ['content' => 'עבד']]]],
+        ];
+        Http::fake(['openai.test/*' => function () use (&$i, $responses) {
+            return Http::response($responses[$i++] ?? end($responses));
+        }]);
+
+        $seen = [];
+        $result = app(ClaudeClient::class)->converse('sys', 'hi',
+            [['name' => 'ping', 'description' => 'p', 'input_schema' => ['type' => 'object', 'properties' => ['x' => ['type' => 'integer']]]]],
+            function (string $name, array $input) use (&$seen): array {
+                $seen[] = [$name, $input];
+
+                return ['content' => 'pong'];
+            });
+
+        $this->assertSame('עבד', $result);
+        $this->assertSame([['ping', ['x' => 1]]], $seen); // the handler ran with decoded args
     }
 }

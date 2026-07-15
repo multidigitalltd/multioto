@@ -8,6 +8,7 @@ use App\Enums\MessageDirection;
 use App\Models\Site;
 use App\Models\Ticket;
 use App\Services\Agent\SiteAgent;
+use App\Services\Ai\ClaudeClient;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Collection;
@@ -66,7 +67,10 @@ class InvestigateTicketJob implements ShouldQueue
         $summary = $agent->investigate($site, $this->goalFrom($ticket, $site));
 
         if (blank($summary)) {
-            $this->note($ticket, "🤖 בדיקת סוכן AI לאתר {$site->domain}: לא הופקה תוצאה (הסוכן כבוי או האתר לא נגיש).");
+            $reason = app(ClaudeClient::class)->isEnabled()
+                ? 'ייתכן שהאתר אינו נגיש או שספק ה-AI נכשל — הריצו "בדוק חיבור AI".'
+                : 'סוכן ה-AI כבוי — בדקו בהגדרות "סוכן AI".';
+            $this->note($ticket, "🤖 בדיקת סוכן AI לאתר {$site->domain}: לא הופקה תוצאה. {$reason}");
 
             return;
         }

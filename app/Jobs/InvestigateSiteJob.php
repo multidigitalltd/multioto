@@ -6,6 +6,7 @@ use App\Models\Site;
 use App\Models\SystemLog;
 use App\Services\Agent\SiteAgent;
 use App\Services\Agent\SiteMemoryStore;
+use App\Services\Ai\ClaudeClient;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Str;
@@ -37,7 +38,7 @@ class InvestigateSiteJob implements ShouldQueue
         $summary = $agent->investigate($site, $this->goal);
 
         if (blank($summary)) {
-            SystemLog::record('warning', 'ai', "אבחון AI לאתר {$site->domain} לא הניב תוצאה", ['site_id' => $site->id]);
+            SystemLog::record('warning', 'ai', "אבחון AI לאתר {$site->domain} לא הניב תוצאה: ".$this->blankReason($site), ['site_id' => $site->id]);
 
             return;
         }
@@ -49,5 +50,15 @@ class InvestigateSiteJob implements ShouldQueue
             'site_id' => $site->id,
             'summary' => Str::limit($summary, 1000),
         ]);
+    }
+
+    /** Why the investigation produced nothing — actionable, not a dead end. */
+    private function blankReason(Site $site): string
+    {
+        return match (true) {
+            ! app(ClaudeClient::class)->isEnabled() => 'סוכן ה-AI כבוי או ללא מפתח — בדקו בהגדרות "סוכן AI".',
+            ! $site->mcp_enabled || blank($site->mcp_endpoint) => 'האתר אינו מחובר (חיבור MCP כבוי או ללא כתובת).',
+            default => 'ייתכן שהאתר אינו נגיש או שבקשת ה-AI נכשלה — הריצו "בדוק חיבור AI" ובדקו את ספק ה-AI.',
+        };
     }
 }
