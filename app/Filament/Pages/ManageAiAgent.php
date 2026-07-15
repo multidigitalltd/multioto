@@ -5,6 +5,7 @@ namespace App\Filament\Pages;
 use App\Filament\Concerns\AdminOnly;
 use App\Filament\Concerns\PersistsSettings;
 use App\Models\Setting;
+use App\Services\Ai\AiCostReporter;
 use App\Services\Ai\ClaudeClient;
 use App\Services\Ai\StyleLearner;
 use Filament\Forms\Components\Section;
@@ -75,6 +76,7 @@ class ManageAiAgent extends Page implements HasForms
             'agent' => [
                 'actions_enabled' => (bool) config('agent.actions_enabled'),
                 'auto_investigate_tickets' => (bool) config('agent.auto_investigate_tickets'),
+                'notify_owner_whatsapp' => (bool) config('agent.notify_owner_whatsapp'),
             ],
         ]);
     }
@@ -114,6 +116,14 @@ class ManageAiAgent extends Page implements HasForms
                             ->autocomplete('new-password')
                             ->helperText('נשמר מוצפן. השאירו ריק כדי לא לשנות.'),
                     ])->columns(2),
+
+                Section::make('התראות בוואטסאפ')
+                    ->description('שליטה על מה שהסוכן שולח לקבוצת הוואטסאפ. גם כשכבוי — כל הצעה עדיין ממתינה במסך "אישורי אוטומציה".')
+                    ->schema([
+                        Toggle::make('agent.notify_owner_whatsapp')
+                            ->label('שלח הצעות ותשובות AI לאישור בוואטסאפ')
+                            ->helperText('כשכבוי — הצעות הסוכן (תשובות ללקוח, פעולות באתרים) לא נשלחות לקבוצה; מאשרים אותן מהפאנל בלבד. פניות לקוח וניהול דרך הקבוצה אינם מושפעים.'),
+                    ]),
 
                 Section::make('פעולות באתרים (Kill-Switch)')
                     ->description('כשכבוי — הסוכן לא מבצע שום פעולה על אתרים, גם אם אושרה. מפעילים רק אחרי בדיקת אבטחה. כל פעולה תמיד עוברת אישור מנהל בנוסף.')
@@ -171,6 +181,7 @@ class ManageAiAgent extends Page implements HasForms
         Setting::put('ai.provider', (string) (data_get($this->data, 'ai.provider') ?: 'anthropic'));
         Setting::put('agent.actions_enabled', data_get($this->data, 'agent.actions_enabled') ? '1' : '0');
         Setting::put('agent.auto_investigate_tickets', data_get($this->data, 'agent.auto_investigate_tickets') ? '1' : '0');
+        Setting::put('agent.notify_owner_whatsapp', data_get($this->data, 'agent.notify_owner_whatsapp') ? '1' : '0');
 
         // model/base_url/persona/rules: persist when filled; clearing reverts to
         // the env/default value instead of storing an empty override.
@@ -231,6 +242,24 @@ class ManageAiAgent extends Page implements HasForms
             ->body('הסיכום יתווסף מעכשיו לכל טיוטה. אפשר לערוך אותו ידנית ולשמור.')
             ->success()
             ->send();
+    }
+
+    /**
+     * The cached (24h) AI-spend snapshot for the dashboard section.
+     *
+     * @return array<string, mixed>
+     */
+    public function getCostSnapshotProperty(): array
+    {
+        return app(AiCostReporter::class)->snapshot();
+    }
+
+    /** Recompute the spend estimate now (busts the 24h cache). */
+    public function refreshCost(): void
+    {
+        app(AiCostReporter::class)->forget();
+
+        Notification::make()->title('נתוני העלות עודכנו')->success()->send();
     }
 
     /** Test the live connection to the AI provider and show the outcome. */

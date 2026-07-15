@@ -62,6 +62,20 @@ class ApprovalGateTest extends TestCase
             && str_contains($request->data()['text'], "אשר {$action->id}"));
     }
 
+    public function test_the_whatsapp_toggle_suppresses_the_owner_notification(): void
+    {
+        config(['agent.notify_owner_whatsapp' => false]);
+        Http::fake(['*/api/sendText' => Http::response(['id' => 'w'])]);
+        $ticket = $this->ticketWithCustomer();
+
+        // The proposal is still recorded (waits in the panel) — only the WhatsApp
+        // push is silenced.
+        $action = app(ApprovalGate::class)->propose('ticket_reply', 'תשובה מוצעת', ['reply' => 'שלום'], $ticket->customer_id, $ticket->id);
+
+        $this->assertSame(ActionStatus::Pending, $action->status);
+        Http::assertNothingSent();
+    }
+
     public function test_owner_approval_by_whatsapp_executes_the_reply_and_skips_ticket_intake(): void
     {
         Queue::fake([SendTicketReplyJob::class]);

@@ -68,6 +68,8 @@ class SettingsServiceProvider extends ServiceProvider
         'agent.actions_enabled' => 'agent.actions_enabled',
         // Auto-run the site agent when a new ticket opens for a connected customer.
         'agent.auto_investigate_tickets' => 'agent.auto_investigate_tickets',
+        // Push AI/automation proposals to the owner's WhatsApp group for approval.
+        'agent.notify_owner_whatsapp' => 'agent.notify_owner_whatsapp',
         // Public signup form — payment-method setup instructions (editable text).
         'signup.instructions.standing_order' => 'billing.signup.instructions.standing_order',
         'signup.instructions.bank_transfer' => 'billing.signup.instructions.bank_transfer',
