@@ -112,6 +112,101 @@ class ClaudeClient
     }
 
     /**
+     * Run a tool-use conversation with Claude (Anthropic only). The model may
+     * call the supplied tools; $handler executes each call and returns its
+     * result. Loops until the model stops requesting tools or a turn cap is
+     * hit, and returns the model's final text — or null on failure/refusal.
+     *
+     * Tool inputs reach $handler already decoded. The handler returns
+     * ['content' => string, 'is_error' => bool]. Every mutating side-effect is
+     * the handler's responsibility — this method only relays the conversation.
+     *
+     * @param  list<array<string, mixed>>  $tools  Anthropic tool definitions.
+     * @param  callable(string, array<string, mixed>): array{content: string, is_error?: bool}  $handler
+     */
+    public function converse(string $system, string $prompt, array $tools, callable $handler, int $maxTurns = 6): ?string
+    {
+        // Tool use is implemented for the Anthropic Messages API only; other
+        // providers fall back to no agentic capability.
+        if (! $this->isEnabled() || config('billing.ai.provider', 'anthropic') !== 'anthropic') {
+            return null;
+        }
+
+        $config = config('billing.ai');
+        $messages = [['role' => 'user', 'content' => $prompt]];
+
+        try {
+            for ($turn = 0; $turn < $maxTurns; $turn++) {
+                $response = Http::baseUrl($config['base_url'])
+                    ->withHeaders(['x-api-key' => $config['api_key'], 'anthropic-version' => '2023-06-01'])
+                    ->timeout(90)
+                    ->post('/v1/messages', [
+                        'model' => $config['model'],
+                        'max_tokens' => 2048,
+                        'system' => $system,
+                        'thinking' => ['type' => 'adaptive'],
+                        'output_config' => ['effort' => $config['effort']],
+                        'tools' => $tools,
+                        'messages' => $messages,
+                    ]);
+
+                if ($response->failed()) {
+                    $this->logFailure('anthropic', $response->status(), $response->body());
+
+                    return null;
+                }
+
+                if ($response->json('stop_reason') === 'refusal') {
+                    return null;
+                }
+
+                $content = (array) $response->json('content', []);
+                // Echo the assistant turn back unchanged (thinking blocks included).
+                $messages[] = ['role' => 'assistant', 'content' => $content];
+
+                $toolUses = array_values(array_filter($content, fn ($b): bool => ($b['type'] ?? null) === 'tool_use'));
+
+                // No tool calls → the model is done; return its text.
+                if ($toolUses === []) {
+                    return $this->joinText($content);
+                }
+
+                $results = [];
+                foreach ($toolUses as $call) {
+                    $out = $handler((string) ($call['name'] ?? ''), (array) ($call['input'] ?? []));
+                    $results[] = [
+                        'type' => 'tool_result',
+                        'tool_use_id' => $call['id'] ?? '',
+                        'content' => (string) ($out['content'] ?? ''),
+                        'is_error' => (bool) ($out['is_error'] ?? false),
+                    ];
+                }
+
+                $messages[] = ['role' => 'user', 'content' => $results];
+            }
+        } catch (\Throwable $e) {
+            $this->lastError = $e->getMessage();
+            Log::warning('AI converse threw', ['error' => $e->getMessage()]);
+
+            return null;
+        }
+
+        // Turn cap reached without a final answer.
+        return null;
+    }
+
+    /** Concatenate the text blocks of an Anthropic content array. */
+    private function joinText(array $content): ?string
+    {
+        $text = collect($content)
+            ->filter(fn ($b): bool => is_array($b) && ($b['type'] ?? null) === 'text')
+            ->pluck('text')
+            ->implode("\n");
+
+        return $text !== '' ? $text : null;
+    }
+
+    /**
      * Record an HTTP-level provider failure — to the log AND the in-panel system
      * log — and keep a concise reason for the UI (connection test / diagnostics).
      */
