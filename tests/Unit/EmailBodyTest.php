@@ -110,6 +110,22 @@ class EmailBodyTest extends TestCase
         }
     }
 
+    public function test_safe_html_strips_the_document_wrapper_of_a_full_html_email(): void
+    {
+        // Some mail clients send a full document, not a fragment. A nested
+        // <html>/<body> rendered inside the panel re-parents the DOM and
+        // duplicates the Alpine/Livewire runtime — the wrapper must be dropped
+        // while its content survives.
+        $html = "<html>\n<body lang=\"EN-US\" link=\"#467886\">\n<div><p dir=\"RTL\">שלום</p></div>\n</body>\n</html>";
+
+        $out = (string) EmailBody::toSafeHtml($html);
+
+        $this->assertStringContainsString('שלום', $out);
+        $this->assertStringNotContainsString('<html', $out);
+        $this->assertStringNotContainsString('<body', $out);
+        $this->assertStringNotContainsString('</body>', $out);
+    }
+
     public function test_safe_html_falls_back_to_plain_body_when_too_large_to_render(): void
     {
         // Over the sanitizer input cap → null, so the caller shows the full

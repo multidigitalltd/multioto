@@ -79,6 +79,11 @@ class EmailBody
 
         $config = (new HtmlSanitizerConfig)
             ->allowSafeElements()
+            // Never keep document-structure tags — a nested <html>/<body> would
+            // corrupt the panel's DOM (see the wrapper strip below).
+            ->blockElement('html')
+            ->blockElement('head')
+            ->blockElement('body')
             // Drop everything that can fetch a remote resource (tracking pixels,
             // attacker URLs). Attachments are rendered separately from metadata.
             ->blockElement('img')
@@ -93,6 +98,15 @@ class EmailBody
             ->forceAttribute('a', 'target', '_blank');
 
         $clean = trim((new HtmlSanitizer($config))->sanitize($html));
+
+        // Some sanitizer versions keep the <html>/<head>/<body> document wrapper
+        // when the email is a full document (not a fragment). Rendered inside our
+        // Livewire component, a nested <body>/<html> makes the browser re-parent
+        // the whole page — duplicating the Alpine/Livewire runtime ("multiple
+        // instances running") and breaking the panel. These tags are structure
+        // only; drop them while keeping their content. Belt-and-suspenders: the
+        // config also blocks them, but the regex guarantees it on every version.
+        $clean = trim((string) preg_replace('#</?(?:html|head|body)\b[^>]*>#i', '', $clean));
 
         // strip_tags(): a document that sanitizes down to whitespace/text-only
         // adds nothing over the plain-text body, so skip it.
