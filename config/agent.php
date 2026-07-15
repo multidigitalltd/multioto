@@ -26,6 +26,12 @@ return [
     // so it can be turned off independently.
     'auto_investigate' => (bool) env('AGENT_AUTO_INVESTIGATE', true),
 
+    // When a NEW support ticket opens for a customer with a connected site, run
+    // the site agent automatically: it reads the site (read-only) and posts a
+    // system note on the ticket with what to do — any fix waits for approval.
+    // Off by default (it costs model tokens per ticket); turn on in the panel.
+    'auto_investigate_tickets' => (bool) env('AGENT_AUTO_INVESTIGATE_TICKETS', false),
+
     'plugin' => [
         // The current version of the companion plugin we ship. A site reporting
         // an older version is told to update itself from the download channel —

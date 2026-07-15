@@ -244,12 +244,27 @@ return [
         // are the guardrails (what's allowed/forbidden). Non-negotiable safety
         // rules are always appended in code on top of these.
         'persona' => env('AI_PERSONA', 'אתה נציג תמיכה של Multi Digital — חברת אחסון ותחזוקת אתרים. דבר בעברית, בנימוס, בקצרה ולעניין.'),
+
+        // Guardrails for MENA to CUSTOMERS (ticket replies / drafts). Editable in
+        // the panel. Non-negotiable safety rules are appended in code on top.
         'rules' => env('AI_RULES', implode("\n", [
             '- בסס תשובות אך ורק על נתוני הלקוח שסופקו; אל תמציא פרטים.',
             '- אל תבטיח החזרים, זיכויים או מועדים שלא אושרו.',
             '- אל תחשוף פרטים פנימיים, מפתחות, או נתונים של לקוחות אחרים.',
             '- בנושאים רגישים (ביטול מנוי, סכסוך תשלום) — המלץ להעביר לנציג אנושי.',
             '- צרף קישור לעדכון כרטיס רק אם הלקוח ביקש לעדכן אמצעי תשלום.',
+        ])),
+
+        // Guardrails for OPERATING ON SITES (the MCP site agent). Separate from
+        // the customer-reply rules above — a different job with different limits.
+        // Hard enforcement (risk tiers, staging-only, approval gate, kill-switch)
+        // still applies in code regardless of what is written here.
+        'site_rules' => env('AI_SITE_RULES', implode("\n", [
+            '- חקור תמיד קודם בכלי קריאה; אל תשנה דבר לפני שהבנת את שורש הבעיה.',
+            '- הצע את הפעולה הבטוחה, המינימלית וההפיכה ביותר שפותרת את הבעיה.',
+            '- אל תיגע בהגדרות אבטחה, במשתמשים או במפתחות ללא הצדקה מפורשת.',
+            '- אל תבצע שינויים גורפים (החלפת מחרוזות במסד, מחיקות המוניות) בלי אישור מפורש.',
+            '- אם אינך בטוח — אל תציע פעולה; כתוב מה בדקת והמלץ על בדיקה ידנית.',
         ])),
 
         // Style guide distilled from past agent replies (StyleLearner). Refreshed

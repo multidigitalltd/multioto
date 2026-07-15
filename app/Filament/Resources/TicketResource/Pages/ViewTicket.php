@@ -12,6 +12,7 @@ use App\Enums\TicketPriority;
 use App\Enums\TicketStatus;
 use App\Filament\Resources\TicketResource;
 use App\Jobs\DraftReplyJob;
+use App\Jobs\InvestigateTicketJob;
 use App\Jobs\SendTicketReplyJob;
 use App\Models\CannedResponse;
 use App\Models\PendingAction;
@@ -296,6 +297,24 @@ class ViewTicket extends ViewRecord
                             ? 'הטיוטה נוספה כהערה פנימית בשיחה וממתינה לאישורך.'
                             : 'ייתכן שההודעה האחרונה אינה מהלקוח, או שהחיבור לספק ה-AI נכשל — בדקו ב"סוכן AI ← בדיקת חיבור".')
                         ->{$produced ? 'success' : 'warning'}()
+                        ->send();
+                }),
+            // Send the customer's connected site to the AI operator: it reads the
+            // site read-only and adds a system note here with what to do; any fix
+            // is filed for approval (nothing runs без אישור). Shown only when the
+            // AI is on and the customer has a connected site.
+            Actions\Action::make('investigateSite')
+                ->label('בדיקת סוכן AI לאתר')
+                ->icon('heroicon-o-globe-alt')
+                ->color('info')
+                ->visible(fn (): bool => (bool) config('billing.ai.enabled')
+                    && (bool) $this->record->customer?->sites()->where('mcp_enabled', true)->exists())
+                ->action(function (): void {
+                    InvestigateTicketJob::dispatch($this->record->id);
+                    Notification::make()
+                        ->title('הסוכן בודק את האתר')
+                        ->body('הבדיקה רצה ברקע; הערת מערכת עם ההמלצה תופיע בשיחה, וכל תיקון יומתן לאישור.')
+                        ->success()
                         ->send();
                 }),
             Actions\Action::make('resolve')

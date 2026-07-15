@@ -69,10 +69,12 @@ class ManageAiAgent extends Page implements HasForms
                 'base_url' => config('billing.ai.base_url'),
                 'persona' => config('billing.ai.persona'),
                 'rules' => config('billing.ai.rules'),
+                'site_rules' => config('billing.ai.site_rules'),
                 'style_summary' => config('billing.ai.style_summary'),
             ],
             'agent' => [
                 'actions_enabled' => (bool) config('agent.actions_enabled'),
+                'auto_investigate_tickets' => (bool) config('agent.auto_investigate_tickets'),
             ],
         ]);
     }
@@ -119,19 +121,32 @@ class ManageAiAgent extends Page implements HasForms
                         Toggle::make('agent.actions_enabled')
                             ->label('אפשר ביצוע פעולות על אתרים')
                             ->helperText('מתג-חירום ראשי. כיבוי חוסם מיידית כל ביצוע על כל האתרים.'),
+                        Toggle::make('agent.auto_investigate_tickets')
+                            ->label('בדיקת אתר אוטומטית בפניות חדשות')
+                            ->helperText('בפנייה חדשה של לקוח עם אתר מחובר — הסוכן יבדוק את האתר לבד ויוסיף הערת מערכת עם המלצה. כל תיקון עדיין ממתין לאישור.'),
                     ]),
 
-                Section::make('הוראות הסוכן')
-                    ->description('כאן קובעים מה מותר ומה אסור. השאירו ריק כדי לחזור לברירת המחדל.')
+                Section::make('הוראות למענה לפניות (תשובות ללקוח)')
+                    ->description('כאן קובעים איך הסוכן עונה ללקוחות. השאירו ריק כדי לחזור לברירת המחדל.')
                     ->schema([
                         Textarea::make('ai.persona')
                             ->label('אישיות ותפקיד')
                             ->rows(3)
                             ->columnSpanFull(),
                         Textarea::make('ai.rules')
-                            ->label('כללים וגבולות גזרה')
-                            ->helperText('שורה לכל כלל. מעל אלה תמיד מתווסף כלל בטיחות: הכל נשמר כטיוטה לאישור אנושי.')
-                            ->rows(7)
+                            ->label('כללים למענה לפניות')
+                            ->helperText('שורה לכל כלל. חלים על טיוטות התשובה ללקוחות. מעל אלה תמיד מתווסף כלל בטיחות: הכל נשמר כטיוטה לאישור אנושי.')
+                            ->rows(6)
+                            ->columnSpanFull(),
+                    ]),
+
+                Section::make('הוראות לטיפול באתרים (פעולות MCP)')
+                    ->description('כללים נפרדים לעבודת הסוכן על אתרים — אבחון ותיקון. מעבר לכללים כאן, האכיפה הקשיחה (דירוג סיכון, סטייג׳ינג בלבד לכלים הרסניים, אישור מנהל, kill-switch) חלה תמיד בקוד.')
+                    ->schema([
+                        Textarea::make('ai.site_rules')
+                            ->label('כללים לטיפול באתרים')
+                            ->helperText('שורה לכל כלל. חלים על אבחון ופעולות באתרים דרך MCP. השאירו ריק כדי לחזור לברירת המחדל.')
+                            ->rows(6)
                             ->columnSpanFull(),
                     ]),
 
@@ -155,10 +170,11 @@ class ManageAiAgent extends Page implements HasForms
         Setting::put('ai.enabled', data_get($this->data, 'ai.enabled') ? '1' : '0');
         Setting::put('ai.provider', (string) (data_get($this->data, 'ai.provider') ?: 'anthropic'));
         Setting::put('agent.actions_enabled', data_get($this->data, 'agent.actions_enabled') ? '1' : '0');
+        Setting::put('agent.auto_investigate_tickets', data_get($this->data, 'agent.auto_investigate_tickets') ? '1' : '0');
 
         // model/base_url/persona/rules: persist when filled; clearing reverts to
         // the env/default value instead of storing an empty override.
-        foreach (['ai.model', 'ai.base_url', 'ai.persona', 'ai.rules', 'ai.style_summary'] as $key) {
+        foreach (['ai.model', 'ai.base_url', 'ai.persona', 'ai.rules', 'ai.site_rules', 'ai.style_summary'] as $key) {
             $value = data_get($this->data, $key);
             if (filled($value)) {
                 Setting::put($key, (string) $value);

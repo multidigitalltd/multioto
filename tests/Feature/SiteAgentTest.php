@@ -152,6 +152,32 @@ class SiteAgentTest extends TestCase
             && ($r->data()['method'] ?? '') === 'tools/call');
     }
 
+    public function test_site_operations_use_the_separate_site_rules(): void
+    {
+        config([
+            'billing.ai.rules' => 'TICKET_ONLY_RULE',
+            'billing.ai.site_rules' => 'SITE_ONLY_RULE',
+        ]);
+        $site = $this->connectedSite();
+        $this->fakeClaude([
+            ['stop_reason' => 'end_turn', 'content' => [['type' => 'text', 'text' => 'סיימתי.']]],
+        ]);
+
+        app(SiteAgent::class)->investigate($site, 'בדוק');
+
+        // The site agent's system prompt carries the site rules — never the
+        // customer-reply rules.
+        Http::assertSent(function (Request $r): bool {
+            if (! str_contains($r->url(), 'api.anthropic.test')) {
+                return false;
+            }
+            $system = $r->data()['system'] ?? '';
+            $system = is_array($system) ? json_encode($system, JSON_UNESCAPED_UNICODE) : (string) $system;
+
+            return str_contains($system, 'SITE_ONLY_RULE') && ! str_contains($system, 'TICKET_ONLY_RULE');
+        });
+    }
+
     public function test_investigate_returns_null_when_the_site_is_not_connected(): void
     {
         $site = Site::factory()->create(['mcp_enabled' => false]);
