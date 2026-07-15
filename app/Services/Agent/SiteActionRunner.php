@@ -79,7 +79,7 @@ class SiteActionRunner
         // would drown the change history in noise. The optional `revert` recipe
         // (an inverse tool + arguments) is stored so the change can be rolled
         // back live later.
-        if ($this->catalog->tier($tool) >= 1) {
+        if ($this->catalog->resolveTier($site, $tool) >= 1) {
             $revert = (array) data_get($action->payload, 'revert', []);
 
             $this->journal->record(

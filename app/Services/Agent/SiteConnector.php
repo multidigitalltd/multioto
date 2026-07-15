@@ -34,6 +34,11 @@ class SiteConnector
                 'tools' => collect($tools)->map(fn (array $tool): array => [
                     'name' => (string) ($tool['name'] ?? ''),
                     'description' => Str::limit((string) ($tool['description'] ?? ''), 500),
+                    // The MCP behaviour hints — the machine-verifiable signal we
+                    // trust for read-only/destructive classification (a tool's
+                    // NAME is never trusted as a security control).
+                    'read_only' => (bool) data_get($tool, 'annotations.readOnlyHint', false),
+                    'destructive' => (bool) data_get($tool, 'annotations.destructiveHint', false),
                 ])->values()->all(),
             ],
             'mcp_last_seen_at' => now(),

@@ -299,9 +299,9 @@ class SiteResource extends Resource
                         Forms\Components\Select::make('tool')
                             ->label('כלי')
                             ->options(collect((array) data_get($record->mcp_capabilities, 'tools', []))
-                                ->mapWithKeys(function (array $tool): array {
+                                ->mapWithKeys(function (array $tool) use ($record): array {
                                     $name = (string) ($tool['name'] ?? '');
-                                    $tier = app(SiteToolCatalog::class)->tierLabel($name);
+                                    $tier = app(SiteToolCatalog::class)->resolveTierLabel($record, $name);
 
                                     return [$name => "{$name} ({$tier})"];
                                 })->all())
@@ -332,7 +332,7 @@ class SiteResource extends Resource
 
                         $gate->propose(
                             type: 'site_action',
-                            summary: "🤖 פעולת AI באתר {$record->domain}\nכלי: {$tool} ({$catalog->tierLabel($tool)})\nפרמטרים: {$argsText}",
+                            summary: "🤖 פעולת AI באתר {$record->domain}\nכלי: {$tool} ({$catalog->resolveTierLabel($record, $tool)})\nפרמטרים: {$argsText}",
                             payload: ['site_id' => $record->id, 'tool' => $tool, 'arguments' => $arguments],
                             customerId: $record->customer_id,
                             proposedBy: 'team',

@@ -93,6 +93,21 @@ class SiteActionTest extends TestCase
         $this->assertTrue($catalog->allowedOn($production, 'wp_plugin_update'));
     }
 
+    public function test_a_destructive_hint_confines_a_benign_named_tool_to_staging(): void
+    {
+        $catalog = app(SiteToolCatalog::class);
+
+        // "db_query" has a benign name (name-tier 2) but the site declares it
+        // destructive — it must be treated as tier 3 (staging-only).
+        $caps = ['tools' => [['name' => 'db_query', 'read_only' => false, 'destructive' => true]]];
+        $production = Site::factory()->create(['environment' => 'production', 'mcp_capabilities' => $caps]);
+        $staging = Site::factory()->create(['environment' => 'staging', 'mcp_capabilities' => $caps]);
+
+        $this->assertSame(3, $catalog->resolveTier($production, 'db_query'));
+        $this->assertFalse($catalog->allowedOn($production, 'db_query'));
+        $this->assertTrue($catalog->allowedOn($staging, 'db_query'));
+    }
+
     // ---- Approved execution --------------------------------------------------
 
     public function test_an_approved_action_runs_the_tool_and_journals_the_change(): void
