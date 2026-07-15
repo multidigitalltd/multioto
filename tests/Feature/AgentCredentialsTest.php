@@ -34,6 +34,38 @@ class AgentCredentialsTest extends TestCase
         $this->assertFalse((bool) $fresh->mcp_enabled);
     }
 
+    public function test_endpoint_is_built_from_the_host_even_when_the_domain_has_a_scheme(): void
+    {
+        // The domain column accepts a full URL; the endpoint must not double up
+        // the scheme (https://https://…).
+        $withScheme = Site::factory()->make(['domain' => 'https://multidigital.co.il']);
+        $this->assertSame('https://multidigital.co.il/wp-json/md-agent/v1/mcp', $withScheme->conventionalMcpEndpoint());
+
+        $withPath = Site::factory()->make(['domain' => 'https://multidigital.co.il/']);
+        $this->assertSame('https://multidigital.co.il/wp-json/md-agent/v1/mcp', $withPath->conventionalMcpEndpoint());
+
+        $bare = Site::factory()->make(['domain' => 'multidigital.co.il']);
+        $this->assertSame('https://multidigital.co.il/wp-json/md-agent/v1/mcp', $bare->conventionalMcpEndpoint());
+
+        // A WordPress install in a subdirectory keeps its path — its REST root
+        // lives under that path.
+        $subdir = Site::factory()->make(['domain' => 'https://example.com/blog']);
+        $this->assertSame('https://example.com/blog/wp-json/md-agent/v1/mcp', $subdir->conventionalMcpEndpoint());
+    }
+
+    public function test_ensure_agent_credentials_heals_a_doubled_scheme_endpoint(): void
+    {
+        $site = Site::factory()->create([
+            'domain' => 'https://multidigital.co.il',
+            'mcp_endpoint' => 'https://https://multidigital.co.il/wp-json/md-agent/v1/mcp',
+        ]);
+
+        $codes = $site->ensureAgentCredentials();
+
+        $this->assertSame('https://multidigital.co.il/wp-json/md-agent/v1/mcp', $codes['mcp_endpoint']);
+        $this->assertSame('https://multidigital.co.il/wp-json/md-agent/v1/mcp', $site->fresh()->mcp_endpoint);
+    }
+
     public function test_ensure_agent_credentials_is_idempotent(): void
     {
         $site = Site::factory()->create(['mcp_endpoint' => null, 'mcp_secret' => null]);
