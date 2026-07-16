@@ -38,9 +38,17 @@ class SiteDiagnostics
         $healthy = $probe['ok'] && ($ssl['days_left'] === null || $ssl['days_left'] > 0);
 
         $lines = [];
-        $lines[] = $probe['ok']
-            ? "האתר עונה (HTTP {$probe['status']}, {$probe['ms']}ms)."
-            : "האתר לא עונה כראוי: {$probe['error']}.";
+        if ($probe['ok']) {
+            $lines[] = "האתר עונה תקין (HTTP {$probe['status']}, {$probe['ms']}ms).";
+        } elseif ($probe['status'] === null) {
+            $lines[] = "האתר לא עונה: {$probe['error']}.";
+        } elseif ($probe['status'] < 500) {
+            // 4xx — the server answered but blocked/failed the request (403 חסימה,
+            // 401 דורש הזדהות, 404 לא נמצא). זה לא אתר תקין.
+            $lines[] = "האתר מחזיר שגיאה (HTTP {$probe['status']}) — האתר לא מוגש כראוי (חסימת הרשאות/אבטחה או דף חסר). דורש בדיקה.";
+        } else {
+            $lines[] = "האתר מחזיר שגיאת שרת (HTTP {$probe['status']}).";
+        }
 
         if ($ssl['days_left'] !== null) {
             $lines[] = $ssl['days_left'] > 0
@@ -78,11 +86,16 @@ class SiteDiagnostics
             $ms = (int) ((microtime(true) - $start) * 1000);
             $status = $response->status();
 
+            // Only 2xx/3xx counts as a properly-served site. A 4xx (403 forbidden,
+            // 401, 404) means the server answered but did NOT serve the site — that
+            // is not healthy, even though it isn't a 5xx crash.
+            $ok = $status >= 200 && $status < 400;
+
             return [
-                'ok' => $status < 500,
+                'ok' => $ok,
                 'status' => $status,
                 'ms' => $ms,
-                'error' => $status < 500 ? null : 'HTTP '.$status,
+                'error' => $ok ? null : 'HTTP '.$status,
             ];
         } catch (\Throwable $e) {
             return [
@@ -170,6 +183,12 @@ class SiteDiagnostics
         }
 
         // Other 5xx → try a cache clear first (least disruptive).
-        return 'clear_cache';
+        if ($probe['status'] >= 500) {
+            return 'clear_cache';
+        }
+
+        // 4xx (403/401/404) — no safe reversible auto-fix; it's permissions,
+        // security or a missing page, so flag it for a human rather than guess.
+        return null;
     }
 }
