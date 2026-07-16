@@ -78,6 +78,35 @@ class AgentSystemActionsTest extends TestCase
         $this->assertSame(1, Task::where('title', 'להתקשר ללקוח')->count());
     }
 
+    // ---- Inline approval from the console ---------------------------------
+
+    public function test_a_proposal_can_be_approved_inline_from_the_console(): void
+    {
+        config(['agent.system_actions_enabled' => true]);
+        Queue::fake();
+        $this->actingAs(User::factory()->create());
+
+        $action = $this->systemAction(['operation' => 'open_task', 'title' => 'משימה מהמסוף']);
+
+        Livewire::test(AgentConsole::class)
+            ->call('approveAction', $action->id)
+            ->assertNotified();
+
+        $this->assertSame(ActionStatus::Executed, $action->fresh()->status);
+        $this->assertSame(1, Task::where('title', 'משימה מהמסוף')->count());
+    }
+
+    public function test_a_proposal_can_be_rejected_inline_from_the_console(): void
+    {
+        $this->actingAs(User::factory()->create());
+        $action = $this->systemAction(['operation' => 'open_task', 'title' => 'לא רלוונטי']);
+
+        Livewire::test(AgentConsole::class)->call('rejectAction', $action->id);
+
+        $this->assertSame(ActionStatus::Rejected, $action->fresh()->status);
+        $this->assertSame(0, Task::count());
+    }
+
     // ---- ConsoleAgent (clarify-and-continue) ------------------------------
 
     public function test_a_missing_amount_is_asked_for_and_the_next_reply_continues(): void
