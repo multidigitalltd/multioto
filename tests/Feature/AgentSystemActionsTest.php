@@ -4,12 +4,15 @@ namespace Tests\Feature;
 
 use App\Enums\ActionStatus;
 use App\Enums\AgentCommandOutcome;
+use App\Enums\TaskStatus;
+use App\Enums\TicketStatus;
 use App\Filament\Pages\AgentConsole;
 use App\Jobs\SendPaymentLinkJob;
 use App\Models\AgentCommand;
 use App\Models\Customer;
 use App\Models\PendingAction;
 use App\Models\Task;
+use App\Models\Ticket;
 use App\Models\User;
 use App\Services\Ai\ClaudeClient;
 use App\Services\Automation\ApprovalGate;
@@ -76,6 +79,72 @@ class AgentSystemActionsTest extends TestCase
 
         $this->assertSame(ActionStatus::Executed, $action->fresh()->status);
         $this->assertSame(1, Task::where('title', 'להתקשר ללקוח')->count());
+    }
+
+    public function test_close_ticket_system_action_closes_the_ticket_when_enabled(): void
+    {
+        config(['agent.system_actions_enabled' => true]);
+        Queue::fake();
+        $customer = Customer::factory()->create();
+        $ticket = Ticket::create([
+            'customer_id' => $customer->id,
+            'channel' => 'whatsapp',
+            'subject' => 'בעיה',
+            'status' => TicketStatus::Open,
+        ]);
+
+        $action = $this->systemAction(['operation' => 'close_ticket', 'ticket_id' => $ticket->id]);
+
+        app(ApprovalGate::class)->approve($action);
+
+        $this->assertSame(ActionStatus::Executed, $action->fresh()->status);
+        $this->assertSame(TicketStatus::Closed, $ticket->fresh()->status);
+    }
+
+    public function test_set_ticket_status_system_action_updates_the_ticket(): void
+    {
+        config(['agent.system_actions_enabled' => true]);
+        Queue::fake();
+        $ticket = Ticket::create(['channel' => 'whatsapp', 'subject' => 'בעיה', 'status' => TicketStatus::Open]);
+
+        $action = $this->systemAction(['operation' => 'set_ticket_status', 'ticket_id' => $ticket->id, 'status' => 'pending']);
+        app(ApprovalGate::class)->approve($action);
+
+        $this->assertSame(ActionStatus::Executed, $action->fresh()->status);
+        $this->assertSame(TicketStatus::Pending, $ticket->fresh()->status);
+    }
+
+    public function test_update_customer_system_action_only_writes_whitelisted_fields(): void
+    {
+        config(['agent.system_actions_enabled' => true]);
+        Queue::fake();
+        $customer = Customer::factory()->create(['name' => 'ישן', 'phone' => '050']);
+
+        // A stray non-whitelisted key must be ignored even if it reaches the payload.
+        $action = $this->systemAction([
+            'operation' => 'update_customer', 'customer_id' => $customer->id,
+            'changes' => ['name' => 'חדש', 'phone' => '051', 'default_token_id' => 999],
+        ]);
+        app(ApprovalGate::class)->approve($action);
+
+        $fresh = $customer->fresh();
+        $this->assertSame(ActionStatus::Executed, $action->fresh()->status);
+        $this->assertSame('חדש', $fresh->name);
+        $this->assertSame('051', $fresh->phone);
+        $this->assertNull($fresh->default_token_id);
+    }
+
+    public function test_complete_task_system_action_marks_the_task_done(): void
+    {
+        config(['agent.system_actions_enabled' => true]);
+        Queue::fake();
+        $task = Task::create(['title' => 'לבדוק', 'status' => TaskStatus::Open]);
+
+        $action = $this->systemAction(['operation' => 'complete_task', 'task_id' => $task->id]);
+        app(ApprovalGate::class)->approve($action);
+
+        $this->assertSame(TaskStatus::Done, $task->fresh()->status);
+        $this->assertNotNull($task->fresh()->completed_at);
     }
 
     public function test_a_double_approval_executes_the_action_only_once(): void

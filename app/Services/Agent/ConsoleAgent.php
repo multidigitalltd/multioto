@@ -2,9 +2,12 @@
 
 namespace App\Services\Agent;
 
+use App\Enums\TicketStatus;
 use App\Jobs\InvestigateSiteJob;
 use App\Models\Customer;
 use App\Models\Site;
+use App\Models\Subscription;
+use App\Models\Task;
 use App\Models\Ticket;
 use App\Services\Ai\ClaudeClient;
 use App\Services\Automation\ApprovalGate;
@@ -81,6 +84,8 @@ class ConsoleAgent
         return trim(implode("\n", array_filter([
             'אתה סוכן התפעול של Multi Digital, חברת אחסון ותחזוקת אתרים. אתה עוזר למנהל לבצע פעולות במערכת בשפה חופשית.',
             '',
+            'יש לך גישה מלאה לכל תחומי המערכת (דרך הצעה לאישור): פניות (מענה, סטטוס, עדיפות, שיוך, סגירה), לקוחות (עדכון פרטים), מנויים (מחיר/סטטוס/ביטול), אתרים (הוספה, השעיה, שחזור, בדיקה), גבייה ותשלומים (דרישת תשלום, סימון תשלום בוצע + חשבונית) ומשימות (פתיחה, סימון כבוצעה). מה שאין לו כלי ישיר — הצע כמשימה לאדם.',
+            '',
             'עקרונות עבודה:',
             '- יש לך יד חופשית לחקור ולהחליט. שלוף בעצמך כל מידע שצריך עם כלי הקריאה (find_customer, customer_overview, read_ticket, find_open_tickets, find_sites) לפני שאתה מציע פעולה — אל תמציא נתונים.',
             '- לפני שאתה מציע תשובה ללקוח בפנייה, קרא קודם את השיחה עם read_ticket ונסח תשובה שמתאימה להקשר.',
@@ -125,6 +130,22 @@ class ConsoleAgent
 
             ['name' => 'propose_reply_ticket', 'description' => 'הצע תשובה ללקוח בפנייה. ticket_id + reply_text (הטקסט המלא שיישלח).',
                 'input_schema' => $obj(['ticket_id' => $int, 'reply_text' => $str], ['ticket_id', 'reply_text'])],
+            ['name' => 'propose_close_ticket', 'description' => 'הצע סגירת פנייה (סימון כסגורה, ללא הודעה ללקוח). ticket_id.',
+                'input_schema' => $obj(['ticket_id' => $int], ['ticket_id'])],
+            ['name' => 'propose_set_ticket_status', 'description' => 'הצע שינוי סטטוס פנייה. status: open (פתוח), pending (ממתין ללקוח), on_hold (בהמתנה), resolved (טופל — מודיע ללקוח), closed (סגור). ticket_id + status.',
+                'input_schema' => $obj(['ticket_id' => $int, 'status' => $str], ['ticket_id', 'status'])],
+            ['name' => 'propose_set_ticket_priority', 'description' => 'הצע שינוי עדיפות פנייה. priority: low, normal, high, urgent. ticket_id + priority.',
+                'input_schema' => $obj(['ticket_id' => $int, 'priority' => $str], ['ticket_id', 'priority'])],
+            ['name' => 'propose_assign_ticket', 'description' => 'הצע שיוך פנייה לנציג (לפי שם). ticket_id + assignee.',
+                'input_schema' => $obj(['ticket_id' => $int, 'assignee' => $str], ['ticket_id', 'assignee'])],
+            ['name' => 'propose_update_customer', 'description' => 'הצע עדכון פרטי לקוח. customer_id + כל שדה לעדכן: name, email, phone, address, notes, vat_exempt (true/false).',
+                'input_schema' => $obj(['customer_id' => $int, 'name' => $str, 'email' => $str, 'phone' => $str, 'address' => $str, 'notes' => $str, 'vat_exempt' => ['type' => 'boolean']], ['customer_id'])],
+            ['name' => 'propose_update_subscription', 'description' => 'הצע עדכון מנוי: מחיר (price_ils בשקלים) ו/או status (active, suspended, canceled). subscription_id.',
+                'input_schema' => $obj(['subscription_id' => $int, 'price_ils' => $num, 'status' => $str], ['subscription_id'])],
+            ['name' => 'propose_create_site', 'description' => 'הצע הוספת אתר ללקוח. customer_id + domain.',
+                'input_schema' => $obj(['customer_id' => $int, 'domain' => $str], ['customer_id', 'domain'])],
+            ['name' => 'propose_complete_task', 'description' => 'הצע סימון משימה כבוצעה. task_id.',
+                'input_schema' => $obj(['task_id' => $int], ['task_id'])],
             ['name' => 'propose_payment_request', 'description' => 'הצע שליחת דרישת תשלום/לינק ללקוח. customer_id, amount_ils (בשקלים), description.',
                 'input_schema' => $obj(['customer_id' => $int, 'amount_ils' => $num, 'description' => $str], ['customer_id', 'amount_ils', 'description'])],
             ['name' => 'propose_mark_collected', 'description' => 'הצע סימון תשלום בוצע למנוי בגבייה ידנית (מפיק חשבונית). customer_id.',
@@ -156,6 +177,14 @@ class ConsoleAgent
                 'read_ticket' => $this->readTicket($input),
                 'find_sites' => $this->findSites($input),
                 'propose_reply_ticket' => $this->proposeReplyTicket($input),
+                'propose_close_ticket' => $this->proposeCloseTicket($input),
+                'propose_set_ticket_status' => $this->proposeSetTicketStatus($input),
+                'propose_set_ticket_priority' => $this->proposeSetTicketPriority($input),
+                'propose_assign_ticket' => $this->proposeAssignTicket($input),
+                'propose_update_customer' => $this->proposeUpdateCustomer($input),
+                'propose_update_subscription' => $this->proposeUpdateSubscription($input),
+                'propose_create_site' => $this->proposeCreateSite($input),
+                'propose_complete_task' => $this->proposeCompleteTask($input),
                 'propose_payment_request' => $this->proposePaymentRequest($input),
                 'propose_mark_collected' => $this->proposeMarkCollected($input),
                 'propose_suspend_site' => $this->proposeSite('suspend_site', $input, 'השעיית אתר'),
@@ -292,6 +321,220 @@ class ConsoleAgent
         );
 
         return $this->proposedOk($action->id, "תשובה לפנייה #{$ticket->id}");
+    }
+
+    private function proposeCloseTicket(array $input): array
+    {
+        $ticket = Ticket::find((int) ($input['ticket_id'] ?? 0));
+        if (! $ticket) {
+            return ['content' => 'הפנייה לא נמצאה.', 'is_error' => true];
+        }
+
+        $this->ticketId = $ticket->id;
+        $this->customerId ??= $ticket->customer_id;
+
+        $action = $this->gate->propose(
+            type: 'system_action',
+            summary: "🛠️ פעולת מערכת — סגירת פנייה #{$ticket->id} ({$ticket->subject})",
+            payload: ['operation' => 'close_ticket', 'ticket_id' => $ticket->id, 'source' => 'console_agent'],
+            customerId: $ticket->customer_id,
+            ticketId: $ticket->id,
+            proposedBy: 'console',
+        );
+
+        return $this->proposedOk($action->id, "סגירת פנייה #{$ticket->id}");
+    }
+
+    private function proposeSetTicketStatus(array $input): array
+    {
+        $ticket = Ticket::find((int) ($input['ticket_id'] ?? 0));
+        $status = strtolower(trim((string) ($input['status'] ?? '')));
+        $allowed = ['open', 'pending', 'on_hold', 'resolved', 'closed'];
+        if (! $ticket || ! in_array($status, $allowed, true)) {
+            return ['content' => 'פנייה או סטטוס חסרים/לא תקינים (open/pending/on_hold/resolved/closed).', 'is_error' => true];
+        }
+
+        $this->ticketId = $ticket->id;
+        $this->customerId ??= $ticket->customer_id;
+        $label = TicketStatus::from($status)->getLabel();
+
+        $action = $this->gate->propose(
+            type: 'system_action',
+            summary: "🛠️ פעולת מערכת — פנייה #{$ticket->id}: שינוי סטטוס ל\"{$label}\"",
+            payload: ['operation' => 'set_ticket_status', 'ticket_id' => $ticket->id, 'status' => $status, 'source' => 'console_agent'],
+            customerId: $ticket->customer_id,
+            ticketId: $ticket->id,
+            proposedBy: 'console',
+        );
+
+        return $this->proposedOk($action->id, "פנייה #{$ticket->id} → {$label}");
+    }
+
+    private function proposeSetTicketPriority(array $input): array
+    {
+        $ticket = Ticket::find((int) ($input['ticket_id'] ?? 0));
+        $priority = strtolower(trim((string) ($input['priority'] ?? '')));
+        $allowed = ['low', 'normal', 'high', 'urgent'];
+        if (! $ticket || ! in_array($priority, $allowed, true)) {
+            return ['content' => 'פנייה או עדיפות חסרים/לא תקינים (low/normal/high/urgent).', 'is_error' => true];
+        }
+
+        $this->ticketId = $ticket->id;
+        $this->customerId ??= $ticket->customer_id;
+
+        $action = $this->gate->propose(
+            type: 'system_action',
+            summary: "🛠️ פעולת מערכת — פנייה #{$ticket->id}: שינוי עדיפות ל\"{$priority}\"",
+            payload: ['operation' => 'set_ticket_priority', 'ticket_id' => $ticket->id, 'priority' => $priority, 'source' => 'console_agent'],
+            customerId: $ticket->customer_id,
+            ticketId: $ticket->id,
+            proposedBy: 'console',
+        );
+
+        return $this->proposedOk($action->id, "עדיפות פנייה #{$ticket->id} → {$priority}");
+    }
+
+    private function proposeAssignTicket(array $input): array
+    {
+        $ticket = Ticket::find((int) ($input['ticket_id'] ?? 0));
+        $assignee = trim((string) ($input['assignee'] ?? ''));
+        if (! $ticket || $assignee === '') {
+            return ['content' => 'פנייה או שם נציג חסרים.', 'is_error' => true];
+        }
+
+        $this->ticketId = $ticket->id;
+        $this->customerId ??= $ticket->customer_id;
+
+        $action = $this->gate->propose(
+            type: 'system_action',
+            summary: "🛠️ פעולת מערכת — פנייה #{$ticket->id}: שיוך ל\"{$assignee}\"",
+            payload: ['operation' => 'assign_ticket', 'ticket_id' => $ticket->id, 'assignee' => $assignee, 'source' => 'console_agent'],
+            customerId: $ticket->customer_id,
+            ticketId: $ticket->id,
+            proposedBy: 'console',
+        );
+
+        return $this->proposedOk($action->id, "שיוך פנייה #{$ticket->id} ל{$assignee}");
+    }
+
+    private function proposeUpdateCustomer(array $input): array
+    {
+        $customer = Customer::find((int) ($input['customer_id'] ?? 0));
+        if (! $customer) {
+            return ['content' => 'הלקוח לא נמצא.', 'is_error' => true];
+        }
+
+        // Only a whitelisted set of safe, human-editable fields — never tokens,
+        // signatures, Cardcom ids or status flags.
+        $changes = [];
+        foreach (['name', 'email', 'phone', 'address', 'notes'] as $field) {
+            if (array_key_exists($field, $input) && trim((string) $input[$field]) !== '') {
+                $changes[$field] = trim((string) $input[$field]);
+            }
+        }
+        if (array_key_exists('vat_exempt', $input)) {
+            $changes['vat_exempt'] = filter_var($input['vat_exempt'], FILTER_VALIDATE_BOOL);
+        }
+
+        if ($changes === []) {
+            return ['content' => 'לא צוין שום שדה לעדכון.', 'is_error' => true];
+        }
+
+        $this->customerId = $customer->id;
+        $summary = collect($changes)->map(fn ($v, $k): string => "{$k}=".(is_bool($v) ? ($v ? 'כן' : 'לא') : $v))->implode(', ');
+
+        $action = $this->gate->propose(
+            type: 'system_action',
+            summary: "🛠️ פעולת מערכת — עדכון לקוח {$customer->name}: {$summary}",
+            payload: ['operation' => 'update_customer', 'customer_id' => $customer->id, 'changes' => $changes, 'source' => 'console_agent'],
+            customerId: $customer->id,
+            proposedBy: 'console',
+        );
+
+        return $this->proposedOk($action->id, "עדכון פרטי {$customer->name}");
+    }
+
+    private function proposeUpdateSubscription(array $input): array
+    {
+        $subscription = Subscription::with('customer')->find((int) ($input['subscription_id'] ?? 0));
+        if (! $subscription) {
+            return ['content' => 'המנוי לא נמצא.', 'is_error' => true];
+        }
+
+        $changes = [];
+        if (array_key_exists('price_ils', $input) && (float) $input['price_ils'] > 0) {
+            $changes['price_agorot_override'] = (int) round(((float) $input['price_ils']) * 100);
+        }
+        if (array_key_exists('status', $input)) {
+            $status = strtolower(trim((string) $input['status']));
+            if (! in_array($status, ['active', 'suspended', 'canceled'], true)) {
+                return ['content' => 'סטטוס מנוי לא תקין (active/suspended/canceled).', 'is_error' => true];
+            }
+            $changes['status'] = $status;
+        }
+
+        if ($changes === []) {
+            return ['content' => 'לא צוין מחיר או סטטוס לעדכון.', 'is_error' => true];
+        }
+
+        $this->customerId ??= $subscription->customer_id;
+        $parts = [];
+        if (isset($changes['price_agorot_override'])) {
+            $parts[] = 'מחיר ₪'.number_format($changes['price_agorot_override'] / 100, 2);
+        }
+        if (isset($changes['status'])) {
+            $parts[] = "סטטוס {$changes['status']}";
+        }
+
+        $action = $this->gate->propose(
+            type: 'system_action',
+            summary: "🛠️ פעולת מערכת — מנוי #{$subscription->id} ({$subscription->customer?->name}): ".implode(', ', $parts),
+            payload: ['operation' => 'update_subscription', 'subscription_id' => $subscription->id, 'changes' => $changes, 'source' => 'console_agent'],
+            customerId: $subscription->customer_id,
+            proposedBy: 'console',
+        );
+
+        return $this->proposedOk($action->id, "עדכון מנוי #{$subscription->id}");
+    }
+
+    private function proposeCreateSite(array $input): array
+    {
+        $customer = Customer::find((int) ($input['customer_id'] ?? 0));
+        $domain = preg_replace('#^https?://#i', '', trim((string) ($input['domain'] ?? '')));
+        $domain = rtrim((string) $domain, '/');
+        if (! $customer || $domain === '') {
+            return ['content' => 'לקוח או דומיין חסרים.', 'is_error' => true];
+        }
+
+        $this->customerId = $customer->id;
+
+        $action = $this->gate->propose(
+            type: 'system_action',
+            summary: "🛠️ פעולת מערכת — הוספת אתר {$domain} ללקוח {$customer->name}",
+            payload: ['operation' => 'create_site', 'customer_id' => $customer->id, 'domain' => $domain, 'source' => 'console_agent'],
+            customerId: $customer->id,
+            proposedBy: 'console',
+        );
+
+        return $this->proposedOk($action->id, "הוספת אתר {$domain}");
+    }
+
+    private function proposeCompleteTask(array $input): array
+    {
+        $task = Task::find((int) ($input['task_id'] ?? 0));
+        if (! $task) {
+            return ['content' => 'המשימה לא נמצאה.', 'is_error' => true];
+        }
+
+        $action = $this->gate->propose(
+            type: 'system_action',
+            summary: "🛠️ פעולת מערכת — סימון משימה כבוצעה: {$task->title}",
+            payload: ['operation' => 'complete_task', 'task_id' => $task->id, 'source' => 'console_agent'],
+            customerId: $task->customer_id,
+            proposedBy: 'console',
+        );
+
+        return $this->proposedOk($action->id, "סימון משימה בוצעה: {$task->title}");
     }
 
     private function proposePaymentRequest(array $input): array

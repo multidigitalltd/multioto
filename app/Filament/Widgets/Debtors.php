@@ -17,7 +17,7 @@ use Filament\Widgets\TableWidget as BaseWidget;
  */
 class Debtors extends BaseWidget
 {
-    protected static ?int $sort = -1;
+    protected static ?int $sort = -40;
 
     protected int|string|array $columnSpan = 'full';
 

@@ -18,7 +18,7 @@ use Illuminate\Support\Str;
  */
 class PendingApprovals extends BaseWidget
 {
-    protected static ?int $sort = -3;
+    protected static ?int $sort = -90;
 
     protected int|string|array $columnSpan = 'full';
 
