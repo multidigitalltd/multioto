@@ -24,6 +24,7 @@ class ManageAiAgentTest extends TestCase
             ->set('data.ai.model', 'gemini-2.5-flash')
             ->set('data.ai.persona', 'אתה מומחה WordPress של Multi Digital')
             ->set('data.ai.rules', 'כלל ראשון')
+            ->set('data.ai.ticket_rules', 'אל תסגור פנייה פתוחה של לקוח שממתין')
             ->call('save');
 
         $this->assertSame('אתה מומחה WordPress של Multi Digital', Setting::map()['ai.persona'] ?? null);
@@ -32,9 +33,13 @@ class ManageAiAgentTest extends TestCase
         // Fresh page load: the overlay applies stored settings, mount refills.
         (new SettingsServiceProvider(app()))->boot();
 
+        // The saved ticket policy reaches config (so the console agent sees it).
+        $this->assertSame('אל תסגור פנייה פתוחה של לקוח שממתין', config('billing.ai.ticket_rules'));
+
         Livewire::test(ManageAiAgent::class)
             ->assertSet('data.ai.persona', 'אתה מומחה WordPress של Multi Digital')
             ->assertSet('data.ai.rules', 'כלל ראשון')
+            ->assertSet('data.ai.ticket_rules', 'אל תסגור פנייה פתוחה של לקוח שממתין')
             ->assertSet('data.ai.model', 'gemini-2.5-flash')
             ->assertSet('data.ai.provider', 'google');
     }

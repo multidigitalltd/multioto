@@ -79,6 +79,7 @@ class ConsoleAgent
         $persona = trim((string) config('billing.ai.persona'));
         $rules = trim((string) config('billing.ai.rules'));
         $siteRules = trim((string) config('billing.ai.site_rules'));
+        $ticketRules = trim((string) config('billing.ai.ticket_rules'));
         $style = trim((string) config('billing.ai.style_summary'));
 
         return trim(implode("\n", array_filter([
@@ -99,6 +100,7 @@ class ConsoleAgent
             '',
             $persona !== '' ? "אישיות ותפקיד במענה ללקוחות:\n{$persona}" : null,
             $rules !== '' ? "כללי מענה ללקוחות:\n{$rules}" : null,
+            $ticketRules !== '' ? "מדיניות פתיחה וסגירה של פניות — חובה לציית לפני שאתה מציע פתיחה/סגירה/סטטוס של פנייה:\n{$ticketRules}" : null,
             $siteRules !== '' ? "כללי טיפול באתרים:\n{$siteRules}" : null,
             $style !== '' ? "סגנון הצוות (נלמד) — נסח תשובות ללקוח בהתאם:\n{$style}" : null,
         ], fn ($line) => $line !== null)));
