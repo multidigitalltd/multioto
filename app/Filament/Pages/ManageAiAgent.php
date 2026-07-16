@@ -69,6 +69,7 @@ class ManageAiAgent extends Page implements HasForms
         $this->form->fill([
             'ai' => [
                 'enabled' => (bool) config('billing.ai.enabled'),
+                'dynamic_ack' => (bool) config('billing.ai.dynamic_ack'),
                 'provider' => config('billing.ai.provider', 'anthropic'),
                 'model' => config('billing.ai.model'),
                 'base_url' => config('billing.ai.base_url'),
@@ -120,6 +121,10 @@ class ManageAiAgent extends Page implements HasForms
                             ->revealable()
                             ->autocomplete('new-password')
                             ->helperText('נשמר מוצפן. השאירו ריק כדי לא לשנות.'),
+                        Toggle::make('ai.dynamic_ack')
+                            ->label('מענה קבלה שהסוכן כותב לכל פנייה')
+                            ->helperText('כשדולק — אישור קבלת הפנייה (מייל/וואטסאפ) נכתב על ידי הסוכן במיוחד לכל פנייה, כולל מספר הפנייה, במקום תבנית קבועה. אם הסוכן כבוי או נכשל — חוזרים אוטומטית לתבנית.')
+                            ->columnSpanFull(),
                     ])->columns(2),
 
                 Section::make('התראות בוואטסאפ')
@@ -186,6 +191,7 @@ class ManageAiAgent extends Page implements HasForms
         // Dotted field names are stored nested under `data`, so read with data_get.
         // Non-secret fields: persist the (prefilled/edited) value.
         Setting::put('ai.enabled', data_get($this->data, 'ai.enabled') ? '1' : '0');
+        Setting::put('ai.dynamic_ack', data_get($this->data, 'ai.dynamic_ack') ? '1' : '0');
         Setting::put('ai.provider', (string) (data_get($this->data, 'ai.provider') ?: 'anthropic'));
         Setting::put('agent.actions_enabled', data_get($this->data, 'agent.actions_enabled') ? '1' : '0');
         Setting::put('agent.auto_investigate_tickets', data_get($this->data, 'agent.auto_investigate_tickets') ? '1' : '0');

@@ -238,6 +238,13 @@ return [
         // no-op — tickets are still handled manually, nothing breaks.
         'enabled' => env('AI_ENABLED', false),
 
+        // When on, the "we received your request" acknowledgement is written by
+        // the AI per ticket (bespoke text + the ticket number) instead of the
+        // fixed template. Auto-sent, so the prompt is tightly constrained (no
+        // promises/prices/timelines); falls back to the template if the AI is
+        // off or fails. Off by default.
+        'dynamic_ack' => env('AI_DYNAMIC_ACK', false),
+
         // Provider: 'anthropic' (Claude) or 'openai' (any OpenAI-compatible
         // endpoint — OpenAI, Azure OpenAI, OpenRouter, or a local model server).
         'provider' => env('AI_PROVIDER', 'anthropic'),

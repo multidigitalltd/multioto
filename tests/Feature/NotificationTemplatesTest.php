@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Enums\MessageChannel;
+use App\Enums\MessageDirection;
 use App\Enums\TicketChannel;
 use App\Enums\TicketStatus;
 use App\Jobs\SendTicketNotificationJob;
@@ -10,6 +11,7 @@ use App\Mail\NotificationMail;
 use App\Models\Customer;
 use App\Models\NotificationTemplate;
 use App\Models\Ticket;
+use App\Services\Ai\ClaudeClient;
 use App\Services\Notifications\TemplateEngine;
 use App\Services\Support\TicketIntake;
 use App\Services\Waha\WahaClient;
@@ -17,6 +19,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Queue;
+use Mockery;
 use Tests\TestCase;
 
 class NotificationTemplatesTest extends TestCase
@@ -68,14 +71,94 @@ class NotificationTemplatesTest extends TestCase
             'subject' => 'תקלה', 'status' => TicketStatus::Open, 'external_thread_ref' => '972501234567@c.us',
         ]);
 
-        (new SendTicketNotificationJob($ticket->id, 'ticket.received'))->handle(app(TemplateEngine::class), app(WahaClient::class));
+        (new SendTicketNotificationJob($ticket->id, 'ticket.received'))->handle(app(TemplateEngine::class), app(WahaClient::class), app(ClaudeClient::class));
 
         Http::assertSent(fn ($request) => str_contains($request->url(), 'sendText')
             && str_contains($request->data()['text'], 'ישראל כהן'));
         $this->assertSame(1, $ticket->messages()->count());
 
         // Running again (retry / duplicate dispatch) must not send twice.
-        (new SendTicketNotificationJob($ticket->id, 'ticket.received'))->handle(app(TemplateEngine::class), app(WahaClient::class));
+        (new SendTicketNotificationJob($ticket->id, 'ticket.received'))->handle(app(TemplateEngine::class), app(WahaClient::class), app(ClaudeClient::class));
+        $this->assertSame(1, $ticket->messages()->count());
+    }
+
+    public function test_dynamic_ack_uses_ai_written_text_with_the_ticket_number(): void
+    {
+        config([
+            'billing.ai.enabled' => true,
+            'billing.ai.dynamic_ack' => true,
+            'billing.waha.base_url' => 'https://waha.test', 'billing.waha.api_key' => 'k', 'billing.waha.session' => 'default',
+        ]);
+        Http::fake(['*/api/sendText' => Http::response(['id' => 'wa-1'])]);
+
+        $customer = Customer::factory()->create(['name' => 'דנה']);
+        $ticket = Ticket::create([
+            'customer_id' => $customer->id, 'channel' => TicketChannel::Whatsapp,
+            'subject' => 'האתר איטי', 'status' => TicketStatus::Open, 'external_thread_ref' => '972501234567@c.us',
+        ]);
+        $ticket->messages()->create(['direction' => MessageDirection::Inbound, 'channel' => MessageChannel::Whatsapp, 'body' => 'האתר שלי איטי מאוד']);
+
+        // The AI writes a bespoke ack (without the number); the job guarantees
+        // the ticket number is appended.
+        $ai = Mockery::mock(ClaudeClient::class);
+        $ai->shouldReceive('isEnabled')->andReturn(true);
+        $ai->shouldReceive('structured')->once()->andReturn(['message' => 'היי דנה, קיבלנו את פנייתך ואנחנו כבר על זה.']);
+
+        (new SendTicketNotificationJob($ticket->id, 'ticket.received'))->handle(app(TemplateEngine::class), app(WahaClient::class), $ai);
+
+        Http::assertSent(fn ($request): bool => str_contains($request->url(), 'sendText')
+            && str_contains($request->data()['text'], 'קיבלנו את פנייתך')
+            && str_contains($request->data()['text'], (string) $ticket->id));
+    }
+
+    public function test_a_disabled_template_opts_out_even_in_dynamic_ack_mode(): void
+    {
+        config([
+            'billing.ai.enabled' => true, 'billing.ai.dynamic_ack' => true,
+            'billing.waha.base_url' => 'https://waha.test', 'billing.waha.api_key' => 'k', 'billing.waha.session' => 'default',
+        ]);
+        Http::fake(['*/api/sendText' => Http::response(['id' => 'wa-1'])]);
+        // The operator disabled the received-ack template — the opt-out.
+        NotificationTemplate::create(['key' => 'ticket.received', 'channel' => 'whatsapp', 'body' => 'x', 'enabled' => false]);
+
+        $customer = Customer::factory()->create();
+        $ticket = Ticket::create([
+            'customer_id' => $customer->id, 'channel' => TicketChannel::Whatsapp,
+            'subject' => 'תקלה', 'status' => TicketStatus::Open, 'external_thread_ref' => '972501234567@c.us',
+        ]);
+
+        $ai = Mockery::mock(ClaudeClient::class);
+        $ai->shouldReceive('isEnabled')->andReturn(true);
+        $ai->shouldNotReceive('structured'); // disabled → never compose/send
+
+        (new SendTicketNotificationJob($ticket->id, 'ticket.received'))->handle(app(TemplateEngine::class), app(WahaClient::class), $ai);
+
+        Http::assertNothingSent();
+        $this->assertSame(0, $ticket->messages()->count());
+    }
+
+    public function test_dynamic_ack_falls_back_to_the_template_when_the_ai_is_off(): void
+    {
+        config([
+            'billing.ai.dynamic_ack' => true, // on, but the AI itself is disabled
+            'billing.waha.base_url' => 'https://waha.test', 'billing.waha.api_key' => 'k', 'billing.waha.session' => 'default',
+        ]);
+        Http::fake(['*/api/sendText' => Http::response(['id' => 'wa-1'])]);
+
+        $customer = Customer::factory()->create(['name' => 'רון']);
+        $ticket = Ticket::create([
+            'customer_id' => $customer->id, 'channel' => TicketChannel::Whatsapp,
+            'subject' => 'תקלה', 'status' => TicketStatus::Open, 'external_thread_ref' => '972501234567@c.us',
+        ]);
+
+        $ai = Mockery::mock(ClaudeClient::class);
+        $ai->shouldReceive('isEnabled')->andReturn(false);
+        $ai->shouldNotReceive('structured');
+
+        (new SendTicketNotificationJob($ticket->id, 'ticket.received'))->handle(app(TemplateEngine::class), app(WahaClient::class), $ai);
+
+        // The template ack was still sent (the customer name comes from ticketData).
+        Http::assertSent(fn ($request): bool => str_contains($request->url(), 'sendText'));
         $this->assertSame(1, $ticket->messages()->count());
     }
 
