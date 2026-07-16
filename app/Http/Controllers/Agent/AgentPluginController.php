@@ -9,7 +9,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\URL;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
-use Symfony\Component\HttpFoundation\StreamedResponse;
+use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
 
 /**
  * The remote-update channel for the companion plugin. A site's plugin checks in
@@ -45,15 +45,26 @@ class AgentPluginController extends Controller
         ]);
     }
 
-    /** Stream a plugin release zip. Authenticated purely by the signed URL. */
-    public function download(Request $request, string $version): StreamedResponse
+    /** Serve a plugin release zip. Authenticated purely by the signed URL. */
+    public function download(Request $request, string $version): SymfonyResponse
     {
         $disk = Storage::disk((string) config('agent.plugin.disk'));
         $path = trim((string) config('agent.plugin.path'), '/')."/{$version}.zip";
 
-        abort_unless($disk->exists($path), 404);
+        if ($disk->exists($path)) {
+            return $disk->download($path, "md-agent-{$version}.zip", [
+                'Content-Type' => 'application/zip',
+            ]);
+        }
 
-        return $disk->download($path, "md-agent-{$version}.zip", [
+        // Fall back to the release committed in the repo, so a fresh deploy
+        // serves the new build for site self-update without a separate upload
+        // to the plugin disk. Same file the admin "הורד תוסף" button uses.
+        $repoCopy = base_path("wordpress-plugin/releases/multioto-agent-{$version}.zip");
+
+        abort_unless(is_file($repoCopy), 404);
+
+        return response()->download($repoCopy, "md-agent-{$version}.zip", [
             'Content-Type' => 'application/zip',
         ]);
     }

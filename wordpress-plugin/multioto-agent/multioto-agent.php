@@ -2,8 +2,8 @@
 /**
  * Plugin Name:       Multi Digital Agent
  * Plugin URI:        https://multidigital.co.il
- * Description:        מחבר את האתר לפאנל התפעול של Multi Digital: נקודת קצה MCP מאובטחת לאבחון ותיקון מרחוק (רק אחרי אישור צוות), ועדכון עצמי של התוסף.
- * Version:           1.0.0
+ * Description:        מחבר את האתר לפאנל התפעול של Multi Digital: נקודת קצה MCP מאובטחת לאבחון ותיקון מרחוק.
+ * Version:           1.0.1
  * Requires at least: 6.0
  * Requires PHP:      7.4
  * Author:            Multi Digital
@@ -20,7 +20,7 @@ if (! defined('ABSPATH')) {
     exit; // No direct access.
 }
 
-define('MULTIOTO_AGENT_VERSION', '1.0.0');
+define('MULTIOTO_AGENT_VERSION', '1.0.1');
 define('MULTIOTO_AGENT_FILE', __FILE__);
 define('MULTIOTO_AGENT_SLUG', 'multioto-agent');
 define('MULTIOTO_AGENT_DIR', plugin_dir_path(__FILE__));
