@@ -345,6 +345,19 @@ class ViewTicket extends ViewRecord
                     $this->record->update(['status' => TicketStatus::Resolved]);
                     Notification::make()->title('הפנייה סומנה כטופלה — הלקוח עודכן')->success()->send();
                 }),
+            // Quiet close — mark the ticket closed WITHOUT notifying the customer
+            // (unlike "סמן כטופלה"). For internal/spam/no-reply-needed tickets.
+            Actions\Action::make('quietClose')
+                ->label('סגירה שקטה')
+                ->icon('heroicon-o-x-circle')
+                ->color('gray')
+                ->visible(fn (): bool => $this->record->status !== TicketStatus::Closed)
+                ->requiresConfirmation()
+                ->modalDescription('הפנייה תיסגר ללא שליחת הודעה כלשהי ללקוח.')
+                ->action(function (): void {
+                    $this->record->update(['status' => TicketStatus::Closed]);
+                    Notification::make()->title('הפנייה נסגרה (ללא הודעה ללקוח)')->success()->send();
+                }),
             $this->convertToTaskAction(),
             Actions\EditAction::make()->label('עריכת פרטים'),
         ];
