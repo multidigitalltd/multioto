@@ -29,10 +29,13 @@ class CommandInterpreter
     {
         $instruction = trim($instruction);
 
-        // Carry the earlier attempt's full text so a clarification completes it
-        // (and further clarifications keep accumulating context).
+        // Carry the earlier attempt's full text AND what the agent replied, so a
+        // clarification completes it with memory of the question it asked (and
+        // further clarifications keep accumulating context).
         $effective = $continues && $instruction !== ''
-            ? trim($continues->instruction."\n\nהבהרה מהמפעיל: ".$instruction)
+            ? trim($continues->instruction
+                .(filled($continues->result) ? "\n\n[מה שהסוכן השיב/שאל קודם: ".$continues->result.']' : '')
+                ."\n\nהבהרה מהמפעיל: ".$instruction)
             : $instruction;
 
         $command = AgentCommand::create([

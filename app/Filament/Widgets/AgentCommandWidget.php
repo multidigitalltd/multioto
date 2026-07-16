@@ -2,8 +2,10 @@
 
 namespace App\Filament\Widgets;
 
+use App\Enums\AgentCommandOutcome;
 use App\Filament\Concerns\RunsAgentCommands;
 use App\Filament\Pages\AgentConsole;
+use App\Models\AgentCommand;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Concerns\InteractsWithForms;
 use Filament\Forms\Contracts\HasForms;
@@ -59,6 +61,20 @@ class AgentCommandWidget extends Widget implements HasForms
     {
         $this->dispatchAgentCommand((string) ($this->form->getState()['instruction'] ?? ''));
         $this->form->fill();
+    }
+
+    /**
+     * The agent's open question, if my last command is waiting for my answer —
+     * so the compact bar can show a "reply to continue" hint too.
+     */
+    public function getAwaitingReplyProperty(): ?AgentCommand
+    {
+        $last = AgentCommand::query()
+            ->where('user_id', auth()->id())
+            ->latest('id')
+            ->first();
+
+        return $last?->outcome === AgentCommandOutcome::Unclear ? $last : null;
     }
 
     public function consoleUrl(): string

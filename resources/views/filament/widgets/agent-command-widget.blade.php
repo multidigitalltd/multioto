@@ -7,6 +7,14 @@
             </a>
         </x-slot>
 
+        @if ($this->awaitingReply)
+            <div class="mb-2 rounded-lg border border-warning-300 bg-warning-50 p-3 text-sm dark:border-warning-700 dark:bg-warning-500/10">
+                <p class="font-medium text-warning-800 dark:text-warning-200">הסוכן ממתין לתשובתך:</p>
+                <p class="mt-1 whitespace-pre-line break-words text-gray-700 dark:text-gray-200">{{ \Illuminate\Support\Str::limit($this->awaitingReply->result, 300) }}</p>
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">כתבו תשובה למטה ושלחו — הסוכן ימשיך מאותה נקודה.</p>
+            </div>
+        @endif
+
         <form wire:submit="run" class="flex flex-col gap-2">
             {{ $this->form }}
             <div class="flex justify-end">
