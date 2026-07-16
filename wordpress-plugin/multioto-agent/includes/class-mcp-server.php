@@ -134,6 +134,9 @@ class Multioto_Agent_Mcp_Server
             ['name' => 'wp_content_create', 'description' => 'יצירת עמוד/פוסט. title, content (HTML), type = page או post, status = draft או publish. אופציונלי: excerpt.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['title' => ['type' => 'string'], 'content' => ['type' => 'string'], 'type' => ['type' => 'string'], 'status' => ['type' => 'string'], 'excerpt' => ['type' => 'string']], 'required' => ['title']]],
             ['name' => 'wp_content_update', 'description' => 'עדכון עמוד/פוסט קיים לפי id: title, content, status, excerpt (כל שדה אופציונלי; מה שלא צוין נשמר).', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['id' => ['type' => 'integer'], 'title' => ['type' => 'string'], 'content' => ['type' => 'string'], 'status' => ['type' => 'string'], 'excerpt' => ['type' => 'string']], 'required' => ['id']]],
             ['name' => 'wp_content_trash', 'description' => 'העברת עמוד/פוסט לפח לפי id (הפיך — ניתן לשחזר מהפח).', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['id' => ['type' => 'integer']], 'required' => ['id']]],
+            ['name' => 'wp_file_list', 'description' => 'רשימת קבצים/תיקיות בתוך wp-content לפי path יחסי (ברירת מחדל: השורש של wp-content). לתיקון קוד — לאיתור הקובץ.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['path' => ['type' => 'string']]]],
+            ['name' => 'wp_file_get', 'description' => 'קריאת תוכן קובץ בתוך wp-content לפי path יחסי (לבדיקת קוד לפני תיקון).', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['path' => ['type' => 'string']], 'required' => ['path']]],
+            ['name' => 'wp_file_put', 'description' => 'כתיבת תוכן לקובץ לתיקון קוד. path יחסי בתוך wp-content ומוגבל ל-themes/plugins/mu-plugins. קובצי PHP נבדקים תחבירית לפני שמירה. תמיד קִראו קודם עם wp_file_get ושמרו גיבוי לביטול.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['path' => ['type' => 'string'], 'content' => ['type' => 'string']], 'required' => ['path', 'content']]],
         ];
     }
 
@@ -158,6 +161,9 @@ class Multioto_Agent_Mcp_Server
             'wp_content_create' => $this->contentCreate($args),
             'wp_content_update' => $this->contentUpdate($args),
             'wp_content_trash' => $this->contentTrash($args),
+            'wp_file_list' => $this->fileList($args),
+            'wp_file_get' => $this->fileGet($args),
+            'wp_file_put' => $this->filePut($args),
             default => throw new Multioto_Agent_Rpc_Error(-32602, "Unknown tool: {$name}"),
         };
 
@@ -613,6 +619,155 @@ class Multioto_Agent_Mcp_Server
         }
 
         return $post;
+    }
+
+    // --- Code / files (confined to wp-content) -------------------------------
+
+    private function fileList(array $args): string
+    {
+        $dir = $this->resolveContentPath((string) ($args['path'] ?? ''), true, false);
+
+        if (! is_dir($dir)) {
+            throw new Multioto_Agent_Rpc_Error(-32602, 'הנתיב אינו תיקייה.');
+        }
+
+        $entries = [];
+
+        foreach (scandir($dir) ?: [] as $name) {
+            if ($name === '.' || $name === '..') {
+                continue;
+            }
+
+            $full = $dir.'/'.$name;
+            $entries[] = [
+                'name' => $name,
+                'type' => is_dir($full) ? 'dir' : 'file',
+                'size' => is_file($full) ? (int) filesize($full) : null,
+            ];
+        }
+
+        return wp_json_encode($entries, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    }
+
+    private function fileGet(array $args): string
+    {
+        $file = $this->resolveContentPath((string) ($args['path'] ?? ''), true, true);
+
+        // Cap the read so a huge file can't blow up the response.
+        if (filesize($file) > 512 * 1024) {
+            throw new Multioto_Agent_Rpc_Error(-32602, 'הקובץ גדול מדי לקריאה (מעל 512KB).');
+        }
+
+        $contents = file_get_contents($file);
+
+        if ($contents === false) {
+            throw new Multioto_Agent_Rpc_Error(-32000, 'לא ניתן לקרוא את הקובץ.');
+        }
+
+        return $contents;
+    }
+
+    private function filePut(array $args): string
+    {
+        $rel = (string) ($args['path'] ?? '');
+        $file = $this->resolveContentPath($rel, false, true);
+
+        // Writes are confined further, to the directories where editing code is
+        // legitimate — never uploads (a PHP file there is a classic backdoor).
+        $relClean = ltrim(str_replace('\\', '/', $rel), '/');
+        $allowed = ['themes/', 'plugins/', 'mu-plugins/'];
+        $ok = false;
+        foreach ($allowed as $root) {
+            if (strpos($relClean, $root) === 0) {
+                $ok = true;
+                break;
+            }
+        }
+        if (! $ok) {
+            throw new Multioto_Agent_Rpc_Error(-32602, 'כתיבה מותרת רק תחת themes/ , plugins/ או mu-plugins/.');
+        }
+
+        $content = (string) ($args['content'] ?? '');
+
+        // Syntax-check PHP before writing so a bad edit can't white-screen the
+        // site. TOKEN_PARSE makes the tokenizer throw on a parse error — no
+        // eval/exec involved.
+        if (preg_match('/\.php$/i', $relClean)) {
+            try {
+                token_get_all($content, TOKEN_PARSE);
+            } catch (\Throwable $e) {
+                throw new Multioto_Agent_Rpc_Error(-32602, 'שגיאת תחביר ב-PHP — הקובץ לא נשמר: '.$e->getMessage());
+            }
+        }
+
+        if (! is_dir(dirname($file))) {
+            throw new Multioto_Agent_Rpc_Error(-32602, 'תיקיית היעד לא קיימת.');
+        }
+
+        if (file_put_contents($file, $content) === false) {
+            throw new Multioto_Agent_Rpc_Error(-32000, 'הכתיבה נכשלה (ייתכן שאין הרשאות).');
+        }
+
+        return wp_json_encode(['written' => $relClean, 'bytes' => strlen($content)], JSON_UNESCAPED_UNICODE);
+    }
+
+    /**
+     * Resolve a path RELATIVE TO wp-content and confirm it stays inside it —
+     * blocking traversal and symlink escapes. $mustExist requires the target to
+     * exist; $isFile requires it to be a regular file.
+     */
+    private function resolveContentPath(string $rel, bool $mustExist, bool $isFile): string
+    {
+        $rel = ltrim(str_replace(['\\', "\0"], '/', $rel), '/');
+
+        if (strpos($rel, '..') !== false) {
+            throw new Multioto_Agent_Rpc_Error(-32602, 'נתיב לא חוקי.');
+        }
+
+        $base = wp_normalize_path(WP_CONTENT_DIR);
+        $full = wp_normalize_path($base.'/'.$rel);
+
+        // The lexical path must be within wp-content…
+        if ($full !== $base && strpos($full, $base.'/') !== 0) {
+            throw new Multioto_Agent_Rpc_Error(-32602, 'הנתיב חייב להיות בתוך wp-content.');
+        }
+
+        $realBase = wp_normalize_path((string) realpath(WP_CONTENT_DIR));
+
+        if ($realBase === '') {
+            throw new Multioto_Agent_Rpc_Error(-32000, 'wp-content לא נמצא.');
+        }
+
+        // The REAL (symlink-resolved) path must also be within wp-content. For a
+        // target that doesn't exist yet we resolve the nearest existing ancestor
+        // instead — otherwise a symlinked parent pointing outside wp-content
+        // could let a NEW file be written past the boundary.
+        $resolveTarget = $full;
+        while (! file_exists($resolveTarget)) {
+            if ($mustExist) {
+                throw new Multioto_Agent_Rpc_Error(-32602, 'הקובץ/הנתיב לא נמצא.');
+            }
+
+            $parent = wp_normalize_path(dirname($resolveTarget));
+
+            if ($parent === $resolveTarget) {
+                throw new Multioto_Agent_Rpc_Error(-32602, 'תיקיית היעד לא קיימת.');
+            }
+
+            $resolveTarget = $parent;
+        }
+
+        $real = wp_normalize_path((string) realpath($resolveTarget));
+
+        if ($real === '' || ($real !== $realBase && strpos($real, $realBase.'/') !== 0)) {
+            throw new Multioto_Agent_Rpc_Error(-32602, 'הנתיב חייב להיות בתוך wp-content.');
+        }
+
+        if ($isFile && $mustExist && ! is_file($full)) {
+            throw new Multioto_Agent_Rpc_Error(-32602, 'הנתיב אינו קובץ.');
+        }
+
+        return $full;
     }
 
     /**

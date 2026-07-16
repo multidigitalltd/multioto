@@ -173,6 +173,39 @@ class SiteAgentTest extends TestCase
         $this->assertSame('תקנון', data_get($action->payload, 'arguments.title'));
     }
 
+    public function test_the_agent_can_propose_a_code_file_edit_on_production(): void
+    {
+        // Editing a theme file to fix a bug is a tier-2 change: proposable on
+        // production behind approval (wp_file_put is not a destructive-named op).
+        $site = Site::factory()->create([
+            'mcp_enabled' => true,
+            'mcp_endpoint' => 'https://site.test/wp-json/md-agent/mcp',
+            'mcp_secret' => 'site-secret',
+            'mcp_capabilities' => ['tools' => [
+                ['name' => 'wp_file_get', 'description' => 'קריאת קובץ', 'read_only' => true, 'destructive' => false],
+                ['name' => 'wp_file_put', 'description' => 'כתיבת קובץ', 'read_only' => false, 'destructive' => false],
+            ]],
+        ]);
+
+        $this->fakeClaude([
+            ['stop_reason' => 'tool_use', 'content' => [
+                ['type' => 'tool_use', 'id' => 'tu_1', 'name' => 'propose_action', 'input' => [
+                    'tool' => 'wp_file_put',
+                    'arguments' => ['path' => 'themes/mytheme/functions.php', 'content' => "<?php\n// fixed"],
+                    'summary' => 'לתקן שגיאת תחביר ב-functions.php',
+                ]],
+            ]],
+            ['stop_reason' => 'end_turn', 'content' => [['type' => 'text', 'text' => 'הצעתי תיקון קוד.']]],
+        ]);
+
+        app(SiteAgent::class)->investigate($site, 'תקן את שגיאת ה-PHP בערכת הנושא');
+
+        $action = PendingAction::where('type', 'site_action')->sole();
+        $this->assertSame(ActionStatus::Pending, $action->status);
+        $this->assertSame('wp_file_put', data_get($action->payload, 'tool'));
+        $this->assertSame('themes/mytheme/functions.php', data_get($action->payload, 'arguments.path'));
+    }
+
     public function test_the_agent_cannot_propose_a_destructive_tool_on_production(): void
     {
         $site = $this->connectedSite(); // environment defaults to production
