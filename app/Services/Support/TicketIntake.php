@@ -57,8 +57,9 @@ class TicketIntake
         ?string $contactHandle = null,
         ?int $threadTicketId = null,
         ?string $bodyHtml = null,
+        array $terminalStatuses = [TicketStatus::Closed],
     ): TicketMessage {
-        $ticket = $this->findOrCreateTicket($channel, $customer, $threadRef, $subject, $body, $contactName, $contactHandle, $threadTicketId);
+        $ticket = $this->findOrCreateTicket($channel, $customer, $threadRef, $subject, $body, $contactName, $contactHandle, $threadTicketId, $terminalStatuses);
 
         $message = $ticket->messages()->firstOrCreate(
             ['external_message_id' => $externalMessageId],
@@ -113,6 +114,13 @@ class TicketIntake
         return $message;
     }
 
+    /**
+     * @param  list<TicketStatus>  $terminalStatuses  statuses that end a
+     *                                                conversation — a message
+     *                                                arriving after one of them
+     *                                                opens a NEW ticket rather
+     *                                                than reviving the thread.
+     */
     protected function findOrCreateTicket(
         TicketChannel $channel,
         ?Customer $customer,
@@ -122,6 +130,7 @@ class TicketIntake
         ?string $contactName = null,
         ?string $contactHandle = null,
         ?int $threadTicketId = null,
+        array $terminalStatuses = [TicketStatus::Closed],
     ): Ticket {
         // An explicit ticket tag ([MD#id] in an email subject) threads onto that
         // exact ticket — even if closed (recordInbound reopens it) — regardless
@@ -147,7 +156,7 @@ class TicketIntake
 
         if ($threadRef !== null) {
             $open = Ticket::where('external_thread_ref', $threadRef)
-                ->where('status', '!=', TicketStatus::Closed)
+                ->whereNotIn('status', $terminalStatuses)
                 ->latest('id')
                 ->first();
 
