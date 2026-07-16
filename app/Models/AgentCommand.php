@@ -16,7 +16,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 class AgentCommand extends Model
 {
     protected $fillable = [
-        'user_id', 'instruction', 'intent', 'outcome', 'result',
+        'user_id', 'instruction', 'outcome', 'result',
         'customer_id', 'ticket_id', 'site_id', 'pending_action_id',
     ];
 

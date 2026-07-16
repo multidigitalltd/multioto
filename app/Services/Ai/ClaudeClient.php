@@ -117,12 +117,6 @@ class ClaudeClient
         }
     }
 
-    /** The most recent provider error message, or null if the last call succeeded. */
-    public function lastError(): ?string
-    {
-        return $this->lastError;
-    }
-
     /**
      * Run a tool-use conversation with Claude (Anthropic only). The model may
      * call the supplied tools; $handler executes each call and returns its
