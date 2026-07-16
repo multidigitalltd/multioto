@@ -107,6 +107,39 @@ class SiteAgentTest extends TestCase
         $this->assertSame('ai', $action->proposed_by);
     }
 
+    public function test_the_agent_can_propose_a_menu_item_add_on_production(): void
+    {
+        // Menu editing is a tier-2 change: proposable on a production site and
+        // gated behind approval (not destructive/staging-only).
+        $site = Site::factory()->create([
+            'mcp_enabled' => true,
+            'mcp_endpoint' => 'https://site.test/wp-json/md-agent/mcp',
+            'mcp_secret' => 'site-secret',
+            'mcp_capabilities' => ['tools' => [
+                ['name' => 'wp_menu_list', 'description' => 'רשימת תפריטים', 'read_only' => true, 'destructive' => false],
+                ['name' => 'wp_menu_item_add', 'description' => 'הוספת פריט לתפריט', 'read_only' => false, 'destructive' => false],
+            ]],
+        ]);
+
+        $this->fakeClaude([
+            ['stop_reason' => 'tool_use', 'content' => [
+                ['type' => 'tool_use', 'id' => 'tu_1', 'name' => 'propose_action', 'input' => [
+                    'tool' => 'wp_menu_item_add',
+                    'arguments' => ['menu' => 'ראשי', 'title' => 'צור קשר', 'url' => 'https://site.test/contact'],
+                    'summary' => 'להוסיף "צור קשר" לתפריט הראשי',
+                ]],
+            ]],
+            ['stop_reason' => 'end_turn', 'content' => [['type' => 'text', 'text' => 'הצעתי להוסיף פריט לתפריט.']]],
+        ]);
+
+        app(SiteAgent::class)->investigate($site, 'תוסיף פריט "צור קשר" לתפריט הראשי');
+
+        $action = PendingAction::where('type', 'site_action')->sole();
+        $this->assertSame(ActionStatus::Pending, $action->status);
+        $this->assertSame('wp_menu_item_add', data_get($action->payload, 'tool'));
+        $this->assertSame('צור קשר', data_get($action->payload, 'arguments.title'));
+    }
+
     public function test_the_agent_cannot_propose_a_destructive_tool_on_production(): void
     {
         $site = $this->connectedSite(); // environment defaults to production
