@@ -19,7 +19,7 @@ class OpenTickets extends BaseWidget
 
     protected int|string|array $columnSpan = 'full';
 
-    protected static ?string $heading = 'פניות פתוחות בלבד';
+    protected static ?string $heading = 'פניות פתוחות';
 
     public function table(Table $table): Table
     {
