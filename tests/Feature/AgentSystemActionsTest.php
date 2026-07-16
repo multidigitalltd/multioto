@@ -4,12 +4,14 @@ namespace Tests\Feature;
 
 use App\Enums\ActionStatus;
 use App\Enums\AgentCommandOutcome;
+use App\Enums\TicketStatus;
 use App\Filament\Pages\AgentConsole;
 use App\Jobs\SendPaymentLinkJob;
 use App\Models\AgentCommand;
 use App\Models\Customer;
 use App\Models\PendingAction;
 use App\Models\Task;
+use App\Models\Ticket;
 use App\Models\User;
 use App\Services\Ai\ClaudeClient;
 use App\Services\Automation\ApprovalGate;
@@ -76,6 +78,26 @@ class AgentSystemActionsTest extends TestCase
 
         $this->assertSame(ActionStatus::Executed, $action->fresh()->status);
         $this->assertSame(1, Task::where('title', 'להתקשר ללקוח')->count());
+    }
+
+    public function test_close_ticket_system_action_closes_the_ticket_when_enabled(): void
+    {
+        config(['agent.system_actions_enabled' => true]);
+        Queue::fake();
+        $customer = Customer::factory()->create();
+        $ticket = Ticket::create([
+            'customer_id' => $customer->id,
+            'channel' => 'whatsapp',
+            'subject' => 'בעיה',
+            'status' => TicketStatus::Open,
+        ]);
+
+        $action = $this->systemAction(['operation' => 'close_ticket', 'ticket_id' => $ticket->id]);
+
+        app(ApprovalGate::class)->approve($action);
+
+        $this->assertSame(ActionStatus::Executed, $action->fresh()->status);
+        $this->assertSame(TicketStatus::Closed, $ticket->fresh()->status);
     }
 
     public function test_a_double_approval_executes_the_action_only_once(): void

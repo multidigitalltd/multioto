@@ -125,6 +125,8 @@ class ConsoleAgent
 
             ['name' => 'propose_reply_ticket', 'description' => 'הצע תשובה ללקוח בפנייה. ticket_id + reply_text (הטקסט המלא שיישלח).',
                 'input_schema' => $obj(['ticket_id' => $int, 'reply_text' => $str], ['ticket_id', 'reply_text'])],
+            ['name' => 'propose_close_ticket', 'description' => 'הצע סגירת פנייה (סימון כסגורה, ללא הודעה ללקוח). ticket_id.',
+                'input_schema' => $obj(['ticket_id' => $int], ['ticket_id'])],
             ['name' => 'propose_payment_request', 'description' => 'הצע שליחת דרישת תשלום/לינק ללקוח. customer_id, amount_ils (בשקלים), description.',
                 'input_schema' => $obj(['customer_id' => $int, 'amount_ils' => $num, 'description' => $str], ['customer_id', 'amount_ils', 'description'])],
             ['name' => 'propose_mark_collected', 'description' => 'הצע סימון תשלום בוצע למנוי בגבייה ידנית (מפיק חשבונית). customer_id.',
@@ -156,6 +158,7 @@ class ConsoleAgent
                 'read_ticket' => $this->readTicket($input),
                 'find_sites' => $this->findSites($input),
                 'propose_reply_ticket' => $this->proposeReplyTicket($input),
+                'propose_close_ticket' => $this->proposeCloseTicket($input),
                 'propose_payment_request' => $this->proposePaymentRequest($input),
                 'propose_mark_collected' => $this->proposeMarkCollected($input),
                 'propose_suspend_site' => $this->proposeSite('suspend_site', $input, 'השעיית אתר'),
@@ -292,6 +295,28 @@ class ConsoleAgent
         );
 
         return $this->proposedOk($action->id, "תשובה לפנייה #{$ticket->id}");
+    }
+
+    private function proposeCloseTicket(array $input): array
+    {
+        $ticket = Ticket::find((int) ($input['ticket_id'] ?? 0));
+        if (! $ticket) {
+            return ['content' => 'הפנייה לא נמצאה.', 'is_error' => true];
+        }
+
+        $this->ticketId = $ticket->id;
+        $this->customerId ??= $ticket->customer_id;
+
+        $action = $this->gate->propose(
+            type: 'system_action',
+            summary: "🛠️ פעולת מערכת — סגירת פנייה #{$ticket->id} ({$ticket->subject})",
+            payload: ['operation' => 'close_ticket', 'ticket_id' => $ticket->id, 'source' => 'console_agent'],
+            customerId: $ticket->customer_id,
+            ticketId: $ticket->id,
+            proposedBy: 'console',
+        );
+
+        return $this->proposedOk($action->id, "סגירת פנייה #{$ticket->id}");
     }
 
     private function proposePaymentRequest(array $input): array

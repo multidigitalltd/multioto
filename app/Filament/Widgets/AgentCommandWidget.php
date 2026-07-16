@@ -25,7 +25,7 @@ class AgentCommandWidget extends Widget implements HasForms
 
     protected int|string|array $columnSpan = 'full';
 
-    protected static ?int $sort = -3;
+    protected static ?int $sort = -100;
 
     /** @var array<string, mixed> */
     public array $data = [];

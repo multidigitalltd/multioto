@@ -10,16 +10,16 @@ use Filament\Tables\Table;
 use Filament\Widgets\TableWidget as BaseWidget;
 
 /**
- * Dashboard inbox: every open/pending ticket, newest first — one click opens
- * the conversation view. This is the "what needs me right now" list.
+ * Dashboard inbox: open tickets only, newest first — one click opens the
+ * conversation view. This is the "what needs me right now" list.
  */
 class OpenTickets extends BaseWidget
 {
-    protected static ?int $sort = -4;
+    protected static ?int $sort = -80;
 
     protected int|string|array $columnSpan = 'full';
 
-    protected static ?string $heading = 'פניות פתוחות — לטיפול';
+    protected static ?string $heading = 'פניות פתוחות בלבד';
 
     public function table(Table $table): Table
     {
@@ -27,7 +27,7 @@ class OpenTickets extends BaseWidget
             ->query(
                 Ticket::query()
                     ->with('customer')
-                    ->whereIn('status', [TicketStatus::Open, TicketStatus::Pending])
+                    ->where('status', TicketStatus::Open)
                     ->latest('created_at')
             )
             ->columns([

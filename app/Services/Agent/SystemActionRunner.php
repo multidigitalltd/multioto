@@ -4,12 +4,14 @@ namespace App\Services\Agent;
 
 use App\Enums\TaskStatus;
 use App\Enums\TicketPriority;
+use App\Enums\TicketStatus;
 use App\Jobs\NotifyTaskCreatedJob;
 use App\Jobs\SendPaymentLinkJob;
 use App\Models\PendingAction;
 use App\Models\Site;
 use App\Models\Subscription;
 use App\Models\Task;
+use App\Models\Ticket;
 use App\Services\Billing\SubscriptionCollectionService;
 use App\Services\Hosting\HostingClient;
 
@@ -42,6 +44,7 @@ class SystemActionRunner
             'open_task' => $this->openTask($payload),
             'send_payment_request' => $this->sendPaymentRequest($payload),
             'mark_collected' => $this->markCollected($payload),
+            'close_ticket' => $this->closeTicket($payload),
             'suspend_site' => $this->suspendSite($payload),
             'restore_site' => $this->restoreSite($payload),
             default => throw new \RuntimeException("פעולת מערכת לא מוכרת: {$operation}"),
@@ -95,6 +98,22 @@ class SystemActionRunner
         }
 
         $this->collections->recordPayment($subscription, 'סומן כשולם דרך מסוף הפקודות.');
+    }
+
+    /** @param array<string, mixed> $p */
+    private function closeTicket(array $p): void
+    {
+        $ticket = Ticket::find((int) ($p['ticket_id'] ?? 0));
+
+        if (! $ticket) {
+            throw new \RuntimeException('הפנייה לא נמצאה.');
+        }
+
+        // Administrative close (like the WhatsApp "סגור" command) — no customer
+        // notification. Skip if it's already terminal.
+        if (! in_array($ticket->status, [TicketStatus::Resolved, TicketStatus::Closed], true)) {
+            $ticket->update(['status' => TicketStatus::Closed]);
+        }
     }
 
     /** @param array<string, mixed> $p */
