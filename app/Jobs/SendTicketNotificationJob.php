@@ -142,9 +142,16 @@ class SendTicketNotificationJob implements ShouldQueue
         $who = $ticket->customer?->name ?? $ticket->senderName();
 
         try {
+            // Carry the ticket tag + signed agent-reply marker and a support
+            // Reply-To (like TeamNotifier) so a team member's reply to the copy
+            // threads onto THIS ticket and reaches the customer through the
+            // authenticated path — never spawning a stray new ticket.
+            $subject = "העתק · {$label} — נשלח ל{$who} · פנייה #{$ticket->id} {$ticket->emailTag()} {$ticket->agentReplyTag()}";
+
             Mail::to($recipients)->send(new NotificationMail(
-                "העתק · {$label} — נשלח ל{$who} · פנייה #{$ticket->id}",
+                $subject,
                 "העתק להודעה שנשלחה ללקוח {$who} בערוץ {$channelLabel} (פנייה #{$ticket->id}):\n\n{$body}",
+                (string) config('billing.email.support_address') ?: null,
             ));
         } catch (\Throwable $e) {
             Log::warning('SendTicketNotificationJob: team copy failed', ['ticket' => $ticket->id, 'error' => $e->getMessage()]);
