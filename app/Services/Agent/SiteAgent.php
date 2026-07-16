@@ -35,28 +35,52 @@ class SiteAgent
             return null;
         }
 
+        $siteTools = collect((array) data_get($site->mcp_capabilities, 'tools', []));
+
         // Only tools the site itself declares read-only (MCP readOnlyHint) may be
         // offered as reads — never a tool that merely has a read-ish name.
-        $readTools = collect((array) data_get($site->mcp_capabilities, 'tools', []))
+        $readTools = $siteTools
             ->pluck('name')
             ->filter(fn ($name): bool => filled($name) && $this->catalog->isReadOnly($site, (string) $name))
+            ->values();
+
+        // The state-changing tools the model may PROPOSE (name + description), so
+        // it knows the exact catalog — menu edits, plugin ops, cache — instead of
+        // guessing a tool name. Destructive-on-this-site tools are left out.
+        $proposableTools = $siteTools
+            ->filter(fn ($tool): bool => filled($tool['name'] ?? null)
+                && ! $this->catalog->isReadOnly($site, (string) $tool['name'])
+                && $this->catalog->allowedOn($site, (string) $tool['name']))
+            ->map(fn ($tool): array => ['name' => (string) $tool['name'], 'description' => (string) ($tool['description'] ?? '')])
             ->values();
 
         return $this->ai->converse(
             system: $this->systemPrompt($site),
             prompt: $goal,
-            tools: $this->toolDefinitions($readTools->all()),
+            tools: $this->toolDefinitions($readTools->all(), $proposableTools->all()),
             handler: fn (string $name, array $input): array => $this->handleToolCall($site, $name, $input),
         );
     }
 
-    /** The tools offered to the model: one read tool and one propose tool. */
-    private function toolDefinitions(array $readToolNames): array
+    /**
+     * The tools offered to the model: one read tool and one propose tool.
+     *
+     * @param  list<array{name: string, description: string}>  $proposableTools
+     */
+    private function toolDefinitions(array $readToolNames, array $proposableTools = []): array
     {
+        $catalogLine = $proposableTools === []
+            ? ''
+            : "\n\nכלים זמינים להצעה (שם — תיאור):\n".collect($proposableTools)
+                ->map(fn (array $t): string => "- {$t['name']} — {$t['description']}")
+                ->implode("\n");
+
         $tools = [[
             'name' => 'propose_action',
-            'description' => 'הצע פעולה אחת לתיקון האתר. הפעולה לא מתבצעת מיד — היא נשלחת לאישור מנהל. '
-                .'ציין את שם הכלי, הפרמטרים, וסיכום קצר. אם ידוע כיצד לבטל את השינוי, ציין revert_tool ו-revert_arguments.',
+            'description' => 'הצע פעולה אחת על האתר. הפעולה לא מתבצעת מיד — היא נשלחת לאישור מנהל. '
+                .'ציין את שם הכלי (tool) מהרשימה למטה, הפרמטרים (arguments), וסיכום קצר. '
+                .'אם ידוע כיצד לבטל את השינוי, ציין revert_tool ו-revert_arguments.'
+                .$catalogLine,
             'input_schema' => [
                 'type' => 'object',
                 'properties' => [

@@ -125,6 +125,10 @@ class Multioto_Agent_Mcp_Server
             ['name' => 'wp_plugin_update', 'description' => 'עדכון תוסף לגרסה האחרונה לפי slug.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['plugin' => ['type' => 'string']], 'required' => ['plugin']]],
             ['name' => 'wp_plugin_activate', 'description' => 'הפעלת תוסף לפי קובץ.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['plugin' => ['type' => 'string']], 'required' => ['plugin']]],
             ['name' => 'wp_plugin_deactivate', 'description' => 'כיבוי תוסף לפי קובץ.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['plugin' => ['type' => 'string']], 'required' => ['plugin']]],
+            ['name' => 'wp_menu_list', 'description' => 'רשימת תפריטי הניווט באתר והפריטים בכל תפריט (מזהה פריט, טקסט, קישור, הורה, סדר).', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => (object) []]],
+            ['name' => 'wp_menu_item_add', 'description' => 'הוספת פריט לתפריט. menu = שם או מזהה התפריט, title = טקסט הפריט, ואחד מ: url (קישור חופשי) או page_id (עמוד קיים). אופציונלי: parent_id (פריט הורה), position (מיקום).', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['menu' => ['type' => 'string'], 'title' => ['type' => 'string'], 'url' => ['type' => 'string'], 'page_id' => ['type' => 'integer'], 'parent_id' => ['type' => 'integer'], 'position' => ['type' => 'integer']], 'required' => ['menu', 'title']]],
+            ['name' => 'wp_menu_item_update', 'description' => 'עדכון פריט קיים בתפריט לפי item_id. אפשר לשנות title, url, parent_id, position (כל שדה אופציונלי).', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['item_id' => ['type' => 'integer'], 'title' => ['type' => 'string'], 'url' => ['type' => 'string'], 'parent_id' => ['type' => 'integer'], 'position' => ['type' => 'integer']], 'required' => ['item_id']]],
+            ['name' => 'wp_menu_item_unlink', 'description' => 'הסרת פריט מהתפריט לפי item_id — מסיר רק את הקישור מהתפריט; העמוד/הפוסט עצמו נשאר.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['item_id' => ['type' => 'integer']], 'required' => ['item_id']]],
         ];
     }
 
@@ -140,6 +144,10 @@ class Multioto_Agent_Mcp_Server
             'wp_plugin_update' => $this->pluginUpdate($args),
             'wp_plugin_activate' => $this->setPluginState($args, true),
             'wp_plugin_deactivate' => $this->setPluginState($args, false),
+            'wp_menu_list' => $this->menuList(),
+            'wp_menu_item_add' => $this->menuItemAdd($args),
+            'wp_menu_item_update' => $this->menuItemUpdate($args),
+            'wp_menu_item_unlink' => $this->menuItemUnlink($args),
             default => throw new Multioto_Agent_Rpc_Error(-32602, "Unknown tool: {$name}"),
         };
 
@@ -274,6 +282,153 @@ class Multioto_Agent_Mcp_Server
         deactivate_plugins($plugin);
 
         return "התוסף {$plugin} כובה.";
+    }
+
+    // --- Navigation menus ----------------------------------------------------
+
+    private function menuList(): string
+    {
+        $out = [];
+
+        foreach (wp_get_nav_menus() as $menu) {
+            $items = wp_get_nav_menu_items($menu->term_id) ?: [];
+
+            $out[] = [
+                'menu' => $menu->name,
+                'menu_id' => (int) $menu->term_id,
+                'items' => array_map(static fn ($item): array => [
+                    'item_id' => (int) $item->ID,
+                    'title' => $item->title,
+                    'url' => $item->url,
+                    'parent_id' => (int) $item->menu_item_parent,
+                    'order' => (int) $item->menu_order,
+                ], $items),
+            ];
+        }
+
+        return wp_json_encode($out, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    }
+
+    private function menuItemAdd(array $args): string
+    {
+        $menuId = $this->resolveMenuId((string) ($args['menu'] ?? ''));
+        $title = sanitize_text_field((string) ($args['title'] ?? ''));
+
+        if ($title === '') {
+            throw new Multioto_Agent_Rpc_Error(-32602, 'חסר טקסט לפריט (title).');
+        }
+
+        $data = ['menu-item-title' => $title, 'menu-item-status' => 'publish'];
+
+        if (! empty($args['page_id'])) {
+            // Link to an existing page.
+            $pageId = (int) $args['page_id'];
+
+            if (get_post_status($pageId) === false) {
+                throw new Multioto_Agent_Rpc_Error(-32602, "העמוד {$pageId} לא נמצא.");
+            }
+
+            $data['menu-item-type'] = 'post_type';
+            $data['menu-item-object'] = get_post_type($pageId) ?: 'page';
+            $data['menu-item-object-id'] = $pageId;
+        } else {
+            $data['menu-item-url'] = esc_url_raw((string) ($args['url'] ?? ''));
+
+            if ($data['menu-item-url'] === '') {
+                throw new Multioto_Agent_Rpc_Error(-32602, 'יש לציין url או page_id.');
+            }
+        }
+
+        if (! empty($args['parent_id'])) {
+            $data['menu-item-parent-id'] = (int) $args['parent_id'];
+        }
+        if (isset($args['position'])) {
+            $data['menu-item-position'] = (int) $args['position'];
+        }
+
+        $id = wp_update_nav_menu_item($menuId, 0, $data);
+
+        if (is_wp_error($id)) {
+            throw new Multioto_Agent_Rpc_Error(-32000, $id->get_error_message());
+        }
+
+        return wp_json_encode(['added_item_id' => (int) $id, 'menu_id' => $menuId], JSON_UNESCAPED_UNICODE);
+    }
+
+    private function menuItemUpdate(array $args): string
+    {
+        $item = $this->navMenuItem((int) ($args['item_id'] ?? 0));
+        $menuId = $this->menuIdOfItem($item->ID);
+
+        // Merge onto the item's current values so an unspecified field is kept,
+        // not blanked out by a partial update.
+        $data = [
+            'menu-item-title' => isset($args['title']) ? sanitize_text_field((string) $args['title']) : $item->title,
+            'menu-item-url' => isset($args['url']) ? esc_url_raw((string) $args['url']) : $item->url,
+            'menu-item-object-id' => (int) $item->object_id,
+            'menu-item-object' => $item->object,
+            'menu-item-type' => $item->type,
+            'menu-item-parent-id' => isset($args['parent_id']) ? (int) $args['parent_id'] : (int) $item->menu_item_parent,
+            'menu-item-position' => isset($args['position']) ? (int) $args['position'] : (int) $item->menu_order,
+            'menu-item-status' => 'publish',
+        ];
+
+        $id = wp_update_nav_menu_item($menuId, $item->ID, $data);
+
+        if (is_wp_error($id)) {
+            throw new Multioto_Agent_Rpc_Error(-32000, $id->get_error_message());
+        }
+
+        return wp_json_encode(['updated_item_id' => (int) $item->ID], JSON_UNESCAPED_UNICODE);
+    }
+
+    private function menuItemUnlink(array $args): string
+    {
+        $item = $this->navMenuItem((int) ($args['item_id'] ?? 0));
+
+        // Deletes the nav_menu_item pointer only — the page/post it linked to is
+        // untouched, so this is reversible by re-adding the item.
+        if (! wp_delete_post($item->ID, true)) {
+            throw new Multioto_Agent_Rpc_Error(-32000, "לא ניתן להסיר את פריט התפריט {$item->ID}.");
+        }
+
+        return wp_json_encode(['unlinked_item_id' => (int) $item->ID], JSON_UNESCAPED_UNICODE);
+    }
+
+    /** Resolve a menu by id, slug or name to its term id (or fail). */
+    private function resolveMenuId(string $menu): int
+    {
+        $object = $menu !== '' ? wp_get_nav_menu_object($menu) : false;
+
+        if (! $object) {
+            throw new Multioto_Agent_Rpc_Error(-32602, "התפריט '{$menu}' לא נמצא.");
+        }
+
+        return (int) $object->term_id;
+    }
+
+    /** Fetch a post and confirm it is a nav menu item (or fail). */
+    private function navMenuItem(int $itemId): \WP_Post
+    {
+        $post = $itemId > 0 ? get_post($itemId) : null;
+
+        if (! $post || $post->post_type !== 'nav_menu_item') {
+            throw new Multioto_Agent_Rpc_Error(-32602, "פריט התפריט {$itemId} לא נמצא.");
+        }
+
+        return $post;
+    }
+
+    /** The menu (term id) a given menu item belongs to. */
+    private function menuIdOfItem(int $itemId): int
+    {
+        $terms = wp_get_object_terms($itemId, 'nav_menu');
+
+        if (is_wp_error($terms) || empty($terms)) {
+            throw new Multioto_Agent_Rpc_Error(-32602, "פריט התפריט {$itemId} לא משויך לתפריט.");
+        }
+
+        return (int) $terms[0]->term_id;
     }
 
     /**
