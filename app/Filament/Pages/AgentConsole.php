@@ -2,12 +2,16 @@
 
 namespace App\Filament\Pages;
 
+use App\Enums\ActionStatus;
 use App\Filament\Concerns\RunsAgentCommands;
 use App\Models\AgentCommand;
+use App\Models\PendingAction;
+use App\Services\Automation\ApprovalGate;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Concerns\InteractsWithForms;
 use Filament\Forms\Contracts\HasForms;
 use Filament\Forms\Form;
+use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 use Illuminate\Support\Collection;
 
@@ -80,5 +84,49 @@ class AgentConsole extends Page implements HasForms
             ->latest('id')
             ->limit(15)
             ->get();
+    }
+
+    /**
+     * Everything the agent has proposed and is still waiting on — shown inline so
+     * a proposal can be approved right here, without a detour to the approvals
+     * screen.
+     *
+     * @return Collection<int, PendingAction>
+     */
+    public function getPendingApprovalsProperty(): Collection
+    {
+        return PendingAction::with('customer')
+            ->where('status', ActionStatus::Pending)
+            ->latest('id')
+            ->limit(12)
+            ->get();
+    }
+
+    /** Approve + run a proposal from the console. */
+    public function approveAction(int $id): void
+    {
+        $action = PendingAction::find($id);
+
+        if (! $action || $action->status !== ActionStatus::Pending) {
+            return;
+        }
+
+        $result = app(ApprovalGate::class)->approve($action->fresh());
+
+        Notification::make()->title($result)
+            ->{$action->fresh()->status === ActionStatus::Executed ? 'success' : 'warning'}()
+            ->send();
+    }
+
+    /** Reject a proposal from the console. */
+    public function rejectAction(int $id): void
+    {
+        $action = PendingAction::find($id);
+
+        if (! $action || $action->status !== ActionStatus::Pending) {
+            return;
+        }
+
+        Notification::make()->title(app(ApprovalGate::class)->reject($action->fresh()))->send();
     }
 }
