@@ -5,10 +5,14 @@ namespace App\Services\Notifications;
 use App\Mail\NotificationMail;
 use App\Models\Ticket;
 use App\Models\TicketMessage;
+use App\Models\User;
 use App\Services\Waha\WahaClient;
 use App\Support\EmailList;
+use Filament\Notifications\Actions\Action;
+use Filament\Notifications\Notification;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 
 /**
@@ -36,6 +40,7 @@ class TeamNotifier
         }
 
         $this->send($title, $body, $ticket);
+        $this->bell($ticket, 'פנייה חדשה', "{$who} · {$ticket->subject}", 'heroicon-o-lifebuoy');
     }
 
     /** A customer replied on an existing ticket. */
@@ -46,6 +51,38 @@ class TeamNotifier
         $body = "מ: {$who}\nנושא: {$ticket->subject}\n\nתוכן:\n".Str::limit($message->body, 600);
 
         $this->send($title, $body, $ticket);
+        $this->bell($ticket, "תגובת לקוח בפנייה #{$ticket->id}", "{$who}: ".Str::limit($message->body, 120), 'heroicon-o-chat-bubble-left-right');
+    }
+
+    /**
+     * In-panel bell notification for the whole team, with a click-through that
+     * opens the ticket. Best-effort: never blocks the WhatsApp/email alert, and
+     * no-ops before the notifications table exists (fresh deploy, pre-migrate).
+     */
+    protected function bell(Ticket $ticket, string $title, string $body, string $icon): void
+    {
+        if (! Schema::hasTable('notifications')) {
+            return;
+        }
+
+        try {
+            $recipients = User::query()->get();
+
+            if ($recipients->isEmpty()) {
+                return;
+            }
+
+            $url = rtrim((string) config('app.url'), '/')."/admin/tickets/{$ticket->id}";
+
+            Notification::make()
+                ->title($title)
+                ->body($body)
+                ->icon($icon)
+                ->actions([Action::make('view')->label('פתח פנייה')->url($url)])
+                ->sendToDatabase($recipients);
+        } catch (\Throwable $e) {
+            Log::warning('TeamNotifier: bell notification failed', ['error' => $e->getMessage()]);
+        }
     }
 
     /** Deliver an alert to both team channels (each independent, best-effort). */
