@@ -78,6 +78,27 @@ class AgentSystemActionsTest extends TestCase
         $this->assertSame(1, Task::where('title', 'להתקשר ללקוח')->count());
     }
 
+    public function test_a_double_approval_executes_the_action_only_once(): void
+    {
+        config(['agent.system_actions_enabled' => true]);
+        Queue::fake();
+        $customer = Customer::factory()->create();
+
+        $action = $this->systemAction([
+            'operation' => 'send_payment_request', 'customer_id' => $customer->id,
+            'amount_agorot' => 30000, 'description' => 'אחסון', 'channel' => 'whatsapp',
+        ]);
+
+        $gate = app(ApprovalGate::class);
+        $first = $gate->approve($action->fresh());
+        $second = $gate->approve($action->fresh()); // e.g. WhatsApp + panel at once
+
+        $this->assertSame(ActionStatus::Executed, $action->fresh()->status);
+        $this->assertStringContainsString('כבר טופלה', $second);
+        // The send job is dispatched exactly once — no duplicate payment demand.
+        Queue::assertPushed(SendPaymentLinkJob::class, 1);
+    }
+
     // ---- Inline approval from the console ---------------------------------
 
     public function test_a_proposal_can_be_approved_inline_from_the_console(): void

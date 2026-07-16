@@ -41,11 +41,6 @@ class SiteToolCatalog
         return 2;
     }
 
-    public function tierLabel(string $tool): string
-    {
-        return self::TIER_LABELS[$this->tier($tool)];
-    }
-
     /**
      * The effective tier for a tool ON A SPECIFIC SITE. The MCP destructive hint
      * can only ESCALATE (a tool declaring itself destructive is tier 3, confined

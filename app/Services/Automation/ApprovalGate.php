@@ -101,7 +101,19 @@ class ApprovalGate
             return "פעולה #{$action->id} פגת תוקף (מעל ".self::MAX_AGE_DAYS.' ימים) ולא בוצעה.';
         }
 
-        $action->update(['status' => ActionStatus::Approved, 'decided_at' => now()]);
+        // Atomically claim the pending → approved transition, so two concurrent
+        // approvals (panel + WhatsApp, a double-click, two operators) can never
+        // both execute the same action — a duplicate charge demand or a duplicate
+        // customer reply. Only the caller whose UPDATE actually flips the row runs.
+        $claimed = PendingAction::whereKey($action->id)
+            ->where('status', ActionStatus::Pending)
+            ->update(['status' => ActionStatus::Approved, 'decided_at' => now()]);
+
+        if ($claimed === 0) {
+            return "פעולה #{$action->id} כבר טופלה.";
+        }
+
+        $action->refresh();
 
         try {
             $this->execute($action);
