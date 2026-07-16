@@ -2,6 +2,7 @@
 
 namespace App\Filament\Pages;
 
+use App\Filament\Clusters\Settings;
 use App\Filament\Concerns\AdminOnly;
 use App\Filament\Concerns\PersistsSettings;
 use App\Models\Setting;
@@ -19,6 +20,7 @@ use Filament\Forms\Form;
 use Filament\Forms\Set;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
+use Filament\Pages\SubNavigationPosition;
 
 /**
  * סוכן AI — ניהול ההפעלה, הספק (אנתרופיק / תואם-OpenAI), הדגם וההוראות של הסוכן.
@@ -35,7 +37,9 @@ class ManageAiAgent extends Page implements HasForms
 
     protected static ?string $navigationIcon = 'heroicon-o-sparkles';
 
-    protected static ?string $navigationGroup = 'הגדרות';
+    protected static ?string $cluster = Settings::class;
+
+    protected static SubNavigationPosition $subNavigationPosition = SubNavigationPosition::Top;
 
     protected static ?string $navigationLabel = 'סוכן AI';
 
