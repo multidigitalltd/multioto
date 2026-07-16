@@ -101,6 +101,20 @@ class AgentFoundationTest extends TestCase
         $this->get($signed)->assertNotFound();
     }
 
+    public function test_download_falls_back_to_the_committed_release_when_the_disk_lacks_it(): void
+    {
+        // No upload to the plugin disk — a fresh deploy. The signed link must
+        // still serve the tracked release committed in the repo, so installed
+        // sites can self-update straight after ./update.sh.
+        Storage::fake('local');
+        config(['agent.plugin.disk' => 'local', 'agent.plugin.path' => 'agent-plugin']);
+        $version = (string) config('agent.plugin.current_version');
+        $this->assertFileExists(base_path("wordpress-plugin/releases/multioto-agent-{$version}.zip"));
+
+        $signed = URL::temporarySignedRoute('agent.plugin.download', now()->addMinutes(15), ['version' => $version]);
+        $this->get($signed)->assertOk()->assertHeader('content-type', 'application/zip');
+    }
+
     // ---- Per-site memory ----------------------------------------------------
 
     public function test_memory_is_written_read_overwritten_and_forgotten(): void
