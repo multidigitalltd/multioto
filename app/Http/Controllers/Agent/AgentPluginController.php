@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Agent;
 
 use App\Http\Controllers\Controller;
+use App\Jobs\RefreshSiteCapabilitiesJob;
 use App\Models\Site;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -29,11 +30,22 @@ class AgentPluginController extends Controller
         $reported = (string) $request->query('version', $request->header('X-Agent-Plugin-Version', ''));
         $current = (string) config('agent.plugin.current_version');
 
+        // A plugin upgrade can add/remove tools, but WordPress just swaps the
+        // files — it never tells us. So when the reported version changes,
+        // re-discover the tool catalog in the background; otherwise the site
+        // would keep the old catalog and the new tools stay invisible to the
+        // agent until someone tests the connection by hand.
+        $versionChanged = $reported !== '' && $reported !== (string) $site->agent_plugin_version;
+
         // Record the check-in: which version the site runs, and that it is alive.
         $site->forceFill([
             'agent_plugin_version' => $reported !== '' ? $reported : $site->agent_plugin_version,
             'mcp_last_seen_at' => now(),
         ])->save();
+
+        if ($versionChanged && $site->mcp_enabled && filled($site->mcp_endpoint)) {
+            RefreshSiteCapabilitiesJob::dispatch($site->id);
+        }
 
         $updateAvailable = $reported === '' || version_compare($current, $reported, '>');
 
