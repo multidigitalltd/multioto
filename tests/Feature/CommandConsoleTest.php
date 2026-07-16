@@ -150,6 +150,35 @@ class CommandConsoleTest extends TestCase
             ->assertNotified();
     }
 
+    public function test_the_console_shows_the_agents_question_and_continues_on_the_next_reply(): void
+    {
+        $this->actingAs($user = User::factory()->create());
+        $customer = Customer::factory()->create(['name' => 'משה']);
+
+        // Turn 1: the agent asks (via need_clarification) instead of guessing.
+        $this->fakeAgent([['need_clarification', ['question' => 'כמה לגבות ממשה?']]], summary: 'צריך סכום.');
+        Livewire::test(AgentConsole::class)
+            ->set('data.instruction', 'תשלח דרישת תשלום למשה')
+            ->call('run')
+            // The "waiting for your reply" banner is now shown with the question.
+            ->assertSet('data.instruction', null)
+            ->assertSeeText('כמה לגבות ממשה?');
+
+        $this->assertSame(AgentCommandOutcome::Unclear, AgentCommand::latest('id')->first()->outcome);
+
+        // Turn 2: the operator answers in the same box → it continues, not restarts.
+        $this->fakeAgent([['propose_payment_request', ['customer_id' => $customer->id, 'amount_ils' => 300, 'description' => 'אחסון']]]);
+        Livewire::test(AgentConsole::class)
+            ->set('data.instruction', '300 שקל')
+            ->call('run');
+
+        $second = AgentCommand::latest('id')->first();
+        $this->assertSame(AgentCommandOutcome::Proposed, $second->outcome);
+        // The continued instruction carried the original request forward.
+        $this->assertStringContainsString('תשלח דרישת תשלום למשה', $second->instruction);
+        $this->assertSame(30000, data_get(PendingAction::find($second->pending_action_id)->payload, 'amount_agorot'));
+    }
+
     protected function tearDown(): void
     {
         Mockery::close();

@@ -1,4 +1,16 @@
 <x-filament-panels::page>
+    {{-- The agent asked something and is waiting — make it obvious the answer
+         goes in the same box below, and that the thread will continue. --}}
+    @if ($this->awaitingReply)
+        <x-filament::section icon="heroicon-o-chat-bubble-left-ellipsis" class="border-warning-300 dark:border-warning-700">
+            <x-slot name="heading">הסוכן ממתין לתשובתך</x-slot>
+            <p class="whitespace-pre-line break-words text-sm text-gray-700 dark:text-gray-200">{{ $this->awaitingReply->result }}</p>
+            <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                כתבו את התשובה בתיבה למטה ושלחו — הסוכן ימשיך מאותה נקודה, בלי להתחיל מחדש.
+            </p>
+        </x-filament::section>
+    @endif
+
     <form wire:submit="run" class="flex flex-col gap-3">
         {{ $this->form }}
 

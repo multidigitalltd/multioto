@@ -3,6 +3,7 @@
 namespace App\Filament\Pages;
 
 use App\Enums\ActionStatus;
+use App\Enums\AgentCommandOutcome;
 use App\Filament\Concerns\RunsAgentCommands;
 use App\Models\AgentCommand;
 use App\Models\PendingAction;
@@ -100,6 +101,21 @@ class AgentConsole extends Page implements HasForms
             ->latest('id')
             ->limit(12)
             ->get();
+    }
+
+    /**
+     * The agent's open question, if my last command is waiting for my answer.
+     * When set, the console shows a "reply to continue" banner and the next
+     * thing I send is treated as the answer (see RunsAgentCommands).
+     */
+    public function getAwaitingReplyProperty(): ?AgentCommand
+    {
+        $last = AgentCommand::query()
+            ->where('user_id', auth()->id())
+            ->latest('id')
+            ->first();
+
+        return $last?->outcome === AgentCommandOutcome::Unclear ? $last : null;
     }
 
     /** Approve + run a proposal from the console. */

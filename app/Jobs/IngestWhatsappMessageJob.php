@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Enums\MessageChannel;
 use App\Enums\TicketChannel;
+use App\Enums\TicketStatus;
 use App\Models\Customer;
 use App\Models\WebhookEvent;
 use App\Services\Automation\ApprovalGate;
@@ -96,6 +97,10 @@ class IngestWhatsappMessageJob implements ShouldQueue
             externalMessageId: $messageId,
             contactName: $pushName ?: null,
             contactHandle: '+'.Str::before($chatId, '@'),
+            // Once a WhatsApp ticket is done (handled OR closed), the next
+            // message from the customer opens a FRESH ticket instead of reviving
+            // the old thread — a new contact is treated as a new enquiry.
+            terminalStatuses: [TicketStatus::Closed, TicketStatus::Resolved],
         );
 
         // Download and store the media the customer sent (image/file), then keep

@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Enums\TicketStatus;
 use App\Enums\WebhookSource;
 use App\Jobs\IngestEmailMessageJob;
 use App\Jobs\IngestWhatsappMessageJob;
@@ -79,5 +80,28 @@ class TicketSenderIdentityTest extends TestCase
         $this->assertNotNull($ticket->customer_id);
         $this->assertNull($ticket->contact_name); // not stored for a matched customer
         $this->assertSame('לקוח ותיק', $ticket->senderName());
+    }
+
+    public function test_whatsapp_after_a_done_ticket_opens_a_new_one(): void
+    {
+        $send = function (string $id, string $body): void {
+            [$event] = WebhookEvent::record(WebhookSource::Waha, 'message', $id, [
+                'event' => 'message',
+                'payload' => ['id' => $id, 'from' => '972521234567@c.us', 'notifyName' => 'משה', 'body' => $body],
+            ]);
+            IngestWhatsappMessageJob::dispatchSync($event->id);
+        };
+
+        // First contact opens a ticket; the team marks it handled (טופל).
+        $send('w-1', 'האתר למטה');
+        $first = Ticket::sole();
+        $first->update(['status' => TicketStatus::Resolved]);
+
+        // A later message from the same number is a NEW enquiry, not a revival.
+        $send('w-2', 'עכשיו יש לי שאלה על חשבונית');
+
+        $this->assertSame(2, Ticket::count());
+        $this->assertSame(TicketStatus::Resolved, $first->fresh()->status);
+        $this->assertSame(TicketStatus::Open, Ticket::latest('id')->first()->status);
     }
 }
