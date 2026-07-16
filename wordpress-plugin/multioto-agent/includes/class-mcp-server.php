@@ -129,6 +129,11 @@ class Multioto_Agent_Mcp_Server
             ['name' => 'wp_menu_item_add', 'description' => 'הוספת פריט לתפריט. menu = שם או מזהה התפריט, title = טקסט הפריט, ואחד מ: url (קישור חופשי) או page_id (עמוד קיים). אופציונלי: parent_id (פריט הורה), position (מיקום).', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['menu' => ['type' => 'string'], 'title' => ['type' => 'string'], 'url' => ['type' => 'string'], 'page_id' => ['type' => 'integer'], 'parent_id' => ['type' => 'integer'], 'position' => ['type' => 'integer']], 'required' => ['menu', 'title']]],
             ['name' => 'wp_menu_item_update', 'description' => 'עדכון פריט קיים בתפריט לפי item_id. אפשר לשנות title, url, parent_id, position (כל שדה אופציונלי).', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['item_id' => ['type' => 'integer'], 'title' => ['type' => 'string'], 'url' => ['type' => 'string'], 'parent_id' => ['type' => 'integer'], 'position' => ['type' => 'integer']], 'required' => ['item_id']]],
             ['name' => 'wp_menu_item_unlink', 'description' => 'הסרת פריט מהתפריט לפי item_id — מסיר רק את הקישור מהתפריט; העמוד/הפוסט עצמו נשאר.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['item_id' => ['type' => 'integer']], 'required' => ['item_id']]],
+            ['name' => 'wp_content_list', 'description' => 'רשימת עמודים/פוסטים. type = page או post (ברירת מחדל page), status (any/publish/draft), search (טקסט חיפוש), limit.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['type' => ['type' => 'string'], 'status' => ['type' => 'string'], 'search' => ['type' => 'string'], 'limit' => ['type' => 'integer']]]],
+            ['name' => 'wp_content_get', 'description' => 'קריאת עמוד/פוסט מלא לפי id: כותרת, תוכן, סטטוס, סוג.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['id' => ['type' => 'integer']], 'required' => ['id']]],
+            ['name' => 'wp_content_create', 'description' => 'יצירת עמוד/פוסט. title, content (HTML), type = page או post, status = draft או publish. אופציונלי: excerpt.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['title' => ['type' => 'string'], 'content' => ['type' => 'string'], 'type' => ['type' => 'string'], 'status' => ['type' => 'string'], 'excerpt' => ['type' => 'string']], 'required' => ['title']]],
+            ['name' => 'wp_content_update', 'description' => 'עדכון עמוד/פוסט קיים לפי id: title, content, status, excerpt (כל שדה אופציונלי; מה שלא צוין נשמר).', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['id' => ['type' => 'integer'], 'title' => ['type' => 'string'], 'content' => ['type' => 'string'], 'status' => ['type' => 'string'], 'excerpt' => ['type' => 'string']], 'required' => ['id']]],
+            ['name' => 'wp_content_trash', 'description' => 'העברת עמוד/פוסט לפח לפי id (הפיך — ניתן לשחזר מהפח).', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['id' => ['type' => 'integer']], 'required' => ['id']]],
         ];
     }
 
@@ -148,6 +153,11 @@ class Multioto_Agent_Mcp_Server
             'wp_menu_item_add' => $this->menuItemAdd($args),
             'wp_menu_item_update' => $this->menuItemUpdate($args),
             'wp_menu_item_unlink' => $this->menuItemUnlink($args),
+            'wp_content_list' => $this->contentList($args),
+            'wp_content_get' => $this->contentGet($args),
+            'wp_content_create' => $this->contentCreate($args),
+            'wp_content_update' => $this->contentUpdate($args),
+            'wp_content_trash' => $this->contentTrash($args),
             default => throw new Multioto_Agent_Rpc_Error(-32602, "Unknown tool: {$name}"),
         };
 
@@ -464,6 +474,145 @@ class Multioto_Agent_Mcp_Server
         }
 
         return (int) $terms[0]->term_id;
+    }
+
+    // --- Content (pages & posts) ---------------------------------------------
+
+    private function contentList(array $args): string
+    {
+        $query = new WP_Query([
+            'post_type' => $this->contentType($args),
+            'post_status' => $this->contentStatus((string) ($args['status'] ?? 'any'), true),
+            's' => sanitize_text_field((string) ($args['search'] ?? '')),
+            'posts_per_page' => min(100, max(1, (int) ($args['limit'] ?? 30))),
+            'orderby' => 'modified',
+            'order' => 'DESC',
+            'no_found_rows' => true,
+        ]);
+
+        $out = array_map(static fn (WP_Post $post): array => [
+            'id' => $post->ID,
+            'title' => $post->post_title,
+            'type' => $post->post_type,
+            'status' => $post->post_status,
+            'modified' => $post->post_modified_gmt,
+            'url' => get_permalink($post),
+        ], $query->posts);
+
+        return wp_json_encode($out, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    }
+
+    private function contentGet(array $args): string
+    {
+        $post = $this->contentPost((int) ($args['id'] ?? 0));
+
+        return wp_json_encode([
+            'id' => $post->ID,
+            'title' => $post->post_title,
+            'type' => $post->post_type,
+            'status' => $post->post_status,
+            'excerpt' => $post->post_excerpt,
+            'content' => $post->post_content,
+            'url' => get_permalink($post),
+        ], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    }
+
+    private function contentCreate(array $args): string
+    {
+        $title = sanitize_text_field((string) ($args['title'] ?? ''));
+
+        if ($title === '') {
+            throw new Multioto_Agent_Rpc_Error(-32602, 'חסרה כותרת (title).');
+        }
+
+        // Content passes through the same sanitiser WordPress uses for the block
+        // editor, so allowed HTML is kept and scripts are stripped.
+        $id = wp_insert_post([
+            'post_title' => $title,
+            'post_content' => wp_kses_post((string) ($args['content'] ?? '')),
+            'post_excerpt' => sanitize_text_field((string) ($args['excerpt'] ?? '')),
+            'post_type' => $this->contentType($args),
+            'post_status' => $this->contentStatus((string) ($args['status'] ?? 'draft')),
+        ], true);
+
+        if (is_wp_error($id)) {
+            throw new Multioto_Agent_Rpc_Error(-32000, $id->get_error_message());
+        }
+
+        return wp_json_encode(['created_id' => (int) $id, 'url' => get_permalink((int) $id)], JSON_UNESCAPED_UNICODE);
+    }
+
+    private function contentUpdate(array $args): string
+    {
+        $post = $this->contentPost((int) ($args['id'] ?? 0));
+
+        $data = ['ID' => $post->ID];
+
+        if (isset($args['title'])) {
+            $data['post_title'] = sanitize_text_field((string) $args['title']);
+        }
+        if (isset($args['content'])) {
+            $data['post_content'] = wp_kses_post((string) $args['content']);
+        }
+        if (isset($args['excerpt'])) {
+            $data['post_excerpt'] = sanitize_text_field((string) $args['excerpt']);
+        }
+        if (isset($args['status'])) {
+            $data['post_status'] = $this->contentStatus((string) $args['status']);
+        }
+
+        if (count($data) === 1) {
+            throw new Multioto_Agent_Rpc_Error(-32602, 'לא צוין שום שדה לעדכון.');
+        }
+
+        $id = wp_update_post($data, true);
+
+        if (is_wp_error($id)) {
+            throw new Multioto_Agent_Rpc_Error(-32000, $id->get_error_message());
+        }
+
+        return wp_json_encode(['updated_id' => (int) $post->ID], JSON_UNESCAPED_UNICODE);
+    }
+
+    private function contentTrash(array $args): string
+    {
+        $post = $this->contentPost((int) ($args['id'] ?? 0));
+
+        // Trash, never force-delete — a manager can restore it from the trash.
+        if (! wp_trash_post($post->ID)) {
+            throw new Multioto_Agent_Rpc_Error(-32000, "לא ניתן להעביר לפח את הפריט {$post->ID}.");
+        }
+
+        return wp_json_encode(['trashed_id' => (int) $post->ID], JSON_UNESCAPED_UNICODE);
+    }
+
+    /** Resolve the requested content type, restricted to pages and posts. */
+    private function contentType(array $args): string
+    {
+        $type = strtolower(trim((string) ($args['type'] ?? 'page')));
+
+        return in_array($type, ['page', 'post'], true) ? $type : 'page';
+    }
+
+    /** Validate a post status; blank/unknown falls back to draft (or any, for a query). */
+    private function contentStatus(string $status, bool $forQuery = false): string
+    {
+        $status = strtolower(trim($status));
+        $allowed = $forQuery ? ['any', 'publish', 'draft', 'pending', 'private'] : ['publish', 'draft', 'pending', 'private'];
+
+        return in_array($status, $allowed, true) ? $status : ($forQuery ? 'any' : 'draft');
+    }
+
+    /** Fetch a post/page (only those types) by id, or fail. */
+    private function contentPost(int $id): WP_Post
+    {
+        $post = $id > 0 ? get_post($id) : null;
+
+        if (! $post || ! in_array($post->post_type, ['page', 'post'], true)) {
+            throw new Multioto_Agent_Rpc_Error(-32602, "העמוד/הפוסט {$id} לא נמצא.");
+        }
+
+        return $post;
     }
 
     /**

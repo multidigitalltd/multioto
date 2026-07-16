@@ -140,6 +140,39 @@ class SiteAgentTest extends TestCase
         $this->assertSame('צור קשר', data_get($action->payload, 'arguments.title'));
     }
 
+    public function test_the_agent_can_propose_creating_content_on_production(): void
+    {
+        // Creating a page is a tier-2 change: proposable on production, gated by
+        // approval — the agent "enters content" like a human, after approval.
+        $site = Site::factory()->create([
+            'mcp_enabled' => true,
+            'mcp_endpoint' => 'https://site.test/wp-json/md-agent/mcp',
+            'mcp_secret' => 'site-secret',
+            'mcp_capabilities' => ['tools' => [
+                ['name' => 'wp_content_list', 'description' => 'רשימת עמודים', 'read_only' => true, 'destructive' => false],
+                ['name' => 'wp_content_create', 'description' => 'יצירת עמוד/פוסט', 'read_only' => false, 'destructive' => false],
+            ]],
+        ]);
+
+        $this->fakeClaude([
+            ['stop_reason' => 'tool_use', 'content' => [
+                ['type' => 'tool_use', 'id' => 'tu_1', 'name' => 'propose_action', 'input' => [
+                    'tool' => 'wp_content_create',
+                    'arguments' => ['title' => 'תקנון', 'content' => '<p>תוכן</p>', 'type' => 'page', 'status' => 'draft'],
+                    'summary' => 'ליצור עמוד "תקנון" כטיוטה',
+                ]],
+            ]],
+            ['stop_reason' => 'end_turn', 'content' => [['type' => 'text', 'text' => 'הצעתי ליצור עמוד תקנון.']]],
+        ]);
+
+        app(SiteAgent::class)->investigate($site, 'תכין עמוד תקנון כטיוטה');
+
+        $action = PendingAction::where('type', 'site_action')->sole();
+        $this->assertSame(ActionStatus::Pending, $action->status);
+        $this->assertSame('wp_content_create', data_get($action->payload, 'tool'));
+        $this->assertSame('תקנון', data_get($action->payload, 'arguments.title'));
+    }
+
     public function test_the_agent_cannot_propose_a_destructive_tool_on_production(): void
     {
         $site = $this->connectedSite(); // environment defaults to production
