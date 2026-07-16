@@ -176,4 +176,48 @@ class NotificationTemplatesTest extends TestCase
         // The observer dispatches the job; on the sync queue it already ran.
         Mail::assertSent(NotificationMail::class, fn ($mail) => str_contains($mail->bodyText, 'הושלם'));
     }
+
+    public function test_the_closing_notice_is_ai_written_when_dynamic_messages_are_on(): void
+    {
+        Mail::fake();
+        config(['billing.ai.enabled' => true, 'billing.ai.dynamic_ack' => true]);
+
+        $customer = Customer::factory()->create(['name' => 'נועה', 'email' => 'noa@test.co']);
+        $ticket = Ticket::create([
+            'customer_id' => $customer->id, 'channel' => TicketChannel::Email,
+            'subject' => 'תקלה', 'status' => TicketStatus::Open,
+        ]);
+
+        $ai = Mockery::mock(ClaudeClient::class);
+        $ai->shouldReceive('isEnabled')->andReturn(true);
+        $ai->shouldReceive('structured')->once()->andReturn(['message' => 'נועה, הפנייה טופלה ונסגרה. תודה שפנית!']);
+
+        (new SendTicketNotificationJob($ticket->id, 'ticket.resolved'))->handle(app(TemplateEngine::class), app(WahaClient::class), $ai);
+
+        Mail::assertSent(NotificationMail::class, fn ($mail): bool => str_contains($mail->bodyText, 'טופלה ונסגרה')
+            && str_contains($mail->subjectLine, (string) $ticket->id));
+    }
+
+    public function test_team_gets_an_email_copy_when_the_copy_toggle_is_on(): void
+    {
+        Mail::fake();
+        config([
+            'billing.notifications.copy_customer_messages' => true,
+            'billing.notifications.team_email' => 'team@multi.co',
+        ]);
+
+        $customer = Customer::factory()->create(['name' => 'איתי', 'email' => 'itay@test.co']);
+        $ticket = Ticket::create([
+            'customer_id' => $customer->id, 'channel' => TicketChannel::Email,
+            'subject' => 'שאלה', 'status' => TicketStatus::Open,
+        ]);
+
+        (new SendTicketNotificationJob($ticket->id, 'ticket.received'))->handle(app(TemplateEngine::class), app(WahaClient::class), app(ClaudeClient::class));
+
+        // The customer got the ack, and the team got a copy labelled as such.
+        Mail::assertSent(NotificationMail::class, fn ($mail): bool => $mail->hasTo('itay@test.co'));
+        Mail::assertSent(NotificationMail::class, fn ($mail): bool => $mail->hasTo('team@multi.co')
+            && str_contains($mail->subjectLine, 'העתק')
+            && str_contains($mail->subjectLine, 'איתי'));
+    }
 }

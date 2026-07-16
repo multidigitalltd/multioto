@@ -59,6 +59,7 @@ class SettingsServiceProvider extends ServiceProvider
         'mail.reply_to' => 'billing.email.support_address',
         'ai.enabled' => 'billing.ai.enabled',
         'ai.dynamic_ack' => 'billing.ai.dynamic_ack',
+        'notifications.copy_customer_messages' => 'billing.notifications.copy_customer_messages',
         'ai.provider' => 'billing.ai.provider',
         'ai.api_key' => 'billing.ai.api_key',
         'ai.base_url' => 'billing.ai.base_url',
