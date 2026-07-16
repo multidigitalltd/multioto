@@ -79,6 +79,9 @@ class ManageAiAgent extends Page implements HasForms
                 'ticket_rules' => config('billing.ai.ticket_rules'),
                 'style_summary' => config('billing.ai.style_summary'),
             ],
+            'notifications' => [
+                'copy_customer_messages' => (bool) config('billing.notifications.copy_customer_messages'),
+            ],
             'agent' => [
                 'actions_enabled' => (bool) config('agent.actions_enabled'),
                 'auto_investigate_tickets' => (bool) config('agent.auto_investigate_tickets'),
@@ -123,8 +126,12 @@ class ManageAiAgent extends Page implements HasForms
                             ->autocomplete('new-password')
                             ->helperText('נשמר מוצפן. השאירו ריק כדי לא לשנות.'),
                         Toggle::make('ai.dynamic_ack')
-                            ->label('מענה קבלה שהסוכן כותב לכל פנייה')
-                            ->helperText('כשדולק — אישור קבלת הפנייה (מייל/וואטסאפ) נכתב על ידי הסוכן במיוחד לכל פנייה, כולל מספר הפנייה, במקום תבנית קבועה. אם הסוכן כבוי או נכשל — חוזרים אוטומטית לתבנית.')
+                            ->label('הודעות אוטומטיות שהסוכן כותב (אישור קבלה + סגירה)')
+                            ->helperText('כשדולק — אישור קבלת הפנייה והודעת הסגירה/"טופל" (מייל/וואטסאפ) נכתבים על ידי הסוכן במיוחד לכל פנייה, כולל מספר הפנייה, במקום תבנית קבועה. אם הסוכן כבוי או נכשל — חוזרים אוטומטית לתבנית.')
+                            ->columnSpanFull(),
+                        Toggle::make('notifications.copy_customer_messages')
+                            ->label('שלח לצוות העתק במייל מכל הודעה אוטומטית ללקוח')
+                            ->helperText('כשדולק — כל הודעה שנשלחת אוטומטית ללקוח (אישור קבלה, הודעת סגירה) נשלחת גם כהעתק לכתובת מיילי הצוות (מוגדרת בהגדרות ← דואר).')
                             ->columnSpanFull(),
                     ])->columns(2),
 
@@ -198,6 +205,7 @@ class ManageAiAgent extends Page implements HasForms
         // Non-secret fields: persist the (prefilled/edited) value.
         Setting::put('ai.enabled', data_get($this->data, 'ai.enabled') ? '1' : '0');
         Setting::put('ai.dynamic_ack', data_get($this->data, 'ai.dynamic_ack') ? '1' : '0');
+        Setting::put('notifications.copy_customer_messages', data_get($this->data, 'notifications.copy_customer_messages') ? '1' : '0');
         Setting::put('ai.provider', (string) (data_get($this->data, 'ai.provider') ?: 'anthropic'));
         Setting::put('agent.actions_enabled', data_get($this->data, 'agent.actions_enabled') ? '1' : '0');
         Setting::put('agent.auto_investigate_tickets', data_get($this->data, 'agent.auto_investigate_tickets') ? '1' : '0');

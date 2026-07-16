@@ -202,6 +202,10 @@ return [
         // approvals number/group (billing.waha.owner_number) AND this email.
         // Independent of the AI layer — the team is always notified.
         'team_email' => env('NOTIFY_TEAM_EMAIL'),
+        // When on, every automatic message sent to a customer (acknowledgement,
+        // closing/resolved notice, …) is also emailed as a copy to the team
+        // address above — so the owner sees exactly what went out. Off by default.
+        'copy_customer_messages' => env('NOTIFY_COPY_CUSTOMER_MESSAGES', false),
         // Fixed signature appended to outbound support replies. Editable in
         // הגדרות ← דואר. Email is the primary use; WhatsApp is optional and
         // usually shorter (or empty). Blank = no signature appended.
