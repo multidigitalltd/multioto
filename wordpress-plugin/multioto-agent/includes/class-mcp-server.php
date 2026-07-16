@@ -357,7 +357,12 @@ class Multioto_Agent_Mcp_Server
 
     private function menuItemUpdate(array $args): string
     {
-        $item = $this->navMenuItem((int) ($args['item_id'] ?? 0));
+        $post = $this->navMenuItem((int) ($args['item_id'] ?? 0));
+
+        // Hydrate the nav properties (url, object, object_id, type, parent) — the
+        // raw post has none of them, so reading from it would blank a custom-link
+        // URL or corrupt a page item's object reference on a partial update.
+        $item = wp_setup_nav_menu_item($post);
         $menuId = $this->menuIdOfItem($item->ID);
 
         // Merge onto the item's current values so an unspecified field is kept,
@@ -385,14 +390,44 @@ class Multioto_Agent_Mcp_Server
     private function menuItemUnlink(array $args): string
     {
         $item = $this->navMenuItem((int) ($args['item_id'] ?? 0));
+        $itemId = (int) $item->ID;
+
+        // Before deleting a parent, re-parent its children to this item's own
+        // parent — otherwise they'd keep pointing at a nonexistent parent and the
+        // menu hierarchy would break. WordPress doesn't do this for us.
+        $grandparentId = (int) get_post_meta($itemId, '_menu_item_menu_item_parent', true);
+
+        foreach ($this->childMenuItemIds($itemId) as $childId) {
+            update_post_meta($childId, '_menu_item_menu_item_parent', $grandparentId);
+        }
 
         // Deletes the nav_menu_item pointer only — the page/post it linked to is
         // untouched, so this is reversible by re-adding the item.
-        if (! wp_delete_post($item->ID, true)) {
-            throw new Multioto_Agent_Rpc_Error(-32000, "לא ניתן להסיר את פריט התפריט {$item->ID}.");
+        if (! wp_delete_post($itemId, true)) {
+            throw new Multioto_Agent_Rpc_Error(-32000, "לא ניתן להסיר את פריט התפריט {$itemId}.");
         }
 
-        return wp_json_encode(['unlinked_item_id' => (int) $item->ID], JSON_UNESCAPED_UNICODE);
+        return wp_json_encode(['unlinked_item_id' => $itemId], JSON_UNESCAPED_UNICODE);
+    }
+
+    /**
+     * The ids of menu items whose parent is the given item — so a removed parent
+     * doesn't orphan its children.
+     *
+     * @return list<int>
+     */
+    private function childMenuItemIds(int $parentItemId): array
+    {
+        $children = get_posts([
+            'post_type' => 'nav_menu_item',
+            'post_status' => 'any',
+            'numberposts' => -1,
+            'fields' => 'ids',
+            'meta_key' => '_menu_item_menu_item_parent',
+            'meta_value' => (string) $parentItemId,
+        ]);
+
+        return array_map('intval', (array) $children);
     }
 
     /** Resolve a menu by id, slug or name to its term id (or fail). */
