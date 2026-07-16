@@ -46,6 +46,21 @@ class SiteOperatorTest extends TestCase
         $this->assertStringContainsString('האתר עונה', $result['summary']);
     }
 
+    public function test_diagnostics_flags_a_403_as_not_healthy(): void
+    {
+        // A site answering 403 is NOT healthy — the server responds but refuses
+        // to serve the site. No safe auto-fix; it needs a human.
+        Http::fake(['*' => Http::response('forbidden', 403)]);
+        $site = $this->site();
+
+        $result = app(SiteDiagnostics::class)->run($site);
+
+        $this->assertFalse($result['healthy']);
+        $this->assertNull($result['suggested_fix']);
+        $this->assertStringContainsString('403', $result['summary']);
+        $this->assertStringNotContainsString('עונה תקין', $result['summary']);
+    }
+
     public function test_diagnostics_suggests_restart_on_a_502(): void
     {
         Http::fake(['*' => Http::response('bad gateway', 502)]);

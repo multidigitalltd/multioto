@@ -150,8 +150,15 @@ class SiteResource extends Resource
                                 ->label('קודי חיבור לתוסף')
                                 ->icon('heroicon-o-clipboard-document')
                                 ->color('primary')
-                                // Needs a saved site to generate/store codes against.
-                                ->visible(fn (?Site $record): bool => $record !== null)
+                                // The codes (a per-site token + secret) are generated
+                                // against the saved row, so they only exist once the
+                                // site is created. On the new-site screen the button
+                                // stays visible but disabled, with a tooltip that says
+                                // why — rather than vanishing and looking like a bug.
+                                ->disabled(fn (?Site $record): bool => $record === null)
+                                ->tooltip(fn (?Site $record): ?string => $record === null
+                                    ? 'שמרו את האתר תחילה — הקודים נוצרים לכל אתר בנפרד.'
+                                    : null)
                                 ->modalHeading(fn (?Site $record): string => 'קודי חיבור — '.($record?->domain ?? ''))
                                 ->modalSubmitAction(false)
                                 ->modalCancelActionLabel('סגור')

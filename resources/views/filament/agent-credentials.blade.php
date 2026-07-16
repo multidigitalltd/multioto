@@ -6,13 +6,15 @@
 <div class="space-y-4 text-sm" dir="rtl">
     <p class="text-gray-500 dark:text-gray-400">
         העתיקו את הערכים הבאים אל התוסף באתר הלקוח (הגדרות → Multi Digital Agent).
+        כתובת הפאנל כבר מוגדרת מראש בתוסף — צריך רק את הערכים שכאן.
         <strong>מפתח MCP</strong> חייב להישאר זהה בשני הצדדים.
     </p>
 
     @php
+        // Only the per-site secrets a manager actually pastes. The panel URL is
+        // constant (pre-set in the plugin) and the MCP endpoint is the site's own
+        // address (the plugin already knows it), so neither is shown here.
         $fields = [
-            ['label' => 'כתובת הפאנל', 'value' => $data['panel_url'], 'hint' => 'שדה "כתובת הפאנל" בתוסף'],
-            ['label' => 'כתובת MCP', 'value' => $data['mcp_endpoint'], 'hint' => 'נכתב אוטומטית גם בפאנל'],
             ['label' => 'מפתח MCP', 'value' => $data['mcp_secret'], 'hint' => 'שדה "מפתח MCP" בתוסף — זהה לפאנל'],
         ];
 

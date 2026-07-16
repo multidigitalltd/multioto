@@ -16,6 +16,12 @@ class Multioto_Agent_Settings
 {
     private const OPTION = 'multioto_agent_settings';
 
+    /**
+     * The Multi Digital panel address. It is always the same, so the plugin
+     * ships with it pre-configured — a manager never has to enter or copy it.
+     */
+    public const DEFAULT_PLATFORM_URL = 'https://app.multidigital.co.il';
+
     public function boot(): void
     {
         add_action('admin_menu', [$this, 'addMenu']);
@@ -26,9 +32,12 @@ class Multioto_Agent_Settings
     public static function get(): array
     {
         $stored = get_option(self::OPTION, []);
+        $url = (string) ($stored['platform_url'] ?? '');
 
         return [
-            'platform_url' => (string) ($stored['platform_url'] ?? ''),
+            // Fall back to the constant panel address when nothing was saved, so
+            // a fresh install is already pointed at the panel.
+            'platform_url' => $url !== '' ? $url : self::DEFAULT_PLATFORM_URL,
             'mcp_secret' => (string) ($stored['mcp_secret'] ?? ''),
             'update_token' => (string) ($stored['update_token'] ?? ''),
         ];
@@ -98,7 +107,7 @@ class Multioto_Agent_Settings
                         <th scope="row"><label for="mo_url">כתובת הפאנל</label></th>
                         <td><input name="<?php echo esc_attr(self::OPTION); ?>[platform_url]" id="mo_url" type="url"
                                    class="regular-text" value="<?php echo esc_attr($current['platform_url']); ?>"
-                                   placeholder="https://panel.multidigital.co.il"></td>
+                                   placeholder="<?php echo esc_attr(self::DEFAULT_PLATFORM_URL); ?>"></td>
                     </tr>
                     <tr>
                         <th scope="row"><label for="mo_secret">מפתח MCP</label></th>
