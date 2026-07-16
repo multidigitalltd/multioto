@@ -11,7 +11,6 @@ use App\Models\Customer;
 use App\Models\PendingAction;
 use App\Models\Task;
 use App\Models\User;
-use App\Services\Agent\CommandInterpreter;
 use App\Services\Ai\ClaudeClient;
 use App\Services\Automation\ApprovalGate;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -24,15 +23,6 @@ class AgentSystemActionsTest extends TestCase
 {
     use RefreshDatabase;
 
-    /** Mock the classifier to return $classification for every structured() call. */
-    private function fakeClassification(array $classification): void
-    {
-        $claude = Mockery::mock(ClaudeClient::class);
-        $claude->shouldReceive('isEnabled')->andReturn(true);
-        $claude->shouldReceive('structured')->andReturn($classification);
-        $this->app->instance(ClaudeClient::class, $claude);
-    }
-
     private function systemAction(array $payload): PendingAction
     {
         return PendingAction::create([
@@ -44,23 +34,7 @@ class AgentSystemActionsTest extends TestCase
         ]);
     }
 
-    public function test_a_payment_request_command_proposes_a_system_action(): void
-    {
-        $customer = Customer::factory()->create(['name' => 'משה כהן']);
-        $this->fakeClassification([
-            'intent' => 'system_action', 'operation' => 'send_payment_request',
-            'customer_name' => 'משה', 'amount_ils' => 300, 'detail' => 'אחסון שנתי',
-        ]);
-
-        $command = app(CommandInterpreter::class)->run('תשלח דרישת תשלום למשה על 300 שקל אחסון שנתי');
-
-        $this->assertSame(AgentCommandOutcome::Proposed, $command->outcome);
-        $action = PendingAction::find($command->pending_action_id);
-        $this->assertSame('system_action', $action->type);
-        $this->assertSame('send_payment_request', data_get($action->payload, 'operation'));
-        $this->assertSame($customer->id, data_get($action->payload, 'customer_id'));
-        $this->assertSame(30000, data_get($action->payload, 'amount_agorot')); // 300 ILS → agorot
-    }
+    // ---- SystemActionRunner (execution) -----------------------------------
 
     public function test_approving_a_payment_request_dispatches_the_send_job_when_enabled(): void
     {
@@ -88,7 +62,7 @@ class AgentSystemActionsTest extends TestCase
         app(ApprovalGate::class)->approve($action);
 
         $this->assertSame(ActionStatus::Failed, $action->fresh()->status);
-        $this->assertSame(0, Task::count()); // nothing ran
+        $this->assertSame(0, Task::count());
     }
 
     public function test_open_task_system_action_creates_the_task_when_enabled(): void
@@ -104,21 +78,29 @@ class AgentSystemActionsTest extends TestCase
         $this->assertSame(1, Task::where('title', 'להתקשר ללקוח')->count());
     }
 
+    // ---- ConsoleAgent (clarify-and-continue) ------------------------------
+
     public function test_a_missing_amount_is_asked_for_and_the_next_reply_continues(): void
     {
         $this->actingAs(User::factory()->create());
-        Customer::factory()->create(['name' => 'משה כהן']);
+        $customer = Customer::factory()->create(['name' => 'משה כהן']);
 
-        // The classifier reads the amount out of whatever text it's given — so the
-        // first turn (no number) yields no amount, the clarification (with 300) does.
+        // The agent proposes when it sees an amount, otherwise it asks for one —
+        // driven off whatever text the loop is given (original, then + clarification).
         $claude = Mockery::mock(ClaudeClient::class);
         $claude->shouldReceive('isEnabled')->andReturn(true);
-        $claude->shouldReceive('structured')->andReturnUsing(function (string $system, string $prompt): array {
-            $amount = preg_match('/(\d{2,})/', $prompt, $m) ? (int) $m[1] : null;
+        $claude->shouldReceive('converse')->andReturnUsing(
+            function (string $system, string $prompt, array $tools, callable $handler) use ($customer): string {
+                if (preg_match('/(\d{2,})/', $prompt, $m)) {
+                    $handler('propose_payment_request', ['customer_id' => $customer->id, 'amount_ils' => (int) $m[1], 'description' => 'אחסון']);
 
-            return ['intent' => 'system_action', 'operation' => 'send_payment_request',
-                'customer_name' => 'משה', 'amount_ils' => $amount, 'detail' => 'אחסון'];
-        });
+                    return 'הצעתי דרישת תשלום.';
+                }
+                $handler('need_clarification', ['question' => 'כמה לגבות ממשה?']);
+
+                return 'צריך סכום.';
+            }
+        );
         $this->app->instance(ClaudeClient::class, $claude);
 
         // Turn 1: no amount → needs clarification (not cancelled).
@@ -127,7 +109,7 @@ class AgentSystemActionsTest extends TestCase
         $this->assertSame(AgentCommandOutcome::Unclear, $first->outcome);
         $this->assertStringContainsString('כמה לגבות', (string) $first->result);
 
-        // Turn 2: the operator answers with the amount → the original is continued.
+        // Turn 2: the operator answers → the original is continued into a proposal.
         Livewire::test(AgentConsole::class)->set('data.instruction', '300 שקל')->call('run');
         $second = AgentCommand::latest('id')->first();
         $this->assertSame(AgentCommandOutcome::Proposed, $second->outcome);
