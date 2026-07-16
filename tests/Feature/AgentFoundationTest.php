@@ -3,10 +3,12 @@
 namespace Tests\Feature;
 
 use App\Enums\SiteChangeStatus;
+use App\Jobs\RefreshSiteCapabilitiesJob;
 use App\Models\Site;
 use App\Services\Agent\SiteChangeJournal;
 use App\Services\Agent\SiteMemoryStore;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\URL;
 use Tests\TestCase;
@@ -65,6 +67,28 @@ class AgentFoundationTest extends TestCase
         // The check-in recorded which version the site runs and that it is alive.
         $this->assertSame('1.0.0', $site->fresh()->agent_plugin_version);
         $this->assertNotNull($site->fresh()->mcp_last_seen_at);
+    }
+
+    public function test_a_version_change_at_checkin_refreshes_the_tool_catalog(): void
+    {
+        Queue::fake();
+        $site = Site::factory()->create([
+            'agent_plugin_version' => '1.0.2',
+            'mcp_enabled' => true,
+            'mcp_endpoint' => 'https://site.test/wp-json/md-agent/mcp',
+        ]);
+        $token = $site->generateAgentToken();
+
+        // The site reports it just upgraded to 1.0.3 → re-discover its tools so
+        // the new ones become usable without a manual "test connection".
+        $this->withToken($token)->getJson(route('agent.plugin.update', ['version' => '1.0.3']))->assertOk();
+
+        Queue::assertPushed(RefreshSiteCapabilitiesJob::class, fn (RefreshSiteCapabilitiesJob $j): bool => $j->siteId === $site->id);
+
+        // Reporting the same version again does not re-sync (no change).
+        Queue::fake();
+        $this->withToken($token)->getJson(route('agent.plugin.update', ['version' => '1.0.3']))->assertOk();
+        Queue::assertNotPushed(RefreshSiteCapabilitiesJob::class);
     }
 
     public function test_no_update_is_offered_when_the_site_is_current(): void

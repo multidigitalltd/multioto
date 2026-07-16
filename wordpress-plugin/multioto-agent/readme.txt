@@ -2,7 +2,7 @@
 Contributors: multidigital
 Requires at least: 6.0
 Requires PHP: 7.4
-Stable tag: 1.0.2
+Stable tag: 1.0.3
 License: GPLv2 or later
 
 מחבר את אתר הוורדפרס לפאנל התפעול של Multi Digital: נקודת קצה MCP מאובטחת
@@ -46,6 +46,9 @@ License: GPLv2 or later
   RewriteRule .* - [E=HTTP_AUTHORIZATION:%1]
 
 == Changelog ==
+
+= 1.0.3 =
+* ניהול תוכן מהפאנל (אחרי אישור): יצירה, עריכה, פרסום והעברה-לפח של עמודים ופוסטים, וקריאת תוכן.
 
 = 1.0.2 =
 * ניהול תפריטי ניווט מהפאנל (אחרי אישור): הוספה, עריכה והסרה של פריטים, וקריאת תפריטים.
