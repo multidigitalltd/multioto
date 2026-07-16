@@ -66,6 +66,7 @@ class SettingsServiceProvider extends ServiceProvider
         'ai.persona' => 'billing.ai.persona',
         'ai.rules' => 'billing.ai.rules',
         'ai.site_rules' => 'billing.ai.site_rules',
+        'ai.ticket_rules' => 'billing.ai.ticket_rules',
         'ai.style_summary' => 'billing.ai.style_summary',
         // Master kill-switch for the AI site agent's actions on sites.
         'agent.actions_enabled' => 'agent.actions_enabled',
@@ -94,6 +95,7 @@ class SettingsServiceProvider extends ServiceProvider
         'ai.persona' => 'billing.ai.persona',
         'ai.rules' => 'billing.ai.rules',
         'ai.site_rules' => 'billing.ai.site_rules',
+        'ai.ticket_rules' => 'billing.ai.ticket_rules',
         'ai.model' => 'billing.ai.model',
         'ai.base_url' => 'billing.ai.base_url',
         'ai.style_summary' => 'billing.ai.style_summary',

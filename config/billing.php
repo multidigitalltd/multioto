@@ -282,6 +282,18 @@ return [
             '- אם אינך בטוח — אל תציע פעולה; כתוב מה בדקת והמלץ על בדיקה ידנית.',
         ])),
 
+        // Policy for OPENING and CLOSING tickets — what the agent may or may not
+        // do when it proposes to close/resolve/reopen a ticket or open a new one.
+        // Editable in the panel; a proposal still needs manager approval, this
+        // just steers what the agent proposes in the first place.
+        'ticket_rules' => env('AI_TICKET_RULES', implode("\n", [
+            '- אל תציע לסגור פנייה שהלקוח עדיין ממתין בה למענה או שלא נפתרה.',
+            '- מותר לסגור (סגירה שקטה, ללא הודעה) פניות ספאם, כפולות, או ללא תוכן ממשי.',
+            '- סמן "טופל" (הלקוח מקבל עדכון) רק כשהבעיה נפתרה בפועל.',
+            '- אל תפתח פנייה חדשה כפולה על נושא שכבר קיימת לו פנייה פתוחה — המשך בקיימת.',
+            '- בספק — אל תסגור; השאר פתוח והצע המשך טיפול.',
+        ])),
+
         // Style guide distilled from past agent replies (StyleLearner). Refreshed
         // from the AI-agent settings page; fed into every draft so it matches how
         // the team actually writes. Blank until first learned.

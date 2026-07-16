@@ -76,6 +76,7 @@ class ManageAiAgent extends Page implements HasForms
                 'persona' => config('billing.ai.persona'),
                 'rules' => config('billing.ai.rules'),
                 'site_rules' => config('billing.ai.site_rules'),
+                'ticket_rules' => config('billing.ai.ticket_rules'),
                 'style_summary' => config('billing.ai.style_summary'),
             ],
             'agent' => [
@@ -161,6 +162,11 @@ class ManageAiAgent extends Page implements HasForms
                             ->helperText('שורה לכל כלל. חלים על טיוטות התשובה ללקוחות. מעל אלה תמיד מתווסף כלל בטיחות: הכל נשמר כטיוטה לאישור אנושי.')
                             ->rows(6)
                             ->columnSpanFull(),
+                        Textarea::make('ai.ticket_rules')
+                            ->label('מדיניות פתיחה וסגירה של פניות')
+                            ->helperText('שורה לכל כלל — מה מותר ומה אסור לסוכן כשהוא מציע לפתוח/לסגור/לשנות סטטוס של פנייה (למשל: מתי מותר לסגור, מתי אסור). כל פעולה עדיין עוברת אישור. השאירו ריק כדי לחזור לברירת המחדל.')
+                            ->rows(6)
+                            ->columnSpanFull(),
                     ]),
 
                 Section::make('הוראות לטיפול באתרים (פעולות MCP)')
@@ -200,7 +206,7 @@ class ManageAiAgent extends Page implements HasForms
 
         // model/base_url/persona/rules: persist when filled; clearing reverts to
         // the env/default value instead of storing an empty override.
-        foreach (['ai.model', 'ai.base_url', 'ai.persona', 'ai.rules', 'ai.site_rules', 'ai.style_summary'] as $key) {
+        foreach (['ai.model', 'ai.base_url', 'ai.persona', 'ai.rules', 'ai.site_rules', 'ai.ticket_rules', 'ai.style_summary'] as $key) {
             $value = data_get($this->data, $key);
             if (filled($value)) {
                 Setting::put($key, (string) $value);

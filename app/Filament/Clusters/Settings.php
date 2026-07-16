@@ -27,5 +27,9 @@ class Settings extends Cluster
 
     protected static ?string $clusterBreadcrumb = 'הגדרות';
 
-    protected static ?int $navigationSort = 95;
+    // Sit inside the last nav group (ניהול) with a high sort, so "הגדרות" is the
+    // very last item in the sidebar rather than a stray entry near the top.
+    protected static ?string $navigationGroup = 'ניהול';
+
+    protected static ?int $navigationSort = 99;
 }
