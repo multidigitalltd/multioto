@@ -732,16 +732,35 @@ class Multioto_Agent_Mcp_Server
             throw new Multioto_Agent_Rpc_Error(-32602, 'הנתיב חייב להיות בתוך wp-content.');
         }
 
-        // …and, for an existing target, so must its real (symlink-resolved) path.
-        if (file_exists($full)) {
-            $real = wp_normalize_path((string) realpath($full));
-            $realBase = wp_normalize_path((string) realpath(WP_CONTENT_DIR));
+        $realBase = wp_normalize_path((string) realpath(WP_CONTENT_DIR));
 
-            if ($real !== $realBase && strpos($real, $realBase.'/') !== 0) {
-                throw new Multioto_Agent_Rpc_Error(-32602, 'הנתיב חייב להיות בתוך wp-content.');
+        if ($realBase === '') {
+            throw new Multioto_Agent_Rpc_Error(-32000, 'wp-content לא נמצא.');
+        }
+
+        // The REAL (symlink-resolved) path must also be within wp-content. For a
+        // target that doesn't exist yet we resolve the nearest existing ancestor
+        // instead — otherwise a symlinked parent pointing outside wp-content
+        // could let a NEW file be written past the boundary.
+        $resolveTarget = $full;
+        while (! file_exists($resolveTarget)) {
+            if ($mustExist) {
+                throw new Multioto_Agent_Rpc_Error(-32602, 'הקובץ/הנתיב לא נמצא.');
             }
-        } elseif ($mustExist) {
-            throw new Multioto_Agent_Rpc_Error(-32602, 'הקובץ/הנתיב לא נמצא.');
+
+            $parent = wp_normalize_path(dirname($resolveTarget));
+
+            if ($parent === $resolveTarget) {
+                throw new Multioto_Agent_Rpc_Error(-32602, 'תיקיית היעד לא קיימת.');
+            }
+
+            $resolveTarget = $parent;
+        }
+
+        $real = wp_normalize_path((string) realpath($resolveTarget));
+
+        if ($real === '' || ($real !== $realBase && strpos($real, $realBase.'/') !== 0)) {
+            throw new Multioto_Agent_Rpc_Error(-32602, 'הנתיב חייב להיות בתוך wp-content.');
         }
 
         if ($isFile && $mustExist && ! is_file($full)) {
