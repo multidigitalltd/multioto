@@ -67,15 +67,18 @@ class SendTicketNotificationJob implements ShouldQueue
                 ?? $ticket->customer?->whatsapp_jid
                 ?? $ticket->customer?->phone;
 
-            // A bespoke AI acknowledgement wins over the template when enabled;
-            // otherwise (or on failure) the template is used exactly as before.
-            $aiBody = $this->composeAiAck($ai, $ticket);
-            $rendered = $aiBody !== null
-                ? ['body' => $aiBody]
-                : $templates->render($this->templateKey, 'whatsapp', $data);
+            // Render the template first — a disabled template is the operator's
+            // opt-out, so a null here means "don't notify", even in AI mode.
+            $rendered = $templates->render($this->templateKey, 'whatsapp', $data);
 
             if (! $chatId || $rendered === null) {
                 return;
+            }
+
+            // The template is enabled → optionally replace its body with a
+            // bespoke AI acknowledgement (falling back to the template body).
+            if (($aiBody = $this->composeAiAck($ai, $ticket)) !== null) {
+                $rendered['body'] = $aiBody;
             }
 
             $waha->sendMessage($chatId, $rendered['body']);
@@ -87,13 +90,16 @@ class SendTicketNotificationJob implements ShouldQueue
 
         $email = $ticket->customer?->email;
 
-        $aiBody = $this->composeAiAck($ai, $ticket);
-        $rendered = $aiBody !== null
-            ? ['subject' => "קיבלנו את פנייתך #{$ticket->id}", 'body' => $aiBody]
-            : $templates->render($this->templateKey, 'email', $data);
+        // Render first so a disabled template still opts the customer out.
+        $rendered = $templates->render($this->templateKey, 'email', $data);
 
         if (! $email || $rendered === null) {
             return;
+        }
+
+        // Template enabled → optionally override with a bespoke AI ack.
+        if (($aiBody = $this->composeAiAck($ai, $ticket)) !== null) {
+            $rendered = ['subject' => "קיבלנו את פנייתך #{$ticket->id}", 'body' => $aiBody];
         }
 
         // Tag the subject so a reply to this acknowledgement threads onto the ticket.

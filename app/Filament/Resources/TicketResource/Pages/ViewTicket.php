@@ -355,7 +355,9 @@ class ViewTicket extends ViewRecord
                 ->requiresConfirmation()
                 ->modalDescription('הפנייה תיסגר ללא שליחת הודעה כלשהי ללקוח.')
                 ->action(function (): void {
-                    $this->record->update(['status' => TicketStatus::Closed]);
+                    // Match the bulk silent-close: stamp resolved_at so the
+                    // resolution history stays consistent.
+                    $this->record->update(['status' => TicketStatus::Closed, 'resolved_at' => now()]);
                     Notification::make()->title('הפנייה נסגרה (ללא הודעה ללקוח)')->success()->send();
                 }),
             $this->convertToTaskAction(),

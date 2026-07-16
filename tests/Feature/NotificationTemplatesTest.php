@@ -111,6 +111,32 @@ class NotificationTemplatesTest extends TestCase
             && str_contains($request->data()['text'], (string) $ticket->id));
     }
 
+    public function test_a_disabled_template_opts_out_even_in_dynamic_ack_mode(): void
+    {
+        config([
+            'billing.ai.enabled' => true, 'billing.ai.dynamic_ack' => true,
+            'billing.waha.base_url' => 'https://waha.test', 'billing.waha.api_key' => 'k', 'billing.waha.session' => 'default',
+        ]);
+        Http::fake(['*/api/sendText' => Http::response(['id' => 'wa-1'])]);
+        // The operator disabled the received-ack template — the opt-out.
+        NotificationTemplate::create(['key' => 'ticket.received', 'channel' => 'whatsapp', 'body' => 'x', 'enabled' => false]);
+
+        $customer = Customer::factory()->create();
+        $ticket = Ticket::create([
+            'customer_id' => $customer->id, 'channel' => TicketChannel::Whatsapp,
+            'subject' => 'תקלה', 'status' => TicketStatus::Open, 'external_thread_ref' => '972501234567@c.us',
+        ]);
+
+        $ai = Mockery::mock(ClaudeClient::class);
+        $ai->shouldReceive('isEnabled')->andReturn(true);
+        $ai->shouldNotReceive('structured'); // disabled → never compose/send
+
+        (new SendTicketNotificationJob($ticket->id, 'ticket.received'))->handle(app(TemplateEngine::class), app(WahaClient::class), $ai);
+
+        Http::assertNothingSent();
+        $this->assertSame(0, $ticket->messages()->count());
+    }
+
     public function test_dynamic_ack_falls_back_to_the_template_when_the_ai_is_off(): void
     {
         config([
