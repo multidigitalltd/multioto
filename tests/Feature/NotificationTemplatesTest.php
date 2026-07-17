@@ -99,10 +99,13 @@ class NotificationTemplatesTest extends TestCase
         $ticket->messages()->create(['direction' => MessageDirection::Inbound, 'channel' => MessageChannel::Whatsapp, 'body' => 'האתר שלי איטי מאוד']);
 
         // The AI writes a bespoke ack (without the number); the job guarantees
-        // the ticket number is appended.
+        // the ticket number is appended. The customer's actual message must be
+        // fed into the prompt so the ack can reference the specific issue.
         $ai = Mockery::mock(ClaudeClient::class);
         $ai->shouldReceive('isEnabled')->andReturn(true);
-        $ai->shouldReceive('structured')->once()->andReturn(['message' => 'היי דנה, קיבלנו את פנייתך ואנחנו כבר על זה.']);
+        $ai->shouldReceive('structured')->once()
+            ->with(Mockery::any(), Mockery::on(fn (string $prompt): bool => str_contains($prompt, 'האתר שלי איטי מאוד')), Mockery::any())
+            ->andReturn(['message' => 'היי דנה, קיבלנו את פנייתך ואנחנו כבר על זה.']);
 
         (new SendTicketNotificationJob($ticket->id, 'ticket.received'))->handle(app(TemplateEngine::class), app(WahaClient::class), $ai);
 
