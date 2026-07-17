@@ -66,6 +66,10 @@ class ConsoleAgent
 
         return [
             'summary' => $summary,
+            // When the model returned nothing, carry the real provider reason
+            // (HTTP status + detail) so the console can show it instead of a
+            // blank "no answer".
+            'error' => $summary === null ? $this->ai->lastError() : null,
             'proposed' => $this->proposed,
             'clarification' => $this->clarification,
             'customer_id' => $this->customerId,

@@ -85,7 +85,14 @@ class CommandInterpreter
             return $this->finish($command, AgentCommandOutcome::Dispatched, $summary);
         }
 
-        return $this->finish($command, AgentCommandOutcome::Failed, 'לא התקבלה תשובה מהסוכן — בדקו את חיבור ה-AI ("סוכן AI ← בדיקת חיבור").');
+        $reason = trim((string) ($result['error'] ?? ''));
+        $message = 'לא התקבלה תשובה מהסוכן — בדקו את חיבור ה-AI ("סוכן AI ← בדיקת חיבור").';
+
+        if ($reason !== '') {
+            $message .= "\n\nסיבה מספק ה-AI: ".Str::limit($reason, 200);
+        }
+
+        return $this->finish($command, AgentCommandOutcome::Failed, $message);
     }
 
     /** Persist the outcome + human result and return the record. */

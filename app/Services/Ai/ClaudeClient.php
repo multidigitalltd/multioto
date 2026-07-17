@@ -30,6 +30,12 @@ class ClaudeClient
         return (bool) config('billing.ai.enabled') && filled(config('billing.ai.api_key'));
     }
 
+    /** The reason the last AI call failed (HTTP status + provider detail), if any. */
+    public function lastError(): ?string
+    {
+        return $this->lastError;
+    }
+
     /**
      * Whether the AGENTIC layer (tool use → converse()) can run. Tool use is
      * implemented for all three providers (Anthropic, OpenAI-compatible, Google
@@ -70,16 +76,45 @@ class ClaudeClient
 
         $where = config('billing.ai.provider').' · '.config('billing.ai.model');
 
-        if ($result !== null) {
-            return ConnectionResult::ok("החיבור לספק ה-AI תקין ✓ ({$where})");
+        if ($result === null) {
+            // Surface the real provider error on screen (also saved in מערכת ועדכונים).
+            $reason = $this->lastError
+                ? Str::limit($this->lastError, 300)
+                : 'הדגם החזיר תשובה ריקה או סירב.';
+
+            return ConnectionResult::fail("הבקשה לספק ה-AI נכשלה ({$where}):\n{$reason}");
         }
 
-        // Surface the real provider error on screen (also saved in מערכת ועדכונים).
-        $reason = $this->lastError
-            ? Str::limit($this->lastError, 300)
-            : 'הדגם החזיר תשובה ריקה או סירב.';
+        // The console and the site agent don't use plain completion — they use
+        // the TOOL-USE layer (converse). A provider/model can pass the simple
+        // check above yet reject tool calls, which is exactly what leaves the
+        // console silent ("לא התקבלה תשובה"). Probe tool-use too, so a green
+        // result actually means the agent will work.
+        $this->lastError = null;
+        $toolProbe = $this->converse(
+            system: 'ענה בקצרה.',
+            prompt: 'כתוב: בסדר',
+            tools: [[
+                'name' => 'noop',
+                'description' => 'אין להשתמש בכלי זה — כלי בדיקה בלבד.',
+                'input_schema' => ['type' => 'object', 'properties' => (object) []],
+            ]],
+            handler: fn (): array => ['content' => 'ok'],
+            maxTurns: 1,
+        );
 
-        return ConnectionResult::fail("הבקשה לספק ה-AI נכשלה ({$where}):\n{$reason}");
+        if ($toolProbe === null) {
+            $reason = $this->lastError
+                ? Str::limit($this->lastError, 300)
+                : 'שכבת ה-tool-use החזירה תשובה ריקה או סירבה.';
+
+            return ConnectionResult::fail(
+                "הקריאה הבסיסית תקינה, אך שכבת ה-tool-use — שהמסוף והסוכן צריכים — נכשלה ({$where}):\n{$reason}\n"
+                    .'לרוב זה מודל שאינו תומך בקריאות פונקציה; נסו מודל אחר.'
+            );
+        }
+
+        return ConnectionResult::ok("החיבור לספק ה-AI תקין ✓ כולל tool-use ({$where})");
     }
 
     /**
