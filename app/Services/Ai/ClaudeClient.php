@@ -100,7 +100,11 @@ class ClaudeClient
                 'input_schema' => ['type' => 'object', 'properties' => (object) []],
             ]],
             handler: fn (): array => ['content' => 'ok'],
-            maxTurns: 1,
+            // Two turns, not one: tool selection is model-driven, so a compliant
+            // model MAY call `noop` on the first turn; it then needs a second
+            // turn to consume the result and produce its final text. One turn
+            // would return null on that path and falsely report tool-use broken.
+            maxTurns: 2,
         );
 
         if ($toolProbe === null) {

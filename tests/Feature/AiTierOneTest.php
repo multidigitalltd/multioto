@@ -316,6 +316,30 @@ class AiTierOneTest extends TestCase
         $this->assertStringContainsString('tool-use', $result->message);
     }
 
+    public function test_connection_probe_passes_when_the_model_actually_calls_the_tool(): void
+    {
+        $this->enableAi();
+
+        // A compliant model MAY call the probe tool; the check must still pass
+        // (it needs a second turn to consume the tool result and answer).
+        $toolTurns = 0;
+        Http::fake([
+            'https://api.anthropic.test/*' => function (Request $request) use (&$toolTurns) {
+                if (empty($request->data()['tools'])) {
+                    return Http::response(['stop_reason' => 'end_turn', 'content' => [['type' => 'text', 'text' => json_encode(['ok' => true])]]]);
+                }
+
+                if (++$toolTurns === 1) {
+                    return Http::response(['stop_reason' => 'tool_use', 'content' => [['type' => 'tool_use', 'id' => 't1', 'name' => 'noop', 'input' => []]]]);
+                }
+
+                return Http::response(['stop_reason' => 'end_turn', 'content' => [['type' => 'text', 'text' => 'בסדר']]]);
+            },
+        ]);
+
+        $this->assertTrue(app(ClaudeClient::class)->testConnection()->ok);
+    }
+
     public function test_manual_draft_action_creates_a_draft_on_demand(): void
     {
         $this->actingAs(User::factory()->create());
