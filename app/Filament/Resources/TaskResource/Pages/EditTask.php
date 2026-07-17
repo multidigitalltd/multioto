@@ -52,9 +52,12 @@ class EditTask extends EditRecord
     {
         $this->record->markStatus($status);
 
-        // Re-sync the edit form so the status field (and any completion time)
-        // shows the change without a manual reload.
-        $this->fillForm();
+        // Sync ONLY the status field in the open form — never fillForm() here,
+        // which would reload every field from the DB and silently discard any
+        // unsaved edits (title, assignees, due date) the operator made before
+        // clicking the button. The header actions re-read $this->record, so
+        // their visibility already reflects the new status.
+        $this->data['status'] = $status->value;
 
         Notification::make()->title($message)->success()->send();
     }

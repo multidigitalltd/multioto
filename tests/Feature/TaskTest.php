@@ -59,6 +59,23 @@ class TaskTest extends TestCase
         $this->assertNull($task->fresh()->completed_at);
     }
 
+    public function test_a_status_button_keeps_unsaved_form_edits(): void
+    {
+        $this->actingAs(User::factory()->create());
+        $task = Task::factory()->create(['status' => TaskStatus::Open, 'title' => 'כותרת מקורית']);
+
+        // The operator edits the title but hasn't saved, then clicks "הושלם".
+        Livewire::test(EditTask::class, ['record' => $task->id])
+            ->fillForm(['title' => 'כותרת ערוכה'])
+            ->callAction('markDone')
+            // The status change persisted, but the unsaved title edit is still
+            // in the form (not clobbered by a DB reload).
+            ->assertFormSet(['title' => 'כותרת ערוכה', 'status' => TaskStatus::Done->value]);
+
+        $this->assertSame(TaskStatus::Done, $task->fresh()->status);
+        $this->assertSame('כותרת מקורית', $task->fresh()->title); // still unsaved in DB
+    }
+
     public function test_rescheduling_a_task_reopens_its_reminder_cycle(): void
     {
         $task = Task::factory()->create([
