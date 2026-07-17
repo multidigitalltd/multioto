@@ -70,20 +70,19 @@ class SiteActions
                             return [$name => "{$name} (".app(SiteToolCatalog::class)->resolveTierLabel($record, $name).')'];
                         })->all())
                     ->required()
-                    ->searchable(),
-                Forms\Components\Textarea::make('arguments')
-                    ->label('פרמטרים (JSON)')
-                    ->rows(3)
-                    ->placeholder('{"plugin": "elementor"}')
-                    ->rule(fn (): \Closure => function (string $attribute, $value, \Closure $fail): void {
-                        if (filled($value) && ! is_array(json_decode((string) $value, true))) {
-                            $fail('הפרמטרים חייבים להיות JSON תקין.');
-                        }
-                    }),
+                    ->searchable()
+                    // Live so the parameter fields below rebuild for the chosen tool.
+                    ->live(),
+
+                // Real, labelled fields per tool — no JSON to write. Rebuilds
+                // whenever the selected tool changes.
+                Forms\Components\Group::make()
+                    ->schema(fn (Forms\Get $get): array => self::toolParamFields($record, (string) $get('tool')))
+                    ->columnSpanFull(),
             ])
             ->action(function (array $data, Site $record, ApprovalGate $gate): void {
                 $catalog = app(SiteToolCatalog::class);
-                $tool = (string) $data['tool'];
+                $tool = (string) ($data['tool'] ?? '');
 
                 if (! $catalog->allowedOn($record, $tool)) {
                     Notification::make()->title('הכלי מסווג כהרסני ומותר רק באתר סטייג׳ינג')->danger()->send();
@@ -91,7 +90,7 @@ class SiteActions
                     return;
                 }
 
-                $arguments = filled($data['arguments'] ?? null) ? (array) json_decode((string) $data['arguments'], true) : [];
+                $arguments = self::collectToolArguments($record, $tool, $data);
                 $argsText = $arguments === [] ? 'ללא פרמטרים' : json_encode($arguments, JSON_UNESCAPED_UNICODE);
 
                 $gate->propose(
@@ -106,6 +105,119 @@ class SiteActions
                     ->body('תופיע ב"אישורי אוטומציה" ותישלח לוואטסאפ לאישור לפני ביצוע.')
                     ->success()->send();
             });
+    }
+
+    /**
+     * The cached parameter spec for a tool (name/type/description/enum/required),
+     * as discovered on the last connection test.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public static function toolParamSpec(Site $site, string $tool): array
+    {
+        foreach ((array) data_get($site->mcp_capabilities, 'tools', []) as $definition) {
+            if (($definition['name'] ?? null) === $tool) {
+                return (array) ($definition['params'] ?? []);
+            }
+        }
+
+        return [];
+    }
+
+    /**
+     * Build the form fields for a tool's parameters — a labelled input per
+     * parameter (text / number / toggle / dropdown), so an operator never types
+     * JSON. When the tool has no known parameter spec (e.g. an older site not
+     * re-tested since this shipped), fall back to a friendly key/value grid.
+     *
+     * @return list<Forms\Components\Component>
+     */
+    private static function toolParamFields(Site $site, string $tool): array
+    {
+        if ($tool === '') {
+            return [];
+        }
+
+        $spec = self::toolParamSpec($site, $tool);
+
+        if ($spec === []) {
+            return [
+                Forms\Components\KeyValue::make('kv_params')
+                    ->label('פרמטרים')
+                    ->keyLabel('שם')
+                    ->valueLabel('ערך')
+                    ->addActionLabel('הוסף פרמטר')
+                    ->helperText('לכלי זה אין רשימת פרמטרים ידועה. אם צריך — הוסיפו שם וערך; אם לא — השאירו ריק. (טיפ: "בדקו חיבור AI" כדי לרענן את רשימת הכלים.)'),
+            ];
+        }
+
+        return array_map(static function (array $param): Forms\Components\Component {
+            $name = (string) $param['name'];
+            $type = (string) ($param['type'] ?? 'string');
+            $enum = (array) ($param['enum'] ?? []);
+
+            $field = match (true) {
+                $type === 'boolean' => Forms\Components\Toggle::make($name)->inline(false),
+                in_array($type, ['integer', 'number'], true) => Forms\Components\TextInput::make($name)->numeric(),
+                $enum !== [] => Forms\Components\Select::make($name)
+                    ->options(array_combine($enum, $enum))
+                    ->native(false),
+                default => Forms\Components\TextInput::make($name),
+            };
+
+            $field->label($name)->required((bool) ($param['required'] ?? false));
+
+            if (filled($param['description'] ?? null)) {
+                $field->helperText((string) $param['description']);
+            }
+
+            return $field;
+        }, $spec);
+    }
+
+    /**
+     * Assemble the tool arguments from the submitted form: typed values from the
+     * per-parameter fields (casting numbers/booleans to match the schema), or
+     * the key/value fallback when the tool had no known spec.
+     *
+     * @param  array<string, mixed>  $data
+     * @return array<string, mixed>
+     */
+    public static function collectToolArguments(Site $site, string $tool, array $data): array
+    {
+        $spec = self::toolParamSpec($site, $tool);
+
+        if ($spec === []) {
+            // Fallback grid: keep only rows with a non-empty key.
+            return collect((array) ($data['kv_params'] ?? []))
+                ->reject(fn ($value, $key): bool => blank($key))
+                ->all();
+        }
+
+        $arguments = [];
+
+        foreach ($spec as $param) {
+            $name = (string) $param['name'];
+
+            if (! array_key_exists($name, $data)) {
+                continue;
+            }
+
+            $value = $data[$name];
+
+            if ($value === null || $value === '') {
+                continue;
+            }
+
+            $arguments[$name] = match ((string) ($param['type'] ?? 'string')) {
+                'boolean' => (bool) $value,
+                'integer' => (int) $value,
+                'number' => (float) $value,
+                default => $value,
+            };
+        }
+
+        return $arguments;
     }
 
     /** Live MCP handshake: verify the connection and refresh the tool list. */

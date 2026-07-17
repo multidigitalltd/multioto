@@ -42,41 +42,48 @@ class SitesRelationManager extends RelationManager
     {
         return $table
             ->recordTitleAttribute('domain')
+            // Cards, not rows — matching the main Sites screen. The card links to
+            // the site's page; the common actions are shortcuts on the card.
+            ->contentGrid(['md' => 2, 'xl' => 3])
+            ->recordUrl(fn (Site $record): string => SiteResource::getUrl('view', ['record' => $record]))
             ->columns([
-                Tables\Columns\TextColumn::make('domain')->label('דומיין')->searchable(),
-                Tables\Columns\IconColumn::make('monitor_enabled')->label('ניטור')->boolean(),
-                Tables\Columns\TextColumn::make('status')->label('סטטוס')->badge(),
+                Tables\Columns\Layout\Stack::make([
+                    Tables\Columns\TextColumn::make('domain')
+                        ->label('דומיין')
+                        ->weight('bold')
+                        ->icon('heroicon-m-globe-alt')
+                        ->searchable(),
+                    Tables\Columns\Layout\Split::make([
+                        Tables\Columns\TextColumn::make('status')->badge()->grow(false),
+                        Tables\Columns\TextColumn::make('monitor_enabled')
+                            ->badge()
+                            ->formatStateUsing(fn ($state): string => $state ? 'ניטור פעיל' : 'ללא ניטור')
+                            ->icon(fn ($state): string => $state ? 'heroicon-m-signal' : 'heroicon-m-signal-slash')
+                            ->color(fn ($state): string => $state ? 'success' : 'gray')
+                            ->grow(false),
+                    ]),
+                ])->space(2),
             ])
             ->headerActions([
                 Tables\Actions\CreateAction::make()->label('אתר חדש'),
             ])
             ->actions([
-                // Open the site's monitoring page (uptime, response times, SSL,
-                // recent probes) straight from the customer card.
-                Tables\Actions\Action::make('monitor')
-                    ->label('ניטור')
-                    ->icon('heroicon-o-chart-bar')
-                    ->color('gray')
-                    ->url(fn (Site $record): string => SiteResource::getUrl('view', ['record' => $record]))
-                    ->openUrlInNewTab(),
-
-                // Everything you need for a site, straight from the customer card:
-                // an AI diagnosis, and the one-time connection setup in a dropdown.
-                SiteActions::aiInvestigate(),
+                SiteActions::aiInvestigate()->iconButton(),
                 Tables\Actions\ActionGroup::make([
+                    Tables\Actions\ViewAction::make()->label('מידע וניטור')->icon('heroicon-o-chart-bar')
+                        ->url(fn (Site $record): string => SiteResource::getUrl('view', ['record' => $record])),
+                    SiteActions::proposeMcpAction(),
                     SiteActions::testMcp(),
                     SiteActions::connectionCodes(),
                     SiteActions::downloadPlugin(),
                     SiteActions::generateAgentToken(),
+                    Tables\Actions\EditAction::make()->label('עריכה'),
+                    Tables\Actions\DeleteAction::make()->label('מחיקה'),
                 ])
-                    ->label('חיבור לתוסף')
-                    ->icon('heroicon-o-link')
+                    ->label('עוד פעולות')
+                    ->icon('heroicon-m-ellipsis-horizontal')
                     ->button()
-                    ->color('gray')
-                    ->visible(fn (): bool => auth()->user()?->isAdmin() ?? false),
-
-                Tables\Actions\EditAction::make()->label('עריכה'),
-                Tables\Actions\DeleteAction::make()->label('מחיקה'),
+                    ->color('gray'),
             ]);
     }
 }

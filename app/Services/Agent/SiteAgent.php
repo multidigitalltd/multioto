@@ -16,6 +16,15 @@ use Illuminate\Support\Str;
  */
 class SiteAgent
 {
+    /**
+     * The goal + fix-round of the investigation currently running, stamped onto
+     * any proposal it files — this is what lets an approved fix loop back into
+     * "did it actually solve the original problem?" (see ApprovalGate).
+     */
+    private string $currentGoal = '';
+
+    private int $currentRound = 1;
+
     public function __construct(
         private ClaudeClient $ai,
         private McpClient $mcp,
@@ -27,13 +36,17 @@ class SiteAgent
     /**
      * Investigate a site toward a goal (an incident, a ticket, a manual "AI
      * diagnose"). Returns the AI's written summary, or null when the AI is
-     * unavailable or the site isn't connected.
+     * unavailable or the site isn't connected. $round marks which fix round of
+     * the same original problem this is (1 = first look).
      */
-    public function investigate(Site $site, string $goal): ?string
+    public function investigate(Site $site, string $goal, int $round = 1): ?string
     {
         if (! $this->ai->isEnabled() || ! $site->mcp_enabled || blank($site->mcp_endpoint)) {
             return null;
         }
+
+        $this->currentGoal = $goal;
+        $this->currentRound = max(1, $round);
 
         $siteTools = collect((array) data_get($site->mcp_capabilities, 'tools', []));
 
@@ -157,7 +170,14 @@ class SiteAgent
             return ['content' => "הכלי {$tool} מסווג כהרסני ומותר רק באתר סטייג׳ינג — לא ניתן להציע אותו כאן.", 'is_error' => true];
         }
 
-        $payload = ['site_id' => $site->id, 'tool' => $tool, 'arguments' => $arguments];
+        // goal + round make the fix a closed loop: after approval + execution,
+        // ApprovalGate re-dispatches an investigation of this same goal, so the
+        // agent verifies the original problem is solved (or proposes the next
+        // step) instead of stopping at "the tool ran".
+        $payload = [
+            'site_id' => $site->id, 'tool' => $tool, 'arguments' => $arguments,
+            'goal' => Str::limit($this->currentGoal, 500), 'round' => $this->currentRound,
+        ];
 
         if (filled($input['revert_tool'] ?? null)) {
             $payload['revert'] = ['tool' => (string) $input['revert_tool'], 'arguments' => (array) ($input['revert_arguments'] ?? [])];
@@ -191,6 +211,7 @@ class SiteAgent
             - חקור תמיד קודם עם site_read (קריאה בלבד). אל תמציא מצב — בדוק אותו.
             - אתה לא משנה דבר בעצמך. אם נדרש תיקון — הצע פעולה אחת בלבד עם propose_action; היא תעבור אישור מנהל לפני ביצוע.
             - הצע את הפעולה הבטוחה והמינימלית שפותרת את הבעיה. אם אין צורך בשינוי — אמור זאת וסיים.
+            - אם המשימה היא בדיקת אימות אחרי תיקון שבוצע: בדוק בכלי קריאה אם הבעיה המקורית אכן נפתרה. נפתרה — פתח את הסיכום ב"✅ הבעיה נפתרה". לא נפתרה — כתוב מה עדיין לא תקין והצע את הצעד הבא עם propose_action.
             - בסיום כתוב סיכום קצר וברור בעברית: מה מצאת, ומה הצעת (אם הצעת).
 
             {$rules}

@@ -29,8 +29,6 @@ class SiteConnector
             'mcp_capabilities' => [
                 'server' => $info['serverInfo'] ?? [],
                 'protocol' => $info['protocolVersion'] ?? McpClient::PROTOCOL_VERSION,
-                // Only what the planner needs; input schemas are re-fetched live
-                // before execution so we never act on a stale contract.
                 'tools' => collect($tools)->map(fn (array $tool): array => [
                     'name' => (string) ($tool['name'] ?? ''),
                     'description' => Str::limit((string) ($tool['description'] ?? ''), 500),
@@ -39,12 +37,42 @@ class SiteConnector
                     // NAME is never trusted as a security control).
                     'read_only' => (bool) data_get($tool, 'annotations.readOnlyHint', false),
                     'destructive' => (bool) data_get($tool, 'annotations.destructiveHint', false),
+                    // A compact parameter spec, so the panel can build a real
+                    // labelled form per tool instead of asking for raw JSON. The
+                    // plugin still validates the actual call, so this is a UI
+                    // convenience, not a trusted contract.
+                    'params' => $this->compactParams(data_get($tool, 'inputSchema')),
                 ])->values()->all(),
             ],
             'mcp_last_seen_at' => now(),
         ])->save();
 
         return count($tools);
+    }
+
+    /**
+     * Flatten a tool's JSON-Schema input into a compact list the form builder
+     * can render: one entry per top-level property with its type, description,
+     * enum options and whether it is required.
+     *
+     * @param  mixed  $schema
+     * @return list<array{name: string, type: string, description: string, enum: list<scalar>, required: bool}>
+     */
+    private function compactParams($schema): array
+    {
+        $properties = (array) data_get($schema, 'properties', []);
+        $required = (array) data_get($schema, 'required', []);
+
+        return collect($properties)
+            ->map(fn ($definition, $name): array => [
+                'name' => (string) $name,
+                'type' => (string) (data_get($definition, 'type') ?: 'string'),
+                'description' => Str::limit((string) data_get($definition, 'description', ''), 200),
+                'enum' => array_values(array_filter((array) data_get($definition, 'enum', []), 'is_scalar')),
+                'required' => in_array($name, $required, true),
+            ])
+            ->values()
+            ->all();
     }
 
     /** Panel "test connection" — human-readable outcome, never throws. */
