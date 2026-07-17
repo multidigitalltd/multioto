@@ -173,49 +173,47 @@ class SiteResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
+            // Each site is a card, not a row — the whole card links to the site
+            // page (full monitoring + options), and the day-to-day actions sit
+            // right on the card as shortcuts, so common jobs need no drill-in.
+            ->contentGrid(['md' => 2, 'xl' => 3])
+            ->recordUrl(fn (Site $record): string => SiteResource::getUrl('view', ['record' => $record]))
             ->columns([
-                Tables\Columns\TextColumn::make('customer.name')
-                    ->label('לקוח')
-                    ->searchable()
-                    ->sortable(),
-                Tables\Columns\TextColumn::make('domain')
-                    ->label('דומיין')
-                    ->searchable()
-                    ->sortable()
-                    ->weight('bold'),
-                Tables\Columns\TextColumn::make('monitor_url')
-                    ->label('כתובת לניטור')
-                    ->searchable()
-                    ->toggleable(),
-                Tables\Columns\IconColumn::make('monitor_enabled')
-                    ->label('ניטור פעיל')
-                    ->boolean(),
-                Tables\Columns\TextColumn::make('status')
-                    ->label('סטטוס')
-                    ->badge()
-                    ->color(fn (SiteStatus $state): string => match ($state) {
-                        SiteStatus::Active => 'success',
-                        SiteStatus::Suspended => 'danger',
-                    }),
-                Tables\Columns\TextColumn::make('ssl_days_left')
-                    ->label('SSL (ימים)')
-                    ->badge()
-                    ->placeholder('—')
-                    ->color(fn ($state): string => $state === null ? 'gray' : ($state <= 0 ? 'danger' : ($state <= (int) config('billing.monitoring.ssl_warn_days', 14) ? 'warning' : 'success'))),
-                Tables\Columns\TextColumn::make('hosting_ref')
-                    ->label('מזהה אחסון')
-                    ->searchable()
-                    ->toggleable(isToggledHiddenByDefault: true),
-                Tables\Columns\TextColumn::make('created_at')
-                    ->label('נוצר')
-                    ->dateTime('d/m/Y H:i')
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
-                Tables\Columns\TextColumn::make('updated_at')
-                    ->label('עודכן')
-                    ->dateTime('d/m/Y H:i')
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
+                Tables\Columns\Layout\Stack::make([
+                    Tables\Columns\TextColumn::make('domain')
+                        ->label('דומיין')
+                        ->weight('bold')
+                        ->size('lg')
+                        ->icon('heroicon-m-globe-alt')
+                        ->searchable()
+                        ->sortable(),
+                    Tables\Columns\TextColumn::make('customer.name')
+                        ->label('לקוח')
+                        ->color('gray')
+                        ->icon('heroicon-m-user')
+                        ->searchable()
+                        ->sortable(),
+                    Tables\Columns\Layout\Split::make([
+                        Tables\Columns\TextColumn::make('status')
+                            ->badge()
+                            ->color(fn (SiteStatus $state): string => match ($state) {
+                                SiteStatus::Active => 'success',
+                                SiteStatus::Suspended => 'danger',
+                            })
+                            ->grow(false),
+                        Tables\Columns\TextColumn::make('ssl_days_left')
+                            ->badge()
+                            ->formatStateUsing(fn ($state): string => $state === null ? 'SSL —' : "SSL · {$state} ימים")
+                            ->color(fn ($state): string => $state === null ? 'gray' : ($state <= 0 ? 'danger' : ($state <= (int) config('billing.monitoring.ssl_warn_days', 14) ? 'warning' : 'success')))
+                            ->grow(false),
+                        Tables\Columns\TextColumn::make('monitor_enabled')
+                            ->badge()
+                            ->formatStateUsing(fn ($state): string => $state ? 'ניטור פעיל' : 'ללא ניטור')
+                            ->icon(fn ($state): string => $state ? 'heroicon-m-signal' : 'heroicon-m-signal-slash')
+                            ->color(fn ($state): string => $state ? 'success' : 'gray')
+                            ->grow(false),
+                    ]),
+                ])->space(3),
             ])
             ->defaultSort('domain', 'asc')
             ->filters([
@@ -226,122 +224,27 @@ class SiteResource extends Resource
                     ->label('ניטור פעיל'),
             ])
             ->actions([
-                // Hosting & maintenance — grouped into one dropdown to keep the row tidy.
+                // The two most-used shortcuts sit directly on the card.
+                self::diagnoseAction()->iconButton(),
+                SiteActions::aiInvestigate()->iconButton(),
+
+                // Everything else in one tidy "more" menu, so the card stays clean.
                 Tables\Actions\ActionGroup::make([
-                    // Read-only WordPress diagnostics: live probe + SSL + uptime,
-                    // with a suggested fix the owner can send to the approval gate.
-                    Tables\Actions\Action::make('diagnose')
-                        ->label('אבחון')
-                        ->icon('heroicon-o-magnifying-glass')
-                        ->color('info')
-                        ->action(function (Site $record, SiteDiagnostics $diagnostics): void {
-                            try {
-                                $result = $diagnostics->run($record);
-                            } catch (\Throwable $e) {
-                                Notification::make()->title('האבחון נכשל')->body(Str::limit($e->getMessage(), 150))->danger()->send();
-
-                                return;
-                            }
-
-                            Notification::make()
-                                ->title('אבחון '.$record->domain.($result['healthy'] ? ' — תקין ✓' : ' — נמצאו בעיות'))
-                                ->body($result['summary']) // includes the suggested fix in Hebrew
-                                ->{$result['healthy'] ? 'success' : 'warning'}()
-                                ->persistent()
-                                ->send();
-                        }),
-
-                    // Propose a reversible fix (owner approves via WhatsApp/panel).
-                    Tables\Actions\Action::make('proposeFix')
-                        ->label('הצע תיקון')
-                        ->icon('heroicon-o-wrench-screwdriver')
-                        ->color('warning')
-                        ->visible(fn (Site $record): bool => self::hostingActionable($record))
-                        ->form([
-                            Forms\Components\Select::make('fix')
-                                ->label('התיקון המוצע')
-                                ->options([
-                                    'clear_cache' => 'ניקוי מטמון (Cache)',
-                                    'restart' => 'הפעלה מחדש של האתר',
-                                    'maintenance_on' => 'הכנסה למצב תחזוקה',
-                                    'maintenance_off' => 'הוצאה ממצב תחזוקה',
-                                ])
-                                ->default('clear_cache')
-                                ->required(),
-                        ])
-                        ->action(function (array $data, Site $record, ApprovalGate $gate): void {
-                            self::proposeSiteFix($gate, $record, $data['fix']);
-                            Notification::make()->title('התיקון נשלח לאישור')
-                                ->body('הבקשה תופיע ב"אישורי אוטומציה" ותישלח לוואטסאפ שלך לאישור לפני ביצוע.')
-                                ->success()->send();
-                        }),
-
-                    Tables\Actions\Action::make('suspend')
-                        ->label('השהה')
-                        ->icon('heroicon-o-pause-circle')
-                        ->color('danger')
-                        ->visible(fn (Site $record): bool => $record->status === SiteStatus::Active
-                            && self::hostingActionable($record))
-                        ->requiresConfirmation()
-                        ->modalHeading('השהיית אתר')
-                        ->modalDescription(fn (Site $record): string => "להשהות את {$record->domain}? האתר יעבור למצב תחזוקה אצל ספק האחסון.")
-                        ->modalSubmitActionLabel('השהה')
-                        ->action(function (Site $record): void {
-                            SuspendSiteJob::dispatch($record->id);
-
-                            Notification::make()
-                                ->title('ההשהיה נשלחה לביצוע')
-                                ->body('הסטטוס יתעדכן תוך רגעים.')
-                                ->success()
-                                ->send();
-                        }),
-
-                    Tables\Actions\Action::make('restore')
-                        ->label('שחזר')
-                        ->icon('heroicon-o-play-circle')
-                        ->color('success')
-                        ->visible(fn (Site $record): bool => $record->status === SiteStatus::Suspended
-                            && self::hostingActionable($record))
-                        ->requiresConfirmation()
-                        ->modalHeading('שחזור אתר')
-                        ->modalDescription(fn (Site $record): string => "לשחזר את {$record->domain} לפעילות מלאה?")
-                        ->modalSubmitActionLabel('שחזר')
-                        ->action(function (Site $record): void {
-                            RestoreSiteJob::dispatch($record->id);
-
-                            Notification::make()
-                                ->title('השחזור נשלח לביצוע')
-                                ->success()
-                                ->send();
-                        }),
-                ])
-                    ->label('תחזוקה ואירוח')
-                    ->icon('heroicon-o-wrench-screwdriver')
-                    ->button()
-                    ->color('gray'),
-
-                // Day-to-day agent actions stay visible.
-                SiteActions::aiInvestigate(),
-                SiteActions::proposeMcpAction(),
-
-                // One-time connection setup — tucked into a single dropdown, since
-                // it's done once per site: codes to copy, the plugin download, the
-                // live connection test, and token rotation.
-                Tables\Actions\ActionGroup::make([
+                    Tables\Actions\ViewAction::make()->label('מידע וניטור')->icon('heroicon-o-chart-bar'),
+                    self::proposeFixAction(),
+                    self::suspendAction(),
+                    self::restoreAction(),
+                    SiteActions::proposeMcpAction(),
                     SiteActions::testMcp(),
                     SiteActions::connectionCodes(),
                     SiteActions::downloadPlugin(),
                     SiteActions::generateAgentToken(),
+                    Tables\Actions\EditAction::make()->label('עריכה'),
                 ])
-                    ->label('חיבור לתוסף')
-                    ->icon('heroicon-o-link')
+                    ->label('עוד פעולות')
+                    ->icon('heroicon-m-ellipsis-horizontal')
                     ->button()
-                    ->color('gray')
-                    ->visible(fn (): bool => auth()->user()?->isAdmin() ?? false),
-
-                Tables\Actions\ViewAction::make()->label('ניטור'),
-
-                Tables\Actions\EditAction::make()->label('עריכה'),
+                    ->color('gray'),
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([
@@ -350,6 +253,110 @@ class SiteResource extends Resource
             ])
             ->emptyStateHeading('אין אתרים עדיין')
             ->emptyStateDescription('הקימו אתר חדש דרך "אתר חדש" בתפריט.');
+    }
+
+    /**
+     * Read-only WordPress diagnostics: live probe + SSL + uptime, with a
+     * suggested fix the owner can send to the approval gate. Shared between the
+     * card grid and the site page so both offer the exact same action.
+     */
+    public static function diagnoseAction(): Tables\Actions\Action
+    {
+        return Tables\Actions\Action::make('diagnose')
+            ->label('אבחון')
+            ->icon('heroicon-o-magnifying-glass')
+            ->color('info')
+            ->action(function (Site $record, SiteDiagnostics $diagnostics): void {
+                try {
+                    $result = $diagnostics->run($record);
+                } catch (\Throwable $e) {
+                    Notification::make()->title('האבחון נכשל')->body(Str::limit($e->getMessage(), 150))->danger()->send();
+
+                    return;
+                }
+
+                Notification::make()
+                    ->title('אבחון '.$record->domain.($result['healthy'] ? ' — תקין ✓' : ' — נמצאו בעיות'))
+                    ->body($result['summary']) // includes the suggested fix in Hebrew
+                    ->{$result['healthy'] ? 'success' : 'warning'}()
+                    ->persistent()
+                    ->send();
+            });
+    }
+
+    /** Propose a reversible hosting fix (owner approves via WhatsApp/panel). */
+    public static function proposeFixAction(): Tables\Actions\Action
+    {
+        return Tables\Actions\Action::make('proposeFix')
+            ->label('הצע תיקון')
+            ->icon('heroicon-o-wrench-screwdriver')
+            ->color('warning')
+            ->visible(fn (Site $record): bool => self::hostingActionable($record))
+            ->form([
+                Forms\Components\Select::make('fix')
+                    ->label('התיקון המוצע')
+                    ->options([
+                        'clear_cache' => 'ניקוי מטמון (Cache)',
+                        'restart' => 'הפעלה מחדש של האתר',
+                        'maintenance_on' => 'הכנסה למצב תחזוקה',
+                        'maintenance_off' => 'הוצאה ממצב תחזוקה',
+                    ])
+                    ->default('clear_cache')
+                    ->required(),
+            ])
+            ->action(function (array $data, Site $record, ApprovalGate $gate): void {
+                self::proposeSiteFix($gate, $record, $data['fix']);
+                Notification::make()->title('התיקון נשלח לאישור')
+                    ->body('הבקשה תופיע ב"אישורי אוטומציה" ותישלח לוואטסאפ שלך לאישור לפני ביצוע.')
+                    ->success()->send();
+            });
+    }
+
+    /** Suspend the site at the hosting provider (maintenance mode). */
+    public static function suspendAction(): Tables\Actions\Action
+    {
+        return Tables\Actions\Action::make('suspend')
+            ->label('השהה')
+            ->icon('heroicon-o-pause-circle')
+            ->color('danger')
+            ->visible(fn (Site $record): bool => $record->status === SiteStatus::Active
+                && self::hostingActionable($record))
+            ->requiresConfirmation()
+            ->modalHeading('השהיית אתר')
+            ->modalDescription(fn (Site $record): string => "להשהות את {$record->domain}? האתר יעבור למצב תחזוקה אצל ספק האחסון.")
+            ->modalSubmitActionLabel('השהה')
+            ->action(function (Site $record): void {
+                SuspendSiteJob::dispatch($record->id);
+
+                Notification::make()
+                    ->title('ההשהיה נשלחה לביצוע')
+                    ->body('הסטטוס יתעדכן תוך רגעים.')
+                    ->success()
+                    ->send();
+            });
+    }
+
+    /** Restore a suspended site to full activity. */
+    public static function restoreAction(): Tables\Actions\Action
+    {
+        return Tables\Actions\Action::make('restore')
+            ->label('שחזר')
+            ->icon('heroicon-o-play-circle')
+            ->color('success')
+            ->visible(fn (Site $record): bool => $record->status === SiteStatus::Suspended
+                && self::hostingActionable($record))
+            ->requiresConfirmation()
+            ->modalHeading('שחזור אתר')
+            ->modalDescription(fn (Site $record): string => "לשחזר את {$record->domain} לפעילות מלאה?")
+            ->modalSubmitActionLabel('שחזר')
+            ->action(function (Site $record): void {
+                RestoreSiteJob::dispatch($record->id);
+
+                Notification::make()
+                    ->title('השחזור נשלח לביצוע')
+                    ->success()
+                    ->send();
+            });
     }
 
     /**
