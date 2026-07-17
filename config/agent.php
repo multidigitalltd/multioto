@@ -79,9 +79,12 @@ return [
     */
     'verify_after_fix' => (bool) env('AGENT_VERIFY_AFTER_FIX', true),
 
-    // Safety cap on the loop: how many fix rounds one problem may go through
-    // before the agent stops proposing and leaves it to a human.
-    'verify_max_rounds' => (int) env('AGENT_VERIFY_MAX_ROUNDS', 3),
+    // Optional cap on the loop: how many fix rounds one problem may go through
+    // before the agent stops proposing and leaves it to a human. 0 (the
+    // default) means unlimited — the loop keeps going until the fix is
+    // confirmed, which is safe because EVERY round still requires manager
+    // approval before anything changes; rejecting a proposal ends the loop.
+    'verify_max_rounds' => (int) env('AGENT_VERIFY_MAX_ROUNDS', 0),
 
     /*
     | Risk tiers for site tools, matched by name substring (first match wins,

@@ -50,7 +50,15 @@ class InvestigateSiteJob implements ShouldQueue
         $summary = $agent->investigate($site, $this->goal, $this->round);
 
         if (blank($summary)) {
-            SystemLog::record('warning', 'ai', "אבחון AI לאתר {$site->domain} לא הניב תוצאה: ".$this->blankReason($site), ['site_id' => $site->id]);
+            $reason = $this->blankReason($site);
+            SystemLog::record('warning', 'ai', "אבחון AI לאתר {$site->domain} לא הניב תוצאה: ".$reason, ['site_id' => $site->id]);
+
+            // A verification pass must never end silently — the owner is
+            // waiting to hear whether the approved fix solved the problem.
+            // Tell them the check itself couldn't run, and why.
+            if ($this->round > 1) {
+                $this->notifyOwner($site, "⚠️ בדיקת האימות לא הצליחה לרוץ: {$reason}");
+            }
 
             return;
         }

@@ -160,8 +160,9 @@ class ApprovalGate
      * the agent back to the site — read-only — to verify the ORIGINAL problem
      * is actually solved. Solved → it reports so; not solved → it proposes the
      * next single step, which again waits for approval. Command → result →
-     * approval → … until the fix is confirmed, capped at verify_max_rounds so
-     * one stubborn problem can't loop forever.
+     * approval → … until the fix is confirmed. The loop is unlimited by
+     * default — every round is human-gated, so rejecting a proposal is the
+     * brake — with verify_max_rounds as an optional cap (0 = no cap).
      */
     protected function executeSiteAction(PendingAction $action): void
     {
@@ -169,7 +170,7 @@ class ApprovalGate
 
         $goal = trim((string) data_get($action->payload, 'goal'));
         $round = (int) data_get($action->payload, 'round', 1);
-        $maxRounds = (int) config('agent.verify_max_rounds', 3);
+        $maxRounds = (int) config('agent.verify_max_rounds', 0);
 
         // Only AI-originated fixes loop — a team member picking a tool by hand
         // ("פעולת AI") asked for that one call, not for an investigation.
@@ -177,7 +178,7 @@ class ApprovalGate
             return;
         }
 
-        if ($round >= $maxRounds) {
+        if ($maxRounds > 0 && $round >= $maxRounds) {
             Log::info('ApprovalGate: fix loop reached its round cap; leaving to a human', [
                 'action_id' => $action->id, 'round' => $round,
             ]);
@@ -187,13 +188,23 @@ class ApprovalGate
 
         $tool = (string) data_get($action->payload, 'tool');
 
-        InvestigateSiteJob::dispatch(
-            (int) data_get($action->payload, 'site_id'),
-            "בוצעה כעת (אחרי אישור מנהל) הפעולה \"{$tool}\" כחלק מטיפול בבעיה: {$goal}\n"
-                .'בדוק עכשיו בכלי קריאה בלבד אם הבעיה המקורית נפתרה בפועל. אם נפתרה — כתוב סיכום קצר שמאשר זאת. '
-                .'אם לא נפתרה — הצע עם propose_action את הצעד הבא לתיקון.',
-            $round + 1,
-        );
+        try {
+            InvestigateSiteJob::dispatch(
+                (int) data_get($action->payload, 'site_id'),
+                "בוצעה כעת (אחרי אישור מנהל) הפעולה \"{$tool}\" כחלק מטיפול בבעיה: {$goal}\n"
+                    .'בדוק עכשיו בכלי קריאה בלבד אם הבעיה המקורית נפתרה בפועל. אם נפתרה — כתוב סיכום קצר שמאשר זאת. '
+                    .'אם לא נפתרה — הצע עם propose_action את הצעד הבא לתיקון.',
+                $round + 1,
+            );
+        } catch (\Throwable $e) {
+            // The fix itself already ran and succeeded — a failure to enqueue
+            // the FOLLOW-UP must not bubble up and mark the executed action as
+            // failed (a false audit trail that invites re-running a
+            // non-idempotent change). Log it and move on.
+            Log::warning('ApprovalGate: verification dispatch failed after an executed fix', [
+                'action_id' => $action->id, 'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     /** Send an approved monthly monitoring report to the customer. */

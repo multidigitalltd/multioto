@@ -121,7 +121,19 @@ class FixLoopTest extends TestCase
         });
     }
 
-    public function test_the_loop_stops_at_the_round_cap(): void
+    public function test_the_loop_is_unlimited_by_default(): void
+    {
+        Queue::fake([InvestigateSiteJob::class]);
+        $site = $this->connectedSite();
+        $this->fakeMcpToolCall();
+
+        // Round 7 of the same problem — with no cap set, verification still runs.
+        app(ApprovalGate::class)->approve($this->aiProposal($site, ['goal' => 'האתר איטי', 'round' => 7]));
+
+        Queue::assertPushed(InvestigateSiteJob::class, fn (InvestigateSiteJob $job): bool => $job->round === 8);
+    }
+
+    public function test_an_optional_round_cap_stops_the_loop(): void
     {
         Queue::fake([InvestigateSiteJob::class]);
         config(['agent.verify_max_rounds' => 3]);
@@ -132,6 +144,22 @@ class FixLoopTest extends TestCase
         app(ApprovalGate::class)->approve($action);
 
         Queue::assertNotPushed(InvestigateSiteJob::class);
+    }
+
+    public function test_a_failed_verification_dispatch_never_fails_the_executed_fix(): void
+    {
+        $site = $this->connectedSite();
+        $this->fakeMcpToolCall();
+        // Break the queue backend: dispatching the follow-up job will throw —
+        // AFTER the tool already ran on the site. The executed action must
+        // still be recorded as executed, not failed.
+        config(['queue.default' => 'redis', 'database.redis.default.host' => '127.0.0.1', 'database.redis.default.port' => 1]);
+
+        $action = $this->aiProposal($site, ['goal' => 'האתר איטי', 'round' => 1]);
+        $reply = app(ApprovalGate::class)->approve($action);
+
+        $this->assertStringContainsString('בוצעה', $reply);
+        $this->assertSame(ActionStatus::Executed, $action->fresh()->status);
     }
 
     public function test_a_manual_team_action_or_a_goalless_one_does_not_loop(): void
@@ -183,6 +211,26 @@ class FixLoopTest extends TestCase
         Http::assertSent(fn (Request $r): bool => str_contains($r->url(), 'sendText')
             && str_contains((string) $r->data()['text'], 'הבעיה נפתרה')
             && str_contains((string) $r->data()['text'], $site->domain));
+    }
+
+    public function test_a_blank_verification_pass_still_reports_to_the_owner(): void
+    {
+        config([
+            'billing.waha.base_url' => 'https://waha.test', 'billing.waha.api_key' => 'k',
+            'billing.waha.session' => 'default', 'billing.waha.owner_number' => '0501112222',
+            'billing.ai.enabled' => false, // the AI is off → investigate() returns null
+        ]);
+        Http::fake(['waha.test/*' => Http::response(['id' => 'wa-1'])]);
+
+        $site = $this->connectedSite();
+
+        (new InvestigateSiteJob($site->id, 'בדוק אם האתר עדיין איטי', round: 2))
+            ->handle(app(SiteAgent::class), app(SiteMemoryStore::class));
+
+        // The owner is waiting for a verdict on the approved fix — a check that
+        // couldn't run must say so (with the reason), never end silently.
+        Http::assertSent(fn (Request $r): bool => str_contains($r->url(), 'sendText')
+            && str_contains((string) $r->data()['text'], 'לא הצליחה לרוץ'));
     }
 
     public function test_a_first_round_investigation_does_not_message_the_owner(): void
