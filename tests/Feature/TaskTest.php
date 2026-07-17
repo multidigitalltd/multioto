@@ -6,6 +6,7 @@ use App\Enums\TaskStatus;
 use App\Enums\TicketChannel;
 use App\Enums\TicketPriority;
 use App\Enums\TicketStatus;
+use App\Filament\Resources\TaskResource\Pages\EditTask;
 use App\Filament\Resources\TaskResource\Pages\ListTasks;
 use App\Filament\Resources\TicketResource\Pages\ViewTicket;
 use App\Jobs\SendTaskRemindersJob;
@@ -32,6 +33,29 @@ class TaskTest extends TestCase
         $this->assertNotNull($task->fresh()->completed_at);
 
         $task->update(['status' => TaskStatus::Open]);
+        $this->assertNull($task->fresh()->completed_at);
+    }
+
+    public function test_status_buttons_inside_a_task_move_it_through_its_lifecycle(): void
+    {
+        $this->actingAs(User::factory()->create());
+        $task = Task::factory()->create(['status' => TaskStatus::Open]);
+
+        // "סמן כבביצוע"
+        Livewire::test(EditTask::class, ['record' => $task->id])
+            ->callAction('markInProgress');
+        $this->assertSame(TaskStatus::InProgress, $task->fresh()->status);
+
+        // "סמן כהושלם" — stamps completion time via the observer.
+        Livewire::test(EditTask::class, ['record' => $task->id])
+            ->callAction('markDone');
+        $this->assertSame(TaskStatus::Done, $task->fresh()->status);
+        $this->assertNotNull($task->fresh()->completed_at);
+
+        // "פתח מחדש" — clears the completion time.
+        Livewire::test(EditTask::class, ['record' => $task->id])
+            ->callAction('reopen');
+        $this->assertSame(TaskStatus::Open, $task->fresh()->status);
         $this->assertNull($task->fresh()->completed_at);
     }
 

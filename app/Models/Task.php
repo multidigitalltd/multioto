@@ -67,6 +67,16 @@ class Task extends Model
             ->get();
     }
 
+    /**
+     * Move the task to a lifecycle status. The TaskObserver keeps completed_at
+     * and the reminder clock in sync on the same write, so this only needs to
+     * set the status.
+     */
+    public function markStatus(TaskStatus $status): void
+    {
+        $this->update(['status' => $status]);
+    }
+
     /** The team members this task is assigned to (may be several). */
     public function assignees(): BelongsToMany
     {
