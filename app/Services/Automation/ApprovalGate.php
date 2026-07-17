@@ -7,6 +7,7 @@ use App\Enums\MessageAuthor;
 use App\Enums\MessageChannel;
 use App\Enums\MessageDirection;
 use App\Enums\TicketChannel;
+use App\Jobs\InvestigateSiteJob;
 use App\Jobs\SendTicketReplyJob;
 use App\Mail\MonitoringReportMail;
 use App\Models\Customer;
@@ -146,11 +147,53 @@ class ApprovalGate
         match ($action->type) {
             'ticket_reply' => $this->executeTicketReply($action),
             'site_fix' => $this->executeSiteFix($action),
-            'site_action' => app(SiteActionRunner::class)->run($action),
+            'site_action' => $this->executeSiteAction($action),
             'system_action' => app(SystemActionRunner::class)->run($action),
             'monitoring_report' => $this->executeMonitoringReport($action),
             default => throw new \RuntimeException("סוג פעולה לא מוכר: {$action->type}"),
         };
+    }
+
+    /**
+     * Run an approved site action, then close the loop: when the action came
+     * from an AI investigation (its payload carries the original goal), send
+     * the agent back to the site — read-only — to verify the ORIGINAL problem
+     * is actually solved. Solved → it reports so; not solved → it proposes the
+     * next single step, which again waits for approval. Command → result →
+     * approval → … until the fix is confirmed, capped at verify_max_rounds so
+     * one stubborn problem can't loop forever.
+     */
+    protected function executeSiteAction(PendingAction $action): void
+    {
+        app(SiteActionRunner::class)->run($action);
+
+        $goal = trim((string) data_get($action->payload, 'goal'));
+        $round = (int) data_get($action->payload, 'round', 1);
+        $maxRounds = (int) config('agent.verify_max_rounds', 3);
+
+        // Only AI-originated fixes loop — a team member picking a tool by hand
+        // ("פעולת AI") asked for that one call, not for an investigation.
+        if (! config('agent.verify_after_fix', true) || $goal === '' || $action->proposed_by !== 'ai') {
+            return;
+        }
+
+        if ($round >= $maxRounds) {
+            Log::info('ApprovalGate: fix loop reached its round cap; leaving to a human', [
+                'action_id' => $action->id, 'round' => $round,
+            ]);
+
+            return;
+        }
+
+        $tool = (string) data_get($action->payload, 'tool');
+
+        InvestigateSiteJob::dispatch(
+            (int) data_get($action->payload, 'site_id'),
+            "בוצעה כעת (אחרי אישור מנהל) הפעולה \"{$tool}\" כחלק מטיפול בבעיה: {$goal}\n"
+                .'בדוק עכשיו בכלי קריאה בלבד אם הבעיה המקורית נפתרה בפועל. אם נפתרה — כתוב סיכום קצר שמאשר זאת. '
+                .'אם לא נפתרה — הצע עם propose_action את הצעד הבא לתיקון.',
+            $round + 1,
+        );
     }
 
     /** Send an approved monthly monitoring report to the customer. */

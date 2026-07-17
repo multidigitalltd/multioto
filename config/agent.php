@@ -70,6 +70,20 @@ return [
     ],
 
     /*
+    | The closed loop: after an AI-proposed site fix is approved and executed,
+    | the agent automatically re-investigates (read-only) whether the ORIGINAL
+    | problem is actually solved. Solved → it reports so. Not solved → it
+    | proposes the next single step, which again waits for approval — command →
+    | result → approval → … until the fix is confirmed. Only the read-back and
+    | the proposing are automatic; every change still requires approval.
+    */
+    'verify_after_fix' => (bool) env('AGENT_VERIFY_AFTER_FIX', true),
+
+    // Safety cap on the loop: how many fix rounds one problem may go through
+    // before the agent stops proposing and leaves it to a human.
+    'verify_max_rounds' => (int) env('AGENT_VERIFY_MAX_ROUNDS', 3),
+
+    /*
     | Risk tiers for site tools, matched by name substring (first match wins,
     | highest tier checked first). Unknown tools default to tier 2 — "a change" —
     | so a tool we never classified still requires explicit human approval and
