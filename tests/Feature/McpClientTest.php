@@ -163,6 +163,40 @@ class McpClientTest extends TestCase
         $client->listTools($site);
     }
 
+    public function test_the_secret_is_also_sent_as_a_fallback_header(): void
+    {
+        $site = $this->connectedSite();
+        $this->fakeRpc([
+            'initialize' => fn (): array => ['result' => ['serverInfo' => ['name' => 'md-agent']]],
+        ]);
+
+        app(McpClient::class)->initialize($site);
+
+        // Both the Bearer token and the fallback header carry the secret, so a
+        // host that strips Authorization can still authenticate the caller.
+        Http::assertSent(fn (Request $r): bool => $r->header('Authorization')[0] === 'Bearer site-secret-key'
+            && ($r->header('X-Md-Agent-Secret')[0] ?? '') === 'site-secret-key');
+    }
+
+    public function test_a_cloudflare_challenge_yields_an_actionable_error(): void
+    {
+        $site = $this->connectedSite();
+        Http::fake(['example-site.co.il/*' => Http::response(
+            '<!DOCTYPE html><html><head><title>Just a moment...</title></head><body>challenge-platform</body></html>',
+            403,
+            ['Server' => 'cloudflare', 'cf-mitigated' => 'challenge', 'Content-Type' => 'text/html'],
+        )]);
+
+        try {
+            app(McpClient::class)->initialize($site);
+            $this->fail('expected McpError');
+        } catch (McpError $e) {
+            // Points the operator at Cloudflare (the real cause), not the secret.
+            $this->assertStringContainsString('Cloudflare', $e->getMessage());
+            $this->assertStringContainsString('md-agent', $e->getMessage());
+        }
+    }
+
     public function test_the_connector_caches_capabilities_and_reports_status(): void
     {
         $site = $this->connectedSite();

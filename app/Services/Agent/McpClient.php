@@ -148,16 +148,54 @@ class McpClient
             ]);
 
         if (filled($site->mcp_secret)) {
-            $request = $request->withToken($site->mcp_secret);
+            // Present the secret as a Bearer token AND in a custom header. Some
+            // hosts (Apache/CGI/LiteSpeed) strip the Authorization header before
+            // it reaches WordPress; the plugin reads this fallback header in that
+            // case, so the same secret still authenticates.
+            $request = $request
+                ->withToken($site->mcp_secret)
+                ->withHeaders(['X-Md-Agent-Secret' => $site->mcp_secret]);
         }
 
         $response = $request->post($site->mcp_endpoint, $message);
 
         if ($response->failed()) {
-            throw new McpError("שרת ה-MCP של האתר החזיר HTTP {$response->status()}");
+            throw new McpError($this->describeHttpFailure($response));
         }
 
         return $response;
+    }
+
+    /**
+     * Turn an HTTP failure into an actionable Hebrew message. The common
+     * real-world case is a CDN/WAF — most often Cloudflare — challenging our
+     * server-to-server request with a JavaScript "Just a moment…" page (HTTP
+     * 403/503). Our platform is a server and cannot solve a browser challenge,
+     * so the fix is on the site's side (bypass the challenge for the agent
+     * endpoint / allow-list the panel), not a wrong secret. Naming the cause
+     * saves the operator from chasing the credentials instead.
+     */
+    protected function describeHttpFailure(Response $response): string
+    {
+        $status = $response->status();
+        $server = Str::lower((string) $response->header('Server'));
+        $body = $response->body();
+
+        $isChallenge = filled($response->header('cf-mitigated'))
+            || (in_array($status, [403, 503], true)
+                && Str::contains($server, 'cloudflare')
+                && Str::contains($body, ['Just a moment', 'challenge-platform', 'cf-chl', '__cf_chl']));
+
+        if ($isChallenge) {
+            return 'החיבור נחסם על ידי Cloudflare באתר (אתגר "Just a moment"). הפאנל הוא שרת ואינו יכול לפתור אתגר JavaScript. '
+                .'יש להגדיר ב-Cloudflare של האתר חריגה שתעקוף את האתגר לכתובת ‎/wp-json/md-agent/*‎ (או להתיר את כתובת ה-IP של הפאנל).';
+        }
+
+        if (in_array($status, [401, 403], true)) {
+            return "שרת ה-MCP של האתר דחה את החיבור (HTTP {$status}). ודאו שמפתח ה-MCP בתוסף זהה למפתח שבפאנל, ושכותרת Authorization אינה נחסמת בשרת.";
+        }
+
+        return "שרת ה-MCP של האתר החזיר HTTP {$status}";
     }
 
     /**

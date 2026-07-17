@@ -20,6 +20,30 @@ class Multioto_Agent_Updater
         add_filter('pre_set_site_transient_update_plugins', [$this, 'injectUpdate']);
         add_filter('plugins_api', [$this, 'details'], 20, 3);
         add_action('upgrader_process_complete', [$this, 'clearCache'], 10, 0);
+
+        // Opt THIS managed plugin into WordPress's automatic background updates.
+        // Advertising a new version only makes it *offered* — WordPress still
+        // waits for a manual "Update now" click unless auto-updates are enabled
+        // for the plugin. That is the whole promise of the managed channel: ship
+        // a version once and every site installs it by itself. Only our own
+        // plugin is affected; every other plugin's decision is left untouched.
+        add_filter('auto_update_plugin', [$this, 'enableAutoUpdate'], 10, 2);
+    }
+
+    /**
+     * Force auto-updates ON for our plugin only. WordPress runs its auto-update
+     * cron twice daily; with this returning true, a newer version we advertise
+     * installs itself without anyone clicking.
+     *
+     * @param  mixed  $update  The current auto-update decision for the item.
+     * @param  mixed  $item    The update offer (has ->plugin = the basename).
+     * @return mixed
+     */
+    public function enableAutoUpdate($update, $item)
+    {
+        $plugin = is_object($item) ? (string) ($item->plugin ?? '') : '';
+
+        return $plugin === plugin_basename(MULTIOTO_AGENT_FILE) ? true : $update;
     }
 
     /** @param mixed $transient */
@@ -38,6 +62,10 @@ class Multioto_Agent_Updater
         $basename = plugin_basename(MULTIOTO_AGENT_FILE);
 
         $transient->response[$basename] = (object) [
+            // WordPress's auto-update path reads several of these fields on the
+            // offer object; give it a stable id + slug so it treats ours like a
+            // normal, auto-updatable plugin.
+            'id' => MULTIOTO_AGENT_SLUG,
             'slug' => MULTIOTO_AGENT_SLUG,
             'plugin' => $basename,
             'new_version' => (string) $info['version'],
