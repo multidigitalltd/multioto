@@ -8,14 +8,17 @@ use App\Enums\TicketChannel;
 use App\Enums\TicketStatus;
 use App\Filament\Pages\AgentConsole;
 use App\Filament\Widgets\AgentCommandWidget;
+use App\Jobs\InvestigateSiteJob;
 use App\Models\AgentCommand;
 use App\Models\Customer;
 use App\Models\PendingAction;
+use App\Models\Site;
 use App\Models\Ticket;
 use App\Models\User;
 use App\Services\Agent\CommandInterpreter;
 use App\Services\Ai\ClaudeClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Queue;
 use Livewire\Livewire;
 use Mockery;
 use Tests\TestCase;
@@ -302,6 +305,35 @@ class CommandConsoleTest extends TestCase
         Livewire::test(AgentConsole::class)
             ->assertSeeText('פעולות נוספות ממתינות לאישור')
             ->assertSeeText('לבדוק את הדומיין של דנה');
+    }
+
+    public function test_a_chat_site_investigation_carries_the_operator_so_the_result_returns_to_the_chat(): void
+    {
+        // When the agent sends the site operator to investigate from the chat,
+        // the background job must carry the requesting operator's id, so its
+        // finding can be posted back into THIS thread when it completes.
+        Queue::fake();
+        $this->actingAs($user = User::factory()->create());
+        $site = Site::factory()->create([
+            'mcp_enabled' => true,
+            'mcp_endpoint' => 'https://site.test/wp-json/md-agent/mcp',
+        ]);
+
+        $this->fakeAgent(
+            [['investigate_site', ['site_id' => $site->id, 'goal' => 'בדוק אם האתר תקין']]],
+            summary: 'שלחתי את סוכן האתר לבדוק — התוצאה תחזור לכאן.',
+        );
+
+        Livewire::test(AgentConsole::class)
+            ->set('data.instruction', 'תבדוק אם האתר של הלקוח תקין')
+            ->call('run');
+
+        Queue::assertPushed(
+            InvestigateSiteJob::class,
+            fn (InvestigateSiteJob $job): bool => $job->siteId === $site->id
+                && $job->chatUserId === $user->id
+                && $job->round === 1,
+        );
     }
 
     public function test_the_chat_page_renders_the_conversation(): void

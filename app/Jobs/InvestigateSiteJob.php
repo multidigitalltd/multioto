@@ -2,6 +2,8 @@
 
 namespace App\Jobs;
 
+use App\Enums\AgentCommandOutcome;
+use App\Models\AgentCommand;
 use App\Models\Site;
 use App\Models\SystemLog;
 use App\Services\Agent\SiteAgent;
@@ -33,11 +35,26 @@ class InvestigateSiteJob implements ShouldQueue
 
     public int $timeout = 180;
 
+    /**
+     * Deliberately NOT constructor-promoted. A promoted property's default is a
+     * parameter default, applied only when the constructor runs — so a job
+     * already serialized in the queue before this field was added would
+     * unserialize WITHOUT it, and the first access (in postToChat) would throw
+     * "typed property must not be accessed before initialization" and fail the
+     * job after the investigation already ran (tries = 1, no retry). A
+     * class-level default IS restored on unserialize, so a legacy payload
+     * safely reads null → "not from chat" → posts nowhere.
+     */
+    public ?int $chatUserId = null;
+
     public function __construct(
         public int $siteId,
         public string $goal,
         public int $round = 1,
-    ) {}
+        ?int $chatUserId = null,
+    ) {
+        $this->chatUserId = $chatUserId;
+    }
 
     public function handle(SiteAgent $agent, SiteMemoryStore $memory): void
     {
@@ -60,6 +77,10 @@ class InvestigateSiteJob implements ShouldQueue
                 $this->notifyOwner($site, "⚠️ בדיקת האימות לא הצליחה לרוץ: {$reason}");
             }
 
+            // If this was asked from the chat, say so there too instead of
+            // leaving the operator waiting for a reply that never comes.
+            $this->postToChat($site, "⚠️ בדיקת האתר {$site->domain} לא הצליחה לרוץ: {$reason}");
+
             return;
         }
 
@@ -74,6 +95,28 @@ class InvestigateSiteJob implements ShouldQueue
         if ($this->round > 1) {
             $this->notifyOwner($site, $summary);
         }
+
+        // Asked from the chat → return the result to the same conversation (as a
+        // system turn), so the operator sees the findings there and any proposed
+        // fix shows up for approval — instead of only in the event log.
+        $this->postToChat($site, "🔎 תוצאת בדיקת האתר {$site->domain}:\n".Str::limit($summary, 1500));
+    }
+
+    /** Post a result back into the chat of the operator who asked (if from chat). */
+    private function postToChat(Site $site, string $body): void
+    {
+        if ($this->chatUserId === null) {
+            return;
+        }
+
+        AgentCommand::create([
+            'user_id' => $this->chatUserId,
+            'role' => 'system',
+            'instruction' => "בדיקת אתר {$site->domain}",
+            'outcome' => AgentCommandOutcome::Dispatched,
+            'result' => $body,
+            'site_id' => $site->id,
+        ]);
     }
 
     /** Push a verification-pass summary to the owner's WhatsApp (best-effort). */
