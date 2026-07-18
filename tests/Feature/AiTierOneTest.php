@@ -18,6 +18,7 @@ use App\Models\User;
 use App\Services\Ai\ClaudeClient;
 use App\Services\Ai\SupportToolkit;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Livewire\Livewire;
@@ -290,6 +291,53 @@ class AiTierOneTest extends TestCase
         $result = app(ClaudeClient::class)->testConnection();
         $this->assertFalse($result->ok);
         $this->assertTrue($result->configured); // a real error, not "unconfigured"
+    }
+
+    public function test_connection_test_flags_a_tool_use_failure_even_when_plain_calls_pass(): void
+    {
+        $this->enableAi();
+
+        // Plain structured calls (output_config.format) succeed, but the
+        // tool-use call (carries a `tools` array) is rejected — the exact case
+        // that leaves the console silent while "basic" checks look fine.
+        Http::fake([
+            'https://api.anthropic.test/*' => function (Request $request) {
+                if (! empty($request->data()['tools'])) {
+                    return Http::response(['error' => ['message' => 'this model does not support tools']], 400);
+                }
+
+                return Http::response(['stop_reason' => 'end_turn', 'content' => [['type' => 'text', 'text' => json_encode(['ok' => true])]]]);
+            },
+        ]);
+
+        $result = app(ClaudeClient::class)->testConnection();
+
+        $this->assertFalse($result->ok);
+        $this->assertStringContainsString('tool-use', $result->message);
+    }
+
+    public function test_connection_probe_passes_when_the_model_actually_calls_the_tool(): void
+    {
+        $this->enableAi();
+
+        // A compliant model MAY call the probe tool; the check must still pass
+        // (it needs a second turn to consume the tool result and answer).
+        $toolTurns = 0;
+        Http::fake([
+            'https://api.anthropic.test/*' => function (Request $request) use (&$toolTurns) {
+                if (empty($request->data()['tools'])) {
+                    return Http::response(['stop_reason' => 'end_turn', 'content' => [['type' => 'text', 'text' => json_encode(['ok' => true])]]]);
+                }
+
+                if (++$toolTurns === 1) {
+                    return Http::response(['stop_reason' => 'tool_use', 'content' => [['type' => 'tool_use', 'id' => 't1', 'name' => 'noop', 'input' => []]]]);
+                }
+
+                return Http::response(['stop_reason' => 'end_turn', 'content' => [['type' => 'text', 'text' => 'בסדר']]]);
+            },
+        ]);
+
+        $this->assertTrue(app(ClaudeClient::class)->testConnection()->ok);
     }
 
     public function test_manual_draft_action_creates_a_draft_on_demand(): void

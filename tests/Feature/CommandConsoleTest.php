@@ -113,6 +113,22 @@ class CommandConsoleTest extends TestCase
         $this->assertSame(AgentCommandOutcome::Failed, $command->outcome);
     }
 
+    public function test_the_console_surfaces_the_real_ai_error_when_tool_use_returns_nothing(): void
+    {
+        // The AI is enabled but its tool-use call fails at the provider — the
+        // console must show WHY, not a blank "no answer".
+        $claude = Mockery::mock(ClaudeClient::class);
+        $claude->shouldReceive('isEnabled')->andReturn(true);
+        $claude->shouldReceive('converse')->andReturn(null);
+        $claude->shouldReceive('lastError')->andReturn('HTTP 400 — this model does not support tools');
+        $this->app->instance(ClaudeClient::class, $claude);
+
+        $command = app(CommandInterpreter::class)->run('כמה פניות פתוחות יש?');
+
+        $this->assertSame(AgentCommandOutcome::Failed, $command->outcome);
+        $this->assertStringContainsString('HTTP 400', $command->result);
+    }
+
     public function test_the_console_page_sends_an_instruction_to_the_interpreter(): void
     {
         $this->actingAs(User::factory()->create());
