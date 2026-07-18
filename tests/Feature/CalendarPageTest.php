@@ -1,0 +1,109 @@
+<?php
+
+namespace Tests\Feature;
+
+use App\Enums\ServiceMode;
+use App\Enums\TaskStatus;
+use App\Filament\Pages\Calendar;
+use App\Models\ServiceException;
+use App\Models\Task;
+use App\Models\User;
+use App\Services\Calendar\ShabbatClock;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
+use Livewire\Livewire;
+use Tests\TestCase;
+
+class CalendarPageTest extends TestCase
+{
+    use RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        // Fix "now" to a Wednesday in Tammuz 5786 so the visible month is July 2026.
+        Carbon::setTestNow(Carbon::parse('2026-07-15 09:00', 'Asia/Jerusalem'));
+        $this->actingAs(User::factory()->create());
+    }
+
+    protected function tearDown(): void
+    {
+        Carbon::setTestNow();
+        parent::tearDown();
+    }
+
+    public function test_the_calendar_shows_open_tasks_service_days_and_hebrew_dates(): void
+    {
+        Task::create(['title' => 'לבדוק גיבוי אתר', 'status' => TaskStatus::Open, 'due_at' => Carbon::parse('2026-07-20 12:00')]);
+        Task::create(['title' => 'לעדכן תוסף אבטחה', 'status' => TaskStatus::InProgress, 'due_at' => Carbon::parse('2026-07-21 10:00')]);
+        // A done task, a dateless task, and a task in another month must NOT show.
+        Task::create(['title' => 'משימה שהושלמה', 'status' => TaskStatus::Done, 'due_at' => Carbon::parse('2026-07-22 10:00')]);
+        Task::create(['title' => 'משימה ללא תאריך', 'status' => TaskStatus::Open]);
+        Task::create(['title' => 'משימה בחודש אחר', 'status' => TaskStatus::Open, 'due_at' => Carbon::parse('2026-09-10 10:00')]);
+
+        // A reduced-capacity span; the internal note must never reach the view.
+        ServiceException::create([
+            'starts_on' => '2026-07-22', 'ends_on' => '2026-07-23',
+            'mode' => ServiceMode::Reduced, 'note' => 'סוד פנימי',
+        ]);
+
+        Livewire::test(Calendar::class)
+            ->assertOk()
+            ->assertSeeText('יולי 2026')          // Gregorian heading
+            ->assertSeeText('תשפ״ו')               // Hebrew year in the heading
+            ->assertSeeText('לבדוק גיבוי אתר')     // an open task, on its due day
+            ->assertSeeText('לעדכן תוסף אבטחה')    // an in-progress task
+            ->assertSeeText('שבת')                 // Shabbat cells are labelled
+            ->assertSeeText('מצומצמת')             // the service-day badge
+            ->assertDontSeeText('סוד פנימי')       // the internal note stays internal
+            ->assertDontSeeText('משימה שהושלמה')   // done tasks are excluded
+            ->assertDontSeeText('משימה ללא תאריך') // dateless tasks are not placed
+            ->assertDontSeeText('משימה בחודש אחר'); // out-of-range tasks are not loaded
+    }
+
+    public function test_month_navigation_moves_forward_back_and_home(): void
+    {
+        Livewire::test(Calendar::class)
+            ->assertSet('year', 2026)->assertSet('month', 7)
+            ->call('previousMonth')->assertSet('month', 6)
+            ->call('nextMonth')->call('nextMonth')->assertSet('month', 8)
+            ->call('goToday')->assertSet('month', 7)->assertSet('year', 2026);
+    }
+
+    public function test_month_navigation_rolls_over_the_year(): void
+    {
+        Livewire::test(Calendar::class)
+            ->set('year', 2026)->set('month', 1)
+            ->call('previousMonth')
+            ->assertSet('year', 2025)->assertSet('month', 12);
+    }
+
+    public function test_rest_day_details_describe_shabbat_but_not_a_weekday(): void
+    {
+        $clock = app(ShabbatClock::class);
+
+        // A plain Wednesday is not a rest day.
+        $this->assertNull($clock->restDay(Carbon::parse('2026-07-15', 'Asia/Jerusalem')));
+
+        // Saturday 2026-07-18 is a standalone Shabbat: it both opens and closes
+        // its own one-day window, candle lighting falls on the Friday eve, and
+        // havdalah on the Saturday night.
+        $rest = $clock->restDay(Carbon::parse('2026-07-18', 'Asia/Jerusalem'));
+        $this->assertNotNull($rest);
+        $this->assertSame('שבת', $rest['label']);
+        $this->assertTrue($rest['first']);
+        $this->assertTrue($rest['last']);
+        $this->assertTrue($rest['entry']->isFriday());
+        $this->assertTrue($rest['exit']->isSaturday());
+        $this->assertTrue($rest['entry']->lessThan($rest['exit']));
+    }
+
+    public function test_rest_day_ignores_the_automation_toggle(): void
+    {
+        // The base TestCase disables the automation halt; the calendar still
+        // describes the day (restDay is about the date, not the pause switch).
+        config(['billing.shabbat.block_automations' => false]);
+
+        $this->assertNotNull(app(ShabbatClock::class)->restDay(Carbon::parse('2026-07-18', 'Asia/Jerusalem')));
+    }
+}
