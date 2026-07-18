@@ -2,24 +2,26 @@
     @if ($available)
         <x-filament::section icon="heroicon-o-arrow-up-circle" class="border-warning-300 dark:border-warning-700">
             <x-slot name="heading">עדכון זמין</x-slot>
-            <x-slot name="description">גרסה חדשה מחכה להתקנה — ראו "מה חדש" למטה.</x-slot>
             <p class="text-sm text-gray-700 dark:text-gray-200">
                 יש {{ $available['behind'] }} עדכונים חדשים
-                @if (! empty($available['short'])) (עד גרסה <span class="font-mono">{{ $available['short'] }}</span>) @endif.
+                @if (! empty($available['short'])) (עד גרסה <span class="font-mono">{{ $available['short'] }}</span>) @endif
+                שממתינים להתקנה.
                 @if ($configured)
                     לחצו "עדכן עכשיו" למעלה כדי להתקין.
                 @else
                     עדכנו בשרת עם <code>./update.sh</code>.
                 @endif
+                עיקרי היתרונות של הגרסה החדשה יופיעו כאן ("מה חדש") מיד לאחר ההתקנה.
             </p>
         </x-filament::section>
     @endif
 
-    {{-- What's new: the highlights of recent releases. --}}
+    {{-- What's new: the highlights of the versions that are already installed
+         (the changelog ships inside the running build). --}}
     @if ($this->releases->isNotEmpty())
         <x-filament::section icon="heroicon-o-sparkles">
             <x-slot name="heading">מה חדש</x-slot>
-            <x-slot name="description">עיקרי היתרונות של הגרסאות האחרונות.</x-slot>
+            <x-slot name="description">עיקרי היתרונות של הגרסאות המותקנות — האחרונה למעלה.</x-slot>
 
             <div class="flex flex-col gap-5">
                 @foreach ($this->releases as $index => $release)
