@@ -16,6 +16,7 @@ use App\Services\Notifications\TemplateEngine;
 use App\Services\Support\TicketIntake;
 use App\Services\Waha\WahaClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Queue;
@@ -80,6 +81,32 @@ class NotificationTemplatesTest extends TestCase
         // Running again (retry / duplicate dispatch) must not send twice.
         (new SendTicketNotificationJob($ticket->id, 'ticket.received'))->handle(app(TemplateEngine::class), app(WahaClient::class), app(ClaudeClient::class));
         $this->assertSame(1, $ticket->messages()->count());
+    }
+
+    public function test_an_automatic_ack_is_held_over_shabbat_and_resent_after(): void
+    {
+        config([
+            'billing.shabbat.block_automations' => true,
+            'billing.waha.base_url' => 'https://waha.test', 'billing.waha.api_key' => 'k', 'billing.waha.session' => 'default',
+        ]);
+        Carbon::setTestNow(Carbon::parse('2026-07-18 12:00', 'Asia/Jerusalem')); // Shabbat
+        Http::fake(['*/api/sendText' => Http::response(['id' => 'wa-1'])]);
+        Queue::fake([SendTicketNotificationJob::class]);
+
+        $customer = Customer::factory()->create();
+        $ticket = Ticket::create([
+            'customer_id' => $customer->id, 'channel' => TicketChannel::Whatsapp,
+            'subject' => 'תקלה', 'status' => TicketStatus::Open, 'external_thread_ref' => '972501234567@c.us',
+        ]);
+
+        (new SendTicketNotificationJob($ticket->id, 'ticket.received'))->handle(app(TemplateEngine::class), app(WahaClient::class), app(ClaudeClient::class));
+
+        // Nothing was sent to the customer on Shabbat; the job was re-queued for later.
+        Http::assertNothingSent();
+        Queue::assertPushed(SendTicketNotificationJob::class, 1);
+        $this->assertSame(0, $ticket->messages()->count());
+
+        Carbon::setTestNow();
     }
 
     public function test_dynamic_ack_uses_ai_written_text_with_the_ticket_number(): void

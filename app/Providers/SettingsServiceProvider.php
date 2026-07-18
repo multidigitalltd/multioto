@@ -60,6 +60,8 @@ class SettingsServiceProvider extends ServiceProvider
         'ai.enabled' => 'billing.ai.enabled',
         'ai.dynamic_ack' => 'billing.ai.dynamic_ack',
         'notifications.copy_customer_messages' => 'billing.notifications.copy_customer_messages',
+        // Pause outward automations over Shabbat & Yom Tov (resume the day after).
+        'shabbat.block_automations' => 'billing.shabbat.block_automations',
         'ai.provider' => 'billing.ai.provider',
         'ai.api_key' => 'billing.ai.api_key',
         'ai.base_url' => 'billing.ai.base_url',

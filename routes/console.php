@@ -17,6 +17,7 @@ use App\Models\Charge;
 use App\Models\Site;
 use App\Models\Subscription;
 use App\Models\SystemLog;
+use App\Services\Calendar\ShabbatClock;
 use Illuminate\Support\Facades\Schedule;
 
 /*
@@ -25,6 +26,11 @@ use Illuminate\Support\Facades\Schedule;
  | single system cron entry (prod).
  */
 
+// Outward automations (charges, dunning, reminders, broadcasts, digests) pause
+// over Shabbat and Yom Tov and resume the day after — attach ->when($awake) to
+// each. Monitoring and internal safety jobs keep running.
+$awake = fn (): bool => ! app(ShabbatClock::class)->isBlocked();
+
 // Billing: enqueue a charge for every subscription that is due. The job holds
 // a per-subscription lock and re-checks the due date, so double dispatch is safe.
 Schedule::call(function () {
@@ -32,7 +38,7 @@ Schedule::call(function () {
         ->dueForCharge()
         ->pluck('id')
         ->each(fn (int $id) => ChargeSubscriptionJob::dispatch($id));
-})->everyFifteenMinutes()->name('billing:dispatch-due-charges')->onOneServer();
+})->everyFifteenMinutes()->name('billing:dispatch-due-charges')->when($awake)->onOneServer();
 
 // Reconcile manual charges left "pending": if Cardcom actually charged the card
 // but we never recorded the result (lost webhook / crashed job), finalise the
@@ -79,23 +85,23 @@ Schedule::call(function () {
 // Proactive reminders: a once-a-day internal digest (renewals due, cards
 // expiring, open debt) so the owner can act before anything slips.
 Schedule::job(new SendProactiveRemindersJob)
-    ->dailyAt('08:00')->name('reminders:daily-digest')->onOneServer();
+    ->dailyAt('08:00')->name('reminders:daily-digest')->when($awake)->onOneServer();
 
 // Chase tickets stuck "waiting for customer": remind once after reminder_days
 // of silence, then auto-close after close_days. Timings in config/billing.php.
 Schedule::job(new FollowUpPendingTicketsJob)
-    ->dailyAt('09:00')->name('support:pending-followup')->onOneServer();
+    ->dailyAt('09:00')->name('support:pending-followup')->when($awake)->onOneServer();
 
 // Chase unpaid payment demands: after the quiet interval, resend the request
 // (link/transfer) up to the configured maximum, then stop.
 Schedule::job(new SendDemandRemindersJob)
-    ->dailyAt('10:00')->name('billing:demand-reminders')->onOneServer();
+    ->dailyAt('10:00')->name('billing:demand-reminders')->when($awake)->onOneServer();
 
 // Daily task reminders: email each team member their open tasks due today or
 // overdue (once per task; the clock resets on reschedule/reopen).
 Schedule::job(new SendTaskRemindersJob)
     ->dailyAt((string) config('billing.support.task_reminders.time', '08:30'))
-    ->name('support:task-reminders')->onOneServer();
+    ->name('support:task-reminders')->when($awake)->onOneServer();
 
 // Scheduled broadcasts.
 Schedule::call(function () {
@@ -104,7 +110,7 @@ Schedule::call(function () {
         ->where('scheduled_at', '<=', now())
         ->pluck('id')
         ->each(fn (int $id) => SendBroadcastJob::dispatch($id));
-})->everyFiveMinutes()->name('broadcasts:dispatch-scheduled')->onOneServer();
+})->everyFiveMinutes()->name('broadcasts:dispatch-scheduled')->when($awake)->onOneServer();
 
 // Horizon metrics snapshot.
 Schedule::command('horizon:snapshot')->everyFiveMinutes();

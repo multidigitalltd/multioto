@@ -445,4 +445,29 @@ return [
         // month only; 1 = this month and next).
         'card_expiry_months' => env('REMINDER_CARD_EXPIRY_MONTHS', 1),
     ],
+
+    /*
+     | Shabbat & Jewish-holiday quiet period. When enabled, outward automations
+     | (charges, dunning/demand reminders, proactive digests, broadcasts, task
+     | reminders, and automatic ticket acknowledgements) pause from candle
+     | lighting until the morning after Shabbat/Yom Tov — so nothing is sent to
+     | customers or the team during the rest, and held work resumes the day
+     | after. Times are computed for a fixed location (Tel Aviv by default).
+     */
+    'shabbat' => [
+        'block_automations' => (bool) env('SHABBAT_BLOCK_AUTOMATIONS', true),
+
+        // Location for candle-lighting / havdalah (default: Tel Aviv).
+        'latitude' => (float) env('SHABBAT_LATITUDE', 32.0853),
+        'longitude' => (float) env('SHABBAT_LONGITUDE', 34.7818),
+
+        // Minutes before sunset the quiet period begins (candle lighting)…
+        'candle_offset_minutes' => (int) env('SHABBAT_CANDLE_OFFSET', 18),
+        // …and minutes after sunset it halachically ends (havdalah / nightfall).
+        'havdalah_offset_minutes' => (int) env('SHABBAT_HAVDALAH_OFFSET', 40),
+
+        // Held automations resume at this local time on the day AFTER the rest
+        // ends ("יחכה ליום שלמחרת"), not the moment Shabbat goes out.
+        'resume_time' => env('SHABBAT_RESUME_TIME', '08:00'),
+    ],
 ];
