@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Enums\ActionStatus;
 use App\Enums\AgentCommandOutcome;
 use App\Enums\TicketChannel;
 use App\Enums\TicketStatus;
@@ -138,7 +139,7 @@ class CommandConsoleTest extends TestCase
 
         $interpreter = Mockery::mock(CommandInterpreter::class);
         $interpreter->shouldReceive('run')->once()
-            ->with('תנקה קאש באתר example.co.il', Mockery::any(), Mockery::any())
+            ->with('תנקה קאש באתר example.co.il', Mockery::any())
             ->andReturn($result);
         $this->app->instance(CommandInterpreter::class, $interpreter);
 
@@ -183,16 +184,139 @@ class CommandConsoleTest extends TestCase
         $this->assertSame(AgentCommandOutcome::Unclear, AgentCommand::latest('id')->first()->outcome);
 
         // Turn 2: the operator answers in the same box → it continues, not restarts.
-        $this->fakeAgent([['propose_payment_request', ['customer_id' => $customer->id, 'amount_ils' => 300, 'description' => 'אחסון']]]);
+        $capturedPrompt = null;
+        $claude = Mockery::mock(ClaudeClient::class);
+        $claude->shouldReceive('isEnabled')->andReturn(true);
+        $claude->shouldReceive('converse')->andReturnUsing(
+            function (string $system, string $prompt, array $tools, callable $handler) use (&$capturedPrompt, $customer): string {
+                $capturedPrompt = $prompt;
+                $handler('propose_payment_request', ['customer_id' => $customer->id, 'amount_ils' => 300, 'description' => 'אחסון']);
+
+                return 'בוצע';
+            }
+        );
+        $this->app->instance(ClaudeClient::class, $claude);
+
         Livewire::test(AgentConsole::class)
             ->set('data.instruction', '300 שקל')
             ->call('run');
 
         $second = AgentCommand::latest('id')->first();
         $this->assertSame(AgentCommandOutcome::Proposed, $second->outcome);
-        // The continued instruction carried the original request forward.
-        $this->assertStringContainsString('תשלח דרישת תשלום למשה', $second->instruction);
+        // The stored turn is exactly what the operator typed (clean chat bubble)…
+        $this->assertSame('300 שקל', $second->instruction);
+        // …while the agent received the original request merged in as context.
+        $this->assertStringContainsString('תשלח דרישת תשלום למשה', (string) $capturedPrompt);
         $this->assertSame(30000, data_get(PendingAction::find($second->pending_action_id)->payload, 'amount_agorot'));
+    }
+
+    public function test_a_follow_up_message_carries_the_recent_conversation_as_context(): void
+    {
+        $this->actingAs(User::factory()->create());
+
+        // Turn 1: a normal answered command.
+        $this->fakeAgent([], summary: 'הצגתי את רשימת הלקוחות.');
+        Livewire::test(AgentConsole::class)->set('data.instruction', 'מי הלקוחות שלי?')->call('run');
+
+        // Turn 2: a plain follow-up (NOT a clarification) must still reach the
+        // agent with the previous turn as context, so the chat has memory.
+        $captured = null;
+        $claude = Mockery::mock(ClaudeClient::class);
+        $claude->shouldReceive('isEnabled')->andReturn(true);
+        $claude->shouldReceive('converse')->andReturnUsing(
+            function (string $system, string $prompt) use (&$captured): string {
+                $captured = $prompt;
+
+                return 'הנה מי שבפיגור.';
+            }
+        );
+        $this->app->instance(ClaudeClient::class, $claude);
+
+        Livewire::test(AgentConsole::class)->set('data.instruction', 'ומי מהם בפיגור תשלום?')->call('run');
+
+        $this->assertStringContainsString('מי הלקוחות שלי?', (string) $captured);
+        $this->assertStringContainsString('ומי מהם בפיגור תשלום?', (string) $captured);
+    }
+
+    public function test_a_decision_from_the_chat_posts_a_system_turn_into_the_thread(): void
+    {
+        $this->actingAs(User::factory()->create());
+        $customer = Customer::factory()->create(['name' => 'משה']);
+
+        // The agent files a proposal in the chat…
+        $this->fakeAgent([['propose_payment_request', ['customer_id' => $customer->id, 'amount_ils' => 300, 'description' => 'אחסון']]]);
+        Livewire::test(AgentConsole::class)->set('data.instruction', 'דרישת תשלום למשה 300')->call('run');
+
+        $action = PendingAction::latest('id')->first();
+
+        // …and rejecting it from the chat records a system turn with the outcome.
+        Livewire::test(AgentConsole::class)->call('rejectAction', $action->id);
+
+        $system = AgentCommand::where('role', 'system')->latest('id')->first();
+        $this->assertNotNull($system);
+        $this->assertStringContainsString("#{$action->id}", $system->instruction);
+        $this->assertStringContainsString('נדחתה', (string) $system->result);
+    }
+
+    public function test_a_multi_step_clarification_keeps_the_original_request(): void
+    {
+        $this->actingAs(User::factory()->create());
+
+        // Ask → clarify → clarify. The final turn must still see the original.
+        $this->fakeAgent([['need_clarification', ['question' => 'כמה לגבות?']]], summary: 'צריך סכום.');
+        Livewire::test(AgentConsole::class)->set('data.instruction', 'תשלח דרישת תשלום למשה')->call('run');
+
+        $this->fakeAgent([['need_clarification', ['question' => 'עבור מה?']]], summary: 'צריך תיאור.');
+        Livewire::test(AgentConsole::class)->set('data.instruction', '300 שקל')->call('run');
+
+        $captured = null;
+        $claude = Mockery::mock(ClaudeClient::class);
+        $claude->shouldReceive('isEnabled')->andReturn(true);
+        $claude->shouldReceive('converse')->andReturnUsing(function (string $s, string $p) use (&$captured): string {
+            $captured = $p;
+
+            return 'בוצע';
+        });
+        $this->app->instance(ClaudeClient::class, $claude);
+        Livewire::test(AgentConsole::class)->set('data.instruction', 'עבור אחסון שנתי')->call('run');
+
+        // The original request AND the first answer are still in the agent's context.
+        $this->assertStringContainsString('תשלח דרישת תשלום למשה', (string) $captured);
+        $this->assertStringContainsString('300 שקל', (string) $captured);
+    }
+
+    public function test_every_proposal_from_one_run_stays_actionable_in_the_chat(): void
+    {
+        $this->actingAs(User::factory()->create());
+
+        // One run files two proposals; only the first links to the turn.
+        $this->fakeAgent([
+            ['propose_task', ['title' => 'להתקשר ליוסי']],
+            ['propose_task', ['title' => 'לבדוק את הדומיין של דנה']],
+        ]);
+        Livewire::test(AgentConsole::class)->set('data.instruction', 'תפתח שתי משימות')->call('run');
+
+        $this->assertSame(2, PendingAction::where('status', ActionStatus::Pending)->count());
+
+        // The second proposal (not linked to the turn) is surfaced as "extra pending".
+        Livewire::test(AgentConsole::class)
+            ->assertSeeText('פעולות נוספות ממתינות לאישור')
+            ->assertSeeText('לבדוק את הדומיין של דנה');
+    }
+
+    public function test_the_chat_page_renders_the_conversation(): void
+    {
+        $this->actingAs($user = User::factory()->create());
+        AgentCommand::create([
+            'user_id' => $user->id, 'role' => 'user',
+            'instruction' => 'שלום סוכן', 'outcome' => AgentCommandOutcome::Dispatched,
+            'result' => 'שלום, איך אפשר לעזור?',
+        ]);
+
+        Livewire::test(AgentConsole::class)
+            ->assertOk()
+            ->assertSeeText('שלום סוכן')
+            ->assertSeeText('שלום, איך אפשר לעזור?');
     }
 
     protected function tearDown(): void
