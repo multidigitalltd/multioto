@@ -92,9 +92,13 @@ class SendTicketNotificationJob implements ShouldQueue
             }
 
             // The template is enabled → optionally replace its body with a
-            // bespoke AI acknowledgement (falling back to the template body).
+            // bespoke AI acknowledgement (falling back to the template body). If
+            // the AI didn't write it, still set the reduced-capacity/urgent-only
+            // expectation deterministically on a marked day.
             if (($aiBody = $this->composeAiAck($ai, $ticket)) !== null) {
                 $rendered['body'] = $aiBody;
+            } else {
+                $rendered['body'] = $this->withServiceNotice($rendered['body']);
             }
 
             $waha->sendMessage($chatId, $rendered['body']);
@@ -120,6 +124,8 @@ class SendTicketNotificationJob implements ShouldQueue
                 ? "פנייתך #{$ticket->id} טופלה"
                 : "קיבלנו את פנייתך #{$ticket->id}";
             $rendered = ['subject' => $aiSubject, 'body' => $aiBody];
+        } else {
+            $rendered['body'] = $this->withServiceNotice($rendered['body']);
         }
 
         // Tag the subject so a reply to this acknowledgement threads onto the ticket.
@@ -170,6 +176,22 @@ class SendTicketNotificationJob implements ShouldQueue
         } catch (\Throwable $e) {
             Log::warning('SendTicketNotificationJob: team copy failed', ['ticket' => $ticket->id, 'error' => $e->getMessage()]);
         }
+    }
+
+    /**
+     * On a marked reduced-capacity / urgent-only day, append the fixed
+     * customer-facing notice to a NEW ticket's acknowledgement — so the
+     * expectation is set even when the AI acknowledgement is off (the default).
+     */
+    protected function withServiceNotice(string $body): string
+    {
+        if ($this->templateKey !== 'ticket.received') {
+            return $body;
+        }
+
+        $notice = app(ServiceStatus::class)->customerNotice();
+
+        return $notice === null ? $body : rtrim($body)."\n\n{$notice}";
     }
 
     /**

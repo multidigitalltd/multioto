@@ -38,4 +38,17 @@ enum ServiceMode: string implements HasColor, HasLabel
             self::UrgentOnly => 'היום הצוות מטפל בפניות דחופות בלבד — יידע את הלקוח שפניות שאינן דחופות ייענו מאוחר יותר, ואם זה דחוף שיציין זאת.',
         };
     }
+
+    /**
+     * A fixed, safe customer-facing line for the non-AI (template) path, so the
+     * expectation is set even when the AI acknowledgement is off. Never contains
+     * the internal note.
+     */
+    public function customerNotice(): string
+    {
+        return match ($this) {
+            self::Reduced => 'לידיעה: אנחנו עובדים כעת במתכונת מצומצמת וייתכן עיכוב קל במענה. נטפל בפנייתך בהקדם.',
+            self::UrgentOnly => 'לידיעה: כרגע אנו מטפלים בפניות דחופות בלבד. אם פנייתך דחופה — נא ציין זאת, אחרת נחזור אליך בהקדם.',
+        };
+    }
 }
