@@ -30,9 +30,9 @@ class AgentConsole extends Page implements HasForms
 
     protected static ?string $navigationGroup = 'תמיכה';
 
-    protected static ?string $navigationLabel = 'מסוף פקודות לסוכן';
+    protected static ?string $navigationLabel = 'צ׳אט עם הסוכן';
 
-    protected static ?string $title = 'מסוף פקודות לסוכן AI';
+    protected static ?string $title = 'צ׳אט עם הסוכן AI';
 
     protected static ?int $navigationSort = 4;
 
@@ -75,31 +75,19 @@ class AgentConsole extends Page implements HasForms
     }
 
     /**
-     * The console history — the most recent instructions and what came of them.
+     * The chat thread — this operator's turns and the agent's replies (plus
+     * system turns for approvals), oldest first so it reads top-to-bottom.
      *
      * @return Collection<int, AgentCommand>
      */
-    public function getRecentCommandsProperty(): Collection
+    public function getConversationProperty(): Collection
     {
+        // Newest first — the blade renders the thread with flex-col-reverse, so
+        // it reads oldest→newest top-to-bottom and stays pinned to the latest.
         return AgentCommand::with('pendingAction')
+            ->where('user_id', auth()->id())
             ->latest('id')
-            ->limit(15)
-            ->get();
-    }
-
-    /**
-     * Everything the agent has proposed and is still waiting on — shown inline so
-     * a proposal can be approved right here, without a detour to the approvals
-     * screen.
-     *
-     * @return Collection<int, PendingAction>
-     */
-    public function getPendingApprovalsProperty(): Collection
-    {
-        return PendingAction::with('customer')
-            ->where('status', ActionStatus::Pending)
-            ->latest('id')
-            ->limit(12)
+            ->limit(40)
             ->get();
     }
 
@@ -118,7 +106,7 @@ class AgentConsole extends Page implements HasForms
         return $last?->outcome === AgentCommandOutcome::Unclear ? $last : null;
     }
 
-    /** Approve + run a proposal from the console. */
+    /** Approve + run a proposal from the chat; post the result back into the thread. */
     public function approveAction(int $id): void
     {
         $action = PendingAction::find($id);
@@ -128,13 +116,13 @@ class AgentConsole extends Page implements HasForms
         }
 
         $result = app(ApprovalGate::class)->approve($action->fresh());
+        $executed = $action->fresh()->status === ActionStatus::Executed;
 
-        Notification::make()->title($result)
-            ->{$action->fresh()->status === ActionStatus::Executed ? 'success' : 'warning'}()
-            ->send();
+        $this->postSystemTurn($result, $id);
+        Notification::make()->title($result)->{$executed ? 'success' : 'warning'}()->send();
     }
 
-    /** Reject a proposal from the console. */
+    /** Reject a proposal from the chat; post the result back into the thread. */
     public function rejectAction(int $id): void
     {
         $action = PendingAction::find($id);
@@ -143,6 +131,22 @@ class AgentConsole extends Page implements HasForms
             return;
         }
 
-        Notification::make()->title(app(ApprovalGate::class)->reject($action->fresh()))->send();
+        $result = app(ApprovalGate::class)->reject($action->fresh());
+
+        $this->postSystemTurn($result, $id);
+        Notification::make()->title($result)->send();
+    }
+
+    /** Record an approval/rejection outcome as a system turn in the chat thread. */
+    protected function postSystemTurn(string $result, int $actionId): void
+    {
+        AgentCommand::create([
+            'user_id' => auth()->id(),
+            'role' => 'system',
+            'instruction' => "החלטה על פעולה #{$actionId}",
+            'outcome' => AgentCommandOutcome::Dispatched,
+            'result' => $result,
+            'pending_action_id' => $actionId,
+        ]);
     }
 }

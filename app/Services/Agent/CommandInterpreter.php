@@ -31,16 +31,20 @@ class CommandInterpreter
 
         // Carry the earlier attempt's full text AND what the agent replied, so a
         // clarification completes it with memory of the question it asked (and
-        // further clarifications keep accumulating context).
+        // further clarifications keep accumulating context). Otherwise, thread
+        // the recent conversation as context so an ordinary follow-up ("make it
+        // warmer", "and also suspend his site") continues the chat instead of
+        // starting cold.
         $effective = $continues && $instruction !== ''
             ? trim($continues->instruction
                 .(filled($continues->result) ? "\n\n[מה שהסוכן השיב/שאל קודם: ".$continues->result.']' : '')
                 ."\n\nהבהרה מהמפעיל: ".$instruction)
-            : $instruction;
+            : $this->withConversationContext($instruction, $userId);
 
         $command = AgentCommand::create([
             'user_id' => $userId,
-            'instruction' => $effective,
+            'role' => 'user',
+            'instruction' => $instruction, // the raw turn; context is passed to the agent only
             'outcome' => AgentCommandOutcome::Unclear,
         ]);
 
@@ -93,6 +97,41 @@ class CommandInterpreter
         }
 
         return $this->finish($command, AgentCommandOutcome::Failed, $message);
+    }
+
+    /**
+     * Prepend the recent conversation so an ordinary follow-up keeps its thread
+     * (the agent sees what was just discussed). Context only — the agent is told
+     * not to re-run past actions. Bounded to the last few turns to stay cheap.
+     */
+    private function withConversationContext(string $instruction, ?int $userId): string
+    {
+        if ($userId === null) {
+            return $instruction;
+        }
+
+        $recent = AgentCommand::query()
+            ->where('user_id', $userId)
+            ->latest('id')
+            ->limit(6)
+            ->get()
+            ->reverse();
+
+        if ($recent->isEmpty()) {
+            return $instruction;
+        }
+
+        $lines = $recent->map(function (AgentCommand $c): string {
+            if ($c->role === 'system') {
+                return 'מערכת: '.Str::limit((string) $c->result, 300);
+            }
+
+            return 'מנהל: '.Str::limit($c->instruction, 400)
+                .(filled($c->result) ? "\nסוכן: ".Str::limit((string) $c->result, 400) : '');
+        })->implode("\n");
+
+        return "שיחה קודמת עם המנהל (להקשר בלבד — אל תבצע שוב פעולות שכבר בוצעו):\n{$lines}"
+            ."\n\nההודעה הנוכחית מהמנהל:\n{$instruction}";
     }
 
     /** Persist the outcome + human result and return the record. */
