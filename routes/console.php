@@ -26,9 +26,13 @@ use Illuminate\Support\Facades\Schedule;
  | single system cron entry (prod).
  */
 
-// Outward automations (charges, dunning, reminders, broadcasts, digests) pause
-// over Shabbat and Yom Tov and resume the day after — attach ->when($awake) to
-// each. Monitoring and internal safety jobs keep running.
+// Outward automations pause over Shabbat and Yom Tov. Each job also rechecks
+// the clock in handle() (PausesForShabbat) and re-queues itself for the day
+// after — so a daily job whose time falls in the quiet window is HELD, not
+// dropped, and a job dispatched just before candle lighting can't slip through.
+// The high-frequency dispatchers additionally gate on ->when($awake) to avoid
+// piling up redundant deferred jobs each tick. Monitoring and internal safety
+// jobs keep running.
 $awake = fn (): bool => ! app(ShabbatClock::class)->isBlocked();
 
 // Billing: enqueue a charge for every subscription that is due. The job holds
@@ -85,23 +89,23 @@ Schedule::call(function () {
 // Proactive reminders: a once-a-day internal digest (renewals due, cards
 // expiring, open debt) so the owner can act before anything slips.
 Schedule::job(new SendProactiveRemindersJob)
-    ->dailyAt('08:00')->name('reminders:daily-digest')->when($awake)->onOneServer();
+    ->dailyAt('08:00')->name('reminders:daily-digest')->onOneServer();
 
 // Chase tickets stuck "waiting for customer": remind once after reminder_days
 // of silence, then auto-close after close_days. Timings in config/billing.php.
 Schedule::job(new FollowUpPendingTicketsJob)
-    ->dailyAt('09:00')->name('support:pending-followup')->when($awake)->onOneServer();
+    ->dailyAt('09:00')->name('support:pending-followup')->onOneServer();
 
 // Chase unpaid payment demands: after the quiet interval, resend the request
 // (link/transfer) up to the configured maximum, then stop.
 Schedule::job(new SendDemandRemindersJob)
-    ->dailyAt('10:00')->name('billing:demand-reminders')->when($awake)->onOneServer();
+    ->dailyAt('10:00')->name('billing:demand-reminders')->onOneServer();
 
 // Daily task reminders: email each team member their open tasks due today or
 // overdue (once per task; the clock resets on reschedule/reopen).
 Schedule::job(new SendTaskRemindersJob)
     ->dailyAt((string) config('billing.support.task_reminders.time', '08:30'))
-    ->name('support:task-reminders')->when($awake)->onOneServer();
+    ->name('support:task-reminders')->onOneServer();
 
 // Scheduled broadcasts.
 Schedule::call(function () {

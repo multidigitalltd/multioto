@@ -6,6 +6,7 @@ use App\Enums\BroadcastChannel;
 use App\Enums\BroadcastStatus;
 use App\Enums\CustomerStatus;
 use App\Enums\NotificationType;
+use App\Jobs\Concerns\PausesForShabbat;
 use App\Mail\BroadcastMail;
 use App\Models\Broadcast;
 use App\Models\Customer;
@@ -24,6 +25,7 @@ use Illuminate\Support\Facades\Mail;
  */
 class SendBroadcastJob implements ShouldQueue
 {
+    use PausesForShabbat;
     use Queueable;
 
     public int $tries = 1;
@@ -32,8 +34,18 @@ class SendBroadcastJob implements ShouldQueue
 
     public function __construct(public int $broadcastId) {}
 
+    /** @return array<int, int> */
+    protected function shabbatDispatchArgs(): array
+    {
+        return [$this->broadcastId];
+    }
+
     public function handle(WahaClient $waha): void
     {
+        if ($this->rescheduledForShabbat()) {
+            return;
+        }
+
         $broadcast = Broadcast::find($this->broadcastId);
 
         if (! $broadcast || $broadcast->status === BroadcastStatus::Sent) {

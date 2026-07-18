@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Jobs\Concerns\PausesForShabbat;
 use App\Mail\NotificationMail;
 use App\Models\Task;
 use App\Models\User;
@@ -18,10 +19,15 @@ use Illuminate\Support\Facades\Mail;
  */
 class SendTaskRemindersJob implements ShouldQueue
 {
+    use PausesForShabbat;
     use Queueable;
 
     public function handle(): void
     {
+        if ($this->rescheduledForShabbat()) {
+            return;
+        }
+
         if (! (bool) config('billing.support.task_reminders.enabled', true)) {
             return;
         }

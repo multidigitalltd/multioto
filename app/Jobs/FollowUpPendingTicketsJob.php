@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Enums\TicketStatus;
+use App\Jobs\Concerns\PausesForShabbat;
 use App\Models\Ticket;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -15,10 +16,15 @@ use Illuminate\Foundation\Queue\Queueable;
  */
 class FollowUpPendingTicketsJob implements ShouldQueue
 {
+    use PausesForShabbat;
     use Queueable;
 
     public function handle(): void
     {
+        if ($this->rescheduledForShabbat()) {
+            return;
+        }
+
         $config = config('billing.support.pending_followup');
 
         if (! ($config['enabled'] ?? true)) {

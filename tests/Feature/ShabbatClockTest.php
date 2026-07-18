@@ -2,8 +2,10 @@
 
 namespace Tests\Feature;
 
+use App\Jobs\FollowUpPendingTicketsJob;
 use App\Services\Calendar\ShabbatClock;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
 
 class ShabbatClockTest extends TestCase
@@ -67,6 +69,20 @@ class ShabbatClockTest extends TestCase
     {
         // A known real date: first day of Pesach 2026 (15 Nisan 5786).
         $this->assertTrue($this->clock()->isBlocked($this->tlv('2026-04-02 12:00')));
+    }
+
+    public function test_a_scheduled_job_re_queues_itself_when_it_runs_during_the_quiet_window(): void
+    {
+        config(['billing.shabbat.block_automations' => true]);
+        Carbon::setTestNow($this->tlv('2026-07-18 12:00')); // Shabbat
+        Queue::fake([FollowUpPendingTicketsJob::class]);
+
+        // Even if it slipped past the scheduler gate (queue latency, dispatched
+        // just before candle lighting), the job holds itself for the day after.
+        (new FollowUpPendingTicketsJob)->handle();
+
+        Queue::assertPushed(FollowUpPendingTicketsJob::class, 1);
+        Carbon::setTestNow();
     }
 
     public function test_the_toggle_disables_blocking(): void

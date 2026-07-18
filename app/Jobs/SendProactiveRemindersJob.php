@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Enums\SubscriptionStatus;
 use App\Enums\TokenStatus;
+use App\Jobs\Concerns\PausesForShabbat;
 use App\Models\PaymentToken;
 use App\Models\Subscription;
 use App\Services\Notifications\TeamNotifier;
@@ -23,6 +24,7 @@ use Illuminate\Support\Carbon;
  */
 class SendProactiveRemindersJob implements ShouldQueue
 {
+    use PausesForShabbat;
     use Queueable;
 
     public int $tries = 1;
@@ -36,6 +38,10 @@ class SendProactiveRemindersJob implements ShouldQueue
 
     public function handle(TeamNotifier $team): void
     {
+        if ($this->rescheduledForShabbat()) {
+            return;
+        }
+
         $renewals = $this->upcomingRenewals();
         $manual = $this->manualCollectionDue();
         $expiring = $this->expiringCards();
