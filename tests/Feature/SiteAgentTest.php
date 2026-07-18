@@ -385,6 +385,19 @@ class SiteAgentTest extends TestCase
         $this->assertSame($site->id, $post->site_id);
     }
 
+    public function test_a_legacy_queue_payload_without_chat_user_id_is_safe(): void
+    {
+        // A job serialized in the queue before chatUserId existed unserializes
+        // without that property. Because it's a class-level property with a null
+        // default (not constructor-promoted), it is restored as null rather than
+        // left uninitialized — so postToChat() reads it safely instead of the job
+        // throwing after the investigation already ran. newInstanceWithoutConstructor
+        // reproduces exactly the property-initialization unserialize performs.
+        $legacy = (new \ReflectionClass(InvestigateSiteJob::class))->newInstanceWithoutConstructor();
+
+        $this->assertNull($legacy->chatUserId);
+    }
+
     public function test_a_background_investigation_not_from_chat_posts_nothing_to_any_thread(): void
     {
         // A scheduled/auto investigation (no chatUserId) must not create a chat

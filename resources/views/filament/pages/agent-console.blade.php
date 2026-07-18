@@ -1,5 +1,10 @@
 <x-filament-panels::page>
-    <div class="flex flex-col gap-4">
+    {{-- Poll the thread so a background result (e.g. a site investigation the
+         agent kicked off) appears on its own when the queued job posts it back,
+         without the operator refreshing. A full re-render also refreshes the
+         extra-pending block and the awaiting-reply hint. Livewire preserves the
+         text being typed in the message box across polls. --}}
+    <div class="flex flex-col gap-4" wire:poll.15s>
         {{-- The conversation thread. flex-col-reverse + a newest-first list keeps
              it pinned to the latest message without any scroll scripting. --}}
         <div class="flex min-h-[45vh] flex-col-reverse gap-4 overflow-y-auto rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-900/40"

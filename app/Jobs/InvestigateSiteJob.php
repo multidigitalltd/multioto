@@ -35,12 +35,26 @@ class InvestigateSiteJob implements ShouldQueue
 
     public int $timeout = 180;
 
+    /**
+     * Deliberately NOT constructor-promoted. A promoted property's default is a
+     * parameter default, applied only when the constructor runs — so a job
+     * already serialized in the queue before this field was added would
+     * unserialize WITHOUT it, and the first access (in postToChat) would throw
+     * "typed property must not be accessed before initialization" and fail the
+     * job after the investigation already ran (tries = 1, no retry). A
+     * class-level default IS restored on unserialize, so a legacy payload
+     * safely reads null → "not from chat" → posts nowhere.
+     */
+    public ?int $chatUserId = null;
+
     public function __construct(
         public int $siteId,
         public string $goal,
         public int $round = 1,
-        public ?int $chatUserId = null,
-    ) {}
+        ?int $chatUserId = null,
+    ) {
+        $this->chatUserId = $chatUserId;
+    }
 
     public function handle(SiteAgent $agent, SiteMemoryStore $memory): void
     {
