@@ -92,6 +92,32 @@ class AgentConsole extends Page implements HasForms
     }
 
     /**
+     * Pending proposals not already shown inline in the thread — a run that
+     * files several actions only links the first to its turn, and proposals can
+     * also arrive from elsewhere (monitoring, WhatsApp). Surfacing the rest here
+     * means no proposal is ever silently un-actionable in the chat.
+     *
+     * @return Collection<int, PendingAction>
+     */
+    public function getExtraPendingProperty(): Collection
+    {
+        $shownInThread = AgentCommand::query()
+            ->where('user_id', auth()->id())
+            ->whereNotNull('pending_action_id')
+            ->latest('id')
+            ->limit(40)
+            ->pluck('pending_action_id')
+            ->all();
+
+        return PendingAction::with('customer')
+            ->where('status', ActionStatus::Pending)
+            ->when($shownInThread !== [], fn ($q) => $q->whereNotIn('id', $shownInThread))
+            ->latest('id')
+            ->limit(12)
+            ->get();
+    }
+
+    /**
      * The agent's open question, if my last command is waiting for my answer.
      * When set, the console shows a "reply to continue" banner and the next
      * thing I send is treated as the answer (see RunsAgentCommands).

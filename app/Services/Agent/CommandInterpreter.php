@@ -25,21 +25,16 @@ class CommandInterpreter
         private ConsoleAgent $agent,
     ) {}
 
-    public function run(string $instruction, ?int $userId = null, ?AgentCommand $continues = null): AgentCommand
+    public function run(string $instruction, ?int $userId = null): AgentCommand
     {
         $instruction = trim($instruction);
 
-        // Carry the earlier attempt's full text AND what the agent replied, so a
-        // clarification completes it with memory of the question it asked (and
-        // further clarifications keep accumulating context). Otherwise, thread
-        // the recent conversation as context so an ordinary follow-up ("make it
-        // warmer", "and also suspend his site") continues the chat instead of
-        // starting cold.
-        $effective = $continues && $instruction !== ''
-            ? trim($continues->instruction
-                .(filled($continues->result) ? "\n\n[מה שהסוכן השיב/שאל קודם: ".$continues->result.']' : '')
-                ."\n\nהבהרה מהמפעיל: ".$instruction)
-            : $this->withConversationContext($instruction, $userId);
+        // Every turn is threaded with the recent conversation, so both an
+        // ordinary follow-up ("make it warmer", "and also suspend his site") AND
+        // a multi-step clarification keep the full chain — the original request,
+        // each answer, and the agent's own questions are all stored turns, so
+        // context is reconstructed from history rather than a single prior row.
+        $effective = $this->withConversationContext($instruction, $userId);
 
         $command = AgentCommand::create([
             'user_id' => $userId,
@@ -130,7 +125,7 @@ class CommandInterpreter
                 .(filled($c->result) ? "\nסוכן: ".Str::limit((string) $c->result, 400) : '');
         })->implode("\n");
 
-        return "שיחה קודמת עם המנהל (להקשר בלבד — אל תבצע שוב פעולות שכבר בוצעו):\n{$lines}"
+        return "שיחה קודמת עם המנהל (להקשר: אל תחזור על פעולות שכבר בוצעו, אבל כן השלם בקשות שנשארו פתוחות — למשל אם שאלת שאלה וקיבלת עכשיו תשובה):\n{$lines}"
             ."\n\nההודעה הנוכחית מהמנהל:\n{$instruction}";
     }
 

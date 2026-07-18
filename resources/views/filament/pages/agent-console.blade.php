@@ -82,6 +82,41 @@
             @endforelse
         </div>
 
+        {{-- Any proposal not already shown inline above — a run that filed several
+             actions, or proposals from monitoring/WhatsApp — stays actionable here. --}}
+        @if ($this->extraPending->isNotEmpty())
+            <div class="rounded-xl border border-warning-300 bg-warning-50 p-3 dark:border-warning-700 dark:bg-warning-950/30">
+                <p class="mb-2 text-xs font-semibold text-warning-700 dark:text-warning-300">פעולות נוספות ממתינות לאישור</p>
+                <div class="flex flex-col divide-y divide-warning-200/60 dark:divide-warning-800/60">
+                    @foreach ($this->extraPending as $action)
+                        <div class="flex flex-col gap-2 py-2 first:pt-0 last:pb-0 sm:flex-row sm:items-start sm:justify-between">
+                            <div class="min-w-0">
+                                <div class="mb-1 flex flex-wrap items-center gap-2">
+                                    <x-filament::badge color="warning">
+                                        {{ \App\Filament\Resources\PendingActionResource::TYPE_LABELS[$action->type] ?? $action->type }}
+                                    </x-filament::badge>
+                                    @if ($action->customer)
+                                        <span class="text-xs text-gray-500 dark:text-gray-400">{{ $action->customer->name }}</span>
+                                    @endif
+                                    <span class="text-xs text-gray-400">#{{ $action->id }}</span>
+                                </div>
+                                <p class="whitespace-pre-line break-words text-sm text-gray-700 dark:text-gray-200">{{ \Illuminate\Support\Str::limit($action->summary, 500) }}</p>
+                            </div>
+                            <div class="flex shrink-0 items-center gap-2">
+                                <x-filament::button size="sm" color="success" icon="heroicon-o-check"
+                                                    wire:click="approveAction({{ $action->id }})"
+                                                    wire:confirm="לאשר ולבצע את הפעולה?"
+                                                    wire:loading.attr="disabled">אשר</x-filament::button>
+                                <x-filament::button size="sm" color="danger" icon="heroicon-o-x-mark"
+                                                    wire:click="rejectAction({{ $action->id }})"
+                                                    wire:loading.attr="disabled">דחה</x-filament::button>
+                            </div>
+                        </div>
+                    @endforeach
+                </div>
+            </div>
+        @endif
+
         {{-- Clarify-and-continue hint: when the agent's last turn was a question,
              make it obvious the answer just goes in the same box. --}}
         @if ($this->awaitingReply)
