@@ -11,6 +11,7 @@ use App\Mail\NotificationMail;
 use App\Models\NotificationLog;
 use App\Models\Ticket;
 use App\Services\Ai\ClaudeClient;
+use App\Services\Calendar\ShabbatClock;
 use App\Services\Notifications\TemplateEngine;
 use App\Services\Waha\WahaClient;
 use App\Support\EmailList;
@@ -47,6 +48,18 @@ class SendTicketNotificationJob implements ShouldQueue
         $ticket = Ticket::with('customer')->find($this->ticketId);
 
         if (! $ticket) {
+            return;
+        }
+
+        // Automatic acknowledgements/closings are held over Shabbat & Yom Tov —
+        // customers aren't messaged during the rest; the send goes out the day
+        // after. (Manual replies from the team are unaffected — this is only the
+        // automatic lifecycle notification.)
+        $shabbat = app(ShabbatClock::class);
+
+        if ($shabbat->isBlocked()) {
+            static::dispatch($this->ticketId, $this->templateKey, $this->dedupeTag)->delay($shabbat->resumeAt());
+
             return;
         }
 

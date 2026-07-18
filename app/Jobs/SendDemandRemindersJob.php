@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Enums\ChargeStatus;
+use App\Jobs\Concerns\PausesForShabbat;
 use App\Models\Charge;
 use App\Services\Billing\DemandDispatcher;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -20,10 +21,15 @@ use Illuminate\Support\Str;
  */
 class SendDemandRemindersJob implements ShouldQueue
 {
+    use PausesForShabbat;
     use Queueable;
 
     public function handle(DemandDispatcher $dispatcher): void
     {
+        if ($this->rescheduledForShabbat()) {
+            return;
+        }
+
         $maxReminders = (int) config('billing.demands.max_reminders', 2);
 
         if ($maxReminders < 1) {

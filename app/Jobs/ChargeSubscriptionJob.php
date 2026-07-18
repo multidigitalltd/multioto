@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Enums\BillingInterval;
 use App\Enums\ChargeStatus;
 use App\Enums\SubscriptionStatus;
+use App\Jobs\Concerns\PausesForShabbat;
 use App\Models\Charge;
 use App\Models\Subscription;
 use App\Services\Billing\DunningMachine;
@@ -27,14 +28,25 @@ use Illuminate\Support\Facades\Cache;
  */
 class ChargeSubscriptionJob implements ShouldQueue
 {
+    use PausesForShabbat;
     use Queueable;
 
     public int $tries = 1;
 
     public function __construct(public int $subscriptionId) {}
 
+    /** @return array<int, int> */
+    protected function shabbatDispatchArgs(): array
+    {
+        return [$this->subscriptionId];
+    }
+
     public function handle(CardcomClient $cardcom, DunningMachine $dunning): void
     {
+        if ($this->rescheduledForShabbat()) {
+            return;
+        }
+
         $subscription = Subscription::with(['plan', 'customer', 'token'])
             ->find($this->subscriptionId);
 

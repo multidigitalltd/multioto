@@ -17,6 +17,7 @@ use App\Models\Charge;
 use App\Models\Site;
 use App\Models\Subscription;
 use App\Models\SystemLog;
+use App\Services\Calendar\ShabbatClock;
 use Illuminate\Support\Facades\Schedule;
 
 /*
@@ -25,6 +26,15 @@ use Illuminate\Support\Facades\Schedule;
  | single system cron entry (prod).
  */
 
+// Outward automations pause over Shabbat and Yom Tov. Each job also rechecks
+// the clock in handle() (PausesForShabbat) and re-queues itself for the day
+// after — so a daily job whose time falls in the quiet window is HELD, not
+// dropped, and a job dispatched just before candle lighting can't slip through.
+// The high-frequency dispatchers additionally gate on ->when($awake) to avoid
+// piling up redundant deferred jobs each tick. Monitoring and internal safety
+// jobs keep running.
+$awake = fn (): bool => ! app(ShabbatClock::class)->isBlocked();
+
 // Billing: enqueue a charge for every subscription that is due. The job holds
 // a per-subscription lock and re-checks the due date, so double dispatch is safe.
 Schedule::call(function () {
@@ -32,7 +42,7 @@ Schedule::call(function () {
         ->dueForCharge()
         ->pluck('id')
         ->each(fn (int $id) => ChargeSubscriptionJob::dispatch($id));
-})->everyFifteenMinutes()->name('billing:dispatch-due-charges')->onOneServer();
+})->everyFifteenMinutes()->name('billing:dispatch-due-charges')->when($awake)->onOneServer();
 
 // Reconcile manual charges left "pending": if Cardcom actually charged the card
 // but we never recorded the result (lost webhook / crashed job), finalise the
@@ -104,7 +114,7 @@ Schedule::call(function () {
         ->where('scheduled_at', '<=', now())
         ->pluck('id')
         ->each(fn (int $id) => SendBroadcastJob::dispatch($id));
-})->everyFiveMinutes()->name('broadcasts:dispatch-scheduled')->onOneServer();
+})->everyFiveMinutes()->name('broadcasts:dispatch-scheduled')->when($awake)->onOneServer();
 
 // Horizon metrics snapshot.
 Schedule::command('horizon:snapshot')->everyFiveMinutes();
