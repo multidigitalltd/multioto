@@ -6,6 +6,7 @@ use App\Filament\Clusters\Settings;
 use App\Filament\Concerns\AdminOnly;
 use App\Models\SystemLog;
 use App\Services\System\DeployManager;
+use App\Support\Changelog;
 use Filament\Actions\Action;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
@@ -14,6 +15,7 @@ use Filament\Tables;
 use Filament\Tables\Concerns\InteractsWithTable;
 use Filament\Tables\Contracts\HasTable;
 use Filament\Tables\Table;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
 
 /**
@@ -48,9 +50,17 @@ class SystemUpdates extends Page implements HasTable
 
     public ?array $lastStatus = null;
 
+    public ?array $available = null;
+
     public bool $pending = false;
 
     public bool $configured = false;
+
+    /** The "מה חדש" release feed. */
+    public function getReleasesProperty(): Collection
+    {
+        return Changelog::releases();
+    }
 
     /** Red badge with the number of errors logged in the last 24 hours. */
     public static function getNavigationBadge(): ?string
@@ -78,6 +88,7 @@ class SystemUpdates extends Page implements HasTable
     {
         $this->version = $deploy->currentVersion();
         $this->lastStatus = $deploy->lastStatus();
+        $this->available = $deploy->availableUpdate();
         $this->pending = $deploy->isPending();
         $this->configured = $deploy->isConfigured();
     }
