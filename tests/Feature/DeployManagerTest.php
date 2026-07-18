@@ -69,5 +69,19 @@ class DeployManagerTest extends TestCase
 
         $this->assertNull($manager->currentVersion());
         $this->assertNull($manager->lastStatus());
+        $this->assertNull($manager->availableUpdate());
+    }
+
+    public function test_it_reports_an_available_update_only_when_behind(): void
+    {
+        $manager = new DeployManager($this->dir);
+
+        // behind > 0 → an update is available.
+        file_put_contents($this->dir.'/available.json', json_encode(['behind' => 3, 'short' => 'def456', 'at' => '2026-07-18 20:00']));
+        $this->assertSame(3, $manager->availableUpdate()['behind']);
+
+        // behind = 0 → up to date, treated as none.
+        file_put_contents($this->dir.'/available.json', json_encode(['behind' => 0]));
+        $this->assertNull($manager->availableUpdate());
     }
 }

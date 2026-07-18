@@ -1,4 +1,50 @@
 <x-filament-panels::page>
+    @if ($available)
+        <x-filament::section icon="heroicon-o-arrow-up-circle" class="border-warning-300 dark:border-warning-700">
+            <x-slot name="heading">עדכון זמין</x-slot>
+            <x-slot name="description">גרסה חדשה מחכה להתקנה — ראו "מה חדש" למטה.</x-slot>
+            <p class="text-sm text-gray-700 dark:text-gray-200">
+                יש {{ $available['behind'] }} עדכונים חדשים
+                @if (! empty($available['short'])) (עד גרסה <span class="font-mono">{{ $available['short'] }}</span>) @endif.
+                @if ($configured)
+                    לחצו "עדכן עכשיו" למעלה כדי להתקין.
+                @else
+                    עדכנו בשרת עם <code>./update.sh</code>.
+                @endif
+            </p>
+        </x-filament::section>
+    @endif
+
+    {{-- What's new: the highlights of recent releases. --}}
+    @if ($this->releases->isNotEmpty())
+        <x-filament::section icon="heroicon-o-sparkles">
+            <x-slot name="heading">מה חדש</x-slot>
+            <x-slot name="description">עיקרי היתרונות של הגרסאות האחרונות.</x-slot>
+
+            <div class="flex flex-col gap-5">
+                @foreach ($this->releases as $index => $release)
+                    <div @class(['border-s-4 ps-3', 'border-primary-400' => $index === 0, 'border-gray-200 dark:border-gray-700' => $index !== 0])>
+                        <div class="mb-1 flex flex-wrap items-center gap-2">
+                            @if ($index === 0)
+                                <x-filament::badge color="primary">האחרונה</x-filament::badge>
+                            @endif
+                            <span class="font-semibold text-gray-900 dark:text-gray-100">{{ $release['title'] ?? '' }}</span>
+                            <span class="font-mono text-xs text-gray-400">v{{ $release['version'] }}</span>
+                            @if (! empty($release['date']))
+                                <span class="text-xs text-gray-400">· {{ $release['date'] }}</span>
+                            @endif
+                        </div>
+                        <ul class="list-disc space-y-1 pe-5 text-sm text-gray-600 dark:text-gray-300">
+                            @foreach ((array) ($release['highlights'] ?? []) as $point)
+                                <li>{{ $point }}</li>
+                            @endforeach
+                        </ul>
+                    </div>
+                @endforeach
+            </div>
+        </x-filament::section>
+    @endif
+
     <x-filament::section icon="heroicon-o-cube">
         <x-slot name="heading">הגרסה הנוכחית</x-slot>
 

@@ -38,6 +38,18 @@ class DeployManager
         return $this->readJson('deploy.status');
     }
 
+    /**
+     * A newer version waiting upstream, as detected by the host watcher
+     * (git fetch → commits ahead), or null when up to date. Shape:
+     * {behind:int, short:string, at:string}.
+     */
+    public function availableUpdate(): ?array
+    {
+        $info = $this->readJson('available.json');
+
+        return ($info !== null && (int) ($info['behind'] ?? 0) > 0) ? $info : null;
+    }
+
     /** True while an update is requested or actively running. */
     public function isPending(): bool
     {

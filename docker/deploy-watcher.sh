@@ -19,8 +19,26 @@ REQUEST="$OPS/deploy.request"
 LOCK="$OPS/deploy.lock"
 STATUS="$OPS/deploy.status"
 VERSION="$OPS/version.json"
+AVAILABLE="$OPS/available.json"
 
 mkdir -p "$OPS"
+
+# Detect whether a newer version is waiting upstream, so the panel can show
+# "עדכון זמין" with the count of pending commits. Best-effort — a fetch failure
+# (offline) just leaves the previous state untouched.
+check_available() {
+    local branch behind short
+    branch="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)"
+    git -C "$ROOT" fetch --quiet origin "$branch" 2>/dev/null || return 0
+    behind="$(git -C "$ROOT" rev-list --count "HEAD..origin/$branch" 2>/dev/null || echo 0)"
+
+    if [ "${behind:-0}" -gt 0 ]; then
+        short="$(git -C "$ROOT" rev-parse --short "origin/$branch" 2>/dev/null || echo unknown)"
+        printf '{"behind":%s,"short":"%s","at":"%s"}\n' "$behind" "$short" "$(date '+%Y-%m-%d %H:%M')" > "$AVAILABLE"
+    else
+        rm -f "$AVAILABLE"
+    fi
+}
 
 stamp_version() {
     local sha short date
@@ -37,8 +55,9 @@ write_status() {
 }
 
 # Stamp the version on every run so the panel shows the truth even before the
-# first UI-triggered update.
+# first UI-triggered update, and refresh whether an upstream update is waiting.
 stamp_version
+check_available
 
 # Nothing to do unless an update was requested and none is already running.
 [ -f "$REQUEST" ] || exit 0
@@ -48,6 +67,7 @@ mv "$REQUEST" "$LOCK"
 
 if OUTPUT="$(cd "$ROOT" && bash update.sh 2>&1)"; then
     stamp_version
+    check_available
     write_status success "העדכון הושלם בהצלחה"
 else
     write_status failed "$(echo "$OUTPUT" | tail -n 3)"

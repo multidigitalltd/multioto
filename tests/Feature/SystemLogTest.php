@@ -66,4 +66,17 @@ class SystemLogTest extends TestCase
 
         Livewire::test(SystemUpdates::class)->assertCanSeeTableRecords(SystemLog::all());
     }
+
+    public function test_the_updates_page_shows_the_whats_new_highlights(): void
+    {
+        config(['changelog.releases' => [
+            ['version' => '9.9.9', 'date' => '2026-07-18', 'title' => 'שדרוג בדיקה', 'highlights' => ['יתרון ראשון לבדיקה', 'יתרון שני']],
+        ]]);
+        $this->actingAs(User::factory()->create());
+
+        Livewire::test(SystemUpdates::class)
+            ->assertSeeText('מה חדש')
+            ->assertSeeText('שדרוג בדיקה')
+            ->assertSeeText('יתרון ראשון לבדיקה');
+    }
 }
