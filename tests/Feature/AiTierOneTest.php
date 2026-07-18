@@ -340,6 +340,50 @@ class AiTierOneTest extends TestCase
         $this->assertTrue(app(ClaudeClient::class)->testConnection()->ok);
     }
 
+    public function test_gemini_tool_use_echoes_empty_args_as_an_object_not_a_list(): void
+    {
+        config([
+            'billing.ai.enabled' => true, 'billing.ai.api_key' => 'g-key',
+            'billing.ai.provider' => 'google',
+            'billing.ai.base_url' => 'https://generativelanguage.googleapis.com',
+            'billing.ai.model' => 'gemini-3.1-flash',
+        ]);
+
+        $turn = 0;
+        Http::fake([
+            'https://generativelanguage.googleapis.com/*' => function () use (&$turn) {
+                if (++$turn === 1) {
+                    // The model calls a tool with NO arguments (args:{}).
+                    return Http::response(['candidates' => [['content' => ['parts' => [
+                        ['functionCall' => ['name' => 'noop', 'args' => new \stdClass]],
+                    ]]]]]);
+                }
+
+                return Http::response(['candidates' => [['content' => ['parts' => [['text' => 'יש 3 פניות פתוחות']]]]]]);
+            },
+        ]);
+
+        $answer = app(ClaudeClient::class)->converse(
+            system: 'עזור.',
+            prompt: 'כמה פניות פתוחות?',
+            tools: [['name' => 'noop', 'description' => 'x', 'input_schema' => ['type' => 'object', 'properties' => (object) []]]],
+            handler: fn (): array => ['content' => '3'],
+        );
+
+        $this->assertSame('יש 3 פניות פתוחות', $answer);
+
+        // The echoed model turn must serialise args as an object {}, never [] —
+        // otherwise Gemini rejects it ("Proto field is not repeating").
+        Http::assertSent(function (Request $request): bool {
+            if (! str_contains($request->body(), 'functionCall')) {
+                return false;
+            }
+
+            return str_contains($request->body(), '"args":{}')
+                && ! str_contains($request->body(), '"args":[]');
+        });
+    }
+
     public function test_manual_draft_action_creates_a_draft_on_demand(): void
     {
         $this->actingAs(User::factory()->create());

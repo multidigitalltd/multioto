@@ -360,7 +360,20 @@ class ClaudeClient
 
             $this->recordUsage($response);
 
-            $parts = (array) $response->json('candidates.0.content.parts', []);
+            // Gemini requires function_call.args to be a JSON OBJECT. When the
+            // model calls a tool with no arguments it returns args:{}, which
+            // json-decodes to a PHP [] and would re-encode as a JSON array —
+            // Gemini then rejects the next request ("Proto field is not
+            // repeating, cannot start list"). Force args back to an object
+            // before echoing the model turn into the conversation.
+            $parts = array_map(function ($part) {
+                if (isset($part['functionCall'])) {
+                    $part['functionCall']['args'] = (object) ($part['functionCall']['args'] ?? []);
+                }
+
+                return $part;
+            }, (array) $response->json('candidates.0.content.parts', []));
+
             $contents[] = ['role' => 'model', 'parts' => $parts];
 
             $calls = array_values(array_filter($parts, fn ($p): bool => isset($p['functionCall'])));
