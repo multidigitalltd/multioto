@@ -40,6 +40,9 @@ class ConsoleAgent
 
     private ?string $clarification = null;
 
+    /** The console user this run belongs to, so async results can post back to their chat. */
+    private ?int $conversationUserId = null;
+
     public function __construct(
         private ClaudeClient $ai,
         private ApprovalGate $gate,
@@ -50,11 +53,12 @@ class ConsoleAgent
      *
      * @return array{summary: ?string, proposed: list<int>, clarification: ?string, customer_id: ?int, ticket_id: ?int, site_id: ?int}
      */
-    public function run(string $instruction): array
+    public function run(string $instruction, ?int $userId = null): array
     {
         $this->proposed = [];
         $this->clarification = null;
         $this->customerId = $this->ticketId = $this->siteId = null;
+        $this->conversationUserId = $userId;
 
         $summary = $this->ai->converse(
             system: $this->systemPrompt(),
@@ -618,9 +622,14 @@ class ConsoleAgent
         }
 
         $this->siteId = $site->id;
-        InvestigateSiteJob::dispatch($site->id, trim((string) ($input['goal'] ?? '')) ?: 'בדיקת מצב האתר');
+        InvestigateSiteJob::dispatch(
+            $site->id,
+            trim((string) ($input['goal'] ?? '')) ?: 'בדיקת מצב האתר',
+            1,
+            $this->conversationUserId,
+        );
 
-        return ['content' => "סוכן האתר נשלח לבדוק את {$site->domain} (רץ ברקע; כל תיקון יוצע לאישור)."];
+        return ['content' => "סוכן האתר נשלח לבדוק את {$site->domain} — התוצאה תופיע כאן בצ׳אט בסיום, וכל תיקון יוצע לאישור."];
     }
 
     private function proposeTask(array $input): array

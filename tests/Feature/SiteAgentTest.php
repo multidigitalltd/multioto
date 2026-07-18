@@ -4,9 +4,11 @@ namespace Tests\Feature;
 
 use App\Enums\ActionStatus;
 use App\Jobs\InvestigateSiteJob;
+use App\Models\AgentCommand;
 use App\Models\PendingAction;
 use App\Models\Site;
 use App\Models\SystemLog;
+use App\Models\User;
 use App\Services\Agent\SiteAgent;
 use App\Services\Ai\ClaudeClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -355,6 +357,46 @@ class SiteAgentTest extends TestCase
         $this->assertNotNull($log);
         $this->assertStringContainsString('לא הניב תוצאה', $log->message);
         $this->assertStringContainsString('כבוי', $log->message);
+    }
+
+    public function test_a_chat_dispatched_investigation_posts_its_result_back_into_the_chat(): void
+    {
+        // Asked from the console chat (a chatUserId is threaded through) → the
+        // finding must return to THAT operator's thread as a system turn, not
+        // only to the event log.
+        $user = User::factory()->create();
+        $site = $this->connectedSite();
+
+        $this->fakeClaude([
+            ['stop_reason' => 'tool_use', 'content' => [
+                ['type' => 'tool_use', 'id' => 'tu_1', 'name' => 'site_read', 'input' => ['tool' => 'wp_plugin_list']],
+            ]],
+            ['stop_reason' => 'end_turn', 'content' => [
+                ['type' => 'text', 'text' => 'האתר תקין — כל התוספים מעודכנים.'],
+            ]],
+        ]);
+
+        InvestigateSiteJob::dispatchSync($site->id, 'בדוק אם האתר תקין', 1, $user->id);
+
+        $post = AgentCommand::where('user_id', $user->id)->where('role', 'system')->latest('id')->first();
+        $this->assertNotNull($post);
+        $this->assertStringContainsString($site->domain, (string) $post->result);
+        $this->assertStringContainsString('תקין', (string) $post->result);
+        $this->assertSame($site->id, $post->site_id);
+    }
+
+    public function test_a_background_investigation_not_from_chat_posts_nothing_to_any_thread(): void
+    {
+        // A scheduled/auto investigation (no chatUserId) must not create a chat
+        // turn for anyone — the result belongs only in the event log there.
+        $site = $this->connectedSite();
+        $this->fakeClaude([
+            ['stop_reason' => 'end_turn', 'content' => [['type' => 'text', 'text' => 'האתר תקין.']]],
+        ]);
+
+        InvestigateSiteJob::dispatchSync($site->id, 'בדיקה מתוזמנת');
+
+        $this->assertSame(0, AgentCommand::where('role', 'system')->count());
     }
 
     public function test_converse_returns_null_on_a_refusal(): void
