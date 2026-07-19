@@ -108,10 +108,16 @@ class SiteResource extends Resource
                             ->disabled()
                             ->dehydrated(false)
                             ->helperText('נקבע אוטומטית מכתובת האתר — אין צורך להזין ידנית.')
+                            // Show the endpoint actually in use (a custom one is
+                            // preserved by the model), falling back to the derived
+                            // value only when none is stored yet.
                             ->afterStateHydrated(function (Forms\Set $set, ?string $state, ?Site $record): void {
-                                if ($record !== null && filled($record->domain)) {
-                                    $set('mcp_endpoint', $record->conventionalMcpEndpoint());
+                                if ($record === null || blank($record->domain)) {
+                                    return;
                                 }
+                                $set('mcp_endpoint', filled($record->mcp_endpoint)
+                                    ? $record->mcp_endpoint
+                                    : $record->conventionalMcpEndpoint());
                             })
                             ->suffixAction(
                                 Forms\Components\Actions\Action::make('copyMcpEndpoint')
