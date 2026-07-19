@@ -64,7 +64,42 @@ class CloudflareClient
             return $this->ok("כתובת ה-IP {$ip} הוחרגה מהגנות Cloudflare — חיבור הסוכן לא ייחסם יותר.");
         }
 
-        return $this->fail($this->errorMessage($response));
+        return $this->fail($this->errorMessage($response, 'החרגת ה-IP ב-Cloudflare נכשלה'));
+    }
+
+    /**
+     * Purge everything from $domain's Cloudflare cache. Guarded like whitelistIp
+     * so any network failure yields a friendly message.
+     *
+     * @return array{ok: bool, message: string}
+     */
+    public function purgeCache(string $token, string $domain): array
+    {
+        $token = trim($token);
+
+        if ($token === '') {
+            return $this->fail('חסר טוקן API של Cloudflare.');
+        }
+
+        try {
+            $zoneId = $this->zoneId($token, $domain);
+
+            if ($zoneId === null) {
+                return $this->fail('לא נמצא Zone פעיל ב-Cloudflare עבור הדומיין הזה. ודאו שהאתר מנוהל בחשבון שאליו שייך הטוקן.');
+            }
+
+            $response = $this->request($token)->post(self::BASE."/zones/{$zoneId}/purge_cache", [
+                'purge_everything' => true,
+            ]);
+        } catch (\Throwable) {
+            return $this->fail('הפנייה ל-Cloudflare נכשלה — בדקו את הטוקן והחיבור לרשת.');
+        }
+
+        if ($response->successful() && data_get($response->json(), 'success') === true) {
+            return $this->ok("הקאש של {$domain} נוקה ב-Cloudflare.");
+        }
+
+        return $this->fail($this->errorMessage($response, 'ניקוי הקאש ב-Cloudflare נכשל'));
     }
 
     /** Resolve the zone id for a domain, trying the host and each parent domain. */
@@ -119,11 +154,11 @@ class CloudflareClient
         return Http::withToken($token)->acceptJson()->timeout(15);
     }
 
-    private function errorMessage(Response $response): string
+    private function errorMessage(Response $response, string $prefix): string
     {
         $detail = data_get($response->json(), 'errors.0.message');
 
-        return 'החרגת ה-IP ב-Cloudflare נכשלה'.(filled($detail) ? ': '.$detail : " (HTTP {$response->status()})").'.';
+        return $prefix.(filled($detail) ? ': '.$detail : " (HTTP {$response->status()})").'.';
     }
 
     /** @return array{ok: true, message: string} */

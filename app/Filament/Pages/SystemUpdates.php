@@ -32,7 +32,7 @@ class SystemUpdates extends Page implements HasTable
 
     protected static ?string $cluster = Settings::class;
 
-    protected static SubNavigationPosition $subNavigationPosition = SubNavigationPosition::Top;
+    protected static SubNavigationPosition $subNavigationPosition = SubNavigationPosition::Start;
 
     protected static ?string $navigationLabel = 'מערכת ועדכונים';
 

@@ -35,7 +35,7 @@ class UserResource extends Resource
 
     protected static ?string $cluster = Settings::class;
 
-    protected static SubNavigationPosition $subNavigationPosition = SubNavigationPosition::Top;
+    protected static SubNavigationPosition $subNavigationPosition = SubNavigationPosition::Start;
 
     protected static ?int $navigationSort = 80;
 

@@ -48,7 +48,7 @@ class ManageIntegrations extends Page implements HasForms
 
     protected static ?string $cluster = Settings::class;
 
-    protected static SubNavigationPosition $subNavigationPosition = SubNavigationPosition::Top;
+    protected static SubNavigationPosition $subNavigationPosition = SubNavigationPosition::Start;
 
     protected static ?string $navigationLabel = 'מפתחות אינטגרציות';
 
@@ -72,6 +72,10 @@ class ManageIntegrations extends Page implements HasForms
         'flywp' => [
             'label' => 'FlyWP',
             'keys' => ['flywp.api_token', 'flywp.server_id'],
+        ],
+        'cloudflare' => [
+            'label' => 'Cloudflare',
+            'keys' => ['cloudflare.api_token'],
         ],
         'waha' => [
             'label' => 'WAHA',
@@ -104,6 +108,7 @@ class ManageIntegrations extends Page implements HasForms
         'linet.key',
         'flywp.api_token',
         'waha.api_key',
+        'cloudflare.api_token',
     ];
 
     /**
@@ -210,6 +215,14 @@ class ManageIntegrations extends Page implements HasForms
                         TextInput::make('flywp.server_id')->label('Server ID')->live(onBlur: true)->autocomplete(false),
                     ])->columns(2)
                     ->footerActions($this->groupActions('flywp')),
+
+                Section::make('Cloudflare')
+                    ->description('טוקן API של Cloudflare (אופציונלי) — מאפשר למערכת ולסוכן להחריג את כתובת ה-IP של הפאנל ולנקות קאש לאתרים. צרו Custom Token עם ההרשאות: Zone·Read, Firewall Services·Edit (החרגת IP), Cache Purge·Purge (ניקוי קאש). נשמר מוצפן; השאירו ריק כדי לא לשנות.')
+                    ->schema([
+                        TextInput::make('cloudflare.api_token')->label('API Token')->password()->live(onBlur: true)->autocomplete('new-password')
+                            ->helperText('משמש לכל האתרים שמנוהלים תחת חשבון ה-Cloudflare הזה. אפשר גם להזין טוקן חד-פעמי בפעולה עצמה במקום לשמור כאן.'),
+                    ])->columns(1)
+                    ->footerActions($this->groupActions('cloudflare')),
 
                 Section::make('WAHA — וואטסאפ')
                     ->description($this->groupDescription('waha', 'כתובת שרת WAHA + מפתח. אם WAHA רץ על אותו שרת בקונטיינר נפרד, השתמשו ב-http://host.docker.internal:3000. את חיבור מספר הוואטסאפ עצמו (סריקת QR) עושים בלוח הבקרה של WAHA.'))

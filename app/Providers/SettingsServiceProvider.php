@@ -38,6 +38,8 @@ class SettingsServiceProvider extends ServiceProvider
         'linet.income_account_exempt' => 'billing.linet.income_account_exempt',
         'flywp.api_token' => 'billing.hosting.flywp.api_token',
         'flywp.server_id' => 'billing.hosting.flywp.server_id',
+        // Account-wide Cloudflare API token (IP whitelist + cache purge).
+        'cloudflare.api_token' => 'billing.cloudflare.api_token',
         'waha.api_key' => 'billing.waha.api_key',
         'waha.base_url' => 'billing.waha.base_url',
         'waha.session' => 'billing.waha.session',

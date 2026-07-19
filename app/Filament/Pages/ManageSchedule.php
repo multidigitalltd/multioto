@@ -36,7 +36,7 @@ class ManageSchedule extends Page implements HasForms
 
     protected static ?string $cluster = Settings::class;
 
-    protected static SubNavigationPosition $subNavigationPosition = SubNavigationPosition::Top;
+    protected static SubNavigationPosition $subNavigationPosition = SubNavigationPosition::Start;
 
     protected static ?string $navigationLabel = 'לוח שנה ושבת';
 
