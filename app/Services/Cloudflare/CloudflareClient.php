@@ -152,11 +152,18 @@ class CloudflareClient
         }
 
         $verb = $mode === 'remove' ? "הוסר כלל המדינה {$country}" : "כלל המדינה {$country} ({$mode}) הוחל";
-        $suffix = $failed > 0 ? " (נכשל ב-{$failed})" : '';
+
+        // Success requires EVERY zone to succeed. A partial failure must not be
+        // recorded as a completed all-zones operation — otherwise the approval
+        // gate marks it Executed while some sites stay unprotected (or keep a
+        // rule that was meant to be removed).
+        if ($failed > 0) {
+            return $this->fail("הפעולה הצליחה ב-{$applied} אתרים אך נכשלה ב-{$failed}. נסו שוב — הכלל לא הוחל על כל האתרים.");
+        }
 
         return $applied > 0
-            ? $this->ok("{$verb} על {$applied} אתרים ב-Cloudflare{$suffix}.")
-            : $this->fail("הפעולה נכשלה בכל הזונים{$suffix}.");
+            ? $this->ok("{$verb} על {$applied} אתרים ב-Cloudflare.")
+            : $this->fail('הפעולה נכשלה בכל הזונים.');
     }
 
     /** Upsert (or delete) the country rule for a single zone. */
