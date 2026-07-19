@@ -276,7 +276,7 @@ class SiteActions
             ->form([
                 Forms\Components\TextInput::make('api_token')
                     ->label('Cloudflare API Token')
-                    ->password()->revealable()->autocomplete('new-password')
+                    ->password()->autocomplete('new-password')
                     ->required(fn (): bool => blank(config('billing.cloudflare.api_token')))
                     ->helperText(self::cloudflareTokenHint()),
             ])
@@ -322,7 +322,7 @@ class SiteActions
             ->form([
                 Forms\Components\TextInput::make('api_token')
                     ->label('Cloudflare API Token')
-                    ->password()->revealable()->autocomplete('new-password')
+                    ->password()->autocomplete('new-password')
                     ->required(fn (): bool => blank(config('billing.cloudflare.api_token')))
                     ->helperText(self::cloudflareTokenHint()),
             ])

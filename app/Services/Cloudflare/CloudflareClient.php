@@ -64,7 +64,7 @@ class CloudflareClient
             return $this->ok("כתובת ה-IP {$ip} הוחרגה מהגנות Cloudflare — חיבור הסוכן לא ייחסם יותר.");
         }
 
-        return $this->fail($this->errorMessage($response));
+        return $this->fail($this->errorMessage($response, 'החרגת ה-IP ב-Cloudflare נכשלה'));
     }
 
     /**
@@ -99,7 +99,7 @@ class CloudflareClient
             return $this->ok("הקאש של {$domain} נוקה ב-Cloudflare.");
         }
 
-        return $this->fail($this->errorMessage($response));
+        return $this->fail($this->errorMessage($response, 'ניקוי הקאש ב-Cloudflare נכשל'));
     }
 
     /** Resolve the zone id for a domain, trying the host and each parent domain. */
@@ -154,11 +154,11 @@ class CloudflareClient
         return Http::withToken($token)->acceptJson()->timeout(15);
     }
 
-    private function errorMessage(Response $response): string
+    private function errorMessage(Response $response, string $prefix): string
     {
         $detail = data_get($response->json(), 'errors.0.message');
 
-        return 'החרגת ה-IP ב-Cloudflare נכשלה'.(filled($detail) ? ': '.$detail : " (HTTP {$response->status()})").'.';
+        return $prefix.(filled($detail) ? ': '.$detail : " (HTTP {$response->status()})").'.';
     }
 
     /** @return array{ok: true, message: string} */
