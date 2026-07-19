@@ -18,24 +18,42 @@ class OutboundIp
     /** @var list<string> IP-echo endpoints tried in order. */
     private const ECHO_URLS = ['https://api.ipify.org', 'https://ifconfig.me/ip', 'https://icanhazip.com'];
 
-    /** Our public egress IP, or null if it couldn't be determined. */
+    /**
+     * Our public egress IP, or null if it couldn't be determined. A success is
+     * cached for a day; a failure is cached briefly as a sentinel so a modal
+     * that renders this doesn't re-probe (three timeouts) on every open —
+     * Cache::remember() can't tell a cached null from a miss, so it would.
+     */
     public function current(): ?string
     {
-        return Cache::remember(self::CACHE_KEY, now()->addDay(), function (): ?string {
-            foreach (self::ECHO_URLS as $url) {
-                try {
-                    $ip = trim((string) Http::timeout(5)->get($url)->body());
+        $cached = Cache::get(self::CACHE_KEY);
 
-                    if (filter_var($ip, FILTER_VALIDATE_IP) !== false) {
-                        return $ip;
-                    }
-                } catch (\Throwable) {
-                    // Try the next echo service.
+        if ($cached !== null) {
+            return $cached === '' ? null : $cached; // '' = known-unreachable, cached briefly
+        }
+
+        $ip = $this->probe();
+
+        Cache::put(self::CACHE_KEY, $ip ?? '', $ip !== null ? now()->addDay() : now()->addMinutes(10));
+
+        return $ip;
+    }
+
+    private function probe(): ?string
+    {
+        foreach (self::ECHO_URLS as $url) {
+            try {
+                $ip = trim((string) Http::timeout(3)->get($url)->body());
+
+                if (filter_var($ip, FILTER_VALIDATE_IP) !== false) {
+                    return $ip;
                 }
+            } catch (\Throwable) {
+                // Try the next echo service.
             }
+        }
 
-            return null;
-        });
+        return null;
     }
 
     /** Drop the cached value (e.g. after a server migration). */

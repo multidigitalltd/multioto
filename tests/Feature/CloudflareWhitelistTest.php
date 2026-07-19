@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Services\Cloudflare\CloudflareClient;
 use App\Services\System\OutboundIp;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
@@ -82,6 +83,19 @@ class CloudflareWhitelistTest extends TestCase
         Http::assertNothingSent();
     }
 
+    public function test_a_connection_failure_yields_a_notice_not_an_exception(): void
+    {
+        Http::fake([
+            '*/access_rules/rules*' => fn () => throw new ConnectionException('down'),
+            '*/zones*' => Http::response(['success' => true, 'result' => [['id' => 'zone_1']]]),
+        ]);
+
+        $result = app(CloudflareClient::class)->whitelistIp('cf-token', 'example.co.il', '203.0.113.7', 'note');
+
+        $this->assertFalse($result['ok']);
+        $this->assertStringContainsString('נכשלה', $result['message']);
+    }
+
     public function test_outbound_ip_is_detected_and_cached(): void
     {
         Http::fake(['*' => Http::response("198.51.100.42\n")]);
@@ -91,5 +105,17 @@ class CloudflareWhitelistTest extends TestCase
         // Cached — a second call makes no further request.
         Http::fake(['*' => Http::response('10.0.0.1')]);
         $this->assertSame('198.51.100.42', app(OutboundIp::class)->current());
+    }
+
+    public function test_a_failed_ip_probe_is_cached_so_it_is_not_re_probed(): void
+    {
+        Http::fake(['*' => Http::response('not-an-ip')]);
+
+        $this->assertNull(app(OutboundIp::class)->current());
+        $this->assertNull(app(OutboundIp::class)->current());
+
+        // Only the first call probed the echo services (3 URLs); the second used
+        // the cached failure sentinel instead of re-probing.
+        Http::assertSentCount(3);
     }
 }

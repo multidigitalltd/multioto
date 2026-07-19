@@ -37,25 +37,28 @@ class CloudflareClient
             return $this->fail('כתובת ה-IP של המערכת אינה תקינה.');
         }
 
+        // Every Cloudflare request is inside the same guard, so a timeout or a
+        // dropped connection at any step yields the friendly failure notice
+        // rather than an unhandled exception out of the Filament action.
         try {
             $zoneId = $this->zoneId($token, $domain);
+
+            if ($zoneId === null) {
+                return $this->fail('לא נמצא Zone פעיל ב-Cloudflare עבור הדומיין הזה. ודאו שהאתר מנוהל בחשבון שאליו שייך הטוקן.');
+            }
+
+            if ($this->alreadyWhitelisted($token, $zoneId, $ip)) {
+                return $this->ok("כתובת ה-IP {$ip} כבר מוחרגת ב-Cloudflare — לא נדרש שינוי.");
+            }
+
+            $response = $this->request($token)->post(self::BASE."/zones/{$zoneId}/firewall/access_rules/rules", [
+                'mode' => 'whitelist',
+                'configuration' => ['target' => 'ip', 'value' => $ip],
+                'notes' => $notes,
+            ]);
         } catch (\Throwable) {
             return $this->fail('הפנייה ל-Cloudflare נכשלה — בדקו את הטוקן והחיבור לרשת.');
         }
-
-        if ($zoneId === null) {
-            return $this->fail('לא נמצא Zone פעיל ב-Cloudflare עבור הדומיין הזה. ודאו שהאתר מנוהל בחשבון שאליו שייך הטוקן.');
-        }
-
-        if ($this->alreadyWhitelisted($token, $zoneId, $ip)) {
-            return $this->ok("כתובת ה-IP {$ip} כבר מוחרגת ב-Cloudflare — לא נדרש שינוי.");
-        }
-
-        $response = $this->request($token)->post(self::BASE."/zones/{$zoneId}/firewall/access_rules/rules", [
-            'mode' => 'whitelist',
-            'configuration' => ['target' => 'ip', 'value' => $ip],
-            'notes' => $notes,
-        ]);
 
         if ($response->successful() && data_get($response->json(), 'success') === true) {
             return $this->ok("כתובת ה-IP {$ip} הוחרגה מהגנות Cloudflare — חיבור הסוכן לא ייחסם יותר.");
