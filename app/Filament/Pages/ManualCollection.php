@@ -75,7 +75,7 @@ class ManualCollection extends Page implements HasTable
                     ->description(fn (Subscription $record): ?string => $record->next_charge_at && $record->next_charge_at->isPast() ? 'לגבייה' : null),
                 Tables\Columns\TextColumn::make('status')->label('סטטוס')->badge(),
             ])
-            ->defaultSort('next_charge_at', 'asc')
+            ->defaultSort('next_charge_at', 'desc')
             ->filters([
                 Tables\Filters\Filter::make('due')
                     ->label('רק לגבייה עכשיו')
@@ -86,6 +86,11 @@ class ManualCollection extends Page implements HasTable
                     ->label('סמן כשולם + חשבונית')
                     ->icon('heroicon-o-check-circle')
                     ->color('success')
+                    // Only offered when the subscription is actually due: once a
+                    // payment is recorded, next_charge_at rolls into the future,
+                    // so the button disappears and the period can't be invoiced
+                    // twice. Overdue/ due-today rows keep it.
+                    ->visible(fn (Subscription $record): bool => $record->next_charge_at !== null && $record->next_charge_at->isPast())
                     ->requiresConfirmation()
                     ->modalHeading('רישום תשלום והפקת חשבונית')
                     ->modalDescription('פעולה זו מתעדת שהמנוי שולם עבור התקופה הנוכחית, מגלגלת אותו לתקופה הבאה, ומפיקה חשבונית מס/קבלה בלינט.')
