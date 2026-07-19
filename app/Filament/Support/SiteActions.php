@@ -134,7 +134,7 @@ class SiteActions
      *
      * @return list<Forms\Components\Component>
      */
-    private static function toolParamFields(Site $site, string $tool): array
+    public static function toolParamFields(Site $site, string $tool): array
     {
         if ($tool === '') {
             return [];
@@ -338,12 +338,12 @@ class SiteActions
     }
 
     /** The token to use: the one typed in the action, else the saved account token. */
-    private static function cloudflareToken(array $data): string
+    public static function cloudflareToken(array $data): string
     {
         return trim((string) ($data['api_token'] ?? '')) ?: trim((string) config('billing.cloudflare.api_token'));
     }
 
-    private static function cloudflareTokenHint(): string
+    public static function cloudflareTokenHint(): string
     {
         return filled(config('billing.cloudflare.api_token'))
             ? 'קיים טוקן שמור בהגדרות ← אינטגרציות — השאירו ריק כדי להשתמש בו, או הזינו טוקן אחר לפעולה זו.'

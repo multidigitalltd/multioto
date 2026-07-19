@@ -3,10 +3,17 @@
 namespace App\Filament\Resources\SiteResource\Pages;
 
 use App\Filament\Resources\SiteResource;
+use App\Filament\Support\SiteActions;
 use App\Jobs\InvestigateSiteJob;
 use App\Models\MonitorCheck;
+use App\Services\Agent\SiteConnector;
+use App\Services\Agent\SiteToolCatalog;
+use App\Services\Automation\ApprovalGate;
+use App\Services\Cloudflare\CloudflareClient;
 use App\Services\Hosting\SiteDiagnostics;
+use App\Services\System\OutboundIp;
 use Filament\Actions;
+use Filament\Forms;
 use Filament\Forms\Components\Textarea;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ViewRecord;
@@ -26,13 +33,16 @@ class ViewSite extends ViewRecord
     protected static string $view = 'filament.sites.monitor';
 
     /**
-     * The site page doubles as the site's action hub — clicking a card lands
-     * here with the day-to-day operations right in the header, so "all the info
-     * and options" live in one place (page actions use Filament\Actions, so
-     * they are declared here rather than reused from the table's actions).
+     * The site page is the single action hub: clicking a card lands here with
+     * ALL the tools in the header — connection on/off, diagnostics, live test,
+     * Cloudflare and plugin codes — while the edit form holds only settings.
+     * Page actions use Filament\Actions, so they are declared here; the shared
+     * logic (tool params, Cloudflare token) is reused from SiteActions.
      */
     protected function getHeaderActions(): array
     {
+        $isAdmin = fn (): bool => auth()->user()?->isAdmin() ?? false;
+
         return [
             Actions\Action::make('diagnose')
                 ->label('אבחון')
@@ -55,11 +65,39 @@ class ViewSite extends ViewRecord
                         ->send();
                 }),
 
+            // Connection on/off — makes the AI-connection state visible right on
+            // the page (the toggle used to be buried in the edit form) and flips
+            // it in one click. Enabling lets the model derive the endpoint.
+            Actions\Action::make('toggleMcp')
+                ->label(fn (): string => $this->record->mcp_enabled ? 'חיבור AI פעיל — כבה' : 'חיבור AI כבוי — הפעל')
+                ->icon(fn (): string => $this->record->mcp_enabled ? 'heroicon-o-bolt' : 'heroicon-o-bolt-slash')
+                ->color(fn (): string => $this->record->mcp_enabled ? 'success' : 'gray')
+                ->visible($isAdmin)
+                ->requiresConfirmation()
+                ->modalHeading(fn (): string => $this->record->mcp_enabled ? 'כיבוי חיבור AI' : 'הפעלת חיבור AI')
+                ->modalDescription(fn (): string => $this->record->mcp_enabled
+                    ? 'הסוכן יפסיק להתחבר לאתר הזה. אפשר להפעיל שוב בכל עת.'
+                    : 'הסוכן יוכל להתחבר לאתר. ודאו שקודי החיבור מוגדרים בתוסף ("קודי חיבור לתוסף").')
+                ->modalSubmitActionLabel(fn (): string => $this->record->mcp_enabled ? 'כבה' : 'הפעל')
+                ->action(function (): void {
+                    $enabling = ! $this->record->mcp_enabled;
+                    $this->record->update(['mcp_enabled' => $enabling]);
+
+                    Notification::make()
+                        ->title($enabling ? 'חיבור ה-AI הופעל' : 'חיבור ה-AI כובה')
+                        ->body($enabling ? 'עכשיו אפשר ללחוץ "בדוק חיבור AI".' : null)
+                        ->success()->send();
+                }),
+
             Actions\Action::make('aiInvestigate')
                 ->label('אבחון AI')
                 ->icon('heroicon-o-sparkles')
                 ->color('info')
-                ->visible(fn (): bool => $this->record->mcp_enabled && (auth()->user()?->isAdmin() ?? false))
+                ->visible($isAdmin)
+                // Stay visible when the connection is off (so it doesn't look like
+                // a missing feature) but disabled, with a hint to turn it on.
+                ->disabled(fn (): bool => ! $this->record->mcp_enabled)
+                ->tooltip(fn (): ?string => $this->record->mcp_enabled ? null : 'הפעילו קודם את חיבור ה-AI')
                 ->form([
                     Textarea::make('goal')
                         ->label('מה לבדוק / לתקן?')
@@ -73,11 +111,29 @@ class ViewSite extends ViewRecord
                         ->success()->send();
                 }),
 
+            Actions\Action::make('testMcp')
+                ->label('בדוק חיבור AI')
+                ->icon('heroicon-o-signal')
+                ->color('info')
+                ->visible(fn (): bool => ($this->record->mcp_enabled || filled($this->record->mcp_endpoint)) && $isAdmin())
+                ->action(function (SiteConnector $connector): void {
+                    $result = $connector->testConnection($this->record);
+
+                    Notification::make()
+                        ->title('חיבור סוכן AI — '.$this->record->domain)
+                        ->body($result->message)
+                        ->{$result->ok ? 'success' : 'warning'}()
+                        ->send();
+                }),
+
             Actions\ActionGroup::make([
+                $this->proposeMcpAction(),
+                $this->whitelistCloudflareAction(),
+                $this->purgeCloudflareCacheAction(),
                 Actions\Action::make('connectionCodes')
                     ->label('קודי חיבור לתוסף')
                     ->icon('heroicon-o-clipboard-document')
-                    ->visible(fn (): bool => auth()->user()?->isAdmin() ?? false)
+                    ->visible($isAdmin)
                     ->modalHeading(fn (): string => 'קודי חיבור — '.$this->record->domain)
                     ->modalSubmitAction(false)
                     ->modalCancelActionLabel('סגור')
@@ -87,16 +143,169 @@ class ViewSite extends ViewRecord
                 Actions\Action::make('downloadPlugin')
                     ->label('הורד תוסף (גרסה אחרונה)')
                     ->icon('heroicon-o-arrow-down-tray')
-                    ->visible(fn (): bool => auth()->user()?->isAdmin() ?? false)
+                    ->visible($isAdmin)
                     ->url(fn (): string => route('agent.plugin.latest'))
                     ->openUrlInNewTab(),
-                Actions\EditAction::make()->label('עריכה'),
+                $this->generateAgentTokenAction(),
+                Actions\EditAction::make()->label('עריכת הגדרות'),
             ])
-                ->label('עוד')
+                ->label('עוד כלים')
                 ->icon('heroicon-m-ellipsis-horizontal')
                 ->button()
                 ->color('gray'),
         ];
+    }
+
+    /** Propose an MCP tool call (gated) — mirrors the table action for the page. */
+    protected function proposeMcpAction(): Actions\Action
+    {
+        return Actions\Action::make('proposeMcp')
+            ->label('פעולת AI')
+            ->icon('heroicon-o-cpu-chip')
+            ->color('warning')
+            ->visible(fn (): bool => $this->record->mcp_enabled
+                && filled(data_get($this->record->mcp_capabilities, 'tools'))
+                && (auth()->user()?->isAdmin() ?? false))
+            ->form(fn (): array => [
+                Forms\Components\Select::make('tool')
+                    ->label('כלי')
+                    ->options(collect((array) data_get($this->record->mcp_capabilities, 'tools', []))
+                        ->mapWithKeys(function (array $tool): array {
+                            $name = (string) ($tool['name'] ?? '');
+
+                            return [$name => "{$name} (".app(SiteToolCatalog::class)->resolveTierLabel($this->record, $name).')'];
+                        })->all())
+                    ->required()
+                    ->searchable()
+                    ->live(),
+                Forms\Components\Group::make()
+                    ->schema(fn (Forms\Get $get): array => SiteActions::toolParamFields($this->record, (string) $get('tool')))
+                    ->columnSpanFull(),
+            ])
+            ->action(function (array $data, ApprovalGate $gate): void {
+                $catalog = app(SiteToolCatalog::class);
+                $tool = (string) ($data['tool'] ?? '');
+
+                if (! $catalog->allowedOn($this->record, $tool)) {
+                    Notification::make()->title('הכלי מסווג כהרסני ומותר רק באתר סטייג׳ינג')->danger()->send();
+
+                    return;
+                }
+
+                $arguments = SiteActions::collectToolArguments($this->record, $tool, $data);
+                $argsText = $arguments === [] ? 'ללא פרמטרים' : json_encode($arguments, JSON_UNESCAPED_UNICODE);
+
+                $gate->propose(
+                    type: 'site_action',
+                    summary: "🤖 פעולת AI באתר {$this->record->domain}\nכלי: {$tool} ({$catalog->resolveTierLabel($this->record, $tool)})\nפרמטרים: {$argsText}",
+                    payload: ['site_id' => $this->record->id, 'tool' => $tool, 'arguments' => $arguments],
+                    customerId: $this->record->customer_id,
+                    proposedBy: 'team',
+                );
+
+                Notification::make()->title('הפעולה נשלחה לאישור')
+                    ->body('תופיע ב"אישורי אוטומציה" ותישלח לוואטסאפ לאישור לפני ביצוע.')
+                    ->success()->send();
+            });
+    }
+
+    /** Whitelist our egress IP in the site's Cloudflare (page version). */
+    protected function whitelistCloudflareAction(): Actions\Action
+    {
+        return Actions\Action::make('whitelistCloudflare')
+            ->label('החרגת IP ב-Cloudflare')
+            ->icon('heroicon-o-shield-check')
+            ->color('gray')
+            ->visible(fn (): bool => auth()->user()?->isAdmin() ?? false)
+            ->modalHeading(fn (): string => 'החרגת כתובת המערכת ב-Cloudflare — '.$this->record->domain)
+            ->modalDescription('נחריג את כתובת ה-IP של המערכת מהגנות Cloudflare של האתר, כדי שחיבור הסוכן לא ייחסם. נדרש טוקן API של Cloudflare עם הרשאת עריכה ל-Firewall/IP Access Rules של הזון.')
+            ->modalSubmitActionLabel('החרג עכשיו')
+            ->form([
+                Forms\Components\TextInput::make('api_token')
+                    ->label('Cloudflare API Token')
+                    ->password()->autocomplete('new-password')
+                    ->required(fn (): bool => blank(config('billing.cloudflare.api_token')))
+                    ->helperText(SiteActions::cloudflareTokenHint()),
+            ])
+            ->action(function (array $data): void {
+                $ip = app(OutboundIp::class)->current();
+
+                if ($ip === null) {
+                    Notification::make()
+                        ->title('לא זוהתה כתובת ה-IP של המערכת')
+                        ->body('לא הצלחנו לזהות את כתובת ה-IP היוצאת של השרת. נסו שוב מאוחר יותר.')
+                        ->danger()->send();
+
+                    return;
+                }
+
+                $result = app(CloudflareClient::class)->whitelistIp(
+                    SiteActions::cloudflareToken($data),
+                    $this->record->domain,
+                    $ip,
+                    'Multi Digital agent — allow panel IP',
+                );
+
+                Notification::make()
+                    ->title('Cloudflare — '.$this->record->domain)
+                    ->body($result['message'])
+                    ->{$result['ok'] ? 'success' : 'danger'}()
+                    ->send();
+            });
+    }
+
+    /** Purge the site's Cloudflare cache (page version). */
+    protected function purgeCloudflareCacheAction(): Actions\Action
+    {
+        return Actions\Action::make('purgeCloudflareCache')
+            ->label('ניקוי קאש ב-Cloudflare')
+            ->icon('heroicon-o-trash')
+            ->color('gray')
+            ->visible(fn (): bool => auth()->user()?->isAdmin() ?? false)
+            ->requiresConfirmation()
+            ->modalHeading(fn (): string => 'ניקוי קאש ב-Cloudflare — '.$this->record->domain)
+            ->modalDescription('ננקה את כל הקאש של האתר ב-Cloudflare. נדרש טוקן API עם הרשאת Cache Purge לזון.')
+            ->modalSubmitActionLabel('נקה קאש')
+            ->form([
+                Forms\Components\TextInput::make('api_token')
+                    ->label('Cloudflare API Token')
+                    ->password()->autocomplete('new-password')
+                    ->required(fn (): bool => blank(config('billing.cloudflare.api_token')))
+                    ->helperText(SiteActions::cloudflareTokenHint()),
+            ])
+            ->action(function (array $data): void {
+                $result = app(CloudflareClient::class)->purgeCache(SiteActions::cloudflareToken($data), $this->record->domain);
+
+                Notification::make()
+                    ->title('Cloudflare — '.$this->record->domain)
+                    ->body($result['message'])
+                    ->{$result['ok'] ? 'success' : 'danger'}()
+                    ->send();
+            });
+    }
+
+    /** Rotate the site's connection token (page version). */
+    protected function generateAgentTokenAction(): Actions\Action
+    {
+        return Actions\Action::make('generateAgentToken')
+            ->label('טוקן חדש')
+            ->icon('heroicon-o-key')
+            ->color('gray')
+            ->visible(fn (): bool => auth()->user()?->isAdmin() ?? false)
+            ->requiresConfirmation()
+            ->modalHeading('החלפת טוקן חיבור לאתר')
+            ->modalDescription('ייווצר טוקן חדש עבור התוסף באתר. הטוקן הקודם יבוטל — יש לעדכן את התוסף בטוקן החדש.')
+            ->modalSubmitActionLabel('צור טוקן חדש')
+            ->action(function (): void {
+                $token = $this->record->generateAgentToken();
+
+                Notification::make()
+                    ->title('נוצר טוקן חדש — עדכנו אותו בתוסף')
+                    ->body('הטוקן הקודם בוטל. הטוקן החדש (זמין גם ב"קודי חיבור לתוסף"):'."\n\n".$token)
+                    ->success()
+                    ->persistent()
+                    ->send();
+            });
     }
 
     /** Window (days) the uptime/response statistics are computed over. */

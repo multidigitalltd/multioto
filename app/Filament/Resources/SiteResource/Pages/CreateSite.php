@@ -10,12 +10,12 @@ class CreateSite extends CreateRecord
     protected static string $resource = SiteResource::class;
 
     /**
-     * Land on the new site's edit page after creating it — that's where the
-     * "קודי חיבור לתוסף" button generates the plugin connection codes, which
-     * can only exist once the site row is saved.
+     * Land on the new site's page after creating it — that's the tools hub where
+     * "קודי חיבור לתוסף" (and the rest of the connection tools) live, which can
+     * only exist once the site row is saved.
      */
     protected function getRedirectUrl(): string
     {
-        return static::getResource()::getUrl('edit', ['record' => $this->getRecord()]);
+        return static::getResource()::getUrl('view', ['record' => $this->getRecord()]);
     }
 }
