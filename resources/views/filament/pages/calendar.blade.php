@@ -65,7 +65,7 @@
         .cal-candle { line-height: 1.2; font-size: 0.6875rem; color: rgba(79, 70, 229, 0.85); }
         .dark .cal-candle { color: rgba(165, 180, 252, 0.85); }
 
-        .cal-svc { width: fit-content; border-radius: 0.25rem; padding: 0.05rem 0.375rem; font-size: 0.625rem; font-weight: 600; }
+        .cal-svc { width: fit-content; border-radius: 0.25rem; padding: 0.05rem 0.375rem; font-size: 0.625rem; font-weight: 600; border: 0; cursor: pointer; font-family: inherit; }
         .cal-svc--reduced { background: rgb(254 243 199); color: rgb(146 64 14); }
         .dark .cal-svc--reduced { background: rgba(146, 64, 14, 0.5); color: rgb(253 230 138); }
         .cal-svc--urgent { background: rgb(255 228 230); color: rgb(159 18 57); }
@@ -175,11 +175,14 @@
                                     <div class="cal-candle">🕯️ הדלקת נרות {{ $day['candle']->format('H:i') }}</div>
                                 @endif
 
-                                {{-- Special service day --}}
+                                {{-- Special service day — click to edit / remove --}}
                                 @if ($service)
-                                    <span class="cal-svc {{ $service->mode === \App\Enums\ServiceMode::UrgentOnly ? 'cal-svc--urgent' : 'cal-svc--reduced' }}">
+                                    <button type="button"
+                                            class="cal-svc {{ $service->mode === \App\Enums\ServiceMode::UrgentOnly ? 'cal-svc--urgent' : 'cal-svc--reduced' }}"
+                                            wire:click="mountAction('editServiceDay', { id: {{ $service->id }} })"
+                                            title="עריכת יום שירות">
                                         {{ $service->mode === \App\Enums\ServiceMode::UrgentOnly ? 'דחוף בלבד' : 'מצומצמת' }}
-                                    </span>
+                                    </button>
                                 @endif
 
                                 {{-- Tasks due this day --}}

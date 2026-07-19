@@ -54,6 +54,21 @@ class ShabbatClockTest extends TestCase
         $this->assertSame('2026-07-19 08:00', $resume->clone()->setTimezone('Asia/Jerusalem')->format('Y-m-d H:i'));
     }
 
+    public function test_havdalah_mode_resumes_the_moment_shabbat_goes_out(): void
+    {
+        config(['billing.shabbat.resume_mode' => 'havdalah']);
+
+        $resume = $this->clock()->resumeAt($this->tlv('2026-07-18 12:00'))
+            ?->clone()->setTimezone('Asia/Jerusalem');
+
+        $this->assertNotNull($resume);
+        // Motzaei Shabbat (Saturday night), not Sunday morning.
+        $this->assertTrue($resume->isSaturday());
+        $this->assertGreaterThanOrEqual(19, $resume->hour);
+        // And blocking ends there: Saturday night after havdalah is free.
+        $this->assertFalse($this->clock()->isBlocked($this->tlv('2026-07-18 23:30')));
+    }
+
     public function test_yom_kippur_is_blocked(): void
     {
         // Tishrei is month 1 in every year — compute Yom Kippur (10 Tishrei) of

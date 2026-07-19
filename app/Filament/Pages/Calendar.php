@@ -61,6 +61,9 @@ class Calendar extends Page implements HasActions, HasForms
 
     public int $month;
 
+    /** The service exception currently open in the edit modal (captured at mount). */
+    public ?int $editingServiceDayId = null;
+
     public function mount(): void
     {
         $now = Carbon::now();
@@ -242,9 +245,17 @@ class Calendar extends Page implements HasActions, HasForms
             ])
             ->action(function (array $data): void {
                 if (($data['type'] ?? 'task') === 'service') {
+                    $end = $data['ends_on'] ?: $data['starts_on'];
+
+                    if ($this->serviceDayOverlaps($data['starts_on'], $end)) {
+                        $this->warnOverlap();
+
+                        return;
+                    }
+
                     ServiceException::create([
                         'starts_on' => $data['starts_on'],
-                        'ends_on' => $data['ends_on'] ?: $data['starts_on'],
+                        'ends_on' => $end,
                         'mode' => $data['mode'],
                         'note' => $data['note'] ?? null,
                     ]);
@@ -267,5 +278,108 @@ class Calendar extends Page implements HasActions, HasForms
 
                 Notification::make()->title('המשימה נוספה ללוח')->success()->send();
             });
+    }
+
+    /**
+     * Edit an existing special service day straight from the calendar (click its
+     * marker). The modal also carries a "הסרה" button to delete it — so service
+     * days are fully managed here, without a separate screen.
+     */
+    public function editServiceDayAction(): Action
+    {
+        return Action::make('editServiceDay')
+            ->label('עריכת יום שירות')
+            ->modalHeading('יום שירות מיוחד')
+            ->modalWidth(MaxWidth::Large)
+            ->modalSubmitActionLabel('שמירה')
+            // Capture the record id on the component itself: a nested footer
+            // action (the "הסרה" button) does NOT inherit the parent action's
+            // arguments, so reading them there would delete nothing.
+            ->mountUsing(function (Forms\Form $form, array $arguments): void {
+                $this->editingServiceDayId = (int) ($arguments['id'] ?? 0);
+                $exception = ServiceException::find($this->editingServiceDayId);
+
+                $form->fill($exception === null ? [] : [
+                    'mode' => $exception->mode->value,
+                    'starts_on' => $exception->starts_on->toDateString(),
+                    'ends_on' => $exception->ends_on->toDateString(),
+                    'note' => $exception->note,
+                ]);
+            })
+            ->form([
+                Forms\Components\Select::make('mode')
+                    ->label('מצב')->options(ServiceMode::class)->required()->native(false),
+                Forms\Components\DatePicker::make('starts_on')
+                    ->label('מתאריך')->native(false)->required()->live()
+                    ->afterStateUpdated(fn ($state, Forms\Set $set, Get $get) => filled($state) && blank($get('ends_on')) ? $set('ends_on', $state) : null),
+                Forms\Components\DatePicker::make('ends_on')
+                    ->label('עד תאריך (כולל)')->native(false)->required()->afterOrEqual('starts_on'),
+                Forms\Components\TextInput::make('note')
+                    ->label('הערה (אופציונלי)')->maxLength(255)->columnSpanFull()
+                    ->helperText('הערה פנימית שתעזור לסוכן לנסח — לא נשלחת כלשונה ללקוח.'),
+            ])
+            ->action(function (array $data): void {
+                $exception = ServiceException::find($this->editingServiceDayId);
+
+                if ($exception === null) {
+                    return;
+                }
+
+                if ($this->serviceDayOverlaps($data['starts_on'], $data['ends_on'] ?: $data['starts_on'], $exception->id)) {
+                    $this->warnOverlap();
+
+                    return;
+                }
+
+                $exception->update([
+                    'mode' => $data['mode'],
+                    'starts_on' => $data['starts_on'],
+                    'ends_on' => $data['ends_on'] ?: $data['starts_on'],
+                    'note' => $data['note'] ?? null,
+                ]);
+
+                Notification::make()->title('יום השירות עודכן')->success()->send();
+            })
+            ->extraModalFooterActions([
+                Action::make('deleteServiceDay')
+                    ->label('הסרה')
+                    ->color('danger')
+                    ->icon('heroicon-o-trash')
+                    ->requiresConfirmation()
+                    ->modalHeading('הסרת יום שירות')
+                    ->action(fn () => $this->deleteServiceDay((int) $this->editingServiceDayId))
+                    ->cancelParentActions(),
+            ]);
+    }
+
+    /**
+     * Is there another service exception whose span overlaps [$start, $end]?
+     * Overlaps are prevented so every marked day stays reachable from the
+     * calendar (which shows one badge per day) now that the list screen is gone.
+     */
+    private function serviceDayOverlaps(string $start, string $end, ?int $ignoreId = null): bool
+    {
+        return ServiceException::query()
+            ->when($ignoreId !== null, fn ($query) => $query->whereKeyNot($ignoreId))
+            ->whereDate('starts_on', '<=', $end)
+            ->whereDate('ends_on', '>=', $start)
+            ->exists();
+    }
+
+    private function warnOverlap(): void
+    {
+        Notification::make()
+            ->title('קיים כבר יום שירות בטווח הזה')
+            ->body('התאריכים חופפים ליום שירות אחר. ערכו או הסירו אותו מהלוח במקום ליצור חדש.')
+            ->warning()
+            ->send();
+    }
+
+    /** Remove a special service day (called from the edit modal's "הסרה" button). */
+    public function deleteServiceDay(int $id): void
+    {
+        ServiceException::whereKey($id)->delete();
+
+        Notification::make()->title('יום השירות הוסר')->success()->send();
     }
 }

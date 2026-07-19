@@ -466,8 +466,23 @@ return [
         // …and minutes after sunset it halachically ends (havdalah / nightfall).
         'havdalah_offset_minutes' => (int) env('SHABBAT_HAVDALAH_OFFSET', 40),
 
-        // Held automations resume at this local time on the day AFTER the rest
-        // ends ("יחכה ליום שלמחרת"), not the moment Shabbat goes out.
+        // When held automations resume: 'day_after' (default) waits until
+        // resume_time the morning after, 'havdalah' releases them the moment
+        // Shabbat/Yom Tov goes out.
+        'resume_mode' => env('SHABBAT_RESUME_MODE', 'day_after'),
+
+        // For resume_mode = 'day_after': the local time on the day AFTER the rest
+        // ends at which held automations are released.
         'resume_time' => env('SHABBAT_RESUME_TIME', '08:00'),
+    ],
+
+    /*
+     | Special service days (reduced-capacity / urgent-only). Marked from the
+     | calendar; when the feature is enabled the agent reads the active day and
+     | sets the right expectation on a new ticket's acknowledgement. Turn it off
+     | to keep the markings but stop them affecting replies.
+     */
+    'service_days' => [
+        'enabled' => (bool) env('SERVICE_DAYS_ENABLED', true),
     ],
 ];

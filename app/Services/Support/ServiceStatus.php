@@ -12,9 +12,18 @@ use Illuminate\Support\Carbon;
  */
 class ServiceStatus
 {
-    /** The exception active right now (or on $date), or null when operating normally. */
+    /**
+     * The exception active right now (or on $date), or null when operating
+     * normally. Returns null when the feature is switched off, so callers (the
+     * agent, ticket acknowledgements) can read it unconditionally — a marked day
+     * then has no effect until the feature is re-enabled in settings.
+     */
     public function current(?Carbon $date = null): ?ServiceException
     {
+        if (! config('billing.service_days.enabled', true)) {
+            return null;
+        }
+
         return ServiceException::query()->activeOn($date)->latest('id')->first();
     }
 
