@@ -34,6 +34,18 @@
         .dark .cal-cell--urgent { background: rgba(190, 18, 60, 0.20); }
 
         .cal-cell__top { display: flex; align-items: flex-start; justify-content: space-between; }
+        .cal-cell__topend { display: inline-flex; align-items: center; gap: 0.25rem; }
+        .cal-add {
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 1.1rem; height: 1.1rem; border-radius: 0.25rem;
+            border: 1px solid rgba(0,0,0,0.12); background: transparent;
+            color: rgb(107 114 128); font-size: 0.9rem; line-height: 1; cursor: pointer;
+            opacity: 0.4; transition: opacity 0.1s, background 0.1s;
+        }
+        .cal-cell:hover .cal-add, .cal-add:focus-visible { opacity: 1; }
+        .cal-add:hover { background: rgba(0,0,0,0.05); }
+        .dark .cal-add { border-color: rgba(255,255,255,0.18); color: rgb(156 163 175); }
+        .dark .cal-add:hover { background: rgba(255,255,255,0.08); }
         .cal-daynum { font-weight: 600; color: rgb(55 65 81); }
         .dark .cal-daynum { color: rgb(229 231 235); }
         .cal-daynum--today {
@@ -85,6 +97,10 @@
             <h2 class="text-lg font-semibold text-gray-950 dark:text-white">{{ $this->monthTitle }}</h2>
 
             <div class="flex items-center gap-2">
+                <x-filament::button size="sm" color="primary" icon="heroicon-o-plus"
+                                    wire:click="mountAction('quickAdd', { date: '{{ $this->today }}' })">
+                    הוספה
+                </x-filament::button>
                 <x-filament::button size="sm" color="gray" icon="heroicon-o-chevron-right" wire:click="previousMonth">
                     קודם
                 </x-filament::button>
@@ -130,10 +146,16 @@
                             <div class="cal-cell {{ $cellClass }} {{ $day['inMonth'] ? '' : 'cal-cell--out' }}"
                                  aria-label="{{ $day['date']->format('d/m/Y') }} · {{ \App\Services\Calendar\HebrewDate::format($day['date']) }}">
 
-                                {{-- Date line: Gregorian (prominent) + Hebrew numeral --}}
+                                {{-- Date line: Gregorian (prominent) + Hebrew numeral + quick-add --}}
                                 <div class="cal-cell__top">
                                     <span class="{{ $day['isToday'] ? 'cal-daynum--today' : 'cal-daynum' }}">{{ $day['gregorianDay'] }}</span>
-                                    <span class="cal-hebday" aria-hidden="true">{{ $day['hebrewDay'] }}</span>
+                                    <span class="cal-cell__topend">
+                                        <span class="cal-hebday" aria-hidden="true">{{ $day['hebrewDay'] }}</span>
+                                        <button type="button" class="cal-add"
+                                                wire:click="mountAction('quickAdd', { date: '{{ $day['date']->toDateString() }}' })"
+                                                title="הוספה ליום זה"
+                                                aria-label="הוספת משימה או יום שירות לתאריך {{ $day['date']->format('d/m/Y') }}">+</button>
+                                    </span>
                                 </div>
 
                                 {{-- Hebrew month marker on Rosh Chodesh --}}
@@ -185,4 +207,7 @@
             </div>
         </div>
     </div>
+
+    {{-- Renders the quick-add modal mounted from a day cell or the header button. --}}
+    <x-filament-actions::modals />
 </x-filament-panels::page>

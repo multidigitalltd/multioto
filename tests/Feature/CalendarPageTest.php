@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Enums\ServiceMode;
 use App\Enums\TaskStatus;
+use App\Enums\TicketPriority;
 use App\Filament\Pages\Calendar;
 use App\Models\ServiceException;
 use App\Models\Task;
@@ -59,6 +60,51 @@ class CalendarPageTest extends TestCase
             ->assertDontSeeText('משימה שהושלמה')   // done tasks are excluded
             ->assertDontSeeText('משימה ללא תאריך') // dateless tasks are not placed
             ->assertDontSeeText('משימה בחודש אחר'); // out-of-range tasks are not loaded
+    }
+
+    public function test_quick_add_creates_a_task_on_the_clicked_day(): void
+    {
+        Livewire::test(Calendar::class)
+            ->callAction('quickAdd', data: [
+                'type' => 'task',
+                'title' => 'להתקשר ללקוח',
+                'due_at' => '2026-07-20 09:00',
+                'priority' => TicketPriority::Normal->value,
+            ], arguments: ['date' => '2026-07-20'])
+            ->assertHasNoActionErrors();
+
+        $task = Task::where('title', 'להתקשר ללקוח')->first();
+        $this->assertNotNull($task);
+        $this->assertSame('2026-07-20', $task->due_at->toDateString());
+        $this->assertSame(TaskStatus::Open, $task->status);
+    }
+
+    public function test_quick_add_requires_a_title_for_a_task(): void
+    {
+        Livewire::test(Calendar::class)
+            ->callAction('quickAdd', data: ['type' => 'task', 'title' => ''], arguments: ['date' => '2026-07-20'])
+            ->assertHasActionErrors(['title' => ['required']]);
+
+        $this->assertSame(0, Task::count());
+    }
+
+    public function test_quick_add_can_mark_a_special_service_day(): void
+    {
+        Livewire::test(Calendar::class)
+            ->callAction('quickAdd', data: [
+                'type' => 'service',
+                'mode' => ServiceMode::UrgentOnly->value,
+                'starts_on' => '2026-07-24',
+                'ends_on' => '2026-07-24',
+                'note' => 'עומס פנימי',
+            ], arguments: ['date' => '2026-07-24'])
+            ->assertHasNoActionErrors();
+
+        $exception = ServiceException::first();
+        $this->assertNotNull($exception);
+        $this->assertSame(ServiceMode::UrgentOnly, $exception->mode);
+        $this->assertSame('2026-07-24', $exception->starts_on->toDateString());
+        $this->assertSame('עומס פנימי', $exception->note);
     }
 
     public function test_month_navigation_moves_forward_back_and_home(): void

@@ -5,12 +5,17 @@ namespace App\Services\Agent;
 use App\Enums\TicketStatus;
 use App\Jobs\InvestigateSiteJob;
 use App\Models\Customer;
+use App\Models\ServiceException;
 use App\Models\Site;
 use App\Models\Subscription;
 use App\Models\Task;
 use App\Models\Ticket;
 use App\Services\Ai\ClaudeClient;
 use App\Services\Automation\ApprovalGate;
+use App\Services\Calendar\HebrewDate;
+use App\Services\Calendar\ShabbatClock;
+use App\Services\Support\ServiceStatus;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 
 /**
@@ -95,8 +100,10 @@ class ConsoleAgent
             '',
             'יש לך גישה מלאה לכל תחומי המערכת (דרך הצעה לאישור): פניות (מענה, סטטוס, עדיפות, שיוך, סגירה), לקוחות (עדכון פרטים), מנויים (מחיר/סטטוס/ביטול), אתרים (הוספה, השעיה, שחזור, בדיקה), גבייה ותשלומים (דרישת תשלום, סימון תשלום בוצע + חשבונית) ומשימות (פתיחה, סימון כבוצעה). מה שאין לו כלי ישיר — הצע כמשימה לאדם.',
             '',
+            $this->scheduleContext(),
+            '',
             'עקרונות עבודה:',
-            '- יש לך יד חופשית לחקור ולהחליט. שלוף בעצמך כל מידע שצריך עם כלי הקריאה (find_customer, customer_overview, read_ticket, find_open_tickets, find_sites) לפני שאתה מציע פעולה — אל תמציא נתונים.',
+            '- יש לך יד חופשית לחקור ולהחליט. שלוף בעצמך כל מידע שצריך עם כלי הקריאה (find_customer, customer_overview, read_ticket, find_open_tickets, find_sites, read_calendar) לפני שאתה מציע פעולה — אל תמציא נתונים.',
             '- לפני שאתה מציע תשובה ללקוח בפנייה, קרא קודם את השיחה עם read_ticket ונסח תשובה שמתאימה להקשר.',
             '- אתה לא מבצע דבר בעצמך. כל פעולה מעשית מוצעת דרך כלי propose_* ועוברת אישור מנהל.',
             '- אם יש לך מספיק מידע כדי לפעול — הצע מיד עם הכלי המתאים. אל תשאל "האם לשלוח?" או "האם לבצע?" בטקסט חופשי: עצם ההצעה היא הבקשה לאישור, והמנהל מאשר או דוחה בלחיצה. למשל אם ניסחת תשובה לפנייה — הגש אותה עם propose_reply_ticket, אל תדפיס אותה ותשאל אם לשלוח.',
@@ -112,6 +119,109 @@ class ConsoleAgent
             $siteRules !== '' ? "כללי טיפול באתרים:\n{$siteRules}" : null,
             $style !== '' ? "סגנון הצוות (נלמד) — נסח תשובות ללקוח בהתאם:\n{$style}" : null,
         ], fn ($line) => $line !== null)));
+    }
+
+    /**
+     * A short "what's the operating context right now" block for the system
+     * prompt, so the agent always knows today's date (Hebrew + Gregorian),
+     * whether outward automations are paused for Shabbat/Yom Tov (and until
+     * when), and whether today is a marked reduced-capacity / urgent-only day —
+     * without having to ask. Deeper questions go through read_calendar.
+     */
+    private function scheduleContext(): string
+    {
+        $now = Carbon::now();
+        $clock = app(ShabbatClock::class);
+
+        $lines = ['הקשר תפעולי — היום '.$now->format('d/m/Y').' ('.$this->weekdayHe($now).') · '.HebrewDate::format($now).'.'];
+
+        if ($clock->isBlocked()) {
+            $lines[] = 'כרגע '.($clock->label() ?? 'שבת/חג').': אוטומציות יוצאות (חיובים, דיוור, תזכורות, אישורי פנייה אוטומטיים) מושהות עד '.$clock->resumeAt()->format('d/m H:i').'. מענה יזום של המנהל אינו מושפע.';
+        }
+
+        $exception = app(ServiceStatus::class)->current();
+        if ($exception !== null) {
+            $note = trim((string) $exception->note);
+            $lines[] = 'מצב שירות היום: '.$exception->mode->getLabel().'.'
+                .($note !== '' ? ' הקשר פנימי (לשיקולך, לא לחשוף ללקוח): '.$note.'.' : '');
+        }
+
+        $lines[] = 'לשאלות על משימות/עומס/שבת/ימי שירות בטווח תאריכים — השתמש ב-read_calendar.';
+
+        return implode("\n", $lines);
+    }
+
+    /**
+     * Read the team calendar for a window: open tasks by due date, marked
+     * service days, and Shabbat/Yom Tov times. Ordinary days with nothing on
+     * them are omitted to keep it short; regular Shabbatot are listed because
+     * they carry entry/exit times.
+     *
+     * @param  array<string, mixed>  $input
+     * @return array{content: string, is_error?: bool}
+     */
+    private function readCalendar(array $input): array
+    {
+        $start = filled($input['date'] ?? null)
+            ? Carbon::parse((string) $input['date'])->startOfDay()
+            : Carbon::now()->startOfDay();
+        $days = max(1, min((int) ($input['days'] ?? 7), 31));
+        $end = $start->copy()->addDays($days - 1)->endOfDay();
+
+        $tasksByDay = Task::query()->open()
+            ->whereNotNull('due_at')
+            ->whereBetween('due_at', [$start, $end])
+            ->orderBy('due_at')
+            ->get()
+            ->groupBy(fn (Task $task): string => $task->due_at->toDateString());
+
+        $exceptions = ServiceException::query()
+            ->whereDate('starts_on', '<=', $end->toDateString())
+            ->whereDate('ends_on', '>=', $start->toDateString())
+            ->get();
+
+        $clock = app(ShabbatClock::class);
+        $lines = [];
+
+        for ($day = $start->copy(); $day <= $end; $day->addDay()) {
+            $parts = [];
+
+            if ($rest = $clock->restDay($day)) {
+                // On the rest day itself: name it, and add havdalah when it ends here.
+                $parts[] = $rest['label'].($rest['last'] ? ' (צאת '.$rest['exit']->format('H:i').')' : '');
+            } elseif (($eve = $clock->restDay($day->copy()->addDay())) && $eve['first']) {
+                // The eve (e.g. Friday): candle lighting is tonight even though the
+                // rest day itself may fall outside the requested range.
+                $parts[] = 'ערב '.$eve['label'].' (הדלקת נרות '.$eve['entry']->format('H:i').')';
+            }
+
+            if ($service = $exceptions->first(fn (ServiceException $e): bool => $day->betweenIncluded($e->starts_on, $e->ends_on))) {
+                $parts[] = 'שירות: '.$service->mode->getLabel();
+            }
+
+            foreach ($tasksByDay->get($day->toDateString(), collect()) as $task) {
+                // Include the id so the agent can act on it (e.g. propose_complete_task).
+                $parts[] = 'משימה #'.$task->id.': '.Str::limit((string) $task->title, 70);
+            }
+
+            if ($parts !== []) {
+                $lines[] = $day->format('d/m').' ('.$this->weekdayHe($day).') '.HebrewDate::day($day).' — '.implode(' · ', $parts);
+            }
+        }
+
+        $range = $start->format('d/m/Y').'–'.$end->format('d/m/Y');
+
+        if ($lines === []) {
+            return ['content' => "אין משימות, ימי שירות מיוחדים או חגים בטווח {$range}."];
+        }
+
+        return ['content' => "לוח השנה לטווח {$range}:\n".implode("\n", $lines)];
+    }
+
+    /** Hebrew weekday name (יום ראשון…שבת) for a date. */
+    private function weekdayHe(Carbon $date): string
+    {
+        return ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'][$date->dayOfWeek];
     }
 
     /** @return list<array<string, mixed>> */
@@ -138,6 +248,8 @@ class ConsoleAgent
                 'input_schema' => $obj(['ticket_id' => $int], ['ticket_id'])],
             ['name' => 'find_sites', 'description' => 'אתרים לפי דומיין או לפי שם לקוח.',
                 'input_schema' => $obj(['domain' => $str, 'customer_name' => $str])],
+            ['name' => 'read_calendar', 'description' => 'לוח השנה של הצוות: משימות פתוחות לפי תאריך יעד, ימי שירות מיוחדים (מתכונת מצומצמת / דחוף בלבד) וזמני שבת/חג. אופציונלי: date (yyyy-mm-dd, ברירת מחדל היום) ו-days (מספר ימים קדימה, ברירת מחדל 7).',
+                'input_schema' => $obj(['date' => $str, 'days' => $int])],
 
             ['name' => 'propose_reply_ticket', 'description' => 'הצע תשובה ללקוח בפנייה. ticket_id + reply_text (הטקסט המלא שיישלח).',
                 'input_schema' => $obj(['ticket_id' => $int, 'reply_text' => $str], ['ticket_id', 'reply_text'])],
@@ -187,6 +299,7 @@ class ConsoleAgent
                 'find_open_tickets' => $this->findOpenTickets($input),
                 'read_ticket' => $this->readTicket($input),
                 'find_sites' => $this->findSites($input),
+                'read_calendar' => $this->readCalendar($input),
                 'propose_reply_ticket' => $this->proposeReplyTicket($input),
                 'propose_close_ticket' => $this->proposeCloseTicket($input),
                 'propose_set_ticket_status' => $this->proposeSetTicketStatus($input),

@@ -2,11 +2,24 @@
 
 namespace App\Filament\Pages;
 
+use App\Enums\ServiceMode;
+use App\Enums\TaskStatus;
+use App\Enums\TicketPriority;
 use App\Models\ServiceException;
 use App\Models\Task;
+use App\Models\User;
 use App\Services\Calendar\HebrewDate;
 use App\Services\Calendar\ShabbatClock;
+use Filament\Actions\Action;
+use Filament\Actions\Concerns\InteractsWithActions;
+use Filament\Actions\Contracts\HasActions;
+use Filament\Forms;
+use Filament\Forms\Concerns\InteractsWithForms;
+use Filament\Forms\Contracts\HasForms;
+use Filament\Forms\Get;
+use Filament\Notifications\Notification;
 use Filament\Pages\Page;
+use Filament\Support\Enums\MaxWidth;
 use Illuminate\Support\Carbon;
 
 /**
@@ -14,11 +27,15 @@ use Illuminate\Support\Carbon;
  * הצללת שבתות וחגים (עם זמני כניסה/צאת) וימי שירות מיוחדים (מתכונת מצומצמת /
  * דחוף בלבד). מקום אחד לראות את עומס העבודה של הצוות בהקשר של לוח השנה העברי.
  *
- * קריאה בלבד: הנתונים נטענים בשתי שאילתות לכל החודש הנראה (משימות + ימי שירות),
- * והתאריך העברי וזמני השבת מחושבים מקומית (תוסף calendar) — בלי קריאות חיצוניות.
+ * המשימות וימי השירות נטענים בשתי שאילתות לכל החודש הנראה, והתאריך העברי וזמני
+ * השבת מחושבים מקומית (תוסף calendar) — בלי קריאות חיצוניות. אפשר גם להוסיף
+ * משימה או יום שירות ישירות מתוך יום בלוח (כפתור ההוספה על התא).
  */
-class Calendar extends Page
+class Calendar extends Page implements HasActions, HasForms
 {
+    use InteractsWithActions;
+    use InteractsWithForms;
+
     protected static ?string $navigationIcon = 'heroicon-o-calendar-days';
 
     protected static ?string $navigationGroup = 'ניהול';
@@ -152,5 +169,103 @@ class Calendar extends Page
         }
 
         return $weeks;
+    }
+
+    /** Today's date — the default for the header "add" button. */
+    public function getTodayProperty(): string
+    {
+        return Carbon::now()->toDateString();
+    }
+
+    /**
+     * Add a task or mark a special service day straight from the calendar. The
+     * clicked day (passed as a mount argument) prefills the dates; a radio at the
+     * top switches the form between the two, so one button on a day cell covers
+     * both. Creates the same records the dedicated screens do.
+     */
+    public function quickAddAction(): Action
+    {
+        return Action::make('quickAdd')
+            ->label('הוספה ללוח')
+            ->modalHeading('הוספה ללוח')
+            ->modalWidth(MaxWidth::Large)
+            ->modalSubmitActionLabel('הוסף')
+            ->mountUsing(function (Forms\Form $form, array $arguments): void {
+                $date = Carbon::parse($arguments['date'] ?? Carbon::now()->toDateString());
+
+                $form->fill([
+                    'type' => 'task',
+                    'due_at' => $date->copy()->setTime(9, 0)->toDateTimeString(),
+                    'priority' => TicketPriority::Normal->value,
+                    'mode' => ServiceMode::Reduced->value,
+                    'starts_on' => $date->toDateString(),
+                    'ends_on' => $date->toDateString(),
+                ]);
+            })
+            ->form([
+                Forms\Components\Radio::make('type')
+                    ->label('מה להוסיף?')
+                    ->options(['task' => 'משימה', 'service' => 'יום שירות מיוחד'])
+                    ->default('task')->required()->live()->inline()->inlineLabel(false)->columnSpanFull(),
+
+                // --- Task ---
+                Forms\Components\TextInput::make('title')
+                    ->label('כותרת')->required()->maxLength(255)->columnSpanFull()
+                    ->visible(fn (Get $get): bool => $get('type') === 'task'),
+                Forms\Components\DateTimePicker::make('due_at')
+                    ->label('מועד יעד')->seconds(false)->native(false)->required()
+                    ->visible(fn (Get $get): bool => $get('type') === 'task'),
+                Forms\Components\Select::make('priority')
+                    ->label('עדיפות')->options(TicketPriority::class)->default(TicketPriority::Normal)
+                    ->visible(fn (Get $get): bool => $get('type') === 'task'),
+                Forms\Components\Select::make('assignees')
+                    ->label('אחראים')->multiple()->searchable()->preload()
+                    ->options(fn (): array => User::orderBy('name')->pluck('name', 'id')->all())
+                    ->placeholder('ללא שיוך')->columnSpanFull()
+                    ->visible(fn (Get $get): bool => $get('type') === 'task'),
+
+                // --- Special service day ---
+                Forms\Components\Select::make('mode')
+                    ->label('מצב')->options(ServiceMode::class)->default(ServiceMode::Reduced)->required()->native(false)
+                    ->visible(fn (Get $get): bool => $get('type') === 'service'),
+                Forms\Components\DatePicker::make('starts_on')
+                    ->label('מתאריך')->native(false)->required()->live()
+                    ->afterStateUpdated(fn ($state, Forms\Set $set, Get $get) => filled($state) && blank($get('ends_on')) ? $set('ends_on', $state) : null)
+                    ->visible(fn (Get $get): bool => $get('type') === 'service'),
+                Forms\Components\DatePicker::make('ends_on')
+                    ->label('עד תאריך (כולל)')->native(false)->required()->afterOrEqual('starts_on')
+                    ->visible(fn (Get $get): bool => $get('type') === 'service'),
+                Forms\Components\TextInput::make('note')
+                    ->label('הערה (אופציונלי)')->maxLength(255)->columnSpanFull()
+                    ->helperText('הערה פנימית שתעזור לסוכן לנסח — לא נשלחת כלשונה ללקוח.')
+                    ->visible(fn (Get $get): bool => $get('type') === 'service'),
+            ])
+            ->action(function (array $data): void {
+                if (($data['type'] ?? 'task') === 'service') {
+                    ServiceException::create([
+                        'starts_on' => $data['starts_on'],
+                        'ends_on' => $data['ends_on'] ?: $data['starts_on'],
+                        'mode' => $data['mode'],
+                        'note' => $data['note'] ?? null,
+                    ]);
+
+                    Notification::make()->title('יום השירות נוסף ללוח')->success()->send();
+
+                    return;
+                }
+
+                $task = Task::create([
+                    'title' => $data['title'],
+                    'due_at' => $data['due_at'] ?? null,
+                    'status' => TaskStatus::Open,
+                    'priority' => $data['priority'] ?? TicketPriority::Normal,
+                ]);
+
+                if (! empty($data['assignees'])) {
+                    $task->assignees()->sync($data['assignees']);
+                }
+
+                Notification::make()->title('המשימה נוספה ללוח')->success()->send();
+            });
     }
 }
