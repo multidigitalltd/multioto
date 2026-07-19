@@ -72,6 +72,48 @@ class ShabbatClock
     }
 
     /**
+     * Details of the rest day a civil date falls on — for the calendar to shade
+     * and annotate it — or null on an ordinary working day. Consecutive rest
+     * days (a chag adjoining Shabbat, the two days of Rosh Hashana) share one
+     * window; `first`/`last` say whether this date opens/closes that run, so the
+     * calendar shows candle lighting on the eve and havdalah at the end.
+     *
+     * Ignores the automation toggle: it describes the day itself, not whether
+     * outward automations are currently being held.
+     *
+     * @return array{label: string, entry: Carbon, exit: Carbon, first: bool, last: bool}|null
+     */
+    public function restDay(?Carbon $date = null): ?array
+    {
+        $day = ($date ?? Carbon::now())->copy()->setTimezone(self::TZ)->startOfDay();
+
+        if (! $this->isRestDate($day)) {
+            return null;
+        }
+
+        $first = $day->copy();
+        while ($this->isRestDate($first->copy()->subDay())) {
+            $first->subDay();
+        }
+
+        $last = $day->copy();
+        while ($this->isRestDate($last->copy()->addDay())) {
+            $last->addDay();
+        }
+
+        return [
+            // Label the specific date being rendered — when a chag adjoins
+            // Shabbat they share one entry/exit window, but each day keeps its
+            // own name (e.g. Shavuot on Friday, שבת on the following Saturday).
+            'label' => $this->restLabel($day),
+            'entry' => $this->sunset($first->copy()->subDay())->subMinutes($this->candleOffset),
+            'exit' => $this->sunset($last)->addMinutes($this->havdalahOffset),
+            'first' => $day->isSameDay($first),
+            'last' => $day->isSameDay($last),
+        ];
+    }
+
+    /**
      * The active pause window covering $at, or null. Shape:
      * [entry, exit, resume, label] — entry = candle lighting, exit = havdalah,
      * resume = the day-after morning automations resume.
