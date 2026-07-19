@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Filament\Resources\SiteResource;
 use App\Filament\Resources\SiteResource\Pages\ListSites;
+use App\Filament\Resources\SiteResource\Pages\ViewSite;
 use App\Models\Customer;
 use App\Models\Site;
 use App\Models\User;
@@ -36,5 +37,25 @@ class SitesCardGridTest extends TestCase
             ->assertSee('מאפיית השחר')
             // The whole card is a link to the site's page (full info + options).
             ->assertSee(SiteResource::getUrl('view', ['record' => $site]));
+    }
+
+    public function test_the_site_page_toggles_the_ai_connection_from_its_header(): void
+    {
+        $this->actingAs(User::factory()->create()); // factory default = admin
+
+        $site = Site::factory()->create([
+            'domain' => 'toggle-me.co.il',
+            'mcp_enabled' => false,
+            'mcp_endpoint' => null,
+        ]);
+
+        Livewire::test(ViewSite::class, ['record' => $site->getKey()])
+            ->callAction('toggleMcp');
+
+        $fresh = $site->fresh();
+        // The connection turned on right from the page, and the endpoint was
+        // derived automatically — no digging into the edit form.
+        $this->assertTrue($fresh->mcp_enabled);
+        $this->assertSame('https://toggle-me.co.il/wp-json/md-agent/v1/mcp', $fresh->mcp_endpoint);
     }
 }

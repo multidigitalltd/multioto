@@ -143,36 +143,14 @@ class SiteResource extends Resource
                             ->dehydrated(fn ($state): bool => filled($state))
                             ->columnSpanFull(),
 
-                        // Where a manager sets up the connection: grab the plugin
-                        // and copy the ready-made codes into the site — no need to
-                        // invent a secret or a token.
-                        Forms\Components\Actions::make([
-                            Forms\Components\Actions\Action::make('downloadPlugin')
-                                ->label('הורד תוסף (גרסה אחרונה)')
-                                ->icon('heroicon-o-arrow-down-tray')
-                                ->color('gray')
-                                ->url(fn (): string => route('agent.plugin.latest'))
-                                ->openUrlInNewTab(),
-                            Forms\Components\Actions\Action::make('connectionCodes')
-                                ->label('קודי חיבור לתוסף')
-                                ->icon('heroicon-o-clipboard-document')
-                                ->color('primary')
-                                // The codes (a per-site token + secret) are generated
-                                // against the saved row, so they only exist once the
-                                // site is created. On the new-site screen the button
-                                // stays visible but disabled, with a tooltip that says
-                                // why — rather than vanishing and looking like a bug.
-                                ->disabled(fn (?Site $record): bool => $record === null)
-                                ->tooltip(fn (?Site $record): ?string => $record === null
-                                    ? 'שמרו את האתר תחילה — הקודים נוצרים לכל אתר בנפרד.'
-                                    : null)
-                                ->modalHeading(fn (?Site $record): string => 'קודי חיבור — '.($record?->domain ?? ''))
-                                ->modalSubmitAction(false)
-                                ->modalCancelActionLabel('סגור')
-                                ->modalContent(fn (Site $record) => view('filament.agent-credentials', [
-                                    'data' => $record->ensureAgentCredentials(),
-                                ])),
-                        ])->columnSpanFull(),
+                        // This screen holds settings only — the connection TOOLS
+                        // (codes, live test, plugin download, token, Cloudflare)
+                        // live on the site page, so everything actionable is in one
+                        // predictable place.
+                        Forms\Components\Placeholder::make('toolsHint')
+                            ->hiddenLabel()
+                            ->content('כלי החיבור — קודי חיבור לתוסף, בדיקת חיבור, הורדת התוסף, טוקן חדש והחרגת Cloudflare — נמצאים בעמוד האתר עצמו (לחיצה על האתר), לא כאן.')
+                            ->columnSpanFull(),
                     ])->columns(2),
             ]);
     }
