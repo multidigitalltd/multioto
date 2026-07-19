@@ -276,8 +276,9 @@ class SiteActions
             ->form([
                 Forms\Components\TextInput::make('api_token')
                     ->label('Cloudflare API Token')
-                    ->password()->revealable()->required()->autocomplete('new-password')
-                    ->helperText('Cloudflare → My Profile → API Tokens → Create Token, עם הרשאת Zone · Firewall Services · Edit לזון של האתר.'),
+                    ->password()->revealable()->autocomplete('new-password')
+                    ->required(fn (): bool => blank(config('billing.cloudflare.api_token')))
+                    ->helperText(self::cloudflareTokenHint()),
             ])
             ->action(function (Site $record, array $data): void {
                 $ip = app(OutboundIp::class)->current();
@@ -292,7 +293,7 @@ class SiteActions
                 }
 
                 $result = app(CloudflareClient::class)->whitelistIp(
-                    (string) ($data['api_token'] ?? ''),
+                    self::cloudflareToken($data),
                     $record->domain,
                     $ip,
                     'Multi Digital agent — allow panel IP',
@@ -304,6 +305,49 @@ class SiteActions
                     ->{$result['ok'] ? 'success' : 'danger'}()
                     ->send();
             });
+    }
+
+    /** One-click: purge the site's Cloudflare (CDN) cache. */
+    public static function purgeCloudflareCache(): Action
+    {
+        return Action::make('purgeCloudflareCache')
+            ->label('ניקוי קאש ב-Cloudflare')
+            ->icon('heroicon-o-trash')
+            ->color('gray')
+            ->visible(fn (): bool => self::isAdmin())
+            ->requiresConfirmation()
+            ->modalHeading(fn (Site $record): string => 'ניקוי קאש ב-Cloudflare — '.$record->domain)
+            ->modalDescription('ננקה את כל הקאש של האתר ב-Cloudflare. נדרש טוקן API עם הרשאת Cache Purge לזון.')
+            ->modalSubmitActionLabel('נקה קאש')
+            ->form([
+                Forms\Components\TextInput::make('api_token')
+                    ->label('Cloudflare API Token')
+                    ->password()->revealable()->autocomplete('new-password')
+                    ->required(fn (): bool => blank(config('billing.cloudflare.api_token')))
+                    ->helperText(self::cloudflareTokenHint()),
+            ])
+            ->action(function (Site $record, array $data): void {
+                $result = app(CloudflareClient::class)->purgeCache(self::cloudflareToken($data), $record->domain);
+
+                Notification::make()
+                    ->title('Cloudflare — '.$record->domain)
+                    ->body($result['message'])
+                    ->{$result['ok'] ? 'success' : 'danger'}()
+                    ->send();
+            });
+    }
+
+    /** The token to use: the one typed in the action, else the saved account token. */
+    private static function cloudflareToken(array $data): string
+    {
+        return trim((string) ($data['api_token'] ?? '')) ?: trim((string) config('billing.cloudflare.api_token'));
+    }
+
+    private static function cloudflareTokenHint(): string
+    {
+        return filled(config('billing.cloudflare.api_token'))
+            ? 'קיים טוקן שמור בהגדרות ← אינטגרציות — השאירו ריק כדי להשתמש בו, או הזינו טוקן אחר לפעולה זו.'
+            : 'Cloudflare → My Profile → API Tokens → Create Token, עם ההרשאות לזון של האתר. אפשר גם לשמור טוקן קבוע בהגדרות ← אינטגרציות.';
     }
 
     /** Download the current plugin build to install on a site. */

@@ -16,6 +16,7 @@ use App\Models\Subscription;
 use App\Models\Task;
 use App\Models\Ticket;
 use App\Services\Billing\SubscriptionCollectionService;
+use App\Services\Cloudflare\CloudflareClient;
 use App\Services\Hosting\HostingClient;
 
 /**
@@ -57,6 +58,7 @@ class SystemActionRunner
             'complete_task' => $this->completeTask($payload),
             'suspend_site' => $this->suspendSite($payload),
             'restore_site' => $this->restoreSite($payload),
+            'purge_cloudflare_cache' => $this->purgeCloudflareCache($payload),
             default => throw new \RuntimeException("פעולת מערכת לא מוכרת: {$operation}"),
         };
     }
@@ -258,6 +260,23 @@ class SystemActionRunner
     private function restoreSite(array $p): void
     {
         $this->hosting->restoreSite($this->site($p));
+    }
+
+    /** @param array<string, mixed> $p */
+    private function purgeCloudflareCache(array $p): void
+    {
+        $site = $this->site($p);
+        $token = trim((string) config('billing.cloudflare.api_token'));
+
+        if ($token === '') {
+            throw new \RuntimeException('לא הוגדר טוקן API של Cloudflare — הגדירו אותו בהגדרות ← אינטגרציות.');
+        }
+
+        $result = app(CloudflareClient::class)->purgeCache($token, $site->domain);
+
+        if (! $result['ok']) {
+            throw new \RuntimeException($result['message']);
+        }
     }
 
     /** @param array<string, mixed> $p */

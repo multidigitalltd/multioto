@@ -67,6 +67,41 @@ class CloudflareClient
         return $this->fail($this->errorMessage($response));
     }
 
+    /**
+     * Purge everything from $domain's Cloudflare cache. Guarded like whitelistIp
+     * so any network failure yields a friendly message.
+     *
+     * @return array{ok: bool, message: string}
+     */
+    public function purgeCache(string $token, string $domain): array
+    {
+        $token = trim($token);
+
+        if ($token === '') {
+            return $this->fail('חסר טוקן API של Cloudflare.');
+        }
+
+        try {
+            $zoneId = $this->zoneId($token, $domain);
+
+            if ($zoneId === null) {
+                return $this->fail('לא נמצא Zone פעיל ב-Cloudflare עבור הדומיין הזה. ודאו שהאתר מנוהל בחשבון שאליו שייך הטוקן.');
+            }
+
+            $response = $this->request($token)->post(self::BASE."/zones/{$zoneId}/purge_cache", [
+                'purge_everything' => true,
+            ]);
+        } catch (\Throwable) {
+            return $this->fail('הפנייה ל-Cloudflare נכשלה — בדקו את הטוקן והחיבור לרשת.');
+        }
+
+        if ($response->successful() && data_get($response->json(), 'success') === true) {
+            return $this->ok("הקאש של {$domain} נוקה ב-Cloudflare.");
+        }
+
+        return $this->fail($this->errorMessage($response));
+    }
+
     /** Resolve the zone id for a domain, trying the host and each parent domain. */
     private function zoneId(string $token, string $domain): ?string
     {

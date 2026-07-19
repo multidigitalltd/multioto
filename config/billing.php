@@ -477,6 +477,16 @@ return [
     ],
 
     /*
+     | Cloudflare. An optional account-wide API token (Zone·Read + Firewall
+     | Services·Edit for IP whitelist + Cache Purge·Purge) so the panel — and the
+     | agent — can whitelist the panel IP and purge a site's cache. Stored in
+     | settings (encrypted); a per-action token may still override it.
+     */
+    'cloudflare' => [
+        'api_token' => env('CLOUDFLARE_API_TOKEN', ''),
+    ],
+
+    /*
      | Special service days (reduced-capacity / urgent-only). Marked from the
      | calendar; when the feature is enabled the agent reads the active day and
      | sets the right expectation on a new ticket's acknowledgement. Turn it off

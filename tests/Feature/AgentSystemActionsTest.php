@@ -11,12 +11,14 @@ use App\Jobs\SendPaymentLinkJob;
 use App\Models\AgentCommand;
 use App\Models\Customer;
 use App\Models\PendingAction;
+use App\Models\Site;
 use App\Models\Task;
 use App\Models\Ticket;
 use App\Models\User;
 use App\Services\Ai\ClaudeClient;
 use App\Services\Automation\ApprovalGate;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Livewire\Livewire;
 use Mockery;
@@ -54,6 +56,35 @@ class AgentSystemActionsTest extends TestCase
 
         $this->assertSame(ActionStatus::Executed, $action->fresh()->status);
         Queue::assertPushed(SendPaymentLinkJob::class, fn (SendPaymentLinkJob $j): bool => $j->customerId === $customer->id && $j->totalAgorot === 30000);
+    }
+
+    public function test_approving_a_cloudflare_purge_calls_cloudflare_with_the_saved_token(): void
+    {
+        config(['agent.system_actions_enabled' => true, 'billing.cloudflare.api_token' => 'saved-token']);
+        Http::fake([
+            '*/purge_cache*' => Http::response(['success' => true, 'result' => ['id' => 'x']]),
+            '*/zones*' => Http::response(['success' => true, 'result' => [['id' => 'zone_1']]]),
+        ]);
+        $site = Site::factory()->create(['domain' => 'example.co.il']);
+
+        $action = $this->systemAction(['operation' => 'purge_cloudflare_cache', 'site_id' => $site->id]);
+        app(ApprovalGate::class)->approve($action);
+
+        $this->assertSame(ActionStatus::Executed, $action->fresh()->status);
+        Http::assertSent(fn ($request): bool => $request->method() === 'POST'
+            && str_contains($request->url(), '/purge_cache')
+            && str_contains($request->header('Authorization')[0] ?? '', 'saved-token'));
+    }
+
+    public function test_a_cloudflare_purge_fails_cleanly_without_a_saved_token(): void
+    {
+        config(['agent.system_actions_enabled' => true, 'billing.cloudflare.api_token' => '']);
+        $site = Site::factory()->create();
+
+        $action = $this->systemAction(['operation' => 'purge_cloudflare_cache', 'site_id' => $site->id]);
+        app(ApprovalGate::class)->approve($action);
+
+        $this->assertSame(ActionStatus::Failed, $action->fresh()->status);
     }
 
     public function test_the_kill_switch_blocks_execution_of_an_approved_system_action(): void

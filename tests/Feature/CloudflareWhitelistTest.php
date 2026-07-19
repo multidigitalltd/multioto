@@ -96,6 +96,21 @@ class CloudflareWhitelistTest extends TestCase
         $this->assertStringContainsString('נכשלה', $result['message']);
     }
 
+    public function test_it_purges_the_cache_for_the_zone(): void
+    {
+        Http::fake([
+            '*/purge_cache*' => Http::response(['success' => true, 'result' => ['id' => 'x']]),
+            '*/zones*' => Http::response(['success' => true, 'result' => [['id' => 'zone_1']]]),
+        ]);
+
+        $result = app(CloudflareClient::class)->purgeCache('cf-token', 'example.co.il');
+
+        $this->assertTrue($result['ok']);
+        Http::assertSent(fn ($request): bool => $request->method() === 'POST'
+            && str_contains($request->url(), '/zones/zone_1/purge_cache')
+            && data_get($request->data(), 'purge_everything') === true);
+    }
+
     public function test_outbound_ip_is_detected_and_cached(): void
     {
         Http::fake(['*' => Http::response("198.51.100.42\n")]);
