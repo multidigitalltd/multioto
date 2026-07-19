@@ -9,6 +9,7 @@ use App\Models\Plan;
 use App\Models\Subscription;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
 use Livewire\Livewire;
 use Tests\TestCase;
 
@@ -53,5 +54,35 @@ class ManualCollectionPageTest extends TestCase
         ]);
 
         $this->assertSame('1', ManualCollection::getNavigationBadge());
+    }
+
+    public function test_mark_paid_is_only_offered_while_the_demand_is_due(): void
+    {
+        $due = $this->manualSub(now()->subDay());          // overdue → collectable
+        $collected = $this->manualSub(now()->addMonth());  // already rolled forward → not re-issuable
+
+        Livewire::test(ManualCollection::class)
+            ->assertTableActionVisible('markPaid', $due)
+            ->assertTableActionHidden('markPaid', $collected);
+    }
+
+    public function test_it_lists_the_newest_payment_date_first(): void
+    {
+        $older = $this->manualSub(now()->addDays(5));
+        $newer = $this->manualSub(now()->addDays(20));
+
+        Livewire::test(ManualCollection::class)
+            ->assertCanSeeTableRecords([$newer, $older], inOrder: true);
+    }
+
+    private function manualSub(Carbon $nextChargeAt): Subscription
+    {
+        return Subscription::factory()->create([
+            'customer_id' => Customer::factory()->create(['payment_method' => 'bank_transfer'])->id,
+            'plan_id' => Plan::factory()->create()->id,
+            'token_id' => null,
+            'status' => SubscriptionStatus::Active,
+            'next_charge_at' => $nextChargeAt,
+        ]);
     }
 }
