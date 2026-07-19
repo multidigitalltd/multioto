@@ -8,6 +8,8 @@ use App\Services\Agent\SiteConnector;
 use App\Services\Agent\SiteToolCatalog;
 use App\Services\Ai\ClaudeClient;
 use App\Services\Automation\ApprovalGate;
+use App\Services\Cloudflare\CloudflareClient;
+use App\Services\System\OutboundIp;
 use Filament\Forms;
 use Filament\Notifications\Notification;
 use Filament\Tables\Actions\Action;
@@ -253,6 +255,55 @@ class SiteActions
             ->modalContent(fn (Site $record) => view('filament.agent-credentials', [
                 'data' => $record->ensureAgentCredentials(),
             ]));
+    }
+
+    /**
+     * One-click: whitelist our panel's egress IP in the site's Cloudflare, so an
+     * IP Access Rule lets the agent's server-to-server request bypass Cloudflare's
+     * protections (the "Just a moment…" 403). The operator supplies a Cloudflare
+     * API token for the zone; it is used once and never stored.
+     */
+    public static function whitelistCloudflare(): Action
+    {
+        return Action::make('whitelistCloudflare')
+            ->label('החרגת IP ב-Cloudflare')
+            ->icon('heroicon-o-shield-check')
+            ->color('gray')
+            ->visible(fn (): bool => self::isAdmin())
+            ->modalHeading(fn (Site $record): string => 'החרגת כתובת המערכת ב-Cloudflare — '.$record->domain)
+            ->modalDescription('נחריג את כתובת ה-IP של המערכת מהגנות Cloudflare של האתר, כדי שחיבור הסוכן לא ייחסם. נדרש טוקן API של Cloudflare עם הרשאת עריכה ל-Firewall/IP Access Rules של הזון. הטוקן משמש פעם אחת ואינו נשמר.')
+            ->modalSubmitActionLabel('החרג עכשיו')
+            ->form([
+                Forms\Components\TextInput::make('api_token')
+                    ->label('Cloudflare API Token')
+                    ->password()->revealable()->required()->autocomplete('new-password')
+                    ->helperText('Cloudflare → My Profile → API Tokens → Create Token, עם הרשאת Zone · Firewall Services · Edit לזון של האתר.'),
+            ])
+            ->action(function (Site $record, array $data): void {
+                $ip = app(OutboundIp::class)->current();
+
+                if ($ip === null) {
+                    Notification::make()
+                        ->title('לא זוהתה כתובת ה-IP של המערכת')
+                        ->body('לא הצלחנו לזהות את כתובת ה-IP היוצאת של השרת. נסו שוב מאוחר יותר.')
+                        ->danger()->send();
+
+                    return;
+                }
+
+                $result = app(CloudflareClient::class)->whitelistIp(
+                    (string) ($data['api_token'] ?? ''),
+                    $record->domain,
+                    $ip,
+                    'Multi Digital agent — allow panel IP',
+                );
+
+                Notification::make()
+                    ->title('Cloudflare — '.$record->domain)
+                    ->body($result['message'])
+                    ->{$result['ok'] ? 'success' : 'danger'}()
+                    ->send();
+            });
     }
 
     /** Download the current plugin build to install on a site. */
