@@ -125,6 +125,58 @@ class CloudflareWhitelistTest extends TestCase
         $this->assertStringNotContainsString('החרגת ה-IP', $result['message']);
     }
 
+    public function test_a_country_rule_is_created_across_all_zones(): void
+    {
+        Http::fake([
+            '*/access_rules/rules/*' => Http::response(['success' => true]),
+            '*/access_rules/rules*' => fn ($request) => $request->method() === 'GET'
+                ? Http::response(['success' => true, 'result' => []])
+                : Http::response(['success' => true, 'result' => ['id' => 'new']]),
+            '*/zones*' => Http::response([
+                'success' => true,
+                'result' => [['id' => 'z1', 'name' => 'a.com'], ['id' => 'z2', 'name' => 'b.com']],
+                'result_info' => ['total_pages' => 1],
+            ]),
+        ]);
+
+        $result = app(CloudflareClient::class)->applyCountryRuleEverywhere('cf-token', 'us', 'managed_challenge', 'note');
+
+        $this->assertTrue($result['ok']);
+        $this->assertStringContainsString('2 אתרים', $result['message']);
+        Http::assertSent(fn ($request): bool => $request->method() === 'POST'
+            && str_contains($request->url(), 'access_rules/rules')
+            && data_get($request->data(), 'configuration.target') === 'country'
+            && data_get($request->data(), 'configuration.value') === 'US'
+            && data_get($request->data(), 'mode') === 'managed_challenge');
+    }
+
+    public function test_removing_a_country_rule_deletes_the_existing_one(): void
+    {
+        Http::fake([
+            '*/access_rules/rules/*' => Http::response(['success' => true]),
+            '*/access_rules/rules*' => Http::response(['success' => true, 'result' => [['id' => 'r1']]]),
+            '*/zones*' => Http::response([
+                'success' => true,
+                'result' => [['id' => 'z1', 'name' => 'a.com']],
+                'result_info' => ['total_pages' => 1],
+            ]),
+        ]);
+
+        $result = app(CloudflareClient::class)->applyCountryRuleEverywhere('cf-token', 'US', 'remove', 'note');
+
+        $this->assertTrue($result['ok']);
+        Http::assertSent(fn ($request): bool => $request->method() === 'DELETE'
+            && str_contains($request->url(), 'access_rules/rules/r1'));
+    }
+
+    public function test_a_country_rule_rejects_a_bad_country_code(): void
+    {
+        Http::fake();
+
+        $this->assertFalse(app(CloudflareClient::class)->applyCountryRuleEverywhere('cf-token', 'USA', 'block', 'n')['ok']);
+        Http::assertNothingSent();
+    }
+
     public function test_outbound_ip_is_detected_and_cached(): void
     {
         Http::fake(['*' => Http::response("198.51.100.42\n")]);
