@@ -63,6 +63,7 @@ class SettingsServiceProvider extends ServiceProvider
         // Pause outward automations over Shabbat & Yom Tov (resume the day after),
         // plus the times/location used to compute the rest window.
         'shabbat.block_automations' => 'billing.shabbat.block_automations',
+        'shabbat.resume_mode' => 'billing.shabbat.resume_mode',
         'shabbat.resume_time' => 'billing.shabbat.resume_time',
         'shabbat.candle_offset_minutes' => 'billing.shabbat.candle_offset_minutes',
         'shabbat.havdalah_offset_minutes' => 'billing.shabbat.havdalah_offset_minutes',

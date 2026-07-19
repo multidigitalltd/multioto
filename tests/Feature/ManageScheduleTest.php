@@ -25,6 +25,7 @@ class ManageScheduleTest extends TestCase
         Livewire::test(ManageSchedule::class)
             ->fillForm([
                 'shabbat.block_automations' => false,
+                'shabbat.resume_mode' => 'day_after',
                 'shabbat.resume_time' => '09:30',
                 'shabbat.candle_offset_minutes' => 22,
                 'shabbat.havdalah_offset_minutes' => 50,
@@ -37,6 +38,7 @@ class ManageScheduleTest extends TestCase
 
         // Stored as settings…
         $this->assertSame('0', Setting::map()['shabbat.block_automations']);
+        $this->assertSame('day_after', Setting::map()['shabbat.resume_mode']);
         $this->assertSame('09:30', Setting::map()['shabbat.resume_time']);
         $this->assertSame('50', Setting::map()['shabbat.havdalah_offset_minutes']);
         $this->assertSame('0', Setting::map()['service_days.enabled']);

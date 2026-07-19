@@ -139,6 +139,37 @@ class CalendarPageTest extends TestCase
         $this->assertModelMissing($exception);
     }
 
+    public function test_opening_the_edit_modal_captures_the_id_for_the_delete_button(): void
+    {
+        // The "הסרה" button reads the id off the component (a nested footer action
+        // does not inherit the parent's arguments), so mounting must capture it.
+        $exception = ServiceException::create([
+            'starts_on' => '2026-07-22', 'ends_on' => '2026-07-22', 'mode' => ServiceMode::Reduced,
+        ]);
+
+        Livewire::test(Calendar::class)
+            ->mountAction('editServiceDay', ['id' => $exception->id])
+            ->assertSet('editingServiceDayId', $exception->id);
+    }
+
+    public function test_it_prevents_overlapping_service_days(): void
+    {
+        ServiceException::create([
+            'starts_on' => '2026-07-22', 'ends_on' => '2026-07-24', 'mode' => ServiceMode::Reduced,
+        ]);
+
+        Livewire::test(Calendar::class)
+            ->callAction('quickAdd', data: [
+                'type' => 'service',
+                'mode' => ServiceMode::UrgentOnly->value,
+                'starts_on' => '2026-07-23',
+                'ends_on' => '2026-07-23',
+            ], arguments: ['date' => '2026-07-23']);
+
+        // The overlapping span was rejected — still just the original.
+        $this->assertSame(1, ServiceException::count());
+    }
+
     public function test_month_navigation_moves_forward_back_and_home(): void
     {
         Livewire::test(Calendar::class)

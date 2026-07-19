@@ -33,6 +33,8 @@ class ShabbatClock
 
     private string $resumeTime;
 
+    private string $resumeMode;
+
     public function __construct()
     {
         $this->lat = (float) config('billing.shabbat.latitude', 32.0853);
@@ -40,6 +42,9 @@ class ShabbatClock
         $this->candleOffset = (int) config('billing.shabbat.candle_offset_minutes', 18);
         $this->havdalahOffset = (int) config('billing.shabbat.havdalah_offset_minutes', 40);
         $this->resumeTime = (string) config('billing.shabbat.resume_time', '08:00');
+        // 'day_after' (default): held work resumes the morning after. 'havdalah':
+        // it resumes the moment Shabbat/Yom Tov goes out.
+        $this->resumeMode = (string) config('billing.shabbat.resume_mode', 'day_after');
     }
 
     /**
@@ -146,7 +151,10 @@ class ShabbatClock
 
             $entry = $this->sunset($first->copy()->subDay())->subMinutes($this->candleOffset);
             $exit = $this->sunset($last)->addMinutes($this->havdalahOffset);
-            $resume = $last->copy()->addDay()->setTimeFromTimeString($this->resumeTime);
+            // Resume at havdalah itself, or the morning after (the default).
+            $resume = $this->resumeMode === 'havdalah'
+                ? $exit->copy()
+                : $last->copy()->addDay()->setTimeFromTimeString($this->resumeTime);
 
             // Paused from candle lighting until the day-after resume time.
             if ($at->betweenIncluded($entry, $resume)) {

@@ -61,6 +61,9 @@ class Calendar extends Page implements HasActions, HasForms
 
     public int $month;
 
+    /** The service exception currently open in the edit modal (captured at mount). */
+    public ?int $editingServiceDayId = null;
+
     public function mount(): void
     {
         $now = Carbon::now();
@@ -242,9 +245,17 @@ class Calendar extends Page implements HasActions, HasForms
             ])
             ->action(function (array $data): void {
                 if (($data['type'] ?? 'task') === 'service') {
+                    $end = $data['ends_on'] ?: $data['starts_on'];
+
+                    if ($this->serviceDayOverlaps($data['starts_on'], $end)) {
+                        $this->warnOverlap();
+
+                        return;
+                    }
+
                     ServiceException::create([
                         'starts_on' => $data['starts_on'],
-                        'ends_on' => $data['ends_on'] ?: $data['starts_on'],
+                        'ends_on' => $end,
                         'mode' => $data['mode'],
                         'note' => $data['note'] ?? null,
                     ]);
@@ -281,15 +292,19 @@ class Calendar extends Page implements HasActions, HasForms
             ->modalHeading('יום שירות מיוחד')
             ->modalWidth(MaxWidth::Large)
             ->modalSubmitActionLabel('שמירה')
-            ->fillForm(function (array $arguments): array {
-                $exception = ServiceException::find((int) ($arguments['id'] ?? 0));
+            // Capture the record id on the component itself: a nested footer
+            // action (the "הסרה" button) does NOT inherit the parent action's
+            // arguments, so reading them there would delete nothing.
+            ->mountUsing(function (Forms\Form $form, array $arguments): void {
+                $this->editingServiceDayId = (int) ($arguments['id'] ?? 0);
+                $exception = ServiceException::find($this->editingServiceDayId);
 
-                return $exception === null ? [] : [
+                $form->fill($exception === null ? [] : [
                     'mode' => $exception->mode->value,
                     'starts_on' => $exception->starts_on->toDateString(),
                     'ends_on' => $exception->ends_on->toDateString(),
                     'note' => $exception->note,
-                ];
+                ]);
             })
             ->form([
                 Forms\Components\Select::make('mode')
@@ -303,10 +318,16 @@ class Calendar extends Page implements HasActions, HasForms
                     ->label('הערה (אופציונלי)')->maxLength(255)->columnSpanFull()
                     ->helperText('הערה פנימית שתעזור לסוכן לנסח — לא נשלחת כלשונה ללקוח.'),
             ])
-            ->action(function (array $data, array $arguments): void {
-                $exception = ServiceException::find((int) ($arguments['id'] ?? 0));
+            ->action(function (array $data): void {
+                $exception = ServiceException::find($this->editingServiceDayId);
 
                 if ($exception === null) {
+                    return;
+                }
+
+                if ($this->serviceDayOverlaps($data['starts_on'], $data['ends_on'] ?: $data['starts_on'], $exception->id)) {
+                    $this->warnOverlap();
+
                     return;
                 }
 
@@ -326,9 +347,32 @@ class Calendar extends Page implements HasActions, HasForms
                     ->icon('heroicon-o-trash')
                     ->requiresConfirmation()
                     ->modalHeading('הסרת יום שירות')
-                    ->action(fn (array $arguments) => $this->deleteServiceDay((int) ($arguments['id'] ?? 0)))
+                    ->action(fn () => $this->deleteServiceDay((int) $this->editingServiceDayId))
                     ->cancelParentActions(),
             ]);
+    }
+
+    /**
+     * Is there another service exception whose span overlaps [$start, $end]?
+     * Overlaps are prevented so every marked day stays reachable from the
+     * calendar (which shows one badge per day) now that the list screen is gone.
+     */
+    private function serviceDayOverlaps(string $start, string $end, ?int $ignoreId = null): bool
+    {
+        return ServiceException::query()
+            ->when($ignoreId !== null, fn ($query) => $query->whereKeyNot($ignoreId))
+            ->whereDate('starts_on', '<=', $end)
+            ->whereDate('ends_on', '>=', $start)
+            ->exists();
+    }
+
+    private function warnOverlap(): void
+    {
+        Notification::make()
+            ->title('קיים כבר יום שירות בטווח הזה')
+            ->body('התאריכים חופפים ליום שירות אחר. ערכו או הסירו אותו מהלוח במקום ליצור חדש.')
+            ->warning()
+            ->send();
     }
 
     /** Remove a special service day (called from the edit modal's "הסרה" button). */

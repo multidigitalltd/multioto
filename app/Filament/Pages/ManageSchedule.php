@@ -9,12 +9,14 @@ use App\Models\Setting;
 use Filament\Forms\Components\Actions\Action;
 use Filament\Forms\Components\Placeholder;
 use Filament\Forms\Components\Section;
+use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\TimePicker;
 use Filament\Forms\Components\Toggle;
 use Filament\Forms\Concerns\InteractsWithForms;
 use Filament\Forms\Contracts\HasForms;
 use Filament\Forms\Form;
+use Filament\Forms\Get;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 use Filament\Pages\SubNavigationPosition;
@@ -47,8 +49,9 @@ class ManageSchedule extends Page implements HasForms
     /** Boolean toggles: stored as '1'/'0'. */
     private const BOOL_KEYS = ['shabbat.block_automations', 'service_days.enabled'];
 
-    /** Plain-value keys (times, offsets, coordinates): stored as strings. */
+    /** Plain-value keys (mode, times, offsets, coordinates): stored as strings. */
     private const VALUE_KEYS = [
+        'shabbat.resume_mode',
         'shabbat.resume_time',
         'shabbat.candle_offset_minutes',
         'shabbat.havdalah_offset_minutes',
@@ -63,6 +66,7 @@ class ManageSchedule extends Page implements HasForms
     {
         $values = [];
         data_set($values, 'shabbat.block_automations', (bool) config('billing.shabbat.block_automations'));
+        data_set($values, 'shabbat.resume_mode', (string) config('billing.shabbat.resume_mode'));
         data_set($values, 'shabbat.resume_time', (string) config('billing.shabbat.resume_time'));
         data_set($values, 'shabbat.candle_offset_minutes', (int) config('billing.shabbat.candle_offset_minutes'));
         data_set($values, 'shabbat.havdalah_offset_minutes', (int) config('billing.shabbat.havdalah_offset_minutes'));
@@ -84,19 +88,28 @@ class ManageSchedule extends Page implements HasForms
                             ->label('לחסום אוטומציות בשבת ובחג')
                             ->helperText('חל על כל השבתות והחגים (ראש השנה, יום כיפור, סוכות, שמיני עצרת, פסח, שבועות).')
                             ->columnSpanFull(),
+                        Select::make('shabbat.resume_mode')
+                            ->label('מתי לחזור')->native(false)->required()->live()
+                            ->options([
+                                'day_after' => 'למחרת בבוקר (בשעה שנקבעה)',
+                                'havdalah' => 'מיד בצאת השבת/החג',
+                            ])
+                            ->helperText('מתי האוטומציות שהוחזקו ייצאו לדרך.'),
                         TimePicker::make('shabbat.resume_time')
-                            ->label('שעת חזרה למחרת')->seconds(false)->native(false)->required()
+                            ->label('שעת חזרה למחרת')->seconds(false)->native(false)
+                            ->required(fn (Get $get): bool => $get('shabbat.resume_mode') === 'day_after')
+                            ->visible(fn (Get $get): bool => $get('shabbat.resume_mode') === 'day_after')
                             ->helperText('האוטומציות שהוחזקו יֵצאו בשעה זו ביום שאחרי צאת השבת/החג.'),
                         TextInput::make('shabbat.candle_offset_minutes')
                             ->label('דקות הדלקת נרות (לפני השקיעה)')->numeric()->minValue(0)->maxValue(120)->required(),
                         TextInput::make('shabbat.havdalah_offset_minutes')
                             ->label('דקות צאת השבת (אחרי השקיעה)')->numeric()->minValue(0)->maxValue(120)->required(),
                         TextInput::make('shabbat.latitude')
-                            ->label('קו רוחב (Latitude)')->numeric()->minValue(-90)->maxValue(90)->required()
-                            ->helperText('ברירת מחדל: תל אביב (32.0853).'),
+                            ->label('קו רוחב (Latitude)')->numeric()->minValue(29.4)->maxValue(33.4)->required()
+                            ->helperText('מיקום בתוך ישראל (ברירת מחדל: תל אביב 32.0853). משפיע על דיוק זמני השקיעה.'),
                         TextInput::make('shabbat.longitude')
-                            ->label('קו אורך (Longitude)')->numeric()->minValue(-180)->maxValue(180)->required()
-                            ->helperText('ברירת מחדל: תל אביב (34.7818).'),
+                            ->label('קו אורך (Longitude)')->numeric()->minValue(34.2)->maxValue(35.9)->required()
+                            ->helperText('מיקום בתוך ישראל (ברירת מחדל: תל אביב 34.7818).'),
                     ])->columns(2)
                     ->footerActions([$this->saveAction()]),
 
