@@ -44,6 +44,41 @@ class Site extends Model
     }
 
     /**
+     * Keep the MCP endpoint automatic. Newer plugin versions expose their own
+     * REST endpoint, so a manager never types an address: on save (for an enabled
+     * site with a domain) we derive the conventional endpoint from the domain
+     * when it's blank/malformed, and re-derive it when the domain changes and the
+     * stored endpoint was itself auto-derived. A deliberate custom endpoint — one
+     * that never matched the conventional form — is left untouched.
+     */
+    protected static function booted(): void
+    {
+        static::saving(function (self $site): void {
+            if (! $site->mcp_enabled || blank($site->domain)) {
+                return;
+            }
+
+            $endpoint = (string) $site->mcp_endpoint;
+
+            if (blank($endpoint) || substr_count($endpoint, '://') > 1) {
+                $site->mcp_endpoint = $site->conventionalMcpEndpoint();
+
+                return;
+            }
+
+            // Domain changed: follow it only if the endpoint was auto-derived
+            // from the previous domain (otherwise it's a custom endpoint to keep).
+            if ($site->isDirty('domain')) {
+                $previousDomain = (string) $site->getOriginal('domain');
+
+                if (filled($previousDomain) && $endpoint === $site->conventionalMcpEndpoint($previousDomain)) {
+                    $site->mcp_endpoint = $site->conventionalMcpEndpoint();
+                }
+            }
+        });
+    }
+
+    /**
      * Issue a fresh per-site token. Its hash authenticates the plugin's
      * check-ins; an encrypted copy is kept so the panel can re-display the code
      * for copying into the site's plugin. Rotating it revokes the previous one.
@@ -107,12 +142,12 @@ class Site extends Model
      * column may hold a bare host or a full URL (it accepts a URL in the form),
      * so reduce it to just the host — otherwise we'd build https://https://…
      */
-    public function conventionalMcpEndpoint(): string
+    public function conventionalMcpEndpoint(?string $domain = null): string
     {
         // Drop the scheme and any trailing slash, but KEEP the path: a WordPress
         // install in a subdirectory (example.com/blog) exposes its REST root at
         // /blog/wp-json/…, so the path must survive.
-        $base = preg_replace('#^https?://#i', '', (string) $this->domain);
+        $base = preg_replace('#^https?://#i', '', (string) ($domain ?? $this->domain));
         $base = trim(rtrim((string) $base, '/'));
 
         return 'https://'.$base.'/wp-json/md-agent/v1/mcp';

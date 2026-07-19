@@ -150,7 +150,9 @@ class McpClientTest extends TestCase
     {
         $client = app(McpClient::class);
 
-        $bare = Site::factory()->create(['mcp_enabled' => true]);
+        // A site with no endpoint (an enabled site always derives one from its
+        // domain now, so a blank endpoint only survives while the site is off).
+        $bare = Site::factory()->create(['mcp_enabled' => false, 'mcp_endpoint' => null]);
         try {
             $client->listTools($bare);
             $this->fail('expected McpError for missing endpoint');
