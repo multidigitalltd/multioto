@@ -14,6 +14,7 @@ use App\Services\Ai\ClaudeClient;
 use App\Services\Automation\ApprovalGate;
 use App\Services\Calendar\HebrewDate;
 use App\Services\Calendar\ShabbatClock;
+use App\Services\Cloudflare\CloudflareClient;
 use App\Services\Support\ServiceStatus;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
@@ -279,6 +280,8 @@ class ConsoleAgent
                 'input_schema' => $obj(['site_id' => $int], ['site_id'])],
             ['name' => 'propose_purge_cloudflare_cache', 'description' => 'הצע ניקוי קאש (CDN) של האתר ב-Cloudflare. site_id.',
                 'input_schema' => $obj(['site_id' => $int], ['site_id'])],
+            ['name' => 'propose_country_rule', 'description' => 'הצע כלל מדינה ב-Cloudflare שיחול על כל האתרים בבת אחת. country (קוד ISO בן 2 אותיות, למשל US) + action: managed_challenge (אתגר מנוהל), js_challenge, block (חסימה), whitelist (מעבר חופשי), remove (הסרת הכלל).',
+                'input_schema' => $obj(['country' => $str, 'action' => $str], ['country', 'action'])],
             ['name' => 'investigate_site', 'description' => 'שלח את סוכן האתר לבדוק אתר מחובר (קריאה בלבד; תיקון יוצע לאישור). site_id + goal.',
                 'input_schema' => $obj(['site_id' => $int, 'goal' => $str], ['site_id'])],
             ['name' => 'propose_task', 'description' => 'הצע פתיחת משימה לאדם — לכל דבר שאין לו כלי ישיר. title + customer_id (אופציונלי).',
@@ -316,6 +319,7 @@ class ConsoleAgent
                 'propose_suspend_site' => $this->proposeSite('suspend_site', $input, 'השעיית אתר'),
                 'propose_restore_site' => $this->proposeSite('restore_site', $input, 'שחזור אתר מהשעיה'),
                 'propose_purge_cloudflare_cache' => $this->proposeSite('purge_cloudflare_cache', $input, 'ניקוי קאש ב-Cloudflare'),
+                'propose_country_rule' => $this->proposeCountryRule($input),
                 'investigate_site' => $this->investigateSite($input),
                 'propose_task' => $this->proposeTask($input),
                 'need_clarification' => $this->needClarification($input),
@@ -725,6 +729,29 @@ class ConsoleAgent
         );
 
         return $this->proposedOk($action->id, "{$label}: {$site->domain}");
+    }
+
+    /** Propose a Cloudflare country rule that applies to ALL zones at once. */
+    private function proposeCountryRule(array $input): array
+    {
+        $country = strtoupper(trim((string) ($input['country'] ?? '')));
+        $mode = (string) ($input['action'] ?? '');
+
+        if (preg_match('/^[A-Z]{2}$/', $country) !== 1) {
+            return ['content' => 'קוד מדינה חייב להיות שתי אותיות (ISO), למשל US.', 'is_error' => true];
+        }
+        if (! in_array($mode, CloudflareClient::COUNTRY_MODES, true)) {
+            return ['content' => 'פעולה לא מוכרת לכלל מדינה.', 'is_error' => true];
+        }
+
+        $action = $this->gate->propose(
+            type: 'system_action',
+            summary: "🌍 כלל מדינה ב-Cloudflare (כל האתרים) — {$country}: {$mode}",
+            payload: ['operation' => 'cloudflare_country_rule', 'country' => $country, 'mode' => $mode, 'source' => 'console_agent'],
+            proposedBy: 'console',
+        );
+
+        return $this->proposedOk($action->id, "כלל מדינה {$country} ({$mode})");
     }
 
     private function investigateSite(array $input): array

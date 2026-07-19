@@ -102,6 +102,119 @@ class CloudflareClient
         return $this->fail($this->errorMessage($response, 'ניקוי הקאש ב-Cloudflare נכשל'));
     }
 
+    /** Valid actions for a country rule. 'remove' deletes an existing rule. */
+    public const COUNTRY_MODES = ['managed_challenge', 'js_challenge', 'block', 'whitelist', 'remove'];
+
+    /**
+     * Apply (or remove) a country IP Access Rule across EVERY zone the token can
+     * see — so one change covers all the account's sites at once, which is how
+     * the team wants it (the rules overlap). $mode is one of COUNTRY_MODES;
+     * 'whitelist' = allow the country, 'remove' = delete the country rule.
+     * Idempotent per zone: an existing country rule is updated, not duplicated.
+     *
+     * @return array{ok: bool, message: string}
+     */
+    public function applyCountryRuleEverywhere(string $token, string $country, string $mode, string $notes): array
+    {
+        $token = trim($token);
+        $country = strtoupper(trim($country));
+
+        if ($token === '') {
+            return $this->fail('חסר טוקן API של Cloudflare.');
+        }
+        if (preg_match('/^[A-Z]{2}$/', $country) !== 1) {
+            return $this->fail('קוד מדינה חייב להיות שתי אותיות (ISO), למשל US.');
+        }
+        if (! in_array($mode, self::COUNTRY_MODES, true)) {
+            return $this->fail('פעולה לא מוכרת לכלל מדינה.');
+        }
+
+        try {
+            $zones = $this->listZones($token);
+        } catch (\Throwable) {
+            return $this->fail('הפנייה ל-Cloudflare נכשלה — בדקו את הטוקן והחיבור לרשת.');
+        }
+
+        if ($zones === []) {
+            return $this->fail('לא נמצאו זונים ב-Cloudflare עבור הטוקן הזה.');
+        }
+
+        $applied = 0;
+        $failed = 0;
+
+        foreach ($zones as $zone) {
+            try {
+                $this->applyCountryRuleToZone($token, $zone, $country, $mode);
+                $applied++;
+            } catch (\Throwable) {
+                $failed++;
+            }
+        }
+
+        $verb = $mode === 'remove' ? "הוסר כלל המדינה {$country}" : "כלל המדינה {$country} ({$mode}) הוחל";
+        $suffix = $failed > 0 ? " (נכשל ב-{$failed})" : '';
+
+        return $applied > 0
+            ? $this->ok("{$verb} על {$applied} אתרים ב-Cloudflare{$suffix}.")
+            : $this->fail("הפעולה נכשלה בכל הזונים{$suffix}.");
+    }
+
+    /** Upsert (or delete) the country rule for a single zone. */
+    private function applyCountryRuleToZone(string $token, array $zone, string $country, string $mode): void
+    {
+        $zoneId = (string) $zone['id'];
+        $existing = data_get($this->request($token)->get(self::BASE."/zones/{$zoneId}/firewall/access_rules/rules", [
+            'configuration.target' => 'country',
+            'configuration.value' => $country,
+        ])->json(), 'result.0.id');
+
+        if ($mode === 'remove') {
+            if (filled($existing)) {
+                $this->request($token)->delete(self::BASE."/zones/{$zoneId}/firewall/access_rules/rules/{$existing}")->throw();
+            }
+
+            return;
+        }
+
+        if (filled($existing)) {
+            $this->request($token)->patch(self::BASE."/zones/{$zoneId}/firewall/access_rules/rules/{$existing}", ['mode' => $mode])->throw();
+
+            return;
+        }
+
+        $this->request($token)->post(self::BASE."/zones/{$zoneId}/firewall/access_rules/rules", [
+            'mode' => $mode,
+            'configuration' => ['target' => 'country', 'value' => $country],
+            'notes' => 'Multi Digital — country rule',
+        ])->throw();
+    }
+
+    /**
+     * Every zone the token can see (paginated).
+     *
+     * @return list<array{id: string, name: string}>
+     */
+    private function listZones(string $token): array
+    {
+        $zones = [];
+        $page = 1;
+
+        do {
+            $body = $this->request($token)->get(self::BASE.'/zones', ['per_page' => 50, 'page' => $page])->throw()->json();
+
+            foreach ((array) data_get($body, 'result', []) as $zone) {
+                if (filled($zone['id'] ?? null)) {
+                    $zones[] = ['id' => (string) $zone['id'], 'name' => (string) ($zone['name'] ?? '')];
+                }
+            }
+
+            $totalPages = (int) data_get($body, 'result_info.total_pages', 1);
+            $page++;
+        } while ($totalPages > 0 && $page <= $totalPages);
+
+        return $zones;
+    }
+
     /** Resolve the zone id for a domain, trying the host and each parent domain. */
     private function zoneId(string $token, string $domain): ?string
     {

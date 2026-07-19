@@ -76,6 +76,31 @@ class AgentSystemActionsTest extends TestCase
             && str_contains($request->header('Authorization')[0] ?? '', 'saved-token'));
     }
 
+    public function test_approving_a_country_rule_applies_it_across_zones_with_the_saved_token(): void
+    {
+        config(['agent.system_actions_enabled' => true, 'billing.cloudflare.api_token' => 'saved-token']);
+        Http::fake([
+            '*/access_rules/rules/*' => Http::response(['success' => true]),
+            '*/access_rules/rules*' => fn ($request) => $request->method() === 'GET'
+                ? Http::response(['success' => true, 'result' => []])
+                : Http::response(['success' => true, 'result' => ['id' => 'new']]),
+            '*/zones*' => Http::response([
+                'success' => true,
+                'result' => [['id' => 'z1', 'name' => 'a.com']],
+                'result_info' => ['total_pages' => 1],
+            ]),
+        ]);
+
+        $action = $this->systemAction(['operation' => 'cloudflare_country_rule', 'country' => 'RU', 'mode' => 'block']);
+        app(ApprovalGate::class)->approve($action);
+
+        $this->assertSame(ActionStatus::Executed, $action->fresh()->status);
+        Http::assertSent(fn ($request): bool => $request->method() === 'POST'
+            && str_contains($request->url(), 'access_rules/rules')
+            && data_get($request->data(), 'configuration.value') === 'RU'
+            && data_get($request->data(), 'mode') === 'block');
+    }
+
     public function test_a_cloudflare_purge_fails_cleanly_without_a_saved_token(): void
     {
         config(['agent.system_actions_enabled' => true, 'billing.cloudflare.api_token' => '']);

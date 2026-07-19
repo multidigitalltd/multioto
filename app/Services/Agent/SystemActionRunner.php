@@ -59,6 +59,7 @@ class SystemActionRunner
             'suspend_site' => $this->suspendSite($payload),
             'restore_site' => $this->restoreSite($payload),
             'purge_cloudflare_cache' => $this->purgeCloudflareCache($payload),
+            'cloudflare_country_rule' => $this->cloudflareCountryRule($payload),
             default => throw new \RuntimeException("פעולת מערכת לא מוכרת: {$operation}"),
         };
     }
@@ -273,6 +274,27 @@ class SystemActionRunner
         }
 
         $result = app(CloudflareClient::class)->purgeCache($token, $site->domain);
+
+        if (! $result['ok']) {
+            throw new \RuntimeException($result['message']);
+        }
+    }
+
+    /** @param array<string, mixed> $p */
+    private function cloudflareCountryRule(array $p): void
+    {
+        $token = trim((string) config('billing.cloudflare.api_token'));
+
+        if ($token === '') {
+            throw new \RuntimeException('לא הוגדר טוקן API של Cloudflare — הגדירו אותו בהגדרות ← אינטגרציות.');
+        }
+
+        $result = app(CloudflareClient::class)->applyCountryRuleEverywhere(
+            $token,
+            (string) ($p['country'] ?? ''),
+            (string) ($p['mode'] ?? ''),
+            'Multi Digital agent — country rule',
+        );
 
         if (! $result['ok']) {
             throw new \RuntimeException($result['message']);
