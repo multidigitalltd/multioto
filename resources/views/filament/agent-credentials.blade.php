@@ -71,4 +71,56 @@
     <p class="text-xs text-gray-400">
         הערכים נשמרים בפאנל — אפשר לחזור ולהעתיק אותם בכל עת. יצירת "טוקן חדש" תבטל את הקודם.
     </p>
+
+    {{-- Cloudflare: if the site is behind Cloudflare, its managed challenge can
+         block our server-to-server connection ("Just a moment…" 403). The fix is
+         to whitelist our egress IP so it bypasses Cloudflare's protections. --}}
+    @php $panelIp = app(\App\Services\System\OutboundIp::class)->current(); @endphp
+    <div class="rounded-lg border border-gray-200 p-3 dark:border-gray-700">
+        <p class="mb-2 font-semibold text-gray-700 dark:text-gray-200">אם האתר מאחורי Cloudflare</p>
+        <p class="mb-2 text-xs text-gray-500 dark:text-gray-400">
+            Cloudflare עלול לחסום את חיבור הסוכן באתגר "Just a moment…" (שרת לא יכול לפתור אתגר דפדפן).
+            הפתרון: להחריג את כתובת ה-IP של המערכת מהגנות Cloudflare של האתר.
+        </p>
+
+        @if ($panelIp)
+            <div
+                x-data="{
+                    copied: false,
+                    copy() {
+                        const done = () => { this.copied = true; setTimeout(() => this.copied = false, 1500); };
+                        if (navigator.clipboard && window.isSecureContext) {
+                            navigator.clipboard.writeText(@js($panelIp)).then(done);
+                        } else {
+                            const ta = document.createElement('textarea');
+                            ta.value = @js($panelIp);
+                            ta.style.position = 'fixed'; ta.style.opacity = '0';
+                            document.body.appendChild(ta); ta.focus(); ta.select();
+                            try { document.execCommand('copy'); done(); } finally { ta.remove(); }
+                        }
+                    },
+                }"
+                class="mb-2 flex items-center justify-between gap-2"
+            >
+                <code class="block select-all break-all rounded bg-gray-50 p-2 font-mono text-xs text-gray-800 dark:bg-gray-900 dark:text-gray-100" dir="ltr">{{ $panelIp }}</code>
+                <button type="button" x-on:click="copy()"
+                        class="inline-flex shrink-0 items-center gap-1 rounded-md bg-primary-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500">
+                    <span x-show="! copied">העתק IP</span>
+                    <span x-show="copied" x-cloak>הועתק ✓</span>
+                </button>
+            </div>
+        @else
+            <p class="mb-2 text-xs text-amber-600 dark:text-amber-400">לא זוהתה כרגע כתובת ה-IP של המערכת — נסו שוב מאוחר יותר.</p>
+        @endif
+
+        <p class="mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">ידני ב-Cloudflare:</p>
+        <ol class="mb-2 list-inside list-decimal space-y-0.5 text-xs text-gray-500 dark:text-gray-400">
+            <li>בחרו את הדומיין של האתר → Security → WAF → Tools → <span dir="ltr">IP Access Rules</span>.</li>
+            <li>הדביקו את ה-IP שלמעלה, בחרו פעולה <span dir="ltr">Allow</span>, והחילו על <span dir="ltr">This website</span>.</li>
+            <li>שמרו — כתובת המערכת תעקוף מעכשיו את הגנות Cloudflare.</li>
+        </ol>
+        <p class="text-xs text-gray-500 dark:text-gray-400">
+            או אוטומטית: כפתור <strong>"החרגת IP ב-Cloudflare"</strong> (בתפריט הפעולות של האתר) עושה זאת עבורכם עם טוקן API של Cloudflare.
+        </p>
+    </div>
 </div>

@@ -75,6 +75,7 @@ class SitesRelationManager extends RelationManager
                     SiteActions::proposeMcpAction(),
                     SiteActions::testMcp(),
                     SiteActions::connectionCodes(),
+                    SiteActions::whitelistCloudflare(),
                     SiteActions::downloadPlugin(),
                     SiteActions::generateAgentToken(),
                     Tables\Actions\EditAction::make()->label('עריכה'),
