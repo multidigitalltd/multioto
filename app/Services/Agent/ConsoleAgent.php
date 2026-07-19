@@ -187,11 +187,12 @@ class ConsoleAgent
             $parts = [];
 
             if ($rest = $clock->restDay($day)) {
-                $times = array_filter([
-                    $rest['first'] ? 'כניסה '.$rest['entry']->format('H:i') : null,
-                    $rest['last'] ? 'צאת '.$rest['exit']->format('H:i') : null,
-                ]);
-                $parts[] = $rest['label'].($times !== [] ? ' ('.implode(', ', $times).')' : '');
+                // On the rest day itself: name it, and add havdalah when it ends here.
+                $parts[] = $rest['label'].($rest['last'] ? ' (צאת '.$rest['exit']->format('H:i').')' : '');
+            } elseif (($eve = $clock->restDay($day->copy()->addDay())) && $eve['first']) {
+                // The eve (e.g. Friday): candle lighting is tonight even though the
+                // rest day itself may fall outside the requested range.
+                $parts[] = 'ערב '.$eve['label'].' (הדלקת נרות '.$eve['entry']->format('H:i').')';
             }
 
             if ($service = $exceptions->first(fn (ServiceException $e): bool => $day->betweenIncluded($e->starts_on, $e->ends_on))) {
@@ -199,7 +200,8 @@ class ConsoleAgent
             }
 
             foreach ($tasksByDay->get($day->toDateString(), collect()) as $task) {
-                $parts[] = 'משימה: '.Str::limit((string) $task->title, 70);
+                // Include the id so the agent can act on it (e.g. propose_complete_task).
+                $parts[] = 'משימה #'.$task->id.': '.Str::limit((string) $task->title, 70);
             }
 
             if ($parts !== []) {

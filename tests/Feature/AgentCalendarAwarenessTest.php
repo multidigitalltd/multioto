@@ -34,7 +34,7 @@ class AgentCalendarAwarenessTest extends TestCase
 
     public function test_read_calendar_reports_tasks_service_days_and_shabbat(): void
     {
-        Task::create(['title' => 'לחדש דומיין ללקוח', 'status' => TaskStatus::Open, 'due_at' => '2026-07-20 10:00']);
+        $task = Task::create(['title' => 'לחדש דומיין ללקוח', 'status' => TaskStatus::Open, 'due_at' => '2026-07-20 10:00']);
         Task::create(['title' => 'משימה שהושלמה', 'status' => TaskStatus::Done, 'due_at' => '2026-07-20 11:00']);
         ServiceException::create(['starts_on' => '2026-07-22', 'ends_on' => '2026-07-22', 'mode' => ServiceMode::Reduced]);
 
@@ -49,8 +49,9 @@ class AgentCalendarAwarenessTest extends TestCase
         $command = app(CommandInterpreter::class)->run('מה יש בלוח בשבוע הקרוב?');
 
         $this->assertStringContainsString('לחדש דומיין ללקוח', $command->result); // open task in range
-        $this->assertStringContainsString('שבת', $command->result);              // Saturday 2026-07-18 with times
-        $this->assertStringContainsString('כניסה', $command->result);            // candle-lighting time shown
+        $this->assertStringContainsString("#{$task->id}", $command->result);      // task id, so the agent can act on it
+        $this->assertStringContainsString('שבת', $command->result);              // Saturday 2026-07-18
+        $this->assertStringContainsString('הדלקת נרות', $command->result);        // candle-lighting shown on the eve
         $this->assertStringContainsString('מתכונת מצומצמת', $command->result);   // the marked service day
         $this->assertStringNotContainsString('משימה שהושלמה', $command->result); // done tasks excluded
     }
