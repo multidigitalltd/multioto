@@ -44,6 +44,28 @@ class Site extends Model
     }
 
     /**
+     * Keep the MCP endpoint automatic. Newer plugin versions expose their own
+     * REST endpoint, so a manager never types an address: whenever it's blank or
+     * malformed (and a domain exists) we derive the conventional endpoint from
+     * the domain on save. A deliberate custom endpoint (a well-formed value) is
+     * left untouched.
+     */
+    protected static function booted(): void
+    {
+        static::saving(function (self $site): void {
+            if (! $site->mcp_enabled || blank($site->domain)) {
+                return;
+            }
+
+            $endpoint = (string) $site->mcp_endpoint;
+
+            if (blank($endpoint) || substr_count($endpoint, '://') > 1) {
+                $site->mcp_endpoint = $site->conventionalMcpEndpoint();
+            }
+        });
+    }
+
+    /**
      * Issue a fresh per-site token. Its hash authenticates the plugin's
      * check-ins; an encrypted copy is kept so the panel can re-display the code
      * for copying into the site's plugin. Rotating it revokes the previous one.
