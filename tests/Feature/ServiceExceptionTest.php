@@ -47,6 +47,23 @@ class ServiceExceptionTest extends TestCase
         $this->assertNull(app(ServiceStatus::class)->current());
     }
 
+    public function test_the_feature_toggle_disables_the_effect_of_a_marked_day(): void
+    {
+        ServiceException::create([
+            'starts_on' => now()->subDay(), 'ends_on' => now()->addDay(),
+            'mode' => ServiceMode::UrgentOnly,
+        ]);
+
+        // Enabled (default): the day is active.
+        $this->assertNotNull(app(ServiceStatus::class)->current());
+
+        // Switched off: the marking stays in the DB but no longer takes effect.
+        config(['billing.service_days.enabled' => false]);
+        $this->assertNull(app(ServiceStatus::class)->current());
+        $this->assertNull(app(ServiceStatus::class)->agentGuidance());
+        $this->assertNull(app(ServiceStatus::class)->customerNotice());
+    }
+
     public function test_the_template_ack_appends_a_notice_when_the_ai_is_off(): void
     {
         // Default config: dynamic AI ack OFF → the fixed template is used, and it

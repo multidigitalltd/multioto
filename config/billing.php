@@ -470,4 +470,14 @@ return [
         // ends ("יחכה ליום שלמחרת"), not the moment Shabbat goes out.
         'resume_time' => env('SHABBAT_RESUME_TIME', '08:00'),
     ],
+
+    /*
+     | Special service days (reduced-capacity / urgent-only). Marked from the
+     | calendar; when the feature is enabled the agent reads the active day and
+     | sets the right expectation on a new ticket's acknowledgement. Turn it off
+     | to keep the markings but stop them affecting replies.
+     */
+    'service_days' => [
+        'enabled' => (bool) env('SERVICE_DAYS_ENABLED', true),
+    ],
 ];

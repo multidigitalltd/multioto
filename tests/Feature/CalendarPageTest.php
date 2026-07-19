@@ -107,6 +107,38 @@ class CalendarPageTest extends TestCase
         $this->assertSame('עומס פנימי', $exception->note);
     }
 
+    public function test_a_service_day_can_be_edited_from_the_calendar(): void
+    {
+        $exception = ServiceException::create([
+            'starts_on' => '2026-07-22', 'ends_on' => '2026-07-22', 'mode' => ServiceMode::Reduced,
+        ]);
+
+        Livewire::test(Calendar::class)
+            ->callAction('editServiceDay', data: [
+                'mode' => ServiceMode::UrgentOnly->value,
+                'starts_on' => '2026-07-22',
+                'ends_on' => '2026-07-23',
+                'note' => 'הורחב',
+            ], arguments: ['id' => $exception->id])
+            ->assertHasNoActionErrors();
+
+        $exception->refresh();
+        $this->assertSame(ServiceMode::UrgentOnly, $exception->mode);
+        $this->assertSame('2026-07-23', $exception->ends_on->toDateString());
+        $this->assertSame('הורחב', $exception->note);
+    }
+
+    public function test_a_service_day_can_be_deleted_from_the_calendar(): void
+    {
+        $exception = ServiceException::create([
+            'starts_on' => '2026-07-22', 'ends_on' => '2026-07-22', 'mode' => ServiceMode::Reduced,
+        ]);
+
+        Livewire::test(Calendar::class)->call('deleteServiceDay', $exception->id);
+
+        $this->assertModelMissing($exception);
+    }
+
     public function test_month_navigation_moves_forward_back_and_home(): void
     {
         Livewire::test(Calendar::class)
