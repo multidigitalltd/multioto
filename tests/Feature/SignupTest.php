@@ -6,12 +6,14 @@ use App\Enums\BusinessType;
 use App\Enums\MessageAuthor;
 use App\Enums\TicketChannel;
 use App\Jobs\GenerateCustomerCardPdfJob;
+use App\Jobs\NotifySignupJob;
 use App\Jobs\SendWelcomeMessageJob;
 use App\Mail\NotificationMail;
 use App\Models\Customer;
 use App\Models\Setting;
 use App\Models\Subscription;
 use App\Models\Ticket;
+use App\Services\Notifications\TeamNotifier;
 use App\Services\Notifications\TemplateEngine;
 use App\Services\Waha\WahaClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -74,7 +76,7 @@ class SignupTest extends TestCase
 
     public function test_signup_creates_a_customer_and_redirects_to_card_capture(): void
     {
-        Queue::fake([SendWelcomeMessageJob::class, GenerateCustomerCardPdfJob::class]);
+        Queue::fake([SendWelcomeMessageJob::class, GenerateCustomerCardPdfJob::class, NotifySignupJob::class]);
         Storage::fake('local');
 
         $response = $this->post(route('signup.store'), $this->validPayload());
@@ -103,6 +105,33 @@ class SignupTest extends TestCase
         // The personal welcome + the signed-card PDF generation are queued.
         Queue::assertPushed(SendWelcomeMessageJob::class, 1);
         Queue::assertPushed(GenerateCustomerCardPdfJob::class, 1);
+
+        // The team is alerted about the new signup even for a credit-card
+        // customer (no ticket is opened for card signups).
+        Queue::assertPushed(NotifySignupJob::class, fn (NotifySignupJob $job): bool => $job->customerId === $customer->id);
+    }
+
+    public function test_the_signup_notification_reaches_the_team_on_email_and_whatsapp(): void
+    {
+        config([
+            'billing.notifications.team_email' => 'team@multidigital.co.il',
+            'billing.waha.owner_number' => '972500000000',
+        ]);
+        Mail::fake();
+        Http::fake(['*' => Http::response(['id' => 'w'])]);
+
+        $customer = Customer::factory()->create([
+            'name' => 'עסק חדש בע״מ',
+            'payment_method' => 'credit_card',
+        ]);
+
+        (new NotifySignupJob($customer->id))->handle(app(TeamNotifier::class));
+
+        Mail::assertSent(NotificationMail::class, fn (NotificationMail $mail): bool => $mail->hasTo('team@multidigital.co.il')
+            && str_contains($mail->subjectLine, 'לקוח חדש נרשם')
+            && str_contains($mail->subjectLine, 'עסק חדש בע״מ'));
+        Http::assertSent(fn ($request): bool => str_contains($request->url(), 'sendText')
+            && str_contains($request->data()['text'] ?? '', 'לקוח חדש נרשם'));
     }
 
     public function test_signup_validates_field_formats(): void
@@ -119,7 +148,7 @@ class SignupTest extends TestCase
 
     public function test_signup_accepts_a_nonprofit_and_a_dashed_phone(): void
     {
-        Queue::fake([SendWelcomeMessageJob::class, GenerateCustomerCardPdfJob::class]);
+        Queue::fake([SendWelcomeMessageJob::class, GenerateCustomerCardPdfJob::class, NotifySignupJob::class]);
 
         $this->post(route('signup.store'), $this->validPayload([
             'business_type' => BusinessType::Nonprofit->value,
@@ -153,7 +182,7 @@ class SignupTest extends TestCase
 
     public function test_checks_signup_opens_a_follow_up_ticket(): void
     {
-        Queue::fake([SendWelcomeMessageJob::class, GenerateCustomerCardPdfJob::class]);
+        Queue::fake([SendWelcomeMessageJob::class, GenerateCustomerCardPdfJob::class, NotifySignupJob::class]);
 
         $this->post(route('signup.store'), $this->validPayload(['payment_method' => 'checks']))
             ->assertRedirect(route('signup.thanks'))
@@ -165,7 +194,7 @@ class SignupTest extends TestCase
 
     public function test_bank_transfer_signup_opens_a_follow_up_ticket_instead_of_card_capture(): void
     {
-        Queue::fake([SendWelcomeMessageJob::class, GenerateCustomerCardPdfJob::class]);
+        Queue::fake([SendWelcomeMessageJob::class, GenerateCustomerCardPdfJob::class, NotifySignupJob::class]);
 
         $response = $this->post(route('signup.store'), $this->validPayload([
             'payment_method' => 'bank_transfer',
@@ -185,7 +214,7 @@ class SignupTest extends TestCase
 
     public function test_exempt_dealer_signup_is_marked_vat_exempt(): void
     {
-        Queue::fake([SendWelcomeMessageJob::class, GenerateCustomerCardPdfJob::class]);
+        Queue::fake([SendWelcomeMessageJob::class, GenerateCustomerCardPdfJob::class, NotifySignupJob::class]);
 
         $this->post(route('signup.store'), $this->validPayload([
             'name' => 'עוסק פטור',
