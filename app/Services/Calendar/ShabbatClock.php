@@ -102,7 +102,10 @@ class ShabbatClock
         }
 
         return [
-            'label' => $this->restLabel($first),
+            // Label the specific date being rendered — when a chag adjoins
+            // Shabbat they share one entry/exit window, but each day keeps its
+            // own name (e.g. Shavuot on Friday, שבת on the following Saturday).
+            'label' => $this->restLabel($day),
             'entry' => $this->sunset($first->copy()->subDay())->subMinutes($this->candleOffset),
             'exit' => $this->sunset($last)->addMinutes($this->havdalahOffset),
             'first' => $day->isSameDay($first),

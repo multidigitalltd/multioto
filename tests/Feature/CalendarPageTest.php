@@ -98,6 +98,29 @@ class CalendarPageTest extends TestCase
         $this->assertTrue($rest['entry']->lessThan($rest['exit']));
     }
 
+    public function test_each_day_of_a_chag_shabbat_run_keeps_its_own_label(): void
+    {
+        // Shavuot 2026 falls on Friday 2026-05-22 and runs straight into Shabbat
+        // on Saturday 2026-05-23 — one shared entry/exit window, but each day is
+        // labelled for what it is (not both "שבועות" nor both "שבת").
+        $clock = app(ShabbatClock::class);
+
+        $friday = $clock->restDay(Carbon::parse('2026-05-22', 'Asia/Jerusalem'));
+        $saturday = $clock->restDay(Carbon::parse('2026-05-23', 'Asia/Jerusalem'));
+
+        $this->assertSame('שבועות', $friday['label']);
+        $this->assertTrue($friday['first']);
+        $this->assertFalse($friday['last']);
+
+        $this->assertSame('שבת', $saturday['label']);
+        $this->assertFalse($saturday['first']);
+        $this->assertTrue($saturday['last']);
+
+        // The two days share one window: candle lighting on the eve, havdalah at the end.
+        $this->assertEquals($friday['entry'], $saturday['entry']);
+        $this->assertEquals($friday['exit'], $saturday['exit']);
+    }
+
     public function test_rest_day_ignores_the_automation_toggle(): void
     {
         // The base TestCase disables the automation halt; the calendar still
