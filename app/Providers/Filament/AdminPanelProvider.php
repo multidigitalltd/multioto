@@ -56,12 +56,16 @@ class AdminPanelProvider extends PanelProvider
                 'primary' => Color::Indigo,
             ])
             ->font('Rubik')
-            // In-panel notification bell (new task assigned, a site incident…) —
-            // always visible in the panel, independent of WhatsApp/email config.
-            // The bell queries the notifications table on EVERY page, so only
-            // enable it once that table exists — otherwise a deploy that ships
-            // new code before its migrations run would 500 every panel page.
-            ->when($this->notificationsTableReady(), fn (Panel $panel): Panel => $panel->databaseNotifications())
+            // In-panel notification bell (new task assigned, a site incident,
+            // a customer reply…) — always visible in the panel, independent of
+            // WhatsApp/email config. The bell queries the notifications table on
+            // EVERY page, so only enable it once that table exists — otherwise a
+            // deploy that ships new code before its migrations run would 500 every
+            // panel page. Polling makes new alerts pop live (a "push"), so a
+            // customer reply reaches the team without reloading the page.
+            ->when($this->notificationsTableReady(), fn (Panel $panel): Panel => $panel
+                ->databaseNotifications()
+                ->databaseNotificationsPolling('30s'))
             ->sidebarCollapsibleOnDesktop()
             ->navigationGroups(['תמיכה', 'כספים', 'ניהול'])
             ->discoverResources(in: app_path('Filament/Resources'), for: 'App\\Filament\\Resources')
