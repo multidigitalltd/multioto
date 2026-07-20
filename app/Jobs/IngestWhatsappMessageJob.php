@@ -212,10 +212,20 @@ class IngestWhatsappMessageJob implements ShouldQueue
             $candidates[] = $payload['body'];
         }
 
-        return array_values(array_filter(
+        $cards = array_filter(
             $candidates,
             fn (string $card): bool => Str::contains($card, 'BEGIN:VCARD'),
-        ));
+        );
+
+        // The same card often arrives in more than one field (e.g. both `vcard`
+        // and the `body`, or payload and `_data`). Deduplicate on a whitespace-
+        // insensitive key so one shared contact is summarised once, not twice.
+        $unique = [];
+        foreach ($cards as $card) {
+            $unique[preg_replace('/\s+/', '', $card)] = $card;
+        }
+
+        return array_values($unique);
     }
 
     /** Read a single vCard property value (e.g. FN), tolerating property params. */

@@ -52,6 +52,32 @@ class WhatsappContactCardTest extends TestCase
         $this->assertStringContainsString('איש קשר', $message->body);
     }
 
+    public function test_the_same_card_repeated_across_fields_is_summarised_once(): void
+    {
+        Customer::factory()->create(['phone' => '+972501234567', 'whatsapp_jid' => null]);
+
+        // WAHA often repeats the identical vCard in more than one field.
+        $vcard = "BEGIN:VCARD\nVERSION:3.0\nFN:רון מזרחי\nTEL;waid=972521112233:+972521112233\nEND:VCARD";
+
+        $this->post('/webhooks/waha?secret=waha-secret', [
+            'event' => 'message',
+            'payload' => [
+                'id' => 'wa-vcard-dup',
+                'from' => '972501234567@c.us',
+                'body' => $vcard,
+                'vcard' => $vcard,
+                'vCards' => [$vcard],
+            ],
+        ])->assertOk();
+
+        $body = Ticket::sole()->messages()->where('direction', MessageDirection::Inbound)->sole()->body;
+
+        $this->assertSame(1, substr_count($body, 'רון מזרחי'), 'the contact should appear exactly once');
+        // A single shared contact uses the singular heading, not the plural one.
+        $this->assertStringContainsString('איש קשר שהתקבל:', $body);
+        $this->assertStringNotContainsString('אנשי קשר שהתקבלו', $body);
+    }
+
     public function test_multiple_contact_cards_are_all_listed(): void
     {
         Customer::factory()->create(['phone' => '+972501234567', 'whatsapp_jid' => null]);
