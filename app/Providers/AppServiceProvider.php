@@ -48,10 +48,12 @@ class AppServiceProvider extends ServiceProvider
 
         // Every date/time picker in the panel opens on a Sunday-first calendar
         // with Hebrew day/month names — the Israeli work week, not the Filament
-        // default (Monday, English). DatePicker extends DateTimePicker but their
-        // configureUsing hooks are per-class, so configure both.
-        DateTimePicker::configureUsing(fn (DateTimePicker $picker) => $picker->weekStartsOnSunday()->locale('he'));
-        DatePicker::configureUsing(fn (DatePicker $picker) => $picker->weekStartsOnSunday()->locale('he'));
+        // default (Monday, English). native(false) is required: the native HTML
+        // input ignores locale()/weekStartsOnSunday() and lets the browser decide,
+        // so we force the JS picker that honours them. DatePicker extends
+        // DateTimePicker but their configureUsing hooks are per-class → configure both.
+        DateTimePicker::configureUsing(fn (DateTimePicker $picker) => $picker->native(false)->weekStartsOnSunday()->locale('he'));
+        DatePicker::configureUsing(fn (DatePicker $picker) => $picker->native(false)->weekStartsOnSunday()->locale('he'));
 
         // Lifecycle notifications (e.g. "your ticket was resolved").
         Ticket::observe(TicketObserver::class);

@@ -16,6 +16,8 @@ class DatePickerLocaleTest extends TestCase
     {
         $picker = DateTimePicker::make('due_at');
 
+        // native(false) is essential: the native HTML input ignores these.
+        $this->assertFalse($picker->isNative());
         $this->assertSame(7, $picker->getFirstDayOfWeek()); // 7 = Sunday (ISO)
         $this->assertSame('he', $picker->getLocale());
     }
@@ -24,6 +26,7 @@ class DatePickerLocaleTest extends TestCase
     {
         $picker = DatePicker::make('starts_on');
 
+        $this->assertFalse($picker->isNative());
         $this->assertSame(7, $picker->getFirstDayOfWeek());
         $this->assertSame('he', $picker->getLocale());
     }
