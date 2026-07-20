@@ -51,7 +51,7 @@ return [
         // The current version of the companion plugin we ship. A site reporting
         // an older version is told to update itself from the download channel —
         // so we never have to re-install the plugin by hand on every site.
-        'current_version' => env('AGENT_PLUGIN_VERSION', '1.0.5'),
+        'current_version' => env('AGENT_PLUGIN_VERSION', '1.0.6'),
 
         // Private disk + path prefix where release zips live: {path}/{version}.zip.
         'disk' => env('AGENT_PLUGIN_DISK', 'local'),

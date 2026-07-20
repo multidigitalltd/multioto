@@ -116,18 +116,22 @@ class McpClient
             $code = is_numeric($error['code'] ?? null) ? (int) $error['code'] : null;
             $message = (string) ($error['message'] ?? 'unknown');
             $detail = $this->errorDetail($error['data'] ?? null);
+            // The tool name lives in the params of a tools/call, not in $method.
+            $tool = $method === 'tools/call' && is_array($params) ? (string) ($params['name'] ?? '') : null;
 
             // The panel message is short; the developer/operator needs the full
-            // context (method, code, any data) to diagnose a site-side failure.
+            // context (method, tool, code, any data) to diagnose a site-side
+            // failure — a read-only call leaves no SiteChange journal entry.
             Log::warning('MCP error from site', [
                 'site' => $site->domain,
                 'method' => $method,
+                'tool' => $tool,
                 'code' => $code,
                 'message' => $message,
                 'data' => $error['data'] ?? null,
             ]);
 
-            throw new McpError($this->describeRpcError($code, $message, $detail), $code);
+            throw new McpError($this->describeRpcError($method, $code, $message, $detail), $code);
         }
 
         $result = $payload['result'] ?? null;
@@ -168,8 +172,11 @@ class McpClient
      * Build an actionable Hebrew message for a JSON-RPC error, including any
      * detail the site supplied and — for a generic internal error — a pointer to
      * where the real problem is, so the operator doesn't chase the connection.
+     * The tool-specific wording is emitted only for a tools/call failure; the
+     * plugin can also return -32603 from initialize/tools/list, where "the tool
+     * failed / the tool may be unsupported" would be wrong.
      */
-    protected function describeRpcError(?int $code, string $message, ?string $detail): string
+    protected function describeRpcError(string $method, ?int $code, string $message, ?string $detail): string
     {
         $text = 'שגיאת MCP מהאתר: '.Str::limit($message, 300);
 
@@ -177,14 +184,16 @@ class McpClient
             $text .= ' — '.Str::limit($detail, 300);
         }
 
-        // -32603 (Internal error): the request reached the plugin, but its tool
-        // handler crashed inside WordPress. Nothing on our side to change — the
-        // connection and credentials are fine (list/handshake work), so send the
-        // operator to the site instead of the panel.
+        // -32603 (Internal error): the request reached the plugin, but something
+        // crashed inside WordPress. Nothing on our side to change — point the
+        // operator at the site's error log instead of the connection/secret.
         if ($code === -32603) {
-            $text .= '. זו תקלה פנימית בצד האתר — התוסף קיבל את הבקשה אך נכשל בביצוע הכלי.'
-                .' החיבור עצמו תקין; בדקו את יומן השגיאות של WordPress (debug.log) באתר,'
-                .' וודאו שגרסת התוסף מעודכנת ושהכלי נתמך בהתקנה הזו.';
+            $text .= $method === 'tools/call'
+                ? '. זו תקלה פנימית בצד האתר — התוסף קיבל את הבקשה אך נכשל בביצוע הכלי.'
+                    .' החיבור עצמו תקין; בדקו את יומן השגיאות של WordPress (debug.log) באתר,'
+                    .' וודאו שגרסת התוסף מעודכנת ושהכלי נתמך בהתקנה הזו.'
+                : '. שגיאה פנימית בצד האתר — בדקו את יומן השגיאות של WordPress (debug.log)'
+                    .' באתר וודאו שגרסת התוסף מעודכנת.';
         }
 
         if ($code !== null) {

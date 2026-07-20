@@ -144,6 +144,24 @@ class McpClientTest extends TestCase
         }
     }
 
+    public function test_an_internal_error_on_the_handshake_is_not_described_as_a_tool_failure(): void
+    {
+        $site = $this->connectedSite();
+        $this->fakeRpc([
+            'initialize' => fn (): array => ['error' => ['code' => -32603, 'message' => 'Internal error']],
+        ]);
+
+        try {
+            app(McpClient::class)->initialize($site);
+            $this->fail('expected McpError');
+        } catch (McpError $e) {
+            // Generic site-side wording — NOT the tools/call-specific claim that
+            // "the tool failed" / "the connection works".
+            $this->assertStringContainsString('שגיאה פנימית בצד האתר', $e->getMessage());
+            $this->assertStringNotContainsString('בביצוע הכלי', $e->getMessage());
+        }
+    }
+
     public function test_an_sse_response_body_is_decoded(): void
     {
         $site = $this->connectedSite();
