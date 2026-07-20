@@ -126,10 +126,78 @@ class ViewTicket extends ViewRecord
         return array_merge(parent::getForms(), ['replyForm']);
     }
 
-    /** @return Collection<int, TicketMessage> */
+    /**
+     * The conversation timeline — WITHOUT the AI reply drafts, which are the
+     * bot's recommendations (not part of the customer↔team exchange) and now
+     * live in their own panel, not inline as chat bubbles.
+     *
+     * @return Collection<int, TicketMessage>
+     */
     public function getMessagesProperty(): Collection
     {
-        return $this->record->messages()->orderBy('created_at')->get();
+        return $this->record->messages()
+            ->orderBy('created_at')
+            ->get()
+            ->reject(fn (TicketMessage $m): bool => $this->isAiDraft($m))
+            ->values();
+    }
+
+    /**
+     * The AI's pending reply drafts — shown in a dedicated "המלצת הסוכן" panel,
+     * separated from the conversation. Newest first.
+     *
+     * @return Collection<int, TicketMessage>
+     */
+    public function getAiDraftsProperty(): Collection
+    {
+        return $this->record->messages()
+            ->where('author', MessageAuthor::Ai)
+            ->where('channel', MessageChannel::InternalNote)
+            ->where('body', 'like', '%טיוטת תשובה%')
+            ->orderByDesc('created_at')
+            ->get();
+    }
+
+    /** An AI reply draft (a bot recommendation), as opposed to a real message/note. */
+    private function isAiDraft(TicketMessage $message): bool
+    {
+        return $message->author === MessageAuthor::Ai
+            && $message->channel === MessageChannel::InternalNote
+            && Str::contains((string) $message->body, 'טיוטת תשובה');
+    }
+
+    /** Just the proposed reply text of a draft, without the "🤖 טיוטה…" preamble. */
+    public function draftText(TicketMessage $draft): string
+    {
+        return trim(Str::of((string) $draft->body)->contains("\n\n")
+            ? Str::after((string) $draft->body, "\n\n")
+            : (string) $draft->body);
+    }
+
+    /** Discard an AI reply draft the agent doesn't want. */
+    public function dismissDraft(int $messageId): void
+    {
+        $deleted = $this->record->messages()
+            ->where('author', MessageAuthor::Ai)
+            ->where('channel', MessageChannel::InternalNote)
+            ->where('body', 'like', '%טיוטת תשובה%')
+            ->whereKey($messageId)
+            ->delete();
+
+        if ($deleted === 0) {
+            return;
+        }
+
+        // The draft also has a pending ticket_reply approval (from DraftReplyJob)
+        // that could otherwise still be approved from the panel/WhatsApp and sent.
+        // Reject it too, exactly as sending a manual reply does — otherwise "דחה"
+        // wouldn't actually prevent the draft from reaching the customer.
+        PendingAction::where('ticket_id', $this->record->id)
+            ->where('type', 'ticket_reply')
+            ->where('status', ActionStatus::Pending)
+            ->update(['status' => ActionStatus::Rejected, 'decided_at' => now(), 'error' => 'בוטלה — הטיוטה נדחתה מהשיחה.']);
+
+        Notification::make()->title('ההמלצה נדחתה')->success()->send();
     }
 
     /** Send the reply box content to the customer (or store an internal note). */
