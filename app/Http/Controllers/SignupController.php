@@ -9,6 +9,7 @@ use App\Enums\SiteStatus;
 use App\Enums\TicketChannel;
 use App\Http\Requests\SignupRequest;
 use App\Jobs\GenerateCustomerCardPdfJob;
+use App\Jobs\NotifySignupJob;
 use App\Jobs\SendWelcomeMessageJob;
 use App\Models\Customer;
 use App\Models\Setting;
@@ -98,6 +99,11 @@ class SignupController extends Controller
             // set up by the team afterwards, then the captured card is charged.
             return $customer;
         });
+
+        // Tell the team a customer just signed up — WhatsApp + email + bell —
+        // for EVERY payment method (a credit-card signup opens no ticket, so this
+        // is the only signal there). Queued so it never blocks the response.
+        NotifySignupJob::dispatch($customer->id);
 
         // Personal welcome (email + WhatsApp) — dispatched only from this
         // explicit signup flow, never from bulk import.
