@@ -4,6 +4,7 @@ namespace App\Filament\Resources\SiteResource\Pages;
 
 use App\Filament\Resources\SiteResource;
 use App\Filament\Support\SiteActions;
+use App\Jobs\DetectSiteTypeJob;
 use App\Jobs\InvestigateSiteJob;
 use App\Models\MonitorCheck;
 use App\Services\Agent\SiteConnector;
@@ -156,6 +157,7 @@ class ViewSite extends ViewRecord
                     ->visible($isAdmin)
                     ->url(fn (): string => route('agent.plugin.latest'))
                     ->openUrlInNewTab(),
+                $this->detectSiteTypeAction(),
                 $this->generateAgentTokenAction(),
                 Actions\EditAction::make()->label('עריכת הגדרות'),
             ])
@@ -327,6 +329,24 @@ class ViewSite extends ViewRecord
                     ->body($result['message'])
                     ->{$result['ok'] ? 'success' : 'danger'}()
                     ->send();
+            });
+    }
+
+    /** Re-classify the site (store/brochure) from its installed plugins now. */
+    protected function detectSiteTypeAction(): Actions\Action
+    {
+        return Actions\Action::make('detectSiteType')
+            ->label('זהה סוג אתר (WooCommerce)')
+            ->icon('heroicon-o-tag')
+            ->color('gray')
+            ->visible(fn (): bool => $this->record->mcp_enabled && (auth()->user()?->isAdmin() ?? false))
+            ->action(function (): void {
+                DetectSiteTypeJob::dispatch($this->record->id, force: true);
+
+                Notification::make()
+                    ->title('זיהוי סוג האתר רץ ברקע')
+                    ->body('הסוג יתעדכן לפי התוספים המותקנים (WooCommerce = חנות).')
+                    ->success()->send();
             });
     }
 

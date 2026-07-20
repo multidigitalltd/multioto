@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Enums\IncidentStatus;
 use App\Enums\SiteStatus;
+use App\Enums\SiteType;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -19,7 +20,7 @@ class Site extends Model
         'customer_id', 'domain', 'hosting_ref', 'monitor_url', 'monitor_enabled', 'status',
         'expected_keyword', 'ssl_days_left', 'ssl_alerted_at', 'slow_alerted_at',
         'domain_expiry_at', 'domain_alerted_at',
-        'mcp_endpoint', 'mcp_secret', 'mcp_enabled', 'environment',
+        'mcp_endpoint', 'mcp_secret', 'mcp_enabled', 'environment', 'site_type',
         'mcp_capabilities', 'mcp_last_seen_at', 'agent_plugin_version',
     ];
 
@@ -40,7 +41,36 @@ class Site extends Model
             'mcp_enabled' => 'boolean',
             'mcp_capabilities' => 'array',
             'mcp_last_seen_at' => 'datetime',
+            'site_type' => SiteType::class,
         ];
+    }
+
+    /**
+     * Classify the site as a store/brochure from its installed plugins
+     * (WooCommerce ⇒ store). By default a value already set — by hand or a
+     * previous detection — is kept, so the team's manual choice wins; pass
+     * $force to re-classify explicitly (the "זהה סוג אתר" action).
+     */
+    public function applyDetectedType(string $pluginListText, bool $force = false): void
+    {
+        $detected = SiteType::fromPluginList($pluginListText);
+
+        if ($force) {
+            $this->update(['site_type' => $detected]);
+
+            return;
+        }
+
+        // Atomic "fill only if still unset": a WHERE site_type IS NULL guard, so
+        // a manual choice made during the (slow) MCP round-trip isn't clobbered
+        // by this stale instance. Sync the in-memory model only if we won the race.
+        $filled = static::whereKey($this->getKey())
+            ->whereNull('site_type')
+            ->update(['site_type' => $detected]);
+
+        if ($filled > 0) {
+            $this->setAttribute('site_type', $detected)->syncOriginalAttribute('site_type');
+        }
     }
 
     /**
