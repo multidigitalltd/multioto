@@ -3,6 +3,8 @@
 namespace App\Filament\Resources;
 
 use App\Enums\BillingInterval;
+use App\Enums\SiteStatus;
+use App\Enums\SiteType;
 use App\Enums\SubscriptionStatus;
 use App\Filament\Resources\SubscriptionResource\Pages;
 use App\Filament\Support\DebtorActions;
@@ -17,6 +19,7 @@ use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Validation\ValidationException;
 
 class SubscriptionResource extends Resource
 {
@@ -70,6 +73,39 @@ class SubscriptionResource extends Resource
                             ->searchable()
                             ->preload()
                             ->disabled(fn (Forms\Get $get): bool => blank($get('customer_id')))
+                            // Add a new site for THIS customer inline, without leaving
+                            // the subscription form. The site is always created under
+                            // the selected customer (never anyone else's).
+                            ->createOptionForm([
+                                Forms\Components\TextInput::make('domain')
+                                    ->label('דומיין')
+                                    ->required()
+                                    ->maxLength(255),
+                                Forms\Components\Select::make('site_type')
+                                    ->label('סוג אתר')
+                                    ->options(SiteType::class)
+                                    ->native(false)
+                                    ->placeholder('לא סווג — הסוכן יזהה לפי WooCommerce'),
+                                Forms\Components\Toggle::make('monitor_enabled')
+                                    ->label('ניטור פעיל')
+                                    ->default(false),
+                            ])
+                            ->createOptionUsing(function (array $data, Forms\Get $get): int {
+                                $customerId = $get('customer_id');
+                                if (blank($customerId)) {
+                                    throw ValidationException::withMessages([
+                                        'customer_id' => 'בחרו לקוח לפני הוספת אתר.',
+                                    ]);
+                                }
+
+                                return Site::create([
+                                    'customer_id' => $customerId,
+                                    'domain' => $data['domain'],
+                                    'site_type' => $data['site_type'] ?? null,
+                                    'monitor_enabled' => $data['monitor_enabled'] ?? false,
+                                    'status' => SiteStatus::Active,
+                                ])->getKey();
+                            })
                             ->rule(fn (Forms\Get $get): Closure => static function (string $attribute, $value, Closure $fail) use ($get): void {
                                 if (filled($value) && ! Site::whereKey($value)->where('customer_id', $get('customer_id'))->exists()) {
                                     $fail('האתר שנבחר אינו שייך ללקוח הזה.');
