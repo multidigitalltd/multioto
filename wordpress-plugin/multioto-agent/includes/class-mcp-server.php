@@ -841,6 +841,34 @@ class Multioto_Agent_Mcp_Server
         }
     }
 
+    /**
+     * Map a value the team sees to an internal WooCommerce order ID. Sequential /
+     * custom order-number plugins store the displayed number in order meta, so a
+     * "#171690" shown to staff may differ from the internal id — resolve that
+     * first, and fall back to treating the value as the internal id.
+     */
+    private function resolveOrderId(int $number): int
+    {
+        if (! function_exists('wc_get_orders')) {
+            return $number;
+        }
+
+        foreach (['_order_number', '_order_number_formatted'] as $meta_key) {
+            $found = wc_get_orders([
+                'limit' => 1,
+                'return' => 'ids',
+                'meta_key' => $meta_key,
+                'meta_value' => (string) $number,
+            ]);
+
+            if (! empty($found)) {
+                return (int) $found[0];
+            }
+        }
+
+        return $number;
+    }
+
     /** Read one WooCommerce order — status, items, addresses, the chosen shipping method and totals. */
     private function wcOrderGet(array $args): string
     {
@@ -851,7 +879,7 @@ class Multioto_Agent_Mcp_Server
             throw new Multioto_Agent_Rpc_Error(-32602, 'order_id (מספר ההזמנה) נדרש.');
         }
 
-        $order = wc_get_order($id);
+        $order = wc_get_order($this->resolveOrderId($id));
         if (! $order) {
             throw new Multioto_Agent_Rpc_Error(-32602, "הזמנה {$id} לא נמצאה.");
         }
@@ -951,13 +979,22 @@ class Multioto_Agent_Mcp_Server
                 'enabled' => $method->is_enabled(),
             ];
 
-            // The conditional settings that decide when/what a customer pays —
-            // cost, the free-shipping minimum and its requirement mode.
-            foreach (['cost', 'min_amount', 'requires'] as $key) {
-                $value = $method->get_option($key);
-                if ($value !== '' && $value !== null && $value !== false) {
-                    $entry['settings'][$key] = $value;
+            // Report ALL of the instance's settings, not a fixed subset — a
+            // method's price/availability can hinge on per-class costs
+            // (class_cost_*, no_class_cost), free-shipping thresholds, or a
+            // third-party method's own keys. Enumerate whatever it exposes.
+            if (method_exists($method, 'init_instance_settings')) {
+                $method->init_instance_settings();
+            }
+
+            $settings = [];
+            foreach ((array) $method->instance_settings as $key => $value) {
+                if ($value !== '' && $value !== null && $value !== false && $value !== []) {
+                    $settings[$key] = $value;
                 }
+            }
+            if ($settings !== []) {
+                $entry['settings'] = $settings;
             }
 
             $methods[] = $entry;
