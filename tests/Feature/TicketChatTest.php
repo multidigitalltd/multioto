@@ -83,6 +83,35 @@ class TicketChatTest extends TestCase
         $this->assertTrue($component->instance()->aiDrafts->contains(fn ($m): bool => $m->id === $draft->id));
     }
 
+    public function test_ai_classification_notes_move_to_the_info_section_not_the_timeline(): void
+    {
+        $this->actingAs(User::factory()->create());
+        $ticket = $this->ticket();
+        $note = $ticket->messages()->create([
+            'direction' => MessageDirection::Outbound,
+            'channel' => MessageChannel::InternalNote,
+            'body' => "🤖 סיווג AI\nעדיפות: high\nכוונה: תקלה\nקטגוריה: אתר למטה\nתקציר: האתר לא נטען",
+            'author' => MessageAuthor::Ai,
+        ]);
+        // A human internal note must STAY in the conversation.
+        $humanNote = $ticket->messages()->create([
+            'direction' => MessageDirection::Outbound,
+            'channel' => MessageChannel::InternalNote,
+            'body' => 'הערה של הצוות',
+            'author' => MessageAuthor::Agent,
+        ]);
+
+        $component = Livewire::test(ViewTicket::class, ['record' => $ticket->id])
+            ->assertSee('מידע מהסוכן')
+            ->assertSee('סיווג AI');
+
+        // The AI note is out of the timeline and in the info section; the human
+        // note stays in the conversation.
+        $this->assertTrue($component->instance()->messages->doesntContain(fn ($m): bool => $m->id === $note->id));
+        $this->assertTrue($component->instance()->aiNotes->contains(fn ($m): bool => $m->id === $note->id));
+        $this->assertTrue($component->instance()->messages->contains(fn ($m): bool => $m->id === $humanNote->id));
+    }
+
     public function test_dismissing_an_ai_draft_removes_it(): void
     {
         $this->actingAs(User::factory()->create());

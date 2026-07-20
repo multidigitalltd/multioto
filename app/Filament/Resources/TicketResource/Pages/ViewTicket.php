@@ -127,9 +127,11 @@ class ViewTicket extends ViewRecord
     }
 
     /**
-     * The conversation timeline — WITHOUT the AI reply drafts, which are the
-     * bot's recommendations (not part of the customer↔team exchange) and now
-     * live in their own panel, not inline as chat bubbles.
+     * The conversation timeline — WITHOUT any AI-authored internal note. Those
+     * are the bot's own working notes (reply drafts, classification, site
+     * findings), not part of the customer↔team exchange, and reading them inline
+     * as chat bubbles is confusing. Drafts move to the "המלצת הסוכן" panel and
+     * the rest to a compact "מידע מהסוכן" section.
      *
      * @return Collection<int, TicketMessage>
      */
@@ -138,7 +140,7 @@ class ViewTicket extends ViewRecord
         return $this->record->messages()
             ->orderBy('created_at')
             ->get()
-            ->reject(fn (TicketMessage $m): bool => $this->isAiDraft($m))
+            ->reject(fn (TicketMessage $m): bool => $this->isAiInternalNote($m))
             ->values();
     }
 
@@ -158,12 +160,27 @@ class ViewTicket extends ViewRecord
             ->get();
     }
 
-    /** An AI reply draft (a bot recommendation), as opposed to a real message/note. */
-    private function isAiDraft(TicketMessage $message): bool
+    /**
+     * The AI's other internal notes — classification, site findings — shown as
+     * compact context in "מידע מהסוכן", out of the conversation. Newest first.
+     *
+     * @return Collection<int, TicketMessage>
+     */
+    public function getAiNotesProperty(): Collection
+    {
+        return $this->record->messages()
+            ->where('author', MessageAuthor::Ai)
+            ->where('channel', MessageChannel::InternalNote)
+            ->where('body', 'not like', '%טיוטת תשובה%')
+            ->orderByDesc('created_at')
+            ->get();
+    }
+
+    /** Any AI-authored internal note — a bot working note, not a real message. */
+    private function isAiInternalNote(TicketMessage $message): bool
     {
         return $message->author === MessageAuthor::Ai
-            && $message->channel === MessageChannel::InternalNote
-            && Str::contains((string) $message->body, 'טיוטת תשובה');
+            && $message->channel === MessageChannel::InternalNote;
     }
 
     /** Just the proposed reply text of a draft, without the "🤖 טיוטה…" preamble. */
