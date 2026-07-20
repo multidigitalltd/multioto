@@ -7,12 +7,16 @@ use App\Enums\SubscriptionStatus;
 use App\Filament\Resources\SubscriptionResource\Pages;
 use App\Filament\Support\DebtorActions;
 use App\Filament\Support\MoneyField;
+use App\Models\PaymentToken;
+use App\Models\Site;
 use App\Models\Subscription;
+use Closure;
 use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
 
 class SubscriptionResource extends Resource
 {
@@ -42,7 +46,15 @@ class SubscriptionResource extends Resource
                             ->relationship('customer', 'name')
                             ->searchable()
                             ->preload()
-                            ->required(),
+                            ->required()
+                            // Card + site belong to THIS customer only. Changing the
+                            // customer clears both so a card/site from the previous
+                            // customer can never stay attached (and be charged).
+                            ->live()
+                            ->afterStateUpdated(function (Forms\Set $set): void {
+                                $set('token_id', null);
+                                $set('site_id', null);
+                            }),
                         Forms\Components\Select::make('plan_id')
                             ->label('תוכנית קבועה')
                             ->relationship('plan', 'name')
@@ -52,14 +64,38 @@ class SubscriptionResource extends Resource
                             ->helperText('בחרו מוצר קבוע, או השאירו ריק למנוי חופשי בהתאמה אישית.'),
                         Forms\Components\Select::make('site_id')
                             ->label('אתר')
-                            ->relationship('site', 'domain')
+                            // Only the selected customer's sites — never another
+                            // customer's.
+                            ->relationship('site', 'domain', fn (Builder $query, Forms\Get $get): Builder => $query->where('customer_id', $get('customer_id')))
                             ->searchable()
-                            ->preload(),
+                            ->preload()
+                            ->disabled(fn (Forms\Get $get): bool => blank($get('customer_id')))
+                            ->rule(fn (Forms\Get $get): Closure => static function (string $attribute, $value, Closure $fail) use ($get): void {
+                                if (filled($value) && ! Site::whereKey($value)->where('customer_id', $get('customer_id'))->exists()) {
+                                    $fail('האתר שנבחר אינו שייך ללקוח הזה.');
+                                }
+                            }),
                         Forms\Components\Select::make('token_id')
                             ->label('כרטיס אשראי')
-                            ->relationship('token', 'id')
+                            // Only the selected customer's saved cards — you must NOT
+                            // be able to attach (and charge) another customer's card.
+                            ->options(fn (Forms\Get $get): array => PaymentToken::query()
+                                ->where('customer_id', $get('customer_id'))
+                                ->orderByDesc('id')
+                                ->get()
+                                ->mapWithKeys(fn (PaymentToken $t): array => [
+                                    $t->id => trim(($t->card_brand ? $t->card_brand.' ' : '').'•••• '.($t->card_last4 ?: '----')),
+                                ])->all())
                             ->searchable()
-                            ->preload(),
+                            ->native(false)
+                            ->disabled(fn (Forms\Get $get): bool => blank($get('customer_id')))
+                            ->helperText('רק כרטיסים של הלקוח שנבחר.')
+                            // Defense in depth: reject a submitted card that isn't the customer's.
+                            ->rule(fn (Forms\Get $get): Closure => static function (string $attribute, $value, Closure $fail) use ($get): void {
+                                if (filled($value) && ! PaymentToken::whereKey($value)->where('customer_id', $get('customer_id'))->exists()) {
+                                    $fail('הכרטיס שנבחר אינו שייך ללקוח הזה.');
+                                }
+                            }),
                         Forms\Components\Select::make('status')
                             ->label('סטטוס')
                             ->options(SubscriptionStatus::class)
