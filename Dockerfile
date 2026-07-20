@@ -1,10 +1,11 @@
 # Multioto — single image used for the web, queue and scheduler containers.
 FROM php:8.3-cli
 
-# System deps + PHP extensions (PostgreSQL, Redis, zip, gd, intl, bcmath).
+# System deps + PHP extensions (PostgreSQL, Redis, zip, gd, intl, bcmath, gmp).
+# gmp is needed by the Web Push (VAPID) crypto in minishlink/web-push.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        git unzip libpq-dev libzip-dev libpng-dev libicu-dev \
-    && docker-php-ext-install pdo_pgsql zip gd intl bcmath pcntl calendar \
+        git unzip libpq-dev libzip-dev libpng-dev libicu-dev libgmp-dev \
+    && docker-php-ext-install pdo_pgsql zip gd intl bcmath gmp pcntl calendar \
     && pecl install redis && docker-php-ext-enable redis \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 

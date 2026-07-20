@@ -13,6 +13,7 @@ use Filament\Pages;
 use Filament\Panel;
 use Filament\PanelProvider;
 use Filament\Support\Colors\Color;
+use Filament\View\PanelsRenderHook;
 use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
 use Illuminate\Cookie\Middleware\EncryptCookies;
 use Illuminate\Foundation\Http\Middleware\VerifyCsrfToken;
@@ -66,6 +67,10 @@ class AdminPanelProvider extends PanelProvider
             ->when($this->notificationsTableReady(), fn (Panel $panel): Panel => $panel
                 ->databaseNotifications()
                 ->databaseNotificationsPolling('30s'))
+            // Browser (Web Push) notifications — a real desktop "pop" even when
+            // this tab is in the background. The view is a no-op unless VAPID keys
+            // are configured, so an install without keys is unaffected.
+            ->renderHook(PanelsRenderHook::BODY_END, fn (): string => view('webpush.register')->render())
             ->sidebarCollapsibleOnDesktop()
             ->navigationGroups(['תמיכה', 'כספים', 'ניהול'])
             ->discoverResources(in: app_path('Filament/Resources'), for: 'App\\Filament\\Resources')
