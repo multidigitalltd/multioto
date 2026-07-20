@@ -133,7 +133,7 @@ class Multioto_Agent_Mcp_Server
         $read = ['readOnlyHint' => true, 'destructiveHint' => false];
         $change = ['readOnlyHint' => false, 'destructiveHint' => false];
 
-        return [
+        $tools = [
             ['name' => 'wp_health', 'description' => 'סקירת בריאות האתר: גרסאות, SSL, תוספים פעילים.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => (object) []]],
             ['name' => 'wp_plugin_list', 'description' => 'רשימת התוספים המותקנים והאם יש עדכון.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => (object) []]],
             ['name' => 'wp_option_get', 'description' => 'קריאת הגדרה בטוחה מרשימה מוגדרת מראש.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['name' => ['type' => 'string']], 'required' => ['name']]],
@@ -155,6 +155,16 @@ class Multioto_Agent_Mcp_Server
             ['name' => 'wp_file_get', 'description' => 'קריאת תוכן קובץ בתוך wp-content לפי path יחסי (לבדיקת קוד לפני תיקון).', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['path' => ['type' => 'string']], 'required' => ['path']]],
             ['name' => 'wp_file_put', 'description' => 'כתיבת תוכן לקובץ לתיקון קוד. path יחסי בתוך wp-content ומוגבל ל-themes/plugins/mu-plugins. קובצי PHP נבדקים תחבירית לפני שמירה. תמיד קִראו קודם עם wp_file_get ושמרו גיבוי לביטול.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['path' => ['type' => 'string'], 'content' => ['type' => 'string']], 'required' => ['path', 'content']]],
         ];
+
+        // WooCommerce read tools — advertised only on stores, so a brochure site
+        // never lists them. Read-only (they never change the shop), for
+        // diagnosing orders and shipping conditions.
+        if (class_exists('WooCommerce')) {
+            $tools[] = ['name' => 'wc_order_get', 'description' => 'קריאת הזמנת WooCommerce לפי מספר: סטטוס, תאריך, פריטים, כתובות, שיטת המשלוח שנבחרה וסכומיה, קופונים וסכום כולל.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['order_id' => ['type' => 'integer']], 'required' => ['order_id']]];
+            $tools[] = ['name' => 'wc_shipping_zones_list', 'description' => 'רשימת אזורי המשלוח (Shipping Zones) של WooCommerce: לכל אזור — האזורים הגאוגרפיים, ושיטות המשלוח עם התנאים שלהן (עלות, סף למשלוח חינם, דרישות).', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => (object) []]];
+        }
+
+        return $tools;
     }
 
     /** Execute an allow-listed tool. Unknown names are rejected. */
@@ -181,6 +191,8 @@ class Multioto_Agent_Mcp_Server
             'wp_file_list' => $this->fileList($args),
             'wp_file_get' => $this->fileGet($args),
             'wp_file_put' => $this->filePut($args),
+            'wc_order_get' => $this->wcOrderGet($args),
+            'wc_shipping_zones_list' => $this->wcShippingZones(),
             default => throw new Multioto_Agent_Rpc_Error(-32602, "Unknown tool: {$name}"),
         };
 
@@ -817,6 +829,183 @@ class Multioto_Agent_Mcp_Server
         }
 
         throw new Multioto_Agent_Rpc_Error(-32602, "Plugin '{$plugin}' is not installed.");
+    }
+
+    // --- WooCommerce (read-only) --------------------------------------------
+
+    /** Guard: WooCommerce must be installed and active. */
+    private function requireWoo(): void
+    {
+        if (! function_exists('wc_get_order') || ! class_exists('WooCommerce')) {
+            throw new Multioto_Agent_Rpc_Error(-32601, 'WooCommerce אינו מותקן או אינו פעיל באתר זה.');
+        }
+    }
+
+    /**
+     * Map a value the team sees to an internal WooCommerce order ID. Sequential /
+     * custom order-number plugins store the displayed number in order meta, so a
+     * "#171690" shown to staff may differ from the internal id — resolve that
+     * first, and fall back to treating the value as the internal id.
+     */
+    private function resolveOrderId(int $number): int
+    {
+        if (! function_exists('wc_get_orders')) {
+            return $number;
+        }
+
+        foreach (['_order_number', '_order_number_formatted'] as $meta_key) {
+            $found = wc_get_orders([
+                'limit' => 1,
+                'return' => 'ids',
+                'meta_key' => $meta_key,
+                'meta_value' => (string) $number,
+            ]);
+
+            if (! empty($found)) {
+                return (int) $found[0];
+            }
+        }
+
+        return $number;
+    }
+
+    /** Read one WooCommerce order — status, items, addresses, the chosen shipping method and totals. */
+    private function wcOrderGet(array $args): string
+    {
+        $this->requireWoo();
+
+        $id = (int) ($args['order_id'] ?? 0);
+        if ($id <= 0) {
+            throw new Multioto_Agent_Rpc_Error(-32602, 'order_id (מספר ההזמנה) נדרש.');
+        }
+
+        $order = wc_get_order($this->resolveOrderId($id));
+        if (! $order) {
+            throw new Multioto_Agent_Rpc_Error(-32602, "הזמנה {$id} לא נמצאה.");
+        }
+
+        $items = [];
+        foreach ($order->get_items() as $item) {
+            $items[] = [
+                'name' => $item->get_name(),
+                'qty' => $item->get_quantity(),
+                'total' => $order->get_line_total($item, true),
+            ];
+        }
+
+        $shipping = [];
+        foreach ($order->get_shipping_methods() as $method) {
+            $shipping[] = [
+                'method_title' => $method->get_method_title(),
+                'method_id' => $method->get_method_id(),
+                'instance_id' => $method->get_instance_id(),
+                'total' => $method->get_total(),
+            ];
+        }
+
+        $coupons = [];
+        foreach ($order->get_items('coupon') as $coupon) {
+            $coupons[] = $coupon->get_code();
+        }
+
+        $created = $order->get_date_created();
+
+        $data = [
+            'id' => $order->get_id(),
+            'number' => $order->get_order_number(),
+            'status' => $order->get_status(),
+            'date_created' => $created ? $created->date('c') : null,
+            'currency' => $order->get_currency(),
+            'total' => $order->get_total(),
+            'shipping_total' => $order->get_shipping_total(),
+            'discount_total' => $order->get_discount_total(),
+            'payment_method' => $order->get_payment_method_title(),
+            'customer' => trim($order->get_formatted_billing_full_name()),
+            'billing' => [
+                'city' => $order->get_billing_city(),
+                'state' => $order->get_billing_state(),
+                'postcode' => $order->get_billing_postcode(),
+                'country' => $order->get_billing_country(),
+            ],
+            'shipping_address' => [
+                'city' => $order->get_shipping_city(),
+                'state' => $order->get_shipping_state(),
+                'postcode' => $order->get_shipping_postcode(),
+                'country' => $order->get_shipping_country(),
+            ],
+            'items' => $items,
+            'shipping_lines' => $shipping,
+            'coupons' => $coupons,
+        ];
+
+        return wp_json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    }
+
+    /** List the store's shipping zones with their regions, methods and conditions. */
+    private function wcShippingZones(): string
+    {
+        $this->requireWoo();
+
+        if (! class_exists('WC_Shipping_Zones') || ! class_exists('WC_Shipping_Zone')) {
+            throw new Multioto_Agent_Rpc_Error(-32601, 'ניהול אזורי המשלוח אינו זמין בגרסת ה-WooCommerce הזו.');
+        }
+
+        $zones = [];
+        foreach (WC_Shipping_Zones::get_zones() as $zone) {
+            $zones[] = $this->describeShippingZone(new WC_Shipping_Zone((int) $zone['id']));
+        }
+
+        // "Rest of the World" — the fallback zone (id 0), where uncovered
+        // regions fall; often the reason an order gets an unexpected method.
+        $zones[] = $this->describeShippingZone(new WC_Shipping_Zone(0));
+
+        return wp_json_encode(['zones' => $zones], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    }
+
+    /** @return array<string, mixed> */
+    private function describeShippingZone(WC_Shipping_Zone $zone): array
+    {
+        $regions = [];
+        foreach ($zone->get_zone_locations() as $location) {
+            $regions[] = ['type' => $location->type ?? '', 'code' => $location->code ?? ''];
+        }
+
+        $methods = [];
+        foreach ($zone->get_shipping_methods(false) as $method) {
+            $entry = [
+                'instance_id' => $method->get_instance_id(),
+                'method_id' => $method->id,
+                'title' => $method->get_title(),
+                'enabled' => $method->is_enabled(),
+            ];
+
+            // Report ALL of the instance's settings, not a fixed subset — a
+            // method's price/availability can hinge on per-class costs
+            // (class_cost_*, no_class_cost), free-shipping thresholds, or a
+            // third-party method's own keys. Enumerate whatever it exposes.
+            if (method_exists($method, 'init_instance_settings')) {
+                $method->init_instance_settings();
+            }
+
+            $settings = [];
+            foreach ((array) $method->instance_settings as $key => $value) {
+                if ($value !== '' && $value !== null && $value !== false && $value !== []) {
+                    $settings[$key] = $value;
+                }
+            }
+            if ($settings !== []) {
+                $entry['settings'] = $settings;
+            }
+
+            $methods[] = $entry;
+        }
+
+        return [
+            'id' => $zone->get_id(),
+            'name' => $zone->get_zone_name(),
+            'regions' => $regions,
+            'methods' => $methods,
+        ];
     }
 
     // --- JSON-RPC framing ----------------------------------------------------
