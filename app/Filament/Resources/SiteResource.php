@@ -3,6 +3,7 @@
 namespace App\Filament\Resources;
 
 use App\Enums\SiteStatus;
+use App\Enums\SiteType;
 use App\Filament\Resources\SiteResource\Pages;
 use App\Filament\Support\SiteActions;
 use App\Jobs\RestoreSiteJob;
@@ -82,6 +83,13 @@ class SiteResource extends Resource
                             ->label('סטטוס')
                             ->options(SiteStatus::class)
                             ->required(),
+                        Forms\Components\Select::make('site_type')
+                            ->label('סוג אתר')
+                            ->options(SiteType::class)
+                            ->native(false)
+                            ->placeholder('לא סווג — הסוכן יזהה לפי WooCommerce')
+                            ->helperText('חנות (WooCommerce) או אתר תדמית. אפשר להשאיר ריק לזיהוי אוטומטי, או לקבוע ידנית.')
+                            ->columnSpanFull(),
                     ])->columns(2),
 
                 // Connection to the AI site agent (MCP). Admin-only: it holds the
@@ -196,6 +204,16 @@ class SiteResource extends Resource
                             ->formatStateUsing(fn ($state): string => $state ? 'ניטור פעיל' : 'ללא ניטור')
                             ->icon(fn ($state): string => $state ? 'heroicon-m-signal' : 'heroicon-m-signal-slash')
                             ->color(fn ($state): string => $state ? 'success' : 'gray')
+                            ->grow(false),
+                        Tables\Columns\TextColumn::make('site_type')
+                            ->badge()
+                            ->formatStateUsing(fn (?SiteType $state): string => $state?->getLabel() ?? 'לא סווג')
+                            ->color(fn (?SiteType $state): string => $state?->getColor() ?? 'gray')
+                            ->icon(fn (?SiteType $state): string => match ($state) {
+                                SiteType::Store => 'heroicon-m-shopping-cart',
+                                SiteType::Brochure => 'heroicon-m-identification',
+                                default => 'heroicon-m-question-mark-circle',
+                            })
                             ->grow(false),
                     ]),
                 ])->space(3),
