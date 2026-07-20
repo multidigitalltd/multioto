@@ -5,6 +5,7 @@ namespace App\Services\Agent;
 use App\Models\Site;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 /**
@@ -111,12 +112,26 @@ class McpClient
         $payload = $this->decode($response);
 
         if (isset($payload['error'])) {
-            $code = is_numeric($payload['error']['code'] ?? null) ? (int) $payload['error']['code'] : null;
+            $error = (array) $payload['error'];
+            $code = is_numeric($error['code'] ?? null) ? (int) $error['code'] : null;
+            $message = (string) ($error['message'] ?? 'unknown');
+            $detail = $this->errorDetail($error['data'] ?? null);
+            // The tool name lives in the params of a tools/call, not in $method.
+            $tool = $method === 'tools/call' && is_array($params) ? (string) ($params['name'] ?? '') : null;
 
-            throw new McpError(
-                'שגיאת MCP מהאתר: '.Str::limit((string) ($payload['error']['message'] ?? 'unknown'), 300),
-                $code,
-            );
+            // The panel message is short; the developer/operator needs the full
+            // context (method, tool, code, any data) to diagnose a site-side
+            // failure — a read-only call leaves no SiteChange journal entry.
+            Log::warning('MCP error from site', [
+                'site' => $site->domain,
+                'method' => $method,
+                'tool' => $tool,
+                'code' => $code,
+                'message' => $message,
+                'data' => $error['data'] ?? null,
+            ]);
+
+            throw new McpError($this->describeRpcError($method, $code, $message, $detail), $code);
         }
 
         $result = $payload['result'] ?? null;
@@ -126,6 +141,66 @@ class McpClient
         }
 
         return $result;
+    }
+
+    /**
+     * A short human string from a JSON-RPC error `data` field, if the site put
+     * any detail there (many "Internal error" replies carry the real cause here).
+     */
+    protected function errorDetail(mixed $data): ?string
+    {
+        if (is_string($data)) {
+            return trim($data) !== '' ? trim($data) : null;
+        }
+
+        if (is_array($data)) {
+            foreach (['message', 'details', 'error', 'reason'] as $key) {
+                if (is_string($data[$key] ?? null) && trim($data[$key]) !== '') {
+                    return trim($data[$key]);
+                }
+            }
+
+            $json = json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+            return $json !== false ? Str::limit($json, 200) : null;
+        }
+
+        return null;
+    }
+
+    /**
+     * Build an actionable Hebrew message for a JSON-RPC error, including any
+     * detail the site supplied and — for a generic internal error — a pointer to
+     * where the real problem is, so the operator doesn't chase the connection.
+     * The tool-specific wording is emitted only for a tools/call failure; the
+     * plugin can also return -32603 from initialize/tools/list, where "the tool
+     * failed / the tool may be unsupported" would be wrong.
+     */
+    protected function describeRpcError(string $method, ?int $code, string $message, ?string $detail): string
+    {
+        $text = 'שגיאת MCP מהאתר: '.Str::limit($message, 300);
+
+        if ($detail !== null) {
+            $text .= ' — '.Str::limit($detail, 300);
+        }
+
+        // -32603 (Internal error): the request reached the plugin, but something
+        // crashed inside WordPress. Nothing on our side to change — point the
+        // operator at the site's error log instead of the connection/secret.
+        if ($code === -32603) {
+            $text .= $method === 'tools/call'
+                ? '. זו תקלה פנימית בצד האתר — התוסף קיבל את הבקשה אך נכשל בביצוע הכלי.'
+                    .' החיבור עצמו תקין; בדקו את יומן השגיאות של WordPress (debug.log) באתר,'
+                    .' וודאו שגרסת התוסף מעודכנת ושהכלי נתמך בהתקנה הזו.'
+                : '. שגיאה פנימית בצד האתר — בדקו את יומן השגיאות של WordPress (debug.log)'
+                    .' באתר וודאו שגרסת התוסף מעודכנת.';
+        }
+
+        if ($code !== null) {
+            $text .= " (קוד {$code})";
+        }
+
+        return $text;
     }
 
     /** Fire-and-forget JSON-RPC notification (no id, no response expected). */

@@ -90,7 +90,24 @@ class Multioto_Agent_Mcp_Server
         } catch (Multioto_Agent_Rpc_Error $e) {
             return $this->rpc($id, null, ['code' => $e->getCode(), 'message' => $e->getMessage()]);
         } catch (\Throwable $e) {
-            return $this->rpc($id, null, ['code' => -32603, 'message' => 'Internal error']);
+            // Log the real cause to the site's error log (recoverable from
+            // debug.log), and hand the panel a safe detail in `data` instead of a
+            // bare "Internal error" — the endpoint is authenticated, so the class
+            // + message only reach our own panel, never the public.
+            error_log(sprintf(
+                '[multioto-agent] %s during %s: %s in %s:%d',
+                get_class($e),
+                $method,
+                $e->getMessage(),
+                $e->getFile(),
+                $e->getLine(),
+            ));
+
+            return $this->rpc($id, null, [
+                'code' => -32603,
+                'message' => 'Internal error',
+                'data' => sprintf('%s: %s', get_class($e), $e->getMessage()),
+            ]);
         }
 
         return $this->rpc($id, $result);
