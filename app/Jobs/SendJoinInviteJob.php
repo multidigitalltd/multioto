@@ -37,20 +37,37 @@ class SendJoinInviteJob implements ShouldQueue
         $greeting = $this->name !== '' ? "שלום {$this->name}," : 'שלום,';
         $body = "{$greeting}\n\nלפתיחת כרטיס לקוח ב־{$business} — מלאו את הפרטים בקישור הבא:\n{$url}\n\nתודה!";
 
+        // Attempt every configured channel independently, but if ALL of them fail
+        // the invite was lost — throw so the queue retries ($tries/$backoff)
+        // instead of marking a silently-undelivered job as complete.
+        $attempted = 0;
+        $delivered = 0;
+        $lastError = null;
+
         if (filled($this->email) && EmailList::parse($this->email) !== []) {
+            $attempted++;
             try {
                 Mail::to(trim((string) $this->email))->send(new NotificationMail('הזמנה להצטרפות — '.$business, $body));
+                $delivered++;
             } catch (\Throwable $e) {
+                $lastError = $e;
                 Log::warning('SendJoinInviteJob: email failed', ['error' => $e->getMessage()]);
             }
         }
 
         if (filled($this->phone)) {
+            $attempted++;
             try {
                 $waha->sendMessage($waha->normalizeChatId((string) $this->phone), $body);
+                $delivered++;
             } catch (\Throwable $e) {
+                $lastError = $e;
                 Log::warning('SendJoinInviteJob: WhatsApp failed', ['error' => $e->getMessage()]);
             }
+        }
+
+        if ($attempted > 0 && $delivered === 0) {
+            throw new \RuntimeException('SendJoinInviteJob: all delivery channels failed', 0, $lastError);
         }
     }
 

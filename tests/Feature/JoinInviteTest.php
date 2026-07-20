@@ -72,4 +72,21 @@ class JoinInviteTest extends TestCase
             ->assertSee('pre@example.co.il')
             ->assertSee('0509998888');
     }
+
+    public function test_the_signup_form_ignores_array_prefill_params_without_erroring(): void
+    {
+        // A crafted public request (?name[]=x) must not 500 the escaping.
+        $this->get('/join?name[]=x&email[]=y&phone[]=z')->assertOk();
+    }
+
+    public function test_the_invite_job_fails_when_every_channel_fails(): void
+    {
+        // A mail transport failure with no WhatsApp channel → nothing delivered,
+        // so the job must throw (queue retries) rather than silently succeed.
+        Mail::shouldReceive('to')->andThrow(new \RuntimeException('smtp down'));
+
+        $this->expectException(\RuntimeException::class);
+
+        (new SendJoinInviteJob('דנה', 'dana@example.co.il', null))->handle(app(WahaClient::class));
+    }
 }
