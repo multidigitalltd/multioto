@@ -176,6 +176,43 @@
         </style>
     @endif
 
+    {{-- The AI's other working notes (classification, site findings) — kept out
+         of the conversation as compact context, not as chat bubbles. --}}
+    @if ($this->aiNotes->isNotEmpty())
+        <details class="ai-note" dir="rtl">
+            <summary class="ai-note-head">
+                <span aria-hidden="true">🤖</span>
+                <span class="ai-note-title">מידע מהסוכן</span>
+                <span class="ai-note-count">{{ $this->aiNotes->count() }}</span>
+                <span class="ai-note-tag">פנימי — לא נשלח ללקוח</span>
+            </summary>
+            @foreach ($this->aiNotes as $note)
+                <div class="ai-note-card">
+                    <div class="ai-note-text">{{ $note->body }}</div>
+                    <time class="ai-note-time" datetime="{{ $note->created_at->toIso8601String() }}">{{ $note->created_at->format('d/m/Y H:i') }}</time>
+                </div>
+            @endforeach
+        </details>
+
+        <style>
+            .ai-note { border: 1px solid #e5e7eb; background: #f9fafb; border-radius: .75rem; padding: .35rem .9rem; }
+            .ai-note-head { display: flex; align-items: center; gap: .5rem; cursor: pointer; padding: .35rem 0; font-size: .85rem; color: #4b5563; list-style: none; }
+            .ai-note-head::-webkit-details-marker { display: none; }
+            .ai-note-title { font-weight: 600; color: #374151; }
+            .ai-note-count { font-size: .72rem; background: #e5e7eb; color: #374151; border-radius: 9999px; padding: .02rem .45rem; }
+            .ai-note-tag { margin-inline-start: auto; font-size: .72rem; color: #9ca3af; }
+            .ai-note-card { border-top: 1px solid #eceef1; padding: .6rem 0; }
+            .ai-note-text { white-space: pre-line; word-break: break-word; color: #374151; font-size: .88rem; line-height: 1.55; }
+            .ai-note-time { display: block; margin-top: .3rem; font-size: .7rem; color: #9ca3af; }
+            .dark .ai-note { border-color: #374151; background: rgba(31,41,55,.5); }
+            .dark .ai-note-head { color: #9ca3af; }
+            .dark .ai-note-title { color: #d1d5db; }
+            .dark .ai-note-count { background: #374151; color: #d1d5db; }
+            .dark .ai-note-card { border-top-color: #374151; }
+            .dark .ai-note-text { color: #d1d5db; }
+        </style>
+    @endif
+
     {{-- Reply box: channel + text + send. --}}
     <form wire:submit.prevent="sendReply" class="flex flex-col gap-3 rounded-xl bg-white p-4 shadow-sm dark:bg-gray-800">
         <div class="flex flex-wrap items-center gap-4">
