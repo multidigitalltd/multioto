@@ -69,16 +69,6 @@
                         <div class="whitespace-pre-line break-words">{{ $message->body }}</div>
                     @endif
 
-                    @if ($note && $message->author === \App\Enums\MessageAuthor::Ai && str_contains($message->body, 'טיוטת תשובה'))
-                        {{-- Edit the AI draft and send it straight from here — no detour to approvals. --}}
-                        <div class="mt-2">
-                            <button type="button" wire:click="useDraft({{ $message->id }})"
-                                    class="inline-flex items-center gap-1 rounded-lg border border-amber-400 px-2.5 py-1 text-xs font-semibold text-amber-700 hover:bg-amber-100 dark:text-amber-300 dark:hover:bg-amber-900/40">
-                                ✏️ ערוך ושלח
-                            </button>
-                        </div>
-                    @endif
-
                     @if (filled($message->attachments))
                         <div class="mt-2 flex flex-col gap-2">
                             @foreach ($message->attachments as $i => $attachment)
@@ -133,6 +123,58 @@
             <p class="text-center text-sm text-gray-500">אין הודעות עדיין.</p>
         @endforelse
     </div>
+
+    {{-- The bot's recommendations, pulled OUT of the conversation so they read as
+         suggestions to the team, not as part of the customer exchange. --}}
+    @if ($this->aiDrafts->isNotEmpty())
+        <div class="ai-suggest" dir="rtl">
+            <div class="ai-suggest-head">
+                <span class="ai-suggest-icon" aria-hidden="true">🤖</span>
+                <span class="ai-suggest-title">המלצת הסוכן</span>
+                <span class="ai-suggest-tag">טיוטה — לא נשלחה ללקוח</span>
+            </div>
+
+            @foreach ($this->aiDrafts as $draft)
+                <div class="ai-suggest-card">
+                    <div class="ai-suggest-text">{{ $this->draftText($draft) }}</div>
+                    <div class="ai-suggest-actions">
+                        <button type="button" wire:click="useDraft({{ $draft->id }})" class="ai-suggest-btn ai-suggest-btn-primary">
+                            ✏️ ערוך ושלח
+                        </button>
+                        <button type="button" wire:click="dismissDraft({{ $draft->id }})" class="ai-suggest-btn ai-suggest-btn-ghost">
+                            דחה
+                        </button>
+                    </div>
+                </div>
+            @endforeach
+        </div>
+
+        {{-- Scoped, purge-proof styles (the panel loads only Filament's compiled
+             CSS, so app utilities won't render). Indigo accent + dark mode. --}}
+        <style>
+            .ai-suggest { border: 1px solid #c7d2fe; background: #eef2ff; border-radius: .85rem; padding: .9rem 1rem; }
+            .ai-suggest-head { display: flex; align-items: center; gap: .5rem; margin-bottom: .6rem; }
+            .ai-suggest-icon { font-size: 1.1rem; }
+            .ai-suggest-title { font-weight: 700; color: #3730a3; }
+            .ai-suggest-tag { font-size: .72rem; color: #6366f1; border: 1px solid #c7d2fe; border-radius: 9999px; padding: .05rem .5rem; }
+            .ai-suggest-card { background: #fff; border: 1px solid #e0e7ff; border-radius: .6rem; padding: .7rem .8rem; }
+            .ai-suggest-card + .ai-suggest-card { margin-top: .6rem; }
+            .ai-suggest-text { white-space: pre-line; word-break: break-word; color: #1f2937; line-height: 1.55; }
+            .ai-suggest-actions { display: flex; gap: .5rem; margin-top: .7rem; }
+            .ai-suggest-btn { font-size: .8rem; font-weight: 600; border-radius: .5rem; padding: .3rem .75rem; cursor: pointer; }
+            .ai-suggest-btn-primary { background: #4f46e5; color: #fff; border: 1px solid #4f46e5; }
+            .ai-suggest-btn-primary:hover { background: #4338ca; }
+            .ai-suggest-btn-ghost { background: transparent; color: #4f46e5; border: 1px solid #c7d2fe; }
+            .ai-suggest-btn-ghost:hover { background: #e0e7ff; }
+            .dark .ai-suggest { border-color: #3730a3; background: rgba(49,46,129,.35); }
+            .dark .ai-suggest-title { color: #c7d2fe; }
+            .dark .ai-suggest-tag { color: #a5b4fc; border-color: #4338ca; }
+            .dark .ai-suggest-card { background: #1f2937; border-color: #3730a3; }
+            .dark .ai-suggest-text { color: #e5e7eb; }
+            .dark .ai-suggest-btn-ghost { color: #a5b4fc; border-color: #4338ca; }
+            .dark .ai-suggest-btn-ghost:hover { background: rgba(67,56,202,.35); }
+        </style>
+    @endif
 
     {{-- Reply box: channel + text + send. --}}
     <form wire:submit.prevent="sendReply" class="flex flex-col gap-3 rounded-xl bg-white p-4 shadow-sm dark:bg-gray-800">

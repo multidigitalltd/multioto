@@ -61,6 +61,43 @@ class TicketChatTest extends TestCase
             ->assertSee('האתר שלי לא נטען כבר שעה');
     }
 
+    public function test_ai_drafts_show_in_the_recommendation_panel_not_the_timeline(): void
+    {
+        $this->actingAs(User::factory()->create());
+        $ticket = $this->ticket();
+        $draft = $ticket->messages()->create([
+            'direction' => MessageDirection::Outbound,
+            'channel' => MessageChannel::InternalNote,
+            'body' => "🤖 טיוטת תשובה — בדקו לפני שליחה:\n\nשלום דנה, האתר עלה מחדש ותקין.",
+            'author' => MessageAuthor::Ai,
+        ]);
+
+        $component = Livewire::test(ViewTicket::class, ['record' => $ticket->id])
+            ->assertSee('המלצת הסוכן')
+            ->assertSee('האתר עלה מחדש ותקין');
+
+        // The draft is out of the conversation timeline, in its own panel.
+        $this->assertTrue($component->instance()->messages->doesntContain(fn ($m): bool => $m->id === $draft->id));
+        $this->assertTrue($component->instance()->aiDrafts->contains(fn ($m): bool => $m->id === $draft->id));
+    }
+
+    public function test_dismissing_an_ai_draft_removes_it(): void
+    {
+        $this->actingAs(User::factory()->create());
+        $ticket = $this->ticket();
+        $draft = $ticket->messages()->create([
+            'direction' => MessageDirection::Outbound,
+            'channel' => MessageChannel::InternalNote,
+            'body' => "🤖 טיוטת תשובה:\n\nטקסט כלשהו",
+            'author' => MessageAuthor::Ai,
+        ]);
+
+        Livewire::test(ViewTicket::class, ['record' => $ticket->id])
+            ->call('dismissDraft', $draft->id);
+
+        $this->assertDatabaseMissing('ticket_messages', ['id' => $draft->id]);
+    }
+
     public function test_the_chat_renders_the_sanitized_rich_html_of_an_email(): void
     {
         $this->actingAs(User::factory()->create());
