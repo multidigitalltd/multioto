@@ -45,6 +45,13 @@ class IngestWhatsappMessageJob implements ShouldQueue
         $body = trim((string) ($payload['body'] ?? ''));
         $messageId = $payload['id'] ?? null;
 
+        // A shared contact card (vCard) carries no text body and no media, so it
+        // would otherwise be dropped below. Render it as readable text (name +
+        // phone) so a contact the customer sends actually lands in the thread.
+        if ($body === '' || Str::contains($body, 'BEGIN:VCARD')) {
+            $body = $this->contactSummary($payload) ?? $body;
+        }
+
         if ($chatId === '' || ($body === '' && empty($payload['hasMedia']))) {
             $event->markProcessed();
 
@@ -145,6 +152,109 @@ class IngestWhatsappMessageJob implements ShouldQueue
         $mime = (string) ($media['mimetype'] ?? $payload['mimetype'] ?? '') ?: null;
 
         return $store->store($ticketId, $filename, $contents, $mime);
+    }
+
+    /**
+     * Turn a WhatsApp contact-card (vCard) message into a readable line per
+     * contact — "📇 איש קשר שהתקבל:\n<name> — <phone>" — or null when the payload
+     * holds no vCard. WAHA exposes the card differently across engines, so we
+     * read defensively and never throw.
+     *
+     * @param  array<string, mixed>  $payload
+     */
+    protected function contactSummary(array $payload): ?string
+    {
+        $lines = [];
+
+        foreach ($this->collectVcards($payload) as $card) {
+            $name = $this->vcardValue($card, 'FN') ?? $this->vcardValue($card, 'N');
+            $phone = $this->vcardPhone($card);
+            $label = trim(($name ?? 'איש קשר').($phone !== null ? ' — '.$phone : ''));
+
+            if ($label !== '') {
+                $lines[] = $label;
+            }
+        }
+
+        if ($lines === []) {
+            return null;
+        }
+
+        $heading = count($lines) > 1 ? '📇 אנשי קשר שהתקבלו:' : '📇 איש קשר שהתקבל:';
+
+        return $heading."\n".implode("\n", $lines);
+    }
+
+    /**
+     * Gather raw vCard strings from the shapes WAHA uses (top-level `vcard`, a
+     * `vCards` list, the same under `_data`, or a raw card inlined in the body).
+     *
+     * @param  array<string, mixed>  $payload
+     * @return list<string>
+     */
+    protected function collectVcards(array $payload): array
+    {
+        $candidates = [];
+
+        foreach ([$payload, is_array($payload['_data'] ?? null) ? $payload['_data'] : []] as $source) {
+            if (is_string($source['vcard'] ?? null)) {
+                $candidates[] = $source['vcard'];
+            }
+
+            foreach ((array) ($source['vCards'] ?? []) as $vcard) {
+                if (is_string($vcard)) {
+                    $candidates[] = $vcard;
+                }
+            }
+        }
+
+        if (is_string($payload['body'] ?? null)) {
+            $candidates[] = $payload['body'];
+        }
+
+        $cards = array_filter(
+            $candidates,
+            fn (string $card): bool => Str::contains($card, 'BEGIN:VCARD'),
+        );
+
+        // The same card often arrives in more than one field (e.g. both `vcard`
+        // and the `body`, or payload and `_data`). Deduplicate on a whitespace-
+        // insensitive key so one shared contact is summarised once, not twice.
+        $unique = [];
+        foreach ($cards as $card) {
+            $unique[preg_replace('/\s+/', '', $card)] = $card;
+        }
+
+        return array_values($unique);
+    }
+
+    /** Read a single vCard property value (e.g. FN), tolerating property params. */
+    protected function vcardValue(string $card, string $field): ?string
+    {
+        if (preg_match('/^'.preg_quote($field, '/').'[^:\r\n]*:(.+)$/mi', $card, $m) !== 1) {
+            return null;
+        }
+
+        // The structured N field is ";"-separated (Last;First;…) — flatten it.
+        $value = trim(str_replace(';', ' ', trim($m[1])));
+
+        return $value !== '' ? $value : null;
+    }
+
+    /** The contact's phone — prefer the clean WhatsApp id (waid=…) over the raw TEL. */
+    protected function vcardPhone(string $card): ?string
+    {
+        if (preg_match('/waid=(\d+)/i', $card, $m) === 1) {
+            return '+'.$m[1];
+        }
+
+        if (preg_match('/^TEL[^:\r\n]*:(.+)$/mi', $card, $m) === 1) {
+            $phone = trim($m[1]);
+
+            return $phone !== '' ? $phone : null;
+        }
+
+        return null;
     }
 
     /**

@@ -32,8 +32,9 @@
         @endif
     </div>
 
-    {{-- The conversation. Polls so live WhatsApp exchanges appear like a chat. --}}
-    <div wire:poll.15s role="log" aria-label="שיחה" aria-live="polite"
+    {{-- The conversation. Polls so live WhatsApp exchanges appear like a chat
+         (browsers pause polling in a background tab; it resumes on focus). --}}
+    <div wire:poll.10s role="log" aria-label="שיחה" aria-live="polite"
          class="flex flex-col gap-3 rounded-xl bg-gray-50 p-4 dark:bg-gray-900" style="min-height: 20rem; max-height: 55vh; overflow-y: auto;">
         @forelse ($this->messages as $message)
             @php
