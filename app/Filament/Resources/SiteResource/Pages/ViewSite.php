@@ -34,6 +34,14 @@ class ViewSite extends ViewRecord
     protected static string $view = 'filament.sites.monitor';
 
     /**
+     * The Cloudflare IP-rules result, fetched once when that modal is opened and
+     * held here so the page's 30s wire:poll re-renders don't re-hit the API.
+     *
+     * @var array{ok: bool, message: string, rules: array<int, array<string, string>>}|null
+     */
+    public ?array $cloudflareRulesResult = null;
+
+    /**
      * The site page is the single action hub: clicking a card lands here with
      * ALL the tools in the header — connection on/off, diagnostics, live test,
      * Cloudflare and plugin codes — while the edit form holds only settings.
@@ -271,18 +279,24 @@ class ViewSite extends ViewRecord
             ->modalHeading(fn (): string => 'כללי IP ב-Cloudflare — '.$this->record->domain)
             ->modalSubmitAction(false)
             ->modalCancelActionLabel('סגור')
-            ->modalContent(function () {
+            // Fetch once when the modal opens; the page's 30s wire:poll must not
+            // re-hit the Cloudflare API on every re-render, so the result is held
+            // in component state and modalContent just reads it.
+            ->mountUsing(function (): void {
                 $token = trim((string) config('billing.cloudflare.api_token'));
 
-                if ($token === '') {
+                $this->cloudflareRulesResult = $token === ''
+                    ? null
+                    : app(CloudflareClient::class)->listAccessRules($token, $this->record->domain);
+            })
+            ->modalContent(function () {
+                if ($this->cloudflareRulesResult === null) {
                     return new HtmlString(
                         '<div dir="rtl" class="text-sm">לא הוגדר טוקן Cloudflare. הגדירו אותו בהגדרות ← אינטגרציות כדי להציג את הכללים.</div>'
                     );
                 }
 
-                return view('filament.cloudflare-rules', [
-                    'result' => app(CloudflareClient::class)->listAccessRules($token, $this->record->domain),
-                ]);
+                return view('filament.cloudflare-rules', ['result' => $this->cloudflareRulesResult]);
             });
     }
 

@@ -76,6 +76,12 @@ class SitesCardGridTest extends TestCase
 
         Livewire::test(ViewSite::class, ['record' => $site->getKey()])
             ->mountAction('cloudflareRules')
+            ->assertSee('203.0.113.7')
+            // A subsequent re-render (the page polls every 30s) must NOT re-hit
+            // Cloudflare — the rules are cached in component state on mount.
+            ->call('$refresh')
             ->assertSee('203.0.113.7');
+
+        Http::assertSentCount(2); // one zone lookup + one rules page, not repeated
     }
 }
