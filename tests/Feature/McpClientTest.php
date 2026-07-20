@@ -120,6 +120,30 @@ class McpClientTest extends TestCase
         }
     }
 
+    public function test_an_internal_error_is_explained_as_a_site_side_fault(): void
+    {
+        $site = $this->connectedSite();
+        $this->fakeRpc([
+            'tools/call' => fn (): array => ['error' => [
+                'code' => -32603,
+                'message' => 'Internal error',
+                'data' => 'Call to undefined function wp_foo()',
+            ]],
+        ]);
+
+        try {
+            app(McpClient::class)->callTool($site, 'wp_cache_flush');
+            $this->fail('expected McpError');
+        } catch (McpError $e) {
+            $this->assertSame(-32603, $e->rpcCode);
+            // The detail the site supplied is surfaced…
+            $this->assertStringContainsString('wp_foo', $e->getMessage());
+            // …and the operator is pointed at the site, not the connection.
+            $this->assertStringContainsString('תקלה פנימית בצד האתר', $e->getMessage());
+            $this->assertStringContainsString('debug.log', $e->getMessage());
+        }
+    }
+
     public function test_an_sse_response_body_is_decoded(): void
     {
         $site = $this->connectedSite();

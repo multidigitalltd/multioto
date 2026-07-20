@@ -5,6 +5,7 @@ namespace App\Services\Agent;
 use App\Models\Site;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 /**
@@ -111,12 +112,22 @@ class McpClient
         $payload = $this->decode($response);
 
         if (isset($payload['error'])) {
-            $code = is_numeric($payload['error']['code'] ?? null) ? (int) $payload['error']['code'] : null;
+            $error = (array) $payload['error'];
+            $code = is_numeric($error['code'] ?? null) ? (int) $error['code'] : null;
+            $message = (string) ($error['message'] ?? 'unknown');
+            $detail = $this->errorDetail($error['data'] ?? null);
 
-            throw new McpError(
-                'שגיאת MCP מהאתר: '.Str::limit((string) ($payload['error']['message'] ?? 'unknown'), 300),
-                $code,
-            );
+            // The panel message is short; the developer/operator needs the full
+            // context (method, code, any data) to diagnose a site-side failure.
+            Log::warning('MCP error from site', [
+                'site' => $site->domain,
+                'method' => $method,
+                'code' => $code,
+                'message' => $message,
+                'data' => $error['data'] ?? null,
+            ]);
+
+            throw new McpError($this->describeRpcError($code, $message, $detail), $code);
         }
 
         $result = $payload['result'] ?? null;
@@ -126,6 +137,61 @@ class McpClient
         }
 
         return $result;
+    }
+
+    /**
+     * A short human string from a JSON-RPC error `data` field, if the site put
+     * any detail there (many "Internal error" replies carry the real cause here).
+     */
+    protected function errorDetail(mixed $data): ?string
+    {
+        if (is_string($data)) {
+            return trim($data) !== '' ? trim($data) : null;
+        }
+
+        if (is_array($data)) {
+            foreach (['message', 'details', 'error', 'reason'] as $key) {
+                if (is_string($data[$key] ?? null) && trim($data[$key]) !== '') {
+                    return trim($data[$key]);
+                }
+            }
+
+            $json = json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+            return $json !== false ? Str::limit($json, 200) : null;
+        }
+
+        return null;
+    }
+
+    /**
+     * Build an actionable Hebrew message for a JSON-RPC error, including any
+     * detail the site supplied and — for a generic internal error — a pointer to
+     * where the real problem is, so the operator doesn't chase the connection.
+     */
+    protected function describeRpcError(?int $code, string $message, ?string $detail): string
+    {
+        $text = 'שגיאת MCP מהאתר: '.Str::limit($message, 300);
+
+        if ($detail !== null) {
+            $text .= ' — '.Str::limit($detail, 300);
+        }
+
+        // -32603 (Internal error): the request reached the plugin, but its tool
+        // handler crashed inside WordPress. Nothing on our side to change — the
+        // connection and credentials are fine (list/handshake work), so send the
+        // operator to the site instead of the panel.
+        if ($code === -32603) {
+            $text .= '. זו תקלה פנימית בצד האתר — התוסף קיבל את הבקשה אך נכשל בביצוע הכלי.'
+                .' החיבור עצמו תקין; בדקו את יומן השגיאות של WordPress (debug.log) באתר,'
+                .' וודאו שגרסת התוסף מעודכנת ושהכלי נתמך בהתקנה הזו.';
+        }
+
+        if ($code !== null) {
+            $text .= " (קוד {$code})";
+        }
+
+        return $text;
     }
 
     /** Fire-and-forget JSON-RPC notification (no id, no response expected). */
