@@ -179,7 +179,10 @@
     {{-- The AI's other working notes (classification, site findings) — kept out
          of the conversation as compact context, not as chat bubbles. --}}
     @if ($this->aiNotes->isNotEmpty())
-        <details class="ai-note" dir="rtl">
+        {{-- Alpine keeps the open state across the conversation's 15s wire:poll:
+             morphing drops the rendered `open` attribute, but x-bind re-applies it
+             from Alpine state (which survives the morph), so it won't re-collapse. --}}
+        <details class="ai-note" dir="rtl" x-data="{ open: false }" x-bind:open="open" x-on:toggle="open = $event.target.open">
             <summary class="ai-note-head">
                 <span aria-hidden="true">🤖</span>
                 <span class="ai-note-title">מידע מהסוכן</span>
