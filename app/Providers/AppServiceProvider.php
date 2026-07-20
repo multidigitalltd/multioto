@@ -9,6 +9,8 @@ use App\Observers\TicketObserver;
 use App\Services\Hosting\FlyWpHostingClient;
 use App\Services\Hosting\HostingClient;
 use App\Services\Hosting\LogHostingClient;
+use Filament\Forms\Components\DatePicker;
+use Filament\Forms\Components\DateTimePicker;
 use Illuminate\Auth\Events\Login;
 use Illuminate\Auth\Events\Logout;
 use Illuminate\Support\Facades\Event;
@@ -43,6 +45,13 @@ class AppServiceProvider extends ServiceProvider
         if (str_starts_with((string) config('app.url'), 'https://')) {
             URL::forceScheme('https');
         }
+
+        // Every date/time picker in the panel opens on a Sunday-first calendar
+        // with Hebrew day/month names — the Israeli work week, not the Filament
+        // default (Monday, English). DatePicker extends DateTimePicker but their
+        // configureUsing hooks are per-class, so configure both.
+        DateTimePicker::configureUsing(fn (DateTimePicker $picker) => $picker->weekStartsOnSunday()->locale('he'));
+        DatePicker::configureUsing(fn (DatePicker $picker) => $picker->weekStartsOnSunday()->locale('he'));
 
         // Lifecycle notifications (e.g. "your ticket was resolved").
         Ticket::observe(TicketObserver::class);
