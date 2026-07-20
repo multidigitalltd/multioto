@@ -8,10 +8,12 @@ use App\Enums\CustomerStatus;
 use App\Enums\SiteStatus;
 use App\Enums\SubscriptionStatus;
 use App\Jobs\SendCardCaptureLinkJob;
+use App\Jobs\SendJoinInviteJob;
 use App\Models\Customer;
 use App\Models\Plan;
 use App\Models\Site;
 use App\Models\Subscription;
+use Filament\Actions\Action;
 use Filament\Forms\Components\DatePicker;
 use Filament\Forms\Components\Placeholder;
 use Filament\Forms\Components\Select;
@@ -65,6 +67,46 @@ class OnboardCustomer extends Page implements HasForms
             'send_card_link' => true,
             'first_charge_at' => now()->format('Y-m-d'),
         ]);
+    }
+
+    /**
+     * A lighter alternative to filling the whole wizard: send the prospect the
+     * public /join link (prefilled) so they complete their own details and sign.
+     * No record is created here — the customer creates it by submitting /join.
+     */
+    protected function getHeaderActions(): array
+    {
+        return [
+            Action::make('sendJoinInvite')
+                ->label('שלח ללקוח קישור למילוי עצמי')
+                ->icon('heroicon-o-paper-airplane')
+                ->color('gray')
+                ->modalHeading('שליחת קישור הצטרפות ללקוח')
+                ->modalDescription('הלקוח יקבל קישור לטופס ההצטרפות (עם הפרטים ממולאים מראש) וישלים בעצמו את השאר והחתימה. לא נוצר כרטיס לקוח עד שהוא ממלא.')
+                ->modalSubmitActionLabel('שלח קישור')
+                ->form([
+                    TextInput::make('name')->label('שם הלקוח / העסק')->required()->maxLength(255),
+                    TextInput::make('phone')->label('טלפון / וואטסאפ')->tel()
+                        ->helperText('הקישור יישלח לוואטסאפ של המספר הזה'),
+                    TextInput::make('email')->label('אימייל')->email()
+                        ->helperText('והקישור יישלח גם לכתובת הזו'),
+                ])
+                ->action(function (array $data): void {
+                    $email = trim((string) ($data['email'] ?? ''));
+                    $phone = trim((string) ($data['phone'] ?? ''));
+
+                    if ($email === '' && $phone === '') {
+                        Notification::make()->title('צריך טלפון או אימייל כדי לשלוח את הקישור')->danger()->send();
+
+                        return;
+                    }
+
+                    SendJoinInviteJob::dispatch(trim((string) $data['name']), $email ?: null, $phone ?: null);
+
+                    Notification::make()->title('הקישור נשלח ללקוח')
+                        ->body('הלקוח יקבל קישור להשלמת הפרטים וחתימה.')->success()->send();
+                }),
+        ];
     }
 
     public function form(Form $form): Form
