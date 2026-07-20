@@ -66,4 +66,21 @@ class PushSubscriptionTest extends TestCase
             ->postJson('/push-subscriptions', ['keys' => ['p256dh' => 'k', 'auth' => 'a']])
             ->assertUnprocessable();
     }
+
+    public function test_a_member_who_has_not_cleared_2fa_cannot_store_a_subscription(): void
+    {
+        // Password authenticated, but the one-time code is not yet confirmed:
+        // must not be able to register a push endpoint (and start receiving
+        // team-notification content) before the second factor.
+        $user = User::factory()->withTwoFactor()->create();
+
+        $this->actingAs($user)
+            ->post('/push-subscriptions', [
+                'endpoint' => 'https://push.example.com/attacker',
+                'keys' => ['p256dh' => 'k', 'auth' => 'a'],
+            ])
+            ->assertRedirect(route('two-factor.challenge'));
+
+        $this->assertDatabaseCount('push_subscriptions', 0);
+    }
 }

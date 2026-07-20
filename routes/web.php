@@ -16,6 +16,7 @@ use App\Http\Controllers\TasksPrintController;
 use App\Http\Controllers\Webhooks\CardcomWebhookController;
 use App\Http\Controllers\Webhooks\EmailWebhookController;
 use App\Http\Controllers\Webhooks\WahaWebhookController;
+use App\Http\Middleware\EnsureTwoFactorConfirmed;
 use Illuminate\Support\Facades\Route;
 
 // Team-only app: the root just sends visitors to the admin panel.
@@ -95,9 +96,11 @@ Route::get('/tasks/print', TasksPrintController::class)
     ->middleware(['web', 'auth'])
     ->name('tasks.print');
 
-// Browser push subscription store/remove — team-only (panel auth), scoped to
-// the signed-in user by the controller.
-Route::middleware(['web', 'auth'])->group(function () {
+// Browser push subscription store/remove — team-only, scoped to the signed-in
+// user by the controller. Gated by the same 2FA confirmation as the panel, so a
+// session that passed the password but not the second factor can't register an
+// endpoint and start receiving team-notification content.
+Route::middleware(['web', 'auth', EnsureTwoFactorConfirmed::class])->group(function () {
     Route::post('/push-subscriptions', [PushSubscriptionController::class, 'store'])
         ->name('push-subscriptions.store');
     Route::delete('/push-subscriptions', [PushSubscriptionController::class, 'destroy'])
