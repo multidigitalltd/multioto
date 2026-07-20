@@ -41,8 +41,8 @@
                     }
 
                     push.register().then(() => {
-                        if (Notification.permission === 'granted') {
-                            // Already allowed — make sure the subscription is stored/fresh.
+                        if (Notification.permission === 'granted' && ! push.optedOut()) {
+                            // Allowed and not turned off here — keep the subscription fresh.
                             push.subscribe();
                         } else if (Notification.permission === 'default') {
                             this.showButton = true;

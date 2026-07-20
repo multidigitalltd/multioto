@@ -3,8 +3,33 @@
    window.MultiotoWebPushConfig (set inline by the server). Everything is
    best-effort and never throws to the caller. */
 window.MultiotoWebPush = {
+    OPT_OUT_KEY: 'multioto_push_optout',
+
     cfg() {
         return window.MultiotoWebPushConfig || {};
+    },
+
+    /** Whether the member explicitly turned push OFF on this device. The bootstrap
+        must not auto-resubscribe them just because browser permission is still
+        granted — otherwise "off" wouldn't survive a page reload. */
+    optedOut() {
+        try {
+            return window.localStorage.getItem(this.OPT_OUT_KEY) === '1';
+        } catch (e) {
+            return false;
+        }
+    },
+
+    setOptedOut(value) {
+        try {
+            if (value) {
+                window.localStorage.setItem(this.OPT_OUT_KEY, '1');
+            } else {
+                window.localStorage.removeItem(this.OPT_OUT_KEY);
+            }
+        } catch (e) {
+            // Private mode / storage disabled — nothing we can persist.
+        }
     },
 
     supported() {
@@ -60,6 +85,9 @@ window.MultiotoWebPush = {
                 body: JSON.stringify(subscription.toJSON()),
             });
 
+            // Turning it on clears any previous opt-out on this device.
+            this.setOptedOut(false);
+
             return true;
         } catch (e) {
             return false;
@@ -68,6 +96,10 @@ window.MultiotoWebPush = {
 
     /** Remove this browser's subscription, server-side and locally. */
     async unsubscribe() {
+        // Remember the choice first, so the bootstrap won't auto-resubscribe on
+        // the next load just because browser permission is still granted.
+        this.setOptedOut(true);
+
         if (! this.supported()) {
             return false;
         }
