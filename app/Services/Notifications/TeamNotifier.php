@@ -7,12 +7,15 @@ use App\Models\Customer;
 use App\Models\Ticket;
 use App\Models\TicketMessage;
 use App\Models\User;
+use App\Notifications\TeamPushNotification;
 use App\Services\Waha\WahaClient;
 use App\Support\EmailList;
+use App\Support\WebPush;
 use Filament\Notifications\Actions\Action;
 use Filament\Notifications\Notification;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Notification as LaravelNotification;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 
@@ -110,6 +113,32 @@ class TeamNotifier
                 ->sendToDatabase($recipients);
         } catch (\Throwable $e) {
             Log::warning('TeamNotifier: bell notification failed', ['error' => $e->getMessage()]);
+        }
+
+        // Browser push (opt-in) — a real "pops on your desktop" alert, sent only
+        // to members who subscribed and only when VAPID keys are configured.
+        $this->push($title, $body, $url);
+    }
+
+    /**
+     * Send a browser (Web Push) alert to team members who subscribed. Best-effort
+     * and no-op unless Web Push is configured (VAPID keys) — an install without
+     * keys behaves exactly as before.
+     */
+    protected function push(string $title, string $body, string $url): void
+    {
+        if (! WebPush::enabled()) {
+            return;
+        }
+
+        try {
+            $subscribers = User::query()->whereHas('pushSubscriptions')->get();
+
+            if ($subscribers->isNotEmpty()) {
+                LaravelNotification::send($subscribers, new TeamPushNotification($title, $body, $url));
+            }
+        } catch (\Throwable $e) {
+            Log::warning('TeamNotifier: web push failed', ['error' => $e->getMessage()]);
         }
     }
 
