@@ -2,6 +2,7 @@
 
 namespace App\Providers\Filament;
 
+use App\Filament\Pages\Auth\EditProfile;
 use App\Filament\Widgets\StatsOverview;
 use App\Http\Middleware\EnsureTwoFactorConfirmed;
 use App\Support\Branding;
@@ -46,7 +47,7 @@ class AdminPanelProvider extends PanelProvider
             ->path('admin')
             ->login()
             ->passwordReset()
-            ->profile()
+            ->profile(EditProfile::class)
             ->brandName('מולטי דיגיטל')
             // Show the uploaded business logo as the panel brand when one is set.
             ->brandLogo(fn (): ?string => Branding::logoUrl())
