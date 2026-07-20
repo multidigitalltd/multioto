@@ -36,12 +36,8 @@ class RefreshSiteCapabilitiesJob implements ShouldQueue
         }
 
         try {
+            // sync() also classifies the site (store/brochure) from its plugins.
             $connector->sync($site);
-
-            // Now that the tool catalog is fresh, classify the site (store vs
-            // brochure) from its plugins if it isn't set yet — won't override a
-            // manual choice (DetectSiteTypeJob guards on force=false).
-            DetectSiteTypeJob::dispatch($this->siteId);
         } catch (\Throwable $e) {
             Log::warning('RefreshSiteCapabilitiesJob: sync failed', ['site' => $this->siteId, 'error' => $e->getMessage()]);
         }

@@ -17,7 +17,11 @@ class SiteTypeTest extends TestCase
     public function test_it_infers_a_store_from_a_woocommerce_plugin_list(): void
     {
         $this->assertSame(SiteType::Store, SiteType::fromPluginList('akismet, WooCommerce, elementor'));
+        $this->assertSame(SiteType::Store, SiteType::fromPluginList('woocommerce/woocommerce.php'));
         $this->assertSame(SiteType::Brochure, SiteType::fromPluginList('akismet, elementor, yoast'));
+
+        // A WooCommerce EXTENSION without the core plugin is not a store.
+        $this->assertSame(SiteType::Brochure, SiteType::fromPluginList('woocommerce-gateway-stripe/woocommerce-gateway-stripe.php'));
     }
 
     public function test_apply_detected_type_fills_only_when_unset_unless_forced(): void

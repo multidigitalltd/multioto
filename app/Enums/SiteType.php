@@ -32,11 +32,19 @@ enum SiteType: string implements HasColor, HasLabel
         };
     }
 
-    /** Infer the type from a plugin list: WooCommerce present ⇒ a store. */
+    /**
+     * Infer the type from a plugin list: the WooCommerce CORE plugin present ⇒ a
+     * store. Matches the core plugin file (woocommerce/woocommerce.php) or the
+     * bare "woocommerce" slug — NOT extensions like woocommerce-gateway-stripe,
+     * which would false-positive a plain substring search.
+     */
     public static function fromPluginList(string $pluginListText): self
     {
-        return Str::contains(Str::lower($pluginListText), 'woocommerce')
-            ? self::Store
-            : self::Brochure;
+        $text = Str::lower($pluginListText);
+
+        $hasCore = str_contains($text, 'woocommerce/woocommerce.php')
+            || preg_match('/(?<![\w-])woocommerce(?![\w-])/', $text) === 1;
+
+        return $hasCore ? self::Store : self::Brochure;
     }
 }

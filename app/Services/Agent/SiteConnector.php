@@ -2,6 +2,7 @@
 
 namespace App\Services\Agent;
 
+use App\Jobs\DetectSiteTypeJob;
 use App\Models\Site;
 use App\Services\Health\ConnectionResult;
 use Illuminate\Support\Str;
@@ -46,6 +47,13 @@ class SiteConnector
             ],
             'mcp_last_seen_at' => now(),
         ])->save();
+
+        // Classify the site (store/brochure) from its plugins now that the tool
+        // catalogue is fresh — best-effort and non-forced, so a manual choice is
+        // preserved. Firing after EVERY sync (a manual "בדוק חיבור AI" or a
+        // capability refresh) means existing sites get classified without waiting
+        // for a plugin-version bump; an already-classified site is a no-op.
+        DetectSiteTypeJob::dispatch($site->id);
 
         return count($tools);
     }

@@ -53,14 +53,23 @@ class Site extends Model
      */
     public function applyDetectedType(string $pluginListText, bool $force = false): void
     {
-        if (! $force && $this->site_type !== null) {
+        $detected = SiteType::fromPluginList($pluginListText);
+
+        if ($force) {
+            $this->update(['site_type' => $detected]);
+
             return;
         }
 
-        $detected = SiteType::fromPluginList($pluginListText);
+        // Atomic "fill only if still unset": a WHERE site_type IS NULL guard, so
+        // a manual choice made during the (slow) MCP round-trip isn't clobbered
+        // by this stale instance. Sync the in-memory model only if we won the race.
+        $filled = static::whereKey($this->getKey())
+            ->whereNull('site_type')
+            ->update(['site_type' => $detected]);
 
-        if ($this->site_type !== $detected) {
-            $this->update(['site_type' => $detected]);
+        if ($filled > 0) {
+            $this->setAttribute('site_type', $detected)->syncOriginalAttribute('site_type');
         }
     }
 
