@@ -19,6 +19,7 @@ use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ViewRecord;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
+use Illuminate\Support\HtmlString;
 use Illuminate\Support\Str;
 
 /**
@@ -129,6 +130,7 @@ class ViewSite extends ViewRecord
             Actions\ActionGroup::make([
                 $this->proposeMcpAction(),
                 $this->whitelistCloudflareAction(),
+                $this->cloudflareRulesAction(),
                 $this->purgeCloudflareCacheAction(),
                 Actions\Action::make('connectionCodes')
                     ->label('קודי חיבור לתוסף')
@@ -251,6 +253,36 @@ class ViewSite extends ViewRecord
                     ->body($result['message'])
                     ->{$result['ok'] ? 'success' : 'danger'}()
                     ->send();
+            });
+    }
+
+    /**
+     * Read-only viewer: list the site's existing Cloudflare IP Access Rules, so
+     * the team can verify a whitelist/block from the panel instead of hunting in
+     * the (frequently-reorganized) Cloudflare dashboard. Uses the saved token.
+     */
+    protected function cloudflareRulesAction(): Actions\Action
+    {
+        return Actions\Action::make('cloudflareRules')
+            ->label('כללי IP ב-Cloudflare')
+            ->icon('heroicon-o-list-bullet')
+            ->color('gray')
+            ->visible(fn (): bool => auth()->user()?->isAdmin() ?? false)
+            ->modalHeading(fn (): string => 'כללי IP ב-Cloudflare — '.$this->record->domain)
+            ->modalSubmitAction(false)
+            ->modalCancelActionLabel('סגור')
+            ->modalContent(function () {
+                $token = trim((string) config('billing.cloudflare.api_token'));
+
+                if ($token === '') {
+                    return new HtmlString(
+                        '<div dir="rtl" class="text-sm">לא הוגדר טוקן Cloudflare. הגדירו אותו בהגדרות ← אינטגרציות כדי להציג את הכללים.</div>'
+                    );
+                }
+
+                return view('filament.cloudflare-rules', [
+                    'result' => app(CloudflareClient::class)->listAccessRules($token, $this->record->domain),
+                ]);
             });
     }
 

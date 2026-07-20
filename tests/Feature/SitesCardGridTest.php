@@ -9,6 +9,7 @@ use App\Models\Customer;
 use App\Models\Site;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
 use Livewire\Livewire;
 use Tests\TestCase;
 
@@ -57,5 +58,24 @@ class SitesCardGridTest extends TestCase
         // derived automatically — no digging into the edit form.
         $this->assertTrue($fresh->mcp_enabled);
         $this->assertSame('https://toggle-me.co.il/wp-json/md-agent/v1/mcp', $fresh->mcp_endpoint);
+    }
+
+    public function test_the_site_page_lists_the_cloudflare_ip_rules(): void
+    {
+        config(['billing.cloudflare.api_token' => 'saved-token']);
+        Http::fake([
+            '*/access_rules/rules*' => Http::response([
+                'success' => true,
+                'result' => [['mode' => 'whitelist', 'notes' => 'Multi Digital', 'configuration' => ['target' => 'ip', 'value' => '203.0.113.7']]],
+                'result_info' => ['total_pages' => 1],
+            ]),
+            '*/zones*' => Http::response(['success' => true, 'result' => [['id' => 'z1']]]),
+        ]);
+        $this->actingAs(User::factory()->create());
+        $site = Site::factory()->create(['domain' => 'example.co.il']);
+
+        Livewire::test(ViewSite::class, ['record' => $site->getKey()])
+            ->mountAction('cloudflareRules')
+            ->assertSee('203.0.113.7');
     }
 }

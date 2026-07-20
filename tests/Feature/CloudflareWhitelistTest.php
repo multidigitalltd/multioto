@@ -177,6 +177,39 @@ class CloudflareWhitelistTest extends TestCase
         Http::assertNothingSent();
     }
 
+    public function test_it_lists_the_access_rules_for_a_zone(): void
+    {
+        Http::fake([
+            '*/access_rules/rules*' => Http::response([
+                'success' => true,
+                'result' => [
+                    ['mode' => 'whitelist', 'notes' => 'Multi Digital', 'configuration' => ['target' => 'ip', 'value' => '203.0.113.7']],
+                    ['mode' => 'managed_challenge', 'notes' => '', 'configuration' => ['target' => 'country', 'value' => 'RU']],
+                ],
+                'result_info' => ['total_pages' => 1],
+            ]),
+            '*/zones*' => Http::response(['success' => true, 'result' => [['id' => 'zone_1']]]),
+        ]);
+
+        $result = app(CloudflareClient::class)->listAccessRules('cf-token', 'example.co.il');
+
+        $this->assertTrue($result['ok']);
+        $this->assertCount(2, $result['rules']);
+        $this->assertSame('203.0.113.7', $result['rules'][0]['value']);
+        $this->assertSame('ip', $result['rules'][0]['target']);
+        $this->assertSame('RU', $result['rules'][1]['value']);
+    }
+
+    public function test_listing_rules_fails_clearly_when_no_zone_matches(): void
+    {
+        Http::fake(['*/zones*' => Http::response(['success' => true, 'result' => []])]);
+
+        $result = app(CloudflareClient::class)->listAccessRules('cf-token', 'example.co.il');
+
+        $this->assertFalse($result['ok']);
+        $this->assertSame([], $result['rules']);
+    }
+
     public function test_outbound_ip_is_detected_and_cached(): void
     {
         Http::fake(['*' => Http::response("198.51.100.42\n")]);

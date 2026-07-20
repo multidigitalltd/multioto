@@ -102,6 +102,56 @@ class CloudflareClient
         return $this->fail($this->errorMessage($response, 'ניקוי הקאש ב-Cloudflare נכשל'));
     }
 
+    /**
+     * List the IP Access Rules on $domain's zone so the team can verify what's
+     * whitelisted/blocked from inside the panel — no hunting in the shifting
+     * Cloudflare dashboard. Read-only.
+     *
+     * @return array{ok: bool, message: string, rules: list<array{target: string, value: string, mode: string, notes: string}>}
+     */
+    public function listAccessRules(string $token, string $domain): array
+    {
+        $token = trim($token);
+
+        if ($token === '') {
+            return $this->fail('חסר טוקן API של Cloudflare.') + ['rules' => []];
+        }
+
+        try {
+            $zoneId = $this->zoneId($token, $domain);
+
+            if ($zoneId === null) {
+                return $this->fail('לא נמצא Zone פעיל ב-Cloudflare עבור הדומיין הזה. ודאו שהאתר מנוהל בחשבון שאליו שייך הטוקן.') + ['rules' => []];
+            }
+
+            $rules = [];
+            $page = 1;
+
+            do {
+                $body = $this->request($token)->get(self::BASE."/zones/{$zoneId}/firewall/access_rules/rules", [
+                    'per_page' => 50,
+                    'page' => $page,
+                ])->throw()->json();
+
+                foreach ((array) data_get($body, 'result', []) as $rule) {
+                    $rules[] = [
+                        'target' => (string) data_get($rule, 'configuration.target', ''),
+                        'value' => (string) data_get($rule, 'configuration.value', ''),
+                        'mode' => (string) ($rule['mode'] ?? ''),
+                        'notes' => (string) ($rule['notes'] ?? ''),
+                    ];
+                }
+
+                $totalPages = (int) data_get($body, 'result_info.total_pages', 1);
+                $page++;
+            } while ($totalPages > 0 && $page <= $totalPages);
+        } catch (\Throwable) {
+            return $this->fail('הפנייה ל-Cloudflare נכשלה — בדקו את הטוקן והחיבור לרשת.') + ['rules' => []];
+        }
+
+        return ['ok' => true, 'message' => count($rules).' כללי גישה', 'rules' => $rules];
+    }
+
     /** Valid actions for a country rule. 'remove' deletes an existing rule. */
     public const COUNTRY_MODES = ['managed_challenge', 'js_challenge', 'block', 'whitelist', 'remove'];
 
