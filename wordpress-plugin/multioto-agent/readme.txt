@@ -2,7 +2,7 @@
 Contributors: multidigital
 Requires at least: 6.0
 Requires PHP: 7.4
-Stable tag: 1.0.5
+Stable tag: 1.0.6
 License: GPLv2 or later
 
 מחבר את אתר הוורדפרס לפאנל התפעול של Multi Digital: נקודת קצה MCP מאובטחת
@@ -55,6 +55,9 @@ Cloudflare באתר כולו — די בחריגה לנתיב הזה.)
   RewriteRule .* - [E=HTTP_AUTHORIZATION:%1]
 
 == Changelog ==
+
+= 1.0.6 =
+* אבחון טוב יותר: כשכלי נכשל עם שגיאה פנימית, הסיבה האמיתית (סוג ותיאור השגיאה) נרשמת ליומן השגיאות של WordPress ומוחזרת לפאנל, במקום "Internal error" סתום.
 
 = 1.0.5 =
 * עדכון עצמי אוטומטי: התוסף מפעיל את עדכוני הרקע של וורדפרס עבור עצמו, כך שגרסה חדשה מותקנת באתר לבד — בלי לחיצה ידנית על "עדכן".
