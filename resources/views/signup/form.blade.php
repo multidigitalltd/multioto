@@ -136,7 +136,7 @@
             <fieldset class="panel" data-step="1">
                 <div class="field">
                     <label for="name">שם העסק <span class="req" aria-hidden="true">*</span></label>
-                    <input type="text" id="name" name="name" value="{{ old('name') }}" required autocomplete="organization"
+                    <input type="text" id="name" name="name" value="{{ old('name', request('name')) }}" required autocomplete="organization"
                         placeholder="השם שיופיע בחשבוניות"
                         @error('name') aria-invalid="true" aria-describedby="name-error" @enderror>
                     @error('name') <p class="error" id="name-error">{{ $message }}</p> @enderror
@@ -168,14 +168,14 @@
                 <div class="row">
                     <div class="field">
                         <label for="contact_name">איש קשר <span class="req" aria-hidden="true">*</span></label>
-                        <input type="text" id="contact_name" name="contact_name" value="{{ old('contact_name') }}" required autocomplete="name"
+                        <input type="text" id="contact_name" name="contact_name" value="{{ old('contact_name', request('contact_name')) }}" required autocomplete="name"
                             placeholder="המוסמך לייצג את המזמין"
                             @error('contact_name') aria-invalid="true" aria-describedby="contact-error" @enderror>
                         @error('contact_name') <p class="error" id="contact-error">{{ $message }}</p> @enderror
                     </div>
                     <div class="field">
                         <label for="phone">טלפון <span class="req" aria-hidden="true">*</span></label>
-                        <input type="tel" id="phone" name="phone" value="{{ old('phone') }}" required autocomplete="tel" inputmode="tel"
+                        <input type="tel" id="phone" name="phone" value="{{ old('phone', request('phone')) }}" required autocomplete="tel" inputmode="tel"
                             placeholder="עדיף נייד זמין (למשל 0501234567)"
                             data-validate="phone"
                             @error('phone') aria-invalid="true" aria-describedby="phone-error" @enderror>
@@ -185,7 +185,7 @@
 
                 <div class="field">
                     <label for="email">אימייל <span class="req" aria-hidden="true">*</span></label>
-                    <input type="email" id="email" name="email" value="{{ old('email') }}" required autocomplete="email"
+                    <input type="email" id="email" name="email" value="{{ old('email', request('email')) }}" required autocomplete="email"
                         placeholder="אימייל אליו יישלחו מסמכים וחשבוניות"
                         data-validate="email"
                         @error('email') aria-invalid="true" aria-describedby="email-error" @enderror>
