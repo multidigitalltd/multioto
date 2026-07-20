@@ -34,7 +34,20 @@ check_available() {
 
     if [ "${behind:-0}" -gt 0 ]; then
         short="$(git -C "$ROOT" rev-parse --short "origin/$branch" 2>/dev/null || echo unknown)"
-        printf '{"behind":%s,"short":"%s","at":"%s"}\n' "$behind" "$short" "$(date '+%Y-%m-%d %H:%M')" > "$AVAILABLE"
+
+        # Extract the highlights of the pending versions from the INCOMING build's
+        # changelog, so the panel can show "why upgrade" before installing. We read
+        # the JSON changelog (data, never executed) from git and diff via the app.
+        # Best-effort: any failure just omits the highlights.
+        local releases="[]"
+        if git -C "$ROOT" show "origin/$branch:config/changelog.json" > "$OPS/incoming-changelog.json" 2>/dev/null; then
+            releases="$(cd "$ROOT" && docker compose exec -T app php artisan app:changelog-diff ops/incoming-changelog.json 2>/dev/null || echo '[]')"
+            [ -z "$releases" ] && releases="[]"
+            rm -f "$OPS/incoming-changelog.json"
+        fi
+
+        printf '{"behind":%s,"short":"%s","at":"%s","releases":%s}\n' \
+            "$behind" "$short" "$(date '+%Y-%m-%d %H:%M')" "$releases" > "$AVAILABLE"
     else
         rm -f "$AVAILABLE"
     fi

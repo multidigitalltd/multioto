@@ -11,8 +11,37 @@
                 @else
                     עדכנו בשרת עם <code>./update.sh</code>.
                 @endif
-                עיקרי היתרונות של הגרסה החדשה יופיעו כאן ("מה חדש") מיד לאחר ההתקנה.
             </p>
+
+            {{-- The highlights of the PENDING versions, extracted from the incoming
+                 build's changelog by the host watcher — so the team sees why to
+                 upgrade before installing. Falls back to a note when unavailable. --}}
+            @if (! empty($available['releases']))
+                <div class="mt-4">
+                    <p class="mb-2 text-sm font-semibold text-gray-800 dark:text-gray-100">מה מחכה בעדכון הזה:</p>
+                    <div class="flex flex-col gap-4">
+                        @foreach ($available['releases'] as $release)
+                            <div class="border-s-4 border-warning-400 ps-3">
+                                <div class="mb-1 flex flex-wrap items-center gap-2">
+                                    <span class="font-semibold text-gray-900 dark:text-gray-100">{{ $release['title'] ?? '' }}</span>
+                                    @if (! empty($release['version']))
+                                        <span class="font-mono text-xs text-gray-400">v{{ $release['version'] }}</span>
+                                    @endif
+                                </div>
+                                <ul class="list-disc space-y-1 pe-5 text-sm text-gray-600 dark:text-gray-300">
+                                    @foreach ((array) ($release['highlights'] ?? []) as $point)
+                                        <li>{{ $point }}</li>
+                                    @endforeach
+                                </ul>
+                            </div>
+                        @endforeach
+                    </div>
+                </div>
+            @else
+                <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">
+                    עיקרי היתרונות של הגרסה החדשה יופיעו כאן מיד לאחר ההתקנה.
+                </p>
+            @endif
         </x-filament::section>
     @endif
 
