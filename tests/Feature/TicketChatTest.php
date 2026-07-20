@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Enums\ActionStatus;
 use App\Enums\MessageAuthor;
 use App\Enums\MessageChannel;
 use App\Enums\MessageDirection;
@@ -15,6 +16,7 @@ use App\Jobs\SendTicketNotificationJob;
 use App\Jobs\SendTicketReplyJob;
 use App\Models\CannedResponse;
 use App\Models\Customer;
+use App\Models\PendingAction;
 use App\Models\Ticket;
 use App\Models\TicketMessage;
 use App\Models\User;
@@ -92,10 +94,22 @@ class TicketChatTest extends TestCase
             'author' => MessageAuthor::Ai,
         ]);
 
+        // The draft also has a pending ticket_reply approval — dismissing must
+        // reject it too, so it can't be approved and sent later.
+        $action = PendingAction::create([
+            'type' => 'ticket_reply',
+            'status' => ActionStatus::Pending,
+            'summary' => 'תשובה ללקוח',
+            'payload' => ['reply' => 'טקסט כלשהו'],
+            'ticket_id' => $ticket->id,
+            'customer_id' => $ticket->customer_id,
+        ]);
+
         Livewire::test(ViewTicket::class, ['record' => $ticket->id])
             ->call('dismissDraft', $draft->id);
 
         $this->assertDatabaseMissing('ticket_messages', ['id' => $draft->id]);
+        $this->assertSame(ActionStatus::Rejected, $action->fresh()->status);
     }
 
     public function test_the_chat_renders_the_sanitized_rich_html_of_an_email(): void

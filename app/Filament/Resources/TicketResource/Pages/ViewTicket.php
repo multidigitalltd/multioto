@@ -177,12 +177,25 @@ class ViewTicket extends ViewRecord
     /** Discard an AI reply draft the agent doesn't want. */
     public function dismissDraft(int $messageId): void
     {
-        $this->record->messages()
+        $deleted = $this->record->messages()
             ->where('author', MessageAuthor::Ai)
             ->where('channel', MessageChannel::InternalNote)
             ->where('body', 'like', '%טיוטת תשובה%')
             ->whereKey($messageId)
             ->delete();
+
+        if ($deleted === 0) {
+            return;
+        }
+
+        // The draft also has a pending ticket_reply approval (from DraftReplyJob)
+        // that could otherwise still be approved from the panel/WhatsApp and sent.
+        // Reject it too, exactly as sending a manual reply does — otherwise "דחה"
+        // wouldn't actually prevent the draft from reaching the customer.
+        PendingAction::where('ticket_id', $this->record->id)
+            ->where('type', 'ticket_reply')
+            ->where('status', ActionStatus::Pending)
+            ->update(['status' => ActionStatus::Rejected, 'decided_at' => now(), 'error' => 'בוטלה — הטיוטה נדחתה מהשיחה.']);
 
         Notification::make()->title('ההמלצה נדחתה')->success()->send();
     }
