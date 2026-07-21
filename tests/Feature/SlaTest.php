@@ -77,6 +77,14 @@ class SlaTest extends TestCase
         $this->assertSame('breached', $urgent->firstResponseSlaStatus());
     }
 
+    public function test_a_ticket_waiting_on_the_customer_is_not_shown_as_breached(): void
+    {
+        // Past the target and unanswered, but the ball is in the customer's court.
+        $ticket = $this->ticket(['status' => TicketStatus::Pending], createdAt: now()->subHours(9));
+
+        $this->assertSame('na', $ticket->firstResponseSlaStatus());
+    }
+
     public function test_the_breach_job_alerts_the_team_once_and_then_stays_quiet(): void
     {
         $this->ticket(createdAt: now()->subHours(9));

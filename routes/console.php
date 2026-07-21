@@ -98,9 +98,10 @@ Schedule::job(new FollowUpPendingTicketsJob)
     ->dailyAt('09:00')->name('support:pending-followup')->onOneServer();
 
 // Alert the team about open tickets that breached their first-response SLA
-// (once per ticket). Hourly so a breach surfaces the same working hour.
+// (once per ticket). Hourly so a breach surfaces the same working hour; gated
+// on $awake so it stays quiet over Shabbat / Yom Tov like the other dispatchers.
 Schedule::job(new CheckSlaBreachesJob)
-    ->hourly()->name('support:sla-breaches')->onOneServer();
+    ->hourly()->name('support:sla-breaches')->when($awake)->onOneServer();
 
 // Chase unpaid payment demands: after the quiet interval, resend the request
 // (link/transfer) up to the configured maximum, then stop.

@@ -60,7 +60,7 @@ class SlaWatch extends BaseWidget
             ->actions([
                 Tables\Actions\Action::make('open')
                     ->label('פתח פנייה')->icon('heroicon-o-arrow-top-right-on-square')
-                    ->url(fn (Ticket $r): string => TicketResource::getUrl('edit', ['record' => $r])),
+                    ->url(fn (Ticket $r): string => TicketResource::getUrl('view', ['record' => $r])),
             ])
             ->paginated([5]);
     }

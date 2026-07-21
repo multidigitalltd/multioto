@@ -182,7 +182,10 @@ class Ticket extends Model
             return $this->firstResponseMet() ? 'met' : 'breached';
         }
 
-        if (in_array($this->status, self::TERMINAL, true)) {
+        // Terminal, or waiting on the customer — the first-response clock is not
+        // on us, so never show these as a breach.
+        if (in_array($this->status, self::TERMINAL, true)
+            || in_array($this->status, self::AWAITING_CUSTOMER, true)) {
             return 'na';
         }
 
