@@ -145,14 +145,24 @@ class DraftReplyJob implements ShouldQueue
             return '';
         }
 
+        // Only a real, sent agent reply (never an internal note or an AI-authored
+        // draft) counts as a solution.
+        $hasAgentReply = fn ($q) => $q->where('channel', '!=', MessageChannel::InternalNote)
+            ->where('author', MessageAuthor::Agent);
+
         $solved = Ticket::query()
             ->where('ai_topic', $topic)
             ->whereKeyNot($ticket->id)
             ->whereIn('status', [TicketStatus::Resolved, TicketStatus::Closed])
-            ->latest('resolved_at')
+            // Constrain to tickets that actually carry a usable agent reply BEFORE
+            // taking the newest three — otherwise reply-less closes could fill all
+            // three slots and leave the prompt ungrounded.
+            ->whereHas('messages', $hasAgentReply)
+            // resolved_at is only set on some terminal transitions; fall back to
+            // updated_at (always bumped on the status change) so "latest" is real.
+            ->orderByRaw('COALESCE(resolved_at, updated_at) DESC')
             ->limit(3)
-            ->with(['messages' => fn ($q) => $q->where('channel', '!=', MessageChannel::InternalNote)
-                ->where('author', MessageAuthor::Agent)
+            ->with(['messages' => fn ($q) => $hasAgentReply($q)
                 ->latest('created_at')
                 ->limit(1)])
             ->get();
@@ -163,7 +173,9 @@ class DraftReplyJob implements ShouldQueue
 
                 return blank($reply)
                     ? null
-                    : "• {$t->subject}\n  פתרון: ".Str::limit(trim((string) $reply), 500);
+                    // Strip customer-specific secrets/PII (signed links, emails)
+                    // so one customer's data never grounds another's draft.
+                    : "• {$t->subject}\n  פתרון: ".Str::limit($this->redact((string) $reply), 500);
             })
             ->filter()
             ->implode("\n\n");
@@ -171,6 +183,21 @@ class DraftReplyJob implements ShouldQueue
         return $examples === ''
             ? ''
             : "\n\nפתרונות מפניות דומות שנסגרו (מאגר ידע — השתמש כרפרנס, אל תעתיק מילה במילה):\n{$examples}";
+    }
+
+    /**
+     * Redact customer-specific secrets and PII from a past reply before it grounds
+     * a DIFFERENT customer's draft. Links are the real hazard: a signed
+     * card-update / payment URL copied verbatim would hand one customer a still-valid
+     * privileged link belonging to another. Email addresses are scrubbed as PII.
+     * Trims whitespace so the snippet stays clean.
+     */
+    protected function redact(string $reply): string
+    {
+        $reply = preg_replace('#https?://\S+#i', '[קישור הוסר]', $reply);
+        $reply = preg_replace('/[\w.+-]+@[\w.-]+\.[a-z]{2,}/i', '[אימייל הוסר]', (string) $reply);
+
+        return trim((string) $reply);
     }
 
     /**

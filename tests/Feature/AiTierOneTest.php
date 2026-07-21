@@ -210,6 +210,87 @@ class AiTierOneTest extends TestCase
         Http::assertSent(fn ($request): bool => ! str_contains($request['messages'][0]['content'] ?? '', 'UNRELATED_MARKER_ZZZ'));
     }
 
+    public function test_a_signed_link_in_a_past_reply_is_redacted_before_grounding(): void
+    {
+        $this->enableAi();
+        $this->fakeClaude(['reply' => 'טופל', 'confidence' => 'high']);
+
+        $solved = Ticket::create([
+            'customer_id' => Customer::factory()->create()->id,
+            'channel' => TicketChannel::Email,
+            'subject' => 'עדכון כרטיס',
+            'status' => TicketStatus::Resolved,
+            'priority' => TicketPriority::Normal,
+            'ai_topic' => 'card_update',
+            'resolved_at' => now()->subDay(),
+        ]);
+        $solved->messages()->create([
+            'direction' => MessageDirection::Outbound,
+            'channel' => MessageChannel::Email,
+            'body' => 'לעדכון הכרטיס: https://multioto.test/billing/update-card/abc123?signature=deadbeef או פנה למייל foo@bar.co.il',
+            'author' => MessageAuthor::Agent,
+        ]);
+
+        $ticket = $this->ticketWithInbound();
+        $ticket->update(['ai_topic' => 'card_update']);
+
+        (new DraftReplyJob($ticket->id))->handle(app(ClaudeClient::class), app(SupportToolkit::class));
+
+        // Another customer's signed link and email never reach the AI provider.
+        Http::assertSent(function ($request): bool {
+            $prompt = $request['messages'][0]['content'] ?? '';
+
+            return str_contains($prompt, 'מאגר ידע')
+                && ! str_contains($prompt, 'signature=deadbeef')
+                && ! str_contains($prompt, 'update-card/abc123')
+                && ! str_contains($prompt, 'foo@bar.co.il');
+        });
+    }
+
+    public function test_grounding_skips_reply_less_closes_and_uses_an_older_solved_ticket(): void
+    {
+        $this->enableAi();
+        $this->fakeClaude(['reply' => 'טופל', 'confidence' => 'high']);
+
+        // Three NEWER closes on the topic with no agent reply at all…
+        foreach (range(1, 3) as $i) {
+            Ticket::create([
+                'customer_id' => Customer::factory()->create()->id,
+                'channel' => TicketChannel::Email,
+                'subject' => "סגירה שקטה {$i}",
+                'status' => TicketStatus::Closed,
+                'priority' => TicketPriority::Normal,
+                'ai_topic' => 'ביצועים',
+                'resolved_at' => now()->subHours($i),
+            ]);
+        }
+
+        // …and one OLDER resolved ticket that actually carries a solution.
+        $older = Ticket::create([
+            'customer_id' => Customer::factory()->create()->id,
+            'channel' => TicketChannel::Email,
+            'subject' => 'אתר איטי מזמן',
+            'status' => TicketStatus::Resolved,
+            'priority' => TicketPriority::Normal,
+            'ai_topic' => 'ביצועים',
+            'resolved_at' => now()->subDays(5),
+        ]);
+        $older->messages()->create([
+            'direction' => MessageDirection::Outbound,
+            'channel' => MessageChannel::Email,
+            'body' => 'הגדלנו את זיכרון ה-PHP וזה נפתר. OLD_SOLUTION_MARKER',
+            'author' => MessageAuthor::Agent,
+        ]);
+
+        $ticket = $this->ticketWithInbound();
+        $ticket->update(['ai_topic' => 'ביצועים']);
+
+        (new DraftReplyJob($ticket->id))->handle(app(ClaudeClient::class), app(SupportToolkit::class));
+
+        // The reply-less closes didn't crowd out the real solution.
+        Http::assertSent(fn ($request): bool => str_contains($request['messages'][0]['content'] ?? '', 'OLD_SOLUTION_MARKER'));
+    }
+
     public function test_editable_persona_flows_into_the_system_prompt(): void
     {
         $this->enableAi();
