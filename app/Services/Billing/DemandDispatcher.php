@@ -48,6 +48,7 @@ class DemandDispatcher
             'payment_options' => $this->paymentOptions($charge, $offerTransfer),
             // Individual fields kept for any operator template still using them.
             'link' => filled($charge->cardcom_pay_url) ? PaymentLink::for($charge->id) : '',
+            'bit' => filled($charge->cardcom_bit_url) ? PaymentLink::bitFor($charge->id) : '',
             'bank_transfer' => $this->bankDetails(),
             'for' => filled($charge->description) ? ' עבור '.$charge->description : '',
         ];
@@ -141,6 +142,11 @@ class DemandDispatcher
         $bank = $this->bankDetails();
         if ($offerTransfer && filled($bank)) {
             $sections[] = "🏦 לתשלום בהעברה בנקאית (הדרך המועדפת):\n{$bank}";
+        }
+
+        // Bit — a one-tap instant option (when the terminal supports it).
+        if (filled($charge->cardcom_bit_url)) {
+            $sections[] = "⚡ לתשלום מהיר ב-Bit:\n".PaymentLink::bitFor($charge->id);
         }
 
         if (filled($charge->cardcom_pay_url)) {

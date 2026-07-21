@@ -13,7 +13,7 @@ class PaymentGatewayTest extends TestCase
 {
     use RefreshDatabase;
 
-    private function demand(ChargeStatus $status, ?string $payUrl = 'https://secure.cardcom.test/lp/ABC'): Charge
+    private function demand(ChargeStatus $status, ?string $payUrl = 'https://secure.cardcom.test/lp/ABC', ?string $bitUrl = 'https://secure.cardcom.test/bit/ABC'): Charge
     {
         $customer = Customer::factory()->create();
 
@@ -27,9 +27,36 @@ class PaymentGatewayTest extends TestCase
             'attempt_number' => 1,
             'description' => 'דרישת תשלום',
             'cardcom_pay_url' => $payUrl,
+            'cardcom_bit_url' => $bitUrl,
             'period_start' => now()->toDateString(),
             'period_end' => now()->toDateString(),
         ]);
+    }
+
+    public function test_a_payable_demand_redirects_to_the_bit_page(): void
+    {
+        $charge = $this->demand(ChargeStatus::Pending);
+
+        $this->get(PaymentLink::bitFor($charge->id))
+            ->assertRedirect('https://secure.cardcom.test/bit/ABC');
+    }
+
+    public function test_a_canceled_demand_bit_link_shows_inactive_and_does_not_redirect(): void
+    {
+        $charge = $this->demand(ChargeStatus::Canceled);
+
+        $response = $this->get(PaymentLink::bitFor($charge->id));
+
+        $response->assertOk();
+        $response->assertSee('אינו פעיל');
+        $response->assertDontSee('secure.cardcom.test');
+    }
+
+    public function test_the_bit_gateway_rejects_an_unsigned_url(): void
+    {
+        $charge = $this->demand(ChargeStatus::Pending);
+
+        $this->get("/billing/pay/{$charge->id}/bit")->assertForbidden();
     }
 
     public function test_a_payable_demand_redirects_to_the_cardcom_page(): void
