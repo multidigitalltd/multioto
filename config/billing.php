@@ -62,9 +62,12 @@ return [
                 'לחלופין ניתן להקים את ההרשאה באופן דיגיטלי בקישור:',
                 'https://ultra.kesherhk.info/extern/paymentPage/311928/',
             ])),
-            // Bank transfer — the account to transfer to. Fill the real details
-            // in הגדרות ← טופס הרשמה.
-            'bank_transfer' => env('SIGNUP_BANK_TRANSFER_INSTRUCTIONS', 'פרטי החשבון להעברה בנקאית יימסרו על ידי הצוות — מלאו אותם בהגדרות ← טופס הרשמה.'),
+            // Bank transfer — the account to transfer to. Shown on the signup
+            // form AND on payment demands (single source of truth). Fill the real
+            // details in הגדרות ← טופס הרשמה. Falls back to the legacy
+            // BANK_TRANSFER_DETAILS env (previously used for demands) so existing
+            // installs keep their configured account without re-entering it.
+            'bank_transfer' => env('SIGNUP_BANK_TRANSFER_INSTRUCTIONS', env('BANK_TRANSFER_DETAILS', 'פרטי החשבון להעברה בנקאית יימסרו על ידי הצוות — מלאו אותם בהגדרות ← טופס הרשמה.')),
             // Cheques (advance / prepayment).
             'checks' => env('SIGNUP_CHECKS_INSTRUCTIONS', 'לתשלום בצ׳קים (מקדמה / תשלום מראש) ניצור עמכם קשר לתיאום מסירת הצ׳קים.'),
         ],

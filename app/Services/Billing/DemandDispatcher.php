@@ -10,7 +10,9 @@ use App\Services\Notifications\TemplateEngine;
 use App\Services\Waha\WahaClient;
 use App\Support\Money;
 use App\Support\PaymentLink;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Str;
 
 /**
  * Builds and sends a payment-demand message (initial request or reminder) for a
@@ -79,14 +81,24 @@ class DemandDispatcher
      */
     private function logSent(Charge $charge, string $channel, string $templateKey): void
     {
-        $log = $charge->demand_reminders_log ?? [];
-        $log[] = [
-            'at' => now()->toIso8601String(),
-            'channel' => $channel,
-            'type' => $templateKey === 'payment.reminder' ? 'reminder' : 'demand',
-        ];
+        try {
+            $log = $charge->demand_reminders_log ?? [];
+            $log[] = [
+                'at' => now()->toIso8601String(),
+                'channel' => $channel,
+                'type' => $templateKey === 'payment.reminder' ? 'reminder' : 'demand',
+            ];
 
-        $charge->update(['demand_reminders_log' => $log]);
+            $charge->update(['demand_reminders_log' => $log]);
+        } catch (\Throwable $e) {
+            // The customer has already been contacted — a failed audit-write must
+            // never bubble up and turn a completed send into a failed/retried job
+            // (which would re-send) or block the caller's own bookkeeping.
+            Log::warning('DemandDispatcher: send-log write failed', [
+                'charge_id' => $charge->id,
+                'error' => Str::limit($e->getMessage(), 200),
+            ]);
+        }
     }
 
     /**

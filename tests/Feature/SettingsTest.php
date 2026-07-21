@@ -29,6 +29,33 @@ class SettingsTest extends TestCase
         $this->assertSame('super-secret', Setting::map()['cardcom.api_password']);
     }
 
+    public function test_legacy_bank_transfer_setting_migrates_to_the_signup_field(): void
+    {
+        // An install that had configured the old dedicated demands setting.
+        Setting::put('billing.bank_transfer_details', 'בנק לאומי · סניף 800 · חשבון 12345');
+        Setting::forget('signup.instructions.bank_transfer'); // signup field never set
+
+        (require database_path('migrations/2026_07_21_000002_migrate_legacy_bank_transfer_details.php'))->up();
+
+        $map = Setting::map();
+        // The value is carried over to the single source of truth…
+        $this->assertSame('בנק לאומי · סניף 800 · חשבון 12345', $map['signup.instructions.bank_transfer'] ?? null);
+        // …and the stale key is retired.
+        $this->assertArrayNotHasKey('billing.bank_transfer_details', $map);
+    }
+
+    public function test_legacy_migration_never_clobbers_an_existing_signup_value(): void
+    {
+        Setting::put('billing.bank_transfer_details', 'ישן');
+        Setting::put('signup.instructions.bank_transfer', 'חדש שכבר הוזן');
+
+        (require database_path('migrations/2026_07_21_000002_migrate_legacy_bank_transfer_details.php'))->up();
+
+        $map = Setting::map();
+        $this->assertSame('חדש שכבר הוזן', $map['signup.instructions.bank_transfer'] ?? null);
+        $this->assertArrayNotHasKey('billing.bank_transfer_details', $map);
+    }
+
     public function test_stored_setting_overrides_env_config_at_boot(): void
     {
         config(['billing.cardcom.api_password' => 'from-env']);
