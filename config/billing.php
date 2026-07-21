@@ -380,6 +380,26 @@ return [
     ],
 
     'support' => [
+        // Service-level targets per ticket priority, in HOURS from when the
+        // ticket was opened. first_response = time to the team's first reply;
+        // resolution = time to close/resolve. A ticket past its first-response
+        // target with no reply is a breach — surfaced on the dashboard and
+        // alerted to the team once (CheckSlaBreachesJob).
+        'sla' => [
+            'first_response_hours' => [
+                'urgent' => (int) env('SLA_FIRST_RESPONSE_URGENT', 2),
+                'high' => (int) env('SLA_FIRST_RESPONSE_HIGH', 4),
+                'normal' => (int) env('SLA_FIRST_RESPONSE_NORMAL', 8),
+                'low' => (int) env('SLA_FIRST_RESPONSE_LOW', 24),
+            ],
+            'resolution_hours' => [
+                'urgent' => (int) env('SLA_RESOLUTION_URGENT', 8),
+                'high' => (int) env('SLA_RESOLUTION_HIGH', 24),
+                'normal' => (int) env('SLA_RESOLUTION_NORMAL', 72),
+                'low' => (int) env('SLA_RESOLUTION_LOW', 120),
+            ],
+        ],
+
         // Auto follow-up for a ticket stuck "waiting for customer" (Pending):
         // after reminder_days of silence the customer gets one reminder, and
         // after close_days it is auto-closed. Set enabled=false to switch off.

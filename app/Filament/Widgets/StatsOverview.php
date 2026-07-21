@@ -56,6 +56,16 @@ class StatsOverview extends BaseWidget
         // in "ממתין ללקוח" (Pending) is waiting on the customer, so it is not a
         // task on the team's plate even though it is not yet closed.
         $openTickets = Ticket::where('status', TicketStatus::Open)->count();
+
+        // Open tickets that blew past their first-response SLA with no reply.
+        // The target is per-priority (config), so the test runs in PHP.
+        $slaBreaches = Ticket::query()
+            ->where('status', TicketStatus::Open)
+            ->whereNull('first_response_at')
+            ->get(['id', 'priority', 'status', 'created_at'])
+            ->filter(fn (Ticket $t): bool => $t->firstResponseSlaStatus() === 'breached')
+            ->count();
+
         $pastDue = Subscription::where('status', SubscriptionStatus::PastDue)->count();
         $openTasks = Task::whereIn('status', [TaskStatus::Open, TaskStatus::InProgress])->count();
 
@@ -86,9 +96,9 @@ class StatsOverview extends BaseWidget
                 ->url(ChargeResource::getUrl()),
 
             Stat::make('פניות פתוחות', $openTickets)
-                ->description('פניות שממתינות לטיפול')
+                ->description($slaBreaches > 0 ? "{$slaBreaches} בחריגת SLA — ללא מענה" : 'פניות שממתינות לטיפול')
                 ->icon('heroicon-o-lifebuoy')
-                ->color($openTickets > 0 ? 'warning' : 'success')
+                ->color($slaBreaches > 0 ? 'danger' : ($openTickets > 0 ? 'warning' : 'success'))
                 ->url(TicketResource::getUrl()),
 
             Stat::make('משימות פתוחות', $openTasks)

@@ -12,6 +12,7 @@ use Filament\Forms\Form;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 
 class TicketResource extends Resource
@@ -144,6 +145,26 @@ class TicketResource extends Resource
                     ->label('אחראי')
                     ->searchable()
                     ->toggleable(),
+                Tables\Columns\TextColumn::make('sla')
+                    ->label('SLA תגובה')
+                    ->badge()
+                    ->getStateUsing(fn (Ticket $record): string => match ($record->firstResponseSlaStatus()) {
+                        'met' => 'עמד ביעד',
+                        'breached' => 'חריגה',
+                        'at_risk' => 'בסיכון',
+                        'ok' => 'בזמן',
+                        default => '—',
+                    })
+                    ->color(fn (Ticket $record): string => match ($record->firstResponseSlaStatus()) {
+                        'met', 'ok' => 'success',
+                        'breached' => 'danger',
+                        'at_risk' => 'warning',
+                        default => 'gray',
+                    })
+                    ->tooltip(fn (Ticket $record): ?string => $record->firstResponseMinutes() !== null
+                        ? 'תגובה ראשונה תוך '.$record->firstResponseMinutes().' דק׳'
+                        : 'יעד תגובה: '.$record->firstResponseDueAt()->format('d/m/Y H:i'))
+                    ->toggleable(),
                 Tables\Columns\TextColumn::make('created_at')
                     ->label('נפתח')
                     ->date('d/m/Y')
@@ -170,6 +191,9 @@ class TicketResource extends Resource
                 Tables\Filters\SelectFilter::make('channel')
                     ->label('ערוץ')
                     ->options(TicketChannel::class),
+                Tables\Filters\Filter::make('sla_breached')
+                    ->label('בחריגת SLA (ללא מענה)')
+                    ->query(fn (Builder $query): Builder => $query->whereKey(self::breachedTicketIds())),
             ])
             ->actions([
                 Tables\Actions\ViewAction::make()->label('פתח שיחה')->icon('heroicon-o-chat-bubble-left-right'),
@@ -215,6 +239,24 @@ class TicketResource extends Resource
         return [
             TicketResource\RelationManagers\MessagesRelationManager::class,
         ];
+    }
+
+    /**
+     * Ids of open tickets that breached their first-response SLA. The per-priority
+     * target lives in config, so the breach test runs in PHP over the open,
+     * still-unanswered set (bounded — the open queue is small).
+     *
+     * @return array<int, int>
+     */
+    private static function breachedTicketIds(): array
+    {
+        return Ticket::query()
+            ->where('status', TicketStatus::Open)
+            ->whereNull('first_response_at')
+            ->get(['id', 'priority', 'status', 'created_at'])
+            ->filter(fn (Ticket $t): bool => $t->firstResponseSlaStatus() === 'breached')
+            ->pluck('id')
+            ->all();
     }
 
     public static function getPages(): array
