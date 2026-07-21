@@ -60,7 +60,7 @@ class CollectionForecast extends Page implements HasTable
     /** Bucket totals + grand total, shown at a glance under the title. */
     public function getSubheading(): ?string
     {
-        $rows = self::baseQuery()->get(['total_agorot', 'demand_sent_at']);
+        $rows = self::baseQuery()->get(['total_agorot', 'created_at']);
 
         if ($rows->isEmpty()) {
             return null;
@@ -86,11 +86,15 @@ class CollectionForecast extends Page implements HasTable
         return implode(' · ', $parts);
     }
 
-    /** Days since the demand was (last) sent. */
+    /**
+     * Age of the DEBT in days — from the immutable creation date, not
+     * demand_sent_at (which the reminder flows overwrite on every nudge, so it
+     * tracks last contact, not the age of the unpaid demand).
+     */
     private static function ageDays(Charge $charge): int
     {
-        return $charge->demand_sent_at
-            ? (int) $charge->demand_sent_at->startOfDay()->diffInDays(now()->startOfDay())
+        return $charge->created_at
+            ? (int) $charge->created_at->startOfDay()->diffInDays(now()->startOfDay())
             : 0;
     }
 
@@ -110,7 +114,7 @@ class CollectionForecast extends Page implements HasTable
     {
         return $table
             ->query(self::baseQuery()->with(['customer', 'subscription.customer']))
-            ->defaultSort('demand_sent_at', 'asc') // oldest debt first
+            ->defaultSort('created_at', 'asc') // oldest debt first (immutable date)
             ->poll('30s')
             ->columns([
                 Tables\Columns\TextColumn::make('customer_name')
@@ -121,10 +125,13 @@ class CollectionForecast extends Page implements HasTable
                 Tables\Columns\TextColumn::make('total_agorot')
                     ->label('סכום')->money('ILS', divideBy: 100)
                     ->summarize(Tables\Columns\Summarizers\Sum::make()->label('סה״כ')->money('ILS', divideBy: 100)),
+                Tables\Columns\TextColumn::make('created_at')
+                    ->label('נוצרה')->date('d/m/Y')->sortable(),
                 Tables\Columns\TextColumn::make('demand_sent_at')
-                    ->label('נשלחה')->date('d/m/Y')->sortable(),
+                    ->label('פנייה אחרונה')->date('d/m/Y')->placeholder('—')
+                    ->toggleable(),
                 Tables\Columns\TextColumn::make('age')
-                    ->label('גיל (ימים)')
+                    ->label('גיל החוב (ימים)')
                     ->getStateUsing(fn (Charge $r): int => self::ageDays($r)),
                 Tables\Columns\TextColumn::make('bucket')
                     ->label('טווח')->badge()

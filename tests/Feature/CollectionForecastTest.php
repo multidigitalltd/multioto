@@ -16,9 +16,13 @@ class CollectionForecastTest extends TestCase
 {
     use RefreshDatabase;
 
-    private function demand(int $customerId, int $totalAgorot, ?int $sentDaysAgo): Charge
+    /**
+     * $ageDays sets the immutable created_at (the debt origin). demand_sent_at is
+     * always "now" to mimic a demand reminded moments ago — aging must ignore it.
+     */
+    private function demand(int $customerId, int $totalAgorot, ?int $ageDays): Charge
     {
-        return Charge::create([
+        $charge = Charge::create([
             'customer_id' => $customerId,
             'amount_agorot' => $totalAgorot,
             'vat_agorot' => 0,
@@ -26,11 +30,18 @@ class CollectionForecastTest extends TestCase
             'status' => ChargeStatus::Pending,
             'attempt_number' => 1,
             'description' => 'דרישה',
-            'demand_sent_at' => $sentDaysAgo === null ? null : now()->subDays($sentDaysAgo),
-            'demand_channel' => $sentDaysAgo === null ? null : 'email',
+            'demand_sent_at' => $ageDays === null ? null : now(),
+            'demand_channel' => $ageDays === null ? null : 'email',
             'period_start' => now()->toDateString(),
             'period_end' => now()->toDateString(),
         ]);
+
+        if ($ageDays !== null) {
+            Charge::whereKey($charge->id)->update(['created_at' => now()->subDays($ageDays)]);
+            $charge->refresh();
+        }
+
+        return $charge;
     }
 
     public function test_it_lists_open_demands_and_excludes_paid_or_non_demands(): void
@@ -63,6 +74,19 @@ class CollectionForecastTest extends TestCase
         $this->assertStringContainsString('31–60 ימים: '.Money::ils(20000), $sub);
         $this->assertStringContainsString('מעל 90 ימים: '.Money::ils(30000), $sub);
         $this->assertStringContainsString('סה״כ פתוח: '.Money::ils(60000), $sub);
+    }
+
+    public function test_aging_uses_the_debt_origin_not_the_last_reminder(): void
+    {
+        $customer = Customer::factory()->create();
+        // 120 days old but "reminded" just now (demand_sent_at = now) — must age
+        // to 90+, not 0–30.
+        $this->demand($customer->id, 30000, 120);
+
+        $sub = (new CollectionForecast)->getSubheading();
+
+        $this->assertStringContainsString('מעל 90 ימים: '.Money::ils(30000), $sub);
+        $this->assertStringNotContainsString('0–30 ימים:', $sub);
     }
 
     public function test_the_navigation_badge_shows_the_total_open(): void
