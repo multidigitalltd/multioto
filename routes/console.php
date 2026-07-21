@@ -4,6 +4,7 @@ use App\Enums\BroadcastStatus;
 use App\Enums\ChargeStatus;
 use App\Jobs\ChargeSubscriptionJob;
 use App\Jobs\CheckDomainExpiryJob;
+use App\Jobs\CheckSlaBreachesJob;
 use App\Jobs\CheckSslExpiryJob;
 use App\Jobs\FollowUpPendingTicketsJob;
 use App\Jobs\MonitorSiteJob;
@@ -95,6 +96,11 @@ Schedule::job(new SendProactiveRemindersJob)
 // of silence, then auto-close after close_days. Timings in config/billing.php.
 Schedule::job(new FollowUpPendingTicketsJob)
     ->dailyAt('09:00')->name('support:pending-followup')->onOneServer();
+
+// Alert the team about open tickets that breached their first-response SLA
+// (once per ticket). Hourly so a breach surfaces the same working hour.
+Schedule::job(new CheckSlaBreachesJob)
+    ->hourly()->name('support:sla-breaches')->onOneServer();
 
 // Chase unpaid payment demands: after the quiet interval, resend the request
 // (link/transfer) up to the configured maximum, then stop.
