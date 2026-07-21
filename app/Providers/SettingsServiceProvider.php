@@ -36,6 +36,7 @@ class SettingsServiceProvider extends ServiceProvider
         'linet.payment_type_standing_order' => 'billing.linet.payment_type_standing_order',
         'linet.general_item_id' => 'billing.linet.general_item_id',
         'linet.income_account_exempt' => 'billing.linet.income_account_exempt',
+        'billing.bank_transfer_details' => 'billing.bank_transfer_details',
         'flywp.api_token' => 'billing.hosting.flywp.api_token',
         'flywp.server_id' => 'billing.hosting.flywp.server_id',
         // Account-wide Cloudflare API token (IP whitelist + cache purge).
