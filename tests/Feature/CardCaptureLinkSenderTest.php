@@ -127,6 +127,9 @@ class CardCaptureLinkSenderTest extends TestCase
 
         Mail::assertNothingSent();
         $this->assertSame([], $result['sent']);
+        // A disabled template is an intentional skip, NOT a delivery failure.
+        $this->assertSame([], $result['failed']);
+        $this->assertNotEmpty($result['skipped']);
         $this->assertStringContainsString('/billing/update-card/', $result['link']);
     }
 

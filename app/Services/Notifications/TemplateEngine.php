@@ -163,6 +163,9 @@ class TemplateEngine
             $text = str_replace('{{'.$name.'}}', (string) ($value ?? ''), $text);
         }
 
-        return $text;
+        // Any placeholder this template's context didn't supply becomes empty —
+        // as the editor promises — so a customer never receives a literal
+        // {{token}} (e.g. {{items}} left in a card-link message).
+        return preg_replace('/\{\{\s*[\w.]+\s*\}\}/', '', $text) ?? $text;
     }
 }

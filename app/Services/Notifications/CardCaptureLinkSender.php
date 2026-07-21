@@ -22,7 +22,7 @@ class CardCaptureLinkSender
     public function __construct(private WahaClient $waha, private TemplateEngine $templates) {}
 
     /**
-     * @return array{link: string, sent: array<int, string>, failed: array<int, string>}
+     * @return array{link: string, sent: array<int, string>, failed: array<int, string>, skipped: array<int, string>}
      */
     public function send(Subscription $subscription): array
     {
@@ -49,7 +49,10 @@ class CardCaptureLinkSender
 
         $sent = [];
         $failed = [];
-        $disabled = 0;
+        // Intentional non-deliveries (a channel whose template the operator turned
+        // off, or a customer with no contact details) — kept SEPARATE from genuine
+        // delivery errors, so the queue job never retries an intentional skip.
+        $skipped = [];
 
         $whatsappTo = $customer->whatsappRecipient();
 
@@ -57,7 +60,7 @@ class CardCaptureLinkSender
             $tpl = $this->templates->render($key, 'whatsapp', $data);
 
             if ($tpl === null) {
-                $disabled++;
+                $skipped[] = 'וואטסאפ (ההודעה כבויה בהגדרות)';
             } else {
                 try {
                     $this->waha->sendMessage($whatsappTo, $tpl['body']);
@@ -74,7 +77,7 @@ class CardCaptureLinkSender
             $tpl = $this->templates->render($key, 'email', $data);
 
             if ($tpl === null) {
-                $disabled++;
+                $skipped[] = 'אימייל (ההודעה כבויה בהגדרות)';
             } else {
                 try {
                     Mail::to($customer->email)->send(new DunningNotificationMail($tpl['subject'], $tpl['body']));
@@ -87,13 +90,11 @@ class CardCaptureLinkSender
             }
         }
 
-        if ($sent === [] && $failed === []) {
-            $failed[] = $disabled > 0
-                ? 'ההודעה כבויה בהגדרות → הודעות אוטומטיות (הקישור עצמו נוצר).'
-                : 'ללקוח אין טלפון/וואטסאפ או אימייל';
+        if ($sent === [] && $failed === [] && $skipped === []) {
+            $skipped[] = 'ללקוח אין טלפון/וואטסאפ או אימייל';
         }
 
-        return ['link' => $link, 'sent' => $sent, 'failed' => $failed];
+        return ['link' => $link, 'sent' => $sent, 'failed' => $failed, 'skipped' => $skipped];
     }
 
     private function reason(\Throwable $e): string

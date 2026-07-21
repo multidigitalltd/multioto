@@ -51,7 +51,7 @@ class NotificationTemplateResource extends Resource
     {
         return $form->schema([
             Forms\Components\Section::make()
-                ->description('משתנים זמינים לפי סוג ההודעה: {{customer_name}} — שם הלקוח · {{business_name}} — שם העסק · בפניות: {{ticket_id}}, {{ticket_subject}} · בתשלום/כרטיס: {{amount}} — סכום, {{plan}} — שם המנוי, {{link}} — קישור, {{items}} — פירוט, {{payment_options}}. משתנה שאינו רלוונטי להודעה מסוימת פשוט יישאר ריק.')
+                ->description('משתנים זמינים לפי סוג ההודעה: {{customer_name}} — שם הלקוח · {{business_name}} — שם העסק · בפניות: {{ticket_id}}, {{ticket_subject}} · בקישור כרטיס: {{plan}} — שם המנוי, {{amount}} — סכום, {{link}} — קישור · בקישור תשלום: {{amount}}, {{items}} — פירוט, {{payment_options}}. משתנה שאינו רלוונטי להודעה מסוימת יישאר ריק.')
                 ->schema([
                     Forms\Components\TextInput::make('subject')
                         ->label('נושא (מייל בלבד)')

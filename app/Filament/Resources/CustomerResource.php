@@ -221,6 +221,8 @@ class CustomerResource extends Resource
      */
     public static function notifyLinkResult(array $result): void
     {
+        $skipped = $result['skipped'] ?? [];
+
         if ($result['sent'] !== [] && $result['failed'] === []) {
             Notification::make()->title('הקישור נשלח: '.implode(', ', $result['sent']).' ✓')->success()->send();
         } elseif ($result['sent'] !== []) {
@@ -228,11 +230,18 @@ class CustomerResource extends Resource
                 ->title('נשלח חלקית')
                 ->body('נשלח: '.implode(', ', $result['sent']).'. נכשל: '.implode('; ', $result['failed']))
                 ->warning()->persistent()->send();
-        } else {
+        } elseif ($result['failed'] !== []) {
             Notification::make()
                 ->title('השליחה נכשלה')
                 ->body(implode('; ', $result['failed']).' — אפשר להעתיק את הקישור ידנית בכפתור "העתקת קישור לכרטיס".')
                 ->danger()->persistent()->send();
+        } else {
+            // Nothing failed — delivery was intentionally skipped (message off /
+            // no contact). Not an error: the link was created and can be copied.
+            Notification::make()
+                ->title('לא נשלחה הודעה')
+                ->body(implode('; ', $skipped).' — הקישור נוצר, אפשר להעתיק אותו ידנית בכפתור "העתקת קישור לכרטיס".')
+                ->warning()->persistent()->send();
         }
     }
 

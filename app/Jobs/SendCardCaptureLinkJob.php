@@ -46,9 +46,11 @@ class SendCardCaptureLinkJob implements ShouldQueue
             ]);
         }
 
-        // If nothing got through, throw so the job retries (a transient WhatsApp
-        // or mail error may clear); if at least one channel delivered, we're done.
-        if ($result['sent'] === []) {
+        // Retry only on a GENUINE delivery error (a transient WhatsApp/mail
+        // failure may clear). An intentional skip — the operator disabled the
+        // message, or the customer has no contact channel — is not a failure and
+        // must not push the job into the failed-jobs queue.
+        if ($result['sent'] === [] && $result['failed'] !== []) {
             throw new \RuntimeException('Card-capture link delivery failed: '.implode('; ', $result['failed']));
         }
     }
