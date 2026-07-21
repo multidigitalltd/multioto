@@ -29,7 +29,7 @@ class SiteDiagnostics
      */
     public function run(Site $site): array
     {
-        $url = $site->monitor_url ?: 'https://'.$site->domain;
+        $url = $site->monitorUrl();
         $probe = $this->probe($url);
         $ssl = $this->sslInfo($site->domain);
         $history = $this->recentHistory($site);

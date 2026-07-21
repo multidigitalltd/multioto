@@ -54,15 +54,17 @@ class SiteResource extends Resource
                         Forms\Components\TextInput::make('domain')
                             ->label('דומיין')
                             ->required()
-                            ->maxLength(255),
+                            ->maxLength(255)
+                            ->helperText('רק הדומיין — ללא https:// (למשל example.co.il). קידומת שתודבק בטעות תוסר אוטומטית.'),
                     ])->columns(2),
 
                 Forms\Components\Section::make('ניטור')
                     ->schema([
                         Forms\Components\TextInput::make('monitor_url')
-                            ->label('כתובת לניטור')
+                            ->label('כתובת לניטור (אופציונלי)')
                             ->url()
-                            ->maxLength(255),
+                            ->maxLength(255)
+                            ->helperText('כתובת מלאה לבדיקת הזמינות. אם ריק — נבדקת אוטומטית https://<דומיין>.'),
                         Forms\Components\Toggle::make('monitor_enabled')
                             ->label('ניטור פעיל')
                             ->inline(false)
@@ -157,7 +159,7 @@ class SiteResource extends Resource
                         // predictable place.
                         Forms\Components\Placeholder::make('toolsHint')
                             ->hiddenLabel()
-                            ->content('כלי החיבור — קודי חיבור לתוסף, בדיקת חיבור, הורדת התוסף, טוקן חדש והחרגת Cloudflare — נמצאים בעמוד האתר עצמו (לחיצה על האתר), לא כאן.')
+                            ->content('כלי החיבור — קודי חיבור לתוסף, בדיקת חיבור, הורדת התוסף, טוקן חדש והחרגת Cloudflare — נמצאים בעמוד האתר. לחצו על "כלי חיבור וניטור" בראש המסך כדי לפתוח אותם.')
                             ->columnSpanFull(),
                     ])->columns(2),
             ]);
