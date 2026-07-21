@@ -8,6 +8,8 @@ use App\Jobs\SendPaymentLinkJob;
 use App\Mail\NotificationMail;
 use App\Models\Charge;
 use App\Models\Customer;
+use App\Models\Setting;
+use App\Providers\SettingsServiceProvider;
 use App\Services\Billing\ManualChargeService;
 use App\Services\Notifications\TemplateEngine;
 use App\Services\Waha\WahaClient;
@@ -155,6 +157,25 @@ class PaymentLinkTest extends TestCase
 
         Mail::assertSent(NotificationMail::class, fn ($mail) => str_contains($mail->bodyText, '/billing/pay/')
             && str_contains($mail->bodyText, 'IBAN IL12 3456'));
+    }
+
+    public function test_a_demand_includes_bank_details_saved_via_signup_settings_and_applied_by_the_overlay(): void
+    {
+        Mail::fake();
+        Http::fake(['*/LowProfile/Create' => Http::response(['ResponseCode' => 0, 'Url' => 'https://secure.cardcom.test/lp/BANK', 'LowProfileId' => 'LP7'])]);
+
+        // Saved through הגדרות ← טופס הרשמה → "העברה בנקאית" (a stored Setting)…
+        Setting::put('signup.instructions.bank_transfer', 'בנק לאומי · סניף 800 · חשבון 12345');
+        // …and applied to config the way a queue worker does before each job.
+        config(['billing.signup.instructions.bank_transfer' => 'STALE-DEFAULT']);
+        (new SettingsServiceProvider(app()))->boot();
+
+        $customer = Customer::factory()->create(['email' => 'pay@example.co.il']);
+
+        (new SendPaymentLinkJob($customer->id, 12000, 'שירות', 'email', [], ['transfer', 'link']))
+            ->handle(app(ManualChargeService::class), app(TemplateEngine::class), app(WahaClient::class));
+
+        Mail::assertSent(NotificationMail::class, fn ($mail) => str_contains($mail->bodyText, 'בנק לאומי · סניף 800 · חשבון 12345'));
     }
 
     public function test_a_demand_captures_and_offers_a_bit_link_when_cardcom_returns_one(): void

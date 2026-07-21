@@ -109,7 +109,21 @@ class DemandDispatcher
      */
     private function bankDetails(): string
     {
-        return (string) config('billing.signup.instructions.bank_transfer');
+        // Single source of truth: the signup-form bank-transfer instructions.
+        // Fall back to the legacy BANK_TRANSFER_DETAILS env for installs that
+        // still carry it, so a demand never silently loses the account.
+        foreach ([
+            config('billing.signup.instructions.bank_transfer'),
+            config('billing.bank_transfer_details'),
+        ] as $value) {
+            $value = trim((string) $value);
+
+            if ($value !== '') {
+                return $value;
+            }
+        }
+
+        return '';
     }
 
     /**
