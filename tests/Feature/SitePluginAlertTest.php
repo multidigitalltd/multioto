@@ -87,4 +87,13 @@ class SitePluginAlertTest extends TestCase
         $text = "WooCommerce | active | 9.1\nAkismet | inactive | 5.3";
         $this->assertSame(['akismet', 'woocommerce'], SitePluginInventory::identities($text));
     }
+
+    public function test_the_stable_plugin_file_is_used_as_the_identity_not_the_display_name(): void
+    {
+        // The bundled wp_plugin_list returns both — a display-name change must not
+        // read as a new install, so the stable 'plugin' file path is the key.
+        $json = json_encode([['plugin' => 'akismet/akismet.php', 'name' => 'Akismet Anti-Spam', 'version' => '5.3']]);
+
+        $this->assertSame(['akismet/akismet.php'], SitePluginInventory::identities((string) $json));
+    }
 }

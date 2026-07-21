@@ -48,10 +48,17 @@ class SitePluginInventory
         return array_is_list($decoded) ? $decoded : array_values($decoded);
     }
 
-    /** @param array<string, mixed> $row */
+    /**
+     * @param  array<string, mixed>  $row
+     *
+     * Prefer the STABLE identifier (a plugin file path / theme stylesheet /
+     * slug) over the mutable display name, so a plugin that changes its display
+     * name isn't reported as a new install, and two plugins that happen to share
+     * a display name aren't collapsed into one identity.
+     */
     private static function pickName(array $row): string
     {
-        foreach (['slug', 'name', 'title', 'plugin', 'stylesheet', 'theme'] as $key) {
+        foreach (['plugin', 'slug', 'stylesheet', 'file', 'name', 'title', 'theme'] as $key) {
             if (filled($row[$key] ?? null)) {
                 return (string) $row[$key];
             }

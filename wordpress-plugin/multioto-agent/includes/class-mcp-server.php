@@ -136,6 +136,7 @@ class Multioto_Agent_Mcp_Server
         $tools = [
             ['name' => 'wp_health', 'description' => 'סקירת בריאות האתר: גרסאות, SSL, תוספים פעילים.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => (object) []]],
             ['name' => 'wp_plugin_list', 'description' => 'רשימת התוספים המותקנים והאם יש עדכון.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => (object) []]],
+            ['name' => 'wp_theme_list', 'description' => 'רשימת התבניות (themes) המותקנות ואיזו פעילה.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => (object) []]],
             ['name' => 'wp_option_get', 'description' => 'קריאת הגדרה בטוחה מרשימה מוגדרת מראש.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['name' => ['type' => 'string']], 'required' => ['name']]],
             ['name' => 'wp_error_log_tail', 'description' => 'שורות אחרונות מיומן השגיאות (אם מופעל).', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['lines' => ['type' => 'integer']]]],
             ['name' => 'wp_cache_flush', 'description' => 'ניקוי מטמון אובייקטים ו-OPcache.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => (object) []]],
@@ -173,6 +174,7 @@ class Multioto_Agent_Mcp_Server
         $text = match ($name) {
             'wp_health' => $this->health(),
             'wp_plugin_list' => $this->pluginList(),
+            'wp_theme_list' => $this->themeList(),
             'wp_option_get' => $this->optionGet($args),
             'wp_error_log_tail' => $this->errorLogTail($args),
             'wp_cache_flush' => $this->cacheFlush(),
@@ -238,6 +240,24 @@ class Multioto_Agent_Mcp_Server
                 'version' => $meta['Version'] ?? '',
                 'active' => in_array($file, $active, true),
                 'update_available' => isset($updates->response[$file]),
+            ];
+        }
+
+        return wp_json_encode($out, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    }
+
+    /** Installed themes, keyed by the stable stylesheet (directory) slug. */
+    private function themeList(): string
+    {
+        $active = get_stylesheet();
+        $out = [];
+
+        foreach (wp_get_themes() as $slug => $theme) {
+            $out[] = [
+                'stylesheet' => (string) $slug,
+                'name' => $theme->get('Name'),
+                'version' => $theme->get('Version'),
+                'active' => ((string) $slug === $active),
             ];
         }
 
