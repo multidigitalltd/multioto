@@ -11,6 +11,7 @@ use App\Jobs\ClassifyTicketJob;
 use App\Jobs\InvestigateTicketJob;
 use App\Jobs\NotifyTeamJob;
 use App\Jobs\SendTicketNotificationJob;
+use App\Models\Contact;
 use App\Models\Customer;
 use App\Models\Ticket;
 use App\Models\TicketMessage;
@@ -29,11 +30,37 @@ class TicketIntake
      */
     public function matchCustomer(?string $email = null, ?string $phone = null, ?string $whatsappJid = null): ?Customer
     {
-        return Customer::query()
+        $direct = Customer::query()
             ->when($whatsappJid, fn ($q) => $q->orWhere('whatsapp_jid', $whatsappJid))
             ->when($email, fn ($q) => $q->orWhere('email', $email))
             ->when($phone, fn ($q) => $q->orWhere('phone', $phone))
             ->when(! $whatsappJid && ! $email && ! $phone, fn ($q) => $q->whereRaw('1 = 0'))
+            ->first();
+
+        if ($direct) {
+            return $direct;
+        }
+
+        // No customer matched on its own fields — try the additional contacts, so
+        // a message from a secondary contact still lands on the right customer.
+        return $this->matchContact($email, $phone, $whatsappJid)?->customer;
+    }
+
+    /**
+     * Find the customer contact whose email / phone / WhatsApp id matches an
+     * inbound sender (null when nothing was provided or nothing matched).
+     */
+    public function matchContact(?string $email = null, ?string $phone = null, ?string $whatsappJid = null): ?Contact
+    {
+        if (! $email && ! $phone && ! $whatsappJid) {
+            return null;
+        }
+
+        return Contact::query()
+            ->with('customer')
+            ->when($whatsappJid, fn ($q) => $q->orWhere('whatsapp_jid', $whatsappJid))
+            ->when($email, fn ($q) => $q->orWhere('email', $email))
+            ->when($phone, fn ($q) => $q->orWhere('phone', $phone))
             ->first();
     }
 
