@@ -19,7 +19,7 @@ use Illuminate\Support\Str;
  */
 class CardCaptureLinkSender
 {
-    public function __construct(private WahaClient $waha) {}
+    public function __construct(private WahaClient $waha, private TemplateEngine $templates) {}
 
     /**
      * @return array{link: string, sent: array<int, string>, failed: array<int, string>}
@@ -30,11 +30,14 @@ class CardCaptureLinkSender
 
         $link = CardLink::for($customer->id);
 
-        $replacements = [
-            'name' => $customer->name,
+        // Operator-editable wording (הגדרות → הודעות אוטומטיות): {{customer_name}},
+        // {{plan}}, {{amount}}, {{link}}, {{business_name}}.
+        $data = [
+            'customer_name' => $customer->name,
             'plan' => $subscription->planName(),
             'amount' => number_format($subscription->totalChargeAgorot() / 100, 2),
             'link' => $link,
+            'business_name' => config('mail.from.name') ?: config('app.name'),
         ];
 
         // A customer whose payment failed (past-due / suspended) is a debtor, not
@@ -42,39 +45,52 @@ class CardCaptureLinkSender
         // link is customer-wide, so any subscription in arrears makes this a debt
         // message, even if the subscription we were handed happens to be active.
         $inArrears = $customer->subscriptions()->inArrears()->exists();
-        $key = $inArrears ? 'onboarding.card_capture_debt' : 'onboarding.card_capture';
-        $subject = __("{$key}.subject", $replacements);
-        $body = __("{$key}.body", $replacements);
+        $key = $inArrears ? 'card.capture_debt' : 'card.capture';
 
         $sent = [];
         $failed = [];
+        $disabled = 0;
 
         $whatsappTo = $customer->whatsappRecipient();
 
         if (filled($whatsappTo)) {
-            try {
-                $this->waha->sendMessage($whatsappTo, $body);
-                $sent[] = 'וואטסאפ';
-                NotificationLog::record('whatsapp', NotificationType::CardLink, $whatsappTo, null, $body, $customer->id);
-            } catch (\Throwable $e) {
-                $failed[] = 'וואטסאפ: '.$this->reason($e);
-                NotificationLog::record('whatsapp', NotificationType::CardLink, $whatsappTo, null, $body, $customer->id, 'failed', $e->getMessage());
+            $tpl = $this->templates->render($key, 'whatsapp', $data);
+
+            if ($tpl === null) {
+                $disabled++;
+            } else {
+                try {
+                    $this->waha->sendMessage($whatsappTo, $tpl['body']);
+                    $sent[] = 'וואטסאפ';
+                    NotificationLog::record('whatsapp', NotificationType::CardLink, $whatsappTo, null, $tpl['body'], $customer->id);
+                } catch (\Throwable $e) {
+                    $failed[] = 'וואטסאפ: '.$this->reason($e);
+                    NotificationLog::record('whatsapp', NotificationType::CardLink, $whatsappTo, null, $tpl['body'], $customer->id, 'failed', $e->getMessage());
+                }
             }
         }
 
         if (filled($customer->email)) {
-            try {
-                Mail::to($customer->email)->send(new DunningNotificationMail($subject, $body));
-                $sent[] = 'אימייל';
-                NotificationLog::record('email', NotificationType::CardLink, $customer->email, $subject, $body, $customer->id);
-            } catch (\Throwable $e) {
-                $failed[] = 'אימייל: '.$this->reason($e);
-                NotificationLog::record('email', NotificationType::CardLink, $customer->email, $subject, $body, $customer->id, 'failed', $e->getMessage());
+            $tpl = $this->templates->render($key, 'email', $data);
+
+            if ($tpl === null) {
+                $disabled++;
+            } else {
+                try {
+                    Mail::to($customer->email)->send(new DunningNotificationMail($tpl['subject'], $tpl['body']));
+                    $sent[] = 'אימייל';
+                    NotificationLog::record('email', NotificationType::CardLink, $customer->email, $tpl['subject'], $tpl['body'], $customer->id);
+                } catch (\Throwable $e) {
+                    $failed[] = 'אימייל: '.$this->reason($e);
+                    NotificationLog::record('email', NotificationType::CardLink, $customer->email, $tpl['subject'], $tpl['body'], $customer->id, 'failed', $e->getMessage());
+                }
             }
         }
 
         if ($sent === [] && $failed === []) {
-            $failed[] = 'ללקוח אין טלפון/וואטסאפ או אימייל';
+            $failed[] = $disabled > 0
+                ? 'ההודעה כבויה בהגדרות → הודעות אוטומטיות (הקישור עצמו נוצר).'
+                : 'ללקוח אין טלפון/וואטסאפ או אימייל';
         }
 
         return ['link' => $link, 'sent' => $sent, 'failed' => $failed];
