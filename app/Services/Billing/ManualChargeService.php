@@ -85,6 +85,9 @@ class ManualChargeService
         $charge->update([
             'cardcom_low_profile_id' => $lowProfile['low_profile_id'],
             'cardcom_pay_url' => $lowProfile['url'],
+            // Direct-to-Bit URL (empty when the terminal has no Bit) — offered as
+            // a one-tap option alongside the card link.
+            'cardcom_bit_url' => $lowProfile['bit_url'] ?? '',
         ]);
 
         return [

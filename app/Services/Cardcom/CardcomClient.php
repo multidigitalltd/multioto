@@ -142,7 +142,11 @@ class CardcomClient
      * page — never here. The result is delivered to the webhook; we match it back
      * to the pending charge by the returned LowProfileId.
      *
-     * @return array{url: string, low_profile_id: string}
+     * When the terminal has Bit enabled, Cardcom also returns UrlToBit — a
+     * direct-to-Bit URL we can offer as a one-tap payment option (paying via Bit
+     * fires the same webhook, so it finalises exactly like a card payment).
+     *
+     * @return array{url: string, bit_url: string, low_profile_id: string}
      */
     public function createChargeLowProfile(int $chargeId, int $totalAgorot, string $description, ?string $name, ?string $email, ?string $phone, string $successUrl, string $failureUrl, string $webhookUrl): array
     {
@@ -165,6 +169,7 @@ class CardcomClient
 
         return [
             'url' => $response['Url'] ?? '',
+            'bit_url' => $response['UrlToBit'] ?? '',
             'low_profile_id' => $response['LowProfileId'] ?? '',
         ];
     }

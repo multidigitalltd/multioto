@@ -66,6 +66,12 @@ Route::get('/billing/pay/{charge}', [BillingController::class, 'pay'])
     ->middleware(['signed', 'throttle:30,1'])
     ->name('billing.pay');
 
+// One-tap Bit variant of the payment link — same signed, cancelable gateway,
+// forwarding to Cardcom's direct Bit URL.
+Route::get('/billing/pay/{charge}/bit', [BillingController::class, 'payBit'])
+    ->middleware(['signed', 'throttle:30,1'])
+    ->name('billing.pay-bit');
+
 /*
  | Inbound support attachments — served only to a signed-in team member
  | (panel auth). Files live on a private disk; this is the sole read path.

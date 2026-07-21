@@ -156,4 +156,26 @@ class PaymentLinkTest extends TestCase
         Mail::assertSent(NotificationMail::class, fn ($mail) => str_contains($mail->bodyText, '/billing/pay/')
             && str_contains($mail->bodyText, 'IBAN IL12 3456'));
     }
+
+    public function test_a_demand_captures_and_offers_a_bit_link_when_cardcom_returns_one(): void
+    {
+        Mail::fake();
+        Http::fake(['*/LowProfile/Create' => Http::response([
+            'ResponseCode' => 0,
+            'Url' => 'https://secure.cardcom.test/lp/BIT',
+            'UrlToBit' => 'https://secure.cardcom.test/bit/XYZ',
+            'LowProfileId' => 'LP6',
+        ])]);
+
+        $customer = Customer::factory()->create(['email' => 'pay@example.co.il']);
+
+        (new SendPaymentLinkJob($customer->id, 12000, 'שירות', 'email', [], ['link']))
+            ->handle(app(ManualChargeService::class), app(TemplateEngine::class), app(WahaClient::class));
+
+        // The Bit URL is stored on the charge…
+        $this->assertSame('https://secure.cardcom.test/bit/XYZ', Charge::sole()->cardcom_bit_url);
+        // …and the email offers a Bit link (our own signed /bit gateway) + "Bit".
+        Mail::assertSent(NotificationMail::class, fn ($mail) => str_contains($mail->bodyText, '/bit')
+            && str_contains($mail->bodyText, 'Bit'));
+    }
 }

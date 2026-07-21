@@ -20,4 +20,14 @@ class PaymentLink
             ['charge' => $chargeId],
         );
     }
+
+    /** The one-tap Bit variant of the payment link (same TTL and signing). */
+    public static function bitFor(int $chargeId): string
+    {
+        return URL::temporarySignedRoute(
+            'billing.pay-bit',
+            now()->addHours((int) config('billing.payment_link_ttl_hours')),
+            ['charge' => $chargeId],
+        );
+    }
 }

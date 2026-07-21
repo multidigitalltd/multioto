@@ -80,10 +80,28 @@ class BillingController extends Controller
      */
     public function pay(Charge $charge): View|RedirectResponse
     {
-        // Only a pending demand with a real Cardcom page is payable. Anything
-        // else — already paid, canceled, or never got a page — is inactive.
+        return $this->forwardWhilePayable($charge, (string) $charge->cardcom_pay_url);
+    }
+
+    /**
+     * Direct-to-Bit variant of the payment link: same signed + cancelable
+     * gateway, redirecting to Cardcom's Bit URL instead of the card page. Paying
+     * via Bit fires the same webhook, so the charge finalises identically.
+     */
+    public function payBit(Charge $charge): View|RedirectResponse
+    {
+        return $this->forwardWhilePayable($charge, (string) $charge->cardcom_bit_url);
+    }
+
+    /**
+     * Redirect to a Cardcom URL only while the demand is still payable (pending
+     * with a real https URL); otherwise show the "inactive" page. Signed +
+     * throttled at the route, so a charge id can't be enumerated.
+     */
+    private function forwardWhilePayable(Charge $charge, string $target): View|RedirectResponse
+    {
         $payable = $charge->status === ChargeStatus::Pending
-            && Str::startsWith((string) $charge->cardcom_pay_url, 'https://');
+            && Str::startsWith($target, 'https://');
 
         if (! $payable) {
             return view('billing.pay-inactive', [
@@ -91,6 +109,6 @@ class BillingController extends Controller
             ]);
         }
 
-        return redirect()->away($charge->cardcom_pay_url);
+        return redirect()->away($target);
     }
 }
