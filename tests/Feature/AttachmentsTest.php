@@ -131,7 +131,7 @@ class AttachmentsTest extends TestCase
     public function test_inbound_whatsapp_media_is_downloaded_and_stored(): void
     {
         Storage::fake('local');
-        config(['billing.waha.api_key' => 'k']);
+        config(['billing.waha.base_url' => 'https://waha.test', 'billing.waha.api_key' => 'k']);
 
         Http::fake([
             'https://waha.test/media/abc.png' => Http::response(base64_decode(self::PNG), 200),
@@ -155,6 +155,62 @@ class AttachmentsTest extends TestCase
         $this->assertCount(1, $message->attachments);
         $this->assertSame('image/png', $message->attachments[0]['mime']);
         Storage::disk('local')->assertExists($message->attachments[0]['path']);
+    }
+
+    public function test_inbound_media_url_is_fetched_from_the_configured_waha_host(): void
+    {
+        Storage::fake('local');
+        // WAHA embeds its own container host (localhost:3000) in the webhook —
+        // unreachable from us. It must be rewritten to the configured base_url.
+        config(['billing.waha.base_url' => 'https://waha.internal:3000', 'billing.waha.api_key' => 'k']);
+
+        Http::fake([
+            'https://waha.internal:3000/api/files/abc.png' => Http::response(base64_decode(self::PNG), 200),
+            '*' => Http::response('', 200), // swallow the auto-ack sendText
+        ]);
+
+        [$event] = WebhookEvent::record(WebhookSource::Waha, 'message', 'wa-host-1', [
+            'payload' => [
+                'id' => 'wa-host-1',
+                'from' => '972501234567@c.us',
+                'body' => '',
+                'hasMedia' => true,
+                'media' => ['url' => 'http://localhost:3000/api/files/abc.png', 'mimetype' => 'image/png', 'filename' => 'p.png'],
+            ],
+        ]);
+
+        IngestWhatsappMessageJob::dispatchSync($event->id);
+
+        $message = Ticket::query()->firstOrFail()
+            ->messages()->where('direction', MessageDirection::Inbound)->first();
+        $this->assertCount(1, $message->attachments);
+        Http::assertSent(fn ($request): bool => $request->url() === 'https://waha.internal:3000/api/files/abc.png');
+    }
+
+    public function test_a_caption_less_image_is_labelled_rather_than_shown_as_empty(): void
+    {
+        Storage::fake('local');
+        config(['billing.waha.base_url' => 'https://waha.test', 'billing.waha.api_key' => 'k']);
+        Http::fake(['*' => Http::response(base64_decode(self::PNG), 200)]);
+
+        [$event] = WebhookEvent::record(WebhookSource::Waha, 'message', 'wa-img-1', [
+            'payload' => [
+                'id' => 'wa-img-1',
+                'from' => '972501234567@c.us',
+                'body' => '',
+                'type' => 'image',
+                'hasMedia' => true,
+                'media' => ['url' => 'https://waha.test/api/files/x.jpg', 'mimetype' => 'image/jpeg', 'filename' => 'x.jpg'],
+            ],
+        ]);
+
+        IngestWhatsappMessageJob::dispatchSync($event->id);
+
+        $message = Ticket::query()->firstOrFail()
+            ->messages()->where('direction', MessageDirection::Inbound)->first();
+        // No caption → a typed label, never the generic "no text" placeholder.
+        $this->assertSame('📷 תמונה', $message->body);
+        $this->assertCount(1, $message->attachments);
     }
 
     public function test_the_attachment_route_streams_the_file_to_a_signed_in_user(): void

@@ -82,6 +82,24 @@ class PaymentDemandsPageTest extends TestCase
             fn (IssueInvoiceJob $job): bool => $job->chargeId === $demand->id);
     }
 
+    public function test_toggle_reminders_pauses_and_resumes_a_single_demand(): void
+    {
+        $this->actingAs(User::factory()->create());
+
+        $customer = Customer::factory()->create();
+        $demand = $this->charge($customer->id, ['demand_sent_at' => now(), 'demand_channel' => 'email']);
+
+        Livewire::test(PaymentDemands::class)
+            ->callTableAction('toggleReminders', $demand)
+            ->assertHasNoTableActionErrors();
+        $this->assertTrue($demand->fresh()->demand_reminders_paused);
+
+        Livewire::test(PaymentDemands::class)
+            ->callTableAction('toggleReminders', $demand)
+            ->assertHasNoTableActionErrors();
+        $this->assertFalse($demand->fresh()->demand_reminders_paused);
+    }
+
     private function charge(int $customerId, array $overrides = []): Charge
     {
         return Charge::create(array_merge([

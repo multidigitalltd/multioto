@@ -46,6 +46,8 @@ class SendDemandRemindersJob implements ShouldQueue
             ->with('customer')
             ->where('status', ChargeStatus::Pending)
             ->whereNotNull('demand_sent_at')
+            // Demands whose reminders were paused for this specific demand.
+            ->where('demand_reminders_paused', false)
             ->where('demand_reminder_count', '<', $maxReminders)
             // Quiet interval since the last contact (initial send or last reminder).
             ->where('demand_sent_at', '<=', now()->subDays($interval))

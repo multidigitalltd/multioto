@@ -79,11 +79,13 @@ class WahaClient
     /**
      * Download inbound media by its WAHA URL (authenticated with the API key).
      * Returns the raw bytes, or null on any failure — a missing attachment must
-     * never break message ingestion. Same-origin as the WAHA server only.
+     * never break message ingestion.
      */
     public function downloadMedia(string $url): ?string
     {
-        if (! str_starts_with($url, 'http')) {
+        $url = $this->resolveMediaUrl($url);
+
+        if ($url === null) {
             return null;
         }
 
@@ -94,6 +96,39 @@ class WahaClient
         } catch (\Throwable) {
             return null;
         }
+    }
+
+    /**
+     * Resolve a WAHA media reference to a URL our app can actually reach.
+     *
+     * WAHA serves media from its own file server, but the URL it embeds in the
+     * webhook uses WAHA's OWN hostname (very often localhost:3000 inside its
+     * container), which is unreachable from ours — so the download silently
+     * fails and the image never arrives. Rebuild the reference against the
+     * configured base_url: this fixes the host, handles a relative path, and
+     * keeps us same-origin with WAHA (an arbitrary host from the payload is
+     * never fetched). Returns null when nothing usable can be built.
+     */
+    private function resolveMediaUrl(string $url): ?string
+    {
+        $url = trim($url);
+
+        if ($url === '') {
+            return null;
+        }
+
+        $base = rtrim((string) config('billing.waha.base_url'), '/');
+
+        if ($base === '') {
+            // No WAHA base configured — only an absolute URL is usable as-is.
+            return str_starts_with($url, 'http') ? $url : null;
+        }
+
+        $parts = parse_url($url);
+        $path = $parts['path'] ?? (str_starts_with($url, '/') ? $url : '/'.$url);
+        $query = isset($parts['query']) ? '?'.$parts['query'] : '';
+
+        return $base.'/'.ltrim((string) $path, '/').$query;
     }
 
     /**
