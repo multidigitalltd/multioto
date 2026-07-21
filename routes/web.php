@@ -142,6 +142,7 @@ Route::prefix('portal')->group(function () {
 
     Route::middleware('portal.customer')->group(function () {
         Route::get('/', [PortalController::class, 'dashboard'])->name('portal.dashboard');
+        Route::get('/debt', [PortalController::class, 'debt'])->name('portal.debt');
         Route::get('/invoices', [PortalController::class, 'invoices'])->name('portal.invoices');
         Route::get('/tickets', [PortalController::class, 'tickets'])->name('portal.tickets');
         Route::get('/card', [PortalController::class, 'updateCard'])->name('portal.card');

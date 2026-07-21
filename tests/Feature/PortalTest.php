@@ -100,6 +100,58 @@ class PortalTest extends TestCase
             ->assertSee('תקלה בדומיין');
     }
 
+    public function test_the_debt_page_lists_only_the_customers_open_demands_with_a_pay_link(): void
+    {
+        $mine = Customer::factory()->create();
+        $other = Customer::factory()->create();
+
+        $myCharge = $this->demandedCharge($mine, 24000, 'אחסון שנתי');
+        $this->demandedCharge($other, 99900, 'חיוב של לקוח אחר');
+
+        $this->withSession(['portal.customer_id' => $mine->id])
+            ->get(route('portal.debt'))
+            ->assertOk()
+            ->assertSee('אחסון שנתי')
+            ->assertDontSee('חיוב של לקוח אחר')
+            // A signed, cancelable pay link for this charge.
+            ->assertSee('/billing/pay/'.$myCharge->id);
+    }
+
+    public function test_a_pending_charge_without_a_demand_is_not_shown_as_debt(): void
+    {
+        $customer = Customer::factory()->create();
+
+        // Pending but never demanded — mid-processing, not something we've asked
+        // the customer to pay. It must not appear as open debt.
+        $subscription = Subscription::factory()->create(['customer_id' => $customer->id]);
+        Charge::create([
+            'subscription_id' => $subscription->id,
+            'amount_agorot' => 5000, 'vat_agorot' => 900, 'total_agorot' => 5900,
+            'status' => ChargeStatus::Pending, 'attempt_number' => 1,
+            'description' => 'טרם נדרש',
+            'period_start' => now()->toDateString(),
+            'period_end' => now()->addMonth()->toDateString(),
+        ]);
+
+        $this->withSession(['portal.customer_id' => $customer->id])
+            ->get(route('portal.debt'))
+            ->assertOk()
+            ->assertSee('הכול משולם')
+            ->assertDontSee('טרם נדרש');
+    }
+
+    public function test_the_dashboard_surfaces_open_debt_when_present(): void
+    {
+        $customer = Customer::factory()->create();
+        $this->demandedCharge($customer, 15000, 'תוסף פרימיום');
+
+        $this->withSession(['portal.customer_id' => $customer->id])
+            ->get(route('portal.dashboard'))
+            ->assertOk()
+            ->assertSee('תשלומים פתוחים')
+            ->assertSee(route('portal.debt'));
+    }
+
     public function test_update_card_forwards_to_the_signed_card_page(): void
     {
         $customer = Customer::factory()->create();
@@ -119,6 +171,25 @@ class PortalTest extends TestCase
             ->assertRedirect(route('portal.login'));
 
         $this->assertNull(session('portal.customer_id'));
+    }
+
+    /** A pending charge with a payment demand issued (i.e. open debt) for a customer. */
+    private function demandedCharge(Customer $customer, int $totalAgorot, string $description): Charge
+    {
+        $subscription = Subscription::factory()->create(['customer_id' => $customer->id]);
+
+        return Charge::create([
+            'subscription_id' => $subscription->id,
+            'amount_agorot' => (int) round($totalAgorot / 1.18),
+            'vat_agorot' => $totalAgorot - (int) round($totalAgorot / 1.18),
+            'total_agorot' => $totalAgorot,
+            'status' => ChargeStatus::Pending,
+            'attempt_number' => 1,
+            'description' => $description,
+            'demand_sent_at' => now()->subDays(2),
+            'period_start' => now()->toDateString(),
+            'period_end' => now()->addMonth()->toDateString(),
+        ]);
     }
 
     /** Build a paid invoice attached to a fresh subscription for a customer. */

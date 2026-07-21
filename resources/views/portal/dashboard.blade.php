@@ -13,6 +13,14 @@
         </div>
     </div>
 
+    @if ($openDebtCount > 0)
+        <div class="card" style="border-color: var(--error);">
+            <h2>תשלומים פתוחים</h2>
+            <p>יש {{ $openDebtCount }} {{ $openDebtCount === 1 ? 'תשלום' : 'תשלומים' }} הממתינים לתשלום, בסך {{ \App\Support\Money::ils($openDebtAgorot) }}.</p>
+            <a href="{{ route('portal.debt') }}" class="btn">לתשלום עכשיו</a>
+        </div>
+    @endif
+
     <div class="card">
         <h2>אמצעי תשלום</h2>
         @if ($hasCard)
