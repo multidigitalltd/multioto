@@ -28,9 +28,9 @@ class ManualCollection extends Page implements HasTable
 
     protected static ?string $navigationGroup = 'כספים';
 
-    protected static ?string $navigationLabel = 'דרישות תשלום';
+    protected static ?string $navigationLabel = 'גבייה ידנית (מנויים)';
 
-    protected static ?string $title = 'דרישות תשלום — גבייה ידנית (העברה / הוראת קבע / צ׳קים)';
+    protected static ?string $title = 'גבייה ידנית של מנויים (העברה / הוראת קבע / צ׳קים)';
 
     protected static ?int $navigationSort = 22;
 

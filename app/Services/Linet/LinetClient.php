@@ -114,6 +114,15 @@ class LinetClient
             'line' => 1,
         ]];
 
+        // Close/convert the open proforma ("חשבונית עסקה") into this fiscal
+        // document when one exists and the (provider-specific) close parameter is
+        // configured — so the tax-receipt references the proforma instead of
+        // leaving it dangling. Opt-in: with the param unset the payload is
+        // unchanged, so the working receipt path is never altered by default.
+        if (filled($charge->proforma_document_id) && filled($config['close_proforma_param'] ?? null)) {
+            $payload[(string) $config['close_proforma_param']] = [$charge->proforma_document_id];
+        }
+
         return $this->createDocument($payload);
     }
 

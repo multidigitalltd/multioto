@@ -154,6 +154,13 @@ return [
         // for payment issued when a payment demand is created (before payment).
         // Leave unset to skip proforma issuance entirely (demands still go out).
         'doctype_proforma' => env('LINET_DOCTYPE_PROFORMA'),
+        // When a paid demand's tax invoice-receipt is issued, close/convert the
+        // open proforma ("חשבונית עסקה") into it by referencing the proforma's
+        // document id. The link field is provider-specific, so this is opt-in:
+        // set it to Linet's close/reference parameter name (per the Linet API
+        // docs) to enable. Left unset, the tax-receipt is still issued — it just
+        // isn't linked to the proforma.
+        'close_proforma_param' => env('LINET_CLOSE_PROFORMA_PARAM'),
         // Linet vat_cat_id values. Linet's own plugin hardcodes 1 = taxable,
         // 2 = exempt/abroad — verified against the live API (other codes are
         // rejected with "Income VAT account must match VAT percent").
