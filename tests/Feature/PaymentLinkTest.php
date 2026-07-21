@@ -123,7 +123,7 @@ class PaymentLinkTest extends TestCase
     {
         Mail::fake();
         Http::fake(); // nothing should hit Cardcom
-        config(['billing.bank_transfer_details' => 'בנק לאומי · סניף 800 · חשבון 12345 · ע"ש מולטי דיגיטל']);
+        config(['billing.signup.instructions.bank_transfer' => 'בנק לאומי · סניף 800 · חשבון 12345 · ע"ש מולטי דיגיטל']);
 
         $customer = Customer::factory()->create(['email' => 'pay@example.co.il']);
 
@@ -146,7 +146,7 @@ class PaymentLinkTest extends TestCase
     {
         Mail::fake();
         Http::fake(['*/LowProfile/Create' => Http::response(['ResponseCode' => 0, 'Url' => 'https://secure.cardcom.test/lp/BOTH', 'LowProfileId' => 'LP5'])]);
-        config(['billing.bank_transfer_details' => 'IBAN IL12 3456']);
+        config(['billing.signup.instructions.bank_transfer' => 'IBAN IL12 3456']);
 
         $customer = Customer::factory()->create(['email' => 'pay@example.co.il']);
 

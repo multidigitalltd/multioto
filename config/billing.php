@@ -33,16 +33,19 @@ return [
     // demand stops working immediately regardless of this TTL.
     'payment_link_ttl_hours' => env('PAYMENT_LINK_TTL_HOURS', 24 * 14),
 
-    // Bank-transfer details shown on a payment demand that offers a transfer
-    // option. Free text (account name, bank/branch, account number, or an IBAN).
-    'bank_transfer_details' => env('BANK_TRANSFER_DETAILS'),
+    // Bank-transfer details shown on a payment demand come from the signup-form
+    // settings (billing.signup.instructions.bank_transfer, editable at
+    // הגדרות ← טופס הרשמה) — a single source of truth, not a separate field.
 
-    // Automatic follow-up on an unpaid payment demand: after `interval_days` of
-    // silence resend the request (link/transfer), up to `max_reminders` times,
-    // then stop. Set max_reminders to 0 to disable reminders entirely.
+    // Automatic follow-up on an unpaid payment demand: nudge the customer every
+    // `reminder_interval_days` (default 3) until the demand is paid or canceled,
+    // up to `max_reminders` times, and stop chasing altogether after
+    // `max_age_days` from when the demand was created. Set max_reminders to 0 to
+    // disable reminders entirely.
     'demands' => [
         'reminder_interval_days' => (int) env('DEMAND_REMINDER_INTERVAL_DAYS', 3),
-        'max_reminders' => (int) env('DEMAND_MAX_REMINDERS', 2),
+        'max_reminders' => (int) env('DEMAND_MAX_REMINDERS', 20),
+        'max_age_days' => (int) env('DEMAND_MAX_AGE_DAYS', 90),
     ],
 
     /*
@@ -59,9 +62,12 @@ return [
                 'לחלופין ניתן להקים את ההרשאה באופן דיגיטלי בקישור:',
                 'https://ultra.kesherhk.info/extern/paymentPage/311928/',
             ])),
-            // Bank transfer — the account to transfer to. Fill the real details
-            // in הגדרות ← טופס הרשמה.
-            'bank_transfer' => env('SIGNUP_BANK_TRANSFER_INSTRUCTIONS', 'פרטי החשבון להעברה בנקאית יימסרו על ידי הצוות — מלאו אותם בהגדרות ← טופס הרשמה.'),
+            // Bank transfer — the account to transfer to. Shown on the signup
+            // form AND on payment demands (single source of truth). Fill the real
+            // details in הגדרות ← טופס הרשמה. Falls back to the legacy
+            // BANK_TRANSFER_DETAILS env (previously used for demands) so existing
+            // installs keep their configured account without re-entering it.
+            'bank_transfer' => env('SIGNUP_BANK_TRANSFER_INSTRUCTIONS', env('BANK_TRANSFER_DETAILS', 'פרטי החשבון להעברה בנקאית יימסרו על ידי הצוות — מלאו אותם בהגדרות ← טופס הרשמה.')),
             // Cheques (advance / prepayment).
             'checks' => env('SIGNUP_CHECKS_INSTRUCTIONS', 'לתשלום בצ׳קים (מקדמה / תשלום מראש) ניצור עמכם קשר לתיאום מסירת הצ׳קים.'),
         ],

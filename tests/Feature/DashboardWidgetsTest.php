@@ -3,12 +3,15 @@
 namespace Tests\Feature;
 
 use App\Enums\ActionStatus;
+use App\Enums\ChargeStatus;
 use App\Enums\SubscriptionStatus;
 use App\Enums\TicketChannel;
 use App\Enums\TicketStatus;
 use App\Filament\Widgets\Debtors;
 use App\Filament\Widgets\PendingApprovals;
 use App\Filament\Widgets\StatsOverview;
+use App\Models\Charge;
+use App\Models\Customer;
 use App\Models\PendingAction;
 use App\Models\Subscription;
 use App\Models\Ticket;
@@ -51,6 +54,46 @@ class DashboardWidgetsTest extends TestCase
 
         $openTickets = $stats->first(fn ($stat): bool => $stat->getLabel() === 'פניות פתוחות');
         $this->assertSame('2', (string) $openTickets->getValue());
+    }
+
+    public function test_expected_revenue_stat_adds_open_demands_to_subscription_mrr(): void
+    {
+        // Recurring: one active subscription.
+        $sub = Subscription::factory()->create(['status' => SubscriptionStatus::Active]);
+        $mrr = $sub->totalChargeAgorot();
+
+        // One-off: an open payment demand (חשבונית עסקה) awaiting payment…
+        $customer = Customer::factory()->create();
+        $this->demandCharge($customer->id, ChargeStatus::Pending, 24000);
+        // …a paid demand and a plain (non-demand) pending charge must NOT count.
+        $this->demandCharge($customer->id, ChargeStatus::Succeeded, 99900);
+        Charge::create([
+            'customer_id' => $customer->id, 'amount_agorot' => 5000, 'vat_agorot' => 900,
+            'total_agorot' => 5900, 'status' => ChargeStatus::Pending, 'attempt_number' => 1,
+            'period_start' => now()->toDateString(), 'period_end' => now()->toDateString(),
+        ]);
+
+        $method = new \ReflectionMethod(StatsOverview::class, 'getStats');
+        $method->setAccessible(true);
+        $stats = collect($method->invoke(new StatsOverview));
+
+        $expected = $stats->first(fn ($s): bool => $s->getLabel() === 'הכנסה חודשית צפויה');
+        // Headline = MRR + the single OPEN demand (24000 agorot = ₪240).
+        $this->assertSame('₪ '.number_format(($mrr + 24000) / 100), (string) $expected->getValue());
+        // The breakdown shows both parts.
+        $this->assertStringContainsString('מנויים ₪'.number_format($mrr / 100), (string) $expected->getDescription());
+        $this->assertStringContainsString('חד-פעמי ₪'.number_format(24000 / 100), (string) $expected->getDescription());
+    }
+
+    private function demandCharge(int $customerId, ChargeStatus $status, int $totalAgorot): Charge
+    {
+        return Charge::create([
+            'customer_id' => $customerId,
+            'amount_agorot' => $totalAgorot, 'vat_agorot' => 0, 'total_agorot' => $totalAgorot,
+            'status' => $status, 'attempt_number' => 1,
+            'demand_sent_at' => now(), 'demand_channel' => 'email',
+            'period_start' => now()->toDateString(), 'period_end' => now()->toDateString(),
+        ]);
     }
 
     public function test_debtors_widget_lists_only_arrears(): void

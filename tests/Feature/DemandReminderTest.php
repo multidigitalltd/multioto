@@ -22,7 +22,7 @@ class DemandReminderTest extends TestCase
         config([
             'billing.demands.reminder_interval_days' => 3,
             'billing.demands.max_reminders' => 2,
-            'billing.cardcom.reconcile_max_age_days' => 14,
+            'billing.demands.max_age_days' => 14,
             'mail.from.name' => 'מולטי דיגיטל',
         ]);
     }
@@ -77,6 +77,13 @@ class DemandReminderTest extends TestCase
         $charge->refresh();
         $this->assertSame(1, $charge->demand_reminder_count);
         $this->assertTrue($charge->demand_sent_at->isAfter(now()->subMinute()));
+
+        // Every send is recorded in the log, so the team sees when it went out.
+        $log = $charge->demand_reminders_log;
+        $this->assertCount(1, $log);
+        $this->assertSame('reminder', $log[0]['type']);
+        $this->assertSame('email', $log[0]['channel']);
+        $this->assertNotEmpty($log[0]['at']);
     }
 
     public function test_a_recent_demand_is_not_reminded(): void

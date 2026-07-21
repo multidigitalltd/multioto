@@ -129,7 +129,7 @@ class ViewCustomer extends ViewRecord
                     ->label('אמצעי תשלום בדרישה')
                     ->options(['link' => 'קישור לתשלום בכרטיס', 'transfer' => 'העברה בנקאית'])
                     ->default(['link'])
-                    ->helperText(blank(config('billing.bank_transfer_details')) ? 'להעברה בנקאית — מלאו את פרטי החשבון בהגדרות (BANK_TRANSFER_DETAILS).' : null)
+                    ->helperText(blank(config('billing.signup.instructions.bank_transfer')) ? 'להעברה בנקאית — מלאו את פרטי החשבון בהגדרות ← טופס הרשמה.' : null)
                     ->minItems(1)
                     ->required()
                     ->columns(2),
