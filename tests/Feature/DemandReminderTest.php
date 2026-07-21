@@ -128,6 +128,17 @@ class DemandReminderTest extends TestCase
         Mail::assertNothingSent();
     }
 
+    public function test_reminders_paused_for_one_demand_are_skipped(): void
+    {
+        Mail::fake();
+        // Due for a reminder in every respect, but paused for this demand.
+        $this->demand(['demand_reminders_paused' => true]);
+
+        (new SendDemandRemindersJob)->handle(app(DemandDispatcher::class));
+
+        Mail::assertNothingSent();
+    }
+
     public function test_reminders_can_be_disabled(): void
     {
         Mail::fake();

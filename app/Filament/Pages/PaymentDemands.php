@@ -229,7 +229,11 @@ class PaymentDemands extends Page implements HasTable
                     ->getStateUsing(fn (Charge $r): bool => $r->invoice()->exists())
                     ->trueIcon('heroicon-o-check-badge')->falseIcon('heroicon-o-minus'),
                 Tables\Columns\TextColumn::make('demand_reminder_count')
-                    ->label('תזכורות')->badge()->color('gray')
+                    ->label('תזכורות')->badge()
+                    // Paused demands are flagged (⏸, red) so it's clear at a glance
+                    // that the automatic nudges were stopped for this one.
+                    ->color(fn (Charge $r): string => $r->demand_reminders_paused ? 'danger' : 'gray')
+                    ->formatStateUsing(fn ($state, Charge $record): string => $record->demand_reminders_paused ? "{$state} ⏸" : (string) $state)
                     // Hover to see exactly when each demand/reminder went out.
                     ->tooltip(fn (Charge $r): ?string => $this->sendLogTooltip($r)),
                 Tables\Columns\TextColumn::make('demand_sent_at')
@@ -267,6 +271,28 @@ class PaymentDemands extends Page implements HasTable
                         ]);
 
                         Notification::make()->title('התזכורת נשלחה')->success()->send();
+                    }),
+
+                // Pause / resume the AUTOMATIC reminders for this one demand,
+                // without canceling it — it stays open and payable, and a manual
+                // "שלח תזכורת" still works. Use when the customer asked for time.
+                Tables\Actions\Action::make('toggleReminders')
+                    ->label(fn (Charge $r): string => $r->demand_reminders_paused ? 'חדש תזכורות' : 'עצור תזכורות')
+                    ->icon(fn (Charge $r): string => $r->demand_reminders_paused ? 'heroicon-o-bell' : 'heroicon-o-bell-slash')
+                    ->color('gray')
+                    ->visible(fn (Charge $r): bool => $r->status === ChargeStatus::Pending)
+                    ->requiresConfirmation()
+                    ->modalHeading(fn (Charge $r): string => $r->demand_reminders_paused ? 'חידוש תזכורות אוטומטיות' : 'עצירת תזכורות אוטומטיות')
+                    ->modalDescription(fn (Charge $r): string => $r->demand_reminders_paused
+                        ? 'התזכורות האוטומטיות לדרישה זו יחזרו לפעול (כל 3 ימים עד לתשלום).'
+                        : 'התזכורות האוטומטיות לדרישה זו ייעצרו. הדרישה תישאר פתוחה — עדיין אפשר לסמן כשולם, לבטל, או לשלוח תזכורת ידנית.')
+                    ->action(function (Charge $record): void {
+                        $paused = ! $record->demand_reminders_paused;
+                        $record->update(['demand_reminders_paused' => $paused]);
+
+                        Notification::make()
+                            ->title($paused ? 'התזכורות האוטומטיות נעצרו לדרישה זו' : 'התזכורות האוטומטיות חודשו')
+                            ->success()->send();
                     }),
 
                 // Record a manual payment (bank transfer / cash): a transfer never
