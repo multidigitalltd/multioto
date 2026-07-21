@@ -37,6 +37,17 @@ class StatsOverview extends BaseWidget
         // Monthly recurring revenue, in shekels, from active subscriptions.
         $mrrAgorot = $activeSubscriptions->sum(fn (Subscription $s) => $s->totalChargeAgorot());
 
+        // One-off income still expected: open payment demands (חשבוניות עסקה
+        // ידניות) that were sent and haven't been paid or canceled. These are not
+        // recurring, so they're shown separately from the subscription MRR.
+        $openDemandsAgorot = (int) Charge::where('status', ChargeStatus::Pending)
+            ->whereNotNull('demand_sent_at')
+            ->sum('total_agorot');
+
+        // The expected total the dashboard headlines: recurring subscriptions
+        // plus outstanding one-off demands.
+        $expectedAgorot = $mrrAgorot + $openDemandsAgorot;
+
         $collectedThisMonth = (int) Charge::where('status', ChargeStatus::Succeeded)
             ->where('charged_at', '>=', Carbon::now()->startOfMonth())
             ->sum('total_agorot');
@@ -62,8 +73,8 @@ class StatsOverview extends BaseWidget
                 ->color($pastDue > 0 ? 'warning' : 'success')
                 ->url(SubscriptionResource::getUrl()),
 
-            Stat::make('הכנסה חודשית צפויה', '₪ '.number_format($mrrAgorot / 100))
-                ->description('MRR ממנויים פעילים')
+            Stat::make('הכנסה חודשית צפויה', '₪ '.number_format($expectedAgorot / 100))
+                ->description('מנויים ₪'.number_format($mrrAgorot / 100).' · חד-פעמי ₪'.number_format($openDemandsAgorot / 100))
                 ->icon('heroicon-o-banknotes')
                 ->color('success')
                 ->url(SubscriptionResource::getUrl()),
