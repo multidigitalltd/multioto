@@ -40,7 +40,14 @@ class MonitorSiteJob implements ShouldQueue
             return;
         }
 
-        $url = $site->monitor_url ?: 'https://'.$site->domain;
+        $url = $site->monitorUrl();
+
+        // Nothing to probe (no domain and no monitor URL) — skip rather than
+        // firing a request at an empty/garbage host.
+        if ($url === '') {
+            return;
+        }
+
         $startedAt = microtime(true);
         // A content check needs the body → GET; otherwise a cheap HEAD.
         $needsBody = filled($site->expected_keyword);

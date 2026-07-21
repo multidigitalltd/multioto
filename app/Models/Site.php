@@ -84,6 +84,13 @@ class Site extends Model
     protected static function booted(): void
     {
         static::saving(function (self $site): void {
+            // Store a clean host — strip any scheme the operator typed/pasted
+            // (incl. the malformed "https//…") so the monitor never builds
+            // "https://https//…". Path is preserved for subdirectory installs.
+            if (filled($site->domain)) {
+                $site->domain = self::stripScheme((string) $site->domain);
+            }
+
             if (! $site->mcp_enabled || blank($site->domain)) {
                 return;
             }
@@ -177,10 +184,36 @@ class Site extends Model
         // Drop the scheme and any trailing slash, but KEEP the path: a WordPress
         // install in a subdirectory (example.com/blog) exposes its REST root at
         // /blog/wp-json/…, so the path must survive.
-        $base = preg_replace('#^https?://#i', '', (string) ($domain ?? $this->domain));
-        $base = trim(rtrim((string) $base, '/'));
+        $base = self::stripScheme((string) ($domain ?? $this->domain));
 
         return 'https://'.$base.'/wp-json/md-agent/v1/mcp';
+    }
+
+    /**
+     * Strip a scheme prefix from a host value — including the common malformed
+     * form a user pastes ("https//example.com", missing the colon) — plus
+     * surrounding whitespace and a trailing slash. Any path is kept.
+     */
+    public static function stripScheme(string $value): string
+    {
+        // http/https, then "://", ":/", "//", or a bare "://" variant.
+        $value = preg_replace('#^\s*https?(?:://?|:?//)#i', '', trim($value));
+
+        return trim(rtrim((string) $value, '/'));
+    }
+
+    /**
+     * The URL to hit when monitoring this site — always well-formed https,
+     * whether it comes from an explicit monitor_url or is derived from the
+     * domain. Never produces "https://https//…" from a scheme-carrying domain.
+     * Returns '' when there's nothing usable to check.
+     */
+    public function monitorUrl(): string
+    {
+        $base = filled($this->monitor_url) ? (string) $this->monitor_url : (string) $this->domain;
+        $host = self::stripScheme($base);
+
+        return $host !== '' ? 'https://'.$host : '';
     }
 
     /** Resolve a site by the plaintext token its plugin presents (constant-time). */
