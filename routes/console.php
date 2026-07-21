@@ -4,6 +4,7 @@ use App\Enums\BroadcastStatus;
 use App\Enums\ChargeStatus;
 use App\Jobs\ChargeSubscriptionJob;
 use App\Jobs\CheckDomainExpiryJob;
+use App\Jobs\CheckSitePluginChangesJob;
 use App\Jobs\CheckSlaBreachesJob;
 use App\Jobs\CheckSslExpiryJob;
 use App\Jobs\FollowUpPendingTicketsJob;
@@ -86,6 +87,16 @@ Schedule::call(function () {
         ->pluck('id')
         ->each(fn (int $id) => CheckDomainExpiryJob::dispatch($id));
 })->dailyAt('07:15')->name('monitoring:domain-expiry')->onOneServer();
+
+// Daily plugin/theme-change watch for every connected site: alert the team when
+// a new plugin/theme appears. Gated on $awake to stay quiet over Shabbat/Yom Tov.
+Schedule::call(function () {
+    Site::query()
+        ->where('mcp_enabled', true)
+        ->whereNotNull('mcp_endpoint')
+        ->pluck('id')
+        ->each(fn (int $id) => CheckSitePluginChangesJob::dispatch($id));
+})->dailyAt('07:30')->name('monitoring:plugin-changes')->when($awake)->onOneServer();
 
 // Proactive reminders: a once-a-day internal digest (renewals due, cards
 // expiring, open debt) so the owner can act before anything slips.
