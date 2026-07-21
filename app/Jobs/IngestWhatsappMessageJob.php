@@ -52,7 +52,7 @@ class IngestWhatsappMessageJob implements ShouldQueue
             $body = $this->contactSummary($payload) ?? $body;
         }
 
-        if ($chatId === '' || ($body === '' && empty($payload['hasMedia']))) {
+        if ($chatId === '' || ($body === '' && ! $this->messageHasMedia($payload))) {
             $event->markProcessed();
 
             return;
@@ -95,6 +95,13 @@ class IngestWhatsappMessageJob implements ShouldQueue
         // pushname (when present) + their phone number.
         $pushName = trim((string) ($payload['notifyName'] ?? ($payload['_data']['notifyName'] ?? '')));
 
+        // A media message with no caption would otherwise be recorded as the
+        // generic "no text" placeholder. Give it a typed label (📷 תמונה, 📎 קובץ…)
+        // so the thread reads clearly even if the file itself can't be fetched.
+        if ($body === '' && $this->messageHasMedia($payload)) {
+            $body = $this->mediaLabel($payload);
+        }
+
         $message = $intake->recordInbound(
             channel: TicketChannel::Whatsapp,
             messageChannel: MessageChannel::Whatsapp,
@@ -113,7 +120,7 @@ class IngestWhatsappMessageJob implements ShouldQueue
         // Download and store the media the customer sent (image/file), then keep
         // its metadata on the message. First ingest only — recordInbound is
         // idempotent per message id.
-        if ($message->wasRecentlyCreated && ! empty($payload['hasMedia'])) {
+        if ($message->wasRecentlyCreated && $this->messageHasMedia($payload)) {
             $stored = $this->storeMedia($waha, $attachments, $message->ticket_id, $payload);
 
             if ($stored !== null) {
@@ -122,6 +129,49 @@ class IngestWhatsappMessageJob implements ShouldQueue
         }
 
         $event->markProcessed();
+    }
+
+    /**
+     * Whether the message carries media. WAHA sets `hasMedia`, but not every
+     * engine/version does — also accept a populated `media` object or a media
+     * message `type` (image/video/document/audio/ptt/sticker).
+     *
+     * @param  array<string, mixed>  $payload
+     */
+    protected function messageHasMedia(array $payload): bool
+    {
+        if (! empty($payload['hasMedia'])) {
+            return true;
+        }
+
+        if (filled($payload['media']['url'] ?? null) || filled($payload['mediaUrl'] ?? null)) {
+            return true;
+        }
+
+        $type = strtolower((string) ($payload['type'] ?? ($payload['_data']['type'] ?? '')));
+
+        return in_array($type, ['image', 'video', 'document', 'audio', 'ptt', 'sticker'], true);
+    }
+
+    /**
+     * A short human label for a caption-less media message, chosen from the
+     * message type or MIME so the thread shows "📷 תמונה" rather than a generic
+     * "no text" placeholder.
+     *
+     * @param  array<string, mixed>  $payload
+     */
+    protected function mediaLabel(array $payload): string
+    {
+        $type = strtolower((string) ($payload['type'] ?? ($payload['_data']['type'] ?? '')));
+        $mime = strtolower((string) ($payload['media']['mimetype'] ?? ($payload['mimetype'] ?? '')));
+
+        return match (true) {
+            $type === 'image' || str_starts_with($mime, 'image/') => '📷 תמונה',
+            $type === 'video' || str_starts_with($mime, 'video/') => '🎥 סרטון',
+            $type === 'ptt', $type === 'audio', str_starts_with($mime, 'audio/') => '🎙️ הודעה קולית',
+            $type === 'sticker' => '🔖 מדבקה',
+            default => '📎 קובץ מצורף',
+        };
     }
 
     /**
