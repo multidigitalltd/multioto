@@ -16,6 +16,8 @@ use App\Jobs\InvestigateTicketJob;
 use App\Jobs\NotifyTaskCreatedJob;
 use App\Jobs\SendTicketReplyJob;
 use App\Models\CannedResponse;
+use App\Models\Contact;
+use App\Models\Customer;
 use App\Models\PendingAction;
 use App\Models\Task;
 use App\Models\TicketMessage;
@@ -445,9 +447,65 @@ class ViewTicket extends ViewRecord
                     $this->record->update(['status' => TicketStatus::Closed, 'resolved_at' => now()]);
                     Notification::make()->title('הפנייה נסגרה (ללא הודעה ללקוח)')->success()->send();
                 }),
+            $this->linkToCustomerAction(),
             $this->convertToTaskAction(),
             Actions\EditAction::make()->label('עריכת פרטים'),
         ];
+    }
+
+    /**
+     * For an UNIDENTIFIED enquiry: attach the sender to an existing customer as
+     * an additional contact (name + email/phone/WhatsApp captured from the
+     * ticket) and associate the ticket to that customer — so this thread, and
+     * every future message from the same sender, lands on the right customer.
+     */
+    private function linkToCustomerAction(): Actions\Action
+    {
+        return Actions\Action::make('linkToCustomer')
+            ->label('שייך ללקוח קיים')
+            ->icon('heroicon-o-user-plus')
+            ->color('info')
+            ->visible(fn (): bool => $this->record->customer_id === null)
+            ->fillForm(fn (): array => [
+                'name' => $this->record->contact_name ?: $this->record->contact_handle,
+            ])
+            ->form([
+                Select::make('customer_id')->label('לקוח')
+                    ->options(fn (): array => Customer::orderBy('name')->pluck('name', 'id')->all())
+                    ->searchable()->required(),
+                TextInput::make('name')->label('שם איש הקשר')->required()->maxLength(255),
+                TextInput::make('role')->label('תפקיד')->maxLength(255)
+                    ->helperText('למשל: בעלים, מנהל/ת, איש קשר טכני, כספים.'),
+            ])
+            ->action(function (array $data): void {
+                $ticket = $this->record;
+                $handle = trim((string) $ticket->contact_handle);
+
+                $fields = [
+                    'customer_id' => $data['customer_id'],
+                    'name' => $data['name'],
+                    'role' => $data['role'] ?? null,
+                    'is_primary' => false,
+                ];
+
+                // Capture the sender's identifiers so future messages auto-match.
+                if ($ticket->channel === TicketChannel::Whatsapp) {
+                    $fields['phone'] = $handle ?: null;
+                    $fields['whatsapp_jid'] = $ticket->external_thread_ref ?: null;
+                } elseif (str_contains($handle, '@')) {
+                    $fields['email'] = $handle;
+                } elseif ($handle !== '') {
+                    $fields['phone'] = $handle;
+                }
+
+                Contact::create($fields);
+                $ticket->update(['customer_id' => $data['customer_id']]);
+
+                Notification::make()
+                    ->title('הפנייה שויכה ללקוח ואיש הקשר נוסף')
+                    ->body('פניות עתידיות מאותו שולח יזוהו אוטומטית.')
+                    ->success()->send();
+            });
     }
 
     /**
