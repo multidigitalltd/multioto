@@ -19,6 +19,7 @@ class Ticket extends Model
         'customer_id', 'contact_name', 'contact_handle', 'channel', 'subject',
         'status', 'priority', 'assignee', 'external_thread_ref',
         'first_response_at', 'resolved_at', 'pending_since', 'pending_reminded_at', 'sla_alerted_at',
+        'ai_summary', 'ai_topic', 'ai_sentiment',
     ];
 
     /**

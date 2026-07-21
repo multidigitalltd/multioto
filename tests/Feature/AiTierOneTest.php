@@ -17,6 +17,7 @@ use App\Models\Ticket;
 use App\Models\User;
 use App\Services\Ai\ClaudeClient;
 use App\Services\Ai\SupportToolkit;
+use App\Services\Notifications\TeamNotifier;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
@@ -73,7 +74,7 @@ class AiTierOneTest extends TestCase
         config(['billing.ai.enabled' => false]);
 
         $ticket = $this->ticketWithInbound();
-        (new ClassifyTicketJob($ticket->id))->handle(app(ClaudeClient::class));
+        (new ClassifyTicketJob($ticket->id))->handle(app(ClaudeClient::class), app(TeamNotifier::class));
 
         // No AI note added, no HTTP call made.
         $this->assertSame(0, $ticket->messages()->where('author', MessageAuthor::Ai)->count());
@@ -86,7 +87,7 @@ class AiTierOneTest extends TestCase
         $this->fakeClaude(['priority' => 'high', 'category' => 'ביצועים', 'summary' => 'אתר איטי']);
 
         $ticket = $this->ticketWithInbound();
-        (new ClassifyTicketJob($ticket->id))->handle(app(ClaudeClient::class));
+        (new ClassifyTicketJob($ticket->id))->handle(app(ClaudeClient::class), app(TeamNotifier::class));
 
         $this->assertSame(TicketPriority::High, $ticket->fresh()->priority);
 
