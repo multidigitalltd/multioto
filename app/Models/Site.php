@@ -256,6 +256,11 @@ class Site extends Model
         return $this->hasMany(Incident::class);
     }
 
+    public function contacts(): HasMany
+    {
+        return $this->hasMany(Contact::class);
+    }
+
     public function openIncident(): HasOne
     {
         return $this->hasOne(Incident::class)->where('status', IncidentStatus::Open);

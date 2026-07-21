@@ -72,6 +72,11 @@ class Customer extends Model
         return $this->hasMany(Subscription::class);
     }
 
+    public function contacts(): HasMany
+    {
+        return $this->hasMany(Contact::class);
+    }
+
     public function paymentTokens(): HasMany
     {
         return $this->hasMany(PaymentToken::class);
