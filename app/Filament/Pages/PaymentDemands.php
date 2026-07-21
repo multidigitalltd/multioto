@@ -89,14 +89,16 @@ class PaymentDemands extends Page implements HasTable
                     ->label('עבור (יופיע ללקוח ובחשבונית)')->default('תשלום')->maxLength(120)->required(),
                 Forms\Components\Repeater::make('items')
                     ->label('פירוט פריטים (אופציונלי)')
-                    ->helperText('הוסיפו פריטים כדי שהלקוח יראה פירוט לפי מוצר. אם ריק — תישלח שורת הסכום שלמטה.')
+                    ->helperText('הוסיפו פריטים כדי שהלקוח יראה פירוט לפי מוצר. המחיר מוזן לפני מע״מ, ולכל פריט בוחרים אם להוסיף מע״מ. אם ריק — תישלח שורת הסכום שלמטה.')
                     ->schema([
                         Forms\Components\TextInput::make('name')->label('פריט')->maxLength(120)->required()->columnSpan(2),
                         Forms\Components\TextInput::make('qty')->label('כמות')->numeric()->default(1)->minValue(1)->required(),
-                        Forms\Components\TextInput::make('unit_price')->label('מחיר ליח׳ (₪, כולל מע״מ)')
+                        Forms\Components\TextInput::make('unit_price')->label('מחיר ליח׳ (₪, לפני מע״מ)')
                             ->numeric()->prefix('₪')->step('0.01')->minValue(0)->inputMode('decimal')->required(),
+                        Forms\Components\Toggle::make('add_vat')->label('להוסיף מע״מ')
+                            ->default(true)->inline(false),
                     ])
-                    ->columns(4)->addActionLabel('הוסף פריט')->default([]),
+                    ->columns(5)->addActionLabel('הוסף פריט')->default([]),
                 Forms\Components\TextInput::make('amount')
                     ->label('סכום לתשלום (₪, כולל מע״מ)')
                     ->helperText('בשימוש רק כשאין פירוט פריטים.')
@@ -151,19 +153,29 @@ class PaymentDemands extends Page implements HasTable
 
     /**
      * Normalise the items repeater into charge line rows (agorot), dropping blank
-     * rows. Returns [] when nothing usable was entered.
+     * rows. The unit price is entered NET (pre-VAT); when "add_vat" is on we gross
+     * it up by the configured VAT rate, so the stored unit_price_agorot is always
+     * the final billed price — keeping the charge/invoice pipeline unchanged.
+     * Returns [] when nothing usable was entered.
      *
-     * @param  array<int, array{name?: string, qty?: mixed, unit_price?: mixed}>  $items
+     * @param  array<int, array{name?: string, qty?: mixed, unit_price?: mixed, add_vat?: mixed}>  $items
      * @return array<int, array{name: string, qty: int, unit_price_agorot: int}>
      */
     private function demandLines(array $items): array
     {
+        $vatRate = (float) config('billing.vat_rate');
+
         return collect($items)
-            ->map(fn (array $item): array => [
-                'name' => trim((string) ($item['name'] ?? '')),
-                'qty' => max(1, (int) ($item['qty'] ?? 1)),
-                'unit_price_agorot' => (int) round(((float) ($item['unit_price'] ?? 0)) * 100),
-            ])
+            ->map(function (array $item) use ($vatRate): array {
+                $net = (float) ($item['unit_price'] ?? 0);
+                $gross = ($item['add_vat'] ?? true) ? $net * (1 + $vatRate) : $net;
+
+                return [
+                    'name' => trim((string) ($item['name'] ?? '')),
+                    'qty' => max(1, (int) ($item['qty'] ?? 1)),
+                    'unit_price_agorot' => (int) round($gross * 100),
+                ];
+            })
             ->filter(fn (array $line): bool => $line['name'] !== '' && $line['unit_price_agorot'] > 0)
             ->values()
             ->all();

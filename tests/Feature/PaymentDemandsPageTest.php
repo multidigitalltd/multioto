@@ -49,6 +49,36 @@ class PaymentDemandsPageTest extends TestCase
         });
     }
 
+    public function test_items_are_entered_net_and_vat_is_added_per_item(): void
+    {
+        Queue::fake();
+        config(['billing.vat_rate' => 0.18]);
+        $this->actingAs(User::factory()->create());
+
+        $customer = Customer::factory()->create(['email' => 'c@example.co.il']);
+
+        Livewire::test(PaymentDemands::class)
+            ->callAction('newDemand', data: [
+                'customer_id' => $customer->id,
+                'description' => 'חבילה',
+                'items' => [
+                    // Net 100 + VAT → 118.
+                    ['name' => 'אחסון', 'qty' => 1, 'unit_price' => 100, 'add_vat' => true],
+                    // Net 50, no VAT, ×2 → 100.
+                    ['name' => 'שירות פטור', 'qty' => 2, 'unit_price' => 50, 'add_vat' => false],
+                ],
+                'amount' => null,
+                'channel' => 'email',
+            ])
+            ->assertHasNoActionErrors();
+
+        Queue::assertPushed(SendPaymentLinkJob::class, function (SendPaymentLinkJob $job): bool {
+            return $job->totalAgorot === 21800 // 11800 + (5000 × 2)
+                && $job->lines[0]['unit_price_agorot'] === 11800
+                && $job->lines[1]['unit_price_agorot'] === 5000;
+        });
+    }
+
     public function test_the_table_lists_only_sent_demands(): void
     {
         $this->actingAs(User::factory()->create());
