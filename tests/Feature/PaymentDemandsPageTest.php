@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Enums\ChargeStatus;
 use App\Filament\Pages\PaymentDemands;
+use App\Jobs\IssueInvoiceJob;
 use App\Jobs\SendPaymentLinkJob;
 use App\Models\Charge;
 use App\Models\Customer;
@@ -60,6 +61,24 @@ class PaymentDemandsPageTest extends TestCase
         Livewire::test(PaymentDemands::class)
             ->assertCanSeeTableRecords([$demand])
             ->assertCanNotSeeTableRecords([$plain]);
+    }
+
+    public function test_mark_paid_finalises_the_demand_and_issues_the_tax_receipt(): void
+    {
+        Queue::fake();
+        $this->actingAs(User::factory()->create());
+
+        $customer = Customer::factory()->create();
+        $demand = $this->charge($customer->id, ['demand_sent_at' => now(), 'demand_channel' => 'email']);
+
+        Livewire::test(PaymentDemands::class)
+            ->callTableAction('markPaid', $demand)
+            ->assertHasNoTableActionErrors();
+
+        $this->assertSame(ChargeStatus::Succeeded, $demand->fresh()->status);
+        $this->assertNotNull($demand->fresh()->charged_at);
+        Queue::assertPushed(IssueInvoiceJob::class,
+            fn (IssueInvoiceJob $job): bool => $job->chargeId === $demand->id);
     }
 
     private function charge(int $customerId, array $overrides = []): Charge

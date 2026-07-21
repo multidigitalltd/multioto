@@ -4,6 +4,7 @@ namespace App\Filament\Pages;
 
 use App\Enums\ChargeStatus;
 use App\Filament\Resources\CustomerResource;
+use App\Jobs\IssueInvoiceJob;
 use App\Jobs\SendPaymentLinkJob;
 use App\Models\Charge;
 use App\Models\Customer;
@@ -229,9 +230,42 @@ class PaymentDemands extends Page implements HasTable
                         }
 
                         $dispatcher->send($record, 'payment.reminder', $record->demand_channel ?: 'email', true);
-                        $record->increment('demand_reminder_count');
+                        // Bump the counter AND the last-contact time, so the daily
+                        // SendDemandRemindersJob counts from now and doesn't fire
+                        // again the same day (it keys off demand_sent_at).
+                        $record->update([
+                            'demand_reminder_count' => $record->demand_reminder_count + 1,
+                            'demand_sent_at' => now(),
+                        ]);
 
                         Notification::make()->title('התזכורת נשלחה')->success()->send();
+                    }),
+
+                // Record a manual payment (bank transfer / cash): a transfer never
+                // reaches Cardcom, so this is the path that finalises the demand,
+                // stops the reminders, and issues the tax invoice-receipt in Linet.
+                Tables\Actions\Action::make('markPaid')
+                    ->label('סמן כשולם')
+                    ->icon('heroicon-o-check-circle')->color('success')
+                    ->visible(fn (Charge $r): bool => $r->status === ChargeStatus::Pending)
+                    ->requiresConfirmation()
+                    ->modalHeading('סימון הדרישה כשולמה')
+                    ->modalDescription('לשימוש כשהתקבל תשלום בהעברה בנקאית / מזומן. הדרישה תסומן כשולמה, התזכורות ייפסקו, ותונפק חשבונית מס/קבלה בלינט.')
+                    ->modalSubmitActionLabel('סמן כשולם והנפק חשבונית')
+                    ->action(function (Charge $record): void {
+                        if ($record->fresh()->status !== ChargeStatus::Pending) {
+                            Notification::make()->title('הסטטוס כבר השתנה')->warning()->send();
+
+                            return;
+                        }
+
+                        $record->update(['status' => ChargeStatus::Succeeded, 'charged_at' => now(), 'failure_reason' => null]);
+                        IssueInvoiceJob::dispatch($record->id);
+
+                        Notification::make()
+                            ->title('הדרישה סומנה כשולמה ✓')
+                            ->body('חשבונית מס/קבלה מונפקת בלינט. עקבו במסך "חיובים".')
+                            ->success()->send();
                     }),
 
                 // Void a pending demand: its link stops working and it's no longer owed.

@@ -118,6 +118,9 @@ class SettingsServiceProvider extends ServiceProvider
         // (credit-card payment_type), not leave the old code in a running worker.
         'linet.payment_type_bank_transfer' => 'billing.linet.payment_type_bank_transfer',
         'linet.payment_type_standing_order' => 'billing.linet.payment_type_standing_order',
+        // Clearing the panel-set bank-transfer details must revert to the .env
+        // default immediately, not keep sending the old account in a live worker.
+        'billing.bank_transfer_details' => 'billing.bank_transfer_details',
     ];
 
     /** Pristine config-file defaults for RESET_ON_CLEAR keys, memoized once. */
