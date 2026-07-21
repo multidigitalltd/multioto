@@ -210,8 +210,17 @@ class Site extends Model
      */
     public function monitorUrl(): string
     {
-        $base = filled($this->monitor_url) ? (string) $this->monitor_url : (string) $this->domain;
-        $host = self::stripScheme($base);
+        $explicit = trim((string) $this->monitor_url);
+
+        // A well-formed explicit monitor URL is used verbatim — preserve its
+        // scheme (an operator may deliberately probe an http-only endpoint).
+        if ($explicit !== '' && preg_match('#^https?://#i', $explicit) === 1) {
+            return $explicit;
+        }
+
+        // Otherwise derive from the (possibly malformed) monitor_url or the
+        // domain, defaulting to https.
+        $host = self::stripScheme($explicit !== '' ? $explicit : (string) $this->domain);
 
         return $host !== '' ? 'https://'.$host : '';
     }

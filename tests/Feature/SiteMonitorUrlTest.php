@@ -49,6 +49,14 @@ class SiteMonitorUrlTest extends TestCase
         $this->assertSame('https://check.example.co.il', $site->monitorUrl());
     }
 
+    public function test_an_explicit_http_monitor_url_keeps_its_scheme(): void
+    {
+        // A deliberately http-only health endpoint must not be forced to https.
+        $site = Site::factory()->create(['domain' => 'example.co.il', 'monitor_url' => 'http://legacy.example.com/health']);
+
+        $this->assertSame('http://legacy.example.com/health', $site->monitorUrl());
+    }
+
     public function test_the_monitor_probes_the_clean_url_for_a_scheme_carrying_domain(): void
     {
         Http::fake(['*' => Http::response('', 200)]);
