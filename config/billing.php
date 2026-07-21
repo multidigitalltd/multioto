@@ -36,6 +36,9 @@ return [
     // Bank-transfer details shown on a payment demand come from the signup-form
     // settings (billing.signup.instructions.bank_transfer, editable at
     // הגדרות ← טופס הרשמה) — a single source of truth, not a separate field.
+    // Legacy fallback only (no panel field): honour an old BANK_TRANSFER_DETAILS
+    // env if an install still has it, so a demand never loses the account.
+    'bank_transfer_details' => env('BANK_TRANSFER_DETAILS'),
 
     // Automatic follow-up on an unpaid payment demand: nudge the customer every
     // `reminder_interval_days` (default 3) until the demand is paid or canceled,
