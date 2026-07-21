@@ -33,9 +33,10 @@ class SubscriptionResource extends Resource
 
     protected static ?string $pluralModelLabel = 'מנויים';
 
-    protected static ?string $navigationGroup = 'ניהול';
+    protected static ?string $navigationGroup = 'כספים';
 
-    protected static ?int $navigationSort = 2;
+    // Lead the finance group — subscriptions are the recurring-revenue engine.
+    protected static ?int $navigationSort = 0;
 
     public static function form(Form $form): Form
     {
