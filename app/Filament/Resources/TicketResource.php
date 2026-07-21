@@ -107,7 +107,27 @@ class TicketResource extends Resource
                 Tables\Columns\TextColumn::make('subject')
                     ->label('נושא')
                     ->searchable()
-                    ->weight('bold'),
+                    ->weight('bold')
+                    // The AI one-line summary of the enquiry, when available.
+                    ->description(fn (Ticket $record): ?string => $record->ai_summary),
+                Tables\Columns\TextColumn::make('ai_sentiment')
+                    ->label('תחושה')
+                    ->badge()
+                    ->placeholder('—')
+                    ->formatStateUsing(fn (?string $state): string => match ($state) {
+                        'positive' => 'חיובית',
+                        'negative' => 'שלילית',
+                        'angry' => 'כועס',
+                        'neutral' => 'ניטרלית',
+                        default => '—',
+                    })
+                    ->color(fn (?string $state): string => match ($state) {
+                        'angry' => 'danger',
+                        'negative' => 'warning',
+                        'positive' => 'success',
+                        default => 'gray',
+                    })
+                    ->toggleable(),
                 Tables\Columns\TextColumn::make('customer.name')
                     ->label('מאת')
                     // Fall back to the captured sender identity (name + email /
