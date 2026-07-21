@@ -138,6 +138,78 @@ class AiTierOneTest extends TestCase
         });
     }
 
+    public function test_draft_prompt_is_grounded_in_past_solutions_on_the_same_topic(): void
+    {
+        $this->enableAi();
+        $this->fakeClaude(['reply' => 'טופל', 'confidence' => 'high']);
+
+        // A past enquiry on the same AI topic that the team already resolved.
+        $solved = Ticket::create([
+            'customer_id' => Customer::factory()->create()->id,
+            'channel' => TicketChannel::Email,
+            'subject' => 'האתר היה איטי',
+            'status' => TicketStatus::Resolved,
+            'priority' => TicketPriority::Normal,
+            'ai_topic' => 'ביצועים',
+            'resolved_at' => now()->subDay(),
+        ]);
+        $solved->messages()->create([
+            'direction' => MessageDirection::Inbound,
+            'channel' => MessageChannel::Email,
+            'body' => 'למה איטי?',
+            'author' => MessageAuthor::Customer,
+        ]);
+        $solved->messages()->create([
+            'direction' => MessageDirection::Outbound,
+            'channel' => MessageChannel::Email,
+            'body' => 'ניקינו את הקאש והאתר חזר להיות מהיר. SOLUTION_MARKER_QWE',
+            'author' => MessageAuthor::Agent,
+        ]);
+
+        // The new ticket carries the same topic (as ClassifyTicketJob would set).
+        $ticket = $this->ticketWithInbound();
+        $ticket->update(['ai_topic' => 'ביצועים']);
+
+        (new DraftReplyJob($ticket->id))->handle(app(ClaudeClient::class), app(SupportToolkit::class));
+
+        // The past resolution reached the model as grounding.
+        Http::assertSent(function ($request): bool {
+            $prompt = $request['messages'][0]['content'] ?? '';
+
+            return str_contains($prompt, 'מאגר ידע')
+                && str_contains($prompt, 'SOLUTION_MARKER_QWE');
+        });
+    }
+
+    public function test_draft_prompt_omits_solutions_from_a_different_topic(): void
+    {
+        $this->enableAi();
+        $this->fakeClaude(['reply' => 'טופל', 'confidence' => 'high']);
+
+        $other = Ticket::create([
+            'customer_id' => Customer::factory()->create()->id,
+            'channel' => TicketChannel::Email,
+            'subject' => 'שאלת חיוב',
+            'status' => TicketStatus::Closed,
+            'priority' => TicketPriority::Normal,
+            'ai_topic' => 'חיוב',
+            'resolved_at' => now()->subDay(),
+        ]);
+        $other->messages()->create([
+            'direction' => MessageDirection::Outbound,
+            'channel' => MessageChannel::Email,
+            'body' => 'זיכינו את החשבון. UNRELATED_MARKER_ZZZ',
+            'author' => MessageAuthor::Agent,
+        ]);
+
+        $ticket = $this->ticketWithInbound();
+        $ticket->update(['ai_topic' => 'ביצועים']);
+
+        (new DraftReplyJob($ticket->id))->handle(app(ClaudeClient::class), app(SupportToolkit::class));
+
+        Http::assertSent(fn ($request): bool => ! str_contains($request['messages'][0]['content'] ?? '', 'UNRELATED_MARKER_ZZZ'));
+    }
+
     public function test_editable_persona_flows_into_the_system_prompt(): void
     {
         $this->enableAi();

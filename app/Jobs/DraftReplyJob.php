@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Enums\MessageAuthor;
 use App\Enums\MessageChannel;
 use App\Enums\MessageDirection;
+use App\Enums\TicketStatus;
 use App\Models\CannedResponse;
 use App\Models\Ticket;
 use App\Services\Ai\ClaudeClient;
@@ -12,6 +13,7 @@ use App\Services\Ai\SupportToolkit;
 use App\Services\Automation\ApprovalGate;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Support\Str;
 
 /**
  * Draft a suggested reply for a ticket (Stage 5, optional).
@@ -69,6 +71,10 @@ class DraftReplyJob implements ShouldQueue
             ->map(fn ($m) => "[{$m->author->value}] {$m->body}")
             ->implode("\n");
 
+        // Knowledge base: how the team actually resolved past enquiries on the
+        // same AI topic. Grounds the draft in solutions that already worked.
+        $pastSolutions = $this->pastSolutions($ticket);
+
         // Real, read-only facts about this customer (account, billing, uptime,
         // last invoice + a card-update link) so the draft answers concretely.
         $facts = $ticket->customer
@@ -77,7 +83,7 @@ class DraftReplyJob implements ShouldQueue
 
         $result = $claude->structured(
             system: $this->systemPrompt(),
-            prompt: "לקוח: {$ticket->customer?->name}\nנושא: {$ticket->subject}\n\nנתוני הלקוח:\n{$facts}\n\nשיחה:\n{$conversation}\n\nתבניות מענה זמינות:\n{$cannedContext}",
+            prompt: "לקוח: {$ticket->customer?->name}\nנושא: {$ticket->subject}\n\nנתוני הלקוח:\n{$facts}\n\nשיחה:\n{$conversation}\n\nתבניות מענה זמינות:\n{$cannedContext}".$pastSolutions,
             schema: [
                 'type' => 'object',
                 'additionalProperties' => false,
@@ -121,6 +127,50 @@ class DraftReplyJob implements ShouldQueue
             customerId: $ticket->customer_id,
             ticketId: $ticket->id,
         );
+    }
+
+    /**
+     * Knowledge base retrieval: past enquiries on the SAME AI topic that were
+     * resolved/closed, each summarised by its final sent agent reply. This turns
+     * the team's accumulated answers into grounding for the draft — the AI reuses
+     * what already worked instead of inventing a fresh answer every time.
+     *
+     * Returns a prompt fragment (leading newlines included) or '' when the ticket
+     * has no topic yet or no comparable resolved ticket exists.
+     */
+    protected function pastSolutions(Ticket $ticket): string
+    {
+        $topic = trim((string) $ticket->ai_topic);
+        if ($topic === '') {
+            return '';
+        }
+
+        $solved = Ticket::query()
+            ->where('ai_topic', $topic)
+            ->whereKeyNot($ticket->id)
+            ->whereIn('status', [TicketStatus::Resolved, TicketStatus::Closed])
+            ->latest('resolved_at')
+            ->limit(3)
+            ->with(['messages' => fn ($q) => $q->where('channel', '!=', MessageChannel::InternalNote)
+                ->where('author', MessageAuthor::Agent)
+                ->latest('created_at')
+                ->limit(1)])
+            ->get();
+
+        $examples = $solved
+            ->map(function (Ticket $t): ?string {
+                $reply = $t->messages->first()?->body;
+
+                return blank($reply)
+                    ? null
+                    : "• {$t->subject}\n  פתרון: ".Str::limit(trim((string) $reply), 500);
+            })
+            ->filter()
+            ->implode("\n\n");
+
+        return $examples === ''
+            ? ''
+            : "\n\nפתרונות מפניות דומות שנסגרו (מאגר ידע — השתמש כרפרנס, אל תעתיק מילה במילה):\n{$examples}";
     }
 
     /**
