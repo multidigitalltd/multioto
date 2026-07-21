@@ -19,6 +19,7 @@ use Filament\Tables\Concerns\InteractsWithTable;
 use Filament\Tables\Contracts\HasTable;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 
 /**
@@ -105,7 +106,7 @@ class PaymentDemands extends Page implements HasTable
                     ->label('לשלוח דרך')
                     ->options(['email' => 'מייל', 'whatsapp' => 'וואטסאפ'])
                     ->default('email')->required()
-                    ->helperText('הדרישה כוללת תמיד קישור לתשלום ידני ופרטי העברה בנקאית — לא מתבצע חיוב אוטומטי.'),
+                    ->helperText('הדרישה מדגישה תשלום בהעברה בנקאית (הדרך המועדפת) ומאפשרת גם קישור לתשלום בכרטיס — לעולם לא מתבצע חיוב אוטומטי.'),
             ])
             ->action(function (array $data): void {
                 $customer = Customer::find($data['customer_id']);
@@ -136,9 +137,10 @@ class PaymentDemands extends Page implements HasTable
                     return;
                 }
 
-                // A demand always offers BOTH the (non-auto-charging) link and the
-                // bank-transfer details; the proforma is issued by the job.
-                SendPaymentLinkJob::dispatch($customer->id, $totalAgorot, filled($data['description']) ? $data['description'] : 'תשלום', $channel, $lines, ['link', 'transfer']);
+                // A demand always offers BOTH options; bank transfer is listed
+                // first (our preferred method) and the (non-auto-charging) card
+                // link second. The proforma is issued by the job.
+                SendPaymentLinkJob::dispatch($customer->id, $totalAgorot, filled($data['description']) ? $data['description'] : 'תשלום', $channel, $lines, ['transfer', 'link']);
 
                 Notification::make()
                     ->title('דרישת התשלום נשלחה')
@@ -165,6 +167,30 @@ class PaymentDemands extends Page implements HasTable
             ->filter(fn (array $line): bool => $line['name'] !== '' && $line['unit_price_agorot'] > 0)
             ->values()
             ->all();
+    }
+
+    /**
+     * A human-readable "sent at" history for a demand — one line per send
+     * (initial demand + each reminder), newest first — for the column tooltip.
+     */
+    private function sendLogTooltip(Charge $charge): ?string
+    {
+        $log = $charge->demand_reminders_log ?? [];
+
+        if ($log === []) {
+            return null;
+        }
+
+        return collect($log)
+            ->reverse()
+            ->map(function (array $entry): string {
+                $when = filled($entry['at'] ?? null) ? Carbon::parse($entry['at'])->format('d/m/Y H:i') : '—';
+                $kind = ($entry['type'] ?? 'demand') === 'reminder' ? 'תזכורת' : 'דרישה';
+                $channel = ($entry['channel'] ?? '') === 'whatsapp' ? 'וואטסאפ' : 'מייל';
+
+                return "{$when} · {$kind} · {$channel}";
+            })
+            ->implode("\n");
     }
 
     public function table(Table $table): Table
@@ -203,9 +229,11 @@ class PaymentDemands extends Page implements HasTable
                     ->getStateUsing(fn (Charge $r): bool => $r->invoice()->exists())
                     ->trueIcon('heroicon-o-check-badge')->falseIcon('heroicon-o-minus'),
                 Tables\Columns\TextColumn::make('demand_reminder_count')
-                    ->label('תזכורות')->badge()->color('gray'),
+                    ->label('תזכורות')->badge()->color('gray')
+                    // Hover to see exactly when each demand/reminder went out.
+                    ->tooltip(fn (Charge $r): ?string => $this->sendLogTooltip($r)),
                 Tables\Columns\TextColumn::make('demand_sent_at')
-                    ->label('נשלחה')->dateTime('d/m/Y H:i')->sortable(),
+                    ->label('נשלחה לאחרונה')->dateTime('d/m/Y H:i')->sortable(),
             ])
             ->filters([
                 Tables\Filters\SelectFilter::make('status')

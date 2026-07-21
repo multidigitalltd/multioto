@@ -37,7 +37,10 @@ class SendDemandRemindersJob implements ShouldQueue
         }
 
         $interval = max(1, (int) config('billing.demands.reminder_interval_days', 3));
-        $maxAgeDays = (int) config('billing.cardcom.reconcile_max_age_days', 14);
+        // Chase a demand until it's paid, but give up on a clearly abandoned one
+        // after this many days from creation (dedicated to demands, not tied to
+        // the Cardcom reconcile window).
+        $maxAgeDays = max(1, (int) config('billing.demands.max_age_days', 90));
 
         Charge::query()
             ->with('customer')

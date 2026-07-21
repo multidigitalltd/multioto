@@ -13,7 +13,6 @@ use App\Support\CardcomWebhook;
 use Filament\Forms\Components\Actions\Action as FormAction;
 use Filament\Forms\Components\Placeholder;
 use Filament\Forms\Components\Section;
-use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Concerns\InteractsWithForms;
 use Filament\Forms\Contracts\HasForms;
@@ -68,7 +67,7 @@ class ManageIntegrations extends Page implements HasForms
         ],
         'linet' => [
             'label' => 'לינט',
-            'keys' => ['linet.login_id', 'linet.key', 'linet.company_id', 'linet.doctype', 'linet.doctype_proforma', 'linet.vat_cat_taxable', 'linet.vat_cat_exempt', 'linet.payment_type', 'linet.payment_type_bank_transfer', 'linet.payment_type_standing_order', 'linet.general_item_id', 'linet.income_account_exempt', 'billing.bank_transfer_details'],
+            'keys' => ['linet.login_id', 'linet.key', 'linet.company_id', 'linet.doctype', 'linet.doctype_proforma', 'linet.vat_cat_taxable', 'linet.vat_cat_exempt', 'linet.payment_type', 'linet.payment_type_bank_transfer', 'linet.payment_type_standing_order', 'linet.general_item_id', 'linet.income_account_exempt'],
         ],
         'flywp' => [
             'label' => 'FlyWP',
@@ -121,7 +120,6 @@ class ManageIntegrations extends Page implements HasForms
     public const CLEARABLE_KEYS = [
         'linet.payment_type_bank_transfer',
         'linet.payment_type_standing_order',
-        'billing.bank_transfer_details',
     ];
 
     /** @var array<string, mixed> */
@@ -207,7 +205,6 @@ class ManageIntegrations extends Page implements HasForms
                         TextInput::make('linet.payment_type_standing_order')->label('קוד אמצעי תשלום (הו״ק בנקאית / מס״ב)')->helperText('קוד אמצעי התשלום בלינט להוראת קבע בנקאית (מס״ב). ריק = ישתמש בקוד ברירת המחדל.')->numeric()->live(onBlur: true)->autocomplete(false),
                         TextInput::make('linet.general_item_id')->label('קוד פריט כללי')->helperText('הפריט בלינט שאליו משויכת כל שורת חשבונית. ברירת מחדל: 1. שנו רק אם הפריט הכללי בחשבונכם שונה.')->live(onBlur: true)->autocomplete(false),
                         TextInput::make('linet.income_account_exempt')->label('חשבון הכנסה — פטור')->helperText('חשבון הכנסות פטורות בלינט (בדרך כלל 102). נדרש רק בחשבוניות ללקוח פטור ממע״מ; שורה חייבת משתמשת בחשבון של הפריט (100).')->numeric()->live(onBlur: true)->autocomplete(false),
-                        Textarea::make('billing.bank_transfer_details')->label('פרטי העברה בנקאית (לדרישות תשלום)')->helperText('חשבון הבנק של העסק שאליו לקוח מעביר. טקסט חופשי — שם המוטב, בנק/סניף, מספר חשבון או IBAN. מופיע במייל דרישת התשלום כאפשרות תשלום בהעברה.')->rows(3)->autocomplete(false)->columnSpanFull(),
                     ])->columns(3)
                     ->footerActions($this->groupActions('linet')),
 

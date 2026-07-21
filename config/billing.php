@@ -33,16 +33,19 @@ return [
     // demand stops working immediately regardless of this TTL.
     'payment_link_ttl_hours' => env('PAYMENT_LINK_TTL_HOURS', 24 * 14),
 
-    // Bank-transfer details shown on a payment demand that offers a transfer
-    // option. Free text (account name, bank/branch, account number, or an IBAN).
-    'bank_transfer_details' => env('BANK_TRANSFER_DETAILS'),
+    // Bank-transfer details shown on a payment demand come from the signup-form
+    // settings (billing.signup.instructions.bank_transfer, editable at
+    // הגדרות ← טופס הרשמה) — a single source of truth, not a separate field.
 
-    // Automatic follow-up on an unpaid payment demand: after `interval_days` of
-    // silence resend the request (link/transfer), up to `max_reminders` times,
-    // then stop. Set max_reminders to 0 to disable reminders entirely.
+    // Automatic follow-up on an unpaid payment demand: nudge the customer every
+    // `reminder_interval_days` (default 3) until the demand is paid or canceled,
+    // up to `max_reminders` times, and stop chasing altogether after
+    // `max_age_days` from when the demand was created. Set max_reminders to 0 to
+    // disable reminders entirely.
     'demands' => [
         'reminder_interval_days' => (int) env('DEMAND_REMINDER_INTERVAL_DAYS', 3),
-        'max_reminders' => (int) env('DEMAND_MAX_REMINDERS', 2),
+        'max_reminders' => (int) env('DEMAND_MAX_REMINDERS', 20),
+        'max_age_days' => (int) env('DEMAND_MAX_AGE_DAYS', 90),
     ],
 
     /*

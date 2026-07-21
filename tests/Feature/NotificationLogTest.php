@@ -86,7 +86,7 @@ class NotificationLogTest extends TestCase
         // A transfer-only demand needs no Cardcom page — it still records the
         // payment-request notification (the recording is what's under test).
         Bus::fake([IssueProformaJob::class]);
-        config(['billing.bank_transfer_details' => 'בנק לאומי · חשבון 12345']);
+        config(['billing.signup.instructions.bank_transfer' => 'בנק לאומי · חשבון 12345']);
 
         $customer = Customer::factory()->create(['email' => 'payer@example.com']);
 

@@ -43,8 +43,9 @@ class PaymentDemandsPageTest extends TestCase
             return $job->customerId === $customer->id
                 && $job->totalAgorot === 25000
                 && $job->channel === 'email'
-                // A demand never auto-charges: it offers a manual link + a transfer.
-                && $job->methods === ['link', 'transfer'];
+                // A demand never auto-charges: bank transfer (preferred) is
+                // listed first, the manual card link second.
+                && $job->methods === ['transfer', 'link'];
         });
     }
 
