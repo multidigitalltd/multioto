@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Enums\SubscriptionStatus;
 use App\Mail\DunningNotificationMail;
+use App\Models\NotificationTemplate;
 use App\Models\Subscription;
 use App\Services\Notifications\CardCaptureLinkSender;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -82,6 +83,54 @@ class CardCaptureLinkSenderTest extends TestCase
         app(CardCaptureLinkSender::class)->send($active->load('customer', 'plan'));
 
         Mail::assertSent(DunningNotificationMail::class, fn (DunningNotificationMail $m): bool => str_contains($m->bodyText, 'לא הצלחנו לחייב'));
+    }
+
+    public function test_an_edited_template_controls_the_wording(): void
+    {
+        Mail::fake();
+        Http::fake(['*/api/sendText' => Http::response(['id' => 'msg-1'])]);
+
+        // The operator rewrote the card-capture email in the panel.
+        NotificationTemplate::create([
+            'key' => 'card.capture',
+            'channel' => 'email',
+            'subject' => 'נוסח מותאם ל-{{customer_name}}',
+            'body' => 'שלום {{customer_name}}, הקישור: {{link}}',
+            'enabled' => true,
+        ]);
+
+        $subscription = Subscription::factory()->create(['status' => SubscriptionStatus::Active]);
+        $subscription->customer->update(['name' => 'דנה', 'phone' => null, 'whatsapp_jid' => null, 'email' => 'c@example.co']);
+
+        app(CardCaptureLinkSender::class)->send($subscription->load('customer', 'plan'));
+
+        Mail::assertSent(DunningNotificationMail::class, function (DunningNotificationMail $m): bool {
+            return $m->subjectLine === 'נוסח מותאם ל-דנה'
+                && str_contains($m->bodyText, 'שלום דנה, הקישור: ')
+                && ! str_contains($m->bodyText, 'שמחים לצרף');
+        });
+    }
+
+    public function test_a_disabled_template_skips_the_channel_but_still_returns_the_link(): void
+    {
+        Mail::fake();
+        Http::fake(['*/api/sendText' => Http::response(['id' => 'msg-1'])]);
+
+        NotificationTemplate::create([
+            'key' => 'card.capture', 'channel' => 'email', 'body' => 'x', 'enabled' => false,
+        ]);
+
+        $subscription = Subscription::factory()->create(['status' => SubscriptionStatus::Active]);
+        $subscription->customer->update(['phone' => null, 'whatsapp_jid' => null, 'email' => 'c@example.co']);
+
+        $result = app(CardCaptureLinkSender::class)->send($subscription->load('customer', 'plan'));
+
+        Mail::assertNothingSent();
+        $this->assertSame([], $result['sent']);
+        // A disabled template is an intentional skip, NOT a delivery failure.
+        $this->assertSame([], $result['failed']);
+        $this->assertNotEmpty($result['skipped']);
+        $this->assertStringContainsString('/billing/update-card/', $result['link']);
     }
 
     public function test_it_reports_a_whatsapp_failure_instead_of_claiming_success(): void

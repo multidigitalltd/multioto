@@ -43,13 +43,15 @@ class NotificationTemplateResource extends Resource
         'ticket.resolved' => 'עדכון על סיום טיפול',
         'customer.welcome' => 'ברוכים הבאים ללקוח חדש',
         'payment.link' => 'קישור תשלום ללקוח',
+        'card.capture' => 'קישור להזנת כרטיס אשראי',
+        'card.capture_debt' => 'קישור להזנת כרטיס — לקוח בחוב',
     ];
 
     public static function form(Form $form): Form
     {
         return $form->schema([
             Forms\Components\Section::make()
-                ->description('משתנים זמינים: {{customer_name}} — שם הלקוח · {{ticket_id}} — מספר פנייה · {{ticket_subject}} — נושא · {{business_name}} — שם העסק (מוגדר במסך "מייל").')
+                ->description('משתנים זמינים לפי סוג ההודעה: {{customer_name}} — שם הלקוח · {{business_name}} — שם העסק · בפניות: {{ticket_id}}, {{ticket_subject}} · בקישור כרטיס: {{plan}} — שם המנוי, {{amount}} — סכום, {{link}} — קישור · בקישור תשלום: {{amount}}, {{items}} — פירוט, {{payment_options}}. משתנה שאינו רלוונטי להודעה מסוימת יישאר ריק.')
                 ->schema([
                     Forms\Components\TextInput::make('subject')
                         ->label('נושא (מייל בלבד)')
