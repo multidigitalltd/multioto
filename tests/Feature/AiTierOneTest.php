@@ -218,7 +218,8 @@ class AiTierOneTest extends TestCase
         $solved = Ticket::create([
             'customer_id' => Customer::factory()->create()->id,
             'channel' => TicketChannel::Email,
-            'subject' => 'עדכון כרטיס',
+            // Inbound subjects are stored verbatim and can carry PII too.
+            'subject' => 'עדכון כרטיס — subj-leak@bar.co.il',
             'status' => TicketStatus::Resolved,
             'priority' => TicketPriority::Normal,
             'ai_topic' => 'card_update',
@@ -243,7 +244,9 @@ class AiTierOneTest extends TestCase
             return str_contains($prompt, 'מאגר ידע')
                 && ! str_contains($prompt, 'signature=deadbeef')
                 && ! str_contains($prompt, 'update-card/abc123')
-                && ! str_contains($prompt, 'foo@bar.co.il');
+                && ! str_contains($prompt, 'foo@bar.co.il')
+                // The subject's email is scrubbed too, not just the reply body.
+                && ! str_contains($prompt, 'subj-leak@bar.co.il');
         });
     }
 

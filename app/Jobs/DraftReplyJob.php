@@ -174,8 +174,10 @@ class DraftReplyJob implements ShouldQueue
                 return blank($reply)
                     ? null
                     // Strip customer-specific secrets/PII (signed links, emails)
-                    // so one customer's data never grounds another's draft.
-                    : "• {$t->subject}\n  פתרון: ".Str::limit($this->redact((string) $reply), 500);
+                    // from BOTH the subject and the reply — inbound email subjects
+                    // are stored verbatim, so one customer's data never grounds
+                    // another's draft.
+                    : '• '.$this->redact((string) $t->subject)."\n  פתרון: ".Str::limit($this->redact((string) $reply), 500);
             })
             ->filter()
             ->implode("\n\n");

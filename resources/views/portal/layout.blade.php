@@ -94,6 +94,7 @@
         @isset($customer)
             <nav class="tabs" aria-label="ניווט האזור האישי">
                 <a href="{{ route('portal.dashboard') }}" @if (request()->routeIs('portal.dashboard')) aria-current="page" @endif>סקירה</a>
+                <a href="{{ route('portal.debt') }}" @if (request()->routeIs('portal.debt')) aria-current="page" @endif>תשלומים פתוחים</a>
                 <a href="{{ route('portal.invoices') }}" @if (request()->routeIs('portal.invoices')) aria-current="page" @endif>חשבוניות</a>
                 <a href="{{ route('portal.tickets') }}" @if (request()->routeIs('portal.tickets')) aria-current="page" @endif>פניות</a>
             </nav>
