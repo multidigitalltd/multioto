@@ -21,6 +21,7 @@ use App\Models\Site;
 use App\Models\Subscription;
 use App\Models\SystemLog;
 use App\Models\WebhookEvent;
+use App\Providers\SettingsServiceProvider;
 use App\Services\Calendar\ShabbatClock;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schedule;
@@ -141,12 +142,19 @@ Schedule::call(function () {
 Schedule::command('horizon:snapshot')->everyFiveMinutes();
 
 // Prune the in-panel system log ("מערכת ועדכונים") so it self-cleans.
-Schedule::call(fn () => SystemLog::prune((int) config('billing.system.log_retention_days', 30)))
-    ->dailyAt('03:00')->name('system:prune-logs')->onOneServer();
+// NOTE: each prune re-applies the settings overlay first. These are Schedule::call
+// closures, which — unlike queued jobs — never pass through Queue::before, so in a
+// long-lived scheduler (schedule:work) a retention window just changed in the panel
+// would otherwise be ignored until the container restarts.
+Schedule::call(function () {
+    SettingsServiceProvider::refreshFromDatabase();
+    SystemLog::prune((int) config('billing.system.log_retention_days', 30));
+})->dailyAt('03:00')->name('system:prune-logs')->onOneServer();
 
 // Prune uptime-probe history — the fastest-growing table in the system (one row
 // per probe per site). Retention stays longer than the monthly-report window.
 Schedule::call(function () {
+    SettingsServiceProvider::refreshFromDatabase();
     MonitorCheck::query()
         ->where('checked_at', '<', now()->subDays((int) config('billing.system.monitor_check_retention_days', 90)))
         ->delete();
@@ -154,6 +162,7 @@ Schedule::call(function () {
 
 // Prune inbound-webhook audit rows; idempotency only needs a short window.
 Schedule::call(function () {
+    SettingsServiceProvider::refreshFromDatabase();
     WebhookEvent::query()
         ->where('created_at', '<', now()->subDays((int) config('billing.system.webhook_retention_days', 60)))
         ->delete();
@@ -161,6 +170,7 @@ Schedule::call(function () {
 
 // Prune read in-panel notifications so the notifications table stays small.
 Schedule::call(function () {
+    SettingsServiceProvider::refreshFromDatabase();
     DB::table('notifications')
         ->whereNotNull('read_at')
         ->where('created_at', '<', now()->subDays((int) config('billing.system.notification_retention_days', 30)))

@@ -6,6 +6,7 @@ use App\Enums\UserRole;
 use App\Filament\Pages\ManageDataRetention;
 use App\Models\Setting;
 use App\Models\User;
+use App\Providers\SettingsServiceProvider;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
 use Tests\TestCase;
@@ -51,6 +52,20 @@ class ManageDataRetentionTest extends TestCase
             ->fillForm(['system.monitor_check_retention_days' => 10])
             ->call('save')
             ->assertHasFormErrors(['system.monitor_check_retention_days']);
+    }
+
+    public function test_the_scheduler_process_reloads_a_saved_retention_change_without_a_restart(): void
+    {
+        // Simulate a long-lived scheduler that booted with the default, then an
+        // admin lowering the window in the panel afterwards.
+        config(['billing.system.webhook_retention_days' => 60]);
+        Setting::put('system.webhook_retention_days', '15');
+
+        // The prune closures call this before reading config — it must surface
+        // the stored value even though Queue::before never fired here.
+        SettingsServiceProvider::refreshFromDatabase();
+
+        $this->assertSame(15, (int) config('billing.system.webhook_retention_days'));
     }
 
     public function test_the_page_is_admin_only(): void

@@ -133,6 +133,18 @@ class SettingsServiceProvider extends ServiceProvider
     /** Pristine config-file defaults for RESET_ON_CLEAR keys, memoized once. */
     private static array $pristine = [];
 
+    /**
+     * Re-apply stored settings onto config from the database, WITHOUT
+     * re-registering the queue hook. Safe to call repeatedly from a long-lived
+     * process (the scheduler) — unlike boot(), which would stack a Queue::before
+     * listener on every call. Use before reading a panel-overridable config value
+     * in a Schedule::call closure, which never passes through Queue::before.
+     */
+    public static function refreshFromDatabase(): void
+    {
+        (new self(app()))->applyOverlay();
+    }
+
     public function boot(): void
     {
         $this->applyOverlay();
