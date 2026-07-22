@@ -98,6 +98,11 @@ class SettingsServiceProvider extends ServiceProvider
         // Business logo (public-disk path) shown across customer-facing surfaces.
         'branding.logo_path' => 'billing.branding.logo_path',
         'branding.email_footer' => 'billing.branding.email_footer',
+        // Data-retention windows (days) for the self-cleaning prune jobs.
+        'system.log_retention_days' => 'billing.system.log_retention_days',
+        'system.monitor_check_retention_days' => 'billing.system.monitor_check_retention_days',
+        'system.webhook_retention_days' => 'billing.system.webhook_retention_days',
+        'system.notification_retention_days' => 'billing.system.notification_retention_days',
     ];
 
     /**
@@ -117,10 +122,28 @@ class SettingsServiceProvider extends ServiceProvider
         // (credit-card payment_type), not leave the old code in a running worker.
         'linet.payment_type_bank_transfer' => 'billing.linet.payment_type_bank_transfer',
         'linet.payment_type_standing_order' => 'billing.linet.payment_type_standing_order',
+        // Retention windows: a cleared field must fall back to the config-file
+        // default, never leave the previous custom number in a running worker.
+        'system.log_retention_days' => 'billing.system.log_retention_days',
+        'system.monitor_check_retention_days' => 'billing.system.monitor_check_retention_days',
+        'system.webhook_retention_days' => 'billing.system.webhook_retention_days',
+        'system.notification_retention_days' => 'billing.system.notification_retention_days',
     ];
 
     /** Pristine config-file defaults for RESET_ON_CLEAR keys, memoized once. */
     private static array $pristine = [];
+
+    /**
+     * Re-apply stored settings onto config from the database, WITHOUT
+     * re-registering the queue hook. Safe to call repeatedly from a long-lived
+     * process (the scheduler) — unlike boot(), which would stack a Queue::before
+     * listener on every call. Use before reading a panel-overridable config value
+     * in a Schedule::call closure, which never passes through Queue::before.
+     */
+    public static function refreshFromDatabase(): void
+    {
+        (new self(app()))->applyOverlay();
+    }
 
     public function boot(): void
     {
