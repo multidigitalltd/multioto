@@ -321,16 +321,26 @@ class SystemActionRunner
             throw new \RuntimeException('מנגנון פעולות ה-AI כבוי (kill-switch). יש להפעיל אותו בהגדרות ← סוכן AI.');
         }
 
-        if (($p['all_connected'] ?? false) === true) {
-            $sites = Site::query()->where('mcp_enabled', true)->whereNotNull('mcp_endpoint')->get();
-        } else {
-            $sites = collect([$this->site($p)]);
+        // Execute EXACTLY the sites approved at proposal time (snapshotted into
+        // the payload) — never a freshly re-queried set, so a site connected
+        // after approval is not swept into an already-approved bulk update.
+        $siteIds = array_values(array_filter(array_map('intval', (array) ($p['site_ids'] ?? []))));
+
+        if ($siteIds === []) {
+            throw new \RuntimeException('לא נבחרו אתרים לעדכון.');
         }
+
+        // Preserve the approved order; skip any site deleted since approval.
+        $sites = Site::query()->whereIn('id', $siteIds)->get()->sortBy(
+            fn (Site $s): int => array_search($s->id, $siteIds, true),
+        )->values();
 
         if ($sites->isEmpty()) {
-            throw new \RuntimeException('אין אתרים מחוברים לסוכן לעדכון.');
+            throw new \RuntimeException('האתרים שנבחרו לעדכון לא נמצאו.');
         }
 
+        // Core upgrades download + swap files and can exceed the default timeout.
+        $timeout = (int) config('agent.mcp.core_update_timeout_seconds', 300);
         $failures = [];
 
         foreach ($sites as $site) {
@@ -341,7 +351,7 @@ class SystemActionRunner
             }
 
             try {
-                $output = $this->mcp->textContent($this->mcp->callTool($site, 'wp_core_update'));
+                $output = $this->mcp->textContent($this->mcp->callTool($site, 'wp_core_update', [], $timeout));
                 $this->journal->record(
                     $site,
                     summary: 'עדכון ליבת וורדפרס',

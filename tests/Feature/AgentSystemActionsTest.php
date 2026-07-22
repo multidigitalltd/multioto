@@ -48,24 +48,47 @@ class AgentSystemActionsTest extends TestCase
 
         $connectedA = Site::factory()->create(['mcp_enabled' => true, 'mcp_endpoint' => 'https://a.test/mcp']);
         $connectedB = Site::factory()->create(['mcp_enabled' => true, 'mcp_endpoint' => 'https://b.test/mcp']);
-        // Not connected — must be skipped entirely.
-        Site::factory()->create(['mcp_enabled' => false, 'mcp_endpoint' => null]);
 
         $mcp = Mockery::mock(McpClient::class);
         $mcp->shouldReceive('callTool')
             ->twice()
-            ->with(Mockery::type(Site::class), 'wp_core_update')
+            ->with(Mockery::type(Site::class), 'wp_core_update', [], Mockery::type('int'))
             ->andReturn(['content' => [['type' => 'text', 'text' => 'ליבת וורדפרס עודכנה מגרסה 6.4 לגרסה 6.5.']]]);
         $mcp->shouldReceive('textContent')->andReturn('ליבת וורדפרס עודכנה מגרסה 6.4 לגרסה 6.5.');
         $this->instance(McpClient::class, $mcp);
 
-        $action = $this->systemAction(['operation' => 'update_wordpress', 'all_connected' => true]);
+        // The payload carries the snapshot of approved site ids (as the proposal builds).
+        $action = $this->systemAction(['operation' => 'update_wordpress', 'site_ids' => [$connectedA->id, $connectedB->id]]);
         app(ApprovalGate::class)->approve($action);
 
         $this->assertSame(ActionStatus::Executed, $action->fresh()->status);
-        // Each connected site got a journalled core-update change; the offline one didn't.
         $this->assertSame(1, $connectedA->changes()->where('tool', 'wp_core_update')->count());
         $this->assertSame(1, $connectedB->changes()->where('tool', 'wp_core_update')->count());
+    }
+
+    public function test_a_wordpress_update_only_touches_the_snapshotted_sites_not_ones_added_later(): void
+    {
+        config(['agent.system_actions_enabled' => true, 'agent.actions_enabled' => true]);
+
+        $approved = Site::factory()->create(['mcp_enabled' => true, 'mcp_endpoint' => 'https://a.test/mcp']);
+        // Proposal captured only $approved. A site connected AFTER approval must
+        // never be swept into the already-approved update.
+        $addedLater = Site::factory()->create(['mcp_enabled' => true, 'mcp_endpoint' => 'https://b.test/mcp']);
+
+        $mcp = Mockery::mock(McpClient::class);
+        $mcp->shouldReceive('callTool')
+            ->once()
+            ->with(Mockery::on(fn (Site $s): bool => $s->id === $approved->id), 'wp_core_update', [], Mockery::type('int'))
+            ->andReturn(['content' => [['type' => 'text', 'text' => 'עודכן']]]);
+        $mcp->shouldReceive('textContent')->andReturn('עודכן');
+        $this->instance(McpClient::class, $mcp);
+
+        $action = $this->systemAction(['operation' => 'update_wordpress', 'site_ids' => [$approved->id]]);
+        app(ApprovalGate::class)->approve($action);
+
+        $this->assertSame(ActionStatus::Executed, $action->fresh()->status);
+        $this->assertSame(1, $approved->changes()->count());
+        $this->assertSame(0, $addedLater->changes()->count());
     }
 
     public function test_a_wordpress_update_is_blocked_by_the_site_agent_kill_switch(): void
@@ -77,7 +100,7 @@ class AgentSystemActionsTest extends TestCase
         $mcp->shouldNotReceive('callTool');
         $this->instance(McpClient::class, $mcp);
 
-        $action = $this->systemAction(['operation' => 'update_wordpress', 'site_id' => $site->id]);
+        $action = $this->systemAction(['operation' => 'update_wordpress', 'site_ids' => [$site->id]]);
         app(ApprovalGate::class)->approve($action);
 
         // Not executed — the kill-switch stopped it before any MCP call.

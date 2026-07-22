@@ -71,12 +71,12 @@ class McpClient
      * @param  array<string, mixed>  $arguments
      * @return array<string, mixed>
      */
-    public function callTool(Site $site, string $name, array $arguments = []): array
+    public function callTool(Site $site, string $name, array $arguments = [], int $timeout = 0): array
     {
         $result = $this->request($site, 'tools/call', [
             'name' => $name,
             'arguments' => (object) $arguments,
-        ]);
+        ], $timeout);
 
         if (($result['isError'] ?? false) === true) {
             throw new McpError("הכלי {$name} החזיר שגיאה: ".Str::limit($this->textContent($result), 300));
@@ -100,14 +100,14 @@ class McpClient
      * @param  array<string, mixed>|object  $params
      * @return array<string, mixed>
      */
-    protected function request(Site $site, string $method, array|object $params = []): array
+    protected function request(Site $site, string $method, array|object $params = [], int $timeout = 0): array
     {
         $response = $this->post($site, [
             'jsonrpc' => '2.0',
             'id' => (string) Str::uuid(),
             'method' => $method,
             'params' => $params === [] ? (object) [] : $params,
-        ]);
+        ], $timeout);
 
         $payload = $this->decode($response);
 
@@ -210,13 +210,18 @@ class McpClient
     }
 
     /** POST a JSON-RPC message to the site's endpoint with its credentials. */
-    protected function post(Site $site, array $message): Response
+    protected function post(Site $site, array $message, int $timeout = 0): Response
     {
         if (blank($site->mcp_endpoint)) {
             throw new McpError('לא הוגדרה כתובת MCP לאתר');
         }
 
-        $request = Http::timeout((int) config('agent.mcp.timeout_seconds', 30))
+        // A caller may pass a longer timeout for a genuinely slow tool (e.g. a
+        // WordPress core upgrade, which downloads + swaps files); otherwise use
+        // the default request timeout.
+        $seconds = $timeout > 0 ? $timeout : (int) config('agent.mcp.timeout_seconds', 30);
+
+        $request = Http::timeout($seconds)
             ->withHeaders([
                 'Accept' => 'application/json, text/event-stream',
                 'MCP-Protocol-Version' => self::PROTOCOL_VERSION,

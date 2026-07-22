@@ -779,16 +779,20 @@ class ConsoleAgent
             $this->siteId = $site->id;
             $this->customerId ??= $site->customer_id;
             $summary = "🛠️ פעולת מערכת — עדכון ליבת וורדפרס: {$site->domain}";
-            $payload = ['operation' => 'update_wordpress', 'site_id' => $site->id, 'source' => 'console_agent'];
+            $payload = ['operation' => 'update_wordpress', 'site_ids' => [$site->id], 'source' => 'console_agent'];
             $what = "עדכון וורדפרס: {$site->domain}";
         } else {
-            $count = Site::query()->where('mcp_enabled', true)->whereNotNull('mcp_endpoint')->count();
-            if ($count === 0) {
+            // Snapshot the EXACT sites shown to the approver into the payload, so
+            // a site connected later (proposals stay valid for days) can't slip
+            // into an already-approved bulk update.
+            $siteIds = Site::query()->where('mcp_enabled', true)->whereNotNull('mcp_endpoint')->pluck('id')->all();
+            if ($siteIds === []) {
                 return ['content' => 'אין אתרים מחוברים לסוכן לעדכון.', 'is_error' => true];
             }
 
+            $count = count($siteIds);
             $summary = "🛠️ פעולת מערכת — עדכון ליבת וורדפרס בכל האתרים המחוברים ({$count})";
-            $payload = ['operation' => 'update_wordpress', 'all_connected' => true, 'source' => 'console_agent'];
+            $payload = ['operation' => 'update_wordpress', 'site_ids' => $siteIds, 'source' => 'console_agent'];
             $what = "עדכון וורדפרס בכל האתרים המחוברים ({$count})";
         }
 

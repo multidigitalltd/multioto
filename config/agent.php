@@ -67,6 +67,9 @@ return [
     'mcp' => [
         // Timeout for a single MCP call to a site, in seconds.
         'timeout_seconds' => (int) env('AGENT_MCP_TIMEOUT', 30),
+        // A longer timeout for a genuinely slow operation — a WordPress core
+        // upgrade downloads and swaps files and can exceed the default.
+        'core_update_timeout_seconds' => (int) env('AGENT_MCP_CORE_UPDATE_TIMEOUT', 300),
     ],
 
     /*

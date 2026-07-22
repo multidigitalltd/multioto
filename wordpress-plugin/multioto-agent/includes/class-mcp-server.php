@@ -359,11 +359,20 @@ class Multioto_Agent_Mcp_Server
             throw new Multioto_Agent_Rpc_Error(-32000, $result->get_error_message());
         }
 
-        // Read the version fresh from the just-updated version.php.
+        // Read the new version fresh from the just-replaced version.php.
         require ABSPATH.WPINC.'/version.php';
         $after = $wp_version ?? get_bloginfo('version');
 
-        return "ליבת וורדפרס עודכנה מגרסה {$before} לגרסה {$after}.";
+        // Core_Upgrader swaps the FILES but does not run the database-schema
+        // upgrade — that normally happens when an admin visits upgrade.php. Run
+        // it now (idempotent) so the site never executes new code against the old
+        // schema. wp_upgrade() bumps db_version and runs the per-version steps.
+        if ((int) get_option('db_version') !== (int) $wp_db_version) {
+            require_once ABSPATH.'wp-admin/includes/upgrade.php';
+            @wp_upgrade();
+        }
+
+        return "ליבת וורדפרס עודכנה מגרסה {$before} לגרסה {$after} (כולל שדרוג מסד הנתונים).";
     }
 
     private function setPluginState(array $args, bool $activate): string
