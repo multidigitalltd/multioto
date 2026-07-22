@@ -37,6 +37,9 @@ class FollowUpPendingTicketsJob implements ShouldQueue
         Ticket::query()
             ->where('status', TicketStatus::Pending)
             ->whereNotNull('pending_since')
+            // Bounded like the sibling sweeps (SLA 200 / demands 100) — the
+            // daily run drains any backlog across days instead of one huge pass.
+            ->limit(200)
             ->get()
             ->each(function (Ticket $ticket) use ($reminderDays, $closeDays) {
                 $silentDays = $ticket->pending_since->diffInDays(now());

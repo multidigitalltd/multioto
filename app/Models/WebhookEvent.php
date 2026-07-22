@@ -35,12 +35,11 @@ class WebhookEvent extends Model
      */
     public static function record(WebhookSource $source, string $eventType, ?string $externalId, array $payload): array
     {
-        if ($externalId === null) {
-            return [self::create([
-                'source' => $source,
-                'event_type' => $eventType,
-                'payload' => $payload,
-            ]), true];
+        // No provider id → derive a deterministic one from the payload, so an
+        // authenticated replay of the exact same delivery still dedups instead
+        // of being processed twice.
+        if ($externalId === null || $externalId === '') {
+            $externalId = 'sha:'.hash('sha256', $eventType.'|'.json_encode($payload));
         }
 
         // Idempotency is scoped by source: the same external_id from two different

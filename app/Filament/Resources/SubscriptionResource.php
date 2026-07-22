@@ -189,6 +189,9 @@ class SubscriptionResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
+            // planName() reads the plan relation per row; eager-load it (the
+            // dot-notation columns are auto-loaded, plan is not).
+            ->modifyQueryUsing(fn (Builder $query) => $query->with('plan'))
             ->columns([
                 Tables\Columns\TextColumn::make('customer.name')
                     ->label('לקוח')

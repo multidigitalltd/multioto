@@ -380,12 +380,22 @@ return [
         // In-panel system log ("מערכת ועדכונים") retention: rows older than this
         // many days are pruned nightly by the scheduler.
         'log_retention_days' => env('SYSTEM_LOG_RETENTION_DAYS', 30),
+
+        // Uptime-probe history (monitor_checks) retention. Must stay LONGER than
+        // monitoring.monthly_report.window_days, or the customer report loses data.
+        'monitor_check_retention_days' => env('MONITOR_CHECK_RETENTION_DAYS', 90),
+
+        // Inbound-webhook audit rows (webhook_events). Idempotency only needs a
+        // short window; the rest is audit history.
+        'webhook_retention_days' => env('WEBHOOK_RETENTION_DAYS', 60),
+
+        // Read in-panel notifications older than this are pruned.
+        'notification_retention_days' => env('NOTIFICATION_RETENTION_DAYS', 30),
     ],
 
     'support' => [
-        // Service-level targets per ticket priority, in HOURS from when the
-        // ticket was opened. first_response = time to the team's first reply;
-        // resolution = time to close/resolve. A ticket past its first-response
+        // Service-level target per ticket priority, in HOURS from when the
+        // ticket was opened until the team's first reply. A ticket past its
         // target with no reply is a breach — surfaced on the dashboard and
         // alerted to the team once (CheckSlaBreachesJob).
         'sla' => [
@@ -394,12 +404,6 @@ return [
                 'high' => (int) env('SLA_FIRST_RESPONSE_HIGH', 4),
                 'normal' => (int) env('SLA_FIRST_RESPONSE_NORMAL', 8),
                 'low' => (int) env('SLA_FIRST_RESPONSE_LOW', 24),
-            ],
-            'resolution_hours' => [
-                'urgent' => (int) env('SLA_RESOLUTION_URGENT', 8),
-                'high' => (int) env('SLA_RESOLUTION_HIGH', 24),
-                'normal' => (int) env('SLA_RESOLUTION_NORMAL', 72),
-                'low' => (int) env('SLA_RESOLUTION_LOW', 120),
             ],
         ],
 
