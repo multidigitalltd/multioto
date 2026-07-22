@@ -37,8 +37,11 @@ class FollowUpPendingTicketsJob implements ShouldQueue
         Ticket::query()
             ->where('status', TicketStatus::Pending)
             ->whereNotNull('pending_since')
-            // Bounded like the sibling sweeps (SLA 200 / demands 100) — the
-            // daily run drains any backlog across days instead of one huge pass.
+            // Only tickets already old enough for SOME action (reminder is the
+            // earlier threshold), oldest first, THEN the cap — so fresh rows can
+            // never crowd an overdue ticket out of the bounded daily sweep.
+            ->where('pending_since', '<=', now()->subDays(min($reminderDays, $closeDays)))
+            ->oldest('pending_since')
             ->limit(200)
             ->get()
             ->each(function (Ticket $ticket) use ($reminderDays, $closeDays) {
