@@ -4,8 +4,8 @@ namespace App\Filament\Pages;
 
 use App\Enums\ChargeStatus;
 use App\Filament\Resources\CustomerResource;
+use App\Filament\Widgets\CollectionForecastStats;
 use App\Models\Charge;
-use App\Support\Money;
 use Filament\Pages\Page;
 use Filament\Tables;
 use Filament\Tables\Concerns\InteractsWithTable;
@@ -50,40 +50,13 @@ class CollectionForecast extends Page implements HasTable
             ->whereNotNull('demand_sent_at');
     }
 
-    public static function getNavigationBadge(): ?string
+    /**
+     * The aging breakdown as stat squares at the TOP of the page (not on the
+     * navigation badge — the numbers show only when you open the page).
+     */
+    protected function getHeaderWidgets(): array
     {
-        $total = (int) self::baseQuery()->sum('total_agorot');
-
-        return $total > 0 ? Money::ils($total) : null;
-    }
-
-    /** Bucket totals + grand total, shown at a glance under the title. */
-    public function getSubheading(): ?string
-    {
-        $rows = self::baseQuery()->get(['total_agorot', 'created_at']);
-
-        if ($rows->isEmpty()) {
-            return null;
-        }
-
-        $parts = [];
-        foreach (self::BUCKETS as [$label, $min, $max, $color]) {
-            $sum = $rows
-                ->filter(function (Charge $c) use ($min, $max): bool {
-                    $age = self::ageDays($c);
-
-                    return $age >= $min && ($max === null || $age <= $max);
-                })
-                ->sum('total_agorot');
-
-            if ($sum > 0) {
-                $parts[] = "{$label}: ".Money::ils((int) $sum);
-            }
-        }
-
-        $parts[] = 'סה״כ פתוח: '.Money::ils((int) $rows->sum('total_agorot'));
-
-        return implode(' · ', $parts);
+        return [CollectionForecastStats::class];
     }
 
     /**
