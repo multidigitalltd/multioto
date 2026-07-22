@@ -2,7 +2,7 @@
 Contributors: multidigital
 Requires at least: 6.0
 Requires PHP: 7.4
-Stable tag: 1.0.9
+Stable tag: 1.0.10
 License: GPLv2 or later
 
 מחבר את אתר הוורדפרס לפאנל התפעול של Multi Digital: נקודת קצה MCP מאובטחת
@@ -55,6 +55,9 @@ Cloudflare באתר כולו — די בחריגה לנתיב הזה.)
   RewriteRule .* - [E=HTTP_AUTHORIZATION:%1]
 
 == Changelog ==
+
+= 1.0.10 =
+* כלי חדש wp_core_update — עדכון ליבת וורדפרס (WordPress core) לגרסה היציבה האחרונה, כדי שהפלטפורמה תוכל לעדכן וורדפרס בכל האתרים המחוברים. מחזיר את הגרסה לפני ואחרי; אתר מעודכן נשאר ללא שינוי.
 
 = 1.0.9 =
 * כלי קריאה חדש wp_theme_list — רשימת התבניות (themes) המותקנות ואיזו פעילה, כדי שהפלטפורמה תוכל להתריע על התקנת תבנית חדשה (בנוסף לתוספים).

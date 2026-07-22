@@ -51,7 +51,7 @@ return [
         // The current version of the companion plugin we ship. A site reporting
         // an older version is told to update itself from the download channel —
         // so we never have to re-install the plugin by hand on every site.
-        'current_version' => env('AGENT_PLUGIN_VERSION', '1.0.9'),
+        'current_version' => env('AGENT_PLUGIN_VERSION', '1.0.10'),
 
         // Private disk + path prefix where release zips live: {path}/{version}.zip.
         'disk' => env('AGENT_PLUGIN_DISK', 'local'),
@@ -67,6 +67,9 @@ return [
     'mcp' => [
         // Timeout for a single MCP call to a site, in seconds.
         'timeout_seconds' => (int) env('AGENT_MCP_TIMEOUT', 30),
+        // A longer timeout for a genuinely slow operation — a WordPress core
+        // upgrade downloads and swaps files and can exceed the default.
+        'core_update_timeout_seconds' => (int) env('AGENT_MCP_CORE_UPDATE_TIMEOUT', 300),
     ],
 
     /*
