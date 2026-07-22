@@ -138,15 +138,6 @@ class Ticket extends Model
         return max(1, (int) ($map[$key] ?? 8));
     }
 
-    /** Target hours to resolution for this ticket's priority. */
-    public function slaResolutionHours(): int
-    {
-        $key = ($this->priority ?? TicketPriority::Normal)->value;
-        $map = (array) config('billing.support.sla.resolution_hours', []);
-
-        return max(1, (int) ($map[$key] ?? 72));
-    }
-
     /** When the first response is due (created + target). */
     public function firstResponseDueAt(): Carbon
     {
@@ -199,13 +190,5 @@ class Ticket extends Model
         $riskFrom = $due->copy()->subMinutes((int) round($this->slaFirstResponseHours() * 60 * 0.2));
 
         return now() >= $riskFrom ? 'at_risk' : 'ok';
-    }
-
-    /** A ticket awaiting OUR first reply (SLA first-response clock running). */
-    public function isAwaitingFirstResponse(): bool
-    {
-        return $this->first_response_at === null
-            && ! in_array($this->status, self::TERMINAL, true)
-            && ! in_array($this->status, self::AWAITING_CUSTOMER, true);
     }
 }

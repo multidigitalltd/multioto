@@ -16,6 +16,7 @@ use App\Services\Calendar\HebrewDate;
 use App\Services\Calendar\ShabbatClock;
 use App\Services\Cloudflare\CloudflareClient;
 use App\Services\Support\ServiceStatus;
+use App\Support\Money;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 
@@ -611,7 +612,7 @@ class ConsoleAgent
         $this->customerId ??= $subscription->customer_id;
         $parts = [];
         if (isset($changes['price_agorot_override'])) {
-            $parts[] = 'מחיר ₪'.number_format($changes['price_agorot_override'] / 100, 2);
+            $parts[] = 'מחיר '.Money::ils((int) $changes['price_agorot_override']);
         }
         if (isset($changes['status'])) {
             $parts[] = "סטטוס {$changes['status']}";
@@ -681,7 +682,7 @@ class ConsoleAgent
 
         $action = $this->gate->propose(
             type: 'system_action',
-            summary: '🛠️ פעולת מערכת — דרישת תשלום ל'.$customer->name.' על ₪'.number_format($agorot / 100, 2)." — {$description}",
+            summary: '🛠️ פעולת מערכת — דרישת תשלום ל'.$customer->name.' על '.Money::ils($agorot)." — {$description}",
             payload: ['operation' => 'send_payment_request', 'customer_id' => $customer->id, 'amount_agorot' => $agorot, 'description' => $description, 'channel' => 'whatsapp', 'source' => 'console_agent'],
             customerId: $customer->id,
             proposedBy: 'console',

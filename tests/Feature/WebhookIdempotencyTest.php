@@ -31,4 +31,26 @@ class WebhookIdempotencyTest extends TestCase
         $this->assertFalse($second); // duplicate delivery, dropped
         $this->assertSame(1, WebhookEvent::count());
     }
+
+    public function test_a_replay_without_an_external_id_is_deduped_by_payload_hash(): void
+    {
+        // An authenticated redelivery of the exact same id-less payload must not
+        // be processed twice — the dedup key falls back to a payload hash.
+        [, $first] = WebhookEvent::record(WebhookSource::Waha, 'session.status', null, ['status' => 'WORKING']);
+        [, $replay] = WebhookEvent::record(WebhookSource::Waha, 'session.status', null, ['status' => 'WORKING']);
+
+        $this->assertTrue($first);
+        $this->assertFalse($replay);
+        $this->assertSame(1, WebhookEvent::count());
+    }
+
+    public function test_different_id_less_payloads_are_distinct_events(): void
+    {
+        [, $a] = WebhookEvent::record(WebhookSource::Waha, 'session.status', null, ['status' => 'WORKING']);
+        [, $b] = WebhookEvent::record(WebhookSource::Waha, 'session.status', null, ['status' => 'FAILED']);
+
+        $this->assertTrue($a);
+        $this->assertTrue($b); // different content — a real new event
+        $this->assertSame(2, WebhookEvent::count());
+    }
 }

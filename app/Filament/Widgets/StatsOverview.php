@@ -30,7 +30,9 @@ class StatsOverview extends BaseWidget
 
     protected function getStats(): array
     {
-        $activeSubscriptions = Subscription::with('plan')
+        // customer is needed too: totalChargeAgorot() → vatAgorot() reads
+        // customer->vat_exempt, so without it this is an N+1 per subscription.
+        $activeSubscriptions = Subscription::with(['plan', 'customer'])
             ->where('status', SubscriptionStatus::Active)
             ->get();
 

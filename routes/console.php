@@ -16,10 +16,13 @@ use App\Jobs\SendProactiveRemindersJob;
 use App\Jobs\SendTaskRemindersJob;
 use App\Models\Broadcast;
 use App\Models\Charge;
+use App\Models\MonitorCheck;
 use App\Models\Site;
 use App\Models\Subscription;
 use App\Models\SystemLog;
+use App\Models\WebhookEvent;
 use App\Services\Calendar\ShabbatClock;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schedule;
 
 /*
@@ -140,3 +143,26 @@ Schedule::command('horizon:snapshot')->everyFiveMinutes();
 // Prune the in-panel system log ("מערכת ועדכונים") so it self-cleans.
 Schedule::call(fn () => SystemLog::prune((int) config('billing.system.log_retention_days', 30)))
     ->dailyAt('03:00')->name('system:prune-logs')->onOneServer();
+
+// Prune uptime-probe history — the fastest-growing table in the system (one row
+// per probe per site). Retention stays longer than the monthly-report window.
+Schedule::call(function () {
+    MonitorCheck::query()
+        ->where('checked_at', '<', now()->subDays((int) config('billing.system.monitor_check_retention_days', 90)))
+        ->delete();
+})->dailyAt('03:10')->name('system:prune-monitor-checks')->onOneServer();
+
+// Prune inbound-webhook audit rows; idempotency only needs a short window.
+Schedule::call(function () {
+    WebhookEvent::query()
+        ->where('created_at', '<', now()->subDays((int) config('billing.system.webhook_retention_days', 60)))
+        ->delete();
+})->dailyAt('03:20')->name('system:prune-webhook-events')->onOneServer();
+
+// Prune read in-panel notifications so the notifications table stays small.
+Schedule::call(function () {
+    DB::table('notifications')
+        ->whereNotNull('read_at')
+        ->where('created_at', '<', now()->subDays((int) config('billing.system.notification_retention_days', 30)))
+        ->delete();
+})->dailyAt('03:30')->name('system:prune-notifications')->onOneServer();

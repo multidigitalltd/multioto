@@ -80,10 +80,7 @@ class ManagementCommands
      */
     private function contactCustomer(string $phone, string $body): string
     {
-        $digits = preg_replace('/\D+/', '', $phone) ?? '';
-        if (str_starts_with($digits, '0')) {
-            $digits = (string) config('billing.waha.default_country_code', '972').substr($digits, 1);
-        }
+        $digits = $this->internationalDigits($phone);
 
         if ($digits === '') {
             return 'מספר טלפון לא תקין.';
@@ -116,10 +113,7 @@ class ManagementCommands
     {
         // Match on both the raw input and its E.164 form: a local "0501234567"
         // becomes "+972501234567" (the way customers are stored), not "+501234567".
-        $digits = preg_replace('/\D+/', '', $phone) ?? '';
-        if (str_starts_with($digits, '0')) {
-            $digits = (string) config('billing.waha.default_country_code', '972').substr($digits, 1);
-        }
+        $digits = $this->internationalDigits($phone);
         $e164 = '+'.$digits;
 
         $customer = $this->intake->matchCustomer(phone: $phone)
@@ -214,6 +208,21 @@ class ManagementCommands
         ));
 
         return "פניות פתוחות ({$open->count()}):\n".$lines->implode("\n");
+    }
+
+    /**
+     * A phone in any local format → bare international digits ("0501234567" →
+     * "972501234567"), the form WhatsApp JIDs and E.164 matching are built from.
+     */
+    private function internationalDigits(string $phone): string
+    {
+        $digits = preg_replace('/\D+/', '', $phone) ?? '';
+
+        if (str_starts_with($digits, '0')) {
+            $digits = (string) config('billing.waha.default_country_code', '972').substr($digits, 1);
+        }
+
+        return $digits;
     }
 
     private function help(): string
