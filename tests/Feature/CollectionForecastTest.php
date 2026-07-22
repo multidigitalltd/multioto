@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Enums\ChargeStatus;
 use App\Filament\Pages\CollectionForecast;
+use App\Filament\Widgets\CollectionForecastStats;
 use App\Models\Charge;
 use App\Models\Customer;
 use App\Models\User;
@@ -61,40 +62,53 @@ class CollectionForecastTest extends TestCase
             ->assertCanNotSeeTableRecords([$plain, $paid]);
     }
 
-    public function test_the_subheading_totals_the_open_debt_by_age_bucket(): void
+    public function test_the_stat_squares_total_the_open_debt_by_age_bucket(): void
     {
+        $this->actingAs(User::factory()->create());
         $customer = Customer::factory()->create();
         $this->demand($customer->id, 10000, 10);   // 0–30 → ₪100
         $this->demand($customer->id, 20000, 45);   // 31–60 → ₪200
         $this->demand($customer->id, 30000, 120);  // 90+  → ₪300
 
-        $sub = (new CollectionForecast)->getSubheading();
-
-        $this->assertStringContainsString('0–30 ימים: '.Money::ils(10000), $sub);
-        $this->assertStringContainsString('31–60 ימים: '.Money::ils(20000), $sub);
-        $this->assertStringContainsString('מעל 90 ימים: '.Money::ils(30000), $sub);
-        $this->assertStringContainsString('סה״כ פתוח: '.Money::ils(60000), $sub);
+        // The breakdown lives in the header stat squares, not the nav badge.
+        Livewire::test(CollectionForecastStats::class)
+            ->assertSee('0–30 ימים')
+            ->assertSee('31–60 ימים')
+            ->assertSee('מעל 90 ימים')
+            ->assertSee('סה״כ פתוח')
+            ->assertSee(Money::ils(10000))
+            ->assertSee(Money::ils(20000))
+            ->assertSee(Money::ils(30000))
+            ->assertSee(Money::ils(60000));
     }
 
     public function test_aging_uses_the_debt_origin_not_the_last_reminder(): void
     {
+        $this->actingAs(User::factory()->create());
         $customer = Customer::factory()->create();
         // 120 days old but "reminded" just now (demand_sent_at = now) — must age
-        // to 90+, not 0–30.
+        // to 90+ (₪300), leaving the 0–30 square at zero.
         $this->demand($customer->id, 30000, 120);
 
-        $sub = (new CollectionForecast)->getSubheading();
-
-        $this->assertStringContainsString('מעל 90 ימים: '.Money::ils(30000), $sub);
-        $this->assertStringNotContainsString('0–30 ימים:', $sub);
+        Livewire::test(CollectionForecastStats::class)
+            ->assertSee('מעל 90 ימים')
+            ->assertSee(Money::ils(30000)) // the 90+ square
+            ->assertSee(Money::ils(0));    // the 0–30 square is empty
     }
 
-    public function test_the_navigation_badge_shows_the_total_open(): void
+    public function test_the_amount_is_not_shown_on_the_navigation_badge(): void
     {
         $customer = Customer::factory()->create();
         $this->demand($customer->id, 10000, 10);
-        $this->demand($customer->id, 20000, 45);
 
-        $this->assertSame(Money::ils(30000), CollectionForecast::getNavigationBadge());
+        // The total is intentionally kept off the tab — it shows only inside.
+        $this->assertNull(CollectionForecast::getNavigationBadge());
+    }
+
+    public function test_the_stats_widget_is_not_auto_discovered_onto_the_dashboard(): void
+    {
+        // It renders only inside the forecast page (getHeaderWidgets), never on
+        // the main dashboard — otherwise the amounts would leak there too.
+        $this->assertFalse(CollectionForecastStats::isDiscovered());
     }
 }
