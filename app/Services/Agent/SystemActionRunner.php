@@ -2,6 +2,7 @@
 
 namespace App\Services\Agent;
 
+use App\Enums\SiteChangeStatus;
 use App\Enums\SiteStatus;
 use App\Enums\SubscriptionStatus;
 use App\Enums\TaskStatus;
@@ -18,6 +19,7 @@ use App\Models\Ticket;
 use App\Services\Billing\SubscriptionCollectionService;
 use App\Services\Cloudflare\CloudflareClient;
 use App\Services\Hosting\HostingClient;
+use Illuminate\Support\Str;
 
 /**
  * Executes an APPROVED internal system action (proposed from the command console
@@ -33,6 +35,8 @@ class SystemActionRunner
     public function __construct(
         private SubscriptionCollectionService $collections,
         private HostingClient $hosting,
+        private McpClient $mcp,
+        private SiteChangeJournal $journal,
     ) {}
 
     public function run(PendingAction $action): void
@@ -60,6 +64,7 @@ class SystemActionRunner
             'restore_site' => $this->restoreSite($payload),
             'purge_cloudflare_cache' => $this->purgeCloudflareCache($payload),
             'cloudflare_country_rule' => $this->cloudflareCountryRule($payload),
+            'update_wordpress' => $this->updateWordpress($payload),
             default => throw new \RuntimeException("פעולת מערכת לא מוכרת: {$operation}"),
         };
     }
@@ -298,6 +303,67 @@ class SystemActionRunner
 
         if (! $result['ok']) {
             throw new \RuntimeException($result['message']);
+        }
+    }
+
+    /**
+     * Update WordPress core on one connected site, or on ALL connected sites at
+     * once. Each site is updated over MCP (wp_core_update) and journalled; one
+     * site failing never aborts the rest — but if EVERY target failed the whole
+     * action is reported as failed so the operator sees it.
+     *
+     * @param  array<string, mixed>  $p
+     */
+    private function updateWordpress(array $p): void
+    {
+        // Touching customer sites is gated by the site-agent kill-switch too.
+        if (! config('agent.actions_enabled')) {
+            throw new \RuntimeException('מנגנון פעולות ה-AI כבוי (kill-switch). יש להפעיל אותו בהגדרות ← סוכן AI.');
+        }
+
+        if (($p['all_connected'] ?? false) === true) {
+            $sites = Site::query()->where('mcp_enabled', true)->whereNotNull('mcp_endpoint')->get();
+        } else {
+            $sites = collect([$this->site($p)]);
+        }
+
+        if ($sites->isEmpty()) {
+            throw new \RuntimeException('אין אתרים מחוברים לסוכן לעדכון.');
+        }
+
+        $failures = [];
+
+        foreach ($sites as $site) {
+            if (! $site->mcp_enabled || blank($site->mcp_endpoint)) {
+                $failures[] = "{$site->domain}: לא מחובר לסוכן";
+
+                continue;
+            }
+
+            try {
+                $output = $this->mcp->textContent($this->mcp->callTool($site, 'wp_core_update'));
+                $this->journal->record(
+                    $site,
+                    summary: 'עדכון ליבת וורדפרס',
+                    tool: 'wp_core_update',
+                    afterState: Str::limit($output, 2000) ?: null,
+                    initiatedBy: 'console',
+                );
+            } catch (\Throwable $e) {
+                $failures[] = "{$site->domain}: ".Str::limit($e->getMessage(), 200);
+                $this->journal->record(
+                    $site,
+                    summary: 'עדכון ליבת וורדפרס',
+                    tool: 'wp_core_update',
+                    initiatedBy: 'console',
+                    status: SiteChangeStatus::Failed,
+                )->update(['error' => Str::limit($e->getMessage(), 500)]);
+            }
+        }
+
+        // All targets failed → surface it as a failed action (partial success is fine).
+        if (count($failures) === $sites->count()) {
+            throw new \RuntimeException('עדכון וורדפרס נכשל בכל האתרים: '.implode(' · ', $failures));
         }
     }
 

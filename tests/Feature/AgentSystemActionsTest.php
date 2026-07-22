@@ -15,6 +15,7 @@ use App\Models\Site;
 use App\Models\Task;
 use App\Models\Ticket;
 use App\Models\User;
+use App\Services\Agent\McpClient;
 use App\Services\Ai\ClaudeClient;
 use App\Services\Automation\ApprovalGate;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -40,6 +41,49 @@ class AgentSystemActionsTest extends TestCase
     }
 
     // ---- SystemActionRunner (execution) -----------------------------------
+
+    public function test_approving_a_wordpress_update_for_all_connected_sites_updates_each(): void
+    {
+        config(['agent.system_actions_enabled' => true, 'agent.actions_enabled' => true]);
+
+        $connectedA = Site::factory()->create(['mcp_enabled' => true, 'mcp_endpoint' => 'https://a.test/mcp']);
+        $connectedB = Site::factory()->create(['mcp_enabled' => true, 'mcp_endpoint' => 'https://b.test/mcp']);
+        // Not connected — must be skipped entirely.
+        Site::factory()->create(['mcp_enabled' => false, 'mcp_endpoint' => null]);
+
+        $mcp = Mockery::mock(McpClient::class);
+        $mcp->shouldReceive('callTool')
+            ->twice()
+            ->with(Mockery::type(Site::class), 'wp_core_update')
+            ->andReturn(['content' => [['type' => 'text', 'text' => 'ליבת וורדפרס עודכנה מגרסה 6.4 לגרסה 6.5.']]]);
+        $mcp->shouldReceive('textContent')->andReturn('ליבת וורדפרס עודכנה מגרסה 6.4 לגרסה 6.5.');
+        $this->instance(McpClient::class, $mcp);
+
+        $action = $this->systemAction(['operation' => 'update_wordpress', 'all_connected' => true]);
+        app(ApprovalGate::class)->approve($action);
+
+        $this->assertSame(ActionStatus::Executed, $action->fresh()->status);
+        // Each connected site got a journalled core-update change; the offline one didn't.
+        $this->assertSame(1, $connectedA->changes()->where('tool', 'wp_core_update')->count());
+        $this->assertSame(1, $connectedB->changes()->where('tool', 'wp_core_update')->count());
+    }
+
+    public function test_a_wordpress_update_is_blocked_by_the_site_agent_kill_switch(): void
+    {
+        config(['agent.system_actions_enabled' => true, 'agent.actions_enabled' => false]);
+        $site = Site::factory()->create(['mcp_enabled' => true, 'mcp_endpoint' => 'https://a.test/mcp']);
+
+        $mcp = Mockery::mock(McpClient::class);
+        $mcp->shouldNotReceive('callTool');
+        $this->instance(McpClient::class, $mcp);
+
+        $action = $this->systemAction(['operation' => 'update_wordpress', 'site_id' => $site->id]);
+        app(ApprovalGate::class)->approve($action);
+
+        // Not executed — the kill-switch stopped it before any MCP call.
+        $this->assertNotSame(ActionStatus::Executed, $action->fresh()->status);
+        $this->assertSame(0, $site->changes()->count());
+    }
 
     public function test_approving_a_payment_request_dispatches_the_send_job_when_enabled(): void
     {

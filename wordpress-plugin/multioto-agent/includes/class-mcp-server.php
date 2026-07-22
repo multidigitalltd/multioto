@@ -141,6 +141,7 @@ class Multioto_Agent_Mcp_Server
             ['name' => 'wp_error_log_tail', 'description' => 'שורות אחרונות מיומן השגיאות (אם מופעל).', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['lines' => ['type' => 'integer']]]],
             ['name' => 'wp_cache_flush', 'description' => 'ניקוי מטמון אובייקטים ו-OPcache.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => (object) []]],
             ['name' => 'wp_plugin_update', 'description' => 'עדכון תוסף לגרסה האחרונה לפי slug.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['plugin' => ['type' => 'string']], 'required' => ['plugin']]],
+            ['name' => 'wp_core_update', 'description' => 'עדכון ליבת וורדפרס (WordPress core) לגרסה היציבה האחרונה. מחזיר את הגרסה לפני ואחרי. אם כבר מעודכן — לא מבצע דבר.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => (object) []]],
             ['name' => 'wp_plugin_activate', 'description' => 'הפעלת תוסף לפי קובץ.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['plugin' => ['type' => 'string']], 'required' => ['plugin']]],
             ['name' => 'wp_plugin_deactivate', 'description' => 'כיבוי תוסף לפי קובץ.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['plugin' => ['type' => 'string']], 'required' => ['plugin']]],
             ['name' => 'wp_menu_list', 'description' => 'רשימת תפריטי הניווט באתר והפריטים בכל תפריט (מזהה פריט, טקסט, קישור, הורה, סדר).', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => (object) []]],
@@ -179,6 +180,7 @@ class Multioto_Agent_Mcp_Server
             'wp_error_log_tail' => $this->errorLogTail($args),
             'wp_cache_flush' => $this->cacheFlush(),
             'wp_plugin_update' => $this->pluginUpdate($args),
+            'wp_core_update' => $this->coreUpdate(),
             'wp_plugin_activate' => $this->setPluginState($args, true),
             'wp_plugin_deactivate' => $this->setPluginState($args, false),
             'wp_menu_list' => $this->menuList(),
@@ -326,6 +328,42 @@ class Multioto_Agent_Mcp_Server
         }
 
         return "התוסף {$plugin} עודכן.";
+    }
+
+    /**
+     * Update WordPress core to the latest stable release. Returns the version
+     * before and after so the caller can confirm the change; a site already on
+     * the latest version is left untouched and reported as such.
+     */
+    private function coreUpdate(): string
+    {
+        require_once ABSPATH.'wp-admin/includes/file.php';
+        require_once ABSPATH.'wp-admin/includes/misc.php';
+        require_once ABSPATH.'wp-admin/includes/class-wp-upgrader.php';
+        require_once ABSPATH.'wp-admin/includes/update.php';
+
+        $before = get_bloginfo('version');
+
+        // Refresh the core-update transient, then pick the offered "upgrade".
+        wp_version_check([], true);
+        $updates = get_core_updates();
+
+        if (empty($updates) || ! is_array($updates) || ($updates[0]->response ?? '') === 'latest') {
+            return "וורדפרס כבר מעודכן (גרסה {$before}). לא בוצע עדכון.";
+        }
+
+        $upgrader = new Core_Upgrader(new Automatic_Upgrader_Skin);
+        $result = $upgrader->upgrade($updates[0]);
+
+        if (is_wp_error($result)) {
+            throw new Multioto_Agent_Rpc_Error(-32000, $result->get_error_message());
+        }
+
+        // Read the version fresh from the just-updated version.php.
+        require ABSPATH.WPINC.'/version.php';
+        $after = $wp_version ?? get_bloginfo('version');
+
+        return "ליבת וורדפרס עודכנה מגרסה {$before} לגרסה {$after}.";
     }
 
     private function setPluginState(array $args, bool $activate): string

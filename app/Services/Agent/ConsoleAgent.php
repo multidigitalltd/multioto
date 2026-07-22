@@ -283,6 +283,8 @@ class ConsoleAgent
                 'input_schema' => $obj(['site_id' => $int], ['site_id'])],
             ['name' => 'propose_country_rule', 'description' => 'הצע כלל מדינה ב-Cloudflare שיחול על כל האתרים בבת אחת. country (קוד ISO בן 2 אותיות, למשל US) + action: managed_challenge (אתגר מנוהל), js_challenge, block (חסימה), whitelist (מעבר חופשי), remove (הסרת הכלל).',
                 'input_schema' => $obj(['country' => $str, 'action' => $str], ['country', 'action'])],
+            ['name' => 'propose_update_wordpress', 'description' => 'הצע עדכון ליבת וורדפרס (WordPress core) לגרסה האחרונה. site_id לאתר בודד, או השמט אותו לעדכון כל האתרים המחוברים בבת אחת.',
+                'input_schema' => $obj(['site_id' => $int], [])],
             ['name' => 'investigate_site', 'description' => 'שלח את סוכן האתר לבדוק אתר מחובר (קריאה בלבד; תיקון יוצע לאישור). site_id + goal.',
                 'input_schema' => $obj(['site_id' => $int, 'goal' => $str], ['site_id'])],
             ['name' => 'propose_task', 'description' => 'הצע פתיחת משימה לאדם — לכל דבר שאין לו כלי ישיר. title + customer_id (אופציונלי).',
@@ -321,6 +323,7 @@ class ConsoleAgent
                 'propose_restore_site' => $this->proposeSite('restore_site', $input, 'שחזור אתר מהשעיה'),
                 'propose_purge_cloudflare_cache' => $this->proposeSite('purge_cloudflare_cache', $input, 'ניקוי קאש ב-Cloudflare'),
                 'propose_country_rule' => $this->proposeCountryRule($input),
+                'propose_update_wordpress' => $this->proposeUpdateWordpress($input),
                 'investigate_site' => $this->investigateSite($input),
                 'propose_task' => $this->proposeTask($input),
                 'need_clarification' => $this->needClarification($input),
@@ -753,6 +756,51 @@ class ConsoleAgent
         );
 
         return $this->proposedOk($action->id, "כלל מדינה {$country} ({$mode})");
+    }
+
+    /**
+     * Propose updating WordPress core — on one connected site (site_id given) or
+     * on ALL connected sites at once (site_id omitted). Runs through the approval
+     * gate; execution calls the wp_core_update MCP tool on each target.
+     */
+    private function proposeUpdateWordpress(array $input): array
+    {
+        $siteId = (int) ($input['site_id'] ?? 0);
+
+        if ($siteId > 0) {
+            $site = Site::find($siteId);
+            if (! $site) {
+                return ['content' => 'האתר לא נמצא.', 'is_error' => true];
+            }
+            if (! $site->mcp_enabled || blank($site->mcp_endpoint)) {
+                return ['content' => "האתר {$site->domain} אינו מחובר לסוכן (MCP כבוי).", 'is_error' => true];
+            }
+
+            $this->siteId = $site->id;
+            $this->customerId ??= $site->customer_id;
+            $summary = "🛠️ פעולת מערכת — עדכון ליבת וורדפרס: {$site->domain}";
+            $payload = ['operation' => 'update_wordpress', 'site_id' => $site->id, 'source' => 'console_agent'];
+            $what = "עדכון וורדפרס: {$site->domain}";
+        } else {
+            $count = Site::query()->where('mcp_enabled', true)->whereNotNull('mcp_endpoint')->count();
+            if ($count === 0) {
+                return ['content' => 'אין אתרים מחוברים לסוכן לעדכון.', 'is_error' => true];
+            }
+
+            $summary = "🛠️ פעולת מערכת — עדכון ליבת וורדפרס בכל האתרים המחוברים ({$count})";
+            $payload = ['operation' => 'update_wordpress', 'all_connected' => true, 'source' => 'console_agent'];
+            $what = "עדכון וורדפרס בכל האתרים המחוברים ({$count})";
+        }
+
+        $action = $this->gate->propose(
+            type: 'system_action',
+            summary: $summary,
+            payload: $payload,
+            customerId: $this->customerId,
+            proposedBy: 'console',
+        );
+
+        return $this->proposedOk($action->id, $what);
     }
 
     private function investigateSite(array $input): array
