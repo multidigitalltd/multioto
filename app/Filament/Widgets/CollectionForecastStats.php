@@ -15,6 +15,11 @@ use Filament\Widgets\StatsOverviewWidget\Stat;
  */
 class CollectionForecastStats extends BaseWidget
 {
+    // NOT auto-discovered onto the main dashboard — it is registered explicitly
+    // as a header widget of the חיזוי גבייה page only. This keeps the collection
+    // amounts inside that page (the whole point: they must not leak elsewhere).
+    protected static bool $isDiscovered = false;
+
     protected static ?string $pollingInterval = '30s';
 
     /** Age buckets in days: [label, min-inclusive, max-inclusive|null, color]. */

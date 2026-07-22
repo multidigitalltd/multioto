@@ -104,4 +104,11 @@ class CollectionForecastTest extends TestCase
         // The total is intentionally kept off the tab — it shows only inside.
         $this->assertNull(CollectionForecast::getNavigationBadge());
     }
+
+    public function test_the_stats_widget_is_not_auto_discovered_onto_the_dashboard(): void
+    {
+        // It renders only inside the forecast page (getHeaderWidgets), never on
+        // the main dashboard — otherwise the amounts would leak there too.
+        $this->assertFalse(CollectionForecastStats::isDiscovered());
+    }
 }
