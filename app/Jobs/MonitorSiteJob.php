@@ -231,6 +231,18 @@ class MonitorSiteJob implements ShouldQueue
             'success',
             $this->siteUrl($site),
         );
+
+        // End-to-end auto-heal: when an APPROVED automation fix executed during
+        // this incident, proactively tell the customer we detected and fixed the
+        // problem. The job itself verifies a fix actually ran (and the config /
+        // template gates), so a site that recovered on its own stays quiet.
+        // Dispatched exactly once — handleUp only runs on the open→resolved
+        // transition. Best-effort: a queue hiccup must never break recovery.
+        try {
+            NotifyIncidentAutoResolvedJob::dispatch($site->id, $incident->id);
+        } catch (\Throwable $e) {
+            Log::warning('Incident auto-resolved dispatch failed', ['site_id' => $site->id, 'error' => $e->getMessage()]);
+        }
     }
 
     /** Raise the in-panel notification bell for every manager (admin). */
