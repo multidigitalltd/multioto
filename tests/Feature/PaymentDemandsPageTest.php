@@ -49,6 +49,27 @@ class PaymentDemandsPageTest extends TestCase
         });
     }
 
+    public function test_a_demand_carries_the_chosen_pay_by_date(): void
+    {
+        Queue::fake();
+        $this->actingAs(User::factory()->create());
+
+        $customer = Customer::factory()->create(['email' => 'c@example.co.il']);
+
+        Livewire::test(PaymentDemands::class)
+            ->callAction('newDemand', data: [
+                'customer_id' => $customer->id,
+                'description' => 'אחסון שנתי',
+                'items' => [],
+                'amount' => 250,
+                'due_at' => now()->addDays(10)->toDateString(),
+                'channel' => 'email',
+            ])
+            ->assertHasNoActionErrors();
+
+        Queue::assertPushed(SendPaymentLinkJob::class, fn (SendPaymentLinkJob $job): bool => $job->dueAt === now()->addDays(10)->toDateString());
+    }
+
     public function test_items_are_entered_net_and_vat_is_added_per_item(): void
     {
         Queue::fake();

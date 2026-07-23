@@ -2,9 +2,11 @@
 
 namespace Tests\Feature;
 
+use App\Enums\ChargeStatus;
 use App\Enums\SubscriptionStatus;
 use App\Filament\Pages\RevenueForecast;
 use App\Filament\Widgets\RevenueForecastStats;
+use App\Models\Charge;
 use App\Models\Customer;
 use App\Models\Plan;
 use App\Models\Subscription;
@@ -58,5 +60,31 @@ class RevenueForecastTest extends TestCase
             ->assertSee('צפוי ב-7 ימים')
             ->assertSee(Money::ils(25000))  // 7-day bucket: 100+150
             ->assertSee(Money::ils(45000)); // 90-day bucket: all three
+    }
+
+    public function test_open_payment_demands_are_included_in_the_forecast_scale(): void
+    {
+        $this->sub(10000, now()->addDays(3)); // one renewal (100) inside 90 days
+
+        // An open, overdue payment demand of 500 — real expected inflow.
+        Charge::create([
+            'customer_id' => Customer::factory()->create()->id,
+            'amount_agorot' => 50000,
+            'vat_agorot' => 0,
+            'total_agorot' => 50000,
+            'status' => ChargeStatus::Pending,
+            'attempt_number' => 1,
+            'description' => 'דרישה',
+            'period_start' => now()->toDateString(),
+            'period_end' => now()->toDateString(),
+            'demand_sent_at' => now()->subDay(),
+            'due_at' => now()->subDay(),
+        ]);
+
+        Livewire::test(RevenueForecastStats::class)
+            ->assertSee('דרישות תשלום פתוחות')
+            ->assertSee('1 באיחור')
+            ->assertSee(Money::ils(50000))              // demands square
+            ->assertSee(Money::ils(60000));             // grand total: 100 renewal + 500 demand
     }
 }

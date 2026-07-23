@@ -104,6 +104,12 @@ class PaymentDemands extends Page implements HasTable
                     ->helperText('בשימוש רק כשאין פירוט פריטים.')
                     ->numeric()->prefix('₪')->step('0.01')->minValue(0)->inputMode('decimal')
                     ->requiredWithout('items'),
+                Forms\Components\DatePicker::make('due_at')
+                    ->label('לתשלום עד')
+                    ->helperText('התאריך שעד אליו מצופה שהתשלום יתקבל — מוצג במעקב ומשמש את חיזוי התזרים.')
+                    ->default(fn (): Carbon => now()->addDays((int) config('billing.demands.due_days', 14)))
+                    ->minDate(fn (): Carbon => now()->startOfDay())
+                    ->native(false)->firstDayOfWeek(7),
                 Forms\Components\Radio::make('channel')
                     ->label('לשלוח דרך')
                     ->options(['email' => 'מייל', 'whatsapp' => 'וואטסאפ'])
@@ -142,7 +148,9 @@ class PaymentDemands extends Page implements HasTable
                 // A demand always offers BOTH options; bank transfer is listed
                 // first (our preferred method) and the (non-auto-charging) card
                 // link second. The proforma is issued by the job.
-                SendPaymentLinkJob::dispatch($customer->id, $totalAgorot, filled($data['description']) ? $data['description'] : 'תשלום', $channel, $lines, ['transfer', 'link']);
+                $dueAt = filled($data['due_at'] ?? null) ? Carbon::parse($data['due_at'])->toDateString() : null;
+
+                SendPaymentLinkJob::dispatch($customer->id, $totalAgorot, filled($data['description']) ? $data['description'] : 'תשלום', $channel, $lines, ['transfer', 'link'], $dueAt);
 
                 Notification::make()
                     ->title('דרישת התשלום נשלחה')
@@ -248,6 +256,13 @@ class PaymentDemands extends Page implements HasTable
                     ->formatStateUsing(fn ($state, Charge $record): string => $record->demand_reminders_paused ? "{$state} ⏸" : (string) $state)
                     // Hover to see exactly when each demand/reminder went out.
                     ->tooltip(fn (Charge $r): ?string => $this->sendLogTooltip($r)),
+                Tables\Columns\TextColumn::make('due_at')
+                    ->label('לתשלום עד')->date('d/m/Y')->placeholder('—')->sortable()
+                    // An open demand past its due date is flagged red so overdue money
+                    // stands out. "Pay by" includes the due day, so only a date strictly
+                    // before today counts as overdue.
+                    ->color(fn (Charge $r): string => $r->status === ChargeStatus::Pending
+                        && $r->due_at !== null && $r->due_at->lt(now()->startOfDay()) ? 'danger' : 'gray'),
                 Tables\Columns\TextColumn::make('demand_sent_at')
                     ->label('נשלחה לאחרונה')->dateTime('d/m/Y H:i')->sortable(),
             ])

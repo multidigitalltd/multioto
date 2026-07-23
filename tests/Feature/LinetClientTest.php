@@ -85,6 +85,32 @@ class LinetClientTest extends TestCase
         });
     }
 
+    public function test_the_due_date_is_written_only_on_the_proforma_not_the_tax_invoice(): void
+    {
+        config(['billing.linet.doctype_proforma' => '20', 'billing.linet.due_date_param' => 'payment_due_date']);
+
+        Http::fake([
+            '*/search/account' => Http::response(['status' => 200, 'body' => [['id' => 77]]]),
+            '*/create/doc' => Http::response(['status' => 200, 'body' => ['id' => 1, 'pdf' => null]]),
+        ]);
+
+        $charge = $this->charge();
+        $charge->update(['due_at' => now()->addDays(14)->toDateString()]);
+
+        app(LinetClient::class)->issueProforma($charge, VatCategory::Taxable, 'דרישה');
+        app(LinetClient::class)->issueDocument($charge, VatCategory::Taxable, 'קבלה');
+
+        $due = now()->addDays(14)->format('Y-m-d');
+        // Proforma carries the due date...
+        Http::assertSent(fn ($r) => str_ends_with($r->url(), '/create/doc')
+            && ($r->data()['doctype'] ?? null) === '20'
+            && ($r->data()['payment_due_date'] ?? null) === $due);
+        // ...the fiscal tax invoice-receipt never does.
+        Http::assertSent(fn ($r) => str_ends_with($r->url(), '/create/doc')
+            && ($r->data()['doctype'] ?? null) === '9'
+            && ! array_key_exists('payment_due_date', $r->data()));
+    }
+
     private function chargeForMethod(?string $method): Charge
     {
         $customer = Customer::factory()->create(['payment_method' => $method]);

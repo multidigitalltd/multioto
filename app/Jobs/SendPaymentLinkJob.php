@@ -38,6 +38,7 @@ class SendPaymentLinkJob implements ShouldQueue
         public string $channel, // whatsapp | email
         public array $lines = [],
         public array $methods = ['link'],
+        public ?string $dueAt = null, // 'Y-m-d' — the demand's "pay by" date
     ) {}
 
     public function handle(ManualChargeService $service, TemplateEngine $templates, WahaClient $waha): void
@@ -61,8 +62,13 @@ class SendPaymentLinkJob implements ShouldQueue
             : $service->createDemand($customer, $this->totalAgorot, $this->description, null, $this->lines);
 
         // Mark this charge as a SENT demand (distinguishes it from an immediate
-        // charge) and record the channel, so an unpaid demand can be chased.
-        $charge->update(['demand_sent_at' => now(), 'demand_channel' => $this->channel]);
+        // charge) and record the channel + "pay by" date, so an unpaid demand can
+        // be chased and placed on the cash-flow forecast.
+        $charge->update([
+            'demand_sent_at' => now(),
+            'demand_channel' => $this->channel,
+            'due_at' => $this->dueAt,
+        ]);
 
         // Issue the proforma (חשבונית עסקה) up front — no-op when no proforma
         // document type is configured. Linet emails it to the customer directly.

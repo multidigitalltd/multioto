@@ -16,7 +16,7 @@ class Charge extends Model
         'subscription_id', 'customer_id', 'amount_agorot', 'vat_agorot', 'total_agorot', 'currency',
         'status', 'attempt_number', 'cardcom_transaction_id', 'cardcom_response_code',
         'failure_reason', 'description', 'invoice_notes', 'lines', 'cardcom_low_profile_id', 'cardcom_pay_url', 'cardcom_bit_url',
-        'demand_sent_at', 'demand_channel', 'demand_reminder_count', 'demand_reminders_log', 'demand_reminders_paused',
+        'demand_sent_at', 'demand_channel', 'due_at', 'demand_reminder_count', 'demand_reminders_log', 'demand_reminders_paused',
         'proforma_document_id', 'proforma_pdf_url', 'period_start', 'period_end', 'charged_at',
     ];
 
@@ -30,6 +30,7 @@ class Charge extends Model
             'attempt_number' => 'integer',
             'lines' => 'array',
             'demand_sent_at' => 'datetime',
+            'due_at' => 'date',
             'demand_reminder_count' => 'integer',
             'demand_reminders_log' => 'array',
             'demand_reminders_paused' => 'boolean',

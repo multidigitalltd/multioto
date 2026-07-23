@@ -158,6 +158,13 @@ class LinetClient
 
         $payload = $this->buildDocumentPayload($charge, $vatCategory, $description, (string) $config['doctype_proforma'], "proforma-charge-{$charge->id}");
 
+        // The "pay by" date belongs on the demand's proforma only — never on the
+        // fiscal tax invoice-receipt issued later when it is paid. Opt-in: set only
+        // when a provider-specific field name is configured (like close_proforma_param).
+        if (filled($charge->due_at) && filled($config['due_date_param'] ?? null)) {
+            $payload[(string) $config['due_date_param']] = $charge->due_at->format('Y-m-d');
+        }
+
         return $this->createDocument($payload);
     }
 
