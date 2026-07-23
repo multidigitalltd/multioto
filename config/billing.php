@@ -417,6 +417,15 @@ return [
             ],
         ],
 
+        // Customer satisfaction (CSAT): when a ticket is resolved, invite the
+        // customer to rate the service 1–5 via a signed one-click link appended
+        // to the closing message. Set enabled=false to switch off.
+        'csat' => [
+            'enabled' => (bool) env('SUPPORT_CSAT_ENABLED', true),
+            // How long the rating link stays valid (days).
+            'link_days' => (int) env('SUPPORT_CSAT_LINK_DAYS', 30),
+        ],
+
         // Auto follow-up for a ticket stuck "waiting for customer" (Pending):
         // after reminder_days of silence the customer gets one reminder, and
         // after close_days it is auto-closed. Set enabled=false to switch off.
