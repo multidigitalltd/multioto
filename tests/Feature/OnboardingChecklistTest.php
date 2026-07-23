@@ -61,6 +61,17 @@ class OnboardingChecklistTest extends TestCase
         }
     }
 
+    public function test_a_failed_welcome_send_does_not_mark_the_step(): void
+    {
+        $customer = Customer::factory()->create();
+
+        // The send failed (bad address / transport outage) — a failed log row
+        // must not show "נשלח ברוכים הבאים" on a welcome no one received.
+        NotificationLog::record('email', NotificationType::Welcome, 'bad@x.co', 'ברוכים הבאים', 'תוכן', $customer->id, 'failed', 'smtp down');
+
+        $this->assertFalse($this->itemsByKey($customer)['welcome_sent']['done']);
+    }
+
     public function test_a_manual_tick_is_stored_and_reversible(): void
     {
         $customer = Customer::factory()->create(['default_token_id' => null]);

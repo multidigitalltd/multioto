@@ -92,9 +92,12 @@ class OnboardingChecklist
             'card_captured' => $customer->default_token_id !== null,
             'plugin_connected' => $customer->sites()->whereNotNull('mcp_last_seen_at')->exists(),
             'monitoring_on' => $customer->sites()->where('monitor_enabled', true)->exists(),
+            // Only a DELIVERED welcome counts — a failed send (bad address,
+            // transport outage) logs a 'failed' row and must leave this open.
             'welcome_sent' => NotificationLog::query()
                 ->where('customer_id', $customer->id)
                 ->where('type', NotificationType::Welcome)
+                ->where('status', 'sent')
                 ->exists(),
         ];
     }
