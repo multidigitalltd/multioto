@@ -4,6 +4,7 @@ namespace App\Filament\Resources\SiteResource\Pages;
 
 use App\Filament\Resources\SiteResource;
 use App\Filament\Support\SiteActions;
+use App\Jobs\CheckSiteDnsJob;
 use App\Jobs\CheckSiteReputationJob;
 use App\Jobs\DetectSiteTypeJob;
 use App\Jobs\InvestigateSiteJob;
@@ -242,6 +243,20 @@ class ViewSite extends ViewRecord
                             ->body($result->message)
                             ->{$result->ok ? 'success' : 'warning'}()
                             ->send();
+                    }),
+
+                // On-demand DNS snapshot/diff — the same check the daily watch
+                // runs; useful right after a planned migration to re-baseline.
+                Actions\Action::make('checkDns')
+                    ->label('בדיקת DNS')
+                    ->icon('heroicon-o-server-stack')
+                    ->visible($isAdmin)
+                    ->action(function (): void {
+                        CheckSiteDnsJob::dispatch($this->record->id);
+
+                        Notification::make()->title('בדיקת ה-DNS רצה ברקע')
+                            ->body('רשומות ה-A/MX/NS יושוו לתמונה הקודמת; שינוי ישלח התראה לצוות והתוצאה תופיע בעמוד האתר.')
+                            ->success()->send();
                     }),
 
                 $this->proposeMcpAction(),
