@@ -48,19 +48,31 @@ class CheckSiteReputationJob implements ShouldQueue
 
         $result = $reputation->check($site->domain);
 
-        // No source produced a definite answer — don't overwrite the last known
-        // state with an empty "clean" result.
-        if (! collect($result['sources'])->contains(true)) {
+        // Providers that actually ran this cycle (a definite answer). If none ran,
+        // don't overwrite the last known state with an empty "clean" result.
+        $ranProviders = array_keys(array_filter($result['sources']));
+
+        if ($ranProviders === []) {
             return;
         }
 
         $previous = (array) data_get($site->reputation_scan, 'listings', []);
         $previousKeys = collect($previous)->map(fn (array $l): string => self::key($l))->all();
 
+        // Keep previous findings from providers that did NOT run this cycle (e.g.
+        // Safe Browsing timed out while URLhaus succeeded) — otherwise a partial
+        // scan would drop them and re-alert them as new when the provider recovers.
+        $preserved = array_values(array_filter(
+            $previous,
+            fn (array $l): bool => ! in_array($l['provider'] ?? '', $ranProviders, true),
+        ));
+
+        $listings = array_merge($preserved, $result['listings']);
+
         $site->update(['reputation_scan' => [
             'checked_at' => now()->toIso8601String(),
             'sources' => $result['sources'],
-            'listings' => $result['listings'],
+            'listings' => $listings,
         ]]);
 
         $fresh = array_values(array_filter(
