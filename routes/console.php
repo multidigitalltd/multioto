@@ -2,6 +2,7 @@
 
 use App\Enums\BroadcastStatus;
 use App\Enums\ChargeStatus;
+use App\Jobs\AlertExpiringCardsBeforeChargeJob;
 use App\Jobs\ChargeSubscriptionJob;
 use App\Jobs\CheckDomainExpiryJob;
 use App\Jobs\CheckSitePluginChangesJob;
@@ -106,6 +107,12 @@ Schedule::call(function () {
 // expiring, open debt) so the owner can act before anything slips.
 Schedule::job(new SendProactiveRemindersJob)
     ->dailyAt('08:00')->name('reminders:daily-digest')->onOneServer();
+
+// Catch cards that will expire before their subscription's next charge (a
+// doomed auto-charge): invite the customer to update their card ahead of time
+// and flag the team, once per card. Timing window in config/billing.php.
+Schedule::job(new AlertExpiringCardsBeforeChargeJob)
+    ->dailyAt('08:15')->name('billing:card-expiry-before-charge')->onOneServer();
 
 // Chase tickets stuck "waiting for customer": remind once after reminder_days
 // of silence, then auto-close after close_days. Timings in config/billing.php.

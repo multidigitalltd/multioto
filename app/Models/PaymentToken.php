@@ -6,6 +6,7 @@ use App\Enums\TokenStatus;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Carbon;
 
 /**
  * A Cardcom token reference. Never stores a card number (PCI stays with Cardcom).
@@ -33,5 +34,19 @@ class PaymentToken extends Model
     public function customer(): BelongsTo
     {
         return $this->belongsTo(Customer::class);
+    }
+
+    /**
+     * The last moment this card is still valid: the end of its expiry month.
+     * A charge attempted after this will be declined for an expired card.
+     * Returns null when the expiry is unknown (never captured).
+     */
+    public function expiresAt(): ?Carbon
+    {
+        if ($this->expiry_month === null || $this->expiry_year === null) {
+            return null;
+        }
+
+        return Carbon::create((int) $this->expiry_year, (int) $this->expiry_month, 1)->endOfMonth();
     }
 }

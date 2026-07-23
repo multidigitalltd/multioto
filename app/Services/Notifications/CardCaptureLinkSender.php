@@ -22,30 +22,37 @@ class CardCaptureLinkSender
     public function __construct(private WahaClient $waha, private TemplateEngine $templates) {}
 
     /**
+     * @param  string|null  $templateKey  Force a specific template (e.g. 'card.expiring').
+     *                                    When null, the tone is chosen automatically
+     *                                    from whether the customer is in arrears.
      * @return array{link: string, sent: array<int, string>, failed: array<int, string>, skipped: array<int, string>}
      */
-    public function send(Subscription $subscription): array
+    public function send(Subscription $subscription, ?string $templateKey = null): array
     {
         $customer = $subscription->customer;
 
         $link = CardLink::for($customer->id);
 
         // Operator-editable wording (הגדרות → הודעות אוטומטיות): {{customer_name}},
-        // {{plan}}, {{amount}}, {{link}}, {{business_name}}.
+        // {{plan}}, {{amount}}, {{link}}, {{card_last4}}, {{business_name}}.
         $data = [
             'customer_name' => $customer->name,
             'plan' => $subscription->planName(),
             'amount' => number_format($subscription->totalChargeAgorot() / 100, 2),
             'link' => $link,
+            'card_last4' => $subscription->token?->card_last4 ?? '',
             'business_name' => config('mail.from.name') ?: config('app.name'),
         ];
 
-        // A customer whose payment failed (past-due / suspended) is a debtor, not
-        // a new signup — send a debt-toned message, not the welcome one. The card
-        // link is customer-wide, so any subscription in arrears makes this a debt
-        // message, even if the subscription we were handed happens to be active.
-        $inArrears = $customer->subscriptions()->inArrears()->exists();
-        $key = $inArrears ? 'card.capture_debt' : 'card.capture';
+        // A caller can pin the template (the "card expiring" reminder needs its own
+        // wording — not the welcome/activation copy). Otherwise: a customer whose
+        // payment failed (past-due / suspended) is a debtor, not a new signup, so
+        // send a debt-toned message. The card link is customer-wide, so any
+        // subscription in arrears makes this a debt message even if the one we were
+        // handed is active.
+        $key = $templateKey ?? ($customer->subscriptions()->inArrears()->exists()
+            ? 'card.capture_debt'
+            : 'card.capture');
 
         $sent = [];
         $failed = [];

@@ -484,6 +484,11 @@ return [
         // Flag saved cards expiring within this many whole months (0 = this
         // month only; 1 = this month and next).
         'card_expiry_months' => env('REMINDER_CARD_EXPIRY_MONTHS', 1),
+        // Warn (and proactively invite the customer to update their card) when a
+        // saved card will expire BEFORE the subscription's next charge and that
+        // charge falls within this many days — so a doomed auto-charge is fixed
+        // before it fails. Set 0 to disable this alert entirely.
+        'card_before_charge_days' => (int) env('REMINDER_CARD_BEFORE_CHARGE_DAYS', 14),
     ],
 
     /*
