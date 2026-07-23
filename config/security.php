@@ -66,6 +66,21 @@ return [
         'retention_days' => (int) env('AUDIT_RETENTION_DAYS', 365),
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | DNS-change watch
+    |--------------------------------------------------------------------------
+    |
+    | Each monitored site's domain is snapshotted daily (A/MX/NS records) and
+    | compared with the previous snapshot. An unexpected change — the site
+    | suddenly pointing elsewhere, mail rerouted, nameservers replaced — is a
+    | classic hijack/migration signal the team should hear about immediately.
+    |
+    */
+    'dns_watch' => [
+        'enabled' => (bool) env('DNS_WATCH_ENABLED', true),
+    ],
+
     'reputation' => [
         'enabled' => (bool) env('REPUTATION_SCAN_ENABLED', true),
 

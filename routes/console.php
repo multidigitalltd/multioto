@@ -5,6 +5,7 @@ use App\Enums\ChargeStatus;
 use App\Jobs\AlertExpiringCardsBeforeChargeJob;
 use App\Jobs\ChargeSubscriptionJob;
 use App\Jobs\CheckDomainExpiryJob;
+use App\Jobs\CheckSiteDnsJob;
 use App\Jobs\CheckSitePluginChangesJob;
 use App\Jobs\CheckSiteReputationJob;
 use App\Jobs\CheckSlaBreachesJob;
@@ -135,6 +136,20 @@ Schedule::call(function () {
         ->pluck('id')
         ->each(fn (int $id) => CheckSiteReputationJob::dispatch($id));
 })->dailyAt('07:50')->name('monitoring:reputation-check')->when($awake)->onOneServer();
+
+// Daily DNS-change watch: snapshot each monitored domain's A/MX/NS records and
+// alert when they differ from yesterday — hijack/silent-migration detection.
+Schedule::call(function () {
+    if (! config('security.dns_watch.enabled', true)) {
+        return;
+    }
+
+    Site::query()
+        ->whereNotNull('domain')
+        ->where('domain', '!=', '')
+        ->pluck('id')
+        ->each(fn (int $id) => CheckSiteDnsJob::dispatch($id));
+})->dailyAt('07:55')->name('monitoring:dns-watch')->when($awake)->onOneServer();
 
 // Proactive reminders: a once-a-day internal digest (renewals due, cards
 // expiring, open debt) so the owner can act before anything slips.

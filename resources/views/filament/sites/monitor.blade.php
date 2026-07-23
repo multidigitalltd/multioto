@@ -181,6 +181,53 @@
         </div>
     @endif
 
+    {{-- DNS watch: the domain's A/MX/NS records + last detected change. --}}
+    @php
+        $dnsSnap = $site->dns_snapshot ?? null;
+        $dnsRecords = (array) data_get($dnsSnap, 'records', []);
+        $dnsCheckedAt = data_get($dnsSnap, 'checked_at');
+        $dnsChangedAt = data_get($dnsSnap, 'changed_at');
+        $dnsLabels = ['a' => 'A — כתובת האתר', 'mx' => 'MX — דואר', 'ns' => 'NS — שרתי שמות'];
+    @endphp
+    @if ($dnsSnap !== null)
+        <div class="rounded-xl bg-white p-4 shadow-sm dark:bg-gray-800">
+            <div class="mb-3 flex items-center justify-between">
+                <h3 class="text-sm font-semibold">רשומות DNS — מעקב שינויים</h3>
+                <span class="text-xs text-gray-500 dark:text-gray-400">
+                    @if ($dnsCheckedAt) נבדק: {{ \Illuminate\Support\Carbon::parse($dnsCheckedAt)->format('d/m/Y H:i') }} @endif
+                </span>
+            </div>
+
+            <div class="grid gap-3" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
+                @foreach ($dnsLabels as $type => $label)
+                    <div class="rounded-lg border border-gray-100 p-3 text-sm dark:border-gray-700">
+                        <div class="mb-1 text-xs font-medium text-gray-500 dark:text-gray-400">{{ $label }}</div>
+                        @php $values = $dnsRecords[$type] ?? null; @endphp
+                        @if ($values === null)
+                            <span class="text-gray-400">לא נבדק</span>
+                        @elseif ($values === [])
+                            <span class="text-gray-400">אין רשומות</span>
+                        @else
+                            <ul class="space-y-0.5 font-mono text-xs" dir="ltr">
+                                @foreach ($values as $value)
+                                    <li>{{ $value }}</li>
+                                @endforeach
+                            </ul>
+                        @endif
+                    </div>
+                @endforeach
+            </div>
+
+            <div class="mt-3 text-xs text-gray-500 dark:text-gray-400">
+                @if ($dnsChangedAt)
+                    שינוי אחרון זוהה: {{ \Illuminate\Support\Carbon::parse($dnsChangedAt)->format('d/m/Y H:i') }}
+                @else
+                    לא זוהו שינויים מאז תחילת המעקב.
+                @endif
+            </div>
+        </div>
+    @endif
+
     {{-- Response-time trend — one bar per recent probe (oldest → newest). --}}
     @php $trend = $this->trend; @endphp
     @if (count($trend['points']) > 1)
