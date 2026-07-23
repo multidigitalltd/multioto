@@ -9,6 +9,7 @@ enum TicketChannel: string implements HasLabel
     case Whatsapp = 'whatsapp';
     case Email = 'email';
     case Form = 'form';
+    case Portal = 'portal';
     case Manual = 'manual';
 
     public function getLabel(): string
@@ -17,6 +18,7 @@ enum TicketChannel: string implements HasLabel
             self::Whatsapp => 'וואטסאפ',
             self::Email => 'אימייל',
             self::Form => 'טופס',
+            self::Portal => 'פורטל',
             self::Manual => 'ידני',
         };
     }

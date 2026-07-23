@@ -3,11 +3,14 @@
 namespace App\Http\Controllers\Portal;
 
 use App\Enums\ChargeStatus;
+use App\Enums\MessageChannel;
 use App\Enums\SubscriptionStatus;
+use App\Enums\TicketChannel;
 use App\Enums\TicketStatus;
 use App\Http\Controllers\Controller;
 use App\Models\Charge;
 use App\Models\Customer;
+use App\Services\Support\TicketIntake;
 use App\Support\CardLink;
 use Illuminate\Contracts\View\View;
 use Illuminate\Database\Eloquent\Builder;
@@ -77,6 +80,33 @@ class PortalController extends Controller
             'customer' => $customer,
             'tickets' => $customer->tickets()->latest('updated_at')->limit(50)->get(),
         ]);
+    }
+
+    /**
+     * Open a new support ticket from the portal, attributed to the signed-in
+     * customer (never an id from the request). Runs through the shared TicketIntake
+     * so a portal ticket behaves like any other: acknowledgement, team alert and
+     * AI classification all fire.
+     */
+    public function storeTicket(Request $request, TicketIntake $intake): RedirectResponse
+    {
+        $data = $request->validate([
+            'subject' => ['required', 'string', 'max:150'],
+            'message' => ['required', 'string', 'max:5000'],
+        ], [], ['subject' => 'נושא', 'message' => 'הודעה']);
+
+        $intake->recordInbound(
+            channel: TicketChannel::Portal,
+            messageChannel: MessageChannel::Email,
+            customer: $this->customer($request),
+            body: $data['message'],
+            subject: $data['subject'],
+            // Each portal submission opens its own ticket (no thread reference).
+        );
+
+        return redirect()
+            ->route('portal.tickets')
+            ->with('status', 'הפנייה נפתחה בהצלחה. נחזור אליך בהקדם.');
     }
 
     /**

@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Enums\ChargeStatus;
+use App\Enums\MessageChannel;
 use App\Enums\TicketChannel;
 use App\Enums\TicketStatus;
 use App\Mail\NotificationMail;
@@ -11,6 +12,7 @@ use App\Models\Customer;
 use App\Models\Invoice;
 use App\Models\Subscription;
 use App\Models\Ticket;
+use App\Services\Support\AgentReply;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\URL;
@@ -98,6 +100,64 @@ class PortalTest extends TestCase
             ->get(route('portal.tickets'))
             ->assertOk()
             ->assertSee('תקלה בדומיין');
+    }
+
+    public function test_a_signed_in_customer_can_open_a_ticket_from_the_portal(): void
+    {
+        Mail::fake();
+        $customer = Customer::factory()->create(['email' => 'c@example.co.il']);
+
+        $this->withSession(['portal.customer_id' => $customer->id])
+            ->post(route('portal.tickets.store'), [
+                'subject' => 'האתר איטי',
+                'message' => 'האתר נטען לאט מאוד מהבוקר',
+            ])
+            ->assertRedirect(route('portal.tickets'))
+            ->assertSessionHas('status');
+
+        $ticket = Ticket::where('customer_id', $customer->id)->first();
+        $this->assertNotNull($ticket);
+        $this->assertSame(TicketChannel::Portal, $ticket->channel);
+        $this->assertSame('האתר איטי', $ticket->subject);
+        $this->assertSame('האתר נטען לאט מאוד מהבוקר', (string) $ticket->messages()->value('body'));
+    }
+
+    public function test_a_portal_ticket_is_answered_by_email_even_with_a_phone(): void
+    {
+        // A portal ticket is acknowledged by email; the agent reply must stay on
+        // email regardless of the customer having a phone/WhatsApp.
+        $customer = Customer::factory()->create(['email' => 'c@example.co.il', 'phone' => '0501234567']);
+        $ticket = Ticket::create([
+            'customer_id' => $customer->id,
+            'channel' => TicketChannel::Portal,
+            'subject' => 'שאלה',
+            'status' => TicketStatus::Open,
+        ]);
+
+        $this->assertSame(
+            MessageChannel::Email,
+            app(AgentReply::class)->channelFor($ticket),
+        );
+    }
+
+    public function test_opening_a_portal_ticket_requires_a_subject_and_message(): void
+    {
+        $customer = Customer::factory()->create();
+
+        $this->withSession(['portal.customer_id' => $customer->id])
+            ->from(route('portal.tickets'))
+            ->post(route('portal.tickets.store'), ['subject' => '', 'message' => ''])
+            ->assertSessionHasErrors(['subject', 'message']);
+
+        $this->assertSame(0, Ticket::count());
+    }
+
+    public function test_a_guest_cannot_open_a_portal_ticket(): void
+    {
+        $this->post(route('portal.tickets.store'), ['subject' => 'x', 'message' => 'y'])
+            ->assertRedirect(route('portal.login'));
+
+        $this->assertSame(0, Ticket::count());
     }
 
     public function test_the_debt_page_lists_only_the_customers_open_demands_with_a_pay_link(): void

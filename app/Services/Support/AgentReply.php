@@ -117,7 +117,10 @@ class AgentReply
             return MessageChannel::Whatsapp;
         }
 
-        if ($ticket->channel === TicketChannel::Email) {
+        // Web-intake tickets (email + portal) are acknowledged by email and read
+        // there — answer on email regardless of how the agent replies, so the
+        // channel doesn't flip to WhatsApp just because the customer has a phone.
+        if (in_array($ticket->channel, [TicketChannel::Email, TicketChannel::Portal], true)) {
             return MessageChannel::Email;
         }
 
