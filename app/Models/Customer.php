@@ -18,7 +18,7 @@ class Customer extends Model
         'name', 'contact_name', 'business_number', 'business_type', 'vat_exempt', 'email', 'phone',
         'address', 'payment_method', 'terms_accepted_at', 'signature_path', 'signed_ip', 'signed_pdf_path',
         'whatsapp_jid', 'cardcom_account_id', 'pending_card_lp_id', 'card_link_token', 'default_token_id', 'status', 'notes',
-        'monitoring_report_sent_at',
+        'monitoring_report_sent_at', 'onboarding_checklist',
     ];
 
     protected function casts(): array
@@ -29,6 +29,7 @@ class Customer extends Model
             'vat_exempt' => 'boolean',
             'terms_accepted_at' => 'datetime',
             'monitoring_report_sent_at' => 'datetime',
+            'onboarding_checklist' => 'array',
         ];
     }
 
