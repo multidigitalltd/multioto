@@ -140,6 +140,27 @@ class DomainExpiryTest extends TestCase
         $this->assertSame(1, NotificationLog::where('channel', 'whatsapp')->where('status', 'sent')->count());
     }
 
+    public function test_the_reminder_sends_only_on_the_chosen_channels(): void
+    {
+        Mail::fake();
+        // Email-only was picked, so WhatsApp must NOT be sent even though a phone
+        // exists.
+        $waha = Mockery::mock(WahaClient::class);
+        $waha->shouldNotReceive('sendMessage');
+        $this->app->instance(WahaClient::class, $waha);
+
+        $customer = Customer::factory()->create(['email' => 'owner@biz.co.il', 'phone' => '0501234567']);
+        $site = Site::factory()->create([
+            'customer_id' => $customer->id,
+            'domain_expiry_at' => now()->addDays(20)->toDateString(),
+        ]);
+
+        SendDomainRenewalReminderJob::dispatchSync($site->id, ['email']);
+
+        Mail::assertSent(NotificationMail::class);
+        $this->assertSame(0, NotificationLog::where('channel', 'whatsapp')->count());
+    }
+
     public function test_the_renewal_reminder_is_a_noop_without_a_known_expiry(): void
     {
         Mail::fake();

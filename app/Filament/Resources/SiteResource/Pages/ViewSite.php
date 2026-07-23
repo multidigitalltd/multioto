@@ -117,16 +117,42 @@ class ViewSite extends ViewRecord
                 ->requiresConfirmation()
                 ->modalHeading('שליחת תזכורת חידוש דומיין')
                 ->modalDescription(fn (): string => sprintf(
-                    'תישלח ללקוח %s תזכורת (מייל + וואטסאפ) שהדומיין %s יפוג ב-%s.',
+                    'תישלח ללקוח %s תזכורת שהדומיין %s יפוג ב-%s. בחרו באילו ערוצים לשלוח.',
                     $this->record->customer?->name ?? '',
                     $this->record->domain,
                     $this->record->domain_expiry_at?->format('d/m/Y') ?? '',
                 ))
+                // Pick the channels — only the ones the customer actually has are
+                // offered, and all available ones are ticked by default.
+                ->form(fn (): array => [
+                    Forms\Components\CheckboxList::make('channels')
+                        ->label('ערוצי שליחה')
+                        ->options(array_filter([
+                            'email' => filled($this->record->customer?->email) ? 'מייל'.' ('.$this->record->customer->email.')' : null,
+                            'whatsapp' => filled($this->record->customer?->whatsappRecipient()) ? 'וואטסאפ' : null,
+                        ]))
+                        ->default(array_values(array_filter([
+                            filled($this->record->customer?->email) ? 'email' : null,
+                            filled($this->record->customer?->whatsappRecipient()) ? 'whatsapp' : null,
+                        ])))
+                        ->required()
+                        ->bulkToggleable(),
+                ])
                 ->modalSubmitActionLabel('שלח תזכורת')
-                ->action(function (): void {
-                    SendDomainRenewalReminderJob::dispatch($this->record->id);
+                ->action(function (array $data): void {
+                    $channels = array_values(array_unique(array_filter((array) ($data['channels'] ?? []))));
+
+                    if ($channels === []) {
+                        Notification::make()->title('לא נבחר ערוץ')->body('בחרו לפחות ערוץ אחד.')->warning()->send();
+
+                        return;
+                    }
+
+                    SendDomainRenewalReminderJob::dispatch($this->record->id, $channels);
+
+                    $labels = implode(' + ', array_map(fn (string $c): string => $c === 'email' ? 'מייל' : 'וואטסאפ', $channels));
                     Notification::make()->title('התזכורת נשלחה ללקוח')
-                        ->body('נשלחה במייל, ובוואטסאפ אם קיים מספר טלפון.')
+                        ->body("נשלחה ב: {$labels}.")
                         ->success()->send();
                 }),
 
