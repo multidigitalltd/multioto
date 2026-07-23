@@ -4,6 +4,7 @@ use App\Http\Controllers\Agent\AgentPluginController;
 use App\Http\Controllers\Auth\TwoFactorChallengeController;
 use App\Http\Controllers\BillingController;
 use App\Http\Controllers\BrandingController;
+use App\Http\Controllers\CsatController;
 use App\Http\Controllers\CustomerCardPdfController;
 use App\Http\Controllers\Portal\PortalAuthController;
 use App\Http\Controllers\Portal\PortalController;
@@ -71,6 +72,16 @@ Route::get('/billing/pay/{charge}', [BillingController::class, 'pay'])
 Route::get('/billing/pay/{charge}/bit', [BillingController::class, 'payBit'])
     ->middleware(['signed', 'throttle:30,1'])
     ->name('billing.pay-bit');
+
+// Customer satisfaction (CSAT) rating for a resolved ticket. The GET form and
+// the POST both carry the same signature (the form posts back to the signed
+// URL), so a rating can't be submitted for an unsigned/forged ticket link.
+Route::get('/support/rate/{ticket}', [CsatController::class, 'show'])
+    ->middleware(['signed', 'throttle:30,1'])
+    ->name('csat.show');
+Route::post('/support/rate/{ticket}', [CsatController::class, 'store'])
+    ->middleware(['signed', 'throttle:30,1'])
+    ->name('csat.store');
 
 /*
  | Inbound support attachments — served only to a signed-in team member

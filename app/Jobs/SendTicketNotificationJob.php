@@ -20,6 +20,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\URL;
 use Illuminate\Support\Str;
 
 /**
@@ -101,6 +102,8 @@ class SendTicketNotificationJob implements ShouldQueue
                 $rendered['body'] = $this->withServiceNotice($rendered['body']);
             }
 
+            $rendered['body'] = $this->withCsatInvite($ticket, $rendered['body']);
+
             $waha->sendMessage($chatId, $rendered['body']);
             $this->record($ticket, MessageChannel::Whatsapp, $rendered['body'], $dedupeKey);
             NotificationLog::record('whatsapp', NotificationType::Ticket, $chatId, null, $rendered['body'], $ticket->customer?->id);
@@ -127,6 +130,8 @@ class SendTicketNotificationJob implements ShouldQueue
         } else {
             $rendered['body'] = $this->withServiceNotice($rendered['body']);
         }
+
+        $rendered['body'] = $this->withCsatInvite($ticket, $rendered['body']);
 
         // Tag the subject so a reply to this acknowledgement threads onto the ticket.
         $subject = ($rendered['subject'] ?? $ticket->subject).' '.$ticket->emailTag();
@@ -271,6 +276,33 @@ class SendTicketNotificationJob implements ShouldQueue
         }
 
         return $message;
+    }
+
+    /**
+     * Append a one-click satisfaction-rating invitation to a RESOLVED ticket's
+     * closing message (a signed, expiring link). Marks csat_requested_at once, and
+     * never asks again on a ticket the customer already rated. Off unless the
+     * ticket.resolved template is being sent and CSAT is enabled.
+     */
+    protected function withCsatInvite(Ticket $ticket, string $body): string
+    {
+        if ($this->templateKey !== 'ticket.resolved'
+            || ! config('billing.support.csat.enabled', true)
+            || $ticket->csat_rating !== null) {
+            return $body;
+        }
+
+        $link = URL::temporarySignedRoute(
+            'csat.show',
+            now()->addDays((int) config('billing.support.csat.link_days', 30)),
+            ['ticket' => $ticket->id],
+        );
+
+        if ($ticket->csat_requested_at === null) {
+            $ticket->forceFill(['csat_requested_at' => now()])->save();
+        }
+
+        return rtrim($body)."\n\nנשמח לשמוע — איך היה השירות שקיבלת? דירוג קצר (דקה):\n{$link}";
     }
 
     protected function record(Ticket $ticket, MessageChannel $channel, string $body, string $dedupeKey): void

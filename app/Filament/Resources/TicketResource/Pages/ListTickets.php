@@ -4,6 +4,7 @@ namespace App\Filament\Resources\TicketResource\Pages;
 
 use App\Filament\Resources\TicketResource;
 use App\Filament\Widgets\AgentCommandWidget;
+use App\Filament\Widgets\CsatOverview;
 use App\Models\Customer;
 use App\Services\Support\AgentReply;
 use Filament\Actions;
@@ -28,6 +29,7 @@ class ListTickets extends ListRecords
     {
         return [
             AgentCommandWidget::class,
+            CsatOverview::class,
         ];
     }
 

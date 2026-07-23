@@ -185,6 +185,19 @@ class TicketResource extends Resource
                         ? 'תגובה ראשונה תוך '.$record->firstResponseMinutes().' דק׳'
                         : 'יעד תגובה: '.$record->firstResponseDueAt()->format('d/m/Y H:i'))
                     ->toggleable(),
+                Tables\Columns\TextColumn::make('csat_rating')
+                    ->label('שביעות רצון')
+                    ->badge()
+                    ->placeholder('—')
+                    ->formatStateUsing(fn (?int $state): string => $state === null ? '—' : str_repeat('★', $state).str_repeat('☆', 5 - $state))
+                    ->color(fn (?int $state): string => match (true) {
+                        $state === null => 'gray',
+                        $state >= 4 => 'success',
+                        $state === 3 => 'warning',
+                        default => 'danger',
+                    })
+                    ->tooltip(fn (Ticket $record): ?string => filled($record->csat_comment) ? $record->csat_comment : null)
+                    ->toggleable(),
                 Tables\Columns\TextColumn::make('created_at')
                     ->label('נפתח')
                     ->date('d/m/Y')
