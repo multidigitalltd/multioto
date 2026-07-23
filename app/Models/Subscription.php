@@ -22,7 +22,7 @@ class Subscription extends Model
     protected $fillable = [
         'customer_id', 'plan_id', 'external_ref', 'name', 'billing_interval', 'vat_applies',
         'site_id', 'token_id', 'status',
-        'current_period_start', 'current_period_end', 'next_charge_at',
+        'current_period_start', 'current_period_end', 'next_charge_at', 'card_expiry_alerted_at',
         'price_agorot_override', 'dunning_stage', 'canceled_at',
     ];
 
@@ -35,6 +35,7 @@ class Subscription extends Model
             'current_period_start' => 'date',
             'current_period_end' => 'date',
             'next_charge_at' => 'datetime',
+            'card_expiry_alerted_at' => 'datetime',
             'price_agorot_override' => 'integer',
             'dunning_stage' => 'integer',
             'canceled_at' => 'datetime',
@@ -51,6 +52,14 @@ class Subscription extends Model
             if ($subscription->token_id === null && $subscription->customer_id !== null) {
                 $subscription->token_id = Customer::whereKey($subscription->customer_id)
                     ->value('default_token_id');
+            }
+        });
+
+        // A new card re-arms the "card expires before next charge" alert: the
+        // old warning no longer applies once a fresh token is on file.
+        static::updating(function (self $subscription): void {
+            if ($subscription->isDirty('token_id')) {
+                $subscription->card_expiry_alerted_at = null;
             }
         });
     }
