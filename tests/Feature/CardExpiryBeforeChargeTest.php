@@ -107,6 +107,49 @@ class CardExpiryBeforeChargeTest extends TestCase
         $this->assertNull($sub->refresh()->card_expiry_alerted_at);
     }
 
+    public function test_a_shared_card_across_subscriptions_is_messaged_once(): void
+    {
+        // One customer, one expiring token, two active subscriptions both due
+        // within the window — CardTokenService shares a token across live subs.
+        $customer = Customer::factory()->create(['email' => 'owner@biz.co.il', 'phone' => '0501234567']);
+        $token = PaymentToken::factory()->create([
+            'customer_id' => $customer->id,
+            'status' => TokenStatus::Active,
+            'expiry_month' => now()->subMonth()->month,
+            'expiry_year' => now()->subMonth()->year,
+        ]);
+
+        $subs = collect([3, 5])->map(fn (int $days): Subscription => Subscription::factory()->create([
+            'customer_id' => $customer->id,
+            'plan_id' => Plan::factory()->create(['price_agorot' => 10000, 'vat_applies' => false])->id,
+            'token_id' => $token->id,
+            'status' => SubscriptionStatus::Active,
+            'next_charge_at' => now()->addDays($days),
+        ]));
+
+        AlertExpiringCardsBeforeChargeJob::dispatchSync();
+
+        // Contacted once (one message per channel the customer has = 2), not twice per sub.
+        $this->assertSame(2, NotificationLog::where('type', NotificationType::CardLink->value)
+            ->where('customer_id', $customer->id)->count());
+        // Both subscriptions marked, so neither re-alerts tomorrow.
+        $subs->each(fn (Subscription $s) => $this->assertNotNull($s->refresh()->card_expiry_alerted_at));
+    }
+
+    public function test_the_customer_message_uses_the_card_expiring_template_not_the_welcome_copy(): void
+    {
+        Mail::fake();
+        $sub = $this->sub(now()->subMonth(), now()->addDays(3));
+
+        AlertExpiringCardsBeforeChargeJob::dispatchSync();
+
+        // The expiry wording ("עומד לפוג") is sent, not the activation/welcome copy.
+        $log = NotificationLog::where('customer_id', $sub->customer_id)
+            ->where('channel', 'email')->first();
+        $this->assertNotNull($log);
+        $this->assertStringContainsString('לפוג', (string) $log->body);
+    }
+
     public function test_the_token_reports_its_expiry_as_the_end_of_the_month(): void
     {
         $token = PaymentToken::factory()->create(['expiry_month' => 3, 'expiry_year' => 2027]);

@@ -74,14 +74,25 @@ class AlertExpiringCardsBeforeChargeJob implements ShouldQueue
 
         $lines = [];
 
-        foreach ($subs as $sub) {
-            $result = $sub->customer ? $links->send($sub) : ['sent' => [], 'failed' => [], 'skipped' => ['אין לקוח']];
+        // One card = one message. A customer with several subscriptions on the
+        // same expiring token (CardTokenService assigns a new token to every live
+        // subscription) must not be messaged once per subscription — group by
+        // token, contact the customer once, and mark every subscription in the
+        // group so the once-per-card promise holds within this run too.
+        foreach ($subs->groupBy('token_id') as $group) {
+            $rep = $group->first(); // soonest charge in the group ($subs is date-sorted)
+
+            $result = $rep->customer
+                ? $links->send($rep, 'card.expiring')
+                : ['sent' => [], 'failed' => [], 'skipped' => ['אין לקוח']];
 
             // Warn once — even if the customer send failed, dunning picks it up
             // when the charge declines; re-nagging the team daily helps no one.
-            $sub->forceFill(['card_expiry_alerted_at' => now()])->save();
+            foreach ($group as $sub) {
+                $sub->forceFill(['card_expiry_alerted_at' => now()])->save();
+            }
 
-            $lines[] = $this->line($sub, $result);
+            $lines[] = $this->line($rep, $result, $group->count());
         }
 
         $team->alert(
@@ -93,7 +104,7 @@ class AlertExpiringCardsBeforeChargeJob implements ShouldQueue
     /**
      * @param  array{sent: array<int, string>, failed: array<int, string>, skipped: array<int, string>}  $result
      */
-    private function line(Subscription $sub, array $result): string
+    private function line(Subscription $sub, array $result, int $subCount): string
     {
         $token = $sub->token;
         $expiry = $token?->expiresAt();
@@ -102,12 +113,16 @@ class AlertExpiringCardsBeforeChargeJob implements ShouldQueue
             ? 'נשלח ('.implode(', ', $result['sent']).')'
             : 'לא נשלח ('.implode('; ', array_merge($result['failed'], $result['skipped'])).')';
 
-        return sprintf('• %s — כרטיס ...%s בתוקף עד %s, חיוב ב-%s (%s) · %s',
+        // A shared card covering several subscriptions is noted once.
+        $scope = $subCount > 1 ? sprintf(' [%d מנויים]', $subCount) : '';
+
+        return sprintf('• %s — כרטיס ...%s בתוקף עד %s, חיוב ב-%s (%s)%s · %s',
             $sub->customer?->name ?? 'לקוח',
             $token?->card_last4 ?? '????',
             $expiry?->format('m/y') ?? '—',
             $sub->next_charge_at->format('d/m'),
             Money::ils($sub->totalChargeAgorot()),
+            $scope,
             $status,
         );
     }
