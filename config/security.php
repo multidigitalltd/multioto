@@ -55,6 +55,17 @@ return [
     | addition when an API key is supplied.
     |
     */
+    /*
+    |--------------------------------------------------------------------------
+    | Team-action audit log
+    |--------------------------------------------------------------------------
+    */
+    'audit' => [
+        // How long team-action audit entries are kept before the nightly prune
+        // removes them. Audit data is compliance-relevant, so the default is long.
+        'retention_days' => (int) env('AUDIT_RETENTION_DAYS', 365),
+    ],
+
     'reputation' => [
         'enabled' => (bool) env('REPUTATION_SCAN_ENABLED', true),
 
