@@ -239,6 +239,12 @@ class LinetClient
             $payload['account_id'] = $accountId;
         }
 
+        // Carry the demand's "pay by" date onto the document when a due-date field
+        // name is configured (provider-specific — opt-in, like close_proforma_param).
+        if (filled($charge->due_at) && filled($config['due_date_param'] ?? null)) {
+            $payload[(string) $config['due_date_param']] = $charge->due_at->format('Y-m-d');
+        }
+
         return $payload;
     }
 

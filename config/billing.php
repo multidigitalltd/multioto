@@ -49,6 +49,10 @@ return [
         'reminder_interval_days' => (int) env('DEMAND_REMINDER_INTERVAL_DAYS', 3),
         'max_reminders' => (int) env('DEMAND_MAX_REMINDERS', 20),
         'max_age_days' => (int) env('DEMAND_MAX_AGE_DAYS', 90),
+        // Default "pay by" window offered when a new demand is opened (days from
+        // today). Drives the demand's due date, shown to the team and used by the
+        // cash-flow forecast.
+        'due_days' => (int) env('DEMAND_DUE_DAYS', 14),
     ],
 
     /*
@@ -170,6 +174,12 @@ return [
         // docs) to enable. Left unset, the tax-receipt is still issued — it just
         // isn't linked to the proforma.
         'close_proforma_param' => env('LINET_CLOSE_PROFORMA_PARAM'),
+        // Optional: carry a demand's "pay by" date onto the proforma document.
+        // The field name is provider-specific, so this is opt-in — set it to
+        // Linet's due-date parameter name (per the Linet API docs) to enable.
+        // Left unset, the due date is still tracked internally and shown in the
+        // panel/forecast; it just isn't written onto the Linet document.
+        'due_date_param' => env('LINET_DUE_DATE_PARAM'),
         // Linet vat_cat_id values. Linet's own plugin hardcodes 1 = taxable,
         // 2 = exempt/abroad — verified against the live API (other codes are
         // rejected with "Income VAT account must match VAT percent").
