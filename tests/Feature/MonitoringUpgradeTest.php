@@ -290,17 +290,18 @@ class MonitoringUpgradeTest extends TestCase
         Queue::fake();
         $this->actingAs(User::factory()->create());
 
-        $customer = Customer::factory()->create();
+        $customer = Customer::factory()->create(['email' => 'owner@biz.co.il', 'phone' => '0501234567']);
         $site = Site::factory()->create([
             'customer_id' => $customer->id,
             'domain_expiry_at' => now()->addDays(20)->toDateString(),
         ]);
 
         Livewire::test(ViewSite::class, ['record' => $site->getRouteKey()])
-            ->callAction('domainRenewalReminder');
+            ->callAction('domainRenewalReminder', ['channels' => ['whatsapp']]);
 
+        // Only the picked channel is passed through to the job.
         Queue::assertPushed(SendDomainRenewalReminderJob::class,
-            fn ($job): bool => $job->siteId === $site->id);
+            fn ($job): bool => $job->siteId === $site->id && $job->channels === ['whatsapp']);
     }
 
     public function test_the_domain_renewal_button_is_hidden_without_a_known_expiry(): void

@@ -129,6 +129,24 @@ class TemplateEngine
      * @param  array<string, scalar|null>  $data
      * @return array{subject: ?string, body: string}|null
      */
+    /**
+     * Whether a template can actually send on a channel: it has body text (from
+     * an override or a built-in default) and is not explicitly disabled. Lets the
+     * UI avoid offering a channel that would silently send nothing.
+     */
+    public function isEnabled(string $key, string $channel): bool
+    {
+        $row = NotificationTemplate::where('key', $key)->where('channel', $channel)->first();
+
+        if ($row !== null && ! $row->enabled) {
+            return false;
+        }
+
+        $body = $row->body ?? (self::DEFAULTS[$key][$channel]['body'] ?? null);
+
+        return filled($body);
+    }
+
     public function render(string $key, string $channel, array $data): ?array
     {
         $row = NotificationTemplate::where('key', $key)->where('channel', $channel)->first();

@@ -27,7 +27,20 @@ class SendDomainRenewalReminderJob implements ShouldQueue
 
     public array $backoff = [60, 300];
 
-    public function __construct(public int $siteId) {}
+    /**
+     * Which channels to send on ('email', 'whatsapp'); null = both. Declared as a
+     * real property with a default (NOT a promoted param) so a job serialized by
+     * an older release — whose payload has no `channels` — unserializes to null
+     * instead of an uninitialized typed-property error.
+     *
+     * @var array<int, string>|null
+     */
+    public ?array $channels = null;
+
+    public function __construct(public int $siteId, ?array $channels = null)
+    {
+        $this->channels = $channels;
+    }
 
     public function handle(TemplateEngine $templates, WahaClient $waha): void
     {
@@ -48,9 +61,13 @@ class SendDomainRenewalReminderJob implements ShouldQueue
             'days_left' => max(0, $daysLeft),
         ];
 
+        // null = both channels (default); otherwise only the operator's picks.
+        $wantsEmail = $this->channels === null || in_array('email', $this->channels, true);
+        $wantsWhatsapp = $this->channels === null || in_array('whatsapp', $this->channels, true);
+
         // Per-channel best-effort: each channel is independent, so an email
         // transport outage never blocks the WhatsApp reminder (and vice versa).
-        if (filled($customer->email) && ($email = $templates->render('domain.renewal', 'email', $data))) {
+        if ($wantsEmail && filled($customer->email) && ($email = $templates->render('domain.renewal', 'email', $data))) {
             try {
                 Mail::to($customer->email)->send(new NotificationMail($email['subject'] ?? 'חידוש דומיין', $email['body']));
                 NotificationLog::record('email', NotificationType::DomainRenewal, $customer->email, $email['subject'] ?? null, $email['body'], $customer->id);
@@ -63,7 +80,7 @@ class SendDomainRenewalReminderJob implements ShouldQueue
         // WhatsApp goes to the stored JID or, failing that, the phone — the same
         // resolution every other customer-facing flow uses.
         $recipient = $customer->whatsappRecipient();
-        if (filled($recipient) && ($wa = $templates->render('domain.renewal', 'whatsapp', $data))) {
+        if ($wantsWhatsapp && filled($recipient) && ($wa = $templates->render('domain.renewal', 'whatsapp', $data))) {
             try {
                 $waha->sendMessage($recipient, $wa['body']);
                 NotificationLog::record('whatsapp', NotificationType::DomainRenewal, $recipient, null, $wa['body'], $customer->id);

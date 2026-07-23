@@ -8,9 +8,11 @@ use App\Jobs\SendDomainRenewalReminderJob;
 use App\Mail\NotificationMail;
 use App\Models\Customer;
 use App\Models\NotificationLog;
+use App\Models\NotificationTemplate;
 use App\Models\Site;
 use App\Services\Monitoring\DomainExpiry;
 use App\Services\Notifications\TeamNotifier;
+use App\Services\Notifications\TemplateEngine;
 use App\Services\Waha\WahaClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -138,6 +140,51 @@ class DomainExpiryTest extends TestCase
         // Email recorded as failed, WhatsApp recorded as sent.
         $this->assertSame(1, NotificationLog::where('channel', 'email')->where('status', 'failed')->count());
         $this->assertSame(1, NotificationLog::where('channel', 'whatsapp')->where('status', 'sent')->count());
+    }
+
+    public function test_the_reminder_sends_only_on_the_chosen_channels(): void
+    {
+        Mail::fake();
+        // Email-only was picked, so WhatsApp must NOT be sent even though a phone
+        // exists.
+        $waha = Mockery::mock(WahaClient::class);
+        $waha->shouldNotReceive('sendMessage');
+        $this->app->instance(WahaClient::class, $waha);
+
+        $customer = Customer::factory()->create(['email' => 'owner@biz.co.il', 'phone' => '0501234567']);
+        $site = Site::factory()->create([
+            'customer_id' => $customer->id,
+            'domain_expiry_at' => now()->addDays(20)->toDateString(),
+        ]);
+
+        SendDomainRenewalReminderJob::dispatchSync($site->id, ['email']);
+
+        Mail::assertSent(NotificationMail::class);
+        $this->assertSame(0, NotificationLog::where('channel', 'whatsapp')->count());
+    }
+
+    public function test_a_disabled_channel_template_is_not_sent_even_when_requested(): void
+    {
+        Mail::fake();
+        NotificationTemplate::create(['key' => 'domain.renewal', 'channel' => 'email', 'body' => 'x', 'enabled' => false]);
+        // The email template is off; the UI won't offer it, and the job must skip it.
+        $this->assertFalse(app(TemplateEngine::class)->isEnabled('domain.renewal', 'email'));
+
+        $customer = Customer::factory()->create(['email' => 'owner@biz.co.il', 'phone' => null, 'whatsapp_jid' => null]);
+        $site = Site::factory()->create(['customer_id' => $customer->id, 'domain_expiry_at' => now()->addDays(15)->toDateString()]);
+
+        SendDomainRenewalReminderJob::dispatchSync($site->id, ['email']);
+
+        Mail::assertNothingSent();
+    }
+
+    public function test_a_job_serialized_without_channels_defaults_to_both(): void
+    {
+        // A reminder queued by an older release carries no `channels`; the declared
+        // property default (null) must survive unserialization, not error.
+        $restored = unserialize(serialize(new SendDomainRenewalReminderJob(123)));
+        $this->assertNull($restored->channels);
+        $this->assertSame(123, $restored->siteId);
     }
 
     public function test_the_renewal_reminder_is_a_noop_without_a_known_expiry(): void
