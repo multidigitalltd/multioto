@@ -28,10 +28,19 @@ class SendDomainRenewalReminderJob implements ShouldQueue
     public array $backoff = [60, 300];
 
     /**
-     * @param  array<int, string>|null  $channels  Which channels to send on
-     *                                             ('email', 'whatsapp'); null = both.
+     * Which channels to send on ('email', 'whatsapp'); null = both. Declared as a
+     * real property with a default (NOT a promoted param) so a job serialized by
+     * an older release — whose payload has no `channels` — unserializes to null
+     * instead of an uninitialized typed-property error.
+     *
+     * @var array<int, string>|null
      */
-    public function __construct(public int $siteId, public ?array $channels = null) {}
+    public ?array $channels = null;
+
+    public function __construct(public int $siteId, ?array $channels = null)
+    {
+        $this->channels = $channels;
+    }
 
     public function handle(TemplateEngine $templates, WahaClient $waha): void
     {

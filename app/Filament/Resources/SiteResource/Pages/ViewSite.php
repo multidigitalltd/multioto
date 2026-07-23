@@ -13,6 +13,7 @@ use App\Services\Agent\SiteToolCatalog;
 use App\Services\Automation\ApprovalGate;
 use App\Services\Cloudflare\CloudflareClient;
 use App\Services\Hosting\SiteDiagnostics;
+use App\Services\Notifications\TemplateEngine;
 use App\Services\System\OutboundIp;
 use Filament\Actions;
 use Filament\Forms;
@@ -122,22 +123,28 @@ class ViewSite extends ViewRecord
                     $this->record->domain,
                     $this->record->domain_expiry_at?->format('d/m/Y') ?? '',
                 ))
-                // Pick the channels — only the ones the customer actually has are
-                // offered, and all available ones are ticked by default.
-                ->form(fn (): array => [
-                    Forms\Components\CheckboxList::make('channels')
-                        ->label('ערוצי שליחה')
-                        ->options(array_filter([
-                            'email' => filled($this->record->customer?->email) ? 'מייל'.' ('.$this->record->customer->email.')' : null,
-                            'whatsapp' => filled($this->record->customer?->whatsappRecipient()) ? 'וואטסאפ' : null,
-                        ]))
-                        ->default(array_values(array_filter([
-                            filled($this->record->customer?->email) ? 'email' : null,
-                            filled($this->record->customer?->whatsappRecipient()) ? 'whatsapp' : null,
-                        ])))
-                        ->required()
-                        ->bulkToggleable(),
-                ])
+                // Pick the channels — only the ones the customer actually has AND
+                // whose template is enabled are offered (a disabled template would
+                // silently send nothing); all offered ones are ticked by default.
+                ->form(function (TemplateEngine $templates): array {
+                    $available = array_filter([
+                        'email' => filled($this->record->customer?->email)
+                            && $templates->isEnabled('domain.renewal', 'email')
+                            ? 'מייל ('.$this->record->customer->email.')' : null,
+                        'whatsapp' => filled($this->record->customer?->whatsappRecipient())
+                            && $templates->isEnabled('domain.renewal', 'whatsapp')
+                            ? 'וואטסאפ' : null,
+                    ]);
+
+                    return [
+                        Forms\Components\CheckboxList::make('channels')
+                            ->label('ערוצי שליחה')
+                            ->options($available)
+                            ->default(array_keys($available))
+                            ->required()
+                            ->bulkToggleable(),
+                    ];
+                })
                 ->modalSubmitActionLabel('שלח תזכורת')
                 ->action(function (array $data): void {
                     $channels = array_values(array_unique(array_filter((array) ($data['channels'] ?? []))));
