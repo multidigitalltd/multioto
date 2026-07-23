@@ -6,6 +6,7 @@ use App\Jobs\AlertExpiringCardsBeforeChargeJob;
 use App\Jobs\ChargeSubscriptionJob;
 use App\Jobs\CheckDomainExpiryJob;
 use App\Jobs\CheckSitePluginChangesJob;
+use App\Jobs\CheckSiteReputationJob;
 use App\Jobs\CheckSlaBreachesJob;
 use App\Jobs\CheckSslExpiryJob;
 use App\Jobs\FollowUpPendingTicketsJob;
@@ -118,6 +119,21 @@ Schedule::call(function () {
         ->pluck('id')
         ->each(fn (int $id) => ScanSiteVulnerabilitiesJob::dispatch($id));
 })->dailyAt('07:45')->name('monitoring:vulnerability-scan')->when($awake)->onOneServer();
+
+// Daily domain-reputation check for every site with a domain: flag it if it
+// appears on a public spam/malware blocklist. External (no site connection
+// needed); gated on $awake to stay quiet over Shabbat/Yom Tov.
+Schedule::call(function () {
+    if (! config('security.reputation.enabled', true)) {
+        return;
+    }
+
+    Site::query()
+        ->whereNotNull('domain')
+        ->where('domain', '!=', '')
+        ->pluck('id')
+        ->each(fn (int $id) => CheckSiteReputationJob::dispatch($id));
+})->dailyAt('07:50')->name('monitoring:reputation-check')->when($awake)->onOneServer();
 
 // Proactive reminders: a once-a-day internal digest (renewals due, cards
 // expiring, open debt) so the owner can act before anything slips.
