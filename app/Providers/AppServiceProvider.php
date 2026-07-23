@@ -2,8 +2,17 @@
 
 namespace App\Providers;
 
+use App\Models\AuditLog;
+use App\Models\Charge;
+use App\Models\Customer;
+use App\Models\NotificationTemplate;
+use App\Models\Plan;
+use App\Models\Site;
+use App\Models\Subscription;
 use App\Models\Task;
 use App\Models\Ticket;
+use App\Models\User;
+use App\Observers\AuditObserver;
 use App\Observers\TaskObserver;
 use App\Observers\TicketObserver;
 use App\Services\Hosting\FlyWpHostingClient;
@@ -59,10 +68,24 @@ class AppServiceProvider extends ServiceProvider
         Ticket::observe(TicketObserver::class);
         Task::observe(TaskObserver::class);
 
+        // Team-action audit trail: attribute create/update/delete of these models
+        // to the signed-in panel user (system/queue writes have no auth user and
+        // are skipped). One observer, registered on each audited model.
+        foreach ([Customer::class, Site::class, Subscription::class, Charge::class,
+            Plan::class, Task::class, Ticket::class, User::class, NotificationTemplate::class] as $audited) {
+            $audited::observe(AuditObserver::class);
+        }
+
         // A fresh password login must earn a fresh one-time code: clear any
         // previous 2FA confirmation so the challenge middleware fires again.
         // Logout wipes it too, so a shared browser can't inherit confirmation.
-        Event::listen(Login::class, fn () => session()->forget('two_factor.confirmed'));
-        Event::listen(Logout::class, fn () => session()->forget('two_factor.confirmed'));
+        Event::listen(Login::class, function (Login $event): void {
+            session()->forget('two_factor.confirmed');
+            AuditLog::record('login', 'התחברות למערכת');
+        });
+        Event::listen(Logout::class, function (Logout $event): void {
+            session()->forget('two_factor.confirmed');
+            AuditLog::record('logout', 'התנתקות מהמערכת', actor: $event->user);
+        });
     }
 }

@@ -17,6 +17,7 @@ use App\Jobs\SendBroadcastJob;
 use App\Jobs\SendDemandRemindersJob;
 use App\Jobs\SendProactiveRemindersJob;
 use App\Jobs\SendTaskRemindersJob;
+use App\Models\AuditLog;
 use App\Models\Broadcast;
 use App\Models\Charge;
 use App\Models\MonitorCheck;
@@ -215,3 +216,10 @@ Schedule::call(function () {
         ->where('created_at', '<', now()->subDays((int) config('billing.system.notification_retention_days', 30)))
         ->delete();
 })->dailyAt('03:30')->name('system:prune-notifications')->onOneServer();
+
+// Prune the team-action audit log after its (long) retention window.
+Schedule::call(function () {
+    AuditLog::query()
+        ->where('created_at', '<', now()->subDays((int) config('security.audit.retention_days', 365)))
+        ->delete();
+})->dailyAt('03:40')->name('system:prune-audit-logs')->onOneServer();
