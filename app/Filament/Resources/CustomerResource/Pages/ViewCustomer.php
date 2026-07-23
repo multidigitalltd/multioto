@@ -7,6 +7,7 @@ use App\Filament\Resources\CustomerResource\Concerns\InteractsWithCustomerCards;
 use App\Jobs\SendPaymentLinkJob;
 use App\Models\Customer;
 use App\Services\Billing\ManualChargeService;
+use App\Services\Customers\OnboardingChecklist;
 use App\Services\Support\AgentReply;
 use App\Support\Money;
 use Filament\Actions;
@@ -26,6 +27,17 @@ class ViewCustomer extends ViewRecord
     use InteractsWithCustomerCards;
 
     protected static string $resource = CustomerResource::class;
+
+    /**
+     * Flip a manual tick on the onboarding checklist (the checklist blade's
+     * buttons call this). The service whitelists the key and refuses to un-do
+     * an auto-detected item, so nothing outside the checklist is ever written.
+     */
+    public function toggleOnboarding(string $key): void
+    {
+        app(OnboardingChecklist::class)->toggle($this->record, $key);
+        $this->record->refresh();
+    }
 
     protected function getHeaderActions(): array
     {

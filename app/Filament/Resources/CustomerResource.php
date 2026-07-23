@@ -10,6 +10,7 @@ use App\Filament\Resources\CustomerResource\RelationManagers;
 use App\Models\Customer;
 use App\Models\Site;
 use App\Models\Ticket;
+use App\Services\Customers\OnboardingChecklist;
 use App\Services\Notifications\CardCaptureLinkSender;
 use App\Support\CardLink;
 use App\Support\Money;
@@ -19,6 +20,7 @@ use Filament\Infolists\Components\Actions\Action as InfolistAction;
 use Filament\Infolists\Components\RepeatableEntry;
 use Filament\Infolists\Components\Section as InfoSection;
 use Filament\Infolists\Components\TextEntry;
+use Filament\Infolists\Components\ViewEntry;
 use Filament\Infolists\Infolist;
 use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
@@ -254,6 +256,22 @@ class CustomerResource extends Resource
         $money = fn ($state): string => Money::ils((int) $state);
 
         return $infolist->schema([
+            // Onboarding checklist — auto-detected steps plus manual ticks.
+            // Collapsed once everything is done, prominent while it isn't.
+            InfoSection::make('צ׳ק-ליסט קליטה')
+                ->icon('heroicon-o-clipboard-document-check')
+                ->collapsible()
+                ->collapsed(function (Customer $record): bool {
+                    $progress = app(OnboardingChecklist::class)->progress($record);
+
+                    return $progress['done'] >= $progress['total'];
+                })
+                ->schema([
+                    ViewEntry::make('onboarding')
+                        ->hiddenLabel()
+                        ->view('filament.customers.onboarding-checklist'),
+                ]),
+
             InfoSection::make('פרטי לקוח')
                 ->icon('heroicon-o-identification')
                 ->schema([
