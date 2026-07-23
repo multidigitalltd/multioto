@@ -313,6 +313,34 @@ class MonitoringUpgradeTest extends TestCase
             ->assertActionHidden('domainRenewalReminder');
     }
 
+    public function test_the_domain_renewal_button_is_hidden_when_expiry_is_far_off(): void
+    {
+        // The reminder is only relevant once the domain is nearing expiry (the
+        // coming month); with an expiry months away it must stay hidden.
+        $this->actingAs(User::factory()->create());
+        $customer = Customer::factory()->create(['email' => 'owner@biz.co.il']);
+        $site = Site::factory()->create([
+            'customer_id' => $customer->id,
+            'domain_expiry_at' => now()->addDays(90)->toDateString(),
+        ]);
+
+        Livewire::test(ViewSite::class, ['record' => $site->getRouteKey()])
+            ->assertActionHidden('domainRenewalReminder');
+    }
+
+    public function test_the_domain_renewal_button_is_visible_when_expiry_is_within_the_month(): void
+    {
+        $this->actingAs(User::factory()->create());
+        $customer = Customer::factory()->create(['email' => 'owner@biz.co.il']);
+        $site = Site::factory()->create([
+            'customer_id' => $customer->id,
+            'domain_expiry_at' => now()->addDays(10)->toDateString(),
+        ]);
+
+        Livewire::test(ViewSite::class, ['record' => $site->getRouteKey()])
+            ->assertActionVisible('domainRenewalReminder');
+    }
+
     protected function tearDown(): void
     {
         Mockery::close();

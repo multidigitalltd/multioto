@@ -188,6 +188,10 @@ class SiteResource extends Resource
                         ->icon('heroicon-m-user')
                         ->searchable()
                         ->sortable(),
+                    // The badges sit in a Split (a flex row that does NOT wrap on
+                    // its own); with several badges they spill past the card edge
+                    // on a narrow card. flex-wrap lets them flow onto a second line
+                    // inside the card instead of overflowing it.
                     Tables\Columns\Layout\Split::make([
                         Tables\Columns\TextColumn::make('status')
                             ->badge()
@@ -236,7 +240,7 @@ class SiteResource extends Resource
                                 default => 'heroicon-m-question-mark-circle',
                             })
                             ->grow(false),
-                    ]),
+                    ])->extraAttributes(['class' => 'flex-wrap']),
                 ])->space(3),
             ])
             ->defaultSort('domain', 'asc')
