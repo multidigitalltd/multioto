@@ -8,6 +8,8 @@ use App\Filament\Widgets\SitesInTrouble;
 use App\Jobs\CheckSslExpiryJob;
 use App\Jobs\InvestigateSiteJob;
 use App\Jobs\MonitorSiteJob;
+use App\Jobs\SendDomainRenewalReminderJob;
+use App\Models\Customer;
 use App\Models\Site;
 use App\Models\User;
 use App\Services\Hosting\SiteDiagnostics;
@@ -281,6 +283,33 @@ class MonitoringUpgradeTest extends TestCase
         $this->assertSame(2, $stats['up']);
         $this->assertEqualsWithDelta(66.67, $stats['uptime'], 0.01);
         $this->assertSame(200, $stats['avg_ms']); // avg of up-checks only: (100+300)/2
+    }
+
+    public function test_the_domain_renewal_reminder_button_dispatches_the_job(): void
+    {
+        Queue::fake();
+        $this->actingAs(User::factory()->create());
+
+        $customer = Customer::factory()->create();
+        $site = Site::factory()->create([
+            'customer_id' => $customer->id,
+            'domain_expiry_at' => now()->addDays(20)->toDateString(),
+        ]);
+
+        Livewire::test(ViewSite::class, ['record' => $site->getRouteKey()])
+            ->callAction('domainRenewalReminder');
+
+        Queue::assertPushed(SendDomainRenewalReminderJob::class,
+            fn ($job): bool => $job->siteId === $site->id);
+    }
+
+    public function test_the_domain_renewal_button_is_hidden_without_a_known_expiry(): void
+    {
+        $this->actingAs(User::factory()->create());
+        $site = Site::factory()->create(['customer_id' => Customer::factory(), 'domain_expiry_at' => null]);
+
+        Livewire::test(ViewSite::class, ['record' => $site->getRouteKey()])
+            ->assertActionHidden('domainRenewalReminder');
     }
 
     protected function tearDown(): void

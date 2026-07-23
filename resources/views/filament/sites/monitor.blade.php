@@ -6,6 +6,11 @@
         $slowMs = (int) config('billing.monitoring.slow_response_ms', 4000);
         $ssl = $site->ssl_days_left;
         $isDown = (bool) $site->openIncident;
+        $domainWarnDays = (int) config('billing.monitoring.domain_warn_days', 30);
+        $domainExpiry = $site->domain_expiry_at;
+        $domainDaysLeft = $domainExpiry !== null
+            ? (int) ceil(now()->startOfDay()->diffInDays($domainExpiry, false))
+            : null;
     @endphp
 
     {{-- Context strip: site + customer + live state. --}}
@@ -20,8 +25,8 @@
         @endif
     </div>
 
-    {{-- Stat cards: uptime, response time, SSL — the whole health picture. --}}
-    <div class="grid grid-cols-1 gap-4 sm:grid-cols-3" wire:poll.30s>
+    {{-- Stat cards: uptime, response time, SSL, domain — the whole health picture. --}}
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4" wire:poll.30s>
         <div class="rounded-xl bg-white p-4 shadow-sm dark:bg-gray-800">
             <div class="text-xs text-gray-500 dark:text-gray-400">זמינות ({{ $this->getStatsWindowDays() }} ימים)</div>
             <div class="mt-1 text-2xl font-bold">
@@ -56,6 +61,27 @@
             </div>
             <div class="text-xs text-gray-500 dark:text-gray-400">
                 @if ($ssl !== null && $ssl > 0 && $ssl <= $warnDays) עומדת לפוג — מומלץ לחדש @else נותרו עד לחידוש @endif
+            </div>
+        </div>
+
+        {{-- Domain registration expiry — until now only surfaced in the team
+             email; now visible here so the team (and, via the reminder button,
+             the customer) can act before the domain lapses. --}}
+        <div class="rounded-xl bg-white p-4 shadow-sm dark:bg-gray-800">
+            <div class="text-xs text-gray-500 dark:text-gray-400">תוקף הדומיין</div>
+            <div @class([
+                    'mt-1 text-2xl font-bold',
+                    'text-danger-600 dark:text-danger-400' => $domainDaysLeft !== null && $domainDaysLeft <= 0,
+                    'text-amber-600 dark:text-amber-400' => $domainDaysLeft !== null && $domainDaysLeft > 0 && $domainDaysLeft <= $domainWarnDays,
+                ])>
+                @if ($domainDaysLeft === null) — @elseif ($domainDaysLeft <= 0) פג @else {{ $domainDaysLeft }} ימים @endif
+            </div>
+            <div class="text-xs text-gray-500 dark:text-gray-400">
+                @if ($domainExpiry !== null)
+                    יפוג ב-{{ $domainExpiry->format('d/m/Y') }}
+                @else
+                    לא נבדק עדיין
+                @endif
             </div>
         </div>
     </div>

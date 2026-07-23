@@ -39,6 +39,16 @@ class TemplateEngine
                 'body' => "שלום {{customer_name}} 🎉\nברוכים הבאים ל-{{business_name}}! הפרטים שלך נקלטו ואנחנו כבר בעבודה.\nלכל שאלה — פשוט כתבו לנו כאן ונענה במהירות.",
             ],
         ],
+        'domain.renewal' => [
+            'email' => [
+                'subject' => 'חידוש דומיין {{domain}} — {{business_name}}',
+                'body' => "שלום {{customer_name}},\n\nרישום הדומיין {{domain}} עומד לפוג בתאריך {{expiry_date}} (בעוד {{days_left}} ימים).\nכדי שהאתר והמייל ימשיכו לפעול ללא הפרעה, יש לחדש את רישום הדומיין לפני מועד זה.\n\nאם החידוש באחריותכם — נא לטפל בהקדם מול רשם הדומיינים. לכל שאלה או סיוע אנחנו כאן.\n\nתודה,\nצוות {{business_name}}",
+            ],
+            'whatsapp' => [
+                'subject' => null,
+                'body' => "שלום {{customer_name}} 🌐\nרישום הדומיין {{domain}} עומד לפוג בתאריך {{expiry_date}} (בעוד {{days_left}} ימים).\nכדי שהאתר לא ירד — יש לחדש את הרישום לפני מועד זה. לכל שאלה או סיוע אנחנו כאן.\nתודה, {{business_name}}",
+            ],
+        ],
         'payment.link' => [
             'email' => [
                 'subject' => 'בקשת תשלום — {{business_name}}',

@@ -2,12 +2,19 @@
 
 namespace Tests\Feature;
 
+use App\Enums\NotificationType;
 use App\Jobs\CheckDomainExpiryJob;
+use App\Jobs\SendDomainRenewalReminderJob;
+use App\Mail\NotificationMail;
+use App\Models\Customer;
+use App\Models\NotificationLog;
 use App\Models\Site;
 use App\Services\Monitoring\DomainExpiry;
 use App\Services\Notifications\TeamNotifier;
+use App\Services\Waha\WahaClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Mail;
 use Mockery;
 use Tests\TestCase;
 
@@ -68,5 +75,38 @@ class DomainExpiryTest extends TestCase
         // Renewed: the flag clears so a future expiry can alert again.
         CheckDomainExpiryJob::dispatchSync($site->id);
         $this->assertNull($site->refresh()->domain_alerted_at);
+    }
+
+    public function test_the_renewal_reminder_reaches_the_customer_by_email_and_whatsapp(): void
+    {
+        Mail::fake();
+        $waha = Mockery::mock(WahaClient::class);
+        $waha->shouldReceive('sendMessage')->once();
+        $this->app->instance(WahaClient::class, $waha);
+
+        $customer = Customer::factory()->create(['email' => 'owner@biz.co.il', 'phone' => '0501234567']);
+        $site = Site::factory()->create([
+            'customer_id' => $customer->id,
+            'domain' => 'client-domain.co.il',
+            'domain_expiry_at' => now()->addDays(20)->toDateString(),
+        ]);
+
+        SendDomainRenewalReminderJob::dispatchSync($site->id);
+
+        Mail::assertSent(NotificationMail::class, fn (NotificationMail $m): bool => $m->hasTo('owner@biz.co.il')
+            && str_contains($m->bodyText, 'client-domain.co.il'));
+        $this->assertSame(1, NotificationLog::where('type', NotificationType::DomainRenewal->value)
+            ->where('channel', 'email')->count());
+    }
+
+    public function test_the_renewal_reminder_is_a_noop_without_a_known_expiry(): void
+    {
+        Mail::fake();
+        $customer = Customer::factory()->create(['email' => 'owner@biz.co.il']);
+        $site = Site::factory()->create(['customer_id' => $customer->id, 'domain_expiry_at' => null]);
+
+        SendDomainRenewalReminderJob::dispatchSync($site->id);
+
+        Mail::assertNothingSent();
     }
 }
