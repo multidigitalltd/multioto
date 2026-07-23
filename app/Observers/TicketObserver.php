@@ -33,6 +33,22 @@ class TicketObserver
             $ticket->pending_since = null;
             $ticket->pending_reminded_at = null;
         }
+
+        // Reopened (terminal → non-terminal): reset the CSAT cycle so any rating
+        // from the previous resolution is dropped and the NEXT resolution invites
+        // the customer again — the dashboard must reflect the final outcome, not a
+        // rating given before the ticket was reopened.
+        $original = $ticket->getOriginal('status');
+        $wasStatus = $original instanceof TicketStatus ? $original : TicketStatus::tryFrom((string) $original);
+
+        if ($wasStatus !== null
+            && in_array($wasStatus, Ticket::TERMINAL, true)
+            && ! in_array($ticket->status, Ticket::TERMINAL, true)) {
+            $ticket->csat_rating = null;
+            $ticket->csat_comment = null;
+            $ticket->csat_requested_at = null;
+            $ticket->csat_rated_at = null;
+        }
     }
 
     public function updated(Ticket $ticket): void

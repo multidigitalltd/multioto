@@ -4,8 +4,8 @@ namespace App\Http\Controllers;
 
 use App\Models\Ticket;
 use Illuminate\Contracts\View\View;
-use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\URL;
 use Illuminate\Support\Str;
 
@@ -17,23 +17,32 @@ use Illuminate\Support\Str;
  */
 class CsatController extends Controller
 {
-    /** Show the 1–5 rating form (or a "thanks" once already rated). */
-    public function show(Ticket $ticket): View
+    /** Show the 1–5 rating form. */
+    public function show(Ticket $ticket, Request $request): View
     {
-        // The form posts back to a signature valid for the POST route, so the
-        // rating can't be submitted without a valid signed link.
-        $action = URL::temporarySignedRoute(
-            'csat.store',
-            now()->addDays((int) config('billing.support.csat.link_days', 30)),
-            ['ticket' => $ticket->id],
-        );
+        // The form posts back with a signature that expires at the SAME time as
+        // the invitation the customer clicked — reopening the page near expiry
+        // must never mint a fresh, longer validity window.
+        $expires = (int) $request->query('expires', 0);
+        $expiresAt = $expires > 0
+            ? Carbon::createFromTimestamp($expires)
+            : now()->addDays((int) config('billing.support.csat.link_days', 30));
+
+        $action = URL::temporarySignedRoute('csat.store', $expiresAt, ['ticket' => $ticket->id]);
 
         return view('csat.rate', ['ticket' => $ticket, 'action' => $action]);
     }
 
     /** Record the rating (+ optional comment) and show the thank-you page. */
-    public function store(Ticket $ticket, Request $request): View|RedirectResponse
+    public function store(Ticket $ticket, Request $request): View
     {
+        // A ticket reopened after the invitation went out is no longer the thing
+        // being rated — reject the stale rating instead of recording feedback for
+        // a resolution that was undone.
+        if (! in_array($ticket->status, Ticket::TERMINAL, true)) {
+            return view('csat.unavailable', ['ticket' => $ticket]);
+        }
+
         $data = $request->validate([
             'rating' => ['required', 'integer', 'min:1', 'max:5'],
             'comment' => ['nullable', 'string', 'max:1000'],

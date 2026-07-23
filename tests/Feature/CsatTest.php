@@ -81,6 +81,49 @@ class CsatTest extends TestCase
         $this->assertNotNull($ticket->csat_rated_at);
     }
 
+    public function test_a_reopened_ticket_rejects_a_stale_rating(): void
+    {
+        $ticket = $this->resolvedTicket();
+        // Customer replied before rating → the ticket was reopened.
+        $ticket->update(['status' => TicketStatus::Open]);
+
+        $store = URL::temporarySignedRoute('csat.store', now()->addDays(30), ['ticket' => $ticket->id]);
+        $this->withoutMiddleware(VerifyCsrfToken::class)
+            ->post($store, ['rating' => 5])
+            ->assertOk()->assertSee('נפתחה מחדש');
+
+        $this->assertNull($ticket->fresh()->csat_rating);
+    }
+
+    public function test_reopening_a_ticket_resets_the_csat_cycle(): void
+    {
+        $ticket = $this->resolvedTicket();
+        $ticket->forceFill(['csat_requested_at' => now(), 'csat_rating' => 4, 'csat_rated_at' => now()])->save();
+
+        $ticket->update(['status' => TicketStatus::Open]); // reopened
+
+        $ticket->refresh();
+        $this->assertNull($ticket->csat_rating);
+        $this->assertNull($ticket->csat_requested_at);
+        $this->assertNull($ticket->csat_rated_at);
+    }
+
+    public function test_the_form_action_does_not_outlive_the_original_link(): void
+    {
+        $ticket = $this->resolvedTicket();
+
+        // A show link that expires in 2 minutes must yield a POST action that
+        // expires at the same moment — not a fresh 30-day window.
+        $show = URL::temporarySignedRoute('csat.show', now()->addMinutes(2), ['ticket' => $ticket->id]);
+        $html = $this->get($show)->assertOk()->getContent();
+
+        preg_match('/action="([^"]+)"/', $html, $m);
+        parse_str((string) parse_url(html_entity_decode($m[1]), PHP_URL_QUERY), $query);
+
+        // Within a minute of the original 2-minute expiry, never ~30 days out.
+        $this->assertLessThanOrEqual(now()->addMinutes(3)->timestamp, (int) $query['expires']);
+    }
+
     public function test_an_out_of_range_rating_is_rejected(): void
     {
         $ticket = $this->resolvedTicket();
