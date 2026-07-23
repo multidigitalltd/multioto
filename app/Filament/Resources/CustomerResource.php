@@ -372,6 +372,7 @@ class CustomerResource extends Resource
             RelationManagers\ContactsRelationManager::class,
             RelationManagers\SubscriptionsRelationManager::class,
             RelationManagers\SitesRelationManager::class,
+            RelationManagers\NotificationLogsRelationManager::class,
         ];
     }
 

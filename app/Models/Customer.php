@@ -92,6 +92,12 @@ class Customer extends Model
         return $this->hasMany(Ticket::class);
     }
 
+    /** Outbound messages the customer received (email/WhatsApp audit trail). */
+    public function notificationLogs(): HasMany
+    {
+        return $this->hasMany(NotificationLog::class);
+    }
+
     /** Tickets newest-first — for the customer card's "פניות" list. */
     public function recentTickets(): HasMany
     {
