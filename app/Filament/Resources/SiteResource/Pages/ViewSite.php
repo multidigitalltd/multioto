@@ -4,6 +4,7 @@ namespace App\Filament\Resources\SiteResource\Pages;
 
 use App\Filament\Resources\SiteResource;
 use App\Filament\Support\SiteActions;
+use App\Jobs\CheckSiteReputationJob;
 use App\Jobs\DetectSiteTypeJob;
 use App\Jobs\InvestigateSiteJob;
 use App\Jobs\ScanSiteVulnerabilitiesJob;
@@ -201,6 +202,21 @@ class ViewSite extends ViewRecord
 
                     Notification::make()->title('סריקת האבטחה רצה ברקע')
                         ->body('התוצאות יופיעו בעמוד האתר, וממצאים חדשים יישלחו גם לצוות.')
+                        ->success()->send();
+                }),
+
+            // Check the domain against public spam/malware blocklists. Works even
+            // without an AI connection — it queries external reputation sources.
+            Actions\Action::make('checkReputation')
+                ->label('בדיקת מוניטין')
+                ->icon('heroicon-o-no-symbol')
+                ->color('warning')
+                ->visible($isAdmin)
+                ->action(function (): void {
+                    CheckSiteReputationJob::dispatch($this->record->id);
+
+                    Notification::make()->title('בדיקת המוניטין רצה ברקע')
+                        ->body('נבדוק את הדומיין מול מאגרי ספאם/נוזקות. התוצאה תופיע בעמוד האתר.')
                         ->success()->send();
                 }),
 

@@ -139,6 +139,44 @@
         </div>
     @endif
 
+    {{-- Domain reputation: spam/malware blocklist status. --}}
+    @php
+        $rep = $site->reputation_scan ?? null;
+        $listings = (array) data_get($rep, 'listings', []);
+        $repCheckedAt = data_get($rep, 'checked_at');
+    @endphp
+    @if ($rep !== null)
+        <div class="rounded-xl bg-white p-4 shadow-sm dark:bg-gray-800">
+            <div class="mb-3 flex items-center justify-between">
+                <h3 class="text-sm font-semibold">מוניטין דומיין — רשימות חסימה</h3>
+                <span class="text-xs text-gray-500 dark:text-gray-400">
+                    @if ($repCheckedAt) נבדק: {{ \Illuminate\Support\Carbon::parse($repCheckedAt)->format('d/m/Y H:i') }} @endif
+                </span>
+            </div>
+
+            @if (count($listings) === 0)
+                <div class="flex items-center gap-2 text-sm text-success-600 dark:text-success-400">
+                    <x-heroicon-o-check-badge class="h-5 w-5" />
+                    הדומיין נקי — לא נמצא ברשימות ספאם/נוזקות.
+                </div>
+            @else
+                <div class="space-y-2">
+                    @foreach ($listings as $l)
+                        <div class="flex items-center justify-between gap-2 rounded-lg border border-danger-100 bg-danger-50 p-3 text-sm dark:border-danger-900/40 dark:bg-danger-900/10">
+                            <span class="font-medium">
+                                {{ ($l['type'] ?? '') === 'spam' ? '📧' : '🦠' }}
+                                {{ $l['source'] ?? '' }} — {{ $l['detail'] ?? '' }}
+                            </span>
+                            @if (filled($l['link'] ?? null))
+                                <a href="{{ $l['link'] }}" target="_blank" rel="noopener noreferrer" class="text-xs text-primary-600 hover:underline dark:text-primary-400">פרטים</a>
+                            @endif
+                        </div>
+                    @endforeach
+                </div>
+            @endif
+        </div>
+    @endif
+
     {{-- Response-time trend — one bar per recent probe (oldest → newest). --}}
     @php $trend = $this->trend; @endphp
     @if (count($trend['points']) > 1)
