@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Enums\ChargeStatus;
+use App\Enums\MessageChannel;
 use App\Enums\TicketChannel;
 use App\Enums\TicketStatus;
 use App\Mail\NotificationMail;
@@ -11,6 +12,7 @@ use App\Models\Customer;
 use App\Models\Invoice;
 use App\Models\Subscription;
 use App\Models\Ticket;
+use App\Services\Support\AgentReply;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\URL;
@@ -118,6 +120,24 @@ class PortalTest extends TestCase
         $this->assertSame(TicketChannel::Portal, $ticket->channel);
         $this->assertSame('האתר איטי', $ticket->subject);
         $this->assertSame('האתר נטען לאט מאוד מהבוקר', (string) $ticket->messages()->value('body'));
+    }
+
+    public function test_a_portal_ticket_is_answered_by_email_even_with_a_phone(): void
+    {
+        // A portal ticket is acknowledged by email; the agent reply must stay on
+        // email regardless of the customer having a phone/WhatsApp.
+        $customer = Customer::factory()->create(['email' => 'c@example.co.il', 'phone' => '0501234567']);
+        $ticket = Ticket::create([
+            'customer_id' => $customer->id,
+            'channel' => TicketChannel::Portal,
+            'subject' => 'שאלה',
+            'status' => TicketStatus::Open,
+        ]);
+
+        $this->assertSame(
+            MessageChannel::Email,
+            app(AgentReply::class)->channelFor($ticket),
+        );
     }
 
     public function test_opening_a_portal_ticket_requires_a_subject_and_message(): void
