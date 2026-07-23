@@ -142,8 +142,4 @@
             </div>
         </x-filament::section>
     @endunless
-
-    <div class="mt-6">
-        {{ $this->table }}
-    </div>
 </x-filament-panels::page>

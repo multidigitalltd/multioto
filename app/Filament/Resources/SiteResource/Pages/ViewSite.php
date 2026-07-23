@@ -79,6 +79,41 @@ class ViewSite extends ViewRecord
                         ->send();
                 }),
 
+            // Run a security scan now: match the site's installed plugins/themes/
+            // core against the vulnerability feed. Results render in the "אבטחה"
+            // section below; new findings also alert the team. Kept inline (next to
+            // אבחון) — it's a day-to-day check, not a buried tool.
+            Actions\Action::make('scanSecurity')
+                ->label('סריקת אבטחה')
+                ->icon('heroicon-o-shield-exclamation')
+                ->color('warning')
+                ->visible($isAdmin)
+                ->disabled(fn (): bool => ! $this->record->mcp_enabled)
+                ->tooltip(fn (): ?string => $this->record->mcp_enabled ? null : 'הפעילו קודם את חיבור ה-AI')
+                ->action(function (): void {
+                    ScanSiteVulnerabilitiesJob::dispatch($this->record->id);
+
+                    Notification::make()->title('סריקת האבטחה רצה ברקע')
+                        ->body('התוצאות יופיעו בעמוד האתר, וממצאים חדשים יישלחו גם לצוות.')
+                        ->success()->send();
+                }),
+
+            // Check the domain against public spam/malware blocklists. Works even
+            // without an AI connection — it queries external reputation sources.
+            // Kept inline (next to אבחון) alongside the security scan.
+            Actions\Action::make('checkReputation')
+                ->label('בדיקת מוניטין')
+                ->icon('heroicon-o-no-symbol')
+                ->color('warning')
+                ->visible($isAdmin)
+                ->action(function (): void {
+                    CheckSiteReputationJob::dispatch($this->record->id);
+
+                    Notification::make()->title('בדיקת המוניטין רצה ברקע')
+                        ->body('נבדוק את הדומיין מול מאגרי ספאם/נוזקות. התוצאה תופיע בעמוד האתר.')
+                        ->success()->send();
+                }),
+
             // Connection on/off — makes the AI-connection state visible right on
             // the page (the toggle used to be buried in the edit form) and flips
             // it in one click. Enabling lets the model derive the endpoint.
@@ -191,39 +226,6 @@ class ViewSite extends ViewRecord
                         InvestigateSiteJob::dispatch($this->record->id, (string) ($data['goal'] ?? 'אבחן את האתר.'));
                         Notification::make()->title('האבחון רץ ברקע')
                             ->body('הסיכום יופיע בזיכרון האתר, והצעות תיקון (אם יהיו) ב"אישורי אוטומציה".')
-                            ->success()->send();
-                    }),
-
-                // Run a security scan now: match the site's installed plugins/themes/
-                // core against the vulnerability feed. Results render in the "אבטחה"
-                // section below; new findings also alert the team.
-                Actions\Action::make('scanSecurity')
-                    ->label('סריקת אבטחה')
-                    ->icon('heroicon-o-shield-exclamation')
-                    ->color('warning')
-                    ->visible($isAdmin)
-                    ->disabled(fn (): bool => ! $this->record->mcp_enabled)
-                    ->tooltip(fn (): ?string => $this->record->mcp_enabled ? null : 'הפעילו קודם את חיבור ה-AI')
-                    ->action(function (): void {
-                        ScanSiteVulnerabilitiesJob::dispatch($this->record->id);
-
-                        Notification::make()->title('סריקת האבטחה רצה ברקע')
-                            ->body('התוצאות יופיעו בעמוד האתר, וממצאים חדשים יישלחו גם לצוות.')
-                            ->success()->send();
-                    }),
-
-                // Check the domain against public spam/malware blocklists. Works even
-                // without an AI connection — it queries external reputation sources.
-                Actions\Action::make('checkReputation')
-                    ->label('בדיקת מוניטין')
-                    ->icon('heroicon-o-no-symbol')
-                    ->color('warning')
-                    ->visible($isAdmin)
-                    ->action(function (): void {
-                        CheckSiteReputationJob::dispatch($this->record->id);
-
-                        Notification::make()->title('בדיקת המוניטין רצה ברקע')
-                            ->body('נבדוק את הדומיין מול מאגרי ספאם/נוזקות. התוצאה תופיע בעמוד האתר.')
                             ->success()->send();
                     }),
 
