@@ -156,6 +156,8 @@ Route::prefix('portal')->group(function () {
         Route::get('/debt', [PortalController::class, 'debt'])->name('portal.debt');
         Route::get('/invoices', [PortalController::class, 'invoices'])->name('portal.invoices');
         Route::get('/tickets', [PortalController::class, 'tickets'])->name('portal.tickets');
+        Route::post('/tickets', [PortalController::class, 'storeTicket'])
+            ->middleware('throttle:10,1')->name('portal.tickets.store');
         Route::get('/card', [PortalController::class, 'updateCard'])->name('portal.card');
     });
 });

@@ -5,6 +5,12 @@
 @section('content')
     <h1>הפניות שלי</h1>
 
+    @if (session('status'))
+        <div class="card" role="status" style="border-inline-start:4px solid #16a34a">
+            {{ session('status') }}
+        </div>
+    @endif
+
     <div class="card">
         @if ($tickets->isEmpty())
             <p class="empty">אין פניות להצגה.</p>
@@ -33,8 +39,38 @@
     </div>
 
     <div class="card">
-        <h2>פנייה חדשה</h2>
-        <p class="muted">רוצים לפתוח פנייה חדשה? אפשר דרך טופס יצירת הקשר.</p>
-        <a href="{{ route('support.form') }}" class="btn ghost">יצירת קשר ותמיכה</a>
+        <h2>פתיחת פנייה חדשה</h2>
+
+        @if ($errors->any())
+            <p class="empty" role="alert" style="color:#dc2626">{{ $errors->first() }}</p>
+        @endif
+
+        <form method="POST" action="{{ route('portal.tickets.store') }}" class="ticket-form" novalidate>
+            @csrf
+            <div class="field">
+                <label for="subject">נושא</label>
+                <input type="text" id="subject" name="subject" maxlength="150" required
+                       value="{{ old('subject') }}" autocomplete="off">
+            </div>
+            <div class="field">
+                <label for="message">פירוט הבקשה</label>
+                <textarea id="message" name="message" rows="5" maxlength="5000" required
+                          placeholder="ספרו לנו במה נוכל לעזור">{{ old('message') }}</textarea>
+            </div>
+            <button type="submit" class="btn">שליחת הפנייה</button>
+        </form>
     </div>
+
+    <style>
+        .ticket-form .field { margin-bottom: 1rem; text-align: start; }
+        .ticket-form label { display: block; font-weight: 600; margin-bottom: .35rem; }
+        .ticket-form input, .ticket-form textarea {
+            width: 100%; padding: .6rem .75rem; border-radius: 8px;
+            border: 1px solid var(--border, #c2c8d0); background: transparent; color: inherit;
+            font: inherit; resize: vertical;
+        }
+        .ticket-form input:focus-visible, .ticket-form textarea:focus-visible {
+            outline: 2px solid #2563eb; outline-offset: 1px;
+        }
+    </style>
 @endsection

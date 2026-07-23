@@ -100,6 +100,46 @@ class PortalTest extends TestCase
             ->assertSee('תקלה בדומיין');
     }
 
+    public function test_a_signed_in_customer_can_open_a_ticket_from_the_portal(): void
+    {
+        Mail::fake();
+        $customer = Customer::factory()->create(['email' => 'c@example.co.il']);
+
+        $this->withSession(['portal.customer_id' => $customer->id])
+            ->post(route('portal.tickets.store'), [
+                'subject' => 'האתר איטי',
+                'message' => 'האתר נטען לאט מאוד מהבוקר',
+            ])
+            ->assertRedirect(route('portal.tickets'))
+            ->assertSessionHas('status');
+
+        $ticket = Ticket::where('customer_id', $customer->id)->first();
+        $this->assertNotNull($ticket);
+        $this->assertSame(TicketChannel::Portal, $ticket->channel);
+        $this->assertSame('האתר איטי', $ticket->subject);
+        $this->assertSame('האתר נטען לאט מאוד מהבוקר', (string) $ticket->messages()->value('body'));
+    }
+
+    public function test_opening_a_portal_ticket_requires_a_subject_and_message(): void
+    {
+        $customer = Customer::factory()->create();
+
+        $this->withSession(['portal.customer_id' => $customer->id])
+            ->from(route('portal.tickets'))
+            ->post(route('portal.tickets.store'), ['subject' => '', 'message' => ''])
+            ->assertSessionHasErrors(['subject', 'message']);
+
+        $this->assertSame(0, Ticket::count());
+    }
+
+    public function test_a_guest_cannot_open_a_portal_ticket(): void
+    {
+        $this->post(route('portal.tickets.store'), ['subject' => 'x', 'message' => 'y'])
+            ->assertRedirect(route('portal.login'));
+
+        $this->assertSame(0, Ticket::count());
+    }
+
     public function test_the_debt_page_lists_only_the_customers_open_demands_with_a_pay_link(): void
     {
         $mine = Customer::factory()->create();
