@@ -24,9 +24,18 @@ class CustomerNotificationLogsTabTest extends TestCase
 
     public function test_the_tab_lists_outbound_messages_for_this_customer_only(): void
     {
+        // record() returns void — build real rows via the factory so the record
+        // assertions actually verify customer scoping.
         $customer = Customer::factory()->create();
-        $mine = NotificationLog::record('email', NotificationType::PaymentLink, 'me@x.co', 'בקשת תשלום', 'גוף ההודעה', $customer->id);
-        $other = NotificationLog::record('email', NotificationType::Welcome, 'other@x.co', 'ברוך הבא', 'גוף אחר', Customer::factory()->create()->id);
+        $mine = NotificationLog::factory()->create([
+            'customer_id' => $customer->id,
+            'type' => NotificationType::PaymentLink,
+            'subject' => 'בקשת תשלום',
+        ]);
+        $other = NotificationLog::factory()->create([
+            'customer_id' => Customer::factory()->create()->id,
+            'subject' => 'ברוך הבא',
+        ]);
 
         Livewire::test(NotificationLogsRelationManager::class, [
             'ownerRecord' => $customer,
