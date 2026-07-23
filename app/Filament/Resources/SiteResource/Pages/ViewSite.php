@@ -107,7 +107,13 @@ class ViewSite extends ViewRecord
                 ->label('תזכורת חידוש דומיין ללקוח')
                 ->icon('heroicon-o-bell-alert')
                 ->color('warning')
-                ->visible(fn (): bool => $this->record->domain_expiry_at !== null && $this->record->customer !== null)
+                // Only when we know an expiry date, the site has a customer, AND
+                // that customer has at least one reachable channel (email or a
+                // WhatsApp JID/phone) — otherwise the reminder would silently
+                // reach no one.
+                ->visible(fn (): bool => $this->record->domain_expiry_at !== null
+                    && $this->record->customer !== null
+                    && (filled($this->record->customer->email) || filled($this->record->customer->whatsappRecipient())))
                 ->requiresConfirmation()
                 ->modalHeading('שליחת תזכורת חידוש דומיין')
                 ->modalDescription(fn (): string => sprintf(

@@ -99,6 +99,47 @@ class DomainExpiryTest extends TestCase
             ->where('channel', 'email')->count());
     }
 
+    public function test_the_renewal_reminder_uses_the_stored_whatsapp_jid_without_a_phone(): void
+    {
+        Mail::fake();
+        $waha = Mockery::mock(WahaClient::class);
+        // Delivered to the JID even though there is no phone number.
+        $waha->shouldReceive('sendMessage')->once()->with('12345@c.us', Mockery::type('string'));
+        $this->app->instance(WahaClient::class, $waha);
+
+        $customer = Customer::factory()->create(['email' => null, 'phone' => null, 'whatsapp_jid' => '12345@c.us']);
+        $site = Site::factory()->create([
+            'customer_id' => $customer->id,
+            'domain_expiry_at' => now()->addDays(15)->toDateString(),
+        ]);
+
+        SendDomainRenewalReminderJob::dispatchSync($site->id);
+
+        Mail::assertNothingSent();
+        $this->assertSame(1, NotificationLog::where('type', NotificationType::DomainRenewal->value)
+            ->where('channel', 'whatsapp')->count());
+    }
+
+    public function test_a_failed_email_does_not_block_the_whatsapp_reminder(): void
+    {
+        Mail::shouldReceive('to')->andThrow(new \RuntimeException('smtp down'));
+        $waha = Mockery::mock(WahaClient::class);
+        $waha->shouldReceive('sendMessage')->once(); // still sent despite the email failure
+        $this->app->instance(WahaClient::class, $waha);
+
+        $customer = Customer::factory()->create(['email' => 'owner@biz.co.il', 'phone' => '0501234567']);
+        $site = Site::factory()->create([
+            'customer_id' => $customer->id,
+            'domain_expiry_at' => now()->addDays(15)->toDateString(),
+        ]);
+
+        SendDomainRenewalReminderJob::dispatchSync($site->id);
+
+        // Email recorded as failed, WhatsApp recorded as sent.
+        $this->assertSame(1, NotificationLog::where('channel', 'email')->where('status', 'failed')->count());
+        $this->assertSame(1, NotificationLog::where('channel', 'whatsapp')->where('status', 'sent')->count());
+    }
+
     public function test_the_renewal_reminder_is_a_noop_without_a_known_expiry(): void
     {
         Mail::fake();

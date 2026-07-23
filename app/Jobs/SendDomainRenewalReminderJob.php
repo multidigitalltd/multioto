@@ -48,18 +48,26 @@ class SendDomainRenewalReminderJob implements ShouldQueue
             'days_left' => max(0, $daysLeft),
         ];
 
+        // Per-channel best-effort: each channel is independent, so an email
+        // transport outage never blocks the WhatsApp reminder (and vice versa).
         if (filled($customer->email) && ($email = $templates->render('domain.renewal', 'email', $data))) {
-            Mail::to($customer->email)->send(new NotificationMail($email['subject'] ?? 'חידוש דומיין', $email['body']));
-            NotificationLog::record('email', NotificationType::DomainRenewal, $customer->email, $email['subject'] ?? null, $email['body'], $customer->id);
+            try {
+                Mail::to($customer->email)->send(new NotificationMail($email['subject'] ?? 'חידוש דומיין', $email['body']));
+                NotificationLog::record('email', NotificationType::DomainRenewal, $customer->email, $email['subject'] ?? null, $email['body'], $customer->id);
+            } catch (\Throwable $e) {
+                Log::warning('Domain renewal email send failed', ['site_id' => $site->id, 'error' => $e->getMessage()]);
+                NotificationLog::record('email', NotificationType::DomainRenewal, $customer->email, $email['subject'] ?? null, $email['body'], $customer->id, 'failed', $e->getMessage());
+            }
         }
 
-        if (filled($customer->phone) && ($wa = $templates->render('domain.renewal', 'whatsapp', $data))) {
-            $recipient = $customer->whatsappRecipient();
+        // WhatsApp goes to the stored JID or, failing that, the phone — the same
+        // resolution every other customer-facing flow uses.
+        $recipient = $customer->whatsappRecipient();
+        if (filled($recipient) && ($wa = $templates->render('domain.renewal', 'whatsapp', $data))) {
             try {
                 $waha->sendMessage($recipient, $wa['body']);
                 NotificationLog::record('whatsapp', NotificationType::DomainRenewal, $recipient, null, $wa['body'], $customer->id);
             } catch (\Throwable $e) {
-                // WhatsApp being down must not fail the reminder (email was sent).
                 Log::warning('Domain renewal WhatsApp send failed', ['site_id' => $site->id, 'error' => $e->getMessage()]);
                 NotificationLog::record('whatsapp', NotificationType::DomainRenewal, $recipient, null, $wa['body'], $customer->id, 'failed', $e->getMessage());
             }
