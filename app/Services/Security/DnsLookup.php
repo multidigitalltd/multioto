@@ -12,23 +12,43 @@ namespace App\Services\Security;
 class DnsLookup
 {
     /**
+     * The bare hostname DNS queries need. The sites table may store a
+     * subdirectory install ("example.com/blog") or a host:port — both would
+     * make every dns_get_record() call fail and read as a resolver outage.
+     */
+    public static function host(string $domain): string
+    {
+        $host = preg_replace('#^[a-z][a-z0-9+.-]*://#i', '', trim($domain)) ?? '';
+
+        foreach (['/', ':', '?', '#'] as $separator) {
+            $host = explode($separator, $host, 2)[0];
+        }
+
+        return rtrim(mb_strtolower($host), '.');
+    }
+
+    /**
      * Current records for a domain, normalized and sorted. A type whose lookup
      * failed (SERVFAIL/timeout) is returned as null — "unknown", never "empty" —
      * so an outage can't masquerade as every record having been removed.
+     * MX values keep their priority ("10 mail.example.com") — promoting a
+     * secondary mail server is a real routing change the diff must see.
      *
      * @return array{a: ?list<string>, mx: ?list<string>, ns: ?list<string>}
      */
     public function records(string $domain): array
     {
+        $host = self::host($domain);
+
         return [
-            'a' => $this->values($domain, DNS_A, 'ip'),
-            'mx' => $this->values($domain, DNS_MX, 'target'),
-            'ns' => $this->values($domain, DNS_NS, 'target'),
+            'a' => $this->values($host, DNS_A, 'ip'),
+            'mx' => $this->values($host, DNS_MX, 'target', 'pri'),
+            'ns' => $this->values($host, DNS_NS, 'target'),
         ];
     }
 
     /** @return ?list<string> */
-    protected function values(string $domain, int $type, string $field): ?array
+    protected function values(string $domain, int $type, string $field, ?string $priorityField = null): ?array
     {
         $records = $this->query($domain, $type);
 
@@ -37,9 +57,20 @@ class DnsLookup
         }
 
         return collect($records)
-            ->pluck($field)
+            ->map(function (array $record) use ($field, $priorityField): ?string {
+                $value = $record[$field] ?? null;
+
+                if (blank($value)) {
+                    return null;
+                }
+
+                $value = rtrim(mb_strtolower((string) $value), '.');
+
+                return $priorityField !== null && isset($record[$priorityField])
+                    ? ((int) $record[$priorityField]).' '.$value
+                    : $value;
+            })
             ->filter()
-            ->map(fn ($v): string => rtrim(mb_strtolower((string) $v), '.'))
             ->unique()
             ->sort()
             ->values()

@@ -51,6 +51,7 @@ class CheckSiteDnsJob implements ShouldQueue
             return;
         }
 
+        $host = DnsLookup::host($site->domain);
         $current = $dns->records($site->domain);
 
         // Total resolver failure — nothing definite this cycle; keep the last
@@ -61,23 +62,29 @@ class CheckSiteDnsJob implements ShouldQueue
 
         $previous = (array) data_get($site->dns_snapshot, 'records', []);
 
+        // First run — including when the operator changed the site's DOMAIN: the
+        // stored snapshot then describes another hostname, and diffing the two
+        // would scream "hijack" over an ordinary edit. Re-baseline silently.
+        $isFirstRun = $site->dns_snapshot === null
+            || data_get($site->dns_snapshot, 'domain') !== $host;
+
         // Effective new snapshot: a type whose lookup failed keeps its previous
-        // value (unknown ≠ empty), so the stored state only ever holds facts.
+        // value (unknown ≠ empty) — except on a re-baseline, where the previous
+        // values describe another hostname and must not carry over.
         $records = [];
         foreach (['a', 'mx', 'ns'] as $type) {
-            $records[$type] = $current[$type] ?? ($previous[$type] ?? null);
+            $records[$type] = $current[$type] ?? ($isFirstRun ? null : ($previous[$type] ?? null));
         }
-
-        $isFirstRun = $site->dns_snapshot === null;
 
         $changes = $isFirstRun ? [] : $this->diff($previous, $current);
 
         $site->update(['dns_snapshot' => [
+            'domain' => $host,
             'checked_at' => now()->toIso8601String(),
             'records' => $records,
             'changed_at' => $changes !== []
                 ? now()->toIso8601String()
-                : data_get($site->dns_snapshot, 'changed_at'),
+                : ($isFirstRun ? null : data_get($site->dns_snapshot, 'changed_at')),
         ]]);
 
         if ($changes !== []) {
