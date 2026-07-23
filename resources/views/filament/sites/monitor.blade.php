@@ -86,6 +86,59 @@
         </div>
     </div>
 
+    {{-- Security scan: known-vulnerable installed components (Wordfence feed). --}}
+    @php
+        $scan = $site->vulnerability_scan ?? null;
+        $vulns = (array) data_get($scan, 'items', []);
+        $scannedAt = data_get($scan, 'scanned_at');
+        $sevColor = fn (?string $s) => match (strtolower((string) $s)) {
+            'critical' => 'danger',
+            'high' => 'danger',
+            'medium' => 'warning',
+            'low' => 'gray',
+            default => 'gray',
+        };
+    @endphp
+    @if ($scan !== null)
+        <div class="rounded-xl bg-white p-4 shadow-sm dark:bg-gray-800">
+            <div class="mb-3 flex items-center justify-between">
+                <h3 class="text-sm font-semibold">אבטחה — רכיבים פגיעים</h3>
+                <span class="text-xs text-gray-500 dark:text-gray-400">
+                    @if ($scannedAt) נסרק: {{ \Illuminate\Support\Carbon::parse($scannedAt)->format('d/m/Y H:i') }} @endif
+                </span>
+            </div>
+
+            @if (count($vulns) === 0)
+                <div class="flex items-center gap-2 text-sm text-success-600 dark:text-success-400">
+                    <x-heroicon-o-shield-check class="h-5 w-5" />
+                    לא נמצאו רכיבים פגיעים ידועים.
+                </div>
+            @else
+                <div class="space-y-2">
+                    @foreach ($vulns as $v)
+                        <div class="rounded-lg border border-gray-100 p-3 text-sm dark:border-gray-700">
+                            <div class="flex items-center justify-between gap-2">
+                                <span class="font-medium">
+                                    {{ $v['name'] ?? $v['slug'] ?? '' }}
+                                    <span class="text-gray-500">{{ $v['version'] ?? '' }}</span>
+                                </span>
+                                @if (filled($v['severity'] ?? null))
+                                    <x-filament::badge :color="$sevColor($v['severity'])">{{ $v['severity'] }}</x-filament::badge>
+                                @endif
+                            </div>
+                            <div class="mt-1 text-gray-700 dark:text-gray-300">{{ $v['title'] ?? '' }}</div>
+                            <div class="mt-1 flex flex-wrap gap-x-3 text-xs text-gray-500 dark:text-gray-400">
+                                @if (filled($v['patched_in'] ?? null)) <span>תוקן בגרסה {{ $v['patched_in'] }}</span> @endif
+                                @if (filled($v['cve'] ?? null)) <span>{{ $v['cve'] }}</span> @endif
+                                @if (filled($v['link'] ?? null)) <a href="{{ $v['link'] }}" target="_blank" rel="noopener noreferrer" class="text-primary-600 hover:underline dark:text-primary-400">פרטים</a> @endif
+                            </div>
+                        </div>
+                    @endforeach
+                </div>
+            @endif
+        </div>
+    @endif
+
     {{-- Response-time trend — one bar per recent probe (oldest → newest). --}}
     @php $trend = $this->trend; @endphp
     @if (count($trend['points']) > 1)

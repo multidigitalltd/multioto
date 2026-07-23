@@ -11,6 +11,7 @@ use App\Jobs\CheckSslExpiryJob;
 use App\Jobs\FollowUpPendingTicketsJob;
 use App\Jobs\MonitorSiteJob;
 use App\Jobs\ReconcileChargeJob;
+use App\Jobs\ScanSiteVulnerabilitiesJob;
 use App\Jobs\SendBroadcastJob;
 use App\Jobs\SendDemandRemindersJob;
 use App\Jobs\SendProactiveRemindersJob;
@@ -102,6 +103,21 @@ Schedule::call(function () {
         ->pluck('id')
         ->each(fn (int $id) => CheckSitePluginChangesJob::dispatch($id));
 })->dailyAt('07:30')->name('monitoring:plugin-changes')->when($awake)->onOneServer();
+
+// Daily security scan for every connected site: match installed plugins/themes/
+// core against the vulnerability feed and alert on newly-found issues. Gated on
+// $awake so it stays quiet over Shabbat/Yom Tov like the other site dispatchers.
+Schedule::call(function () {
+    if (! config('security.vulnerabilities.enabled', true)) {
+        return;
+    }
+
+    Site::query()
+        ->where('mcp_enabled', true)
+        ->whereNotNull('mcp_endpoint')
+        ->pluck('id')
+        ->each(fn (int $id) => ScanSiteVulnerabilitiesJob::dispatch($id));
+})->dailyAt('07:45')->name('monitoring:vulnerability-scan')->when($awake)->onOneServer();
 
 // Proactive reminders: a once-a-day internal digest (renewals due, cards
 // expiring, open debt) so the owner can act before anything slips.
