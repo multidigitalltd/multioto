@@ -25,8 +25,12 @@
         @endif
     </div>
 
-    {{-- Stat cards: uptime, response time, SSL, domain — the whole health picture. --}}
-    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4" wire:poll.30s>
+    {{-- Stat cards: uptime, response time, SSL, domain — the whole health picture.
+         The Filament panel's compiled CSS doesn't ship the sm:/lg:grid-cols
+         responsive utilities, so an auto-fit template (independent of Tailwind's
+         breakpoint classes) is used to pack the four cards onto one row when there
+         is room and wrap down gracefully on narrow screens. --}}
+    <div class="grid gap-4" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));" wire:poll.30s>
         <div class="rounded-xl bg-white p-4 shadow-sm dark:bg-gray-800">
             <div class="text-xs text-gray-500 dark:text-gray-400">זמינות ({{ $this->getStatsWindowDays() }} ימים)</div>
             <div class="mt-1 text-2xl font-bold">

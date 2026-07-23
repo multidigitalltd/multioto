@@ -36,4 +36,16 @@ class SettingsOverlayTest extends TestCase
         $this->applyOverlay();
         $this->assertSame($default, config('billing.ai.site_rules'));
     }
+
+    public function test_security_keys_saved_in_the_panel_reach_the_scan_clients_config(): void
+    {
+        // The vulnerability-scan and reputation clients read these config paths
+        // at call time — a key saved in הגדרות ← מפתחות אינטגרציות must land there.
+        Setting::put('security.wpscan_token', 'wpscan-secret');
+        Setting::put('security.safe_browsing_key', 'gsb-secret');
+        $this->applyOverlay();
+
+        $this->assertSame('wpscan-secret', config('security.vulnerabilities.wpscan_token'));
+        $this->assertSame('gsb-secret', config('security.reputation.safe_browsing_key'));
+    }
 }

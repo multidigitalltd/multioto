@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Filament\Pages\SystemEventLog;
 use App\Filament\Pages\SystemUpdates;
 use App\Models\SystemLog;
 use App\Models\User;
@@ -54,17 +55,17 @@ class SystemLogTest extends TestCase
         $this->assertDatabaseHas('system_logs', ['level' => 'error', 'source' => 'ai']);
     }
 
-    public function test_the_system_logs_page_lists_entries_and_badges_errors(): void
+    public function test_the_event_log_page_lists_entries_and_badges_errors(): void
     {
         $this->actingAs(User::factory()->create());
 
-        $this->assertNull(SystemUpdates::getNavigationBadge());
+        $this->assertNull(SystemEventLog::getNavigationBadge());
 
         SystemLog::record('error', 'ai', 'שגיאת ספק', ['status' => 500]);
 
-        $this->assertSame('1', SystemUpdates::getNavigationBadge());
+        $this->assertSame('1', SystemEventLog::getNavigationBadge());
 
-        Livewire::test(SystemUpdates::class)->assertCanSeeTableRecords(SystemLog::all());
+        Livewire::test(SystemEventLog::class)->assertCanSeeTableRecords(SystemLog::all());
     }
 
     public function test_the_updates_page_shows_the_whats_new_highlights(): void

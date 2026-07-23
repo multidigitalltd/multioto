@@ -24,7 +24,7 @@ class TeamAuditLog extends Page implements HasTable
 
     protected static ?string $navigationIcon = 'heroicon-o-clipboard-document-list';
 
-    protected static ?string $navigationGroup = 'מערכת';
+    protected static ?string $navigationGroup = 'ניהול';
 
     protected static ?string $navigationLabel = 'יומן פעולות צוות';
 

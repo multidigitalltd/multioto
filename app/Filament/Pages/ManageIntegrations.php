@@ -81,6 +81,10 @@ class ManageIntegrations extends Page implements HasForms
             'label' => 'WAHA',
             'keys' => ['waha.base_url', 'waha.api_key', 'waha.session', 'waha.owner_number'],
         ],
+        'security' => [
+            'label' => 'אבטחה ומוניטין',
+            'keys' => ['security.wpscan_token', 'security.safe_browsing_key'],
+        ],
         // Postmark / outbound-mail settings live on their own page (ManageMail),
         // which also manages the sender address and verified-sender sync.
     ];
@@ -109,6 +113,8 @@ class ManageIntegrations extends Page implements HasForms
         'flywp.api_token',
         'waha.api_key',
         'cloudflare.api_token',
+        'security.wpscan_token',
+        'security.safe_browsing_key',
     ];
 
     /**
@@ -223,6 +229,16 @@ class ManageIntegrations extends Page implements HasForms
                             ->helperText('משמש לכל האתרים שמנוהלים תחת חשבון ה-Cloudflare הזה. אפשר גם להזין טוקן חד-פעמי בפעולה עצמה במקום לשמור כאן.'),
                     ])->columns(1)
                     ->footerActions($this->groupActions('cloudflare')),
+
+                Section::make('אבטחה ומוניטין — מפתחות אופציונליים')
+                    ->description('סריקת האבטחה ובדיקת המוניטין עובדות כבר עכשיו בלי שום מפתח: פיד הפגיעויות של Wordfence ומאגרי URLhaus + Spamhaus DBL הם חינמיים וללא הרשמה. המפתחות כאן רק מוסיפים מקורות בדיקה. נשמרים מוצפנים; השאירו ריק כדי לא לשנות.')
+                    ->schema([
+                        TextInput::make('security.wpscan_token')->label('WPScan API Token')->password()->live(onBlur: true)->autocomplete('new-password')
+                            ->helperText('אופציונלי (wpscan.com/api) — מקור חלופי לפיד הפגיעויות במקום Wordfence. רלוונטי רק אם מגדירים גם VULN_FEED_SOURCE=wpscan.'),
+                        TextInput::make('security.safe_browsing_key')->label('Google Safe Browsing API Key')->password()->live(onBlur: true)->autocomplete('new-password')
+                            ->helperText('אופציונלי (Google Cloud Console → Safe Browsing API) — מוסיף בדיקת הדומיין גם מול רשימות הנוזקות/פישינג של גוגל.'),
+                    ])->columns(2)
+                    ->footerActions($this->groupActions('security')),
 
                 Section::make('WAHA — וואטסאפ')
                     ->description($this->groupDescription('waha', 'כתובת שרת WAHA + מפתח. אם WAHA רץ על אותו שרת בקונטיינר נפרד, השתמשו ב-http://host.docker.internal:3000. את חיבור מספר הוואטסאפ עצמו (סריקת QR) עושים בלוח הבקרה של WAHA.'))

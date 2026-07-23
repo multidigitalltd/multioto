@@ -40,6 +40,11 @@ class SettingsServiceProvider extends ServiceProvider
         'flywp.server_id' => 'billing.hosting.flywp.server_id',
         // Account-wide Cloudflare API token (IP whitelist + cache purge).
         'cloudflare.api_token' => 'billing.cloudflare.api_token',
+        // Optional security-scan / domain-reputation keys. The defaults
+        // (Wordfence feed, URLhaus + Spamhaus DBL) are keyless — these only
+        // ADD sources (WPScan feed, Google Safe Browsing).
+        'security.wpscan_token' => 'security.vulnerabilities.wpscan_token',
+        'security.safe_browsing_key' => 'security.reputation.safe_browsing_key',
         'waha.api_key' => 'billing.waha.api_key',
         'waha.base_url' => 'billing.waha.base_url',
         'waha.session' => 'billing.waha.session',
