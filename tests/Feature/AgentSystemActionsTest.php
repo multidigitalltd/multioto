@@ -86,6 +86,9 @@ class AgentSystemActionsTest extends TestCase
         $this->assertTrue($change->isRevertable());
         $this->assertSame('wp_core_rollback', $change->revert_tool);
         $this->assertStringContainsString('6.4', (string) $change->before_state);
+        // The recipe pins THIS entry's own version, so a later update can't make
+        // its Rollback button roll back to the wrong version.
+        $this->assertSame(['version' => '6.4'], $change->revert_arguments);
     }
 
     public function test_a_noop_wordpress_update_is_not_revertable(): void

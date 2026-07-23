@@ -440,6 +440,13 @@ class Multioto_Agent_Mcp_Server
             throw new Multioto_Agent_Rpc_Error(-32000, $result->get_error_message());
         }
 
+        // A filesystem it cannot reach makes Core_Upgrader return false/null (not a
+        // WP_Error). Treat that as failure — otherwise we would report success and
+        // delete the only restore point while nothing actually changed.
+        if ($result === false || $result === null) {
+            throw new Multioto_Agent_Rpc_Error(-32000, 'שחזור הליבה נכשל — לא ניתן היה להחליף את קבצי וורדפרס.');
+        }
+
         require ABSPATH.WPINC.'/version.php';
         $after = $wp_version ?? get_bloginfo('version');
 
