@@ -72,7 +72,7 @@ class RevenueForecast extends Page implements HasTable
                     ->label('חיוב הבא')->date('d/m/Y')->sortable(),
                 Tables\Columns\TextColumn::make('days_left')
                     ->label('בעוד (ימים)')
-                    ->state(fn (Subscription $r): int => max(0, (int) ceil(now()->startOfDay()->diffInDays($r->next_charge_at, false)))),
+                    ->state(fn (Subscription $r): int => max(0, (int) now()->startOfDay()->diffInDays($r->next_charge_at->copy()->startOfDay()))),
                 Tables\Columns\TextColumn::make('status')
                     ->label('סטטוס')->badge(),
             ])
