@@ -7,6 +7,7 @@ use App\Enums\TicketChannel;
 use App\Enums\TicketPriority;
 use App\Enums\TicketStatus;
 use App\Enums\UserRole;
+use App\Models\Incident;
 use App\Models\Site;
 use App\Models\Ticket;
 use App\Models\User;
@@ -210,10 +211,19 @@ class MonitorSiteJob implements ShouldQueue
             return; // Was already up — nothing to resolve or announce.
         }
 
-        $incident->update([
-            'status' => IncidentStatus::Resolved,
-            'resolved_at' => now(),
-        ]);
+        // Atomically claim the open→resolved transition: two overlapping probes
+        // can both hold this incident as "open", and only the one whose UPDATE
+        // actually flips the row may announce recovery and message the customer
+        // — otherwise both would send identical alerts and notifications.
+        $claimed = Incident::whereKey($incident->id)
+            ->where('status', IncidentStatus::Open)
+            ->update(['status' => IncidentStatus::Resolved, 'resolved_at' => now()]);
+
+        if ($claimed === 0) {
+            return; // Another probe already resolved and announced it.
+        }
+
+        $incident->refresh();
 
         // Recovery is as newsworthy as the outage — tell the team, with how
         // long it was down.

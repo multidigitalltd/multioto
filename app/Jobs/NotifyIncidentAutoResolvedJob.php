@@ -48,13 +48,19 @@ class NotifyIncidentAutoResolvedJob implements ShouldQueue
             return;
         }
 
-        // Only when an APPROVED automation fix actually ran during the incident —
-        // a site that recovered on its own gets no "we fixed it" message.
+        // Only when an APPROVED automation/AI fix actually ran INSIDE the outage
+        // window — a site that recovered on its own gets no "we fixed it"
+        // message. proposed_by filters out a team member's manual "פעולת AI"
+        // (proposedBy: 'team'), which is maintenance, not auto-heal; the upper
+        // bound keeps out actions executed after recovery (e.g. when this queued
+        // job ran late) that could not have fixed the already-resolved incident.
         $fix = PendingAction::query()
             ->whereIn('type', ['site_fix', 'site_action'])
+            ->whereIn('proposed_by', ['automation', 'ai'])
             ->where('status', ActionStatus::Executed)
             ->where('payload->site_id', $site->id)
             ->where('executed_at', '>=', $incident->started_at)
+            ->where('executed_at', '<=', $incident->resolved_at ?? now())
             ->latest('executed_at')
             ->first();
 

@@ -118,6 +118,53 @@ class IncidentAutoResolveTest extends TestCase
         Mail::assertNothingSent();
     }
 
+    public function test_a_team_members_manual_action_is_not_claimed_as_auto_heal(): void
+    {
+        Mail::fake();
+
+        [, $site, $incident] = $this->siteWithIncident();
+        // A team member ran a manual "פעולת AI" during the outage — maintenance,
+        // not the automation loop; the customer must not be told "we auto-fixed".
+        PendingAction::create([
+            'type' => 'site_action',
+            'status' => ActionStatus::Executed,
+            'customer_id' => $site->customer_id,
+            'summary' => 'פעולה ידנית של הצוות',
+            'payload' => ['site_id' => $site->id, 'tool' => 'wp_cache_flush'],
+            'proposed_by' => 'team',
+            'decided_at' => now()->subMinutes(10),
+            'executed_at' => now()->subMinutes(10),
+        ]);
+
+        NotifyIncidentAutoResolvedJob::dispatchSync($site->id, $incident->id);
+
+        Mail::assertNothingSent();
+    }
+
+    public function test_a_fix_executed_after_recovery_does_not_count(): void
+    {
+        Mail::fake();
+
+        [, $site, $incident] = $this->siteWithIncident();
+        $incident->update(['resolved_at' => now()->subMinutes(5)]);
+        // Executed AFTER the site already recovered (delayed queue) — it cannot
+        // have fixed this incident.
+        PendingAction::create([
+            'type' => 'site_fix',
+            'status' => ActionStatus::Executed,
+            'customer_id' => $site->customer_id,
+            'summary' => 'תיקון מאוחר',
+            'payload' => ['site_id' => $site->id, 'fix' => 'clear_cache'],
+            'proposed_by' => 'automation',
+            'decided_at' => now()->subMinutes(2),
+            'executed_at' => now()->subMinutes(2),
+        ]);
+
+        NotifyIncidentAutoResolvedJob::dispatchSync($site->id, $incident->id);
+
+        Mail::assertNothingSent();
+    }
+
     public function test_the_config_switch_silences_the_notification(): void
     {
         config(['billing.monitoring.notify_customer_after_auto_fix' => false]);
