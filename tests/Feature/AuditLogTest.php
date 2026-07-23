@@ -63,6 +63,28 @@ class AuditLogTest extends TestCase
         $this->assertSame('[hidden]', $entry->changes['mcp_secret']);
     }
 
+    public function test_the_two_factor_code_hash_is_redacted(): void
+    {
+        $this->actingAs(User::factory()->create());
+
+        $user = User::factory()->create();
+        $user->forceFill(['two_factor_code' => bcrypt('123456')])->save();
+
+        $entry = AuditLog::where('auditable_type', User::class)->where('event', 'updated')->latest('id')->first();
+        $this->assertNotNull($entry);
+        $this->assertSame('[hidden]', $entry->changes['two_factor_code']);
+    }
+
+    public function test_a_2fa_required_login_is_audited_only_after_confirmation(): void
+    {
+        $user = User::factory()->create();
+        Auth::login($user); // password step (Login event)
+
+        // Not yet, if this user needs 2FA — otherwise it is recorded immediately.
+        $expected = $user->requiresTwoFactor() ? 0 : 1;
+        $this->assertSame($expected, AuditLog::where('event', 'login')->count());
+    }
+
     public function test_the_audit_page_is_admin_only(): void
     {
         $this->actingAs(User::factory()->create(['role' => UserRole::Agent]));

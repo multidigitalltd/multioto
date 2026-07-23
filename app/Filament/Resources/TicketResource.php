@@ -6,6 +6,7 @@ use App\Enums\TicketChannel;
 use App\Enums\TicketPriority;
 use App\Enums\TicketStatus;
 use App\Filament\Resources\TicketResource\Pages;
+use App\Models\AuditLog;
 use App\Models\Ticket;
 use Filament\Forms;
 use Filament\Forms\Form;
@@ -259,8 +260,14 @@ class TicketResource extends Resource
                         ->modalDescription('הפניות שנבחרו ייסגרו מבלי לשלוח שום הודעה ללקוח.')
                         ->successNotificationTitle('הפניות נסגרו')
                         ->deselectRecordsAfterCompletion()
-                        ->action(fn (Collection $records) => Ticket::whereKey($records->modelKeys())
-                            ->update(['status' => TicketStatus::Closed->value, 'resolved_at' => now()])),
+                        ->action(function (Collection $records): void {
+                            $ids = $records->modelKeys();
+                            Ticket::whereKey($ids)->update(['status' => TicketStatus::Closed->value, 'resolved_at' => now()]);
+
+                            // A bulk query-update fires no model events, so the audit
+                            // observer never sees it — record the team action explicitly.
+                            AuditLog::record('updated', 'סגירת פניות ללא הודעה ('.count($ids).'): #'.implode(', #', $ids));
+                        }),
                     Tables\Actions\DeleteBulkAction::make()->label('מחיקה'),
                 ]),
             ])

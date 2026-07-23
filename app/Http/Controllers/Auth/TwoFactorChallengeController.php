@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Auth;
 
 use App\Enums\TwoFactorChannel;
 use App\Http\Controllers\Controller;
+use App\Models\AuditLog;
 use App\Models\User;
 use App\Services\Auth\TwoFactorCode;
 use Illuminate\Contracts\View\View;
@@ -62,6 +63,10 @@ class TwoFactorChallengeController extends Controller
         // Rotate the session id on privilege elevation, then mark it confirmed.
         $request->session()->regenerate();
         session()->put('two_factor.confirmed', true);
+
+        // NOW the login is complete — audit it here (the Login event fired before
+        // 2FA and is deliberately not logged for 2FA-required users).
+        AuditLog::record('login', 'התחברות למערכת (אימות דו-שלבי)', actor: $user);
 
         return redirect()->intended(route('filament.admin.pages.dashboard'));
     }

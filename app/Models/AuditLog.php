@@ -22,7 +22,7 @@ class AuditLog extends Model
     /** Attribute names whose VALUES are never stored in the changes payload. */
     public const REDACTED = [
         'password', 'remember_token', 'two_factor_secret', 'two_factor_recovery_codes',
-        'mcp_secret', 'agent_token', 'agent_token_plain', 'cardcom_token', 'card_link_token',
+        'two_factor_code', 'mcp_secret', 'agent_token', 'agent_token_plain', 'cardcom_token', 'card_link_token',
     ];
 
     protected $fillable = [

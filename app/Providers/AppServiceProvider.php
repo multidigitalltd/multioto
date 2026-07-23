@@ -81,7 +81,18 @@ class AppServiceProvider extends ServiceProvider
         // Logout wipes it too, so a shared browser can't inherit confirmation.
         Event::listen(Login::class, function (Login $event): void {
             session()->forget('two_factor.confirmed');
-            AuditLog::record('login', 'התחברות למערכת');
+
+            // A 2FA-required user is NOT fully signed in until the code is
+            // verified — that login is audited by TwoFactorChallengeController on
+            // confirmation. Audit here only users who finish at the password step,
+            // so a failed/abandoned 2FA challenge is never logged as a login.
+            $user = $event->user;
+
+            if (method_exists($user, 'requiresTwoFactor') && $user->requiresTwoFactor()) {
+                return;
+            }
+
+            AuditLog::record('login', 'התחברות למערכת', actor: $user);
         });
         Event::listen(Logout::class, function (Logout $event): void {
             session()->forget('two_factor.confirmed');

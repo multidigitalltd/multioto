@@ -20,7 +20,7 @@ return new class extends Migration
             $table->string('event');                    // created | updated | deleted | login | logout
             $table->string('auditable_type')->nullable();
             $table->unsignedBigInteger('auditable_id')->nullable();
-            $table->string('description');
+            $table->string('description', 500);
             $table->json('changes')->nullable();        // changed attributes (sensitive values redacted)
             $table->string('ip_address', 45)->nullable();
             $table->timestamp('created_at')->nullable();
