@@ -49,8 +49,15 @@ class SiteActionRunner
             throw new \RuntimeException("הכלי {$tool} מסווג כהרסני ומותר רק באתר סטייג׳ינג.");
         }
 
+        // Core file operations (update/rollback) download and swap WordPress and
+        // can exceed the default per-call timeout — give them the same long window
+        // the update path uses, so a rollback isn't wrongly recorded as failed.
+        $timeout = in_array($tool, ['wp_core_update', 'wp_core_rollback'], true)
+            ? (int) config('agent.mcp.core_update_timeout_seconds', 300)
+            : 0;
+
         try {
-            $result = $this->mcp->callTool($site, $tool, $arguments);
+            $result = $this->mcp->callTool($site, $tool, $arguments, $timeout);
         } catch (\Throwable $e) {
             // A failed attempt is part of the site's history too.
             $this->journal->record(

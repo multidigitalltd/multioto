@@ -141,7 +141,8 @@ class Multioto_Agent_Mcp_Server
             ['name' => 'wp_error_log_tail', 'description' => 'שורות אחרונות מיומן השגיאות (אם מופעל).', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['lines' => ['type' => 'integer']]]],
             ['name' => 'wp_cache_flush', 'description' => 'ניקוי מטמון אובייקטים ו-OPcache.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => (object) []]],
             ['name' => 'wp_plugin_update', 'description' => 'עדכון תוסף לגרסה האחרונה לפי slug.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['plugin' => ['type' => 'string']], 'required' => ['plugin']]],
-            ['name' => 'wp_core_update', 'description' => 'עדכון ליבת וורדפרס (WordPress core) לגרסה היציבה האחרונה. מחזיר את הגרסה לפני ואחרי. אם כבר מעודכן — לא מבצע דבר.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => (object) []]],
+            ['name' => 'wp_core_update', 'description' => 'עדכון ליבת וורדפרס (WordPress core) לגרסה היציבה האחרונה. מחזיר את הגרסה לפני ואחרי. אם כבר מעודכן — לא מבצע דבר. לפני העדכון נשמרת נקודת שחזור (הגרסה הקודמת) לצורך Rollback.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => (object) []]],
+            ['name' => 'wp_core_rollback', 'description' => 'שחזור ליבת וורדפרס לגרסה שנשמרה בנקודת השחזור לפני העדכון האחרון (או לגרסה שצוינה ב-version). מתקין מחדש את קבצי הגרסה מ-wordpress.org. שים לב: שדרוג מסד הנתונים אינו הפיך — שחזור בטוח בעיקר לעדכוני תחזוקה (minor/patch).', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['version' => ['type' => 'string']]]],
             ['name' => 'wp_plugin_activate', 'description' => 'הפעלת תוסף לפי קובץ.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['plugin' => ['type' => 'string']], 'required' => ['plugin']]],
             ['name' => 'wp_plugin_deactivate', 'description' => 'כיבוי תוסף לפי קובץ.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['plugin' => ['type' => 'string']], 'required' => ['plugin']]],
             ['name' => 'wp_menu_list', 'description' => 'רשימת תפריטי הניווט באתר והפריטים בכל תפריט (מזהה פריט, טקסט, קישור, הורה, סדר).', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => (object) []]],
@@ -181,6 +182,7 @@ class Multioto_Agent_Mcp_Server
             'wp_cache_flush' => $this->cacheFlush(),
             'wp_plugin_update' => $this->pluginUpdate($args),
             'wp_core_update' => $this->coreUpdate(),
+            'wp_core_rollback' => $this->coreRollback($args),
             'wp_plugin_activate' => $this->setPluginState($args, true),
             'wp_plugin_deactivate' => $this->setPluginState($args, false),
             'wp_menu_list' => $this->menuList(),
@@ -352,6 +354,11 @@ class Multioto_Agent_Mcp_Server
             return "וורדפרס כבר מעודכן (גרסה {$before}). לא בוצע עדכון.";
         }
 
+        // Save a restore point BEFORE touching the files, so wp_core_rollback can
+        // reinstall exactly the version we are leaving. Not autoloaded — it is read
+        // only on an explicit rollback.
+        update_option('multioto_agent_core_rollback', ['version' => $before, 'time' => time()], false);
+
         $upgrader = new Core_Upgrader(new Automatic_Upgrader_Skin);
         $result = $upgrader->upgrade($updates[0]);
 
@@ -373,6 +380,80 @@ class Multioto_Agent_Mcp_Server
         }
 
         return "ליבת וורדפרס עודכנה מגרסה {$before} לגרסה {$after} (כולל שדרוג מסד הנתונים).";
+    }
+
+    /**
+     * Roll WordPress core back to the version saved before the last core update
+     * (the restore point), or to an explicitly given version. Reinstalls that
+     * release's files from the official wordpress.org archive. Idempotent: a site
+     * already on the target version is left untouched.
+     *
+     * Note: WordPress does not support downgrading the database schema, so this
+     * is safe for maintenance (minor/patch) rollbacks; a downgrade across a major
+     * release that ran DB migrations may leave the schema ahead of the files.
+     */
+    private function coreRollback(array $args): string
+    {
+        require_once ABSPATH.'wp-admin/includes/file.php';
+        require_once ABSPATH.'wp-admin/includes/misc.php';
+        require_once ABSPATH.'wp-admin/includes/class-wp-upgrader.php';
+        require_once ABSPATH.'wp-admin/includes/update.php';
+
+        $current = get_bloginfo('version');
+
+        // Explicit version wins; otherwise use the saved restore point.
+        $target = trim((string) ($args['version'] ?? ''));
+
+        if ($target === '') {
+            $point = get_option('multioto_agent_core_rollback');
+            $target = is_array($point) ? (string) ($point['version'] ?? '') : '';
+        }
+
+        if ($target === '' || ! preg_match('/^[0-9]+\.[0-9]+(\.[0-9]+)?$/', $target)) {
+            throw new Multioto_Agent_Rpc_Error(-32602, 'אין נקודת שחזור שמורה או שהגרסה שצוינה אינה תקינה.');
+        }
+
+        if ($target === $current) {
+            return "וורדפרס כבר בגרסה {$target}. לא בוצע שחזור.";
+        }
+
+        // Build a version-pinned "offer" pointing at the official release archive,
+        // exactly the shape Core_Upgrader::upgrade() expects from get_core_updates().
+        $package = 'https://downloads.wordpress.org/release/wordpress-'.$target.'.zip';
+        $offer = (object) [
+            'response' => 'upgrade',
+            'download' => $package,
+            'locale' => 'en_US',
+            'packages' => (object) ['full' => $package, 'no_content' => false, 'new_bundled' => false, 'partial' => false, 'rollback' => false],
+            'current' => $target,
+            'version' => $target,
+            'php_version' => '7.2.24',
+            'mysql_version' => '5.5.5',
+        ];
+
+        // Force the core files to be replaced even though it is a downgrade.
+        add_filter('update_feedback', '__return_false');
+        $upgrader = new Core_Upgrader(new Automatic_Upgrader_Skin);
+        $result = $upgrader->upgrade($offer);
+
+        if (is_wp_error($result)) {
+            throw new Multioto_Agent_Rpc_Error(-32000, $result->get_error_message());
+        }
+
+        // A filesystem it cannot reach makes Core_Upgrader return false/null (not a
+        // WP_Error). Treat that as failure — otherwise we would report success and
+        // delete the only restore point while nothing actually changed.
+        if ($result === false || $result === null) {
+            throw new Multioto_Agent_Rpc_Error(-32000, 'שחזור הליבה נכשל — לא ניתן היה להחליף את קבצי וורדפרס.');
+        }
+
+        require ABSPATH.WPINC.'/version.php';
+        $after = $wp_version ?? get_bloginfo('version');
+
+        // The restore point is consumed once used, so a later update stores a fresh one.
+        delete_option('multioto_agent_core_rollback');
+
+        return "ליבת וורדפרס שוחזרה מגרסה {$current} לגרסה {$after}.";
     }
 
     private function setPluginState(array $args, bool $activate): string
