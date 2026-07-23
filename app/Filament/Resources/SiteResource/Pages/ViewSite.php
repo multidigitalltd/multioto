@@ -6,6 +6,7 @@ use App\Filament\Resources\SiteResource;
 use App\Filament\Support\SiteActions;
 use App\Jobs\DetectSiteTypeJob;
 use App\Jobs\InvestigateSiteJob;
+use App\Jobs\ScanSiteVulnerabilitiesJob;
 use App\Jobs\SendDomainRenewalReminderJob;
 use App\Models\MonitorCheck;
 use App\Services\Agent\SiteConnector;
@@ -182,6 +183,24 @@ class ViewSite extends ViewRecord
                     InvestigateSiteJob::dispatch($this->record->id, (string) ($data['goal'] ?? 'אבחן את האתר.'));
                     Notification::make()->title('האבחון רץ ברקע')
                         ->body('הסיכום יופיע בזיכרון האתר, והצעות תיקון (אם יהיו) ב"אישורי אוטומציה".')
+                        ->success()->send();
+                }),
+
+            // Run a security scan now: match the site's installed plugins/themes/
+            // core against the vulnerability feed. Results render in the "אבטחה"
+            // section below; new findings also alert the team.
+            Actions\Action::make('scanSecurity')
+                ->label('סריקת אבטחה')
+                ->icon('heroicon-o-shield-exclamation')
+                ->color('warning')
+                ->visible($isAdmin)
+                ->disabled(fn (): bool => ! $this->record->mcp_enabled)
+                ->tooltip(fn (): ?string => $this->record->mcp_enabled ? null : 'הפעילו קודם את חיבור ה-AI')
+                ->action(function (): void {
+                    ScanSiteVulnerabilitiesJob::dispatch($this->record->id);
+
+                    Notification::make()->title('סריקת האבטחה רצה ברקע')
+                        ->body('התוצאות יופיעו בעמוד האתר, וממצאים חדשים יישלחו גם לצוות.')
                         ->success()->send();
                 }),
 
