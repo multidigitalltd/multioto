@@ -20,6 +20,7 @@ enum NotificationType: string implements HasColor, HasLabel
     case TicketReply = 'ticket_reply';
     case Broadcast = 'broadcast';
     case CustomerCard = 'customer_card';
+    case DomainRenewal = 'domain_renewal';
 
     public function getLabel(): string
     {
@@ -32,6 +33,7 @@ enum NotificationType: string implements HasColor, HasLabel
             self::TicketReply => 'תשובת נציג',
             self::Broadcast => 'דיוור',
             self::CustomerCard => 'כרטיס לקוח חתום',
+            self::DomainRenewal => 'חידוש דומיין',
         };
     }
 
@@ -45,6 +47,7 @@ enum NotificationType: string implements HasColor, HasLabel
             self::Ticket, self::TicketReply => 'primary',
             self::Broadcast => 'gray',
             self::CustomerCard => 'success',
+            self::DomainRenewal => 'warning',
         };
     }
 }

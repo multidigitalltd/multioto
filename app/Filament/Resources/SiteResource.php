@@ -201,6 +201,25 @@ class SiteResource extends Resource
                             ->formatStateUsing(fn ($state): string => $state === null ? 'SSL —' : "SSL · {$state} ימים")
                             ->color(fn ($state): string => $state === null ? 'gray' : ($state <= 0 ? 'danger' : ($state <= (int) config('billing.monitoring.ssl_warn_days', 14) ? 'warning' : 'success')))
                             ->grow(false),
+                        Tables\Columns\TextColumn::make('domain_expiry_at')
+                            ->badge()
+                            ->formatStateUsing(function ($state): string {
+                                if ($state === null) {
+                                    return 'דומיין —';
+                                }
+                                $days = (int) ceil(now()->startOfDay()->diffInDays($state, false));
+
+                                return $days <= 0 ? 'דומיין · פג' : "דומיין · {$days} ימים";
+                            })
+                            ->color(function ($state): string {
+                                if ($state === null) {
+                                    return 'gray';
+                                }
+                                $days = (int) ceil(now()->startOfDay()->diffInDays($state, false));
+
+                                return $days <= 0 ? 'danger' : ($days <= (int) config('billing.monitoring.domain_warn_days', 30) ? 'warning' : 'success');
+                            })
+                            ->grow(false),
                         Tables\Columns\TextColumn::make('monitor_enabled')
                             ->badge()
                             ->formatStateUsing(fn ($state): string => $state ? 'ניטור פעיל' : 'ללא ניטור')

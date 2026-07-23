@@ -75,7 +75,10 @@ class ManualCollection extends Page implements HasTable
                     ->description(fn (Subscription $record): ?string => $record->next_charge_at && $record->next_charge_at->isPast() ? 'לגבייה' : null),
                 Tables\Columns\TextColumn::make('status')->label('סטטוס')->badge(),
             ])
-            ->defaultSort('next_charge_at', 'desc')
+            // Oldest charge date first: the overdue "to collect" rows rise to the
+            // top, while just-paid subscriptions (rolled to a future date) sink to
+            // the bottom. This is the queue the team works down.
+            ->defaultSort('next_charge_at', 'asc')
             ->filters([
                 Tables\Filters\Filter::make('due')
                     ->label('רק לגבייה עכשיו')
