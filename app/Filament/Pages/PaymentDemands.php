@@ -258,9 +258,11 @@ class PaymentDemands extends Page implements HasTable
                     ->tooltip(fn (Charge $r): ?string => $this->sendLogTooltip($r)),
                 Tables\Columns\TextColumn::make('due_at')
                     ->label('לתשלום עד')->date('d/m/Y')->placeholder('—')->sortable()
-                    // An open demand past its due date is flagged red so overdue money stands out.
+                    // An open demand past its due date is flagged red so overdue money
+                    // stands out. "Pay by" includes the due day, so only a date strictly
+                    // before today counts as overdue.
                     ->color(fn (Charge $r): string => $r->status === ChargeStatus::Pending
-                        && $r->due_at !== null && $r->due_at->isPast() ? 'danger' : 'gray'),
+                        && $r->due_at !== null && $r->due_at->lt(now()->startOfDay()) ? 'danger' : 'gray'),
                 Tables\Columns\TextColumn::make('demand_sent_at')
                     ->label('נשלחה לאחרונה')->dateTime('d/m/Y H:i')->sortable(),
             ])

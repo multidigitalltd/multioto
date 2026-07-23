@@ -65,7 +65,8 @@ class RevenueForecastStats extends BaseWidget
             ->get(['total_agorot', 'due_at']);
 
         $demandTotal = (int) $demands->sum('total_agorot');
-        $overdue = $demands->filter(fn (Charge $c): bool => $c->due_at !== null && $c->due_at->isPast())->count();
+        // "Pay by" includes the due day itself — only a date strictly before today is overdue.
+        $overdue = $demands->filter(fn (Charge $c): bool => $c->due_at !== null && $c->due_at->lt(now()->startOfDay()))->count();
 
         $stats[] = Stat::make('דרישות תשלום פתוחות', Money::ils($demandTotal))
             ->description($demands->count().' דרישות'.($overdue > 0 ? " · {$overdue} באיחור" : ''))
