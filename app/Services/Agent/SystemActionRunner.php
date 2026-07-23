@@ -352,12 +352,24 @@ class SystemActionRunner
 
             try {
                 $output = $this->mcp->textContent($this->mcp->callTool($site, 'wp_core_update', [], $timeout));
+
+                // A real upgrade leaves a restore point on the site — record the
+                // journal entry as revertable so the team gets a one-click Rollback
+                // (wp_core_rollback). A no-op ("already up to date") has nothing to
+                // undo, so it is logged without a revert recipe.
+                $upgraded = ! str_contains($output, 'כבר מעודכן');
+                $beforeVersion = ($upgraded && preg_match('/מגרסה\s+([0-9.]+)/u', $output, $m))
+                    ? $m[1] : null;
+
                 $this->journal->record(
                     $site,
                     summary: 'עדכון ליבת וורדפרס',
                     tool: 'wp_core_update',
+                    beforeState: $beforeVersion !== null ? "גרסה לפני העדכון: {$beforeVersion}" : null,
                     afterState: Str::limit($output, 2000) ?: null,
                     initiatedBy: 'console',
+                    revertTool: $upgraded ? 'wp_core_rollback' : null,
+                    revertArguments: $upgraded ? [] : null,
                 );
             } catch (\Throwable $e) {
                 $failures[] = "{$site->domain}: ".Str::limit($e->getMessage(), 200);

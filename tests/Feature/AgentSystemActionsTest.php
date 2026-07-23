@@ -66,6 +66,49 @@ class AgentSystemActionsTest extends TestCase
         $this->assertSame(1, $connectedB->changes()->where('tool', 'wp_core_update')->count());
     }
 
+    public function test_a_successful_wordpress_update_is_recorded_as_revertable(): void
+    {
+        config(['agent.system_actions_enabled' => true, 'agent.actions_enabled' => true]);
+
+        $site = Site::factory()->create(['mcp_enabled' => true, 'mcp_endpoint' => 'https://a.test/mcp']);
+
+        $mcp = Mockery::mock(McpClient::class);
+        $mcp->shouldReceive('callTool')->once()->andReturn(['content' => []]);
+        $mcp->shouldReceive('textContent')->andReturn('ליבת וורדפרס עודכנה מגרסה 6.4 לגרסה 6.5 (כולל שדרוג מסד הנתונים).');
+        $this->instance(McpClient::class, $mcp);
+
+        $action = $this->systemAction(['operation' => 'update_wordpress', 'site_ids' => [$site->id]]);
+        app(ApprovalGate::class)->approve($action);
+
+        $change = $site->changes()->where('tool', 'wp_core_update')->first();
+        $this->assertNotNull($change);
+        // The team gets a one-click Rollback: the recipe points at wp_core_rollback.
+        $this->assertTrue($change->isRevertable());
+        $this->assertSame('wp_core_rollback', $change->revert_tool);
+        $this->assertStringContainsString('6.4', (string) $change->before_state);
+    }
+
+    public function test_a_noop_wordpress_update_is_not_revertable(): void
+    {
+        config(['agent.system_actions_enabled' => true, 'agent.actions_enabled' => true]);
+
+        $site = Site::factory()->create(['mcp_enabled' => true, 'mcp_endpoint' => 'https://a.test/mcp']);
+
+        $mcp = Mockery::mock(McpClient::class);
+        $mcp->shouldReceive('callTool')->once()->andReturn(['content' => []]);
+        $mcp->shouldReceive('textContent')->andReturn('וורדפרס כבר מעודכן (גרסה 6.5). לא בוצע עדכון.');
+        $this->instance(McpClient::class, $mcp);
+
+        $action = $this->systemAction(['operation' => 'update_wordpress', 'site_ids' => [$site->id]]);
+        app(ApprovalGate::class)->approve($action);
+
+        $change = $site->changes()->where('tool', 'wp_core_update')->first();
+        $this->assertNotNull($change);
+        // Nothing changed on the site, so there is nothing to roll back.
+        $this->assertFalse($change->isRevertable());
+        $this->assertNull($change->revert_tool);
+    }
+
     public function test_a_wordpress_update_only_touches_the_snapshotted_sites_not_ones_added_later(): void
     {
         config(['agent.system_actions_enabled' => true, 'agent.actions_enabled' => true]);
