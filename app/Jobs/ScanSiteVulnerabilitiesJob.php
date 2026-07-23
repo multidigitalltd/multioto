@@ -50,9 +50,9 @@ class ScanSiteVulnerabilitiesJob implements ShouldQueue
             return;
         }
 
-        $components = $this->inventory($site, $mcp);
+        ['components' => $components, 'types' => $readTypes] = $this->inventory($site, $mcp);
 
-        if ($components === []) {
+        if ($readTypes === []) {
             return; // Nothing readable this run — leave the last scan untouched.
         }
 
@@ -64,10 +64,10 @@ class ScanSiteVulnerabilitiesJob implements ShouldQueue
             return;
         }
 
-        $items = [];
+        $newItems = [];
         foreach ($components as $component) {
             foreach ($feed->matches($component['type'], $component['slug'], $component['version']) as $vuln) {
-                $items[] = [
+                $newItems[] = [
                     'type' => $component['type'],
                     'slug' => $component['slug'],
                     'name' => $component['name'],
@@ -82,8 +82,19 @@ class ScanSiteVulnerabilitiesJob implements ShouldQueue
             }
         }
 
-        $previousKeys = collect((array) data_get($site->vulnerability_scan, 'items', []))
-            ->map(fn (array $i): string => self::key($i))->all();
+        $previous = (array) data_get($site->vulnerability_scan, 'items', []);
+        $previousKeys = collect($previous)->map(fn (array $i): string => self::key($i))->all();
+
+        // Only the component types we actually read this run are refreshed;
+        // findings for a type whose reader was missing or failed are kept, so a
+        // transient wp_theme_list / wp_health failure never wipes (and later
+        // re-alerts as "new") known theme/core vulnerabilities.
+        $preserved = array_values(array_filter(
+            $previous,
+            fn (array $i): bool => ! in_array($i['type'] ?? '', $readTypes, true),
+        ));
+
+        $items = array_merge($preserved, $newItems);
 
         $site->update(['vulnerability_scan' => [
             'scanned_at' => now()->toIso8601String(),
@@ -99,22 +110,27 @@ class ScanSiteVulnerabilitiesJob implements ShouldQueue
     }
 
     /**
-     * Read the installed plugins, themes and core version over MCP.
+     * Read the installed plugins, themes and core version over MCP. Returns the
+     * components found AND the set of component types actually read this run
+     * (only a successful tool call counts) — so the caller can refresh only what
+     * it re-scanned and preserve findings for types it could not read.
      *
-     * @return list<array{type: string, slug: string, name: string, version: string}>
+     * @return array{components: list<array{type: string, slug: string, name: string, version: string}>, types: list<string>}
      */
     private function inventory(Site $site, McpClient $mcp): array
     {
         $tools = collect((array) data_get($site->mcp_capabilities, 'tools', []))->pluck('name');
         $components = [];
+        $readTypes = [];
 
+        // tool => [component type it covers, parser]
         $readers = [
-            'wp_plugin_list' => fn (string $t): array => SiteSecurityInventory::plugins($t),
-            'wp_theme_list' => fn (string $t): array => SiteSecurityInventory::themes($t),
-            'wp_health' => fn (string $t): array => array_filter([SiteSecurityInventory::core($t)]),
+            'wp_plugin_list' => ['plugin', fn (string $t): array => SiteSecurityInventory::plugins($t)],
+            'wp_theme_list' => ['theme', fn (string $t): array => SiteSecurityInventory::themes($t)],
+            'wp_health' => ['core', fn (string $t): array => array_values(array_filter([SiteSecurityInventory::core($t)]))],
         ];
 
-        foreach ($readers as $tool => $parse) {
+        foreach ($readers as $tool => [$type, $parse]) {
             if (! $tools->contains($tool)) {
                 continue;
             }
@@ -127,12 +143,16 @@ class ScanSiteVulnerabilitiesJob implements ShouldQueue
                 continue;
             }
 
+            // The read succeeded (even if it returned nothing) — this type is now
+            // authoritative for this run.
+            $readTypes[] = $type;
+
             foreach ($parse($text) as $component) {
                 $components[] = $component;
             }
         }
 
-        return $components;
+        return ['components' => $components, 'types' => $readTypes];
     }
 
     /** A stable identity for one finding, so the same vuln isn't re-alerted. */

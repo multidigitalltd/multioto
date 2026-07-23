@@ -32,6 +32,12 @@ return [
         // source = 'wpscan'.
         'wpscan_token' => env('WPSCAN_API_TOKEN'),
 
+        // Feed URL used when source = 'wpscan'. WPScan has no single bulk feed on
+        // the free tier, so this must point at a Wordfence-compatible feed the
+        // team supplies; without it (or a token) the wpscan source is treated as
+        // unavailable rather than silently using Wordfence.
+        'wpscan_feed_url' => env('WPSCAN_FEED_URL'),
+
         // How long a fetched feed is cached before it is refreshed (hours). The
         // feed is large, so we never fetch it per-site.
         'cache_hours' => (int) env('VULN_FEED_CACHE_HOURS', 24),
