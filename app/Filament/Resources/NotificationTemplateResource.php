@@ -41,10 +41,16 @@ class NotificationTemplateResource extends Resource
     public const KEY_LABELS = [
         'ticket.received' => 'אישור קבלת פנייה',
         'ticket.resolved' => 'עדכון על סיום טיפול',
+        'ticket.reminder' => 'תזכורת לפנייה ממתינה',
+        'ticket.autoclosed' => 'סגירת פנייה אוטומטית',
         'customer.welcome' => 'ברוכים הבאים ללקוח חדש',
         'payment.link' => 'קישור תשלום ללקוח',
+        'payment.reminder' => 'תזכורת תשלום',
         'card.capture' => 'קישור להזנת כרטיס אשראי',
         'card.capture_debt' => 'קישור להזנת כרטיס — לקוח בחוב',
+        'card.expiring' => 'כרטיס אשראי עומד לפוג',
+        'domain.renewal' => 'תזכורת חידוש דומיין',
+        'incident.auto_resolved' => 'תקלה זוהתה וטופלה אוטומטית',
     ];
 
     public static function form(Form $form): Form

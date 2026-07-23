@@ -370,6 +370,12 @@ return [
         // Responses slower than this (ms) are flagged as "degraded" (not down).
         'slow_response_ms' => env('MONITOR_SLOW_RESPONSE_MS', 4000),
 
+        // When a site recovers after an APPROVED automation fix ran during the
+        // incident, proactively tell the customer we detected and fixed the
+        // problem ("זיהינו תקלה ותיקנו"). Template: incident.auto_resolved —
+        // disabling the template (or this flag) silences the message.
+        'notify_customer_after_auto_fix' => env('MONITOR_NOTIFY_CUSTOMER_AFTER_FIX', true),
+
         // Monthly monitoring report emailed to the customer on their billing day.
         'monthly_report' => [
             // Off by default — turn on once the team is happy with the content.
