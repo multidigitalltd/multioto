@@ -110,11 +110,13 @@ class ViewSite extends ViewRecord
                 ->label('תזכורת חידוש דומיין ללקוח')
                 ->icon('heroicon-o-bell-alert')
                 ->color('warning')
-                // Only when we know an expiry date, the site has a customer, AND
-                // that customer has at least one reachable channel (email or a
-                // WhatsApp JID/phone) — otherwise the reminder would silently
-                // reach no one.
+                // Only when the domain expires within the coming window (a month
+                // by default — the same threshold the site card warns on), the
+                // site has a customer, AND that customer has at least one reachable
+                // channel (email or a WhatsApp JID/phone) — otherwise the reminder
+                // is either premature or would silently reach no one.
                 ->visible(fn (): bool => $this->record->domain_expiry_at !== null
+                    && $this->record->domain_expiry_at->lte(now()->addDays((int) config('billing.monitoring.domain_warn_days', 30)))
                     && $this->record->customer !== null
                     && (filled($this->record->customer->email) || filled($this->record->customer->whatsappRecipient())))
                 ->requiresConfirmation()
@@ -165,77 +167,81 @@ class ViewSite extends ViewRecord
                         ->success()->send();
                 }),
 
-            Actions\Action::make('aiInvestigate')
-                ->label('אבחון AI')
-                ->icon('heroicon-o-sparkles')
-                ->color('info')
-                ->visible($isAdmin)
+            // Everything below sits in the "עוד כלים" dropdown. Only the few
+            // most-used actions (diagnose, AI-connection toggle, and the
+            // contextual domain-renewal reminder) stay inline, so the header row
+            // of buttons stops overflowing the screen — mirrors the customer view.
+            Actions\ActionGroup::make([
+                Actions\Action::make('aiInvestigate')
+                    ->label('אבחון AI')
+                    ->icon('heroicon-o-sparkles')
+                    ->color('info')
+                    ->visible($isAdmin)
                 // Stay visible when the connection is off (so it doesn't look like
                 // a missing feature) but disabled, with a hint to turn it on.
-                ->disabled(fn (): bool => ! $this->record->mcp_enabled)
-                ->tooltip(fn (): ?string => $this->record->mcp_enabled ? null : 'הפעילו קודם את חיבור ה-AI')
-                ->form([
-                    Textarea::make('goal')
-                        ->label('מה לבדוק / לתקן?')
-                        ->rows(2)
-                        ->default('אבחן את האתר וזהה תקלות. אם נדרש תיקון — הצע פעולה אחת לאישור.'),
-                ])
-                ->action(function (array $data): void {
-                    InvestigateSiteJob::dispatch($this->record->id, (string) ($data['goal'] ?? 'אבחן את האתר.'));
-                    Notification::make()->title('האבחון רץ ברקע')
-                        ->body('הסיכום יופיע בזיכרון האתר, והצעות תיקון (אם יהיו) ב"אישורי אוטומציה".')
-                        ->success()->send();
-                }),
+                    ->disabled(fn (): bool => ! $this->record->mcp_enabled)
+                    ->tooltip(fn (): ?string => $this->record->mcp_enabled ? null : 'הפעילו קודם את חיבור ה-AI')
+                    ->form([
+                        Textarea::make('goal')
+                            ->label('מה לבדוק / לתקן?')
+                            ->rows(2)
+                            ->default('אבחן את האתר וזהה תקלות. אם נדרש תיקון — הצע פעולה אחת לאישור.'),
+                    ])
+                    ->action(function (array $data): void {
+                        InvestigateSiteJob::dispatch($this->record->id, (string) ($data['goal'] ?? 'אבחן את האתר.'));
+                        Notification::make()->title('האבחון רץ ברקע')
+                            ->body('הסיכום יופיע בזיכרון האתר, והצעות תיקון (אם יהיו) ב"אישורי אוטומציה".')
+                            ->success()->send();
+                    }),
 
-            // Run a security scan now: match the site's installed plugins/themes/
-            // core against the vulnerability feed. Results render in the "אבטחה"
-            // section below; new findings also alert the team.
-            Actions\Action::make('scanSecurity')
-                ->label('סריקת אבטחה')
-                ->icon('heroicon-o-shield-exclamation')
-                ->color('warning')
-                ->visible($isAdmin)
-                ->disabled(fn (): bool => ! $this->record->mcp_enabled)
-                ->tooltip(fn (): ?string => $this->record->mcp_enabled ? null : 'הפעילו קודם את חיבור ה-AI')
-                ->action(function (): void {
-                    ScanSiteVulnerabilitiesJob::dispatch($this->record->id);
+                // Run a security scan now: match the site's installed plugins/themes/
+                // core against the vulnerability feed. Results render in the "אבטחה"
+                // section below; new findings also alert the team.
+                Actions\Action::make('scanSecurity')
+                    ->label('סריקת אבטחה')
+                    ->icon('heroicon-o-shield-exclamation')
+                    ->color('warning')
+                    ->visible($isAdmin)
+                    ->disabled(fn (): bool => ! $this->record->mcp_enabled)
+                    ->tooltip(fn (): ?string => $this->record->mcp_enabled ? null : 'הפעילו קודם את חיבור ה-AI')
+                    ->action(function (): void {
+                        ScanSiteVulnerabilitiesJob::dispatch($this->record->id);
 
-                    Notification::make()->title('סריקת האבטחה רצה ברקע')
-                        ->body('התוצאות יופיעו בעמוד האתר, וממצאים חדשים יישלחו גם לצוות.')
-                        ->success()->send();
-                }),
+                        Notification::make()->title('סריקת האבטחה רצה ברקע')
+                            ->body('התוצאות יופיעו בעמוד האתר, וממצאים חדשים יישלחו גם לצוות.')
+                            ->success()->send();
+                    }),
 
-            // Check the domain against public spam/malware blocklists. Works even
-            // without an AI connection — it queries external reputation sources.
-            Actions\Action::make('checkReputation')
-                ->label('בדיקת מוניטין')
-                ->icon('heroicon-o-no-symbol')
-                ->color('warning')
-                ->visible($isAdmin)
-                ->action(function (): void {
-                    CheckSiteReputationJob::dispatch($this->record->id);
+                // Check the domain against public spam/malware blocklists. Works even
+                // without an AI connection — it queries external reputation sources.
+                Actions\Action::make('checkReputation')
+                    ->label('בדיקת מוניטין')
+                    ->icon('heroicon-o-no-symbol')
+                    ->color('warning')
+                    ->visible($isAdmin)
+                    ->action(function (): void {
+                        CheckSiteReputationJob::dispatch($this->record->id);
 
-                    Notification::make()->title('בדיקת המוניטין רצה ברקע')
-                        ->body('נבדוק את הדומיין מול מאגרי ספאם/נוזקות. התוצאה תופיע בעמוד האתר.')
-                        ->success()->send();
-                }),
+                        Notification::make()->title('בדיקת המוניטין רצה ברקע')
+                            ->body('נבדוק את הדומיין מול מאגרי ספאם/נוזקות. התוצאה תופיע בעמוד האתר.')
+                            ->success()->send();
+                    }),
 
-            Actions\Action::make('testMcp')
-                ->label('בדוק חיבור AI')
-                ->icon('heroicon-o-signal')
-                ->color('info')
-                ->visible(fn (): bool => ($this->record->mcp_enabled || filled($this->record->mcp_endpoint)) && $isAdmin())
-                ->action(function (SiteConnector $connector): void {
-                    $result = $connector->testConnection($this->record);
+                Actions\Action::make('testMcp')
+                    ->label('בדוק חיבור AI')
+                    ->icon('heroicon-o-signal')
+                    ->color('info')
+                    ->visible(fn (): bool => ($this->record->mcp_enabled || filled($this->record->mcp_endpoint)) && $isAdmin())
+                    ->action(function (SiteConnector $connector): void {
+                        $result = $connector->testConnection($this->record);
 
-                    Notification::make()
-                        ->title('חיבור סוכן AI — '.$this->record->domain)
-                        ->body($result->message)
-                        ->{$result->ok ? 'success' : 'warning'}()
-                        ->send();
-                }),
+                        Notification::make()
+                            ->title('חיבור סוכן AI — '.$this->record->domain)
+                            ->body($result->message)
+                            ->{$result->ok ? 'success' : 'warning'}()
+                            ->send();
+                    }),
 
-            Actions\ActionGroup::make([
                 $this->proposeMcpAction(),
                 $this->whitelistCloudflareAction(),
                 $this->cloudflareRulesAction(),
