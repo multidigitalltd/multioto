@@ -35,10 +35,14 @@ class ProfitabilityReport
 
         // Revenue attributed to the charge's own customer or, failing that, the
         // subscription's customer — the same ownership rule the portal uses.
+        // Windowed by the PAYMENT time (charged_at — when the money actually
+        // arrived, the same field the collections stats use), so a demand opened
+        // months ago but paid inside the window still counts; created_at is only
+        // a fallback for legacy rows that predate the charged_at stamp.
         $revenue = Charge::query()
             ->leftJoin('subscriptions', 'subscriptions.id', '=', 'charges.subscription_id')
             ->where('charges.status', ChargeStatus::Succeeded)
-            ->where('charges.created_at', '>=', $since)
+            ->whereRaw('COALESCE(charges.charged_at, charges.created_at) >= ?', [$since])
             ->whereRaw('COALESCE(charges.customer_id, subscriptions.customer_id) IS NOT NULL')
             ->selectRaw('COALESCE(charges.customer_id, subscriptions.customer_id) as cid')
             ->selectRaw('SUM(charges.total_agorot) as total')

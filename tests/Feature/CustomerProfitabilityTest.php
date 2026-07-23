@@ -131,6 +131,23 @@ class CustomerProfitabilityTest extends TestCase
         $this->assertCount(0, app(ProfitabilityReport::class)->rows(90));
     }
 
+    public function test_an_old_demand_paid_inside_the_window_counts_as_revenue(): void
+    {
+        $customer = Customer::factory()->create();
+
+        // The demand was opened 4 months ago but the money arrived 5 days ago —
+        // revenue is windowed by payment time, not by the demand's creation.
+        $charge = $this->succeededCharge($customer, 25000);
+        $charge->created_at = now()->subDays(120);
+        $charge->charged_at = now()->subDays(5);
+        $charge->save();
+
+        $rows = app(ProfitabilityReport::class)->rows(90);
+
+        $this->assertCount(1, $rows);
+        $this->assertSame(25000, $rows->first()['revenue_agorot']);
+    }
+
     public function test_failed_charges_do_not_count_as_revenue(): void
     {
         $customer = Customer::factory()->create();
