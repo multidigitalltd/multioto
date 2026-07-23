@@ -392,6 +392,19 @@ return [
         'email_chunk_size' => env('BROADCAST_EMAIL_CHUNK', 50),
     ],
 
+    /*
+    | רווחיות פר לקוח — הערכת עומס הטיפול בדקות. המשקלים ניתנים לכיול לפי
+    | הניסיון בפועל; תעריף השעה (באגורות) מייצג את עלות שעת עבודה של הצוות
+    | ומתרגם את העומס לעלות, כך שמתקבל רווח משוער פר לקוח.
+    */
+    'profitability' => [
+        'minutes_per_ticket' => env('PROFIT_MINUTES_PER_TICKET', 30),
+        'minutes_per_message' => env('PROFIT_MINUTES_PER_MESSAGE', 4),
+        'minutes_per_incident' => env('PROFIT_MINUTES_PER_INCIDENT', 20),
+        // ₪150 per team hour by default, in agorot.
+        'hourly_cost_agorot' => env('PROFIT_HOURLY_COST_AGOROT', 15000),
+    ],
+
     'system' => [
         // In-panel system log ("מערכת ועדכונים") retention: rows older than this
         // many days are pruned nightly by the scheduler.
