@@ -142,6 +142,59 @@ class DefacementWatchTest extends TestCase
         $this->assertSame($before['checked_at'], $site->refresh()->content_snapshot['checked_at']);
     }
 
+    public function test_an_error_page_is_not_treated_as_site_content(): void
+    {
+        $site = $this->baselined($this->site(), 'כותרת', 'תוכן קיים ומוכר של האתר.');
+        $before = $site->content_snapshot;
+
+        // A non-empty 403 challenge page — not the site's real content: it must
+        // neither roll the baseline forward nor read as a defacement.
+        Http::fake(['*' => Http::response($this->page('Access denied', 'You have been blocked by the firewall.'), 403)]);
+        $this->quietTeam();
+
+        CheckSiteContentJob::dispatchSync($site->id);
+
+        $this->assertSame($before['checked_at'], $site->refresh()->content_snapshot['checked_at']);
+    }
+
+    public function test_the_homepage_is_fingerprinted_even_when_monitoring_probes_a_health_endpoint(): void
+    {
+        // The uptime probe deliberately watches /health — but a hacked homepage
+        // can leave /health intact, so the fingerprint must read the HOMEPAGE.
+        $site = $this->baselined(Site::factory()->create([
+            'domain' => 'shop.co.il',
+            'monitor_url' => 'https://shop.co.il/health',
+            'monitor_enabled' => true,
+        ]), 'החנות שלנו', 'קטלוג המוצרים המלא שלנו עם משלוחים עד הבית.');
+
+        Http::fake([
+            'https://shop.co.il/health' => Http::response('ok'),
+            'https://shop.co.il' => Http::response($this->page('pwned', 'totally different english takeover page content here')),
+        ]);
+
+        $team = Mockery::mock(TeamNotifier::class);
+        $team->shouldReceive('alert')->once();
+        $this->app->instance(TeamNotifier::class, $team);
+
+        CheckSiteContentJob::dispatchSync($site->id);
+
+        $this->assertTrue($site->refresh()->content_snapshot['suspected']);
+    }
+
+    public function test_similarity_is_word_based_and_unicode_safe(): void
+    {
+        $fp = app(ContentFingerprint::class);
+
+        // Unrelated Hebrew texts share UTF-8 lead bytes — a byte-based measure
+        // would overscore them; word-based similarity must stay near zero.
+        $this->assertLessThan(10, $fp->similarity(
+            'חנות פרחים משלוחים זרים כלות אירועים עציצים',
+            'מוסך רכב תיקונים צמיגים שמן מנוע בדיקת חורף',
+        ));
+
+        $this->assertSame(100.0, $fp->similarity('שלום עולם', 'שלום עולם'));
+    }
+
     public function test_the_watch_can_be_disabled_by_config(): void
     {
         config(['security.defacement.enabled' => false]);

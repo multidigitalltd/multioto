@@ -213,6 +213,18 @@ class Site extends Model
      * domain. Never produces "https://https//…" from a scheme-carrying domain.
      * Returns '' when there's nothing usable to check.
      */
+    /**
+     * The site's public homepage URL — always derived from the DOMAIN, never
+     * from monitor_url (which may deliberately point at a /health endpoint).
+     * The defacement watch fingerprints THIS page, the one visitors see.
+     */
+    public function homepageUrl(): string
+    {
+        $host = self::stripScheme((string) $this->domain);
+
+        return $host !== '' ? 'https://'.$host : '';
+    }
+
     public function monitorUrl(): string
     {
         $explicit = trim((string) $this->monitor_url);

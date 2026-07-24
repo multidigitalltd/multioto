@@ -42,23 +42,40 @@ class ContentFingerprint
     }
 
     /**
-     * Similarity (0–100) between two normalized-text samples. Capped input —
-     * similar_text() is cubic in the worst case, so both sides are truncated to
-     * the configured sample size before comparing.
+     * Similarity (0–100) between two normalized-text samples: Sørensen–Dice
+     * over word multisets. Word-level and Unicode-safe — byte-based measures
+     * (similar_text) overscore Hebrew, where every letter shares a UTF-8 lead
+     * byte, and could wave completely unrelated replacement content through.
      */
     public function similarity(string $previous, string $current): float
     {
-        if ($previous === '' && $current === '') {
+        $a = $this->words($previous);
+        $b = $this->words($current);
+
+        if ($a === [] && $b === []) {
             return 100.0;
         }
 
-        if ($previous === '' || $current === '') {
+        if ($a === [] || $b === []) {
             return 0.0;
         }
 
-        similar_text($previous, $current, $percent);
+        $countsB = array_count_values($b);
+        $shared = 0;
 
-        return round($percent, 1);
+        foreach (array_count_values($a) as $word => $count) {
+            if (isset($countsB[$word])) {
+                $shared += min($count, $countsB[$word]);
+            }
+        }
+
+        return round(200 * $shared / (count($a) + count($b)), 1);
+    }
+
+    /** @return list<string> */
+    private function words(string $text): array
+    {
+        return preg_split('/\s+/u', trim($text), -1, PREG_SPLIT_NO_EMPTY) ?: [];
     }
 
     /** The first defacement marker found in the text, or null when clean. */

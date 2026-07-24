@@ -51,13 +51,18 @@ class CheckSiteContentJob implements ShouldQueue
         }
 
         try {
+            // The HOMEPAGE — what visitors see — never monitor_url, which may
+            // deliberately point at a /health endpoint that survives a hack.
             $response = Http::timeout((int) config('billing.monitoring.timeout_seconds', 10))
-                ->get($site->monitorUrl());
+                ->get($site->homepageUrl());
         } catch (\Throwable) {
             return; // Unreachable — the uptime monitor owns that story.
         }
 
-        if ($response->status() >= 500 || trim((string) $response->body()) === '') {
+        // Only a SUCCESSFUL response is real site content: a 403/404/429
+        // challenge or error page must neither roll the baseline forward nor
+        // scream "defacement" — skip and let the next clean fetch decide.
+        if (! $response->successful() || trim((string) $response->body()) === '') {
             return;
         }
 
