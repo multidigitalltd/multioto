@@ -9,6 +9,7 @@ use App\Services\Notifications\TeamNotifier;
 use App\Services\Security\DomainReputationClient;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Check one site's domain against public spam/malware blocklists (URLhaus +
@@ -56,10 +57,17 @@ class CheckSiteReputationJob implements ShouldQueue
         $ranProviders = array_keys(array_filter($result['sources']));
 
         if ($ranProviders === []) {
-            $site->update(['reputation_scan' => array_merge((array) $site->reputation_scan, [
-                'last_run_at' => now()->toIso8601String(),
-                'last_run_status' => 'no_source',
-            ])]);
+            // Lock + reload before stamping: this job's in-memory copy may be
+            // stale by now, and merging onto it would overwrite listings a
+            // concurrent successful run just stored.
+            DB::transaction(function (): void {
+                $locked = Site::whereKey($this->siteId)->lockForUpdate()->first();
+
+                $locked?->update(['reputation_scan' => array_merge((array) $locked->reputation_scan, [
+                    'last_run_at' => now()->toIso8601String(),
+                    'last_run_status' => 'no_source',
+                ])]);
+            });
 
             SystemLog::record('warning', 'monitoring',
                 "בדיקת מוניטין לדומיין {$site->domain} רצה אך אף מקור חיצוני לא היה זמין (URLhaus / Spamhaus). ייתכן שהשרת חוסם את הבקשות או שהמקורות לא זמינים כרגע.",

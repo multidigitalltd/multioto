@@ -108,7 +108,7 @@
         $scanRunAt = data_get($scan, 'last_run_at');
         $scanFailReason = match ($scanRunStatus) {
             'unreadable' => 'לא ניתן היה לקרוא את רשימת הרכיבים מהתוסף — ודאו שהתוסף באתר מעודכן ומחובר ("בדוק חיבור AI").',
-            'feed_unavailable' => 'פיד הפגיעויות (Wordfence) לא היה זמין — ננסה שוב בריצה הבאה.',
+            'feed_unavailable' => 'פיד הפגיעויות ('.(config('security.vulnerabilities.source', 'wordfence') === 'wpscan' ? 'WPScan' : 'Wordfence').') לא היה זמין — ננסה שוב בריצה הבאה.',
             default => null,
         };
     @endphp
