@@ -8,8 +8,10 @@ use App\Models\AuditLog;
 use App\Models\Customer;
 use App\Models\Site;
 use App\Models\User;
+use App\Services\Auth\TwoFactorCode;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Mail;
 use Tests\TestCase;
 
 class AuditLogTest extends TestCase
@@ -59,12 +61,13 @@ class AuditLogTest extends TestCase
 
         // The login flow stores/clears a 2FA one-time code and remember token on
         // the user row — bookkeeping, not a team action. It used to spam the log
-        // with a "עודכן משתמש" line before every התחברות entry.
-        $user->forceFill([
-            'two_factor_code' => bcrypt('123456'),
-            'two_factor_expires_at' => now()->addMinutes(5),
-            'remember_token' => 'abc123',
-        ])->save();
+        // with a "עודכן משתמש" line before every התחברות entry. Exercise the REAL
+        // send flow so every field it stamps (code, expiry, last_sent_at,
+        // attempts) is covered — not just a hand-picked subset.
+        Mail::fake();
+        app(TwoFactorCode::class)->send($user);
+
+        $user->refresh()->forceFill(['remember_token' => 'abc123'])->save();
 
         $this->assertSame(0, AuditLog::where('event', 'updated')
             ->where('auditable_type', User::class)

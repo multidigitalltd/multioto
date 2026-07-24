@@ -21,7 +21,8 @@ class AuditObserver
      */
     private const IGNORED_KEYS = [
         'updated_at', 'created_at',
-        'two_factor_code', 'two_factor_expires_at', 'remember_token',
+        'two_factor_code', 'two_factor_expires_at', 'two_factor_last_sent_at',
+        'two_factor_attempts', 'remember_token',
     ];
 
     public function created(Model $model): void
