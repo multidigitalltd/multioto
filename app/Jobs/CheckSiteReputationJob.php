@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Jobs\Concerns\PausesForShabbat;
 use App\Models\Site;
+use App\Models\SystemLog;
 use App\Services\Notifications\TeamNotifier;
 use App\Services\Security\DomainReputationClient;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -49,10 +50,21 @@ class CheckSiteReputationJob implements ShouldQueue
         $result = $reputation->check($site->domain);
 
         // Providers that actually ran this cycle (a definite answer). If none ran,
-        // don't overwrite the last known state with an empty "clean" result.
+        // don't overwrite the last known state with an empty "clean" result — but
+        // DO leave a visible trace: an operator who clicked "בדיקת מוניטין" and
+        // sees nothing at all can't tell a queued job from a dead end.
         $ranProviders = array_keys(array_filter($result['sources']));
 
         if ($ranProviders === []) {
+            $site->update(['reputation_scan' => array_merge((array) $site->reputation_scan, [
+                'last_run_at' => now()->toIso8601String(),
+                'last_run_status' => 'no_source',
+            ])]);
+
+            SystemLog::record('warning', 'monitoring',
+                "בדיקת מוניטין לדומיין {$site->domain} רצה אך אף מקור חיצוני לא היה זמין (URLhaus / Spamhaus). ייתכן שהשרת חוסם את הבקשות או שהמקורות לא זמינים כרגע.",
+                ['site_id' => $site->id]);
+
             return;
         }
 
@@ -73,6 +85,8 @@ class CheckSiteReputationJob implements ShouldQueue
             'checked_at' => now()->toIso8601String(),
             'sources' => $result['sources'],
             'listings' => $listings,
+            'last_run_at' => now()->toIso8601String(),
+            'last_run_status' => 'ok',
         ]]);
 
         $fresh = array_values(array_filter(

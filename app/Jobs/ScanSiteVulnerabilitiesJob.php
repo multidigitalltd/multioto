@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Jobs\Concerns\PausesForShabbat;
 use App\Models\Site;
+use App\Models\SystemLog;
 use App\Services\Agent\McpClient;
 use App\Services\Notifications\TeamNotifier;
 use App\Services\Security\SiteSecurityInventory;
@@ -52,14 +53,21 @@ class ScanSiteVulnerabilitiesJob implements ShouldQueue
 
         ['components' => $components, 'types' => $readTypes] = $this->inventory($site, $mcp);
 
+        // A run that can't complete keeps the last findings untouched, but must
+        // leave a visible trace — an empty page tells the operator nothing.
         if ($readTypes === []) {
-            return; // Nothing readable this run — leave the last scan untouched.
+            $this->recordFailedRun($site, 'unreadable',
+                "סריקת אבטחה לאתר {$site->domain} רצה אך לא הצליחה לקרוא את רשימת הרכיבים מהתוסף — ודאו שהתוסף באתר מעודכן ומחובר (בדוק חיבור AI).");
+
+            return;
         }
 
         // The feed being unreachable is not a "clean" site — record it as unknown
         // so a fetch outage never reads as "no vulnerabilities".
         if (! $feed->available()) {
             Log::warning('ScanSiteVulnerabilitiesJob: vulnerability feed unavailable', ['site' => $this->siteId]);
+            $this->recordFailedRun($site, 'feed_unavailable',
+                "סריקת אבטחה לאתר {$site->domain}: פיד הפגיעויות (Wordfence) לא היה זמין — ננסה שוב בריצה הבאה.");
 
             return;
         }
@@ -99,6 +107,8 @@ class ScanSiteVulnerabilitiesJob implements ShouldQueue
         $site->update(['vulnerability_scan' => [
             'scanned_at' => now()->toIso8601String(),
             'items' => $items,
+            'last_run_at' => now()->toIso8601String(),
+            'last_run_status' => 'ok',
         ]]);
 
         // Alert only about vulnerabilities we hadn't already reported for this site.
@@ -156,6 +166,21 @@ class ScanSiteVulnerabilitiesJob implements ShouldQueue
     }
 
     /** A stable identity for one finding, so the same vuln isn't re-alerted. */
+    /**
+     * Stamp an incomplete run on the stored scan (keeping all previous findings
+     * and scanned_at) and surface the reason in the in-panel event log — so the
+     * site page can say WHY there is no fresh result instead of showing nothing.
+     */
+    private function recordFailedRun(Site $site, string $status, string $message): void
+    {
+        $site->update(['vulnerability_scan' => array_merge((array) $site->vulnerability_scan, [
+            'last_run_at' => now()->toIso8601String(),
+            'last_run_status' => $status,
+        ])]);
+
+        SystemLog::record('warning', 'monitoring', $message, ['site_id' => $site->id]);
+    }
+
     private static function key(array $item): string
     {
         return implode('|', [$item['type'] ?? '', $item['slug'] ?? '', $item['cve'] ?? $item['title'] ?? '']);
