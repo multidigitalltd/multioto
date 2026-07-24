@@ -13,8 +13,17 @@ use Illuminate\Database\Eloquent\Model;
  */
 class AuditObserver
 {
-    /** Changed-attribute keys that are noise, never worth an audit line on their own. */
-    private const IGNORED_KEYS = ['updated_at', 'created_at'];
+    /**
+     * Changed-attribute keys that are noise, never worth an audit line on their
+     * own: timestamps, plus the sign-in flow's bookkeeping on the user row (the
+     * 2FA one-time code and remember token change on EVERY login, and used to
+     * spam the log with a "עודכן משתמש" line before each התחברות entry).
+     */
+    private const IGNORED_KEYS = [
+        'updated_at', 'created_at',
+        'two_factor_code', 'two_factor_expires_at', 'two_factor_last_sent_at',
+        'two_factor_attempts', 'remember_token',
+    ];
 
     public function created(Model $model): void
     {

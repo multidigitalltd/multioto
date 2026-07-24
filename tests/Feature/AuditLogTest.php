@@ -8,8 +8,10 @@ use App\Models\AuditLog;
 use App\Models\Customer;
 use App\Models\Site;
 use App\Models\User;
+use App\Services\Auth\TwoFactorCode;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Mail;
 use Tests\TestCase;
 
 class AuditLogTest extends TestCase
@@ -52,6 +54,35 @@ class AuditLogTest extends TestCase
         $this->assertSame(1, AuditLog::where('event', 'login')->where('user_id', $user->id)->count());
     }
 
+    public function test_the_sign_in_flows_bookkeeping_writes_are_not_audited_as_user_updates(): void
+    {
+        $user = User::factory()->create();
+        $this->actingAs($user);
+
+        // The login flow stores/clears a 2FA one-time code and remember token on
+        // the user row — bookkeeping, not a team action. It used to spam the log
+        // with a "עודכן משתמש" line before every התחברות entry. Exercise the REAL
+        // send flow so every field it stamps (code, expiry, last_sent_at,
+        // attempts) is covered — not just a hand-picked subset.
+        Mail::fake();
+        app(TwoFactorCode::class)->send($user);
+
+        $user->refresh()->forceFill(['remember_token' => 'abc123'])->save();
+
+        $this->assertSame(0, AuditLog::where('event', 'updated')
+            ->where('auditable_type', User::class)
+            ->where('auditable_id', $user->id)
+            ->count());
+
+        // A REAL user change is still audited.
+        $user->update(['name' => 'שם חדש']);
+
+        $this->assertSame(1, AuditLog::where('event', 'updated')
+            ->where('auditable_type', User::class)
+            ->where('auditable_id', $user->id)
+            ->count());
+    }
+
     public function test_sensitive_values_are_redacted(): void
     {
         $this->actingAs(User::factory()->create());
@@ -63,16 +94,16 @@ class AuditLogTest extends TestCase
         $this->assertSame('[hidden]', $entry->changes['mcp_secret']);
     }
 
-    public function test_the_two_factor_code_hash_is_redacted(): void
+    public function test_a_two_factor_code_write_produces_no_audit_entry_at_all(): void
     {
+        // Stronger than redaction: the 2FA one-time code is login bookkeeping,
+        // so its writes are ignored entirely — no row, no hash, nothing.
         $this->actingAs(User::factory()->create());
 
         $user = User::factory()->create();
         $user->forceFill(['two_factor_code' => bcrypt('123456')])->save();
 
-        $entry = AuditLog::where('auditable_type', User::class)->where('event', 'updated')->latest('id')->first();
-        $this->assertNotNull($entry);
-        $this->assertSame('[hidden]', $entry->changes['two_factor_code']);
+        $this->assertNull(AuditLog::where('auditable_type', User::class)->where('event', 'updated')->latest('id')->first());
     }
 
     public function test_a_2fa_required_login_is_audited_only_after_confirmation(): void
