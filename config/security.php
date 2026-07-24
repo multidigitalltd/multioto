@@ -81,6 +81,28 @@ return [
         'enabled' => (bool) env('DNS_WATCH_ENABLED', true),
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Defacement watch (homepage content fingerprint)
+    |--------------------------------------------------------------------------
+    |
+    | Each monitored site's homepage is fingerprinted daily (title + normalized
+    | visible text). A drastic drop in similarity vs the stored baseline — or a
+    | classic defacement marker ("hacked by") — alerts the team before Google
+    | flags the site. Gradual edits keep refreshing the baseline.
+    |
+    */
+    'defacement' => [
+        'enabled' => (bool) env('DEFACEMENT_WATCH_ENABLED', true),
+
+        // Similarity (%) at or above which content is considered "the same
+        // site" and the baseline rolls forward. Below it → suspected defacement.
+        'min_similarity' => (int) env('DEFACEMENT_MIN_SIMILARITY', 45),
+
+        // Normalized-text sample size used for storage + comparison.
+        'sample_chars' => (int) env('DEFACEMENT_SAMPLE_CHARS', 3000),
+    ],
+
     'reputation' => [
         'enabled' => (bool) env('REPUTATION_SCAN_ENABLED', true),
 
