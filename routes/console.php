@@ -5,6 +5,7 @@ use App\Enums\ChargeStatus;
 use App\Jobs\AlertExpiringCardsBeforeChargeJob;
 use App\Jobs\ChargeSubscriptionJob;
 use App\Jobs\CheckDomainExpiryJob;
+use App\Jobs\CheckSiteContentJob;
 use App\Jobs\CheckSiteDnsJob;
 use App\Jobs\CheckSitePluginChangesJob;
 use App\Jobs\CheckSiteReputationJob;
@@ -150,6 +151,21 @@ Schedule::call(function () {
         ->pluck('id')
         ->each(fn (int $id) => CheckSiteDnsJob::dispatch($id));
 })->dailyAt('07:55')->name('monitoring:dns-watch')->when($awake)->onOneServer();
+
+// Daily defacement watch: fingerprint each monitored homepage and alert when
+// the content changed drastically vs the baseline (hack/injection detection).
+Schedule::call(function () {
+    if (! config('security.defacement.enabled', true)) {
+        return;
+    }
+
+    Site::query()
+        ->where('monitor_enabled', true)
+        ->whereNotNull('domain')
+        ->where('domain', '!=', '')
+        ->pluck('id')
+        ->each(fn (int $id) => CheckSiteContentJob::dispatch($id));
+})->dailyAt('08:05')->name('monitoring:defacement-watch')->when($awake)->onOneServer();
 
 // Proactive reminders: a once-a-day internal digest (renewals due, cards
 // expiring, open debt) so the owner can act before anything slips.

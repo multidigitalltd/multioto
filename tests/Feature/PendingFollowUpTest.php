@@ -106,7 +106,7 @@ class PendingFollowUpTest extends TestCase
         $this->assertNotSame($tags[0], $tags[1]);
     }
 
-    public function test_the_ticket_is_auto_closed_after_close_days_of_silence(): void
+    public function test_the_ticket_is_auto_closed_silently_after_close_days_of_silence(): void
     {
         Queue::fake();
         config(['billing.support.pending_followup' => ['enabled' => true, 'reminder_days' => 3, 'close_days' => 7]]);
@@ -122,7 +122,9 @@ class PendingFollowUpTest extends TestCase
         $fresh = $ticket->fresh();
         $this->assertSame(TicketStatus::Closed, $fresh->status);
         $this->assertNotNull($fresh->resolved_at);
-        Queue::assertPushed(SendTicketNotificationJob::class, fn ($job) => $job->ticketId === $ticket->id && $job->templateKey === 'ticket.autoclosed');
+        // A quiet close: the customer is NOT told the ticket was closed — they
+        // already ignored the reminder, and a reply still reopens it.
+        Queue::assertNotPushed(SendTicketNotificationJob::class);
     }
 
     public function test_a_freshly_pending_ticket_is_left_alone(): void

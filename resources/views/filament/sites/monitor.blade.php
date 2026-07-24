@@ -181,6 +181,66 @@
         </div>
     @endif
 
+    {{-- Defacement watch: homepage content fingerprint state. --}}
+    @php
+        $content = $site->content_snapshot ?? null;
+        $contentSuspected = (bool) data_get($content, 'suspected', false);
+        $contentSimilarity = data_get($content, 'similarity');
+        $contentCheckedAt = data_get($content, 'checked_at');
+        $contentAlertedAt = data_get($content, 'alerted_at');
+    @endphp
+    @if ($content !== null)
+        <div @class([
+            'rounded-xl p-4 shadow-sm',
+            'bg-white dark:bg-gray-800' => ! $contentSuspected,
+            'border border-danger-300 bg-danger-50 dark:border-danger-800 dark:bg-danger-900/10' => $contentSuspected,
+        ])>
+            <div class="mb-3 flex items-center justify-between">
+                <h3 class="text-sm font-semibold">זיהוי השחתה — תוכן דף הבית</h3>
+                <span class="text-xs text-gray-500 dark:text-gray-400">
+                    @if ($contentCheckedAt) נבדק: {{ \Illuminate\Support\Carbon::parse($contentCheckedAt)->format('d/m/Y H:i') }} @endif
+                </span>
+            </div>
+
+            @if ($contentSuspected)
+                <div class="flex items-start gap-2 text-sm text-danger-700 dark:text-danger-400">
+                    <x-heroicon-o-exclamation-triangle class="h-5 w-5 shrink-0" />
+                    <div>
+                        <div class="font-semibold">חשד להשחתה — התוכן שונה באופן קיצוני מהבסיס המוכר.</div>
+                        <div class="mt-1 space-y-0.5 text-xs">
+                            @if ($contentSimilarity !== null)
+                                <div>דמיון לתוכן המוכר: {{ $contentSimilarity }}%</div>
+                            @endif
+                            @if (filled(data_get($content, 'marker')))
+                                <div>סימן פריצה שזוהה: "{{ data_get($content, 'marker') }}"</div>
+                            @endif
+                            @if (filled(data_get($content, 'suspected_title')))
+                                <div>כותרת הדף כעת: "{{ data_get($content, 'suspected_title') }}"</div>
+                            @endif
+                            @if ($contentAlertedAt)
+                                <div>הצוות הותרע: {{ \Illuminate\Support\Carbon::parse($contentAlertedAt)->format('d/m/Y H:i') }}</div>
+                            @endif
+                        </div>
+                        <div class="mt-2 text-xs">
+                            אם מדובר בעיצוב מחודש מכוון — השתמשו בכפתור <span class="font-semibold">"אשר את התוכן הנוכחי"</span> למעלה. אחרת, בדקו פריצה מיד.
+                        </div>
+                    </div>
+                </div>
+            @else
+                <div class="flex items-center gap-2 text-sm text-success-600 dark:text-success-400">
+                    <x-heroicon-o-check-circle class="h-5 w-5" />
+                    התוכן תקין ותואם את הבסיס המוכר{{ $contentSimilarity !== null ? " (דמיון {$contentSimilarity}%)" : '' }}.
+                </div>
+                <div class="mt-2 flex flex-wrap gap-x-4 text-xs text-gray-500 dark:text-gray-400">
+                    @if (filled(data_get($content, 'title')))
+                        <span>כותרת: "{{ data_get($content, 'title') }}"</span>
+                    @endif
+                    <span>אורך תוכן: {{ number_format((int) data_get($content, 'length', 0)) }} תווים</span>
+                </div>
+            @endif
+        </div>
+    @endif
+
     {{-- DNS watch: the domain's A/MX/NS records + last detected change. --}}
     @php
         $dnsSnap = $site->dns_snapshot ?? null;

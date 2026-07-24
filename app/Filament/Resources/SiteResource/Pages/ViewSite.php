@@ -4,6 +4,7 @@ namespace App\Filament\Resources\SiteResource\Pages;
 
 use App\Filament\Resources\SiteResource;
 use App\Filament\Support\SiteActions;
+use App\Jobs\CheckSiteContentJob;
 use App\Jobs\CheckSiteDnsJob;
 use App\Jobs\CheckSiteReputationJob;
 use App\Jobs\DetectSiteTypeJob;
@@ -203,6 +204,27 @@ class ViewSite extends ViewRecord
                         ->success()->send();
                 }),
 
+            // Shown ONLY under a standing defacement suspicion — the one-click
+            // "this redesign is intentional" acceptance: re-baselines on the
+            // current content and clears the alert.
+            Actions\Action::make('acceptContent')
+                ->label('אשר את התוכן הנוכחי')
+                ->icon('heroicon-o-check-badge')
+                ->color('danger')
+                ->visible(fn (): bool => (bool) data_get($this->record->content_snapshot, 'suspected', false)
+                    && (auth()->user()?->isAdmin() ?? false))
+                ->requiresConfirmation()
+                ->modalHeading('אישור התוכן הנוכחי כתקין')
+                ->modalDescription('התוכן הנוכחי של דף הבית יאושר כבסיס החדש (למשל אחרי עיצוב מחודש מכוון), והחשד להשחתה יימחק. ודאו קודם שהאתר באמת תקין!')
+                ->modalSubmitActionLabel('אשר — התוכן תקין')
+                ->action(function (): void {
+                    CheckSiteContentJob::dispatch($this->record->id, rebaseline: true);
+
+                    Notification::make()->title('התוכן הנוכחי אושר')
+                        ->body('הבסיס יתעדכן ברקע והחשד יימחק תוך רגע.')
+                        ->success()->send();
+                }),
+
             // Everything below sits in the "עוד כלים" dropdown. Only the few
             // most-used actions (diagnose, AI-connection toggle, and the
             // contextual domain-renewal reminder) stay inline, so the header row
@@ -243,6 +265,20 @@ class ViewSite extends ViewRecord
                             ->body($result->message)
                             ->{$result->ok ? 'success' : 'warning'}()
                             ->send();
+                    }),
+
+                // On-demand defacement check — the same fingerprint comparison
+                // the daily watch runs.
+                Actions\Action::make('checkContent')
+                    ->label('בדיקת השחתה')
+                    ->icon('heroicon-o-eye')
+                    ->visible($isAdmin)
+                    ->action(function (): void {
+                        CheckSiteContentJob::dispatch($this->record->id);
+
+                        Notification::make()->title('בדיקת ההשחתה רצה ברקע')
+                            ->body('תוכן דף הבית יושווה לבסיס המוכר; חשד ישלח התראה לצוות והתוצאה תופיע בעמוד האתר.')
+                            ->success()->send();
                     }),
 
                 // On-demand DNS snapshot/diff — the same check the daily watch
