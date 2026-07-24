@@ -42,7 +42,6 @@ class NotificationTemplateResource extends Resource
         'ticket.received' => 'אישור קבלת פנייה',
         'ticket.resolved' => 'עדכון על סיום טיפול',
         'ticket.reminder' => 'תזכורת לפנייה ממתינה',
-        'ticket.autoclosed' => 'סגירת פנייה אוטומטית',
         'customer.welcome' => 'ברוכים הבאים ללקוח חדש',
         'payment.link' => 'קישור תשלום ללקוח',
         'payment.reminder' => 'תזכורת תשלום',

@@ -48,9 +48,11 @@ class FollowUpPendingTicketsJob implements ShouldQueue
                 $silentDays = $ticket->pending_since->diffInDays(now());
 
                 if ($silentDays >= $closeDays) {
-                    // Auto-close and let the customer know (editable template).
+                    // Quiet close: the customer already got the reminder and chose
+                    // not to answer — a "we closed your ticket" message on top of
+                    // that is just noise, so no notification is sent. Replying
+                    // still reopens the ticket as usual.
                     $ticket->update(['status' => TicketStatus::Closed, 'resolved_at' => now()]);
-                    SendTicketNotificationJob::dispatch($ticket->id, 'ticket.autoclosed');
 
                     return;
                 }
