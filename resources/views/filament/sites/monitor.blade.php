@@ -103,6 +103,15 @@
             default => 'gray',
         };
     @endphp
+    @php
+        $scanRunStatus = data_get($scan, 'last_run_status');
+        $scanRunAt = data_get($scan, 'last_run_at');
+        $scanFailReason = match ($scanRunStatus) {
+            'unreadable' => 'לא ניתן היה לקרוא את רשימת הרכיבים מהתוסף — ודאו שהתוסף באתר מעודכן ומחובר ("בדוק חיבור AI").',
+            'feed_unavailable' => 'פיד הפגיעויות ('.(config('security.vulnerabilities.source', 'wordfence') === 'wpscan' ? 'WPScan' : 'Wordfence').') לא היה זמין — ננסה שוב בריצה הבאה.',
+            default => null,
+        };
+    @endphp
     @if ($scan !== null)
         <div class="rounded-xl bg-white p-4 shadow-sm dark:bg-gray-800">
             <div class="mb-3 flex items-center justify-between">
@@ -112,7 +121,22 @@
                 </span>
             </div>
 
-            @if (count($vulns) === 0)
+            @if ($scanFailReason !== null)
+                <div class="mb-3 flex items-start gap-2 text-sm text-amber-700 dark:text-amber-400" role="status">
+                    <x-heroicon-o-exclamation-triangle class="h-5 w-5 shrink-0" />
+                    <span>
+                        הבדיקה האחרונה
+                        @if ($scanRunAt) ({{ \Illuminate\Support\Carbon::parse($scanRunAt)->format('d/m/Y H:i') }}) @endif
+                        לא הושלמה: {{ $scanFailReason }}
+                    </span>
+                </div>
+            @endif
+
+            @if (count($vulns) === 0 && $scannedAt === null)
+                <div class="text-sm text-gray-500 dark:text-gray-400">
+                    טרם הושלמה סריקה מלאה לאתר הזה.
+                </div>
+            @elseif (count($vulns) === 0)
                 <div class="flex items-center gap-2 text-sm text-success-600 dark:text-success-400">
                     <x-heroicon-o-shield-check class="h-5 w-5" />
                     לא נמצאו רכיבים פגיעים ידועים.
@@ -149,6 +173,10 @@
         $listings = (array) data_get($rep, 'listings', []);
         $repCheckedAt = data_get($rep, 'checked_at');
     @endphp
+    @php
+        $repRunStatus = data_get($rep, 'last_run_status');
+        $repRunAt = data_get($rep, 'last_run_at');
+    @endphp
     @if ($rep !== null)
         <div class="rounded-xl bg-white p-4 shadow-sm dark:bg-gray-800">
             <div class="mb-3 flex items-center justify-between">
@@ -158,7 +186,22 @@
                 </span>
             </div>
 
-            @if (count($listings) === 0)
+            @if ($repRunStatus === 'no_source')
+                <div class="mb-3 flex items-start gap-2 text-sm text-amber-700 dark:text-amber-400" role="status">
+                    <x-heroicon-o-exclamation-triangle class="h-5 w-5 shrink-0" />
+                    <span>
+                        הבדיקה האחרונה
+                        @if ($repRunAt) ({{ \Illuminate\Support\Carbon::parse($repRunAt)->format('d/m/Y H:i') }}) @endif
+                        לא הושלמה: אף מקור חיצוני (URLhaus / Spamhaus) לא היה זמין — ייתכן שהשרת חוסם בקשות יוצאות. פרטים ב"יומן אירועים".
+                    </span>
+                </div>
+            @endif
+
+            @if (count($listings) === 0 && $repCheckedAt === null)
+                <div class="text-sm text-gray-500 dark:text-gray-400">
+                    טרם הושלמה בדיקת מוניטין לדומיין הזה.
+                </div>
+            @elseif (count($listings) === 0)
                 <div class="flex items-center gap-2 text-sm text-success-600 dark:text-success-400">
                     <x-heroicon-o-check-badge class="h-5 w-5" />
                     הדומיין נקי — לא נמצא ברשימות ספאם/נוזקות.

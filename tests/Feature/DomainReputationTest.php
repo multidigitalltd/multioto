@@ -144,8 +144,16 @@ class DomainReputationTest extends TestCase
 
         CheckSiteReputationJob::dispatchSync($site->id);
 
-        $this->assertCount(1, data_get($site->fresh()->reputation_scan, 'listings'));
+        $scan = $site->fresh()->reputation_scan;
+        $this->assertCount(1, data_get($scan, 'listings'));
         $team->shouldNotHaveReceived('alert');
+
+        // The dead-end run leaves a visible trace: a status on the site (shown
+        // in the panel) and a warning row in the in-panel event log — so an
+        // empty page never leaves the operator guessing.
+        $this->assertSame('no_source', data_get($scan, 'last_run_status'));
+        $this->assertNotNull(data_get($scan, 'last_run_at'));
+        $this->assertDatabaseHas('system_logs', ['level' => 'warning', 'source' => 'monitoring']);
     }
 
     public function test_a_failed_provider_preserves_its_previous_findings(): void
