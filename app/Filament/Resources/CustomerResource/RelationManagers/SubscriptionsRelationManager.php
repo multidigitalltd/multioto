@@ -91,7 +91,7 @@ class SubscriptionsRelationManager extends RelationManager
                         // Collect now without moving the billing anchor forward
                         // (a late payer must not earn free days).
                         $record->markDueNow();
-                        ChargeSubscriptionJob::dispatch($record->id);
+                        ChargeSubscriptionJob::dispatch($record->id, manual: true);
                         Notification::make()->title('החיוב נשלח לביצוע')->success()->send();
                     }),
                 Tables\Actions\EditAction::make()->label('עריכה'),

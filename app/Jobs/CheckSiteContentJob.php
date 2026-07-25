@@ -2,7 +2,6 @@
 
 namespace App\Jobs;
 
-use App\Jobs\Concerns\PausesForShabbat;
 use App\Models\Site;
 use App\Models\SystemLog;
 use App\Services\Notifications\TeamNotifier;
@@ -24,7 +23,6 @@ use Illuminate\Support\Facades\Http;
  */
 class CheckSiteContentJob implements ShouldQueue
 {
-    use PausesForShabbat;
     use Queueable;
 
     public int $tries = 2;
@@ -32,23 +30,6 @@ class CheckSiteContentJob implements ShouldQueue
     public array $backoff = [60];
 
     public function __construct(public int $siteId, public bool $rebaseline = false) {}
-
-    /** @return array<int, mixed> */
-    protected function shabbatDispatchArgs(): array
-    {
-        return [$this->siteId, $this->rebaseline];
-    }
-
-    protected function shabbatHoldDescription(): ?string
-    {
-        return 'בדיקת ההשחתה לאתר '.(Site::whereKey($this->siteId)->value('domain') ?: "#{$this->siteId}");
-    }
-
-    /** @return array<string, mixed> */
-    protected function shabbatHoldContext(): array
-    {
-        return ['site_id' => $this->siteId];
-    }
 
     /** An unexpected crash must land in the event log, not only in Horizon. */
     public function failed(?\Throwable $e): void
@@ -60,10 +41,6 @@ class CheckSiteContentJob implements ShouldQueue
 
     public function handle(ContentFingerprint $fingerprint, TeamNotifier $team): void
     {
-        if ($this->rescheduledForShabbat()) {
-            return;
-        }
-
         if (! config('security.defacement.enabled', true)) {
             SystemLog::record('info', 'monitoring',
                 'בדיקת השחתה לא רצה — הבדיקות מושבתות בהגדרות (SECURITY_DEFACEMENT_ENABLED).',

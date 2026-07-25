@@ -2,7 +2,6 @@
 
 namespace App\Jobs;
 
-use App\Jobs\Concerns\PausesForShabbat;
 use App\Models\Site;
 use App\Models\SystemLog;
 use App\Services\Notifications\TeamNotifier;
@@ -18,11 +17,10 @@ use Illuminate\Foundation\Queue\Queueable;
  *
  * First run stores a baseline silently. A resolver outage (lookup failure) for
  * a record type keeps that type's last known state — an outage never reads as
- * "all records were removed". Honours Shabbat quiet.
+ * "all records were removed".
  */
 class CheckSiteDnsJob implements ShouldQueue
 {
-    use PausesForShabbat;
     use Queueable;
 
     public int $tries = 2;
@@ -34,23 +32,6 @@ class CheckSiteDnsJob implements ShouldQueue
 
     public function __construct(public int $siteId) {}
 
-    /** @return array<int, mixed> */
-    protected function shabbatDispatchArgs(): array
-    {
-        return [$this->siteId];
-    }
-
-    protected function shabbatHoldDescription(): ?string
-    {
-        return 'בדיקת ה-DNS לאתר '.(Site::whereKey($this->siteId)->value('domain') ?: "#{$this->siteId}");
-    }
-
-    /** @return array<string, mixed> */
-    protected function shabbatHoldContext(): array
-    {
-        return ['site_id' => $this->siteId];
-    }
-
     /** An unexpected crash must land in the event log, not only in Horizon. */
     public function failed(?\Throwable $e): void
     {
@@ -61,10 +42,6 @@ class CheckSiteDnsJob implements ShouldQueue
 
     public function handle(DnsLookup $dns, TeamNotifier $team): void
     {
-        if ($this->rescheduledForShabbat()) {
-            return;
-        }
-
         if (! config('security.dns_watch.enabled', true)) {
             SystemLog::record('info', 'monitoring',
                 'בדיקת DNS לא רצה — מעקב ה-DNS מושבת בהגדרות (SECURITY_DNS_WATCH_ENABLED).',

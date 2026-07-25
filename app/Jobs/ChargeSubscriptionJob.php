@@ -33,17 +33,23 @@ class ChargeSubscriptionJob implements ShouldQueue
 
     public int $tries = 1;
 
-    public function __construct(public int $subscriptionId) {}
+    /**
+     * $manual marks a charge a human explicitly requested right now (operator
+     * "חייב עכשיו", or a customer who just updated their card to pay) — those
+     * run immediately and never defer to after Shabbat; only SCHEDULED charges
+     * hold for the quiet period.
+     */
+    public function __construct(public int $subscriptionId, public bool $manual = false) {}
 
-    /** @return array<int, int> */
+    /** @return array<int, mixed> */
     protected function shabbatDispatchArgs(): array
     {
-        return [$this->subscriptionId];
+        return [$this->subscriptionId, $this->manual];
     }
 
     public function handle(CardcomClient $cardcom, DunningMachine $dunning): void
     {
-        if ($this->rescheduledForShabbat()) {
+        if (! $this->manual && $this->rescheduledForShabbat()) {
             return;
         }
 

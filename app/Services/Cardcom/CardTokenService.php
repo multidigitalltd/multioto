@@ -90,7 +90,9 @@ class CardTokenService
                 if ($subscription->status !== SubscriptionStatus::Canceled
                     && $subscription->next_charge_at
                     && $subscription->next_charge_at->isPast()) {
-                    ChargeSubscriptionJob::dispatch($subscription->id);
+                    // The customer just updated their card in order to pay —
+                    // charge now, even during the Shabbat quiet period.
+                    ChargeSubscriptionJob::dispatch($subscription->id, manual: true);
                 }
             });
 

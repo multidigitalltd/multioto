@@ -2,7 +2,6 @@
 
 namespace App\Jobs;
 
-use App\Jobs\Concerns\PausesForShabbat;
 use App\Models\Site;
 use App\Services\Agent\McpClient;
 use App\Services\Agent\SitePluginInventory;
@@ -22,7 +21,6 @@ use Illuminate\Support\Facades\Log;
  */
 class CheckSitePluginChangesJob implements ShouldQueue
 {
-    use PausesForShabbat;
     use Queueable;
 
     public int $tries = 2;
@@ -31,18 +29,8 @@ class CheckSitePluginChangesJob implements ShouldQueue
 
     public function __construct(public int $siteId) {}
 
-    /** @return array<int, mixed> */
-    protected function shabbatDispatchArgs(): array
-    {
-        return [$this->siteId];
-    }
-
     public function handle(McpClient $mcp, TeamNotifier $team): void
     {
-        if ($this->rescheduledForShabbat()) {
-            return;
-        }
-
         $site = Site::with('customer')->find($this->siteId);
 
         if (! $site || ! $site->mcp_enabled || blank($site->mcp_endpoint)) {

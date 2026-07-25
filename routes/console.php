@@ -106,7 +106,7 @@ Schedule::call(function () {
         ->whereNotNull('mcp_endpoint')
         ->pluck('id')
         ->each(fn (int $id) => CheckSitePluginChangesJob::dispatch($id));
-})->dailyAt('07:30')->name('monitoring:plugin-changes')->when($awake)->onOneServer();
+})->dailyAt('07:30')->name('monitoring:plugin-changes')->onOneServer();
 
 // Daily security scan for every connected site: match installed plugins/themes/
 // core against the vulnerability feed and alert on newly-found issues. Gated on
@@ -121,7 +121,7 @@ Schedule::call(function () {
         ->whereNotNull('mcp_endpoint')
         ->pluck('id')
         ->each(fn (int $id) => ScanSiteVulnerabilitiesJob::dispatch($id));
-})->dailyAt('07:45')->name('monitoring:vulnerability-scan')->when($awake)->onOneServer();
+})->dailyAt('07:45')->name('monitoring:vulnerability-scan')->onOneServer();
 
 // Daily domain-reputation check for every site with a domain: flag it if it
 // appears on a public spam/malware blocklist. External (no site connection
@@ -136,7 +136,7 @@ Schedule::call(function () {
         ->where('domain', '!=', '')
         ->pluck('id')
         ->each(fn (int $id) => CheckSiteReputationJob::dispatch($id));
-})->dailyAt('07:50')->name('monitoring:reputation-check')->when($awake)->onOneServer();
+})->dailyAt('07:50')->name('monitoring:reputation-check')->onOneServer();
 
 // Daily DNS-change watch: snapshot each monitored domain's A/MX/NS records and
 // alert when they differ from yesterday — hijack/silent-migration detection.
@@ -150,7 +150,7 @@ Schedule::call(function () {
         ->where('domain', '!=', '')
         ->pluck('id')
         ->each(fn (int $id) => CheckSiteDnsJob::dispatch($id));
-})->dailyAt('07:55')->name('monitoring:dns-watch')->when($awake)->onOneServer();
+})->dailyAt('07:55')->name('monitoring:dns-watch')->onOneServer();
 
 // Daily defacement watch: fingerprint each monitored homepage and alert when
 // the content changed drastically vs the baseline (hack/injection detection).
@@ -165,7 +165,7 @@ Schedule::call(function () {
         ->where('domain', '!=', '')
         ->pluck('id')
         ->each(fn (int $id) => CheckSiteContentJob::dispatch($id));
-})->dailyAt('08:05')->name('monitoring:defacement-watch')->when($awake)->onOneServer();
+})->dailyAt('08:05')->name('monitoring:defacement-watch')->onOneServer();
 
 // Proactive reminders: a once-a-day internal digest (renewals due, cards
 // expiring, open debt) so the owner can act before anything slips.

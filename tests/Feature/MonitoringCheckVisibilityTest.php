@@ -3,10 +3,14 @@
 namespace Tests\Feature;
 
 use App\Filament\Resources\SiteResource\Pages\ViewSite;
+use App\Jobs\ChargeSubscriptionJob;
 use App\Jobs\CheckSiteReputationJob;
 use App\Models\Site;
+use App\Models\Subscription;
 use App\Models\SystemLog;
 use App\Models\User;
+use App\Services\Billing\DunningMachine;
+use App\Services\Cardcom\CardcomClient;
 use App\Services\Notifications\TeamNotifier;
 use App\Services\Security\DomainReputationClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -84,25 +88,45 @@ class MonitoringCheckVisibilityTest extends TestCase
         );
     }
 
-    public function test_a_check_held_for_shabbat_leaves_an_event_log_entry(): void
+    public function test_monitoring_checks_run_immediately_even_during_shabbat(): void
     {
-        // Saturday noon in Israel — the quiet period is in effect. The job must
-        // re-queue itself AND say so in the event log, not vanish silently.
+        // Monitoring is INTERNAL — only customer-facing automations pause for
+        // Shabbat. A check requested on Saturday runs now, not the day after.
         config(['billing.shabbat.block_automations' => true]);
         Carbon::setTestNow(Carbon::parse('2026-07-18 12:00', 'Asia/Jerusalem'));
 
-        $site = Site::factory()->create(['domain' => 'shabbat.co.il']);
+        $site = Site::factory()->create(['domain' => '']);
         Queue::fake();
 
         (new CheckSiteReputationJob($site->id))->handle(app(DomainReputationClient::class), app(TeamNotifier::class));
 
-        Queue::assertPushed(CheckSiteReputationJob::class, fn (CheckSiteReputationJob $job): bool => $job->siteId === $site->id);
-        $this->assertTrue(
-            SystemLog::query()
-                ->where('message', 'like', '%shabbat.co.il%')
-                ->where('message', 'like', '%הושהתה לשבת%')
-                ->exists(),
-        );
+        // It proceeded past where the old hold used to be (the no-domain
+        // warning was written) and was NOT re-queued for after Shabbat.
+        Queue::assertNothingPushed();
+        $this->assertTrue(SystemLog::query()->where('message', 'like', '%לא מוגדר דומיין%')->exists());
+        $this->assertFalse(SystemLog::query()->where('message', 'like', '%הושהתה לשבת%')->exists());
+    }
+
+    public function test_a_manual_charge_bypasses_the_shabbat_hold_but_a_scheduled_one_defers(): void
+    {
+        // "חייב עכשיו" is an explicit human request — it must charge now even
+        // on Shabbat. Only SCHEDULED charges keep deferring to the day after.
+        config(['billing.shabbat.block_automations' => true]);
+        Carbon::setTestNow(Carbon::parse('2026-07-18 12:00', 'Asia/Jerusalem'));
+
+        $subscription = Subscription::factory()->create(['token_id' => null]);
+        Queue::fake();
+
+        // Scheduled: held and re-queued for after Shabbat.
+        (new ChargeSubscriptionJob($subscription->id))
+            ->handle(app(CardcomClient::class), app(DunningMachine::class));
+        Queue::assertPushed(ChargeSubscriptionJob::class, 1);
+
+        // Manual: proceeds past the hold (and exits on the no-token guard) —
+        // no re-queue is added.
+        (new ChargeSubscriptionJob($subscription->id, manual: true))
+            ->handle(app(CardcomClient::class), app(DunningMachine::class));
+        Queue::assertPushed(ChargeSubscriptionJob::class, 1);
     }
 
     public function test_a_reputation_check_without_a_domain_logs_a_warning(): void

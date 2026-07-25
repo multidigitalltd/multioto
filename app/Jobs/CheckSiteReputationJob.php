@@ -2,7 +2,6 @@
 
 namespace App\Jobs;
 
-use App\Jobs\Concerns\PausesForShabbat;
 use App\Models\Site;
 use App\Models\SystemLog;
 use App\Services\Notifications\TeamNotifier;
@@ -17,11 +16,10 @@ use Illuminate\Support\Facades\DB;
  * result on the site, and alert the team about newly-appeared listings.
  *
  * External, read-only, best-effort. If no source could run, the previous result
- * is left untouched (an outage never reads as "clean"). Honours Shabbat quiet.
+ * is left untouched (an outage never reads as "clean").
  */
 class CheckSiteReputationJob implements ShouldQueue
 {
-    use PausesForShabbat;
     use Queueable;
 
     public int $tries = 2;
@@ -30,29 +28,8 @@ class CheckSiteReputationJob implements ShouldQueue
 
     public function __construct(public int $siteId) {}
 
-    /** @return array<int, mixed> */
-    protected function shabbatDispatchArgs(): array
-    {
-        return [$this->siteId];
-    }
-
-    protected function shabbatHoldDescription(): ?string
-    {
-        return 'בדיקת המוניטין לאתר '.(Site::whereKey($this->siteId)->value('domain') ?: "#{$this->siteId}");
-    }
-
-    /** @return array<string, mixed> */
-    protected function shabbatHoldContext(): array
-    {
-        return ['site_id' => $this->siteId];
-    }
-
     public function handle(DomainReputationClient $reputation, TeamNotifier $team): void
     {
-        if ($this->rescheduledForShabbat()) {
-            return;
-        }
-
         if (! config('security.reputation.enabled', true)) {
             SystemLog::record('info', 'monitoring',
                 'בדיקת מוניטין לא רצה — בדיקות המוניטין מושבתות בהגדרות (SECURITY_REPUTATION_ENABLED).',
