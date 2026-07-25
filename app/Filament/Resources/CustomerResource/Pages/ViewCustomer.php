@@ -44,19 +44,24 @@ class ViewCustomer extends ViewRecord
         // Keep only the two most-used actions inline; the rest live in a "עוד
         // פעולות" dropdown so the row of buttons stops crowding the customer name
         // and breadcrumbs (they get their own line).
-        return [
+        // Charging and card/payment links are finance-module operations — a
+        // team member without that module gets a customer page with no money
+        // buttons at all (unregistered actions can't be mounted either).
+        $finance = auth()->user()?->canAccessModule('finance') ?? false;
+
+        return array_values(array_filter([
             $this->contactCustomerAction(),
-            $this->chargeAction(),
-            Actions\ActionGroup::make([
-                $this->paymentLinkAction(),
-                $this->cardLinkAction(),
-                $this->syncCardAction(),
+            $finance ? $this->chargeAction() : null,
+            Actions\ActionGroup::make(array_values(array_filter([
+                $finance ? $this->paymentLinkAction() : null,
+                $finance ? $this->cardLinkAction() : null,
+                $finance ? $this->syncCardAction() : null,
                 Actions\EditAction::make()->label('עריכה'),
-            ])
+            ])))
                 ->label('עוד פעולות')
                 ->icon('heroicon-m-ellipsis-horizontal')
                 ->button(),
-        ];
+        ]));
     }
 
     /**

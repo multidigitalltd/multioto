@@ -13,6 +13,7 @@ use Filament\Notifications\Notification;
 use Filament\Resources\RelationManagers\RelationManager;
 use Filament\Tables;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Model;
 
 /**
  * Edit a customer's subscriptions directly from the customer card — no jumping
@@ -21,6 +22,16 @@ use Filament\Tables\Table;
  */
 class SubscriptionsRelationManager extends RelationManager
 {
+    /**
+     * Subscriptions are finance-module territory (create/edit/cancel/charge
+     * now) — a team member without the finance module must not see or reach
+     * this tab even though the customer page itself is in ניהול.
+     */
+    public static function canViewForRecord(Model $ownerRecord, string $pageClass): bool
+    {
+        return auth()->user()?->canAccessModule('finance') ?? false;
+    }
+
     protected static string $relationship = 'subscriptions';
 
     protected static ?string $title = 'מנויים';

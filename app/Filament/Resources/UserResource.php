@@ -104,6 +104,13 @@ class UserResource extends Resource
                                     $component->state(TeamModules::keys());
                                 }
                             })
+                            // Everything checked saves back as null, so an
+                            // unrestricted user STAYS unrestricted (and will
+                            // automatically get modules added in the future)
+                            // even when an admin edits an unrelated field.
+                            ->dehydrateStateUsing(fn (?array $state): ?array => $state !== null && array_diff(TeamModules::keys(), $state) === []
+                                ? null
+                                : $state)
                             ->descriptions([
                                 'finance' => 'חיובים, מנויים, חשבוניות, גבייה ותחזיות',
                                 'support' => 'פניות, דיוור, תשובות מוכנות וקונסולת ה-AI',

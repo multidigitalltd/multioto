@@ -15,12 +15,22 @@ trait RespectsModuleAccess
 {
     public static function canAccess(): bool
     {
-        $module = TeamModules::keyForGroup(static::getNavigationGroup());
+        $module = static::accessModule();
 
         if ($module !== null && ! (auth()->user()?->canAccessModule($module) ?? false)) {
             return false;
         }
 
         return parent::canAccess();
+    }
+
+    /**
+     * The module key governing this screen. Defaults to the navigation group;
+     * screens without one (e.g. clustered resources, whose sidebar entry is
+     * the cluster's) override this so a direct URL is still gated.
+     */
+    protected static function accessModule(): ?string
+    {
+        return TeamModules::keyForGroup(static::getNavigationGroup());
     }
 }

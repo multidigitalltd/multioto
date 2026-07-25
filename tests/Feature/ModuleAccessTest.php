@@ -6,10 +6,16 @@ use App\Enums\UserRole;
 use App\Filament\Pages\ManualCollection;
 use App\Filament\Resources\ChargeResource;
 use App\Filament\Resources\CustomerResource;
+use App\Filament\Resources\CustomerResource\Pages\ViewCustomer;
+use App\Filament\Resources\CustomerResource\RelationManagers\SubscriptionsRelationManager;
+use App\Filament\Resources\NotificationTemplateResource;
 use App\Filament\Resources\TicketResource;
+use App\Filament\Resources\UserResource\Pages\EditUser;
 use App\Filament\Widgets\StatsOverview;
+use App\Models\Customer;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Livewire\Livewire;
 use Tests\TestCase;
 
 /**
@@ -87,5 +93,60 @@ class ModuleAccessTest extends TestCase
 
         $this->get('/admin')->assertOk();
         $this->get(ChargeResource::getUrl())->assertForbidden();
+    }
+
+    public function test_the_clustered_template_editor_is_gated_by_the_support_module(): void
+    {
+        // The notification-template editor sits in the settings cluster with
+        // no navigation group of its own; it edits the customer-facing message
+        // templates, so it follows the support module explicitly — a direct
+        // URL must not slip past just because the group is null.
+        $this->actingAs($this->agent(['management']));
+        $this->get(NotificationTemplateResource::getUrl())->assertForbidden();
+
+        $this->actingAs($this->agent(['support']));
+        $this->get(NotificationTemplateResource::getUrl())->assertOk();
+
+        $this->actingAs($this->agent(null));
+        $this->get(NotificationTemplateResource::getUrl())->assertOk();
+    }
+
+    public function test_financial_operations_on_the_customer_page_require_the_finance_module(): void
+    {
+        // A management-only agent can open the customer page, but must get it
+        // without the subscriptions tab (create/cancel/charge-now) and without
+        // the charge / payment-link / card actions.
+        $customer = Customer::factory()->create();
+
+        $this->actingAs($this->agent(['management']));
+        $this->assertFalse(
+            SubscriptionsRelationManager::canViewForRecord($customer, ViewCustomer::class),
+        );
+        Livewire::test(ViewCustomer::class, ['record' => $customer->getRouteKey()])
+            ->assertActionDoesNotExist('newCharge')
+            ->assertActionDoesNotExist('paymentLink');
+
+        $this->actingAs($this->agent(['management', 'finance']));
+        $this->assertTrue(
+            SubscriptionsRelationManager::canViewForRecord($customer, ViewCustomer::class),
+        );
+        Livewire::test(ViewCustomer::class, ['record' => $customer->getRouteKey()])
+            ->assertActionExists('newCharge');
+    }
+
+    public function test_editing_an_unrestricted_user_keeps_the_null_grant(): void
+    {
+        // The checkbox list shows null as "everything checked"; saving it back
+        // must store null again — not today's explicit key list — so modules
+        // added in the future are granted automatically.
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+        $agent = $this->agent(null);
+
+        Livewire::test(EditUser::class, ['record' => $agent->getRouteKey()])
+            ->fillForm(['name' => 'שם חדש'])
+            ->call('save');
+
+        $this->assertNull($agent->refresh()->allowed_modules);
+        $this->assertSame('שם חדש', $agent->name);
     }
 }
