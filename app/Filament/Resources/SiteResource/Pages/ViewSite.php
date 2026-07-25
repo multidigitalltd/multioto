@@ -334,14 +334,15 @@ class ViewSite extends ViewRecord
     /** Propose an MCP tool call (gated) — mirrors the table action for the page. */
     /**
      * Record a manually-requested check in the event log the moment it is
-     * queued. If this entry appears but no result/failure entry follows, the
-     * queue worker isn't processing — the one failure mode the job itself can
-     * never report.
+     * queued. A completed run shows up as a fresh timestamp on the check's
+     * card in the site page (success) or as a log entry here (skip/failure/
+     * crash via failed()); when NEITHER appears, the queue worker isn't
+     * processing — the one failure mode the job itself can never report.
      */
     private static function logManualCheck(string $label, int $siteId): void
     {
         SystemLog::record('info', 'monitoring',
-            "{$label} נשלחה ידנית לתור עבור אתר #{$siteId} — ממתינה לעיבוד. אם לא מופיעה כאן תוצאה תוך דקות, ודאו שמעבד התור (Horizon) רץ בשרת.",
+            "{$label} נשלחה ידנית לתור עבור אתר #{$siteId} — ממתינה לעיבוד. בסיום, התוצאה תופיע בקוביית הבדיקה בעמוד האתר (תאריך הבדיקה יתעדכן); דילוג או כשל יירשמו כאן. אם תוך דקות אין לא זה ולא זה — ודאו שמעבד התור (Horizon) רץ בשרת.",
             ['site_id' => $siteId]);
     }
 

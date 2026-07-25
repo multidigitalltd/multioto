@@ -50,6 +50,14 @@ class CheckSiteContentJob implements ShouldQueue
         return ['site_id' => $this->siteId];
     }
 
+    /** An unexpected crash must land in the event log, not only in Horizon. */
+    public function failed(?\Throwable $e): void
+    {
+        SystemLog::record('error', 'monitoring',
+            "בדיקת השחתה לאתר #{$this->siteId} נכשלה בשגיאה לא צפויה: ".($e?->getMessage() ?: 'שגיאה לא ידועה'),
+            ['site_id' => $this->siteId]);
+    }
+
     public function handle(ContentFingerprint $fingerprint, TeamNotifier $team): void
     {
         if ($this->rescheduledForShabbat()) {

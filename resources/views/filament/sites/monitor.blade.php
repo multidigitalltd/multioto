@@ -247,7 +247,15 @@
         <div class="rounded-xl bg-white p-4 shadow-sm dark:bg-gray-800">
             <h3 class="mb-3 text-sm font-semibold">זיהוי השחתה — תוכן דף הבית</h3>
             <div class="text-sm text-gray-500 dark:text-gray-400">
-                טרם נלקחה טביעת תוכן לדף הבית. הבדיקה רצה אוטומטית כל בוקר, או מייד דרך "עוד כלים" ← "בדיקת השחתה".
+                {{-- Name the real blocker: a site the scheduler/job skips would
+                     otherwise show "runs every morning" forever. --}}
+                @if (blank($site->domain))
+                    לא מוגדר דומיין לאתר — זיהוי השחתה דורש דומיין.
+                @elseif (! $site->monitor_enabled)
+                    הניטור לאתר כבוי — הפעילו ניטור כדי שבדיקת ההשחתה תרוץ.
+                @else
+                    טרם נלקחה טביעת תוכן לדף הבית. הבדיקה רצה אוטומטית כל בוקר, או מייד דרך "עוד כלים" ← "בדיקת השחתה".
+                @endif
             </div>
         </div>
     @else
@@ -314,7 +322,11 @@
         <div class="rounded-xl bg-white p-4 shadow-sm dark:bg-gray-800">
             <h3 class="mb-3 text-sm font-semibold">רשומות DNS — מעקב שינויים</h3>
             <div class="text-sm text-gray-500 dark:text-gray-400">
-                טרם נלקחה תמונת DNS לדומיין. הבדיקה רצה אוטומטית כל בוקר, או מייד דרך "עוד כלים" ← "בדיקת DNS".
+                @if (blank($site->domain))
+                    לא מוגדר דומיין לאתר — מעקב DNS דורש דומיין.
+                @else
+                    טרם נלקחה תמונת DNS לדומיין. הבדיקה רצה אוטומטית כל בוקר, או מייד דרך "עוד כלים" ← "בדיקת DNS".
+                @endif
             </div>
         </div>
     @else

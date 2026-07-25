@@ -41,6 +41,32 @@ class MonitoringCheckVisibilityTest extends TestCase
             ->assertSeeText('טרם נלקחה תמונת DNS');
     }
 
+    public function test_the_defacement_card_names_the_real_blocker_instead_of_promising_runs(): void
+    {
+        // A site the scheduler skips (monitoring off) must not claim the check
+        // "runs every morning" — it never will until monitoring is enabled.
+        $this->actingAs(User::factory()->create());
+        $off = Site::factory()->create(['domain' => 'off.co.il', 'monitor_enabled' => false]);
+
+        Livewire::test(ViewSite::class, ['record' => $off->getRouteKey()])
+            ->assertSeeText('הניטור לאתר כבוי')
+            ->assertDontSeeText('טרם נלקחה טביעת תוכן');
+    }
+
+    public function test_an_unexpected_job_crash_is_recorded_in_the_event_log(): void
+    {
+        $site = Site::factory()->create(['domain' => 'crash.co.il']);
+
+        (new CheckSiteReputationJob($site->id))->failed(new \RuntimeException('boom'));
+
+        $this->assertTrue(
+            SystemLog::query()
+                ->where('level', 'error')
+                ->where('message', 'like', '%שגיאה לא צפויה%boom%')
+                ->exists(),
+        );
+    }
+
     public function test_a_manual_check_click_is_recorded_in_the_event_log(): void
     {
         // If this entry appears but no result follows, the operator can tell

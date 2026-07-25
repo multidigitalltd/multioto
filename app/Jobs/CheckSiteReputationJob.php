@@ -134,6 +134,14 @@ class CheckSiteReputationJob implements ShouldQueue
         }
     }
 
+    /** An unexpected crash must land in the event log, not only in Horizon. */
+    public function failed(?\Throwable $e): void
+    {
+        SystemLog::record('error', 'monitoring',
+            "בדיקת מוניטין לאתר #{$this->siteId} נכשלה בשגיאה לא צפויה: ".($e?->getMessage() ?: 'שגיאה לא ידועה'),
+            ['site_id' => $this->siteId]);
+    }
+
     /** A stable identity for one listing so the same flag isn't re-alerted. */
     private static function key(array $listing): string
     {
