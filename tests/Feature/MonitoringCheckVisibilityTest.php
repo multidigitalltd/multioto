@@ -84,25 +84,23 @@ class MonitoringCheckVisibilityTest extends TestCase
         );
     }
 
-    public function test_a_check_held_for_shabbat_leaves_an_event_log_entry(): void
+    public function test_monitoring_checks_run_immediately_even_during_shabbat(): void
     {
-        // Saturday noon in Israel — the quiet period is in effect. The job must
-        // re-queue itself AND say so in the event log, not vanish silently.
+        // Monitoring is INTERNAL — only customer-facing automations pause for
+        // Shabbat. A check requested on Saturday runs now, not the day after.
         config(['billing.shabbat.block_automations' => true]);
         Carbon::setTestNow(Carbon::parse('2026-07-18 12:00', 'Asia/Jerusalem'));
 
-        $site = Site::factory()->create(['domain' => 'shabbat.co.il']);
+        $site = Site::factory()->create(['domain' => '']);
         Queue::fake();
 
         (new CheckSiteReputationJob($site->id))->handle(app(DomainReputationClient::class), app(TeamNotifier::class));
 
-        Queue::assertPushed(CheckSiteReputationJob::class, fn (CheckSiteReputationJob $job): bool => $job->siteId === $site->id);
-        $this->assertTrue(
-            SystemLog::query()
-                ->where('message', 'like', '%shabbat.co.il%')
-                ->where('message', 'like', '%הושהתה לשבת%')
-                ->exists(),
-        );
+        // It proceeded past where the old hold used to be (the no-domain
+        // warning was written) and was NOT re-queued for after Shabbat.
+        Queue::assertNothingPushed();
+        $this->assertTrue(SystemLog::query()->where('message', 'like', '%לא מוגדר דומיין%')->exists());
+        $this->assertFalse(SystemLog::query()->where('message', 'like', '%הושהתה לשבת%')->exists());
     }
 
     public function test_a_reputation_check_without_a_domain_logs_a_warning(): void

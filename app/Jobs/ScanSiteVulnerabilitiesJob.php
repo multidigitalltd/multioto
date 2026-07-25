@@ -2,7 +2,6 @@
 
 namespace App\Jobs;
 
-use App\Jobs\Concerns\PausesForShabbat;
 use App\Models\Site;
 use App\Models\SystemLog;
 use App\Services\Agent\McpClient;
@@ -20,12 +19,10 @@ use Illuminate\Support\Facades\Log;
  * Intelligence by default), store the result on the site, and alert the team
  * about newly-appeared vulnerabilities (once — not on every run).
  *
- * Read-only on the customer site; it never changes anything. Honours the
- * Shabbat quiet period like the other outward jobs.
+ * Read-only on the customer site; it never changes anything.
  */
 class ScanSiteVulnerabilitiesJob implements ShouldQueue
 {
-    use PausesForShabbat;
     use Queueable;
 
     public int $tries = 2;
@@ -33,23 +30,6 @@ class ScanSiteVulnerabilitiesJob implements ShouldQueue
     public array $backoff = [30];
 
     public function __construct(public int $siteId) {}
-
-    /** @return array<int, mixed> */
-    protected function shabbatDispatchArgs(): array
-    {
-        return [$this->siteId];
-    }
-
-    protected function shabbatHoldDescription(): ?string
-    {
-        return 'סריקת האבטחה לאתר '.(Site::whereKey($this->siteId)->value('domain') ?: "#{$this->siteId}");
-    }
-
-    /** @return array<string, mixed> */
-    protected function shabbatHoldContext(): array
-    {
-        return ['site_id' => $this->siteId];
-    }
 
     /** An unexpected crash must land in the event log, not only in Horizon. */
     public function failed(?\Throwable $e): void
@@ -61,10 +41,6 @@ class ScanSiteVulnerabilitiesJob implements ShouldQueue
 
     public function handle(McpClient $mcp, VulnerabilityFeedClient $feed, TeamNotifier $team): void
     {
-        if ($this->rescheduledForShabbat()) {
-            return;
-        }
-
         if (! config('security.vulnerabilities.enabled', true)) {
             SystemLog::record('info', 'monitoring',
                 'סריקת אבטחה לא רצה — סריקות האבטחה מושבתות בהגדרות (SECURITY_VULNERABILITIES_ENABLED).',
