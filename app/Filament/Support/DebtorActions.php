@@ -35,7 +35,7 @@ class DebtorActions
                 // Collect now without moving the billing anchor forward, so a late
                 // payer is billed for the delayed period (no free days).
                 $record->markDueNow();
-                ChargeSubscriptionJob::dispatch($record->id);
+                ChargeSubscriptionJob::dispatch($record->id, manual: true);
                 Notification::make()->title('החיוב נשלח לביצוע')->body('התוצאה תופיע במסך "חיובים".')->success()->send();
             });
     }
