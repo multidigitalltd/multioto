@@ -66,18 +66,21 @@ class ManualCollection extends Page implements HasTable
                 // (that charge's period_start) — one subselect each, no N+1 — so
                 // the table can show when the customer really paid and how late,
                 // not just the next rolled-forward due date.
+                // charged_at is COALESCEd to created_at for legacy rows that
+                // predate the charged_at stamp (same fallback the revenue
+                // reports use) — old payments must not vanish from the screen.
                 ->addSelect([
-                    'last_paid_at' => Charge::select('charged_at')
+                    'last_paid_at' => Charge::query()
+                        ->selectRaw('COALESCE(charged_at, created_at)')
                         ->whereColumn('subscription_id', 'subscriptions.id')
                         ->where('status', ChargeStatus::Succeeded)
-                        ->whereNotNull('charged_at')
-                        ->latest('charged_at')
+                        ->orderByRaw('COALESCE(charged_at, created_at) DESC')
                         ->limit(1),
-                    'last_paid_due_at' => Charge::select('period_start')
+                    'last_paid_due_at' => Charge::query()
+                        ->select('period_start')
                         ->whereColumn('subscription_id', 'subscriptions.id')
                         ->where('status', ChargeStatus::Succeeded)
-                        ->whereNotNull('charged_at')
-                        ->latest('charged_at')
+                        ->orderByRaw('COALESCE(charged_at, created_at) DESC')
                         ->limit(1),
                 ]))
             ->columns([

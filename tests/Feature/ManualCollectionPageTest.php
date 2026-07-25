@@ -117,6 +117,25 @@ class ManualCollectionPageTest extends TestCase
             ->assertDontSeeText('באיחור של');
     }
 
+    public function test_a_legacy_charge_without_charged_at_still_shows_a_payment_date(): void
+    {
+        // Rows that predate the charged_at stamp fall back to created_at — the
+        // customer's payment history must not read as "טרם נרשם תשלום".
+        $sub = $this->manualSub(now()->addMonth());
+        $legacy = Charge::create([
+            'subscription_id' => $sub->id,
+            'amount_agorot' => 10000, 'vat_agorot' => 1800, 'total_agorot' => 11800,
+            'status' => ChargeStatus::Succeeded, 'attempt_number' => 1,
+            'period_start' => now()->subDays(3)->toDateString(),
+            'period_end' => now()->addDays(27)->toDateString(),
+            'charged_at' => null,
+        ]);
+
+        Livewire::test(ManualCollection::class)
+            ->assertSeeText($legacy->created_at->format('d/m/Y'))
+            ->assertDontSeeText('טרם נרשם תשלום');
+    }
+
     private function manualSub(Carbon $nextChargeAt): Subscription
     {
         return Subscription::factory()->create([
