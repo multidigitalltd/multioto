@@ -35,10 +35,17 @@ class DomainExpiry
                 continue;
             }
 
-            return [
-                'expires_at' => $this->expiryFrom($data),
-                'registrant' => $this->registrantFrom($data),
-            ];
+            // Parsing stays inside the best-effort boundary: a 200 with a
+            // malformed payload (e.g. an unparsable eventDate) must fall through
+            // to the next endpoint, not blow up the single-attempt job.
+            try {
+                return [
+                    'expires_at' => $this->expiryFrom($data),
+                    'registrant' => $this->registrantFrom($data),
+                ];
+            } catch (\Throwable) {
+                continue;
+            }
         }
 
         return null;

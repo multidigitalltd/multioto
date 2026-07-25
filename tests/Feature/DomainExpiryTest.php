@@ -68,6 +68,23 @@ class DomainExpiryTest extends TestCase
         $this->assertSame('חברת דוגמה בע״מ', $lookup['registrant']);
     }
 
+    public function test_a_malformed_event_date_falls_through_to_the_next_endpoint(): void
+    {
+        // rdap.org answers 200 but with garbage — the .il fallback must still run.
+        Http::fake([
+            'rdap.org/*' => Http::response([
+                'events' => [['eventAction' => 'expiration', 'eventDate' => 'not-a-date']],
+            ]),
+            'rdap.isoc.org.il/domain/example.co.il' => Http::response([
+                'events' => [['eventAction' => 'expiration', 'eventDate' => '2027-05-25T00:00:00Z']],
+            ]),
+        ]);
+
+        $lookup = app(DomainExpiry::class)->lookup('example.co.il');
+
+        $this->assertSame('2027-05-25', $lookup['expires_at']?->toDateString());
+    }
+
     public function test_the_job_stores_the_registrant_on_the_site(): void
     {
         Http::fake([
