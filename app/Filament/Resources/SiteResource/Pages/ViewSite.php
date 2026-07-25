@@ -12,6 +12,7 @@ use App\Jobs\InvestigateSiteJob;
 use App\Jobs\ScanSiteVulnerabilitiesJob;
 use App\Jobs\SendDomainRenewalReminderJob;
 use App\Models\MonitorCheck;
+use App\Models\SystemLog;
 use App\Services\Agent\SiteConnector;
 use App\Services\Agent\SiteToolCatalog;
 use App\Services\Automation\ApprovalGate;
@@ -94,9 +95,10 @@ class ViewSite extends ViewRecord
                 ->tooltip(fn (): ?string => $this->record->mcp_enabled ? null : 'הפעילו קודם את חיבור ה-AI')
                 ->action(function (): void {
                     ScanSiteVulnerabilitiesJob::dispatch($this->record->id);
+                    self::logManualCheck('סריקת אבטחה', $this->record->id);
 
                     Notification::make()->title('סריקת האבטחה רצה ברקע')
-                        ->body('התוצאות יופיעו בעמוד האתר, וממצאים חדשים יישלחו גם לצוות.')
+                        ->body('התוצאות יופיעו בעמוד האתר, וממצאים חדשים יישלחו גם לצוות. אם לא מופיעה תוצאה תוך כמה דקות — בדקו בניהול ← יומן אירועים.')
                         ->success()->send();
                 }),
 
@@ -110,9 +112,10 @@ class ViewSite extends ViewRecord
                 ->visible($isAdmin)
                 ->action(function (): void {
                     CheckSiteReputationJob::dispatch($this->record->id);
+                    self::logManualCheck('בדיקת מוניטין', $this->record->id);
 
                     Notification::make()->title('בדיקת המוניטין רצה ברקע')
-                        ->body('נבדוק את הדומיין מול מאגרי ספאם/נוזקות. התוצאה תופיע בעמוד האתר.')
+                        ->body('נבדוק את הדומיין מול מאגרי ספאם/נוזקות. התוצאה תופיע בעמוד האתר; אם לא — בדקו בניהול ← יומן אירועים.')
                         ->success()->send();
                 }),
 
@@ -275,6 +278,7 @@ class ViewSite extends ViewRecord
                     ->visible($isAdmin)
                     ->action(function (): void {
                         CheckSiteContentJob::dispatch($this->record->id);
+                        self::logManualCheck('בדיקת השחתה', $this->record->id);
 
                         Notification::make()->title('בדיקת ההשחתה רצה ברקע')
                             ->body('תוכן דף הבית יושווה לבסיס המוכר; חשד ישלח התראה לצוות והתוצאה תופיע בעמוד האתר.')
@@ -289,6 +293,7 @@ class ViewSite extends ViewRecord
                     ->visible($isAdmin)
                     ->action(function (): void {
                         CheckSiteDnsJob::dispatch($this->record->id);
+                        self::logManualCheck('בדיקת DNS', $this->record->id);
 
                         Notification::make()->title('בדיקת ה-DNS רצה ברקע')
                             ->body('רשומות ה-A/MX/NS יושוו לתמונה הקודמת; שינוי ישלח התראה לצוות והתוצאה תופיע בעמוד האתר.')
@@ -327,6 +332,20 @@ class ViewSite extends ViewRecord
     }
 
     /** Propose an MCP tool call (gated) — mirrors the table action for the page. */
+    /**
+     * Record a manually-requested check in the event log the moment it is
+     * queued. A completed run shows up as a fresh timestamp on the check's
+     * card in the site page (success) or as a log entry here (skip/failure/
+     * crash via failed()); when NEITHER appears, the queue worker isn't
+     * processing — the one failure mode the job itself can never report.
+     */
+    private static function logManualCheck(string $label, int $siteId): void
+    {
+        SystemLog::record('info', 'monitoring',
+            "{$label} נשלחה ידנית לתור עבור אתר #{$siteId} — ממתינה לעיבוד. בסיום, התוצאה תופיע בקוביית הבדיקה בעמוד האתר (תאריך הבדיקה יתעדכן); דילוג או כשל יירשמו כאן. אם תוך דקות אין לא זה ולא זה — ודאו שמעבד התור (Horizon) רץ בשרת.",
+            ['site_id' => $siteId]);
+    }
+
     protected function proposeMcpAction(): Actions\Action
     {
         return Actions\Action::make('proposeMcp')

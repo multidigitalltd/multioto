@@ -36,15 +36,42 @@ class CheckSiteReputationJob implements ShouldQueue
         return [$this->siteId];
     }
 
+    protected function shabbatHoldDescription(): ?string
+    {
+        return 'בדיקת המוניטין לאתר '.(Site::whereKey($this->siteId)->value('domain') ?: "#{$this->siteId}");
+    }
+
+    /** @return array<string, mixed> */
+    protected function shabbatHoldContext(): array
+    {
+        return ['site_id' => $this->siteId];
+    }
+
     public function handle(DomainReputationClient $reputation, TeamNotifier $team): void
     {
-        if ($this->rescheduledForShabbat() || ! config('security.reputation.enabled', true)) {
+        if ($this->rescheduledForShabbat()) {
+            return;
+        }
+
+        if (! config('security.reputation.enabled', true)) {
+            SystemLog::record('info', 'monitoring',
+                'בדיקת מוניטין לא רצה — בדיקות המוניטין מושבתות בהגדרות (SECURITY_REPUTATION_ENABLED).',
+                ['site_id' => $this->siteId]);
+
             return;
         }
 
         $site = Site::with('customer')->find($this->siteId);
 
-        if (! $site || blank($site->domain)) {
+        if (! $site) {
+            return;
+        }
+
+        if (blank($site->domain)) {
+            SystemLog::record('warning', 'monitoring',
+                "בדיקת מוניטין לאתר #{$site->id} לא רצה — לא מוגדר דומיין לאתר.",
+                ['site_id' => $site->id]);
+
             return;
         }
 
@@ -105,6 +132,14 @@ class CheckSiteReputationJob implements ShouldQueue
         if ($fresh !== []) {
             $this->alert($team, $site, $fresh);
         }
+    }
+
+    /** An unexpected crash must land in the event log, not only in Horizon. */
+    public function failed(?\Throwable $e): void
+    {
+        SystemLog::record('error', 'monitoring',
+            "בדיקת מוניטין לאתר #{$this->siteId} נכשלה בשגיאה לא צפויה: ".($e?->getMessage() ?: 'שגיאה לא ידועה'),
+            ['site_id' => $this->siteId]);
     }
 
     /** A stable identity for one listing so the same flag isn't re-alerted. */

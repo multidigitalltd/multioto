@@ -40,15 +40,50 @@ class ScanSiteVulnerabilitiesJob implements ShouldQueue
         return [$this->siteId];
     }
 
+    protected function shabbatHoldDescription(): ?string
+    {
+        return 'סריקת האבטחה לאתר '.(Site::whereKey($this->siteId)->value('domain') ?: "#{$this->siteId}");
+    }
+
+    /** @return array<string, mixed> */
+    protected function shabbatHoldContext(): array
+    {
+        return ['site_id' => $this->siteId];
+    }
+
+    /** An unexpected crash must land in the event log, not only in Horizon. */
+    public function failed(?\Throwable $e): void
+    {
+        SystemLog::record('error', 'monitoring',
+            "סריקת אבטחה לאתר #{$this->siteId} נכשלה בשגיאה לא צפויה: ".($e?->getMessage() ?: 'שגיאה לא ידועה'),
+            ['site_id' => $this->siteId]);
+    }
+
     public function handle(McpClient $mcp, VulnerabilityFeedClient $feed, TeamNotifier $team): void
     {
-        if ($this->rescheduledForShabbat() || ! config('security.vulnerabilities.enabled', true)) {
+        if ($this->rescheduledForShabbat()) {
+            return;
+        }
+
+        if (! config('security.vulnerabilities.enabled', true)) {
+            SystemLog::record('info', 'monitoring',
+                'סריקת אבטחה לא רצה — סריקות האבטחה מושבתות בהגדרות (SECURITY_VULNERABILITIES_ENABLED).',
+                ['site_id' => $this->siteId]);
+
             return;
         }
 
         $site = Site::with('customer')->find($this->siteId);
 
-        if (! $site || ! $site->mcp_enabled || blank($site->mcp_endpoint)) {
+        if (! $site) {
+            return;
+        }
+
+        if (! $site->mcp_enabled || blank($site->mcp_endpoint)) {
+            SystemLog::record('warning', 'monitoring',
+                'סריקת אבטחה לאתר '.($site->domain ?: "#{$site->id}").' לא רצה — חיבור ה-AI לאתר כבוי או שכתובת החיבור חסרה.',
+                ['site_id' => $site->id]);
+
             return;
         }
 

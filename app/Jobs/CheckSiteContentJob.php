@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Jobs\Concerns\PausesForShabbat;
 use App\Models\Site;
+use App\Models\SystemLog;
 use App\Services\Notifications\TeamNotifier;
 use App\Services\Security\ContentFingerprint;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -38,15 +39,50 @@ class CheckSiteContentJob implements ShouldQueue
         return [$this->siteId, $this->rebaseline];
     }
 
+    protected function shabbatHoldDescription(): ?string
+    {
+        return 'בדיקת ההשחתה לאתר '.(Site::whereKey($this->siteId)->value('domain') ?: "#{$this->siteId}");
+    }
+
+    /** @return array<string, mixed> */
+    protected function shabbatHoldContext(): array
+    {
+        return ['site_id' => $this->siteId];
+    }
+
+    /** An unexpected crash must land in the event log, not only in Horizon. */
+    public function failed(?\Throwable $e): void
+    {
+        SystemLog::record('error', 'monitoring',
+            "בדיקת השחתה לאתר #{$this->siteId} נכשלה בשגיאה לא צפויה: ".($e?->getMessage() ?: 'שגיאה לא ידועה'),
+            ['site_id' => $this->siteId]);
+    }
+
     public function handle(ContentFingerprint $fingerprint, TeamNotifier $team): void
     {
-        if ($this->rescheduledForShabbat() || ! config('security.defacement.enabled', true)) {
+        if ($this->rescheduledForShabbat()) {
+            return;
+        }
+
+        if (! config('security.defacement.enabled', true)) {
+            SystemLog::record('info', 'monitoring',
+                'בדיקת השחתה לא רצה — הבדיקות מושבתות בהגדרות (SECURITY_DEFACEMENT_ENABLED).',
+                ['site_id' => $this->siteId]);
+
             return;
         }
 
         $site = Site::with('customer')->find($this->siteId);
 
-        if (! $site || blank($site->domain) || ! $site->monitor_enabled) {
+        if (! $site) {
+            return;
+        }
+
+        if (blank($site->domain) || ! $site->monitor_enabled) {
+            SystemLog::record('warning', 'monitoring',
+                "בדיקת השחתה לאתר #{$site->id} לא רצה — ".(blank($site->domain) ? 'לא מוגדר דומיין לאתר.' : 'הניטור לאתר כבוי.'),
+                ['site_id' => $site->id]);
+
             return;
         }
 
@@ -56,13 +92,23 @@ class CheckSiteContentJob implements ShouldQueue
             $response = Http::timeout((int) config('billing.monitoring.timeout_seconds', 10))
                 ->get($site->homepageUrl());
         } catch (\Throwable) {
-            return; // Unreachable — the uptime monitor owns that story.
+            // Unreachable — the uptime monitor owns downtime; just leave a
+            // trace so a manual check doesn't look like it did nothing.
+            SystemLog::record('warning', 'monitoring',
+                "בדיקת השחתה לאתר {$site->domain}: לא ניתן היה להביא את דף הבית — הבדיקה דולגה (זמינות האתר נבדקת בניטור הרגיל).",
+                ['site_id' => $site->id]);
+
+            return;
         }
 
         // Only a SUCCESSFUL response is real site content: a 403/404/429
         // challenge or error page must neither roll the baseline forward nor
         // scream "defacement" — skip and let the next clean fetch decide.
         if (! $response->successful() || trim((string) $response->body()) === '') {
+            SystemLog::record('warning', 'monitoring',
+                "בדיקת השחתה לאתר {$site->domain}: דף הבית החזיר תגובה לא תקינה (סטטוס {$response->status()}) — הבדיקה דולגה כדי לא לזהם את בסיס התוכן.",
+                ['site_id' => $site->id]);
+
             return;
         }
 
