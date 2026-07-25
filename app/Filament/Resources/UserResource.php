@@ -8,6 +8,7 @@ use App\Filament\Clusters\Settings;
 use App\Filament\Concerns\AdminOnly;
 use App\Filament\Resources\UserResource\Pages;
 use App\Models\User;
+use App\Support\TeamModules;
 use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Notifications\Notification;
@@ -71,6 +72,7 @@ class UserResource extends Resource
                             ->default(UserRole::Agent)
                             ->required()
                             ->native(false)
+                            ->live()
                             ->helperText('מנהל — גישה מלאה כולל הגדרות וניהול צוות. נציג — תפעול יומיומי בלבד.')
                             // Never allow the last admin to be demoted — that would
                             // lock everyone out of settings and team management.
@@ -86,6 +88,31 @@ class UserResource extends Resource
                             ->maxLength(30)
                             ->helperText('נדרש לקבלת קוד כניסה חד-פעמי בוואטסאפ.'),
                     ])->columns(2),
+
+                Forms\Components\Section::make('גישה למודולים')
+                    ->description('לאילו חלקים של המערכת המשתמש ניגש. מודול שלא סומן נעלם מהתפריט שלו וחסום גם בכניסה ישירה בקישור. מנהל תמיד רואה הכול.')
+                    ->schema([
+                        Forms\Components\CheckboxList::make('allowed_modules')
+                            ->label('מודולים מותרים')
+                            ->options(TeamModules::options())
+                            ->columns(3)
+                            ->bulkToggleable()
+                            // Existing users (null = never limited) show as
+                            // fully checked, which is what null means.
+                            ->afterStateHydrated(function (Forms\Components\CheckboxList $component, ?array $state): void {
+                                if ($state === null) {
+                                    $component->state(TeamModules::keys());
+                                }
+                            })
+                            ->descriptions([
+                                'finance' => 'חיובים, מנויים, חשבוניות, גבייה ותחזיות',
+                                'support' => 'פניות, דיוור, תשובות מוכנות וקונסולת ה-AI',
+                                'management' => 'לקוחות, אתרים, מסלולים, משימות ויומנים',
+                            ]),
+                    ])
+                    // Admins bypass the limits anyway — hide the section to
+                    // avoid implying an admin can be restricted.
+                    ->visible(fn (Forms\Get $get): bool => $get('role') !== UserRole::Admin->value && $get('role') !== UserRole::Admin),
 
                 Forms\Components\Section::make('אימות דו-שלבי (2FA)')
                     ->description('בכניסה, לאחר הסיסמה, יישלח קוד חד-פעמי שיש להזין כדי להיכנס.')

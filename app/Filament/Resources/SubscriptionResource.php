@@ -6,6 +6,7 @@ use App\Enums\BillingInterval;
 use App\Enums\SiteStatus;
 use App\Enums\SiteType;
 use App\Enums\SubscriptionStatus;
+use App\Filament\Concerns\RespectsModuleAccess;
 use App\Filament\Resources\SubscriptionResource\Pages;
 use App\Filament\Support\DebtorActions;
 use App\Filament\Support\MoneyField;
@@ -23,6 +24,8 @@ use Illuminate\Validation\ValidationException;
 
 class SubscriptionResource extends Resource
 {
+    use RespectsModuleAccess;
+
     protected static ?string $model = Subscription::class;
 
     protected static ?string $navigationIcon = 'heroicon-o-arrow-path-rounded-square';

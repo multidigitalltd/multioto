@@ -4,6 +4,7 @@ namespace App\Filament\Resources;
 
 use App\Enums\DocumentType;
 use App\Enums\VatCategory;
+use App\Filament\Concerns\RespectsModuleAccess;
 use App\Filament\Resources\InvoiceResource\Pages;
 use App\Filament\Support\MoneyField;
 use App\Models\Invoice;
@@ -18,6 +19,8 @@ use Illuminate\Support\Str;
 
 class InvoiceResource extends Resource
 {
+    use RespectsModuleAccess;
+
     protected static ?string $model = Invoice::class;
 
     protected static ?string $navigationIcon = 'heroicon-o-document-text';

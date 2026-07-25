@@ -4,6 +4,7 @@ namespace App\Filament\Resources;
 
 use App\Enums\SiteStatus;
 use App\Enums\SiteType;
+use App\Filament\Concerns\RespectsModuleAccess;
 use App\Filament\Resources\SiteResource\Pages;
 use App\Filament\Support\SiteActions;
 use App\Jobs\RestoreSiteJob;
@@ -22,6 +23,8 @@ use Illuminate\Support\Str;
 
 class SiteResource extends Resource
 {
+    use RespectsModuleAccess;
+
     protected static ?string $model = Site::class;
 
     protected static ?string $navigationIcon = 'heroicon-o-globe-alt';

@@ -3,6 +3,7 @@
 namespace App\Filament\Resources;
 
 use App\Filament\Clusters\Settings;
+use App\Filament\Concerns\RespectsModuleAccess;
 use App\Filament\Resources\NotificationTemplateResource\Pages;
 use App\Models\NotificationTemplate;
 use Filament\Forms;
@@ -21,6 +22,8 @@ use Filament\Tables\Table;
  */
 class NotificationTemplateResource extends Resource
 {
+    use RespectsModuleAccess;
+
     protected static ?string $model = NotificationTemplate::class;
 
     protected static ?string $navigationIcon = 'heroicon-o-megaphone';

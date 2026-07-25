@@ -4,6 +4,7 @@ namespace App\Filament\Resources;
 
 use App\Enums\BroadcastChannel;
 use App\Enums\BroadcastStatus;
+use App\Filament\Concerns\RespectsModuleAccess;
 use App\Filament\Resources\BroadcastResource\Pages;
 use App\Models\Broadcast;
 use Filament\Forms;
@@ -14,6 +15,8 @@ use Filament\Tables\Table;
 
 class BroadcastResource extends Resource
 {
+    use RespectsModuleAccess;
+
     protected static ?string $model = Broadcast::class;
 
     protected static ?string $navigationIcon = 'heroicon-o-megaphone';

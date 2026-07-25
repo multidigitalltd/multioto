@@ -17,6 +17,12 @@ use Filament\Widgets\StatsOverviewWidget\Stat;
  */
 class RevenueForecastStats extends BaseWidget
 {
+    /** Hidden for team members without this permission module. */
+    public static function canView(): bool
+    {
+        return auth()->user()?->canAccessModule('finance') ?? false;
+    }
+
     // Page-only: never auto-discovered onto the main dashboard.
     protected static bool $isDiscovered = false;
 

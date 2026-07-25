@@ -3,6 +3,7 @@
 namespace App\Filament\Pages;
 
 use App\Enums\SubscriptionStatus;
+use App\Filament\Concerns\RespectsModuleAccess;
 use App\Filament\Resources\CustomerResource;
 use App\Filament\Widgets\RevenueForecastStats;
 use App\Models\Subscription;
@@ -22,6 +23,7 @@ use Illuminate\Database\Eloquent\Builder;
 class RevenueForecast extends Page implements HasTable
 {
     use InteractsWithTable;
+    use RespectsModuleAccess;
 
     protected static ?string $navigationIcon = 'heroicon-o-arrow-trending-up';
 

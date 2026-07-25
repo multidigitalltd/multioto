@@ -3,6 +3,7 @@
 namespace App\Filament\Resources;
 
 use App\Enums\BillingInterval;
+use App\Filament\Concerns\RespectsModuleAccess;
 use App\Filament\Resources\PlanResource\Pages;
 use App\Filament\Support\MoneyField;
 use App\Models\Plan;
@@ -14,6 +15,8 @@ use Filament\Tables\Table;
 
 class PlanResource extends Resource
 {
+    use RespectsModuleAccess;
+
     protected static ?string $model = Plan::class;
 
     protected static ?string $navigationIcon = 'heroicon-o-rectangle-stack';

@@ -25,6 +25,10 @@ class Debtors extends BaseWidget
 
     public static function canView(): bool
     {
+        if (! (auth()->user()?->canAccessModule('finance') ?? false)) {
+            return false;
+        }
+
         return Subscription::query()->inArrears()->exists();
     }
 

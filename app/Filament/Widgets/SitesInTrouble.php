@@ -35,6 +35,10 @@ class SitesInTrouble extends BaseWidget
 
     public static function canView(): bool
     {
+        if (! (auth()->user()?->canAccessModule('management') ?? false)) {
+            return false;
+        }
+
         return static::query()->exists();
     }
 

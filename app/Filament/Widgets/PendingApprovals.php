@@ -26,6 +26,10 @@ class PendingApprovals extends BaseWidget
 
     public static function canView(): bool
     {
+        if (! (auth()->user()?->canAccessModule('support') ?? false)) {
+            return false;
+        }
+
         return PendingAction::where('status', ActionStatus::Pending)->exists();
     }
 

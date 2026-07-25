@@ -3,6 +3,7 @@
 namespace App\Filament\Pages;
 
 use App\Enums\TokenStatus;
+use App\Filament\Concerns\RespectsModuleAccess;
 use App\Models\Customer;
 use App\Services\Billing\ManualChargeService;
 use App\Support\Money;
@@ -33,6 +34,7 @@ use Illuminate\Support\Str;
 class ManualCharge extends Page implements HasForms
 {
     use InteractsWithForms;
+    use RespectsModuleAccess;
 
     protected static ?string $navigationIcon = 'heroicon-o-banknotes';
 

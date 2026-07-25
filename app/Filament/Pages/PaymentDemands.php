@@ -3,6 +3,7 @@
 namespace App\Filament\Pages;
 
 use App\Enums\ChargeStatus;
+use App\Filament\Concerns\RespectsModuleAccess;
 use App\Filament\Resources\CustomerResource;
 use App\Jobs\IssueInvoiceJob;
 use App\Jobs\SendPaymentLinkJob;
@@ -31,6 +32,7 @@ use Illuminate\Support\Str;
 class PaymentDemands extends Page implements HasTable
 {
     use InteractsWithTable;
+    use RespectsModuleAccess;
 
     protected static ?string $navigationIcon = 'heroicon-o-document-currency-dollar';
 

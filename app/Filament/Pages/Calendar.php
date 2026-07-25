@@ -5,6 +5,7 @@ namespace App\Filament\Pages;
 use App\Enums\ServiceMode;
 use App\Enums\TaskStatus;
 use App\Enums\TicketPriority;
+use App\Filament\Concerns\RespectsModuleAccess;
 use App\Models\ServiceException;
 use App\Models\Task;
 use App\Models\User;
@@ -35,6 +36,7 @@ class Calendar extends Page implements HasActions, HasForms
 {
     use InteractsWithActions;
     use InteractsWithForms;
+    use RespectsModuleAccess;
 
     protected static ?string $navigationIcon = 'heroicon-o-calendar-days';
 

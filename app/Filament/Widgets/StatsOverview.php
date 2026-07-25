@@ -26,6 +26,12 @@ use Illuminate\Support\Carbon;
  */
 class StatsOverview extends BaseWidget
 {
+    /** Hidden for team members without this permission module. */
+    public static function canView(): bool
+    {
+        return auth()->user()?->canAccessModule('finance') ?? false;
+    }
+
     protected static ?int $sort = -60;
 
     protected function getStats(): array

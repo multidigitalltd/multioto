@@ -15,6 +15,12 @@ use Filament\Widgets\StatsOverviewWidget\Stat;
  */
 class CollectionForecastStats extends BaseWidget
 {
+    /** Hidden for team members without this permission module. */
+    public static function canView(): bool
+    {
+        return auth()->user()?->canAccessModule('finance') ?? false;
+    }
+
     // NOT auto-discovered onto the main dashboard — it is registered explicitly
     // as a header widget of the חיזוי גבייה page only. This keeps the collection
     // amounts inside that page (the whole point: they must not leak elsewhere).
