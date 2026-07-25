@@ -7,6 +7,7 @@ use App\Enums\BusinessType;
 use App\Enums\CustomerStatus;
 use App\Enums\SiteStatus;
 use App\Enums\SubscriptionStatus;
+use App\Filament\Concerns\RespectsModuleAccess;
 use App\Jobs\SendCardCaptureLinkJob;
 use App\Jobs\SendJoinInviteJob;
 use App\Models\Customer;
@@ -42,6 +43,7 @@ use Illuminate\Support\HtmlString;
 class OnboardCustomer extends Page implements HasForms
 {
     use InteractsWithForms;
+    use RespectsModuleAccess;
 
     protected static ?string $navigationIcon = 'heroicon-o-user-plus';
 

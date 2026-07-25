@@ -3,6 +3,7 @@
 namespace App\Filament\Pages;
 
 use App\Enums\ChargeStatus;
+use App\Filament\Concerns\RespectsModuleAccess;
 use App\Filament\Resources\CustomerResource;
 use App\Filament\Widgets\CollectionForecastStats;
 use App\Models\Charge;
@@ -21,6 +22,7 @@ use Illuminate\Database\Eloquent\Builder;
 class CollectionForecast extends Page implements HasTable
 {
     use InteractsWithTable;
+    use RespectsModuleAccess;
 
     protected static ?string $navigationIcon = 'heroicon-o-chart-bar-square';
 

@@ -5,6 +5,7 @@ namespace App\Models;
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
 use App\Enums\TwoFactorChannel;
 use App\Enums\UserRole;
+use App\Support\TeamModules;
 use Database\Factories\UserFactory;
 use Filament\Models\Contracts\FilamentUser;
 use Filament\Panel;
@@ -59,10 +60,26 @@ class User extends Authenticatable implements FilamentUser
         'email',
         'password',
         'role',
+        'allowed_modules',
         'phone',
         'two_factor_enabled',
         'two_factor_channel',
     ];
+
+    /**
+     * May this user reach screens of the given permission module (a
+     * TeamModules key)? Admins always can; agents are limited to the modules
+     * an admin granted them — null (never configured) means everything.
+     */
+    public function canAccessModule(string $module): bool
+    {
+        if ($this->isAdmin() || ! array_key_exists($module, TeamModules::LABELS)) {
+            return true;
+        }
+
+        return $this->allowed_modules === null
+            || in_array($module, $this->allowed_modules, true);
+    }
 
     /**
      * The attributes that should be hidden for serialization.
@@ -86,6 +103,7 @@ class User extends Authenticatable implements FilamentUser
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
             'role' => UserRole::class,
+            'allowed_modules' => 'array',
             'two_factor_enabled' => 'boolean',
             'two_factor_channel' => TwoFactorChannel::class,
             'two_factor_expires_at' => 'datetime',

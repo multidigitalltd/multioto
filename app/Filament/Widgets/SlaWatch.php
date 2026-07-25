@@ -36,6 +36,10 @@ class SlaWatch extends BaseWidget
 
     public static function canView(): bool
     {
+        if (! (auth()->user()?->canAccessModule('support') ?? false)) {
+            return false;
+        }
+
         return self::watchIds() !== [];
     }
 

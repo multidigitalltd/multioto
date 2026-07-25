@@ -35,6 +35,10 @@ class AgentCommandWidget extends Widget implements HasForms
     /** Only when the AI agent is on — otherwise the bar would do nothing. */
     public static function canView(): bool
     {
+        if (! (auth()->user()?->canAccessModule('support') ?? false)) {
+            return false;
+        }
+
         return (bool) config('billing.ai.enabled');
     }
 

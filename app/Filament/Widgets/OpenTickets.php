@@ -15,6 +15,12 @@ use Filament\Widgets\TableWidget as BaseWidget;
  */
 class OpenTickets extends BaseWidget
 {
+    /** Hidden for team members without this permission module. */
+    public static function canView(): bool
+    {
+        return auth()->user()?->canAccessModule('support') ?? false;
+    }
+
     protected static ?int $sort = -80;
 
     protected int|string|array $columnSpan = 'full';

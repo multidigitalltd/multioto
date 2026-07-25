@@ -3,6 +3,7 @@
 namespace App\Filament\Resources;
 
 use App\Enums\NotificationType;
+use App\Filament\Concerns\RespectsModuleAccess;
 use App\Filament\Resources\NotificationLogResource\Pages;
 use App\Models\NotificationLog;
 use Filament\Forms\Components\DatePicker;
@@ -22,6 +23,8 @@ use Illuminate\Database\Eloquent\Builder;
  */
 class NotificationLogResource extends Resource
 {
+    use RespectsModuleAccess;
+
     protected static ?string $model = NotificationLog::class;
 
     protected static ?string $navigationIcon = 'heroicon-o-paper-airplane';

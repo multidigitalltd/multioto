@@ -13,6 +13,12 @@ use Filament\Widgets\StatsOverviewWidget\Stat;
  */
 class CsatOverview extends BaseWidget
 {
+    /** Hidden for team members without this permission module. */
+    public static function canView(): bool
+    {
+        return auth()->user()?->canAccessModule('support') ?? false;
+    }
+
     protected static bool $isDiscovered = false;
 
     protected function getStats(): array

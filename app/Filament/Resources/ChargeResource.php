@@ -3,6 +3,7 @@
 namespace App\Filament\Resources;
 
 use App\Enums\ChargeStatus;
+use App\Filament\Concerns\RespectsModuleAccess;
 use App\Filament\Resources\ChargeResource\Pages;
 use App\Filament\Support\MoneyField;
 use App\Models\Charge;
@@ -20,6 +21,8 @@ use Illuminate\Support\Str;
 
 class ChargeResource extends Resource
 {
+    use RespectsModuleAccess;
+
     protected static ?string $model = Charge::class;
 
     protected static ?string $navigationIcon = 'heroicon-o-credit-card';

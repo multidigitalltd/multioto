@@ -4,6 +4,7 @@ namespace App\Filament\Resources;
 
 use App\Enums\TaskStatus;
 use App\Enums\TicketPriority;
+use App\Filament\Concerns\RespectsModuleAccess;
 use App\Filament\Resources\TaskResource\Pages;
 use App\Models\Task;
 use Filament\Forms;
@@ -20,6 +21,8 @@ use Illuminate\Database\Eloquent\Builder;
  */
 class TaskResource extends Resource
 {
+    use RespectsModuleAccess;
+
     protected static ?string $model = Task::class;
 
     protected static ?string $navigationIcon = 'heroicon-o-clipboard-document-check';

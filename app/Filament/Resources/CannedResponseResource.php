@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources;
 
+use App\Filament\Concerns\RespectsModuleAccess;
 use App\Filament\Resources\CannedResponseResource\Pages;
 use App\Models\CannedResponse;
 use Filament\Forms;
@@ -12,6 +13,8 @@ use Filament\Tables\Table;
 
 class CannedResponseResource extends Resource
 {
+    use RespectsModuleAccess;
+
     protected static ?string $model = CannedResponse::class;
 
     protected static ?string $navigationIcon = 'heroicon-o-chat-bubble-bottom-center-text';

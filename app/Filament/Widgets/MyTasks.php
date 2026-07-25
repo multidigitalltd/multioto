@@ -14,6 +14,12 @@ use Filament\Widgets\TableWidget as BaseWidget;
  */
 class MyTasks extends BaseWidget
 {
+    /** Hidden for team members without this permission module. */
+    public static function canView(): bool
+    {
+        return auth()->user()?->canAccessModule('management') ?? false;
+    }
+
     protected static ?int $sort = -70;
 
     protected int|string|array $columnSpan = 'full';

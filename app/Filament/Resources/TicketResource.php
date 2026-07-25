@@ -5,6 +5,7 @@ namespace App\Filament\Resources;
 use App\Enums\TicketChannel;
 use App\Enums\TicketPriority;
 use App\Enums\TicketStatus;
+use App\Filament\Concerns\RespectsModuleAccess;
 use App\Filament\Resources\TicketResource\Pages;
 use App\Models\AuditLog;
 use App\Models\Ticket;
@@ -18,6 +19,8 @@ use Illuminate\Database\Eloquent\Collection;
 
 class TicketResource extends Resource
 {
+    use RespectsModuleAccess;
+
     protected static ?string $model = Ticket::class;
 
     protected static ?string $navigationIcon = 'heroicon-o-lifebuoy';

@@ -3,6 +3,7 @@
 namespace App\Filament\Pages;
 
 use App\Enums\ChargeStatus;
+use App\Filament\Concerns\RespectsModuleAccess;
 use App\Filament\Support\DebtorActions;
 use App\Models\Charge;
 use App\Models\Subscription;
@@ -26,6 +27,7 @@ use Illuminate\Support\Carbon;
 class ManualCollection extends Page implements HasTable
 {
     use InteractsWithTable;
+    use RespectsModuleAccess;
 
     protected static ?string $navigationIcon = 'heroicon-o-banknotes';
 

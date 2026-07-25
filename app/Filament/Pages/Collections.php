@@ -3,6 +3,7 @@
 namespace App\Filament\Pages;
 
 use App\Enums\SubscriptionStatus;
+use App\Filament\Concerns\RespectsModuleAccess;
 use App\Filament\Support\DebtorActions;
 use App\Models\Subscription;
 use App\Support\Money;
@@ -20,6 +21,7 @@ use Filament\Tables\Table;
 class Collections extends Page implements HasTable
 {
     use InteractsWithTable;
+    use RespectsModuleAccess;
 
     protected static ?string $navigationIcon = 'heroicon-o-exclamation-triangle';
 

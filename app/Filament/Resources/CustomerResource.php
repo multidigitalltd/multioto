@@ -5,6 +5,7 @@ namespace App\Filament\Resources;
 use App\Enums\BusinessType;
 use App\Enums\CustomerStatus;
 use App\Enums\SubscriptionStatus;
+use App\Filament\Concerns\RespectsModuleAccess;
 use App\Filament\Resources\CustomerResource\Pages;
 use App\Filament\Resources\CustomerResource\RelationManagers;
 use App\Models\Customer;
@@ -29,6 +30,8 @@ use Filament\Tables\Table;
 
 class CustomerResource extends Resource
 {
+    use RespectsModuleAccess;
+
     protected static ?string $model = Customer::class;
 
     protected static ?string $navigationIcon = 'heroicon-o-users';

@@ -3,6 +3,7 @@
 namespace App\Filament\Resources;
 
 use App\Enums\ActionStatus;
+use App\Filament\Concerns\RespectsModuleAccess;
 use App\Filament\Resources\PendingActionResource\Pages;
 use App\Models\PendingAction;
 use App\Services\Automation\ApprovalGate;
@@ -21,6 +22,8 @@ use Illuminate\Support\Str;
  */
 class PendingActionResource extends Resource
 {
+    use RespectsModuleAccess;
+
     protected static ?string $model = PendingAction::class;
 
     protected static ?string $navigationIcon = 'heroicon-o-shield-check';

@@ -4,6 +4,7 @@ namespace App\Filament\Pages;
 
 use App\Enums\ActionStatus;
 use App\Enums\AgentCommandOutcome;
+use App\Filament\Concerns\RespectsModuleAccess;
 use App\Filament\Concerns\RunsAgentCommands;
 use App\Models\AgentCommand;
 use App\Models\PendingAction;
@@ -24,6 +25,7 @@ use Illuminate\Support\Collection;
 class AgentConsole extends Page implements HasForms
 {
     use InteractsWithForms;
+    use RespectsModuleAccess;
     use RunsAgentCommands;
 
     protected static ?string $navigationIcon = 'heroicon-o-command-line';

@@ -3,6 +3,7 @@
 namespace App\Filament\Resources;
 
 use App\Filament\Clusters\Settings;
+use App\Filament\Concerns\RespectsModuleAccess;
 use App\Filament\Resources\NotificationTemplateResource\Pages;
 use App\Models\NotificationTemplate;
 use Filament\Forms;
@@ -21,6 +22,19 @@ use Filament\Tables\Table;
  */
 class NotificationTemplateResource extends Resource
 {
+    use RespectsModuleAccess;
+
+    /**
+     * Clustered under הגדרות, so there is no navigation group to derive the
+     * module from — but these are the customer-facing message templates, so
+     * editing them belongs to the support module (deliberately NOT admin-only:
+     * agents with support access may tune the wording they send).
+     */
+    protected static function accessModule(): ?string
+    {
+        return 'support';
+    }
+
     protected static ?string $model = NotificationTemplate::class;
 
     protected static ?string $navigationIcon = 'heroicon-o-megaphone';
