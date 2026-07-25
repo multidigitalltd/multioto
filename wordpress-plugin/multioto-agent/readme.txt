@@ -2,7 +2,7 @@
 Contributors: multidigital
 Requires at least: 6.0
 Requires PHP: 7.4
-Stable tag: 1.0.11
+Stable tag: 1.0.12
 License: GPLv2 or later
 
 מחבר את אתר הוורדפרס לפאנל התפעול של Multi Digital: נקודת קצה MCP מאובטחת
@@ -55,6 +55,9 @@ Cloudflare באתר כולו — די בחריגה לנתיב הזה.)
   RewriteRule .* - [E=HTTP_AUTHORIZATION:%1]
 
 == Changelog ==
+
+= 1.0.12 =
+* תיקון קריטי: כל שגיאת כלי (למשל "כלי לא מוכר" או כשל עדכון) קרסה עם TypeError במקום לחזור כשגיאת JSON-RPC תקינה — סדר הפרמטרים של Multioto_Agent_Rpc_Error היה הפוך מחתימת Exception של PHP. נוסף constructor שממפה נכון (code, message) → (message, code), וכלים שנכשלים מחזירים עכשיו הודעת שגיאה ברורה לפאנל.
 
 = 1.0.11 =
 * כלי חדש wp_core_rollback — שחזור ליבת וורדפרס לגרסה הקודמת. wp_core_update שומר נקודת שחזור (הגרסה שלפני העדכון) לפני שהוא נוגע בקבצים, כך שאפשר לגלגל אחורה בלחיצה אם עדכון גרם לתקלה. השחזור מתקין מחדש את קבצי הגרסה מ-wordpress.org; מיועד בעיקר לעדכוני תחזוקה (minor/patch) — שדרוג מסד נתונים אינו הפיך.

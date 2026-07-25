@@ -1172,5 +1172,15 @@ class Multioto_Agent_Mcp_Server
     }
 }
 
-/** A typed JSON-RPC error carrying a protocol code. */
-class Multioto_Agent_Rpc_Error extends \Exception {}
+/**
+ * A typed JSON-RPC error carrying a protocol code. Every throw site passes
+ * (code, message) — JSON-RPC order — which is the REVERSE of \Exception's
+ * (message, int $code) signature; without this constructor PHP fatals with
+ * "Argument #2 ($code) must be of type int, string given" on EVERY thrown
+ * tool error, so tools failed with a TypeError instead of a clean RPC error.
+ */
+class Multioto_Agent_Rpc_Error extends \Exception {
+    public function __construct( int $code, string $message ) {
+        parent::__construct( $message, $code );
+    }
+}
