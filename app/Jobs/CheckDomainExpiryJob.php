@@ -30,7 +30,13 @@ class CheckDomainExpiryJob implements ShouldQueue
             return;
         }
 
-        $expiresAt = $domains->expiresAt($site->domain);
+        $lookup = $domains->lookup($site->domain);
+        $expiresAt = $lookup['expires_at'] ?? null;
+
+        // Registrant (owner) may arrive even when the expiry event is missing.
+        if (filled($lookup['registrant'] ?? null)) {
+            $site->update(['domain_registrant' => $lookup['registrant']]);
+        }
 
         if ($expiresAt === null) {
             return; // TLD has no RDAP / lookup failed — leave the cached value alone.
