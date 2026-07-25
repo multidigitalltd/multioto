@@ -48,6 +48,65 @@ class DomainExpiryTest extends TestCase
         $this->assertNull(app(DomainExpiry::class)->expiresAt('no-such-tld.zzz'));
     }
 
+    public function test_an_il_domain_falls_back_to_the_isoc_il_rdap(): void
+    {
+        // The public bootstrap can't route .il — ISOC-IL's own RDAP answers.
+        Http::fake([
+            'rdap.org/*' => Http::response([], 404),
+            'rdap.isoc.org.il/domain/example.co.il' => Http::response([
+                'events' => [['eventAction' => 'expiration', 'eventDate' => '2027-05-25T00:00:00Z']],
+                'entities' => [[
+                    'roles' => ['registrant'],
+                    'vcardArray' => ['vcard', [['fn', [], 'text', 'חברת דוגמה בע״מ']]],
+                ]],
+            ]),
+        ]);
+
+        $lookup = app(DomainExpiry::class)->lookup('www.example.co.il');
+
+        $this->assertSame('2027-05-25', $lookup['expires_at']?->toDateString());
+        $this->assertSame('חברת דוגמה בע״מ', $lookup['registrant']);
+    }
+
+    public function test_a_malformed_event_date_falls_through_to_the_next_endpoint(): void
+    {
+        // rdap.org answers 200 but with garbage — the .il fallback must still run.
+        Http::fake([
+            'rdap.org/*' => Http::response([
+                'events' => [['eventAction' => 'expiration', 'eventDate' => 'not-a-date']],
+            ]),
+            'rdap.isoc.org.il/domain/example.co.il' => Http::response([
+                'events' => [['eventAction' => 'expiration', 'eventDate' => '2027-05-25T00:00:00Z']],
+            ]),
+        ]);
+
+        $lookup = app(DomainExpiry::class)->lookup('example.co.il');
+
+        $this->assertSame('2027-05-25', $lookup['expires_at']?->toDateString());
+    }
+
+    public function test_the_job_stores_the_registrant_on_the_site(): void
+    {
+        Http::fake([
+            'rdap.org/domain/owned.co.il' => Http::response([], 404),
+            'rdap.isoc.org.il/domain/owned.co.il' => Http::response([
+                'events' => [['eventAction' => 'expiration', 'eventDate' => now()->addDays(200)->toIso8601String()]],
+                'entities' => [[
+                    'roles' => ['registrant'],
+                    'vcardArray' => ['vcard', [['fn', [], 'text', 'ישראל ישראלי']]],
+                ]],
+            ]),
+        ]);
+
+        $site = Site::factory()->create(['domain' => 'owned.co.il']);
+
+        CheckDomainExpiryJob::dispatchSync($site->id);
+
+        $site->refresh();
+        $this->assertNotNull($site->domain_expiry_at);
+        $this->assertSame('ישראל ישראלי', $site->domain_registrant);
+    }
+
     public function test_domain_expiry_alerts_the_team_once_then_re_arms_after_renewal(): void
     {
         config(['billing.monitoring.domain_warn_days' => 30]);
@@ -56,10 +115,10 @@ class DomainExpiryTest extends TestCase
 
         $domains = Mockery::mock(DomainExpiry::class);
         // Inside the window (10 days), still inside, then renewed (400 days out).
-        $domains->shouldReceive('expiresAt')->andReturn(
-            now()->addDays(10),
-            now()->addDays(10),
-            now()->addDays(400),
+        $domains->shouldReceive('lookup')->andReturn(
+            ['expires_at' => now()->addDays(10), 'registrant' => null],
+            ['expires_at' => now()->addDays(10), 'registrant' => null],
+            ['expires_at' => now()->addDays(400), 'registrant' => null],
         );
         $this->app->instance(DomainExpiry::class, $domains);
 

@@ -86,6 +86,9 @@
                 @else
                     לא נבדק עדיין
                 @endif
+                @if (filled($site->domain_registrant))
+                    <br>בעלים: {{ $site->domain_registrant }}
+                @endif
             </div>
         </div>
     </div>
