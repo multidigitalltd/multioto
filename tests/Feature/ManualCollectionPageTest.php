@@ -68,16 +68,16 @@ class ManualCollectionPageTest extends TestCase
             ->assertTableActionHidden('markPaid', $collected);
     }
 
-    public function test_it_lists_the_overdue_to_collect_rows_first(): void
+    public function test_it_lists_the_newest_charge_dates_first(): void
     {
-        // Oldest charge date first: overdue rows to collect rise to the top;
-        // just-paid subscriptions (future date) sink to the bottom.
-        $overdue = $this->manualSub(now()->subDays(10));   // most overdue → top
+        // Newest charge date first: recently-paid subscriptions (rolled to a
+        // future date) at the top, the oldest dates at the bottom.
+        $paidRolledForward = $this->manualSub(now()->addMonth()); // newest → top
         $dueToday = $this->manualSub(now()->subDay());
-        $paidRolledForward = $this->manualSub(now()->addMonth()); // bottom
+        $overdue = $this->manualSub(now()->subDays(10));   // oldest → bottom
 
         Livewire::test(ManualCollection::class)
-            ->assertCanSeeTableRecords([$overdue, $dueToday, $paidRolledForward], inOrder: true);
+            ->assertCanSeeTableRecords([$paidRolledForward, $dueToday, $overdue], inOrder: true);
     }
 
     public function test_it_shows_when_the_last_payment_was_actually_made_and_how_late(): void
