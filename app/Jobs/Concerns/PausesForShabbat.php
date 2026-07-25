@@ -2,6 +2,7 @@
 
 namespace App\Jobs\Concerns;
 
+use App\Models\SystemLog;
 use App\Services\Calendar\ShabbatClock;
 
 /**
@@ -23,9 +24,38 @@ trait PausesForShabbat
             return false;
         }
 
-        static::dispatch(...$this->shabbatDispatchArgs())->delay($clock->resumeAt());
+        $resume = $clock->resumeAt();
+
+        static::dispatch(...$this->shabbatDispatchArgs())->delay($resume);
+
+        // Jobs an operator can trigger by hand (the monitoring checks) name
+        // themselves here, so a click during Shabbat leaves a visible trace in
+        // the event log instead of appearing to do nothing.
+        if (($held = $this->shabbatHoldDescription()) !== null) {
+            $when = $resume !== null ? 'ב-'.$resume->format('d/m/Y H:i') : 'אחרי צאת השבת/החג';
+            SystemLog::record('info', 'monitoring',
+                "{$held} הושהתה לשבת/חג ותרוץ אוטומטית {$when}.",
+                $this->shabbatHoldContext());
+        }
 
         return true;
+    }
+
+    /**
+     * A short Hebrew description of this job for the "held for Shabbat" event-
+     * log entry (e.g. "בדיקת המוניטין לאתר X"), or null to hold silently.
+     * Silent is the right default for bulk/outward jobs — logging every held
+     * notification would flood the log.
+     */
+    protected function shabbatHoldDescription(): ?string
+    {
+        return null;
+    }
+
+    /** @return array<string, mixed> Context stored with the hold log entry. */
+    protected function shabbatHoldContext(): array
+    {
+        return [];
     }
 
     /**

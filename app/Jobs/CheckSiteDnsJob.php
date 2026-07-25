@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Jobs\Concerns\PausesForShabbat;
 use App\Models\Site;
+use App\Models\SystemLog;
 use App\Services\Notifications\TeamNotifier;
 use App\Services\Security\DnsLookup;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -39,15 +40,42 @@ class CheckSiteDnsJob implements ShouldQueue
         return [$this->siteId];
     }
 
+    protected function shabbatHoldDescription(): ?string
+    {
+        return 'בדיקת ה-DNS לאתר '.(Site::whereKey($this->siteId)->value('domain') ?: "#{$this->siteId}");
+    }
+
+    /** @return array<string, mixed> */
+    protected function shabbatHoldContext(): array
+    {
+        return ['site_id' => $this->siteId];
+    }
+
     public function handle(DnsLookup $dns, TeamNotifier $team): void
     {
-        if ($this->rescheduledForShabbat() || ! config('security.dns_watch.enabled', true)) {
+        if ($this->rescheduledForShabbat()) {
+            return;
+        }
+
+        if (! config('security.dns_watch.enabled', true)) {
+            SystemLog::record('info', 'monitoring',
+                'בדיקת DNS לא רצה — מעקב ה-DNS מושבת בהגדרות (SECURITY_DNS_WATCH_ENABLED).',
+                ['site_id' => $this->siteId]);
+
             return;
         }
 
         $site = Site::with('customer')->find($this->siteId);
 
-        if (! $site || blank($site->domain)) {
+        if (! $site) {
+            return;
+        }
+
+        if (blank($site->domain)) {
+            SystemLog::record('warning', 'monitoring',
+                "בדיקת DNS לאתר #{$site->id} לא רצה — לא מוגדר דומיין לאתר.",
+                ['site_id' => $site->id]);
+
             return;
         }
 
@@ -57,6 +85,10 @@ class CheckSiteDnsJob implements ShouldQueue
         // Total resolver failure — nothing definite this cycle; keep the last
         // known snapshot untouched rather than "detecting" a mass removal.
         if ($current['a'] === null && $current['mx'] === null && $current['ns'] === null) {
+            SystemLog::record('warning', 'monitoring',
+                "בדיקת DNS לדומיין {$site->domain} רצה אך אף שאילתת resolver לא הצליחה — התמונה הקודמת נשמרה.",
+                ['site_id' => $site->id]);
+
             return;
         }
 

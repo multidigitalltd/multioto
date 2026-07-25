@@ -115,8 +115,9 @@
             default => null,
         };
     @endphp
-    @if ($scan !== null)
-        <div class="rounded-xl bg-white p-4 shadow-sm dark:bg-gray-800">
+    {{-- Always rendered: an operator must SEE that no scan has completed yet —
+         a missing card reads as "the feature doesn't exist". --}}
+    <div class="rounded-xl bg-white p-4 shadow-sm dark:bg-gray-800">
             <div class="mb-3 flex items-center justify-between">
                 <h3 class="text-sm font-semibold">אבטחה — רכיבים פגיעים</h3>
                 <span class="text-xs text-gray-500 dark:text-gray-400">
@@ -138,6 +139,11 @@
             @if (count($vulns) === 0 && $scannedAt === null)
                 <div class="text-sm text-gray-500 dark:text-gray-400">
                     טרם הושלמה סריקה מלאה לאתר הזה.
+                    @if (! $site->mcp_enabled)
+                        הסריקה דורשת חיבור AI פעיל לאתר (התוסף מותקן ו"חיבור פעיל" דלוק).
+                    @else
+                        לחצו "סריקת אבטחה" למעלה או המתינו לריצה היומית; אם אין תוצאה — בדקו בניהול ← יומן אירועים.
+                    @endif
                 </div>
             @elseif (count($vulns) === 0)
                 <div class="flex items-center gap-2 text-sm text-success-600 dark:text-success-400">
@@ -167,8 +173,7 @@
                     @endforeach
                 </div>
             @endif
-        </div>
-    @endif
+    </div>
 
     {{-- Domain reputation: spam/malware blocklist status. --}}
     @php
@@ -180,8 +185,7 @@
         $repRunStatus = data_get($rep, 'last_run_status');
         $repRunAt = data_get($rep, 'last_run_at');
     @endphp
-    @if ($rep !== null)
-        <div class="rounded-xl bg-white p-4 shadow-sm dark:bg-gray-800">
+    <div class="rounded-xl bg-white p-4 shadow-sm dark:bg-gray-800">
             <div class="mb-3 flex items-center justify-between">
                 <h3 class="text-sm font-semibold">מוניטין דומיין — רשימות חסימה</h3>
                 <span class="text-xs text-gray-500 dark:text-gray-400">
@@ -203,6 +207,11 @@
             @if (count($listings) === 0 && $repCheckedAt === null)
                 <div class="text-sm text-gray-500 dark:text-gray-400">
                     טרם הושלמה בדיקת מוניטין לדומיין הזה.
+                    @if (blank($site->domain))
+                        לאתר לא מוגדר דומיין — הבדיקה דורשת דומיין.
+                    @else
+                        לחצו "בדיקת מוניטין" למעלה או המתינו לריצה היומית; אם אין תוצאה — בדקו בניהול ← יומן אירועים.
+                    @endif
                 </div>
             @elseif (count($listings) === 0)
                 <div class="flex items-center gap-2 text-sm text-success-600 dark:text-success-400">
@@ -224,8 +233,7 @@
                     @endforeach
                 </div>
             @endif
-        </div>
-    @endif
+    </div>
 
     {{-- Defacement watch: homepage content fingerprint state. --}}
     @php
@@ -235,7 +243,14 @@
         $contentCheckedAt = data_get($content, 'checked_at');
         $contentAlertedAt = data_get($content, 'alerted_at');
     @endphp
-    @if ($content !== null)
+    @if ($content === null)
+        <div class="rounded-xl bg-white p-4 shadow-sm dark:bg-gray-800">
+            <h3 class="mb-3 text-sm font-semibold">זיהוי השחתה — תוכן דף הבית</h3>
+            <div class="text-sm text-gray-500 dark:text-gray-400">
+                טרם נלקחה טביעת תוכן לדף הבית. הבדיקה רצה אוטומטית כל בוקר, או מייד דרך "עוד כלים" ← "בדיקת השחתה".
+            </div>
+        </div>
+    @else
         <div @class([
             'rounded-xl p-4 shadow-sm',
             'bg-white dark:bg-gray-800' => ! $contentSuspected,
@@ -295,7 +310,14 @@
         $dnsChangedAt = data_get($dnsSnap, 'changed_at');
         $dnsLabels = ['a' => 'A — כתובת האתר', 'mx' => 'MX — דואר', 'ns' => 'NS — שרתי שמות'];
     @endphp
-    @if ($dnsSnap !== null)
+    @if ($dnsSnap === null)
+        <div class="rounded-xl bg-white p-4 shadow-sm dark:bg-gray-800">
+            <h3 class="mb-3 text-sm font-semibold">רשומות DNS — מעקב שינויים</h3>
+            <div class="text-sm text-gray-500 dark:text-gray-400">
+                טרם נלקחה תמונת DNS לדומיין. הבדיקה רצה אוטומטית כל בוקר, או מייד דרך "עוד כלים" ← "בדיקת DNS".
+            </div>
+        </div>
+    @else
         <div class="rounded-xl bg-white p-4 shadow-sm dark:bg-gray-800">
             <div class="mb-3 flex items-center justify-between">
                 <h3 class="text-sm font-semibold">רשומות DNS — מעקב שינויים</h3>
