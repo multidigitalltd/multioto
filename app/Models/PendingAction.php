@@ -16,7 +16,7 @@ class PendingAction extends Model
 {
     protected $fillable = [
         'type', 'status', 'customer_id', 'ticket_id', 'summary', 'payload',
-        'proposed_by', 'decided_at', 'executed_at', 'error',
+        'proposed_by', 'standing_approval_id', 'decided_at', 'executed_at', 'error',
     ];
 
     protected function casts(): array

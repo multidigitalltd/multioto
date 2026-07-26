@@ -13,7 +13,10 @@ use App\Mail\MonitoringReportMail;
 use App\Models\Customer;
 use App\Models\PendingAction;
 use App\Models\Site;
+use App\Models\StandingApproval;
+use App\Models\SystemLog;
 use App\Services\Agent\SiteActionRunner;
+use App\Services\Agent\SiteToolCatalog;
 use App\Services\Agent\SystemActionRunner;
 use App\Services\Hosting\HostingClient;
 use App\Services\Monitoring\MonitoringReport;
@@ -34,7 +37,57 @@ class ApprovalGate
     /** A stale proposal must not execute long after its context has changed. */
     public const MAX_AGE_DAYS = 7;
 
+    /**
+     * System operations that may NEVER get a standing approval — anything that
+     * moves money or changes billing must be looked at every single time.
+     */
+    private const STANDING_BLOCKED_OPERATIONS = [
+        'send_payment_request', 'mark_collected', 'update_subscription',
+    ];
+
     public function __construct(private WahaClient $waha) {}
+
+    /**
+     * The standing-approval key for an action of this type+payload, or null
+     * when the kind is not eligible for "always approve":
+     * - ticket replies — unique customer-facing content, reviewed every time;
+     * - destructive site tools (tier 3) — never pre-approved;
+     * - money-moving system operations — never pre-approved.
+     */
+    public static function standingKeyFor(string $type, array $payload): ?string
+    {
+        return match ($type) {
+            'site_action' => self::siteActionStandingKey($payload),
+            'site_fix' => ($fix = (string) data_get($payload, 'fix')) !== '' ? "site_fix:{$fix}" : null,
+            'system_action' => ($op = (string) data_get($payload, 'operation')) !== ''
+                && ! in_array($op, self::STANDING_BLOCKED_OPERATIONS, true)
+                    ? "system_action:{$op}"
+                    : null,
+            'monitoring_report' => 'monitoring_report',
+            default => null,
+        };
+    }
+
+    /**
+     * The EFFECTIVE tier decides eligibility: a benignly-named tool the site's
+     * MCP capabilities flag as destructive escalates to tier 3 via
+     * resolveTier(), and must not be pre-approvable (nor auto-run) there —
+     * name-only classification would let it slip through on staging sites.
+     */
+    private static function siteActionStandingKey(array $payload): ?string
+    {
+        $tool = (string) data_get($payload, 'tool');
+
+        if ($tool === '') {
+            return null;
+        }
+
+        $catalog = app(SiteToolCatalog::class);
+        $site = Site::find((int) data_get($payload, 'site_id'));
+        $tier = $site !== null ? $catalog->resolveTier($site, $tool) : $catalog->tier($tool);
+
+        return $tier < 3 ? "site_action:{$tool}" : null;
+    }
 
     /**
      * Record a proposed action and notify the owner on WhatsApp. WhatsApp being
@@ -58,6 +111,24 @@ class ApprovalGate
             'proposed_by' => $proposedBy,
         ]);
 
+        // A standing ("always approve") grant for this exact action kind runs
+        // it immediately — the owner is INFORMED it ran instead of being asked.
+        $standing = StandingApproval::enabledFor(self::standingKeyFor($type, $payload));
+
+        if ($standing !== null) {
+            $action->update(['standing_approval_id' => $standing->id]);
+            $standing->markUsed();
+
+            $result = $this->approve($action->refresh());
+
+            SystemLog::record('info', 'automation',
+                "פעולה #{$action->id} בוצעה אוטומטית לפי אישור קבוע \"{$standing->label}\": {$result}",
+                ['action_id' => $action->id, 'standing_approval_id' => $standing->id]);
+            $this->notifyOwnerAutoRun($action, $standing, $result);
+
+            return $action->refresh();
+        }
+
         $this->notifyOwner($action);
 
         return $action;
@@ -76,7 +147,7 @@ class ApprovalGate
             return null;
         }
 
-        if (! preg_match('/^\s*(אשר|דחה)\s*#?(\d+)\s*$/u', trim($body), $m)) {
+        if (! preg_match('/^\s*(אשר תמיד|אשר|דחה)\s*#?(\d+)\s*$/u', trim($body), $m)) {
             return null;
         }
 
@@ -90,16 +161,90 @@ class ApprovalGate
             return "פעולה #{$action->id} כבר טופלה (סטטוס: {$action->status->getLabel()}).";
         }
 
-        return $m[1] === 'אשר' ? $this->approve($action) : $this->reject($action);
+        return match ($m[1]) {
+            'אשר תמיד' => $this->approveAlways($action),
+            'אשר' => $this->approve($action),
+            default => $this->reject($action),
+        };
+    }
+
+    /**
+     * Approve this action AND record a standing approval, so future proposals
+     * of the same kind execute automatically (owner notified, not asked).
+     */
+    public function approveAlways(PendingAction $action): string
+    {
+        $key = self::standingKeyFor($action->type, (array) $action->payload);
+
+        if ($key === null) {
+            return "לפעולה מסוג זה אי אפשר לקבוע אישור קבוע (תוכן ללקוח / פעולה הרסנית / כספים). אפשר לאשר חד-פעמית: אשר {$action->id}";
+        }
+
+        // Claim (and run) the concrete action FIRST — if another request
+        // already approved/rejected it, no permanent grant may be installed on
+        // the back of this lost race.
+        ['claimed' => $claimed, 'message' => $message] = $this->approveInternal($action);
+
+        if (! $claimed) {
+            return $message;
+        }
+
+        $standing = StandingApproval::updateOrCreate(
+            ['action_key' => $key],
+            [
+                'label' => self::standingLabelFor($key),
+                'enabled' => true,
+                'created_from_action_id' => $action->id,
+            ],
+        );
+
+        SystemLog::record('info', 'automation',
+            "נקבע אישור קבוע \"{$standing->label}\" — פעולות מסוג זה יבוצעו מעכשיו אוטומטית (ניתן לבטל בהגדרות ← אישורים קבועים).",
+            ['standing_approval_id' => $standing->id, 'action_id' => $action->id]);
+
+        return $message."\n🔁 נקבע אישור קבוע: \"{$standing->label}\". פעולות כאלה יבוצעו מעכשיו אוטומטית ותקבל דיווח. לביטול: הגדרות ← אישורים קבועים.";
+    }
+
+    /** A human label for a standing-approval key ("site_action:wp_cache_flush"). */
+    private static function standingLabelFor(string $key): string
+    {
+        [$type, $detail] = array_pad(explode(':', $key, 2), 2, '');
+
+        return match ($type) {
+            'site_action' => "פעולת אתר: {$detail}",
+            'site_fix' => 'תיקון אתר: '.match ($detail) {
+                'clear_cache' => 'ניקוי מטמון',
+                'restart' => 'הפעלה מחדש',
+                'maintenance_on' => 'מצב תחזוקה — הפעלה',
+                'maintenance_off' => 'מצב תחזוקה — כיבוי',
+                default => $detail,
+            },
+            'system_action' => "פעולת מערכת: {$detail}",
+            'monitoring_report' => 'שליחת דוח ניטור חודשי ללקוח',
+            default => $key,
+        };
     }
 
     /** Approve + execute. Returns a human status line (for WhatsApp/panel). */
     public function approve(PendingAction $action): string
     {
+        return $this->approveInternal($action)['message'];
+    }
+
+    /**
+     * Approve + execute, also reporting whether THIS caller won the atomic
+     * pending→approved claim — approveAlways() must not install a permanent
+     * grant on the back of a request that lost the race (the action may have
+     * been rejected by someone else a moment earlier).
+     *
+     * @return array{claimed: bool, message: string}
+     */
+    protected function approveInternal(PendingAction $action): array
+    {
         if ($action->created_at->lt(now()->subDays(self::MAX_AGE_DAYS))) {
             $action->update(['status' => ActionStatus::Rejected, 'decided_at' => now(), 'error' => 'פג תוקף — ההצעה ישנה מדי לביצוע.']);
 
-            return "פעולה #{$action->id} פגת תוקף (מעל ".self::MAX_AGE_DAYS.' ימים) ולא בוצעה.';
+            return ['claimed' => false, 'message' => "פעולה #{$action->id} פגת תוקף (מעל ".self::MAX_AGE_DAYS.' ימים) ולא בוצעה.'];
         }
 
         // Atomically claim the pending → approved transition, so two concurrent
@@ -111,7 +256,7 @@ class ApprovalGate
             ->update(['status' => ActionStatus::Approved, 'decided_at' => now()]);
 
         if ($claimed === 0) {
-            return "פעולה #{$action->id} כבר טופלה.";
+            return ['claimed' => false, 'message' => "פעולה #{$action->id} כבר טופלה."];
         }
 
         $action->refresh();
@@ -121,12 +266,12 @@ class ApprovalGate
         } catch (\Throwable $e) {
             $action->update(['status' => ActionStatus::Failed, 'error' => Str::limit($e->getMessage(), 300)]);
 
-            return "פעולה #{$action->id} אושרה אך הביצוע נכשל: ".Str::limit($e->getMessage(), 120);
+            return ['claimed' => true, 'message' => "פעולה #{$action->id} אושרה אך הביצוע נכשל: ".Str::limit($e->getMessage(), 120)];
         }
 
         $action->update(['status' => ActionStatus::Executed, 'executed_at' => now()]);
 
-        return "פעולה #{$action->id} אושרה ובוצעה ✓";
+        return ['claimed' => true, 'message' => "פעולה #{$action->id} אושרה ובוצעה ✓"];
     }
 
     /** Reject without executing. */
@@ -293,12 +438,42 @@ class ApprovalGate
             ."✅ לאישור השיבו: אשר {$action->id}\n"
             ."❌ לדחייה: דחה {$action->id}";
 
+        // Offer the standing option only where the kind is eligible for one.
+        if (self::standingKeyFor($action->type, (array) $action->payload) !== null) {
+            $text .= "\n🔁 לאישור אוטומטי של פעולות כאלה מעכשיו: אשר תמיד {$action->id}";
+        }
+
         try {
             $this->waha->sendMessage($ownerChat, $text);
         } catch (\Throwable $e) {
             Log::warning('ApprovalGate: owner notification failed; action awaits panel approval', [
                 'action_id' => $action->id,
                 'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /** Tell the owner an action already ran under a standing approval. */
+    protected function notifyOwnerAutoRun(PendingAction $action, StandingApproval $standing, string $result): void
+    {
+        if (! config('agent.notify_owner_whatsapp', true)) {
+            return;
+        }
+
+        $ownerChat = $this->ownerChatId();
+
+        if ($ownerChat === null) {
+            return;
+        }
+
+        try {
+            $this->waha->sendMessage($ownerChat,
+                "🤖 בוצע אוטומטית (אישור קבוע: {$standing->label})\n\n"
+                .Str::limit($action->summary, 500)."\n\n"
+                ."תוצאה: {$result}\nלביטול האישור הקבוע: הגדרות ← אישורים קבועים.");
+        } catch (\Throwable $e) {
+            Log::warning('ApprovalGate: auto-run notification failed', [
+                'action_id' => $action->id, 'error' => $e->getMessage(),
             ]);
         }
     }
