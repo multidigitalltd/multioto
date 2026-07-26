@@ -526,7 +526,7 @@ class ManageIntegrations extends Page implements HasForms
     }
 
     /** Hebrew-facing labels for the secret fields, for the per-field save report. */
-    private const SECRET_LABELS = [
+    public const SECRET_LABELS = [
         'cardcom.api_password' => 'API Password',
         'linet.login_id' => 'Login ID',
         'linet.key' => 'Key',
