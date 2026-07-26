@@ -63,6 +63,28 @@ class ProbeStatusClassificationTest extends TestCase
         }
     }
 
+    public function test_a_head_rejection_is_retried_with_get_before_counting_as_down(): void
+    {
+        // Some servers 405 every HEAD while serving GET fine — that must not
+        // read as downtime.
+        config(['billing.monitoring.failures_to_incident' => 1]);
+        $site = Site::factory()->create([
+            'domain' => 'probe.example.com',
+            'monitor_url' => 'https://probe.example.com',
+            'monitor_enabled' => true,
+        ]);
+        Http::fake(fn ($request) => $request->method() === 'HEAD'
+            ? Http::response('', 405)
+            : Http::response('ok', 200));
+
+        MonitorSiteJob::dispatchSync($site->id);
+
+        $check = $site->monitorChecks()->latest('checked_at')->first();
+        $this->assertTrue($check->is_up);
+        $this->assertNull($check->error);
+        $this->assertFalse($site->openIncident()->exists());
+    }
+
     public function test_the_charges_screen_is_display_only(): void
     {
         $this->actingAs(User::factory()->create());

@@ -64,6 +64,15 @@ class MonitorSiteJob implements ShouldQueue
                 ? $request->get($url)
                 : $request->withoutRedirecting()->head($url);
 
+            // Some servers reject HEAD outright (405) while serving GET just
+            // fine — retry with GET before classifying, so "no HEAD support"
+            // never reads as downtime now that 4xx counts as down.
+            if (! $needsBody && $response->status() === 405) {
+                $response = Http::timeout((int) config('billing.monitoring.timeout_seconds'))
+                    ->withoutRedirecting()
+                    ->get($url);
+            }
+
             $statusCode = $response->status();
 
             // 2xx/3xx → up. 401/403/429 usually mean a bot-protection layer
