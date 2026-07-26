@@ -3,6 +3,7 @@
 namespace App\Services\Security;
 
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Str;
 
 /**
  * Checks a domain against public spam/malware blocklists:
@@ -19,30 +20,39 @@ use Illuminate\Support\Facades\Http;
 class DomainReputationClient
 {
     /**
-     * @return array{sources: array<string, bool>, listings: list<array{provider: string, source: string, type: string, detail: string, link: ?string}>}
+     * `errors` carries a human reason per provider that did NOT run, so the
+     * event log can say WHY a source was unavailable (timeout, HTTP status,
+     * blocked resolver) instead of a generic "not available".
+     *
+     * @return array{sources: array<string, bool>, listings: list<array{provider: string, source: string, type: string, detail: string, link: ?string}>, errors: array<string, string>}
      */
     public function check(string $domain): array
     {
         $host = $this->normalizeHost($domain);
 
         if ($host === '') {
-            return ['sources' => [], 'listings' => []];
+            return ['sources' => [], 'listings' => [], 'errors' => []];
         }
 
         $sources = [];
         $listings = [];
+        $errors = [];
 
         foreach ($this->providers() as $provider => $runner) {
-            [$ran, $found] = $runner($host);
+            [$ran, $found, $error] = $runner($host);
             $sources[$provider] = $ran;
             $listings = array_merge($listings, $found);
+
+            if (! $ran && $error !== null) {
+                $errors[$provider] = $error;
+            }
         }
 
-        return ['sources' => $sources, 'listings' => $listings];
+        return ['sources' => $sources, 'listings' => $listings, 'errors' => $errors];
     }
 
     /**
-     * @return array<string, callable(string): array{0: bool, 1: list<array<string, mixed>>}>
+     * @return array<string, callable(string): array{0: bool, 1: list<array<string, mixed>>, 2: ?string}>
      */
     private function providers(): array
     {
@@ -61,24 +71,24 @@ class DomainReputationClient
     /**
      * URLhaus host lookup — known malware URLs on the host.
      *
-     * @return array{0: bool, 1: list<array<string, mixed>>}
+     * @return array{0: bool, 1: list<array<string, mixed>>, 2: ?string}
      */
     private function urlhaus(string $host): array
     {
         $url = (string) config('security.reputation.urlhaus_host_url');
 
         if ($url === '') {
-            return [false, []];
+            return [false, [], 'לא מוגדרת כתובת URLhaus בהגדרות.'];
         }
 
         try {
             $response = Http::asForm()->timeout(30)->acceptJson()->post($url, ['host' => $host]);
-        } catch (\Throwable) {
-            return [false, []];
+        } catch (\Throwable $e) {
+            return [false, [], 'הבקשה ל-URLhaus נכשלה: '.Str::limit($e->getMessage(), 120)];
         }
 
         if (! $response->successful()) {
-            return [false, []];
+            return [false, [], 'URLhaus החזיר סטטוס HTTP '.$response->status().'.'];
         }
 
         $body = (array) $response->json();
@@ -86,17 +96,17 @@ class DomainReputationClient
 
         // Only a definite answer (listed or clean) counts as "ran".
         if (! in_array($status, ['ok', 'no_results'], true)) {
-            return [false, []];
+            return [false, [], 'תשובה לא צפויה מ-URLhaus (query_status: '.($status !== '' ? $status : 'ריק').').'];
         }
 
         if ($status === 'no_results') {
-            return [true, []];
+            return [true, [], null];
         }
 
         $urlCount = (int) ($body['url_count'] ?? 0);
 
         if ($urlCount === 0) {
-            return [true, []];
+            return [true, [], null];
         }
 
         $online = collect((array) ($body['urls'] ?? []))
@@ -109,7 +119,7 @@ class DomainReputationClient
             'type' => 'malware',
             'detail' => $online > 0 ? "{$online} כתובות זדוניות פעילות" : "{$urlCount} כתובות זדוניות ידועות",
             'link' => isset($body['urlhaus_reference']) ? (string) $body['urlhaus_reference'] : null,
-        ]]];
+        ]], null];
     }
 
     /**
@@ -118,17 +128,17 @@ class DomainReputationClient
      * test point guards against a resolver that can't query the DBL (public
      * resolvers are blocked): if the probe fails we report "not run", never clean.
      *
-     * @return array{0: bool, 1: list<array<string, mixed>>}
+     * @return array{0: bool, 1: list<array<string, mixed>>, 2: ?string}
      */
     private function spamhaus(string $host): array
     {
         // The resolver must see the known-listed test point, or it cannot query DBL.
         if (! $this->dblListed('test')) {
-            return [false, []];
+            return [false, [], 'שאילתת ה-DNS ל-Spamhaus DBL לא נענתה. הסיבה הנפוצה: השרת משתמש ב-resolver ציבורי (8.8.8.8 / 1.1.1.1) ש-Spamhaus חוסם — הגדירו בשרת resolver של ספק האחסון או מקומי.'];
         }
 
         if (! $this->dblListed($host)) {
-            return [true, []];
+            return [true, [], null];
         }
 
         return [true, [[
@@ -137,7 +147,7 @@ class DomainReputationClient
             'type' => 'spam',
             'detail' => 'הדומיין רשום ב-Spamhaus DBL',
             'link' => 'https://check.spamhaus.org/results?query='.$host,
-        ]]];
+        ]], null];
     }
 
     /** Whether "<name>.dbl.spamhaus.org" resolves to a DBL listing code (127.0.1.x). */
@@ -168,7 +178,7 @@ class DomainReputationClient
      * page (Safe Browsing evaluates the exact URL entries it is given); this is a
      * domain-level check, not a full crawl of every path on the site.
      *
-     * @return array{0: bool, 1: list<array<string, mixed>>}
+     * @return array{0: bool, 1: list<array<string, mixed>>, 2: ?string}
      */
     private function safeBrowsing(string $host): array
     {
@@ -194,12 +204,12 @@ class DomainReputationClient
                     ],
                 ],
             );
-        } catch (\Throwable) {
-            return [false, []];
+        } catch (\Throwable $e) {
+            return [false, [], 'הבקשה ל-Google Safe Browsing נכשלה: '.Str::limit($e->getMessage(), 120)];
         }
 
         if (! $response->successful()) {
-            return [false, []];
+            return [false, [], 'Google Safe Browsing החזיר סטטוס HTTP '.$response->status().' — בדקו את המפתח.'];
         }
 
         $listings = [];
@@ -214,7 +224,7 @@ class DomainReputationClient
             ];
         }
 
-        return [true, $listings];
+        return [true, $listings, null];
     }
 
     /** Reduce a URL/domain to a bare host (no scheme, path, port, www or trailing dot). */

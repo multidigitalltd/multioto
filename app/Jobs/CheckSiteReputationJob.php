@@ -73,9 +73,17 @@ class CheckSiteReputationJob implements ShouldQueue
                 ])]);
             });
 
+            // Name the exact per-source failure — "not available" alone sends
+            // the operator hunting in the dark.
+            $names = ['urlhaus' => 'URLhaus', 'spamhaus' => 'Spamhaus', 'safe_browsing' => 'Google Safe Browsing'];
+            $reasons = collect($result['errors'] ?? [])
+                ->map(fn (string $error, string $provider): string => ($names[$provider] ?? $provider).': '.$error)
+                ->implode(' | ');
+
             SystemLog::record('warning', 'monitoring',
-                "בדיקת מוניטין לדומיין {$site->domain} רצה אך אף מקור חיצוני לא היה זמין (URLhaus / Spamhaus). ייתכן שהשרת חוסם את הבקשות או שהמקורות לא זמינים כרגע.",
-                ['site_id' => $site->id]);
+                "בדיקת מוניטין לדומיין {$site->domain} רצה אך אף מקור חיצוני לא היה זמין."
+                    .($reasons !== '' ? " פירוט — {$reasons}" : ''),
+                ['site_id' => $site->id, 'errors' => $result['errors'] ?? []]);
 
             return;
         }
