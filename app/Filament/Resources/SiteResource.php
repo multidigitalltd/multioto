@@ -18,6 +18,7 @@ use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Js;
 use Illuminate\Support\Str;
 
@@ -147,13 +148,29 @@ class SiteResource extends Resource
                             ->columnSpanFull(),
                         Forms\Components\TextInput::make('mcp_secret')
                             ->label('מפתח MCP')
-                            ->password()
+                            // NOT type=password: browsers autofill password
+                            // inputs on this (panel) domain with the manager's
+                            // saved PANEL password — which then silently
+                            // overwrote the site's MCP key on save, on every
+                            // edited site. The stored secret is never rendered
+                            // back anyway, so there is nothing to mask.
+                            ->autocomplete('off')
                             ->maxLength(255)
                             ->helperText('נוצר אוטומטית ב"קודי חיבור לתוסף". בעריכה — השאירו ריק כדי לא לשנות.')
                             // Never render the stored secret back into the form;
                             // a blank field means "leave unchanged".
                             ->formatStateUsing(fn (): ?string => null)
                             ->dehydrated(fn ($state): bool => filled($state))
+                            // Defence in depth against any remaining autofill:
+                            // the panel login password must never become a
+                            // site's MCP key.
+                            ->rule(fn (): \Closure => function (string $attribute, $value, \Closure $fail): void {
+                                $user = auth()->user();
+
+                                if ($user !== null && filled($value) && Hash::check((string) $value, $user->password)) {
+                                    $fail('הערך שהוזן זהה לסיסמת הכניסה שלך לפאנל — כנראה מולא אוטומטית על ידי הדפדפן. נקו את השדה (או הדביקו מפתח MCP אמיתי).');
+                                }
+                            })
                             ->columnSpanFull(),
 
                         // This screen holds settings only — the connection TOOLS

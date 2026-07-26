@@ -314,6 +314,23 @@ class ViewSite extends ViewRecord
                     ->modalContent(fn () => view('filament.agent-credentials', [
                         'data' => $this->record->ensureAgentCredentials(),
                     ])),
+                // Recovery for an MCP key that was corrupted (e.g. by browser
+                // autofill overwriting it with the manager's panel password):
+                // mint a fresh random key, then copy it into the plugin.
+                Actions\Action::make('rotateMcpSecret')
+                    ->label('מפתח MCP חדש')
+                    ->icon('heroicon-o-key')
+                    ->visible($isAdmin)
+                    ->requiresConfirmation()
+                    ->modalHeading('החלפת מפתח ה-MCP')
+                    ->modalDescription('ייווצר מפתח אקראי חדש. חובה להעתיק אותו גם לתוסף באתר ("קודי חיבור לתוסף") — עד אז חיבור ה-AI לאתר לא יעבוד.')
+                    ->action(function (): void {
+                        $this->record->update(['mcp_secret' => Str::random(40)]);
+
+                        Notification::make()->title('נוצר מפתח MCP חדש')
+                            ->body('פתחו "קודי חיבור לתוסף", העתיקו את המפתח החדש והדביקו אותו בתוסף באתר.')
+                            ->success()->send();
+                    }),
                 Actions\Action::make('downloadPlugin')
                     ->label('הורד תוסף (גרסה אחרונה)')
                     ->icon('heroicon-o-arrow-down-tray')
