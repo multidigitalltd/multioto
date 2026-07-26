@@ -6,6 +6,7 @@ use App\Http\Controllers\BillingController;
 use App\Http\Controllers\BrandingController;
 use App\Http\Controllers\CsatController;
 use App\Http\Controllers\CustomerCardPdfController;
+use App\Http\Controllers\IntegrationKeysFallbackController;
 use App\Http\Controllers\Portal\PortalAuthController;
 use App\Http\Controllers\Portal\PortalController;
 use App\Http\Controllers\PushSubscriptionController;
@@ -112,6 +113,14 @@ Route::middleware(['web', 'auth'])->group(function () {
 Route::get('/tasks/print', TasksPrintController::class)
     ->middleware(['web', 'auth'])
     ->name('tasks.print');
+
+// Classic (non-Livewire) fallback save for the security API keys — admin-only
+// (enforced in the controller), same 2FA gate as the panel. Exists because the
+// Livewire save button can be broken client-side (extensions/blocked JS) and
+// the operator still needs a dependable way to store the keys.
+Route::post('/integrations/security-keys', IntegrationKeysFallbackController::class)
+    ->middleware(['web', 'auth', EnsureTwoFactorConfirmed::class, 'throttle:20,1'])
+    ->name('integrations.security-keys.fallback');
 
 // Browser push subscription store/remove — team-only, scoped to the signed-in
 // user by the controller. Gated by the same 2FA confirmation as the panel, so a
