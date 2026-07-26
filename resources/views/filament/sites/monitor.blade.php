@@ -193,6 +193,21 @@
                 </span>
             </div>
 
+            {{-- Which sources actually answered in the last run — the "is my
+                 key working?" indicator, straight on the card. --}}
+            @php $repSources = (array) data_get($rep, 'sources', []); @endphp
+            @if ($repSources !== [])
+                <div class="mb-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 dark:text-gray-400">
+                    @foreach (['urlhaus' => 'URLhaus', 'spamhaus' => 'Spamhaus', 'safe_browsing' => 'Google Safe Browsing'] as $srcKey => $srcLabel)
+                        @if (array_key_exists($srcKey, $repSources))
+                            <span @class(['text-success-600 dark:text-success-400' => $repSources[$srcKey], 'text-amber-600 dark:text-amber-400' => ! $repSources[$srcKey]])>
+                                {{ $srcLabel }}: {{ $repSources[$srcKey] ? 'רץ ✓' : 'לא רץ ✗' }}
+                            </span>
+                        @endif
+                    @endforeach
+                </div>
+            @endif
+
             @if ($repRunStatus === 'no_source')
                 <div class="mb-3 flex items-start gap-2 text-sm text-amber-700 dark:text-amber-400" role="status">
                     <x-heroicon-o-exclamation-triangle class="h-5 w-5 shrink-0" />

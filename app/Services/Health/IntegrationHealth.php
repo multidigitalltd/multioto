@@ -4,6 +4,7 @@ namespace App\Services\Health;
 
 use App\Services\Cardcom\CardcomClient;
 use App\Services\Linet\LinetClient;
+use App\Services\Security\VulnerabilityFeedClient;
 use App\Services\Waha\WahaClient;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
@@ -28,8 +29,106 @@ class IntegrationHealth
             'linet' => $this->linet->testConnection(),
             'waha' => $this->waha->testConnection(),
             'email' => $this->checkEmail(),
+            'security' => $this->checkSecuritySources(),
             default => ConnectionResult::fail('אינטגרציה לא מוכרת'),
         };
+    }
+
+    /**
+     * One-click diagnostic for ALL the reputation/vulnerability sources: is
+     * URLhaus reachable, can the resolver query Spamhaus DBL, is the Safe
+     * Browsing key valid, is the vulnerability feed reachable. Reports a
+     * per-source line so the operator sees exactly what is blocked and where.
+     */
+    private function checkSecuritySources(): ConnectionResult
+    {
+        $lines = [];
+        $allOk = true;
+
+        // URLhaus — keyless HTTPS; failure here means outbound is blocked.
+        try {
+            $urlhaus = Http::asForm()->timeout(15)->post(
+                (string) config('security.reputation.urlhaus_host_url'),
+                ['host' => 'example.com'],
+            );
+            $ok = $urlhaus->successful();
+            $lines[] = 'URLhaus: '.($ok ? 'נגיש ✓' : 'נכשל (HTTP '.$urlhaus->status().')');
+            $allOk = $allOk && $ok;
+        } catch (\Throwable $e) {
+            $lines[] = 'URLhaus: לא נגיש ('.Str::limit($e->getMessage(), 80).')';
+            $allOk = false;
+        }
+
+        // Spamhaus DBL — a DNS probe against the documented test point. Public
+        // resolvers (8.8.8.8 / 1.1.1.1) are refused by Spamhaus.
+        if ($this->spamhausProbeWorks()) {
+            $lines[] = 'Spamhaus DBL: נגיש ✓';
+        } else {
+            $lines[] = 'Spamhaus DBL: ה-resolver לא מצליח לשאול (כנראה DNS ציבורי 8.8.8.8/1.1.1.1 שחסום — יש לעבור ל-resolver של ספק האחסון)';
+            $allOk = false;
+        }
+
+        // Google Safe Browsing — validate the key with Google's test URL.
+        $sbKey = trim((string) config('security.reputation.safe_browsing_key'));
+
+        if ($sbKey === '') {
+            $lines[] = 'Google Safe Browsing: לא הוגדר מפתח (אופציונלי)';
+        } else {
+            try {
+                $sb = Http::timeout(15)->acceptJson()->post(
+                    'https://safebrowsing.googleapis.com/v4/threatMatches:find?key='.urlencode($sbKey),
+                    [
+                        'client' => ['clientId' => 'multioto', 'clientVersion' => '1.0'],
+                        'threatInfo' => [
+                            'threatTypes' => ['MALWARE'],
+                            'platformTypes' => ['ANY_PLATFORM'],
+                            'threatEntryTypes' => ['URL'],
+                            'threatEntries' => [['url' => 'http://malware.testing.google.test/testing/malware/']],
+                        ],
+                    ],
+                );
+                $ok = $sb->successful();
+                $lines[] = 'Google Safe Browsing: '.($ok
+                    ? 'המפתח תקין ✓'
+                    : 'המפתח נדחה (HTTP '.$sb->status().') — ודאו שה-Safe Browsing API מופעל בפרויקט ושהמפתח לא מוגבל לשירות אחר');
+                $allOk = $allOk && $ok;
+            } catch (\Throwable $e) {
+                $lines[] = 'Google Safe Browsing: הבקשה נכשלה ('.Str::limit($e->getMessage(), 80).')';
+                $allOk = false;
+            }
+        }
+
+        // The vulnerability feed (Wordfence by default / WPScan when selected).
+        $feedSource = strtolower((string) config('security.vulnerabilities.source', 'wordfence')) === 'wpscan' ? 'WPScan' : 'Wordfence';
+
+        try {
+            $feed = app(VulnerabilityFeedClient::class);
+            $ok = $feed->available();
+            $lines[] = "פיד פגיעויות ({$feedSource}): ".($ok ? 'נגיש ✓' : 'לא זמין'.(($why = $feed->lastError()) !== null ? " — {$why}" : ''));
+            $allOk = $allOk && $ok;
+        } catch (\Throwable $e) {
+            $lines[] = "פיד פגיעויות ({$feedSource}): שגיאה (".Str::limit($e->getMessage(), 80).')';
+            $allOk = false;
+        }
+
+        $message = implode(' · ', $lines);
+
+        return $allOk ? ConnectionResult::ok($message) : ConnectionResult::fail($message);
+    }
+
+    /**
+     * Can this server's resolver query the Spamhaus DBL? Probes the documented
+     * always-listed test point. Isolated for stubbing in tests (no real DNS).
+     */
+    protected function spamhausProbeWorks(): bool
+    {
+        foreach ((array) (@dns_get_record('test.dbl.spamhaus.org', DNS_A) ?: []) as $record) {
+            if (str_starts_with((string) ($record['ip'] ?? ''), '127.0.1.')) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

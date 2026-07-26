@@ -110,6 +110,10 @@ return [
         // URLs on the host plus its Spamhaus DBL / SURBL blocklist status.
         'urlhaus_host_url' => env('URLHAUS_HOST_URL', 'https://urlhaus-api.abuse.ch/v1/host/'),
 
+        // abuse.ch requires a free Auth-Key for its APIs (auth.abuse.ch) —
+        // without one URLhaus answers 401. Managed from the panel settings.
+        'urlhaus_auth_key' => env('URLHAUS_AUTH_KEY', ''),
+
         // Optional Google Safe Browsing API key (https://developers.google.com/
         // safe-browsing). When set, the domain is also checked against Google's
         // malware/phishing lists.
