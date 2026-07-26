@@ -15,7 +15,9 @@ return new class extends Migration
             // investigations on the same site AND across sites.
             $table->id();
             $table->foreignId('site_id')->index();
-            $table->string('domain', 190); // snapshot — survives site deletion/rename
+            // Snapshot (survives site deletion/rename); 255 matches sites.domain
+            // so a copy can never overflow this column.
+            $table->string('domain');
             $table->text('problem');
             $table->string('fix_tool', 190)->nullable();
             $table->string('fix_summary', 500)->nullable();

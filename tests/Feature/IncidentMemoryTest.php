@@ -93,6 +93,60 @@ class IncidentMemoryTest extends TestCase
         $this->assertFalse($resolution->fresh()->verified);
     }
 
+    public function test_a_negative_verification_phrase_is_not_read_as_success(): void
+    {
+        // "לא ניתן לאשר שהבעיה נפתרה" contains the phrase but is NOT the
+        // mandated leading "✅ הבעיה נפתרה" marker.
+        $site = Site::factory()->create();
+        $resolution = app(IncidentMemory::class)->record($site, 'האתר איטי', 'wp_cache_flush');
+
+        $agent = Mockery::mock(SiteAgent::class);
+        $agent->shouldReceive('investigate')->andReturn('לא ניתן לאשר שהבעיה נפתרה — נדרשת בדיקה נוספת.');
+        $this->app->instance(SiteAgent::class, $agent);
+
+        (new InvestigateSiteJob($site->id, 'אימות', 2, null, $resolution->id))
+            ->handle(app(SiteAgent::class), app(SiteMemoryStore::class));
+
+        $this->assertFalse($resolution->fresh()->verified);
+    }
+
+    public function test_a_single_generic_shared_word_is_not_enough_to_cross_sites(): void
+    {
+        $memory = app(IncidentMemory::class);
+        $site = Site::factory()->create();
+        $other = Site::factory()->create(['domain' => 'other.co.il']);
+
+        // Shares only the generic "האתר" (stop word) — must not be suggested.
+        $memory->record($other, 'האתר מציג שגיאת 500', 'wp_plugin_rollback')->update(['verified' => true]);
+
+        $this->assertSame('', $memory->contextFor($site, 'האתר איטי מאוד בשעות הבוקר'));
+    }
+
+    public function test_a_memory_write_failure_does_not_fail_the_executed_action(): void
+    {
+        // The fix already ran — a memory hiccup must not flip it to Failed.
+        $site = Site::factory()->create();
+        $runner = Mockery::mock(SiteActionRunner::class);
+        $runner->shouldReceive('run')->once();
+        $this->app->instance(SiteActionRunner::class, $runner);
+
+        $failing = Mockery::mock(IncidentMemory::class);
+        $failing->shouldReceive('record')->andThrow(new \RuntimeException('db down'));
+        $this->app->instance(IncidentMemory::class, $failing);
+        Queue::fake();
+
+        $action = PendingAction::create([
+            'type' => 'site_action', 'status' => ActionStatus::Pending,
+            'summary' => 'ניקוי מטמון',
+            'payload' => ['site_id' => $site->id, 'tool' => 'wp_cache_flush', 'goal' => 'האתר איטי', 'round' => 1],
+            'proposed_by' => 'ai',
+        ]);
+
+        app(ApprovalGate::class)->approve($action);
+
+        $this->assertSame(ActionStatus::Executed, $action->fresh()->status);
+    }
+
     public function test_context_includes_same_site_history_and_similar_verified_cross_site_fixes(): void
     {
         $memory = app(IncidentMemory::class);

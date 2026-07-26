@@ -107,7 +107,9 @@ class InvestigateSiteJob implements ShouldQueue
 
             // The verification confirmed the fix — remember it as a PROVEN
             // solution, so future similar problems (anywhere) start from it.
-            if ($this->verifiesResolutionId !== null && str_contains($summary, 'הבעיה נפתרה')) {
+            // Only the explicit LEADING marker the prompt mandates counts:
+            // "לא ניתן לאשר שהבעיה נפתרה" must not read as success.
+            if ($this->verifiesResolutionId !== null && str_starts_with(trim($summary), '✅ הבעיה נפתרה')) {
                 app(IncidentMemory::class)->confirm($this->verifiesResolutionId);
             }
         }

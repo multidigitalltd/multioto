@@ -320,17 +320,25 @@ class ApprovalGate
 
         // Remember the treatment in the incident memory — the verification
         // round (below) upgrades it to "verified" when the problem is gone.
+        // Best-effort: the external action already ran; a memory-write failure
+        // must not flip an EXECUTED change to Failed (inviting a re-run).
         $resolutionId = null;
 
-        if ($goal !== '' && $action->proposed_by === 'ai'
-            && ($memorySite = Site::find((int) data_get($action->payload, 'site_id'))) !== null) {
-            $resolutionId = app(IncidentMemory::class)->record(
-                $memorySite,
-                $goal,
-                (string) data_get($action->payload, 'tool'),
-                Str::limit($action->summary, 400),
-                $action->id,
-            )->id;
+        try {
+            if ($goal !== '' && $action->proposed_by === 'ai'
+                && ($memorySite = Site::find((int) data_get($action->payload, 'site_id'))) !== null) {
+                $resolutionId = app(IncidentMemory::class)->record(
+                    $memorySite,
+                    $goal,
+                    (string) data_get($action->payload, 'tool'),
+                    Str::limit($action->summary, 400),
+                    $action->id,
+                )->id;
+            }
+        } catch (\Throwable $e) {
+            Log::warning('ApprovalGate: incident-memory recording failed after an executed fix', [
+                'action_id' => $action->id, 'error' => $e->getMessage(),
+            ]);
         }
 
         // Only AI-originated fixes loop — a team member picking a tool by hand
@@ -406,8 +414,15 @@ class ApprovalGate
         };
 
         // Hosting-level fixes join the incident memory too (unverified — there
-        // is no automatic verification round for them).
-        app(IncidentMemory::class)->record($site, $action->summary, "hosting:{$fix}", null, $action->id);
+        // is no automatic verification round for them). Best-effort: the fix
+        // already ran; a memory failure must not mark it Failed.
+        try {
+            app(IncidentMemory::class)->record($site, $action->summary, "hosting:{$fix}", null, $action->id);
+        } catch (\Throwable $e) {
+            Log::warning('ApprovalGate: incident-memory recording failed after an executed hosting fix', [
+                'action_id' => $action->id, 'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     /** Send an approved AI reply to the customer over the ticket's channel. */

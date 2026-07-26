@@ -25,6 +25,20 @@ class IncidentMemory
     /** Cross-site matches actually shown. */
     private const CROSS_SITE_LIMIT = 3;
 
+    /** Shared meaningful words required before a cross-site fix is suggested. */
+    private const MIN_SIMILARITY = 2;
+
+    /**
+     * Generic Hebrew words that appear in almost every goal/problem ("האתר",
+     * "בעיה"…) — matching on them would inject unrelated history.
+     */
+    private const STOP_WORDS = [
+        'האתר', 'אתר', 'אתרים', 'בעיה', 'הבעיה', 'בעיית', 'תקלה', 'התקלה', 'תקלת',
+        'מציג', 'מחזיר', 'נראה', 'מאוד', 'כרגע', 'עדיין', 'אחרי', 'לאחר', 'בזמן',
+        'כאשר', 'אנא', 'בבקשה', 'בדוק', 'לבדוק', 'טיפול', 'לטפל', 'קיימת', 'ישנה',
+        'אצל', 'הלקוח', 'לקוח', 'דיווח', 'דווח',
+    ];
+
     /** Record an executed fix against the problem it treated. */
     public function record(Site $site, string $problem, ?string $fixTool, ?string $fixSummary = null, ?int $actionId = null): IncidentResolution
     {
@@ -67,7 +81,7 @@ class IncidentMemory
 
         $matches = $candidates
             ->map(fn (IncidentResolution $r): array => ['r' => $r, 'score' => self::similarity($goal, $r->problem)])
-            ->filter(fn (array $m): bool => $m['score'] > 0)
+            ->filter(fn (array $m): bool => $m['score'] >= self::MIN_SIMILARITY)
             ->sortByDesc('score')
             ->take(self::CROSS_SITE_LIMIT);
 
@@ -88,7 +102,7 @@ class IncidentMemory
     {
         $tokenize = fn (string $text): array => array_values(array_filter(
             preg_split('/[^\p{L}\p{N}]+/u', mb_strtolower($text)) ?: [],
-            fn (string $w): bool => mb_strlen($w) > 3,
+            fn (string $w): bool => mb_strlen($w) > 3 && ! in_array($w, self::STOP_WORDS, true),
         ));
 
         return count(array_intersect(array_unique($tokenize($goal)), array_unique($tokenize($problem))));
