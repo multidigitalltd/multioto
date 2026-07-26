@@ -4,6 +4,8 @@ namespace Tests\Feature;
 
 use App\Models\Setting;
 use App\Models\User;
+use App\Services\Health\ConnectionResult;
+use App\Services\Health\IntegrationHealth;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -54,6 +56,29 @@ class IntegrationKeysFallbackTest extends TestCase
         ])->assertForbidden();
 
         $this->assertArrayNotHasKey('security.urlhaus_auth_key', Setting::map());
+    }
+
+    public function test_the_fallback_connection_test_flashes_the_per_source_result(): void
+    {
+        $this->actingAs(User::factory()->create());
+
+        $health = \Mockery::mock(IntegrationHealth::class);
+        $health->shouldReceive('check')->with('security')
+            ->andReturn(ConnectionResult::fail('URLhaus: ה-Auth-Key נדחה (403) — העתיקו מחדש את המפתח המלא מ-auth.abuse.ch ושמרו שוב'));
+        $this->app->instance(IntegrationHealth::class, $health);
+
+        $response = $this->post(route('integrations.security-keys.test'));
+
+        $response->assertRedirect();
+        $response->assertSessionHas('integration_status', fn ($s) => $s['variant'] === 'danger'
+            && str_contains($s['text'], 'Auth-Key נדחה (403)'));
+    }
+
+    public function test_the_fallback_connection_test_is_admin_only(): void
+    {
+        $this->actingAs(User::factory()->agent()->create());
+
+        $this->post(route('integrations.security-keys.test'))->assertForbidden();
     }
 
     public function test_an_empty_submit_changes_nothing_and_says_so(): void

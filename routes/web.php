@@ -118,9 +118,12 @@ Route::get('/tasks/print', TasksPrintController::class)
 // (enforced in the controller), same 2FA gate as the panel. Exists because the
 // Livewire save button can be broken client-side (extensions/blocked JS) and
 // the operator still needs a dependable way to store the keys.
-Route::post('/integrations/security-keys', IntegrationKeysFallbackController::class)
+Route::post('/integrations/security-keys', [IntegrationKeysFallbackController::class, 'save'])
     ->middleware(['web', 'auth', EnsureTwoFactorConfirmed::class, 'throttle:20,1'])
     ->name('integrations.security-keys.fallback');
+Route::post('/integrations/security-keys/test', [IntegrationKeysFallbackController::class, 'test'])
+    ->middleware(['web', 'auth', EnsureTwoFactorConfirmed::class, 'throttle:10,1'])
+    ->name('integrations.security-keys.test');
 
 // Browser push subscription store/remove — team-only, scoped to the signed-in
 // user by the controller. Gated by the same 2FA confirmation as the panel, so a

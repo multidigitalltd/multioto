@@ -4,10 +4,12 @@ namespace App\Http\Controllers;
 
 use App\Filament\Pages\ManageIntegrations;
 use App\Models\Setting;
+use App\Services\Health\IntegrationHealth;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 
 /**
  * Classic (non-Livewire) fallback for saving the security/reputation API keys.
@@ -29,7 +31,7 @@ class IntegrationKeysFallbackController extends Controller
         'urlhaus_auth_key' => 'security.urlhaus_auth_key',
     ];
 
-    public function __invoke(Request $request): RedirectResponse
+    public function save(Request $request): RedirectResponse
     {
         abort_unless($request->user()?->isAdmin() ?? false, 403);
 
@@ -94,6 +96,32 @@ class IntegrationKeysFallbackController extends Controller
         return back()->with('integration_status', [
             'variant' => 'success',
             'text' => 'המפתחות נשמרו והוצפנו (בטופס הגיבוי). '.$states->implode(' · ').'. עכשיו לחצו "בדיקת חיבור" לאימות.',
+        ]);
+    }
+
+    /**
+     * Run the security-sources connection test without Livewire — the same
+     * IntegrationHealth check the panel button runs, delivered as a redirect +
+     * flash so it works when the page's JavaScript is broken.
+     */
+    public function test(Request $request): RedirectResponse
+    {
+        abort_unless($request->user()?->isAdmin() ?? false, 403);
+
+        Log::info('IntegrationKeysFallback: connection test');
+
+        try {
+            $result = app(IntegrationHealth::class)->check('security');
+        } catch (\Throwable $e) {
+            return back()->with('integration_status', [
+                'variant' => 'warning',
+                'text' => 'בדיקת החיבור לא הושלמה: '.Str::limit(trim($e->getMessage()) ?: class_basename($e), 150),
+            ]);
+        }
+
+        return back()->with('integration_status', [
+            'variant' => $result->ok ? 'success' : 'danger',
+            'text' => ($result->ok ? 'החיבור למקורות האבטחה תקין ✓ — ' : 'בדיקת החיבור למקורות האבטחה: ').$result->message,
         ]);
     }
 }

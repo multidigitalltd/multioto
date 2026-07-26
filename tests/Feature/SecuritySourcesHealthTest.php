@@ -92,6 +92,25 @@ class SecuritySourcesHealthTest extends TestCase
         Http::assertSent(fn ($request) => $request->hasHeader('Auth-Key', 'abuse-key-1'));
     }
 
+    public function test_a_403_with_a_key_points_at_a_wrong_or_partial_key(): void
+    {
+        config(['security.reputation.urlhaus_auth_key' => 'wrong-key']);
+        config(['security.reputation.safe_browsing_key' => '']);
+        Http::fake(['*urlhaus*' => Http::response('', 403)]);
+
+        $result = $this->health(spamhausWorks: true)->check('security');
+
+        $this->assertFalse($result->ok);
+        $this->assertStringContainsString('ה-Auth-Key נדחה (403)', $result->message);
+
+        // And the reputation client explains the same in the event log.
+        $client = Mockery::mock(DomainReputationClient::class.'[dblRecords]')
+            ->shouldAllowMockingProtectedMethods()->makePartial();
+        $client->shouldReceive('dblRecords')->andReturn([]);
+        $check = $client->check('example.co.il');
+        $this->assertStringContainsString('שגוי או חלקי', $check['errors']['urlhaus']);
+    }
+
     public function test_a_401_without_a_key_explains_where_to_get_one(): void
     {
         config(['security.reputation.urlhaus_auth_key' => '']);

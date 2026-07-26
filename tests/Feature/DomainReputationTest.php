@@ -121,7 +121,7 @@ class DomainReputationTest extends TestCase
         CheckSiteReputationJob::dispatchSync($site->id);
 
         $log = SystemLog::query()->where('source', 'monitoring')->latest('id')->first();
-        $this->assertStringContainsString('URLhaus: URLhaus החזיר סטטוס HTTP 403', $log->message);
+        $this->assertStringContainsString('URLhaus דחה את הבקשה (403)', $log->message);
         $this->assertStringContainsString('resolver ציבורי', $log->message);
     }
 
