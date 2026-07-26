@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\SiteResource\Pages;
 
 use App\Filament\Resources\SiteResource;
+use App\Filament\Support\SiteActions;
 use App\Services\Cloudflare\CloudflareClient;
 use Filament\Actions;
 use Filament\Forms;
@@ -15,8 +16,16 @@ class ListSites extends ListRecords
 {
     protected static string $resource = SiteResource::class;
 
-    /** Cached account-wide country-rules overview (N zones = N API calls). */
-    private const COUNTRY_OVERVIEW_CACHE = 'cloudflare.country_rules_overview';
+    /**
+     * Cache key for the account-wide country-rules overview (N zones = N API
+     * calls). Bound to the token's hash: replacing the saved token — possibly
+     * for a DIFFERENT Cloudflare account — must never serve the previous
+     * account's zones from cache.
+     */
+    private function countryOverviewCacheKey(string $token): string
+    {
+        return 'cloudflare.country_rules_overview.'.sha1($token);
+    }
 
     protected function getHeaderActions(): array
     {
@@ -58,12 +67,7 @@ class ListSites extends ListRecords
                         'whitelist' => 'מעבר חופשי (Allow)',
                         'remove' => 'הסרת הכלל',
                     ]),
-                Forms\Components\TextInput::make('api_token')
-                    ->label('Cloudflare API Token')->password()->autocomplete('new-password')
-                    ->required(fn (): bool => blank(config('billing.cloudflare.api_token')))
-                    ->helperText(filled(config('billing.cloudflare.api_token'))
-                        ? 'קיים טוקן שמור בהגדרות — השאירו ריק כדי להשתמש בו.'
-                        : 'טוקן עם הרשאת Zone·Read + Firewall Services·Edit. אפשר גם לשמור אותו בהגדרות ← אינטגרציות.'),
+                SiteActions::cloudflareTokenField(),
             ])
             ->action(function (array $data): void {
                 $token = trim((string) ($data['api_token'] ?? '')) ?: trim((string) config('billing.cloudflare.api_token'));
@@ -76,7 +80,7 @@ class ListSites extends ListRecords
                 );
 
                 // The overview must reflect the change the next time it opens.
-                Cache::forget(self::COUNTRY_OVERVIEW_CACHE);
+                Cache::forget($this->countryOverviewCacheKey(trim((string) config('billing.cloudflare.api_token'))));
 
                 Notification::make()
                     ->title('כללי מדינה ב-Cloudflare')
@@ -101,7 +105,7 @@ class ListSites extends ListRecords
             return new HtmlString('<span style="'.$muted.'">אין טוקן Cloudflare שמור — שמרו טוקן בהגדרות ← אינטגרציות כדי לראות כאן את הכללים הקיימים.</span>');
         }
 
-        $overview = Cache::remember(self::COUNTRY_OVERVIEW_CACHE, now()->addMinutes(5),
+        $overview = Cache::remember($this->countryOverviewCacheKey($token), now()->addMinutes(5),
             fn (): array => app(CloudflareClient::class)->countryRulesOverview($token));
 
         if (! $overview['ok']) {
