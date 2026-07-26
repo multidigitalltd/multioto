@@ -81,14 +81,20 @@ class DomainReputationClient
             return [false, [], 'לא מוגדרת כתובת URLhaus בהגדרות.'];
         }
 
+        $authKey = trim((string) config('security.reputation.urlhaus_auth_key'));
+
         try {
-            $response = Http::asForm()->timeout(30)->acceptJson()->post($url, ['host' => $host]);
+            $response = Http::asForm()->timeout(30)->acceptJson()
+                ->withHeaders($authKey !== '' ? ['Auth-Key' => $authKey] : [])
+                ->post($url, ['host' => $host]);
         } catch (\Throwable $e) {
             return [false, [], 'הבקשה ל-URLhaus נכשלה: '.self::redactSecrets(Str::limit($e->getMessage(), 120))];
         }
 
         if (! $response->successful()) {
-            return [false, [], 'URLhaus החזיר סטטוס HTTP '.$response->status().'.'];
+            return [false, [], $response->status() === 401
+                ? 'URLhaus החזיר 401 — נדרש Auth-Key חינמי מ-auth.abuse.ch (הגדרות ← אינטגרציות ← אבטחה ומוניטין).'
+                : 'URLhaus החזיר סטטוס HTTP '.$response->status().'.'];
         }
 
         $body = (array) $response->json();

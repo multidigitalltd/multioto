@@ -44,6 +44,7 @@ class SettingsServiceProvider extends ServiceProvider
         // (Wordfence feed, URLhaus + Spamhaus DBL) are keyless — these only
         // ADD sources (WPScan feed, Google Safe Browsing).
         'security.wpscan_token' => 'security.vulnerabilities.wpscan_token',
+        'security.urlhaus_auth_key' => 'security.reputation.urlhaus_auth_key',
         'security.safe_browsing_key' => 'security.reputation.safe_browsing_key',
         'waha.api_key' => 'billing.waha.api_key',
         'waha.base_url' => 'billing.waha.base_url',

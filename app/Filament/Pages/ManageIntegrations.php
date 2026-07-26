@@ -83,7 +83,7 @@ class ManageIntegrations extends Page implements HasForms
         ],
         'security' => [
             'label' => 'אבטחה ומוניטין',
-            'keys' => ['security.wpscan_token', 'security.safe_browsing_key'],
+            'keys' => ['security.wpscan_token', 'security.safe_browsing_key', 'security.urlhaus_auth_key'],
         ],
         // Postmark / outbound-mail settings live on their own page (ManageMail),
         // which also manages the sender address and verified-sender sync.
@@ -97,6 +97,9 @@ class ManageIntegrations extends Page implements HasForms
         'cardcom' => 'cardcom',
         'linet' => 'linet',
         'waha' => 'waha',
+        // One click tests ALL the reputation/vulnerability sources and reports
+        // a per-source line (reachable / blocked / bad key).
+        'security' => 'security',
     ];
 
     /**
@@ -115,6 +118,7 @@ class ManageIntegrations extends Page implements HasForms
         'cloudflare.api_token',
         'security.wpscan_token',
         'security.safe_browsing_key',
+        'security.urlhaus_auth_key',
     ];
 
     /**
@@ -230,13 +234,15 @@ class ManageIntegrations extends Page implements HasForms
                     ])->columns(1)
                     ->footerActions($this->groupActions('cloudflare')),
 
-                Section::make('אבטחה ומוניטין — מפתחות אופציונליים')
-                    ->description('סריקת האבטחה ובדיקת המוניטין עובדות כבר עכשיו בלי שום מפתח: פיד הפגיעויות של Wordfence ומאגרי URLhaus + Spamhaus DBL הם חינמיים וללא הרשמה. המפתחות כאן רק מוסיפים מקורות בדיקה. נשמרים מוצפנים; השאירו ריק כדי לא לשנות.')
+                Section::make('אבטחה ומוניטין — מפתחות')
+                    ->description('פיד הפגיעויות (Wordfence) ו-Spamhaus DBL חינמיים וללא מפתח. URLhaus דורש Auth-Key חינמי מ-auth.abuse.ch (בלעדיו הבדיקה מחזירה 401), ו-WPScan/Safe Browsing הם מקורות נוספים אופציונליים. הכול נשמר מוצפן; השאירו ריק כדי לא לשנות, ולחצו "בדיקת חיבור" לאימות כל המקורות.')
                     ->schema([
                         TextInput::make('security.wpscan_token')->label('WPScan API Token')->password()->live(onBlur: true)->autocomplete('new-password')
                             ->helperText('אופציונלי (wpscan.com/api) — מקור חלופי לפיד הפגיעויות במקום Wordfence. רלוונטי רק אם מגדירים גם VULN_FEED_SOURCE=wpscan.'),
                         TextInput::make('security.safe_browsing_key')->label('Google Safe Browsing API Key')->password()->live(onBlur: true)->autocomplete('new-password')
                             ->helperText('אופציונלי (Google Cloud Console → Safe Browsing API) — מוסיף בדיקת הדומיין גם מול רשימות הנוזקות/פישינג של גוגל.'),
+                        TextInput::make('security.urlhaus_auth_key')->label('abuse.ch Auth-Key (URLhaus)')->password()->live(onBlur: true)->autocomplete('new-password')
+                            ->helperText('חובה לבדיקת URLhaus: מפתח חינמי מ-auth.abuse.ch (הרשמה → Auth-Key). בלעדיו URLhaus מחזיר 401.'),
                     ])->columns(2)
                     ->footerActions($this->groupActions('security')),
 
