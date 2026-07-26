@@ -15,6 +15,7 @@ use App\Models\PendingAction;
 use App\Models\Site;
 use App\Models\StandingApproval;
 use App\Models\SystemLog;
+use App\Services\Agent\IncidentMemory;
 use App\Services\Agent\SiteActionRunner;
 use App\Services\Agent\SiteToolCatalog;
 use App\Services\Agent\SystemActionRunner;
@@ -317,6 +318,21 @@ class ApprovalGate
         $round = (int) data_get($action->payload, 'round', 1);
         $maxRounds = (int) config('agent.verify_max_rounds', 0);
 
+        // Remember the treatment in the incident memory — the verification
+        // round (below) upgrades it to "verified" when the problem is gone.
+        $resolutionId = null;
+
+        if ($goal !== '' && $action->proposed_by === 'ai'
+            && ($memorySite = Site::find((int) data_get($action->payload, 'site_id'))) !== null) {
+            $resolutionId = app(IncidentMemory::class)->record(
+                $memorySite,
+                $goal,
+                (string) data_get($action->payload, 'tool'),
+                Str::limit($action->summary, 400),
+                $action->id,
+            )->id;
+        }
+
         // Only AI-originated fixes loop — a team member picking a tool by hand
         // ("פעולת AI") asked for that one call, not for an investigation.
         if (! config('agent.verify_after_fix', true) || $goal === '' || $action->proposed_by !== 'ai') {
@@ -340,6 +356,8 @@ class ApprovalGate
                     .'בדוק עכשיו בכלי קריאה בלבד אם הבעיה המקורית נפתרה בפועל. אם נפתרה — כתוב סיכום קצר שמאשר זאת. '
                     .'אם לא נפתרה — הצע עם propose_action את הצעד הבא לתיקון.',
                 $round + 1,
+                null,
+                $resolutionId,
             );
         } catch (\Throwable $e) {
             // The fix itself already ran and succeeded — a failure to enqueue
@@ -386,6 +404,10 @@ class ApprovalGate
             'maintenance_off' => $hosting->restoreSite($site),
             default => throw new \RuntimeException("תיקון לא מוכר: {$fix}"),
         };
+
+        // Hosting-level fixes join the incident memory too (unverified — there
+        // is no automatic verification round for them).
+        app(IncidentMemory::class)->record($site, $action->summary, "hosting:{$fix}", null, $action->id);
     }
 
     /** Send an approved AI reply to the customer over the ticket's channel. */

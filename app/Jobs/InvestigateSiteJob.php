@@ -6,6 +6,7 @@ use App\Enums\AgentCommandOutcome;
 use App\Models\AgentCommand;
 use App\Models\Site;
 use App\Models\SystemLog;
+use App\Services\Agent\IncidentMemory;
 use App\Services\Agent\SiteAgent;
 use App\Services\Agent\SiteMemoryStore;
 use App\Services\Ai\ClaudeClient;
@@ -47,13 +48,22 @@ class InvestigateSiteJob implements ShouldQueue
      */
     public ?int $chatUserId = null;
 
+    /**
+     * When set, this run is the verification round of that recorded incident
+     * resolution — a "✅ הבעיה נפתרה" summary marks it verified in the
+     * agent's incident memory. Class-level default for queue-payload BC.
+     */
+    public ?int $verifiesResolutionId = null;
+
     public function __construct(
         public int $siteId,
         public string $goal,
         public int $round = 1,
         ?int $chatUserId = null,
+        ?int $verifiesResolutionId = null,
     ) {
         $this->chatUserId = $chatUserId;
+        $this->verifiesResolutionId = $verifiesResolutionId;
     }
 
     public function handle(SiteAgent $agent, SiteMemoryStore $memory): void
@@ -94,6 +104,12 @@ class InvestigateSiteJob implements ShouldQueue
 
         if ($this->round > 1) {
             $this->notifyOwner($site, $summary);
+
+            // The verification confirmed the fix — remember it as a PROVEN
+            // solution, so future similar problems (anywhere) start from it.
+            if ($this->verifiesResolutionId !== null && str_contains($summary, 'הבעיה נפתרה')) {
+                app(IncidentMemory::class)->confirm($this->verifiesResolutionId);
+            }
         }
 
         // Asked from the chat → return the result to the same conversation (as a
