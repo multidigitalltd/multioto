@@ -341,15 +341,19 @@ class ManageIntegrations extends Page implements HasForms
 
             // Trim so a stray space/newline pasted with an API key can never
             // silently reject auth (a value that is only whitespace is "blank").
+            $raw = $value;
             $value = is_string($value) ? trim($value) : $value;
 
             // A "secret" that equals the operator's own panel password is a
             // browser-autofill artefact, not an API key — storing it would both
             // break the integration and leak the login password to a third
             // party. Refuse it loudly (same guard as the site MCP-key field).
+            // Compared BOTH raw and trimmed: a password that itself starts or
+            // ends with whitespace would only match pre-trim.
             if (filled($value) && in_array($key, self::SECRET_KEYS, true)
                 && ($user = auth()->user()) !== null
-                && Hash::check((string) $value, $user->password)) {
+                && (Hash::check((string) $value, $user->password)
+                    || (is_string($raw) && $raw !== $value && Hash::check($raw, $user->password)))) {
                 $rejected = true;
 
                 continue;

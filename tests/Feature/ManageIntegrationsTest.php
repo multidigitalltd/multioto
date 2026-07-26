@@ -184,6 +184,22 @@ class ManageIntegrationsTest extends TestCase
         $this->assertSame('danger', $component->get('statusVariant'));
     }
 
+    public function test_a_panel_password_with_surrounding_whitespace_is_still_rejected(): void
+    {
+        // The user form only enforces a minimum length, so a password may
+        // legitimately end with a space — the autofill guard must catch the
+        // RAW value, before the API-key trim strips it.
+        $user = User::factory()->create(['password' => bcrypt('Pass-With-Space! ')]);
+        $this->actingAs($user);
+
+        $component = Livewire::test(ManageIntegrations::class)
+            ->fillForm(['security.urlhaus_auth_key' => 'Pass-With-Space! '])
+            ->call('saveGroup', 'security');
+
+        $this->assertArrayNotHasKey('security.urlhaus_auth_key', Setting::map());
+        $this->assertStringContainsString('מילוי אוטומטי', (string) $component->get('statusText'));
+    }
+
     public function test_credentials_are_trimmed_so_a_pasted_space_cannot_reject_auth(): void
     {
         $this->actingAs(User::factory()->create());
