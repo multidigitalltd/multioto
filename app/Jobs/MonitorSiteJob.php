@@ -65,8 +65,20 @@ class MonitorSiteJob implements ShouldQueue
                 : $request->withoutRedirecting()->head($url);
 
             $statusCode = $response->status();
-            $isUp = $statusCode < 500;
-            $error = $isUp ? null : 'HTTP '.$statusCode;
+
+            // 2xx/3xx → up. 401/403/429 usually mean a bot-protection layer
+            // (Cloudflare/WAF) blocked OUR probe while the site serves humans
+            // fine — count as up so we don't false-alarm every protected site,
+            // but keep an explanatory note so the UI shows "מוגן", never a
+            // plain green "תקין" next to a 403. Any OTHER 4xx on the homepage
+            // (404/410…) is a real problem and counts as down, like 5xx.
+            $protected = in_array($statusCode, [401, 403, 429], true);
+            $isUp = $statusCode < 400 || $protected;
+            $error = match (true) {
+                ! $isUp => 'HTTP '.$statusCode,
+                $protected => "HTTP {$statusCode} — כנראה הגנת בוטים (Cloudflare/WAF) שחוסמת את בדיקת המערכת; האתר ככל הנראה זמין לגולשים. לבדיקה ודאית הגדירו \"מילת מפתח לבדיקת תוכן\" בהגדרות האתר.",
+                default => null,
+            };
 
             // HTTP 200 but expected content missing → treat as down (WSOD/defacement).
             if ($isUp && $needsBody && ! str_contains((string) $response->body(), (string) $site->expected_keyword)) {
