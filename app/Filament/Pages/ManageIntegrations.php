@@ -426,7 +426,7 @@ class ManageIntegrations extends Page implements HasForms
             return;
         }
 
-        $this->confirmSaved($meta['label'], $group);
+        $this->confirmSaved($meta['label'], $group, $receivedFilled);
     }
 
     /**
@@ -541,10 +541,14 @@ class ManageIntegrations extends Page implements HasForms
     /**
      * Save confirmation — names each secret field's stored-state explicitly
      * (the fields themselves are blanked after save, so this banner is the
-     * operator's only proof of what the save actually persisted). Never makes
-     * a network call.
+     * operator's only proof of what the save actually persisted). A value that
+     * was only stored PREVIOUSLY is reported as such — never as freshly saved:
+     * a replacement key that failed to sync must not masquerade as updated.
+     * Never makes a network call.
+     *
+     * @param  list<string>  $receivedFilled  keys whose value arrived in THIS save
      */
-    protected function confirmSaved(string $label, string $group): void
+    protected function confirmSaved(string $label, string $group, array $receivedFilled = []): void
     {
         $stored = Setting::map();
         $keys = collect(self::GROUPS[$group]['keys'])->reject(fn ($k) => $k === 'ai.enabled');
@@ -554,7 +558,16 @@ class ManageIntegrations extends Page implements HasForms
 
         $secretStates = $keys
             ->filter(fn (string $k): bool => in_array($k, self::SECRET_KEYS, true))
-            ->map(fn (string $k): string => (self::SECRET_LABELS[$k] ?? $k).': '.(filled($stored[$k] ?? null) ? 'שמור ✓' : 'עדיין ריק'));
+            ->map(function (string $k) use ($stored, $receivedFilled): string {
+                $state = match (true) {
+                    in_array($k, $receivedFilled, true) && filled($stored[$k] ?? null) => 'עודכן עכשיו ✓',
+                    in_array($k, $receivedFilled, true) => 'לא נשמר ✗',
+                    filled($stored[$k] ?? null) => 'שמור מקודם (לא הוזן ערך חדש)',
+                    default => 'עדיין ריק',
+                };
+
+                return (self::SECRET_LABELS[$k] ?? $k).': '.$state;
+            });
 
         if ($secretStates->isNotEmpty()) {
             $body .= ' '.$secretStates->implode(' · ').'.';

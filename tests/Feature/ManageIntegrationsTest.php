@@ -140,8 +140,21 @@ class ManageIntegrationsTest extends TestCase
         $this->assertStringContainsString('נשמרו', (string) $component->get('statusText'));
 
         // The banner names each secret field's stored state explicitly.
-        $this->assertStringContainsString('abuse.ch Auth-Key: שמור ✓', (string) $component->get('statusText'));
+        $this->assertStringContainsString('abuse.ch Auth-Key: עודכן עכשיו ✓', (string) $component->get('statusText'));
         $this->assertStringContainsString('Google Safe Browsing: עדיין ריק', (string) $component->get('statusText'));
+    }
+
+    public function test_a_previously_stored_secret_is_not_reported_as_freshly_updated(): void
+    {
+        $this->actingAs(User::factory()->create());
+        Setting::put('security.urlhaus_auth_key', 'old-key');
+
+        // Save with NO new value typed — e.g. the paste failed to sync. The old
+        // key must show as previously stored, never as "updated now".
+        $component = Livewire::test(ManageIntegrations::class)->call('saveGroup', 'security');
+
+        $this->assertStringContainsString('abuse.ch Auth-Key: שמור מקודם', (string) $component->get('statusText'));
+        $this->assertStringNotContainsString('עודכן עכשיו', (string) $component->get('statusText'));
     }
 
     public function test_testing_with_a_typed_but_unsaved_key_warns_instead_of_testing_the_old_one(): void
