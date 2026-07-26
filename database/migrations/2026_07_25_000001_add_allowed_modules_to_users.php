@@ -12,7 +12,10 @@ return new class extends Migration
             // null = full access (default for existing users); a JSON list of
             // module keys (see App\Support\TeamModules) limits an agent to
             // those navigation groups. Admins always have everything.
-            $table->json('allowed_modules')->nullable()->after('role');
+            // jsonb, NOT json: Postgres json has no equality operator, and the
+            // assignee pickers SELECT DISTINCT over users — plain json 500s
+            // every such screen ("could not identify an equality operator").
+            $table->jsonb('allowed_modules')->nullable()->after('role');
         });
     }
 
