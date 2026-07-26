@@ -20,6 +20,7 @@ use Filament\Forms\Form;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 use Filament\Pages\SubNavigationPosition;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\HtmlString;
 use Illuminate\Support\Str;
@@ -34,9 +35,12 @@ use Illuminate\Support\Str;
  * the live connection is a separate, deliberate button, so a slow or unreachable
  * provider (e.g. the Linet ERP) can never hang the save or swallow its feedback.
  *
- * Secret inputs use ->password() (masking) but deliberately NOT ->revealable():
- * the reveal toggle swaps the input type via Alpine, which broke Livewire's
- * deferred wire:model sync so typed keys never reached the server on save.
+ * Secret inputs are plain text inputs masked with CSS, NOT type=password: the
+ * reveal toggle of ->revealable() broke Livewire's wire:model sync, and browsers
+ * autofill the operator's saved panel password into password inputs on this
+ * domain — a value that never syncs to Livewire, so saves silently persist
+ * nothing (see secretInput()). A typed value matching the operator's panel
+ * password is additionally rejected on save as an autofill artefact.
  */
 class ManageIntegrations extends Page implements HasForms
 {
@@ -190,14 +194,30 @@ class ManageIntegrations extends Page implements HasForms
      * A write-only secret input with a live "שמור ✓" marker: the value itself is
      * never echoed back, so without this hint the operator cannot tell a saved
      * key apart from an empty one — which reads as "the save did nothing".
+     *
+     * Deliberately NOT type=password: browsers autofill the operator's saved
+     * PANEL password into password inputs on this domain (ignoring
+     * autocomplete=new-password), which both displays a misleading "filled"
+     * field that never syncs to Livewire and risks saving the login password as
+     * an API key — the exact failure the site MCP-key field had. Masking is done
+     * with CSS (-webkit-text-security) on a plain text input instead, and
+     * password managers are told to stay away.
      */
     protected function secretInput(string $key, string $label): TextInput
     {
         return TextInput::make($key)
             ->label($label)
-            ->password()
             ->live(onBlur: true)
-            ->autocomplete('new-password')
+            ->autocomplete('off')
+            ->extraInputAttributes([
+                'style' => '-webkit-text-security: disc',
+                'spellcheck' => 'false',
+                'autocapitalize' => 'off',
+                'data-1p-ignore' => 'true',
+                'data-lpignore' => 'true',
+                'data-bwignore' => 'true',
+                'data-form-type' => 'other',
+            ])
             ->hint(fn (): ?string => $this->keyStored($key) ? 'שמור במערכת ✓' : null)
             ->hintColor('success')
             ->placeholder(fn (): ?string => $this->keyStored($key) ? '•••••••• שמור — ריק = ללא שינוי' : null);
@@ -308,6 +328,8 @@ class ManageIntegrations extends Page implements HasForms
             $state = $this->data;
         }
 
+        $rejected = false;
+
         foreach ($meta['keys'] as $key) {
             $value = data_get($state, $key) ?? data_get($this->data, $key);
 
@@ -319,7 +341,23 @@ class ManageIntegrations extends Page implements HasForms
 
             // Trim so a stray space/newline pasted with an API key can never
             // silently reject auth (a value that is only whitespace is "blank").
+            $raw = $value;
             $value = is_string($value) ? trim($value) : $value;
+
+            // A "secret" that equals the operator's own panel password is a
+            // browser-autofill artefact, not an API key — storing it would both
+            // break the integration and leak the login password to a third
+            // party. Refuse it loudly (same guard as the site MCP-key field).
+            // Compared BOTH raw and trimmed: a password that itself starts or
+            // ends with whitespace would only match pre-trim.
+            if (filled($value) && in_array($key, self::SECRET_KEYS, true)
+                && ($user = auth()->user()) !== null
+                && (Hash::check((string) $value, $user->password)
+                    || (is_string($raw) && $raw !== $value && Hash::check($raw, $user->password)))) {
+                $rejected = true;
+
+                continue;
+            }
 
             if (filled($value)) {
                 Setting::put($key, (string) $value);
@@ -354,6 +392,16 @@ class ManageIntegrations extends Page implements HasForms
 
             $path = SettingsServiceProvider::MAP[$key] ?? null;
             data_set($this->data, $key, $path !== null ? config($path) : null);
+        }
+
+        if ($rejected) {
+            $this->announce(
+                'שדה לא נשמר — זוהה מילוי אוטומטי של הדפדפן',
+                'הערך שהוזן זהה לסיסמת הכניסה שלך לפאנל, כנראה מילוי אוטומטי. נקו את השדה, הדביקו את המפתח האמיתי ושמרו שוב.',
+                'danger',
+            );
+
+            return;
         }
 
         $this->confirmSaved($meta['label'], $group);

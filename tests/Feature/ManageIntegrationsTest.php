@@ -169,6 +169,37 @@ class ManageIntegrationsTest extends TestCase
         Http::assertNothingSent();
     }
 
+    public function test_a_secret_equal_to_the_panel_password_is_rejected_as_browser_autofill(): void
+    {
+        $user = User::factory()->create(['password' => bcrypt('My-Panel-Pass-1!')]);
+        $this->actingAs($user);
+
+        $component = Livewire::test(ManageIntegrations::class)
+            ->fillForm(['security.urlhaus_auth_key' => 'My-Panel-Pass-1!'])
+            ->call('saveGroup', 'security');
+
+        // The login password must never be stored as an API key.
+        $this->assertArrayNotHasKey('security.urlhaus_auth_key', Setting::map());
+        $this->assertStringContainsString('מילוי אוטומטי', (string) $component->get('statusText'));
+        $this->assertSame('danger', $component->get('statusVariant'));
+    }
+
+    public function test_a_panel_password_with_surrounding_whitespace_is_still_rejected(): void
+    {
+        // The user form only enforces a minimum length, so a password may
+        // legitimately end with a space — the autofill guard must catch the
+        // RAW value, before the API-key trim strips it.
+        $user = User::factory()->create(['password' => bcrypt('Pass-With-Space! ')]);
+        $this->actingAs($user);
+
+        $component = Livewire::test(ManageIntegrations::class)
+            ->fillForm(['security.urlhaus_auth_key' => 'Pass-With-Space! '])
+            ->call('saveGroup', 'security');
+
+        $this->assertArrayNotHasKey('security.urlhaus_auth_key', Setting::map());
+        $this->assertStringContainsString('מילוי אוטומטי', (string) $component->get('statusText'));
+    }
+
     public function test_credentials_are_trimmed_so_a_pasted_space_cannot_reject_auth(): void
     {
         $this->actingAs(User::factory()->create());
