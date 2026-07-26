@@ -19,6 +19,7 @@ use App\Jobs\SendBroadcastJob;
 use App\Jobs\SendDemandRemindersJob;
 use App\Jobs\SendProactiveRemindersJob;
 use App\Jobs\SendTaskRemindersJob;
+use App\Jobs\WeeklyMaintenanceJob;
 use App\Models\AuditLog;
 use App\Models\Broadcast;
 use App\Models\Charge;
@@ -107,6 +108,22 @@ Schedule::call(function () {
         ->pluck('id')
         ->each(fn (int $id) => CheckSitePluginChangesJob::dispatch($id));
 })->dailyAt('07:30')->name('monitoring:plugin-changes')->onOneServer();
+
+// Weekly proactive maintenance: propose (or auto-run under a standing
+// approval) plugin updates for every connected site, with a homepage health
+// check after each update. Sunday morning — right after the weekend, before
+// the busy week. Internal proposal, not a customer message — no Shabbat gate.
+Schedule::call(function () {
+    if (! config('agent.weekly_maintenance', true)) {
+        return;
+    }
+
+    Site::query()
+        ->where('mcp_enabled', true)
+        ->whereNotNull('mcp_endpoint')
+        ->pluck('id')
+        ->each(fn (int $id) => WeeklyMaintenanceJob::dispatch($id));
+})->weeklyOn(0, '06:30')->name('maintenance:weekly-plugin-updates')->onOneServer();
 
 // Daily security scan for every connected site: match installed plugins/themes/
 // core against the vulnerability feed and alert on newly-found issues. Gated on
