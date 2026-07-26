@@ -142,7 +142,10 @@ class PendingActionResource extends Resource
                     ->modalHeading('אישור קבוע לפעולות מסוג זה')
                     ->modalDescription('הפעולה תבוצע עכשיו, ומכאן והלאה פעולות מאותו סוג יבוצעו אוטומטית בלי לשאול — תקבל דיווח אחרי כל ביצוע. אפשר לבטל בכל רגע בהגדרות ← אישורים קבועים.')
                     ->action(function (PendingAction $record, ApprovalGate $gate): void {
-                        Notification::make()->title($gate->approveAlways($record->fresh()))->success()->send();
+                        $result = $gate->approveAlways($record->fresh());
+                        Notification::make()->title($result)
+                            ->{$record->fresh()->status === ActionStatus::Executed ? 'success' : 'warning'}()
+                            ->send();
                     }),
                 Tables\Actions\Action::make('reject')
                     ->label('דחה')

@@ -119,6 +119,42 @@ class StandingApprovalTest extends TestCase
         $this->assertSame('system_action:close_ticket', ApprovalGate::standingKeyFor('system_action', ['operation' => 'close_ticket']));
     }
 
+    public function test_a_lost_race_installs_no_permanent_grant(): void
+    {
+        // The action was already handled (e.g. rejected from the panel) by the
+        // time "אשר תמיד" arrives — no standing approval may be installed.
+        $site = $this->expectCacheClears(0);
+        $action = PendingAction::create([
+            'type' => 'site_fix', 'status' => ActionStatus::Rejected,
+            'summary' => 'ניקוי מטמון', 'payload' => ['site_id' => $site->id, 'fix' => 'clear_cache'],
+            'proposed_by' => 'ai', 'decided_at' => now(),
+        ]);
+
+        // Simulate the race: bypass the pending pre-check and hit approveAlways
+        // directly with a stale in-memory "pending" copy.
+        $stale = PendingAction::find($action->id)->forceFill(['status' => ActionStatus::Pending]);
+        $reply = $this->gate()->approveAlways($stale);
+
+        $this->assertStringContainsString('כבר טופלה', (string) $reply);
+        $this->assertSame(0, StandingApproval::count());
+        $this->assertSame(ActionStatus::Rejected, $action->fresh()->status);
+    }
+
+    public function test_a_site_specific_destructive_hint_blocks_eligibility(): void
+    {
+        // A benignly-named tool the site's MCP capabilities flag as destructive
+        // escalates to tier 3 on THAT site — no standing key, no auto-run.
+        $site = Site::factory()->create([
+            'mcp_capabilities' => ['tools' => [['name' => 'db_query', 'destructive' => true]]],
+        ]);
+
+        $this->assertNull(ApprovalGate::standingKeyFor('site_action', ['tool' => 'db_query', 'site_id' => $site->id]));
+
+        // The same tool name without the destructive hint stays eligible.
+        $plain = Site::factory()->create();
+        $this->assertSame('site_action:db_query', ApprovalGate::standingKeyFor('site_action', ['tool' => 'db_query', 'site_id' => $plain->id]));
+    }
+
     public function test_the_approval_message_offers_always_only_when_eligible(): void
     {
         $site = $this->expectCacheClears(0);

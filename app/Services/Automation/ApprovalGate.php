@@ -57,10 +57,7 @@ class ApprovalGate
     public static function standingKeyFor(string $type, array $payload): ?string
     {
         return match ($type) {
-            'site_action' => ($tool = (string) data_get($payload, 'tool')) !== ''
-                && app(SiteToolCatalog::class)->tier($tool) < 3
-                    ? "site_action:{$tool}"
-                    : null,
+            'site_action' => self::siteActionStandingKey($payload),
             'site_fix' => ($fix = (string) data_get($payload, 'fix')) !== '' ? "site_fix:{$fix}" : null,
             'system_action' => ($op = (string) data_get($payload, 'operation')) !== ''
                 && ! in_array($op, self::STANDING_BLOCKED_OPERATIONS, true)
@@ -69,6 +66,27 @@ class ApprovalGate
             'monitoring_report' => 'monitoring_report',
             default => null,
         };
+    }
+
+    /**
+     * The EFFECTIVE tier decides eligibility: a benignly-named tool the site's
+     * MCP capabilities flag as destructive escalates to tier 3 via
+     * resolveTier(), and must not be pre-approvable (nor auto-run) there —
+     * name-only classification would let it slip through on staging sites.
+     */
+    private static function siteActionStandingKey(array $payload): ?string
+    {
+        $tool = (string) data_get($payload, 'tool');
+
+        if ($tool === '') {
+            return null;
+        }
+
+        $catalog = app(SiteToolCatalog::class);
+        $site = Site::find((int) data_get($payload, 'site_id'));
+        $tier = $site !== null ? $catalog->resolveTier($site, $tool) : $catalog->tier($tool);
+
+        return $tier < 3 ? "site_action:{$tool}" : null;
     }
 
     /**
@@ -162,6 +180,15 @@ class ApprovalGate
             return "לפעולה מסוג זה אי אפשר לקבוע אישור קבוע (תוכן ללקוח / פעולה הרסנית / כספים). אפשר לאשר חד-פעמית: אשר {$action->id}";
         }
 
+        // Claim (and run) the concrete action FIRST — if another request
+        // already approved/rejected it, no permanent grant may be installed on
+        // the back of this lost race.
+        ['claimed' => $claimed, 'message' => $message] = $this->approveInternal($action);
+
+        if (! $claimed) {
+            return $message;
+        }
+
         $standing = StandingApproval::updateOrCreate(
             ['action_key' => $key],
             [
@@ -175,7 +202,7 @@ class ApprovalGate
             "נקבע אישור קבוע \"{$standing->label}\" — פעולות מסוג זה יבוצעו מעכשיו אוטומטית (ניתן לבטל בהגדרות ← אישורים קבועים).",
             ['standing_approval_id' => $standing->id, 'action_id' => $action->id]);
 
-        return $this->approve($action)."\n🔁 נקבע אישור קבוע: \"{$standing->label}\". פעולות כאלה יבוצעו מעכשיו אוטומטית ותקבל דיווח. לביטול: הגדרות ← אישורים קבועים.";
+        return $message."\n🔁 נקבע אישור קבוע: \"{$standing->label}\". פעולות כאלה יבוצעו מעכשיו אוטומטית ותקבל דיווח. לביטול: הגדרות ← אישורים קבועים.";
     }
 
     /** A human label for a standing-approval key ("site_action:wp_cache_flush"). */
@@ -201,10 +228,23 @@ class ApprovalGate
     /** Approve + execute. Returns a human status line (for WhatsApp/panel). */
     public function approve(PendingAction $action): string
     {
+        return $this->approveInternal($action)['message'];
+    }
+
+    /**
+     * Approve + execute, also reporting whether THIS caller won the atomic
+     * pending→approved claim — approveAlways() must not install a permanent
+     * grant on the back of a request that lost the race (the action may have
+     * been rejected by someone else a moment earlier).
+     *
+     * @return array{claimed: bool, message: string}
+     */
+    protected function approveInternal(PendingAction $action): array
+    {
         if ($action->created_at->lt(now()->subDays(self::MAX_AGE_DAYS))) {
             $action->update(['status' => ActionStatus::Rejected, 'decided_at' => now(), 'error' => 'פג תוקף — ההצעה ישנה מדי לביצוע.']);
 
-            return "פעולה #{$action->id} פגת תוקף (מעל ".self::MAX_AGE_DAYS.' ימים) ולא בוצעה.';
+            return ['claimed' => false, 'message' => "פעולה #{$action->id} פגת תוקף (מעל ".self::MAX_AGE_DAYS.' ימים) ולא בוצעה.'];
         }
 
         // Atomically claim the pending → approved transition, so two concurrent
@@ -216,7 +256,7 @@ class ApprovalGate
             ->update(['status' => ActionStatus::Approved, 'decided_at' => now()]);
 
         if ($claimed === 0) {
-            return "פעולה #{$action->id} כבר טופלה.";
+            return ['claimed' => false, 'message' => "פעולה #{$action->id} כבר טופלה."];
         }
 
         $action->refresh();
@@ -226,12 +266,12 @@ class ApprovalGate
         } catch (\Throwable $e) {
             $action->update(['status' => ActionStatus::Failed, 'error' => Str::limit($e->getMessage(), 300)]);
 
-            return "פעולה #{$action->id} אושרה אך הביצוע נכשל: ".Str::limit($e->getMessage(), 120);
+            return ['claimed' => true, 'message' => "פעולה #{$action->id} אושרה אך הביצוע נכשל: ".Str::limit($e->getMessage(), 120)];
         }
 
         $action->update(['status' => ActionStatus::Executed, 'executed_at' => now()]);
 
-        return "פעולה #{$action->id} אושרה ובוצעה ✓";
+        return ['claimed' => true, 'message' => "פעולה #{$action->id} אושרה ובוצעה ✓"];
     }
 
     /** Reject without executing. */
