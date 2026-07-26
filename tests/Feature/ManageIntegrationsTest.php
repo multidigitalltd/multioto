@@ -138,6 +138,10 @@ class ManageIntegrationsTest extends TestCase
         $component->assertSet('data.security.urlhaus_auth_key', null);
         $component->assertSee('שמור במערכת ✓');
         $this->assertStringContainsString('נשמרו', (string) $component->get('statusText'));
+
+        // The banner names each secret field's stored state explicitly.
+        $this->assertStringContainsString('abuse.ch Auth-Key: שמור ✓', (string) $component->get('statusText'));
+        $this->assertStringContainsString('Google Safe Browsing: עדיין ריק', (string) $component->get('statusText'));
     }
 
     public function test_testing_with_a_typed_but_unsaved_key_warns_instead_of_testing_the_old_one(): void
