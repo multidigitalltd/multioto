@@ -31,6 +31,7 @@ class SiteAgent
         private SiteToolCatalog $catalog,
         private ApprovalGate $gate,
         private SiteMemoryStore $memory,
+        private IncidentMemory $incidents,
     ) {}
 
     /**
@@ -68,7 +69,7 @@ class SiteAgent
             ->values();
 
         return $this->ai->converse(
-            system: $this->systemPrompt($site),
+            system: $this->systemPrompt($site, $goal),
             prompt: $goal,
             tools: $this->toolDefinitions($readTools->all(), $proposableTools->all()),
             handler: fn (string $name, array $input): array => $this->handleToolCall($site, $name, $input),
@@ -194,8 +195,11 @@ class SiteAgent
         return ['content' => "הפעולה הוצעה (#{$action->id}) ונשלחה לאישור מנהל. אל תציע אותה שוב."];
     }
 
-    private function systemPrompt(Site $site): string
+    private function systemPrompt(Site $site, string $goal): string
     {
+        // Incident memory: what already worked for similar problems — on this
+        // site and on other sites — so a recurring issue starts from a lead.
+        $incidents = $this->incidents->contextFor($site, $goal);
         $memory = collect($this->memory->all($site))
             ->map(fn ($value, $key): string => "- {$key}: {$value}")
             ->implode("\n");
@@ -218,6 +222,8 @@ class SiteAgent
 
             מה שידוע לנו על האתר:
             {$memory}
+
+            {$incidents}
             PROMPT);
     }
 }
