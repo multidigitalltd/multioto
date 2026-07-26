@@ -29,6 +29,7 @@ class IntegrationKeysFallbackController extends Controller
         'wpscan_token' => 'security.wpscan_token',
         'safe_browsing_key' => 'security.safe_browsing_key',
         'urlhaus_auth_key' => 'security.urlhaus_auth_key',
+        'wordfence_api_key' => 'security.wordfence_api_key',
     ];
 
     public function save(Request $request): RedirectResponse
@@ -39,6 +40,7 @@ class IntegrationKeysFallbackController extends Controller
             'wpscan_token' => ['nullable', 'string', 'max:500'],
             'safe_browsing_key' => ['nullable', 'string', 'max:500'],
             'urlhaus_auth_key' => ['nullable', 'string', 'max:500'],
+            'wordfence_api_key' => ['nullable', 'string', 'max:500'],
         ]);
 
         $saved = [];

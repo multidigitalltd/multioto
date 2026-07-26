@@ -78,6 +78,15 @@
             </div>
 
             <div>
+                <label for="fb-wf" class="mb-1 block text-sm font-medium">Wordfence Intelligence API Key</label>
+                <input id="fb-wf" name="wordfence_api_key" type="text" style="-webkit-text-security: disc" autocomplete="off" spellcheck="false"
+                       data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
+                       class="fi-input block w-full rounded-lg border-gray-300 text-sm shadow-sm dark:border-gray-600 dark:bg-gray-800"
+                       aria-describedby="fb-wf-help">
+                <p id="fb-wf-help" class="mt-1 text-xs text-gray-500 dark:text-gray-400">נדרש לפיד הפגיעויות: wordfence.com → Wordfence Intelligence → API Keys.</p>
+            </div>
+
+            <div>
                 <label for="fb-wpscan" class="mb-1 block text-sm font-medium">WPScan API Token</label>
                 <input id="fb-wpscan" name="wpscan_token" type="text" style="-webkit-text-security: disc" autocomplete="off" spellcheck="false"
                        data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
