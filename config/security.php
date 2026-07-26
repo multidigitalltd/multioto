@@ -21,12 +21,14 @@ return [
         // 'wordfence' (default, keyless) or 'wpscan' (needs a token).
         'source' => env('VULN_FEED_SOURCE', 'wordfence'),
 
-        // Wordfence Intelligence production feed — a single JSON of every known
-        // WordPress vulnerability. The v2 feed was removed (HTTP 410); v3
-        // requires an API key sent as a Bearer token.
+        // Wordfence Intelligence vulnerability feed. The v2 feed was removed
+        // (HTTP 410); v3 requires an API key sent as a Bearer token. The
+        // "scanner" variant is the slimmed feed built exactly for version
+        // matching — far smaller than "production", which can be hundreds of
+        // MB and risks timeouts/memory on a shared server.
         'wordfence_feed_url' => env(
             'WORDFENCE_FEED_URL',
-            'https://www.wordfence.com/api/intelligence/v3/vulnerabilities/production',
+            'https://www.wordfence.com/api/intelligence/v3/vulnerabilities/scanner',
         ),
 
         // Wordfence Intelligence API key (wordfence.com → Wordfence Intelligence
