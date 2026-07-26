@@ -90,6 +90,16 @@
                 </x-filament::button>
             </div>
         </form>
+
+        {{-- The connection test, also without Livewire: a separate classic form
+             so it works when the panel's "בדיקת חיבור" button does not respond. --}}
+        <form method="POST" action="{{ route('integrations.security-keys.test') }}" class="mt-4">
+            @csrf
+            <x-filament::button type="submit" color="gray" icon="heroicon-o-signal">
+                בדיקת חיבור למקורות האבטחה (טופס גיבוי)
+            </x-filament::button>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">בודק את URLhaus / Spamhaus / Safe Browsing / פיד הפגיעויות מול המפתחות השמורים ומציג שורה לכל מקור.</p>
+        </form>
     </x-filament::section>
 
     <x-filament::section class="mt-6" icon="heroicon-o-lock-closed">

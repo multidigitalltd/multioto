@@ -92,9 +92,11 @@ class DomainReputationClient
         }
 
         if (! $response->successful()) {
-            return [false, [], $response->status() === 401
-                ? 'URLhaus החזיר 401 — נדרש Auth-Key חינמי מ-auth.abuse.ch (הגדרות ← אינטגרציות ← אבטחה ומוניטין).'
-                : 'URLhaus החזיר סטטוס HTTP '.$response->status().'.'];
+            return [false, [], match ($response->status()) {
+                401 => 'URLhaus החזיר 401 — נדרש Auth-Key חינמי מ-auth.abuse.ch (הגדרות ← אינטגרציות ← אבטחה ומוניטין).',
+                403 => 'URLhaus דחה את הבקשה (403) — ה-Auth-Key שגוי או חלקי. העתיקו מחדש את המפתח המלא מהפרופיל ב-auth.abuse.ch (בלי רווחים/מרכאות) ושמרו שוב. אם זה נמשך — ייתכן שחומת אש בשרת חוסמת את urlhaus-api.abuse.ch.',
+                default => 'URLhaus החזיר סטטוס HTTP '.$response->status().'.',
+            }];
         }
 
         $body = (array) $response->json();

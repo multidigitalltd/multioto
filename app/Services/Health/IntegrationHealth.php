@@ -57,9 +57,11 @@ class IntegrationHealth
                     ['host' => 'example.com'],
                 );
             $ok = $urlhaus->successful();
-            $lines[] = 'URLhaus: '.($ok ? 'נגיש ✓' : ($urlhaus->status() === 401 && $urlhausKey === ''
-                ? 'נדרש Auth-Key חינמי מ-auth.abuse.ch (השדה למטה)'
-                : 'נכשל (HTTP '.$urlhaus->status().')'));
+            $lines[] = 'URLhaus: '.($ok ? 'נגיש ✓' : match (true) {
+                $urlhaus->status() === 401 && $urlhausKey === '' => 'נדרש Auth-Key חינמי מ-auth.abuse.ch (השדה למטה)',
+                $urlhaus->status() === 403 && $urlhausKey !== '' => 'ה-Auth-Key נדחה (403) — העתיקו מחדש את המפתח המלא מ-auth.abuse.ch ושמרו שוב',
+                default => 'נכשל (HTTP '.$urlhaus->status().')',
+            });
             $allOk = $allOk && $ok;
         } catch (\Throwable $e) {
             $lines[] = 'URLhaus: לא נגיש ('.Str::limit($e->getMessage(), 80).')';
