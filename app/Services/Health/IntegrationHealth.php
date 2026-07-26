@@ -45,14 +45,21 @@ class IntegrationHealth
         $lines = [];
         $allOk = true;
 
-        // URLhaus — keyless HTTPS; failure here means outbound is blocked.
+        // URLhaus — must carry the configured abuse.ch Auth-Key, exactly like
+        // the real reputation scans (the API answers 401 without one).
+        $urlhausKey = trim((string) config('security.reputation.urlhaus_auth_key'));
+
         try {
-            $urlhaus = Http::asForm()->timeout(15)->post(
-                (string) config('security.reputation.urlhaus_host_url'),
-                ['host' => 'example.com'],
-            );
+            $urlhaus = Http::asForm()->timeout(15)
+                ->withHeaders($urlhausKey !== '' ? ['Auth-Key' => $urlhausKey] : [])
+                ->post(
+                    (string) config('security.reputation.urlhaus_host_url'),
+                    ['host' => 'example.com'],
+                );
             $ok = $urlhaus->successful();
-            $lines[] = 'URLhaus: '.($ok ? 'נגיש ✓' : 'נכשל (HTTP '.$urlhaus->status().')');
+            $lines[] = 'URLhaus: '.($ok ? 'נגיש ✓' : ($urlhaus->status() === 401 && $urlhausKey === ''
+                ? 'נדרש Auth-Key חינמי מ-auth.abuse.ch (השדה למטה)'
+                : 'נכשל (HTTP '.$urlhaus->status().')'));
             $allOk = $allOk && $ok;
         } catch (\Throwable $e) {
             $lines[] = 'URLhaus: לא נגיש ('.Str::limit($e->getMessage(), 80).')';

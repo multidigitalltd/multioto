@@ -194,9 +194,11 @@
             </div>
 
             {{-- Which sources actually answered in the last run — the "is my
-                 key working?" indicator, straight on the card. --}}
+                 key working?" indicator, straight on the card. After a
+                 no-source run the stored sources are stale, so the warning
+                 below speaks alone instead of a misleading "רץ ✓". --}}
             @php $repSources = (array) data_get($rep, 'sources', []); @endphp
-            @if ($repSources !== [])
+            @if ($repSources !== [] && $repRunStatus !== 'no_source')
                 <div class="mb-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 dark:text-gray-400">
                     @foreach (['urlhaus' => 'URLhaus', 'spamhaus' => 'Spamhaus', 'safe_browsing' => 'Google Safe Browsing'] as $srcKey => $srcLabel)
                         @if (array_key_exists($srcKey, $repSources))

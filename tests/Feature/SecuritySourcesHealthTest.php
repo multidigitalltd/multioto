@@ -43,6 +43,7 @@ class SecuritySourcesHealthTest extends TestCase
     public function test_all_sources_healthy_reports_ok_per_source(): void
     {
         config(['security.reputation.safe_browsing_key' => 'valid-key']);
+        config(['security.reputation.urlhaus_auth_key' => 'abuse-key-9']);
         Http::fake([
             '*urlhaus*' => Http::response(['query_status' => 'no_results']),
             '*safebrowsing*' => Http::response(['matches' => []]),
@@ -55,6 +56,11 @@ class SecuritySourcesHealthTest extends TestCase
         $this->assertStringContainsString('Spamhaus DBL: נגיש ✓', $result->message);
         $this->assertStringContainsString('המפתח תקין ✓', $result->message);
         $this->assertStringContainsString('פיד פגיעויות (Wordfence): נגיש ✓', $result->message);
+
+        // The connection test must probe URLhaus exactly like the real scans —
+        // with the configured abuse.ch Auth-Key attached.
+        Http::assertSent(fn ($request) => str_contains($request->url(), 'urlhaus')
+            && $request->hasHeader('Auth-Key', 'abuse-key-9'));
     }
 
     public function test_a_401_from_urlhaus_points_at_the_missing_auth_key(): void
@@ -65,7 +71,7 @@ class SecuritySourcesHealthTest extends TestCase
         $result = $this->health(spamhausWorks: false, feedAvailable: false, feedError: 'הפיד החזיר סטטוס HTTP 403.')->check('security');
 
         $this->assertFalse($result->ok);
-        $this->assertStringContainsString('URLhaus: נכשל (HTTP 401)', $result->message);
+        $this->assertStringContainsString('URLhaus: נדרש Auth-Key חינמי מ-auth.abuse.ch', $result->message);
         $this->assertStringContainsString('resolver', $result->message);
         $this->assertStringContainsString('לא הוגדר מפתח', $result->message);
         $this->assertStringContainsString('HTTP 403', $result->message);

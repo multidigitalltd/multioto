@@ -234,8 +234,8 @@ class ManageIntegrations extends Page implements HasForms
                     ])->columns(1)
                     ->footerActions($this->groupActions('cloudflare')),
 
-                Section::make('אבטחה ומוניטין — מפתחות אופציונליים')
-                    ->description('סריקת האבטחה ובדיקת המוניטין עובדות כבר עכשיו בלי שום מפתח: פיד הפגיעויות של Wordfence ומאגרי URLhaus + Spamhaus DBL הם חינמיים וללא הרשמה. המפתחות כאן רק מוסיפים מקורות בדיקה. נשמרים מוצפנים; השאירו ריק כדי לא לשנות.')
+                Section::make('אבטחה ומוניטין — מפתחות')
+                    ->description('פיד הפגיעויות (Wordfence) ו-Spamhaus DBL חינמיים וללא מפתח. URLhaus דורש Auth-Key חינמי מ-auth.abuse.ch (בלעדיו הבדיקה מחזירה 401), ו-WPScan/Safe Browsing הם מקורות נוספים אופציונליים. הכול נשמר מוצפן; השאירו ריק כדי לא לשנות, ולחצו "בדיקת חיבור" לאימות כל המקורות.')
                     ->schema([
                         TextInput::make('security.wpscan_token')->label('WPScan API Token')->password()->live(onBlur: true)->autocomplete('new-password')
                             ->helperText('אופציונלי (wpscan.com/api) — מקור חלופי לפיד הפגיעויות במקום Wordfence. רלוונטי רק אם מגדירים גם VULN_FEED_SOURCE=wpscan.'),
