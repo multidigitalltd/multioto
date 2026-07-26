@@ -271,14 +271,10 @@ class SiteActions
             ->color('gray')
             ->visible(fn (): bool => self::isAdmin())
             ->modalHeading(fn (Site $record): string => 'החרגת כתובת המערכת ב-Cloudflare — '.$record->domain)
-            ->modalDescription('נחריג את כתובת ה-IP של המערכת מהגנות Cloudflare של האתר, כדי שחיבור הסוכן לא ייחסם. נדרש טוקן API של Cloudflare עם הרשאת עריכה ל-Firewall/IP Access Rules של הזון. הטוקן משמש פעם אחת ואינו נשמר.')
+            ->modalDescription('נחריג את כתובת ה-IP של המערכת מהגנות Cloudflare של האתר, כדי שחיבור הסוכן לא ייחסם. משתמש בטוקן ה-Cloudflare השמור בהגדרות ← אינטגרציות.')
             ->modalSubmitActionLabel('החרג עכשיו')
             ->form([
-                Forms\Components\TextInput::make('api_token')
-                    ->label('Cloudflare API Token')
-                    ->password()->autocomplete('new-password')
-                    ->required(fn (): bool => blank(config('billing.cloudflare.api_token')))
-                    ->helperText(self::cloudflareTokenHint()),
+                self::cloudflareTokenField(),
             ])
             ->action(function (Site $record, array $data): void {
                 $ip = app(OutboundIp::class)->current();
@@ -317,14 +313,10 @@ class SiteActions
             ->visible(fn (): bool => self::isAdmin())
             ->requiresConfirmation()
             ->modalHeading(fn (Site $record): string => 'ניקוי קאש ב-Cloudflare — '.$record->domain)
-            ->modalDescription('ננקה את כל הקאש של האתר ב-Cloudflare. נדרש טוקן API עם הרשאת Cache Purge לזון.')
+            ->modalDescription('ננקה את כל הקאש של האתר ב-Cloudflare. משתמש בטוקן השמור בהגדרות ← אינטגרציות.')
             ->modalSubmitActionLabel('נקה קאש')
             ->form([
-                Forms\Components\TextInput::make('api_token')
-                    ->label('Cloudflare API Token')
-                    ->password()->autocomplete('new-password')
-                    ->required(fn (): bool => blank(config('billing.cloudflare.api_token')))
-                    ->helperText(self::cloudflareTokenHint()),
+                self::cloudflareTokenField(),
             ])
             ->action(function (Site $record, array $data): void {
                 $result = app(CloudflareClient::class)->purgeCache(self::cloudflareToken($data), $record->domain);
@@ -343,11 +335,28 @@ class SiteActions
         return trim((string) ($data['api_token'] ?? '')) ?: trim((string) config('billing.cloudflare.api_token'));
     }
 
-    public static function cloudflareTokenHint(): string
+    /**
+     * One-time Cloudflare token input — shown ONLY when no account token is
+     * saved in settings; with a saved token the field is pure noise (and an
+     * autofill hazard), so it disappears entirely. Masked with CSS rather than
+     * type=password so browsers never autofill the panel password into it.
+     */
+    public static function cloudflareTokenField(): Forms\Components\TextInput
     {
-        return filled(config('billing.cloudflare.api_token'))
-            ? 'קיים טוקן שמור בהגדרות ← אינטגרציות — השאירו ריק כדי להשתמש בו, או הזינו טוקן אחר לפעולה זו.'
-            : 'Cloudflare → My Profile → API Tokens → Create Token, עם ההרשאות לזון של האתר. אפשר גם לשמור טוקן קבוע בהגדרות ← אינטגרציות.';
+        return Forms\Components\TextInput::make('api_token')
+            ->label('Cloudflare API Token')
+            ->autocomplete('off')
+            ->extraInputAttributes([
+                'style' => '-webkit-text-security: disc',
+                'spellcheck' => 'false',
+                'data-1p-ignore' => 'true',
+                'data-lpignore' => 'true',
+                'data-bwignore' => 'true',
+                'data-form-type' => 'other',
+            ])
+            ->visible(fn (): bool => blank(config('billing.cloudflare.api_token')))
+            ->required(fn (): bool => blank(config('billing.cloudflare.api_token')))
+            ->helperText('Cloudflare → My Profile → API Tokens → Create Token, עם ההרשאות לזון. עדיף לשמור טוקן קבוע בהגדרות ← אינטגרציות — ואז השדה הזה לא יופיע יותר.');
     }
 
     /** Download the current plugin build to install on a site. */

@@ -216,6 +216,73 @@ class CloudflareClient
             : $this->fail('הפעולה נכשלה בכל הזונים.');
     }
 
+    /** Hebrew labels for country-rule modes, for operator-facing summaries. */
+    public const COUNTRY_MODE_LABELS = [
+        'block' => 'חסימה',
+        'managed_challenge' => 'אתגר מנוהל',
+        'js_challenge' => 'אתגר JavaScript',
+        'whitelist' => 'מעבר חופשי',
+        'challenge' => 'אתגר (CAPTCHA)',
+    ];
+
+    /**
+     * Account-wide overview of the EXISTING country access rules: which
+     * countries already have a rule, with which action, and on how many zones —
+     * so the operator sees what is already blocked before adding another rule.
+     *
+     * @return array{ok: bool, message: string, total_zones: int, countries: list<array{country: string, modes: array<string, int>}>}
+     */
+    public function countryRulesOverview(string $token): array
+    {
+        $token = trim($token);
+
+        if ($token === '') {
+            return $this->fail('חסר טוקן API של Cloudflare.') + ['total_zones' => 0, 'countries' => []];
+        }
+
+        try {
+            $zones = $this->listZones($token);
+            $byCountry = [];
+
+            foreach ($zones as $zone) {
+                $page = 1;
+
+                do {
+                    $body = $this->request($token)->get(self::BASE."/zones/{$zone['id']}/firewall/access_rules/rules", [
+                        'configuration.target' => 'country',
+                        'per_page' => 100,
+                        'page' => $page,
+                    ])->throw()->json();
+
+                    foreach ((array) data_get($body, 'result', []) as $rule) {
+                        $country = strtoupper((string) data_get($rule, 'configuration.value'));
+
+                        if ($country !== '') {
+                            $mode = (string) data_get($rule, 'mode');
+                            $byCountry[$country][$mode] = ($byCountry[$country][$mode] ?? 0) + 1;
+                        }
+                    }
+
+                    $totalPages = (int) data_get($body, 'result_info.total_pages', 1);
+                    $page++;
+                } while ($totalPages > 0 && $page <= $totalPages);
+            }
+        } catch (\Throwable) {
+            return $this->fail('הפנייה ל-Cloudflare נכשלה — בדקו את הטוקן והחיבור לרשת.') + ['total_zones' => 0, 'countries' => []];
+        }
+
+        ksort($byCountry);
+
+        return [
+            'ok' => true,
+            'message' => count($byCountry).' כללי מדינה קיימים',
+            'total_zones' => count($zones),
+            'countries' => collect($byCountry)
+                ->map(fn (array $modes, string $country): array => ['country' => $country, 'modes' => $modes])
+                ->values()->all(),
+        ];
+    }
+
     /** Upsert (or delete) the country rule for a single zone. */
     private function applyCountryRuleToZone(string $token, array $zone, string $country, string $mode): void
     {

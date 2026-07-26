@@ -424,14 +424,10 @@ class ViewSite extends ViewRecord
             ->color('gray')
             ->visible(fn (): bool => auth()->user()?->isAdmin() ?? false)
             ->modalHeading(fn (): string => 'החרגת כתובת המערכת ב-Cloudflare — '.$this->record->domain)
-            ->modalDescription('נחריג את כתובת ה-IP של המערכת מהגנות Cloudflare של האתר, כדי שחיבור הסוכן לא ייחסם. נדרש טוקן API של Cloudflare עם הרשאת עריכה ל-Firewall/IP Access Rules של הזון.')
+            ->modalDescription('נחריג את כתובת ה-IP של המערכת מהגנות Cloudflare של האתר, כדי שחיבור הסוכן לא ייחסם. משתמש בטוקן ה-Cloudflare השמור בהגדרות ← אינטגרציות.')
             ->modalSubmitActionLabel('החרג עכשיו')
             ->form([
-                Forms\Components\TextInput::make('api_token')
-                    ->label('Cloudflare API Token')
-                    ->password()->autocomplete('new-password')
-                    ->required(fn (): bool => blank(config('billing.cloudflare.api_token')))
-                    ->helperText(SiteActions::cloudflareTokenHint()),
+                SiteActions::cloudflareTokenField(),
             ])
             ->action(function (array $data): void {
                 $ip = app(OutboundIp::class)->current();
@@ -506,14 +502,10 @@ class ViewSite extends ViewRecord
             ->visible(fn (): bool => auth()->user()?->isAdmin() ?? false)
             ->requiresConfirmation()
             ->modalHeading(fn (): string => 'ניקוי קאש ב-Cloudflare — '.$this->record->domain)
-            ->modalDescription('ננקה את כל הקאש של האתר ב-Cloudflare. נדרש טוקן API עם הרשאת Cache Purge לזון.')
+            ->modalDescription('ננקה את כל הקאש של האתר ב-Cloudflare. משתמש בטוקן השמור בהגדרות ← אינטגרציות.')
             ->modalSubmitActionLabel('נקה קאש')
             ->form([
-                Forms\Components\TextInput::make('api_token')
-                    ->label('Cloudflare API Token')
-                    ->password()->autocomplete('new-password')
-                    ->required(fn (): bool => blank(config('billing.cloudflare.api_token')))
-                    ->helperText(SiteActions::cloudflareTokenHint()),
+                SiteActions::cloudflareTokenField(),
             ])
             ->action(function (array $data): void {
                 $result = app(CloudflareClient::class)->purgeCache(SiteActions::cloudflareToken($data), $this->record->domain);

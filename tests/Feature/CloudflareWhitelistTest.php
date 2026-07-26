@@ -210,6 +210,51 @@ class CloudflareWhitelistTest extends TestCase
         $this->assertSame([], $result['rules']);
     }
 
+    public function test_the_country_rules_overview_aggregates_rules_across_zones(): void
+    {
+        Http::fake([
+            '*/zones/zone_1/firewall/access_rules/rules*' => Http::response(['success' => true, 'result' => [
+                ['mode' => 'block', 'configuration' => ['target' => 'country', 'value' => 'RU']],
+                ['mode' => 'managed_challenge', 'configuration' => ['target' => 'country', 'value' => 'CN']],
+            ]]),
+            '*/zones/zone_2/firewall/access_rules/rules*' => Http::response(['success' => true, 'result' => [
+                ['mode' => 'block', 'configuration' => ['target' => 'country', 'value' => 'RU']],
+            ]]),
+            '*/zones*' => Http::response(['success' => true, 'result' => [['id' => 'zone_1', 'name' => 'a.co.il'], ['id' => 'zone_2', 'name' => 'b.co.il']]]),
+        ]);
+
+        $overview = app(CloudflareClient::class)->countryRulesOverview('cf-token');
+
+        $this->assertTrue($overview['ok']);
+        $this->assertSame(2, $overview['total_zones']);
+        // Sorted by country; RU blocked on both zones, CN challenged on one.
+        $this->assertSame([
+            ['country' => 'CN', 'modes' => ['managed_challenge' => 1]],
+            ['country' => 'RU', 'modes' => ['block' => 2]],
+        ], $overview['countries']);
+    }
+
+    public function test_the_country_rules_overview_requires_a_token(): void
+    {
+        Http::fake();
+
+        $noToken = app(CloudflareClient::class)->countryRulesOverview('');
+
+        $this->assertFalse($noToken['ok']);
+        $this->assertSame([], $noToken['countries']);
+        Http::assertNothingSent();
+    }
+
+    public function test_the_country_rules_overview_fails_softly_on_an_api_error(): void
+    {
+        Http::fake(['*/zones*' => Http::response('', 500)]);
+
+        $error = app(CloudflareClient::class)->countryRulesOverview('cf-token');
+
+        $this->assertFalse($error['ok']);
+        $this->assertSame([], $error['countries']);
+    }
+
     public function test_outbound_ip_is_detected_and_cached(): void
     {
         Http::fake(['*' => Http::response("198.51.100.42\n")]);
