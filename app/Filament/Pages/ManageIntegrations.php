@@ -180,6 +180,29 @@ class ManageIntegrations extends Page implements HasForms
         return $values;
     }
 
+    /** Whether an encrypted value is currently stored for the given setting key. */
+    protected function keyStored(string $key): bool
+    {
+        return filled(Setting::map()[$key] ?? null);
+    }
+
+    /**
+     * A write-only secret input with a live "שמור ✓" marker: the value itself is
+     * never echoed back, so without this hint the operator cannot tell a saved
+     * key apart from an empty one — which reads as "the save did nothing".
+     */
+    protected function secretInput(string $key, string $label): TextInput
+    {
+        return TextInput::make($key)
+            ->label($label)
+            ->password()
+            ->live(onBlur: true)
+            ->autocomplete('new-password')
+            ->hint(fn (): ?string => $this->keyStored($key) ? 'שמור במערכת ✓' : null)
+            ->hintColor('success')
+            ->placeholder(fn (): ?string => $this->keyStored($key) ? '•••••••• שמור — ריק = ללא שינוי' : null);
+    }
+
     public function form(Form $form): Form
     {
         return $form
@@ -189,7 +212,7 @@ class ManageIntegrations extends Page implements HasForms
                     ->schema([
                         TextInput::make('cardcom.terminal_number')->label('מספר מסוף')->live(onBlur: true)->autocomplete(false),
                         TextInput::make('cardcom.api_name')->label('API Name')->live(onBlur: true)->autocomplete(false),
-                        TextInput::make('cardcom.api_password')->label('API Password')->password()->live(onBlur: true)->autocomplete('new-password'),
+                        $this->secretInput('cardcom.api_password', 'API Password'),
                         Placeholder::make('cardcom_webhook_url')
                             ->label('כתובת Webhook (WebHookUrl)')
                             ->content(fn (): HtmlString => new HtmlString(
@@ -203,8 +226,8 @@ class ManageIntegrations extends Page implements HasForms
                 Section::make('לינט — חשבוניות')
                     ->description($this->groupDescription('linet', 'שלושת הערכים ממסך הגדרות ה-API בלינט: Login ID, Key ו-Company ID. הקודים למטה (סוג מסמך, קטגוריות מע״מ, אמצעי תשלום) ספציפיים לחשבון שלכם בלינט.'))
                     ->schema([
-                        TextInput::make('linet.login_id')->label('Login ID')->password()->live(onBlur: true)->autocomplete('new-password'),
-                        TextInput::make('linet.key')->label('Key')->password()->live(onBlur: true)->autocomplete('new-password'),
+                        $this->secretInput('linet.login_id', 'Login ID'),
+                        $this->secretInput('linet.key', 'Key'),
                         TextInput::make('linet.company_id')->label('Company ID')->live(onBlur: true)->autocomplete(false),
                         TextInput::make('linet.doctype')->label('קוד סוג מסמך (חשבונית מס/קבלה)')->live(onBlur: true)->autocomplete(false),
                         TextInput::make('linet.doctype_proforma')->label('קוד סוג מסמך (חשבונית עסקה)')->helperText('קוד "חשבונית עסקה" (פרו-פורמה) מלינט — מונפק בעת יצירת דרישת תשלום. השאירו ריק כדי לא להנפיק פרו-פורמה.')->live(onBlur: true)->autocomplete(false),
@@ -221,7 +244,7 @@ class ManageIntegrations extends Page implements HasForms
                 Section::make('FlyWP — אחסון')
                     ->description($this->groupDescription('flywp'))
                     ->schema([
-                        TextInput::make('flywp.api_token')->label('API Token')->password()->live(onBlur: true)->autocomplete('new-password'),
+                        $this->secretInput('flywp.api_token', 'API Token'),
                         TextInput::make('flywp.server_id')->label('Server ID')->live(onBlur: true)->autocomplete(false),
                     ])->columns(2)
                     ->footerActions($this->groupActions('flywp')),
@@ -229,7 +252,7 @@ class ManageIntegrations extends Page implements HasForms
                 Section::make('Cloudflare')
                     ->description('טוקן API של Cloudflare (אופציונלי) — מאפשר למערכת ולסוכן להחריג את כתובת ה-IP של הפאנל ולנקות קאש לאתרים. צרו Custom Token עם ההרשאות: Zone·Read, Firewall Services·Edit (החרגת IP), Cache Purge·Purge (ניקוי קאש). נשמר מוצפן; השאירו ריק כדי לא לשנות.')
                     ->schema([
-                        TextInput::make('cloudflare.api_token')->label('API Token')->password()->live(onBlur: true)->autocomplete('new-password')
+                        $this->secretInput('cloudflare.api_token', 'API Token')
                             ->helperText('משמש לכל האתרים שמנוהלים תחת חשבון ה-Cloudflare הזה. אפשר גם להזין טוקן חד-פעמי בפעולה עצמה במקום לשמור כאן.'),
                     ])->columns(1)
                     ->footerActions($this->groupActions('cloudflare')),
@@ -237,11 +260,11 @@ class ManageIntegrations extends Page implements HasForms
                 Section::make('אבטחה ומוניטין — מפתחות')
                     ->description('פיד הפגיעויות (Wordfence) ו-Spamhaus DBL חינמיים וללא מפתח. URLhaus דורש Auth-Key חינמי מ-auth.abuse.ch (בלעדיו הבדיקה מחזירה 401), ו-WPScan/Safe Browsing הם מקורות נוספים אופציונליים. הכול נשמר מוצפן; השאירו ריק כדי לא לשנות, ולחצו "בדיקת חיבור" לאימות כל המקורות.')
                     ->schema([
-                        TextInput::make('security.wpscan_token')->label('WPScan API Token')->password()->live(onBlur: true)->autocomplete('new-password')
+                        $this->secretInput('security.wpscan_token', 'WPScan API Token')
                             ->helperText('אופציונלי (wpscan.com/api) — מקור חלופי לפיד הפגיעויות במקום Wordfence. רלוונטי רק אם מגדירים גם VULN_FEED_SOURCE=wpscan.'),
-                        TextInput::make('security.safe_browsing_key')->label('Google Safe Browsing API Key')->password()->live(onBlur: true)->autocomplete('new-password')
+                        $this->secretInput('security.safe_browsing_key', 'Google Safe Browsing API Key')
                             ->helperText('אופציונלי (Google Cloud Console → Safe Browsing API) — מוסיף בדיקת הדומיין גם מול רשימות הנוזקות/פישינג של גוגל.'),
-                        TextInput::make('security.urlhaus_auth_key')->label('abuse.ch Auth-Key (URLhaus)')->password()->live(onBlur: true)->autocomplete('new-password')
+                        $this->secretInput('security.urlhaus_auth_key', 'abuse.ch Auth-Key (URLhaus)')
                             ->helperText('חובה לבדיקת URLhaus: מפתח חינמי מ-auth.abuse.ch (הרשמה → Auth-Key). בלעדיו URLhaus מחזיר 401.'),
                     ])->columns(2)
                     ->footerActions($this->groupActions('security')),
@@ -250,7 +273,7 @@ class ManageIntegrations extends Page implements HasForms
                     ->description($this->groupDescription('waha', 'כתובת שרת WAHA + מפתח. אם WAHA רץ על אותו שרת בקונטיינר נפרד, השתמשו ב-http://host.docker.internal:3000. את חיבור מספר הוואטסאפ עצמו (סריקת QR) עושים בלוח הבקרה של WAHA.'))
                     ->schema([
                         TextInput::make('waha.base_url')->label('כתובת שרת (Base URL)')->placeholder('http://host.docker.internal:3000')->live(onBlur: true)->autocomplete(false),
-                        TextInput::make('waha.api_key')->label('API Key')->password()->live(onBlur: true)->autocomplete('new-password'),
+                        $this->secretInput('waha.api_key', 'API Key'),
                         TextInput::make('waha.session')->label('שם Session')->placeholder('default')->live(onBlur: true)->autocomplete(false),
                         TextInput::make('waha.owner_number')->label('וואטסאפ לאישורים (מספר או קבוצה)')->placeholder('0501234567 או 12036…@g.us')->helperText('בקשות אישור (תשובות AI וכד׳) יישלחו לכאן — עונים "אשר <מספר>" או "דחה <מספר>". אפשר מספר אישי או מזהה קבוצה (@g.us) כדי שכל הצוות יאשר. איתור מזהה קבוצה: צרפו את מספר העסק לקבוצה, שלחו בה הודעה — המזהה יופיע בפנייה שנפתחת. הודעות רגילות בצ׳אט הזה לא פותחות פניות.')->live(onBlur: true)->autocomplete(false),
                     ])->columns(3)
@@ -352,6 +375,23 @@ class ManageIntegrations extends Page implements HasForms
             return;
         }
 
+        // A secret typed into the form but not yet saved would NOT be tested
+        // (the check reads stored config) — testing anyway silently validates
+        // the OLD key. Stop and tell the operator to save first.
+        $unsaved = collect(self::GROUPS[$group]['keys'] ?? [])
+            ->filter(fn (string $key): bool => in_array($key, self::SECRET_KEYS, true)
+                && filled(is_string($v = data_get($this->data, $key)) ? trim($v) : $v));
+
+        if ($unsaved->isNotEmpty()) {
+            $this->announce(
+                'יש מפתח שהוקלד אך עדיין לא נשמר',
+                "לחצו קודם על \"שמירת מפתחות {$label}\" ואז על \"בדיקת חיבור\" — הבדיקה רצה מול המפתחות השמורים.",
+                'warning',
+            );
+
+            return;
+        }
+
         // Ensure the check reads the latest stored credentials (best-effort).
         try {
             $this->refreshConfig();
@@ -396,6 +436,11 @@ class ManageIntegrations extends Page implements HasForms
             default => $notification->warning(),
         };
         $notification->persistent()->send();
+
+        // The banner sits at the top of a long page and the save/test buttons at
+        // the bottom of each section — bring the outcome into view so pressing a
+        // button never LOOKS like it did nothing.
+        $this->dispatch('scroll-to-integration-status');
     }
 
     /**

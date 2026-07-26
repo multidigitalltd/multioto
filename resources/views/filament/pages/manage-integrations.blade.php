@@ -11,6 +11,9 @@
             role="status"
             aria-live="polite"
             wire:key="integration-status"
+            x-data="{ show() { $el.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'center' }) } }"
+            x-init="show()"
+            x-on:scroll-to-integration-status.window="show()"
             class="rounded-lg px-4 py-3 text-sm font-medium ring-1 ring-inset {{ $variantClasses }}"
         >
             {{ $statusText }}
