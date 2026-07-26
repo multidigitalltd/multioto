@@ -45,6 +45,7 @@ class PendingActionResource extends Resource
         'site_action' => 'פעולת AI באתר',
         'system_action' => 'פעולת מערכת',
         'monitoring_report' => 'דוח ניטור ללקוח',
+        'maintenance_update' => 'תחזוקה שבועית',
     ];
 
     public static function getNavigationBadge(): ?string

@@ -16,6 +16,7 @@ use App\Models\Site;
 use App\Models\StandingApproval;
 use App\Models\SystemLog;
 use App\Services\Agent\IncidentMemory;
+use App\Services\Agent\MaintenanceRunner;
 use App\Services\Agent\SiteActionRunner;
 use App\Services\Agent\SiteToolCatalog;
 use App\Services\Agent\SystemActionRunner;
@@ -65,6 +66,7 @@ class ApprovalGate
                     ? "system_action:{$op}"
                     : null,
             'monitoring_report' => 'monitoring_report',
+            'maintenance_update' => 'maintenance_update',
             default => null,
         };
     }
@@ -222,6 +224,7 @@ class ApprovalGate
             },
             'system_action' => "פעולת מערכת: {$detail}",
             'monitoring_report' => 'שליחת דוח ניטור חודשי ללקוח',
+            'maintenance_update' => 'תחזוקה שבועית — עדכוני תוספים',
             default => $key,
         };
     }
@@ -295,6 +298,7 @@ class ApprovalGate
             'site_fix' => $this->executeSiteFix($action),
             'site_action' => $this->executeSiteAction($action),
             'system_action' => app(SystemActionRunner::class)->run($action),
+            'maintenance_update' => app(MaintenanceRunner::class)->run($action),
             'monitoring_report' => $this->executeMonitoringReport($action),
             default => throw new \RuntimeException("סוג פעולה לא מוכר: {$action->type}"),
         };

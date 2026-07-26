@@ -99,6 +99,15 @@ return [
     |
     | Tier-3 tools only ever run on staging sites.
     */
+    // Weekly proactive maintenance: propose plugin updates for every connected
+    // site (Sunday morning), health-checking the homepage after each update.
+    // With a standing approval the batch runs automatically.
+    'weekly_maintenance' => env('AGENT_WEEKLY_MAINTENANCE', true),
+
+    // Updates per site per weekly run — the rest wait for next week, so one
+    // run never floods a site with a dozen simultaneous plugin changes.
+    'weekly_maintenance_max_updates' => env('AGENT_WEEKLY_MAINTENANCE_MAX_UPDATES', 10),
+
     'risk' => [
         3 => ['exec', 'eval', 'sql', 'db_write', 'file_write', 'file_edit', 'delete', 'drop', 'remove'],
         1 => ['cache', 'restart', 'maintenance', 'transient'],
