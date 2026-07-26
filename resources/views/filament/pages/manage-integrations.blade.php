@@ -63,7 +63,7 @@
 
             <div>
                 <label for="fb-urlhaus" class="mb-1 block text-sm font-medium">abuse.ch Auth-Key (URLhaus)</label>
-                <input id="fb-urlhaus" name="urlhaus_auth_key" type="text" autocomplete="off" spellcheck="false"
+                <input id="fb-urlhaus" name="urlhaus_auth_key" type="text" style="-webkit-text-security: disc" autocomplete="off" spellcheck="false"
                        data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
                        class="fi-input block w-full rounded-lg border-gray-300 text-sm shadow-sm dark:border-gray-600 dark:bg-gray-800"
                        aria-describedby="fb-urlhaus-help">
@@ -72,14 +72,14 @@
 
             <div>
                 <label for="fb-sb" class="mb-1 block text-sm font-medium">Google Safe Browsing API Key</label>
-                <input id="fb-sb" name="safe_browsing_key" type="text" autocomplete="off" spellcheck="false"
+                <input id="fb-sb" name="safe_browsing_key" type="text" style="-webkit-text-security: disc" autocomplete="off" spellcheck="false"
                        data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
                        class="fi-input block w-full rounded-lg border-gray-300 text-sm shadow-sm dark:border-gray-600 dark:bg-gray-800">
             </div>
 
             <div>
                 <label for="fb-wpscan" class="mb-1 block text-sm font-medium">WPScan API Token</label>
-                <input id="fb-wpscan" name="wpscan_token" type="text" autocomplete="off" spellcheck="false"
+                <input id="fb-wpscan" name="wpscan_token" type="text" style="-webkit-text-security: disc" autocomplete="off" spellcheck="false"
                        data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
                        class="fi-input block w-full rounded-lg border-gray-300 text-sm shadow-sm dark:border-gray-600 dark:bg-gray-800">
             </div>
