@@ -169,6 +169,21 @@ class ManageIntegrationsTest extends TestCase
         Http::assertNothingSent();
     }
 
+    public function test_a_secret_equal_to_the_panel_password_is_rejected_as_browser_autofill(): void
+    {
+        $user = User::factory()->create(['password' => bcrypt('My-Panel-Pass-1!')]);
+        $this->actingAs($user);
+
+        $component = Livewire::test(ManageIntegrations::class)
+            ->fillForm(['security.urlhaus_auth_key' => 'My-Panel-Pass-1!'])
+            ->call('saveGroup', 'security');
+
+        // The login password must never be stored as an API key.
+        $this->assertArrayNotHasKey('security.urlhaus_auth_key', Setting::map());
+        $this->assertStringContainsString('מילוי אוטומטי', (string) $component->get('statusText'));
+        $this->assertSame('danger', $component->get('statusVariant'));
+    }
+
     public function test_credentials_are_trimmed_so_a_pasted_space_cannot_reject_auth(): void
     {
         $this->actingAs(User::factory()->create());
