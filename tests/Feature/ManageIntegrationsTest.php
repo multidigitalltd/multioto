@@ -122,6 +122,53 @@ class ManageIntegrationsTest extends TestCase
         $this->assertSame('success', $component->get('statusVariant'));
     }
 
+    public function test_a_saved_secret_shows_a_stored_marker(): void
+    {
+        $this->actingAs(User::factory()->create());
+
+        $component = Livewire::test(ManageIntegrations::class);
+        $component->assertDontSee('שמור במערכת ✓');
+
+        $component->fillForm(['security.urlhaus_auth_key' => 'abuse-key-1'])
+            ->call('saveGroup', 'security');
+
+        // The value is persisted, the field is blanked (write-only) — and the
+        // operator still SEES that a key is stored.
+        $this->assertSame('abuse-key-1', Setting::map()['security.urlhaus_auth_key'] ?? null);
+        $component->assertSet('data.security.urlhaus_auth_key', null);
+        $component->assertSee('שמור במערכת ✓');
+        $this->assertStringContainsString('נשמרו', (string) $component->get('statusText'));
+    }
+
+    public function test_testing_with_a_typed_but_unsaved_key_warns_instead_of_testing_the_old_one(): void
+    {
+        $this->actingAs(User::factory()->create());
+        Http::fake();
+
+        $component = Livewire::test(ManageIntegrations::class)
+            ->fillForm(['security.safe_browsing_key' => 'typed-not-saved'])
+            ->call('testGroup', 'security');
+
+        $this->assertStringContainsString('לא נשמר', (string) $component->get('statusText'));
+        $this->assertSame('warning', $component->get('statusVariant'));
+        Http::assertNothingSent();
+    }
+
+    public function test_testing_with_an_edited_but_unsaved_non_secret_field_warns_too(): void
+    {
+        $this->actingAs(User::factory()->create());
+        config(['billing.waha.base_url' => 'http://old-waha.test']);
+        Http::fake();
+
+        $component = Livewire::test(ManageIntegrations::class)
+            ->fillForm(['waha.base_url' => 'http://new-waha.test'])
+            ->call('testGroup', 'waha');
+
+        $this->assertStringContainsString('לא נשמר', (string) $component->get('statusText'));
+        $this->assertSame('warning', $component->get('statusVariant'));
+        Http::assertNothingSent();
+    }
+
     public function test_credentials_are_trimmed_so_a_pasted_space_cannot_reject_auth(): void
     {
         $this->actingAs(User::factory()->create());
