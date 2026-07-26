@@ -9,6 +9,7 @@ use App\Services\Notifications\TeamNotifier;
 use App\Services\Security\DomainReputationClient;
 use App\Services\Waha\WahaClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Mail;
 use Mockery;
@@ -122,6 +123,24 @@ class DomainReputationTest extends TestCase
         $log = SystemLog::query()->where('source', 'monitoring')->latest('id')->first();
         $this->assertStringContainsString('URLhaus: URLhaus החזיר סטטוס HTTP 403', $log->message);
         $this->assertStringContainsString('resolver ציבורי', $log->message);
+    }
+
+    public function test_a_safe_browsing_transport_error_never_leaks_the_api_key(): void
+    {
+        config(['security.reputation.safe_browsing_key' => 'SECRET-KEY-123']);
+        // Connection exceptions embed the request URL — including ?key=...
+        Http::fake([
+            '*urlhaus*' => Http::response(['query_status' => 'no_results']),
+            '*safebrowsing*' => fn () => throw new ConnectionException(
+                'cURL error 28: Operation timed out for https://safebrowsing.googleapis.com/v4/threatMatches:find?key=SECRET-KEY-123',
+            ),
+        ]);
+
+        $result = $this->client(spamhausProbeWorks: false)->check('slow.co.il');
+
+        $error = (string) ($result['errors']['safe_browsing'] ?? '');
+        $this->assertStringNotContainsString('SECRET-KEY-123', $error);
+        $this->assertStringContainsString('[מוסתר]', $error);
     }
 
     public function test_a_clean_domain_has_no_listings(): void

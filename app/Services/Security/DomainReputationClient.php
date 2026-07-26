@@ -84,7 +84,7 @@ class DomainReputationClient
         try {
             $response = Http::asForm()->timeout(30)->acceptJson()->post($url, ['host' => $host]);
         } catch (\Throwable $e) {
-            return [false, [], 'הבקשה ל-URLhaus נכשלה: '.Str::limit($e->getMessage(), 120)];
+            return [false, [], 'הבקשה ל-URLhaus נכשלה: '.self::redactSecrets(Str::limit($e->getMessage(), 120))];
         }
 
         if (! $response->successful()) {
@@ -205,7 +205,7 @@ class DomainReputationClient
                 ],
             );
         } catch (\Throwable $e) {
-            return [false, [], 'הבקשה ל-Google Safe Browsing נכשלה: '.Str::limit($e->getMessage(), 120)];
+            return [false, [], 'הבקשה ל-Google Safe Browsing נכשלה: '.self::redactSecrets(Str::limit($e->getMessage(), 120))];
         }
 
         if (! $response->successful()) {
@@ -225,6 +225,16 @@ class DomainReputationClient
         }
 
         return [true, $listings, null];
+    }
+
+    /**
+     * Strip credential query parameters (?key=... etc.) from a diagnostic that
+     * may embed the request URL — these reasons are persisted to the event
+     * log, and an API key must never land there.
+     */
+    private static function redactSecrets(string $message): string
+    {
+        return (string) preg_replace('/([?&](?:key|token|api_key)=)[^&\s\'"]+/i', '$1[מוסתר]', $message);
     }
 
     /** Reduce a URL/domain to a bare host (no scheme, path, port, www or trailing dot). */
