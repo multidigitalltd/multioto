@@ -207,7 +207,10 @@ class ManageIntegrations extends Page implements HasForms
     {
         return TextInput::make($key)
             ->label($label)
-            ->live(onBlur: true)
+            // Debounced (not onBlur): the value syncs moments after a paste,
+            // without depending on a blur event ever firing before the save
+            // click — one less way for the typed key to silently not arrive.
+            ->live(debounce: 500)
             ->autocomplete('off')
             ->extraInputAttributes([
                 'style' => '-webkit-text-security: disc',
@@ -322,16 +325,24 @@ class ManageIntegrations extends Page implements HasForms
         // Force Filament to gather every component's current value into a fresh
         // array; fall back to the raw property if validation on another section
         // would otherwise block the read.
+        $usedFallback = false;
+
         try {
             $state = $this->form->getState();
         } catch (\Throwable) {
             $state = $this->data;
+            $usedFallback = true;
         }
 
         $rejected = false;
+        $receivedFilled = [];
 
         foreach ($meta['keys'] as $key) {
             $value = data_get($state, $key) ?? data_get($this->data, $key);
+
+            if (filled(is_string($value) ? trim($value) : $value)) {
+                $receivedFilled[] = $key;
+            }
 
             if ($key === 'ai.enabled') {
                 Setting::put($key, $value ? '1' : '0');
@@ -367,6 +378,17 @@ class ManageIntegrations extends Page implements HasForms
                 Setting::forget($key);
             }
         }
+
+        // Field NAMES only, never values: shows in the log whether the typed
+        // input actually reached the server — the exact thing that silently
+        // fails when a browser/extension interferes with the input sync.
+        Log::info('ManageIntegrations: saveGroup result', [
+            'group' => $group,
+            'received_filled' => $receivedFilled,
+            'stored_now' => array_values(array_filter($meta['keys'], fn (string $k): bool => filled(Setting::map()[$k] ?? null))),
+            'used_raw_fallback' => $usedFallback,
+            'autofill_rejected' => $rejected,
+        ]);
 
         // Overlay the just-saved values onto config so the re-display below (and
         // any connection test) sees them. Guarded so an overlay hiccup can never
@@ -404,7 +426,7 @@ class ManageIntegrations extends Page implements HasForms
             return;
         }
 
-        $this->confirmSaved($meta['label'], $group);
+        $this->confirmSaved($meta['label'], $group, $receivedFilled);
     }
 
     /**
@@ -503,17 +525,53 @@ class ManageIntegrations extends Page implements HasForms
         $this->dispatch('scroll-to-integration-status');
     }
 
+    /** Hebrew-facing labels for the secret fields, for the per-field save report. */
+    private const SECRET_LABELS = [
+        'cardcom.api_password' => 'API Password',
+        'linet.login_id' => 'Login ID',
+        'linet.key' => 'Key',
+        'flywp.api_token' => 'API Token',
+        'waha.api_key' => 'API Key',
+        'cloudflare.api_token' => 'API Token',
+        'security.wpscan_token' => 'WPScan',
+        'security.safe_browsing_key' => 'Google Safe Browsing',
+        'security.urlhaus_auth_key' => 'abuse.ch Auth-Key',
+    ];
+
     /**
-     * Save confirmation — reports how many of the group's keys are now stored so
-     * a partial save is immediately visible. Never makes a network call.
+     * Save confirmation — names each secret field's stored-state explicitly
+     * (the fields themselves are blanked after save, so this banner is the
+     * operator's only proof of what the save actually persisted). A value that
+     * was only stored PREVIOUSLY is reported as such — never as freshly saved:
+     * a replacement key that failed to sync must not masquerade as updated.
+     * Never makes a network call.
+     *
+     * @param  list<string>  $receivedFilled  keys whose value arrived in THIS save
      */
-    protected function confirmSaved(string $label, string $group): void
+    protected function confirmSaved(string $label, string $group, array $receivedFilled = []): void
     {
         $stored = Setting::map();
         $keys = collect(self::GROUPS[$group]['keys'])->reject(fn ($k) => $k === 'ai.enabled');
         $savedCount = $keys->filter(fn ($k) => filled($stored[$k] ?? null))->count();
 
         $body = "שמורים כעת {$savedCount} מתוך {$keys->count()} שדות בקבוצה זו.";
+
+        $secretStates = $keys
+            ->filter(fn (string $k): bool => in_array($k, self::SECRET_KEYS, true))
+            ->map(function (string $k) use ($stored, $receivedFilled): string {
+                $state = match (true) {
+                    in_array($k, $receivedFilled, true) && filled($stored[$k] ?? null) => 'עודכן עכשיו ✓',
+                    in_array($k, $receivedFilled, true) => 'לא נשמר ✗',
+                    filled($stored[$k] ?? null) => 'שמור מקודם (לא הוזן ערך חדש)',
+                    default => 'עדיין ריק',
+                };
+
+                return (self::SECRET_LABELS[$k] ?? $k).': '.$state;
+            });
+
+        if ($secretStates->isNotEmpty()) {
+            $body .= ' '.$secretStates->implode(' · ').'.';
+        }
 
         if (isset(self::HEALTH_KEYS[$group])) {
             $body .= ' לבדיקת החיבור לספק לחצו על "בדיקת חיבור".';
