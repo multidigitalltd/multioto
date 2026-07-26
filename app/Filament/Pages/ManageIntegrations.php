@@ -375,17 +375,29 @@ class ManageIntegrations extends Page implements HasForms
             return;
         }
 
-        // A secret typed into the form but not yet saved would NOT be tested
+        // A value typed into the form but not yet saved would NOT be tested
         // (the check reads stored config) — testing anyway silently validates
-        // the OLD key. Stop and tell the operator to save first.
+        // the OLD configuration. Secrets count as unsaved when filled (they are
+        // always blank otherwise); non-secrets when they differ from the
+        // currently effective config they were pre-filled from.
         $unsaved = collect(self::GROUPS[$group]['keys'] ?? [])
-            ->filter(fn (string $key): bool => in_array($key, self::SECRET_KEYS, true)
-                && filled(is_string($v = data_get($this->data, $key)) ? trim($v) : $v));
+            ->filter(function (string $key): bool {
+                $typed = data_get($this->data, $key);
+                $typed = is_string($typed) ? trim($typed) : $typed;
+
+                if (in_array($key, self::SECRET_KEYS, true)) {
+                    return filled($typed);
+                }
+
+                $path = SettingsServiceProvider::MAP[$key] ?? null;
+
+                return $path !== null && (string) ($typed ?? '') !== (string) (config($path) ?? '');
+            });
 
         if ($unsaved->isNotEmpty()) {
             $this->announce(
-                'יש מפתח שהוקלד אך עדיין לא נשמר',
-                "לחצו קודם על \"שמירת מפתחות {$label}\" ואז על \"בדיקת חיבור\" — הבדיקה רצה מול המפתחות השמורים.",
+                'יש שינויים שהוקלדו אך עדיין לא נשמרו',
+                "לחצו קודם על \"שמירת מפתחות {$label}\" ואז על \"בדיקת חיבור\" — הבדיקה רצה מול הערכים השמורים.",
                 'warning',
             );
 

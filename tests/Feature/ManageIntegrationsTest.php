@@ -154,6 +154,21 @@ class ManageIntegrationsTest extends TestCase
         Http::assertNothingSent();
     }
 
+    public function test_testing_with_an_edited_but_unsaved_non_secret_field_warns_too(): void
+    {
+        $this->actingAs(User::factory()->create());
+        config(['billing.waha.base_url' => 'http://old-waha.test']);
+        Http::fake();
+
+        $component = Livewire::test(ManageIntegrations::class)
+            ->fillForm(['waha.base_url' => 'http://new-waha.test'])
+            ->call('testGroup', 'waha');
+
+        $this->assertStringContainsString('לא נשמר', (string) $component->get('statusText'));
+        $this->assertSame('warning', $component->get('statusVariant'));
+        Http::assertNothingSent();
+    }
+
     public function test_credentials_are_trimmed_so_a_pasted_space_cannot_reject_auth(): void
     {
         $this->actingAs(User::factory()->create());
