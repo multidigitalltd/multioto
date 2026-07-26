@@ -81,9 +81,13 @@ class ScanSiteVulnerabilitiesJob implements ShouldQueue
             // selected WPScan would send troubleshooting to the wrong service.
             $source = config('security.vulnerabilities.source', 'wordfence') === 'wpscan' ? 'WPScan' : 'Wordfence';
 
-            Log::warning('ScanSiteVulnerabilitiesJob: vulnerability feed unavailable', ['site' => $this->siteId]);
+            $reason = $feed->lastError();
+
+            Log::warning('ScanSiteVulnerabilitiesJob: vulnerability feed unavailable', ['site' => $this->siteId, 'reason' => $reason]);
             $this->recordFailedRun($site, 'feed_unavailable',
-                "סריקת אבטחה לאתר {$site->domain}: פיד הפגיעויות ({$source}) לא היה זמין — ננסה שוב בריצה הבאה.");
+                "סריקת אבטחה לאתר {$site->domain}: פיד הפגיעויות ({$source}) לא היה זמין"
+                    .($reason !== null ? " — {$reason}" : '')
+                    .' ננסה שוב בריצה הבאה.');
 
             return;
         }
