@@ -7,7 +7,6 @@ use App\Models\Setting;
 use App\Services\Health\IntegrationHealth;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
@@ -29,6 +28,7 @@ class IntegrationKeysFallbackController extends Controller
         'wpscan_token' => 'security.wpscan_token',
         'safe_browsing_key' => 'security.safe_browsing_key',
         'urlhaus_auth_key' => 'security.urlhaus_auth_key',
+        'wordfence_api_key' => 'security.wordfence_api_key',
     ];
 
     public function save(Request $request): RedirectResponse
@@ -39,6 +39,7 @@ class IntegrationKeysFallbackController extends Controller
             'wpscan_token' => ['nullable', 'string', 'max:500'],
             'safe_browsing_key' => ['nullable', 'string', 'max:500'],
             'urlhaus_auth_key' => ['nullable', 'string', 'max:500'],
+            'wordfence_api_key' => ['nullable', 'string', 'max:500'],
         ]);
 
         $saved = [];
@@ -54,8 +55,7 @@ class IntegrationKeysFallbackController extends Controller
 
             // Same autofill guard as the Livewire save: never store (or ship to
             // a third party) a value that is actually the panel login password.
-            if (Hash::check($value, $request->user()->password)
-                || ($raw !== $value && Hash::check($raw, $request->user()->password))) {
+            if ($request->user()->enteredOwnPassword($raw)) {
                 $rejected = true;
 
                 continue;
