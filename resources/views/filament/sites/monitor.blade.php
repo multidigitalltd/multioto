@@ -420,8 +420,14 @@
                                 <time datetime="{{ $check->checked_at->toIso8601String() }}">{{ $check->checked_at->format('d/m/Y H:i') }}</time>
                             </td>
                             <td class="p-2">
-                                <x-filament::badge :color="$check->is_up ? 'success' : 'danger'">
-                                    {{ $check->is_up ? 'תקין' : 'נפילה' }}
+                                @php
+                                    // 401/403/429 while "up" = our probe was blocked
+                                    // by bot protection — the site is likely fine for
+                                    // visitors, but "תקין" next to a 403 misleads.
+                                    $isProtected = $check->is_up && in_array($check->status_code, [401, 403, 429], true);
+                                @endphp
+                                <x-filament::badge :color="$check->is_up ? ($isProtected ? 'warning' : 'success') : 'danger'">
+                                    {{ $check->is_up ? ($isProtected ? 'מוגן (חסימת בוט)' : 'תקין') : 'נפילה' }}
                                 </x-filament::badge>
                             </td>
                             <td class="p-2">{{ $check->status_code ?? '—' }}</td>

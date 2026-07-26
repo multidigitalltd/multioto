@@ -17,11 +17,38 @@ use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Str;
 
 class ChargeResource extends Resource
 {
     use RespectsModuleAccess;
+
+    /**
+     * Charges are the financial ledger — DISPLAY ONLY. Rows are created and
+     * updated exclusively by the billing flows (charge jobs, webhooks, manual
+     * charge / mark-paid actions); hand-editing or deleting a charge would
+     * falsify the books.
+     */
+    public static function canCreate(): bool
+    {
+        return false;
+    }
+
+    public static function canEdit(Model $record): bool
+    {
+        return false;
+    }
+
+    public static function canDelete(Model $record): bool
+    {
+        return false;
+    }
+
+    public static function canDeleteAny(): bool
+    {
+        return false;
+    }
 
     protected static ?string $model = Charge::class;
 
@@ -285,13 +312,8 @@ class ChargeResource extends Resource
                         return redirect()->away($invoice->pdf_url);
                     }),
 
-                Tables\Actions\EditAction::make()->label('עריכה'),
             ])
-            ->bulkActions([
-                Tables\Actions\BulkActionGroup::make([
-                    Tables\Actions\DeleteBulkAction::make()->label('מחיקה'),
-                ]),
-            ])
+            ->bulkActions([])
             ->emptyStateHeading('אין חיובים עדיין')
             ->emptyStateDescription('חיובים נוצרים אוטומטית על ידי מנוע החיוב.');
     }
@@ -307,8 +329,6 @@ class ChargeResource extends Resource
     {
         return [
             'index' => Pages\ListCharges::route('/'),
-            'create' => Pages\CreateCharge::route('/create'),
-            'edit' => Pages\EditCharge::route('/{record}/edit'),
         ];
     }
 }

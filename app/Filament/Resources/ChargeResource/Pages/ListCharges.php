@@ -3,7 +3,6 @@
 namespace App\Filament\Resources\ChargeResource\Pages;
 
 use App\Filament\Resources\ChargeResource;
-use Filament\Actions;
 use Filament\Resources\Pages\ListRecords;
 
 class ListCharges extends ListRecords
@@ -13,7 +12,6 @@ class ListCharges extends ListRecords
     protected function getHeaderActions(): array
     {
         return [
-            Actions\CreateAction::make(),
         ];
     }
 }
