@@ -75,6 +75,13 @@ class PendingActionResource extends Resource
                     ->tooltip(fn (PendingAction $record): string => Str::limit($record->summary, 500))
                     ->wrap(),
                 Tables\Columns\TextColumn::make('status')->label('סטטוס')->badge(),
+                Tables\Columns\IconColumn::make('standing_approval_id')
+                    ->label('אוטומטי')
+                    ->boolean()
+                    ->trueIcon('heroicon-o-arrow-path-rounded-square')
+                    ->falseIcon('')
+                    ->state(fn (PendingAction $record): bool => $record->standing_approval_id !== null)
+                    ->tooltip(fn (PendingAction $record): ?string => $record->standing_approval_id !== null ? 'בוצע אוטומטית לפי אישור קבוע' : null),
                 Tables\Columns\TextColumn::make('created_at')->label('הוצע')->dateTime('d/m/Y H:i')->sortable(),
                 Tables\Columns\TextColumn::make('error')->label('שגיאה')->limit(60)->placeholder('—')
                     ->toggleable(isToggledHiddenByDefault: true),
@@ -122,6 +129,20 @@ class PendingActionResource extends Resource
                         Notification::make()->title($result)
                             ->{$record->fresh()->status === ActionStatus::Executed ? 'success' : 'warning'}()
                             ->send();
+                    }),
+                Tables\Actions\Action::make('approveAlways')
+                    ->label('אשר תמיד')
+                    ->icon('heroicon-o-arrow-path-rounded-square')
+                    ->color('warning')
+                    // Offered only where a standing approval is allowed at all
+                    // (never for customer replies / destructive tools / money).
+                    ->visible(fn (PendingAction $record): bool => $record->status === ActionStatus::Pending
+                        && ApprovalGate::standingKeyFor($record->type, (array) $record->payload) !== null)
+                    ->requiresConfirmation()
+                    ->modalHeading('אישור קבוע לפעולות מסוג זה')
+                    ->modalDescription('הפעולה תבוצע עכשיו, ומכאן והלאה פעולות מאותו סוג יבוצעו אוטומטית בלי לשאול — תקבל דיווח אחרי כל ביצוע. אפשר לבטל בכל רגע בהגדרות ← אישורים קבועים.')
+                    ->action(function (PendingAction $record, ApprovalGate $gate): void {
+                        Notification::make()->title($gate->approveAlways($record->fresh()))->success()->send();
                     }),
                 Tables\Actions\Action::make('reject')
                     ->label('דחה')
