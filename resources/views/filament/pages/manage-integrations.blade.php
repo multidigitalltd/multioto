@@ -58,42 +58,33 @@
         <x-slot name="heading">טופס גיבוי — שמירת מפתחות אבטחה (עובד גם בלי JavaScript)</x-slot>
         <x-slot name="description">אם כפתור השמירה למעלה לא מגיב, שמרו כאן: טופס רגיל ששולח ישירות לשרת. שדה ריק לא משנה ערך קיים.</x-slot>
 
-        <form method="POST" action="{{ route('integrations.security-keys.fallback') }}" class="grid gap-4 sm:grid-cols-3">
+        @php
+            $fallbackFields = [
+                ['name' => 'urlhaus_auth_key', 'label' => 'abuse.ch Auth-Key (URLhaus)', 'help' => 'מפתח חינמי מ-auth.abuse.ch.'],
+                ['name' => 'wordfence_api_key', 'label' => 'Wordfence Intelligence API Key', 'help' => 'נדרש לפיד הפגיעויות: wordfence.com → Wordfence Intelligence → API Keys.'],
+                ['name' => 'safe_browsing_key', 'label' => 'Google Safe Browsing API Key', 'help' => null],
+                ['name' => 'wpscan_token', 'label' => 'WPScan API Token', 'help' => null],
+            ];
+        @endphp
+
+        <form method="POST" action="{{ route('integrations.security-keys.fallback') }}" class="grid gap-4 sm:grid-cols-2">
             @csrf
 
-            <div>
-                <label for="fb-urlhaus" class="mb-1 block text-sm font-medium">abuse.ch Auth-Key (URLhaus)</label>
-                <input id="fb-urlhaus" name="urlhaus_auth_key" type="text" style="-webkit-text-security: disc" autocomplete="off" spellcheck="false"
-                       data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
-                       class="fi-input block w-full rounded-lg border-gray-300 text-sm shadow-sm dark:border-gray-600 dark:bg-gray-800"
-                       aria-describedby="fb-urlhaus-help">
-                <p id="fb-urlhaus-help" class="mt-1 text-xs text-gray-500 dark:text-gray-400">מפתח חינמי מ-auth.abuse.ch.</p>
-            </div>
+            @foreach ($fallbackFields as $field)
+                <div>
+                    <label for="fb-{{ $field['name'] }}" class="mb-1 block text-sm font-medium">{{ $field['label'] }}</label>
+                    <input id="fb-{{ $field['name'] }}" name="{{ $field['name'] }}" type="text"
+                           style="-webkit-text-security: disc" autocomplete="off" spellcheck="false"
+                           data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
+                           class="fi-input block w-full rounded-lg border-gray-300 text-sm shadow-sm dark:border-gray-600 dark:bg-gray-800"
+                           @if ($field['help']) aria-describedby="fb-{{ $field['name'] }}-help" @endif>
+                    @if ($field['help'])
+                        <p id="fb-{{ $field['name'] }}-help" class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ $field['help'] }}</p>
+                    @endif
+                </div>
+            @endforeach
 
-            <div>
-                <label for="fb-sb" class="mb-1 block text-sm font-medium">Google Safe Browsing API Key</label>
-                <input id="fb-sb" name="safe_browsing_key" type="text" style="-webkit-text-security: disc" autocomplete="off" spellcheck="false"
-                       data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
-                       class="fi-input block w-full rounded-lg border-gray-300 text-sm shadow-sm dark:border-gray-600 dark:bg-gray-800">
-            </div>
-
-            <div>
-                <label for="fb-wf" class="mb-1 block text-sm font-medium">Wordfence Intelligence API Key</label>
-                <input id="fb-wf" name="wordfence_api_key" type="text" style="-webkit-text-security: disc" autocomplete="off" spellcheck="false"
-                       data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
-                       class="fi-input block w-full rounded-lg border-gray-300 text-sm shadow-sm dark:border-gray-600 dark:bg-gray-800"
-                       aria-describedby="fb-wf-help">
-                <p id="fb-wf-help" class="mt-1 text-xs text-gray-500 dark:text-gray-400">נדרש לפיד הפגיעויות: wordfence.com → Wordfence Intelligence → API Keys.</p>
-            </div>
-
-            <div>
-                <label for="fb-wpscan" class="mb-1 block text-sm font-medium">WPScan API Token</label>
-                <input id="fb-wpscan" name="wpscan_token" type="text" style="-webkit-text-security: disc" autocomplete="off" spellcheck="false"
-                       data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
-                       class="fi-input block w-full rounded-lg border-gray-300 text-sm shadow-sm dark:border-gray-600 dark:bg-gray-800">
-            </div>
-
-            <div class="sm:col-span-3">
+            <div class="sm:col-span-2">
                 <x-filament::button type="submit" icon="heroicon-o-check">
                     שמירת המפתחות (טופס גיבוי)
                 </x-filament::button>

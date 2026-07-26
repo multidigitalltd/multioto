@@ -12,6 +12,7 @@ use Filament\Panel;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
+use Illuminate\Support\Facades\Hash;
 use NotificationChannels\WebPush\HasPushSubscriptions;
 
 /**
@@ -41,6 +42,20 @@ class User extends Authenticatable implements FilamentUser
      * WhatsApp delivery needs a phone on file, so an enabled-but-unreachable
      * WhatsApp setup does not lock the member out.
      */
+    /**
+     * Whether the given input is this user's login password — checked both raw
+     * and trimmed, since a valid password may itself carry edge whitespace.
+     * Used to reject browser-autofilled panel passwords in API-key fields, so
+     * the login password is never stored (or shipped) as an integration secret.
+     */
+    public function enteredOwnPassword(string $value): bool
+    {
+        $trimmed = trim($value);
+
+        return Hash::check($value, $this->password)
+            || ($trimmed !== $value && Hash::check($trimmed, $this->password));
+    }
+
     public function requiresTwoFactor(): bool
     {
         if (! $this->two_factor_enabled) {

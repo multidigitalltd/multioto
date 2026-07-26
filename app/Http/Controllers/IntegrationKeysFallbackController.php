@@ -7,7 +7,6 @@ use App\Models\Setting;
 use App\Services\Health\IntegrationHealth;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
@@ -56,8 +55,7 @@ class IntegrationKeysFallbackController extends Controller
 
             // Same autofill guard as the Livewire save: never store (or ship to
             // a third party) a value that is actually the panel login password.
-            if (Hash::check($value, $request->user()->password)
-                || ($raw !== $value && Hash::check($raw, $request->user()->password))) {
+            if ($request->user()->enteredOwnPassword($raw)) {
                 $rejected = true;
 
                 continue;

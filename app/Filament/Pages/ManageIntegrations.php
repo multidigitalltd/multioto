@@ -20,7 +20,6 @@ use Filament\Forms\Form;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 use Filament\Pages\SubNavigationPosition;
-use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\HtmlString;
 use Illuminate\Support\Str;
@@ -362,12 +361,9 @@ class ManageIntegrations extends Page implements HasForms
             // browser-autofill artefact, not an API key — storing it would both
             // break the integration and leak the login password to a third
             // party. Refuse it loudly (same guard as the site MCP-key field).
-            // Compared BOTH raw and trimmed: a password that itself starts or
-            // ends with whitespace would only match pre-trim.
             if (filled($value) && in_array($key, self::SECRET_KEYS, true)
-                && ($user = auth()->user()) !== null
-                && (Hash::check((string) $value, $user->password)
-                    || (is_string($raw) && $raw !== $value && Hash::check($raw, $user->password)))) {
+                && is_string($raw)
+                && (auth()->user()?->enteredOwnPassword($raw) ?? false)) {
                 $rejected = true;
 
                 continue;
