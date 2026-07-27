@@ -207,6 +207,36 @@ class SitePluginAlertTest extends TestCase
         $this->assertNotNull($event->detected_at);
     }
 
+    public function test_removing_the_last_admin_is_still_detected(): void
+    {
+        // An emptied inventory arrives as a successful "[]" — it must be
+        // diffed, or deleting the final admin would pass unnoticed.
+        $site = $this->adminSite(['admins' => ['yossi']]);
+
+        $team = Mockery::mock(TeamNotifier::class);
+        $team->shouldReceive('alert')->once()->withArgs(fn (string $title, string $body): bool => str_contains($body, 'שהוסר: yossi'));
+
+        (new CheckSitePluginChangesJob($site->id))->handle($this->mcpReturning('[]'), $team);
+
+        $this->assertSame([], $site->fresh()->plugin_snapshot['admins']);
+    }
+
+    public function test_unreadable_output_is_never_treated_as_a_mass_removal(): void
+    {
+        $site = $this->adminSite(['admins' => ['yossi', 'dana']]);
+
+        $team = Mockery::mock(TeamNotifier::class);
+        $team->shouldNotReceive('alert');
+
+        (new CheckSitePluginChangesJob($site->id))->handle(
+            $this->mcpReturning('<html>503 Service Unavailable</html>'),
+            $team,
+        );
+
+        // The snapshot survives untouched — nothing was actually observed.
+        $this->assertSame(['yossi', 'dana'], $site->fresh()->plugin_snapshot['admins']);
+    }
+
     public function test_inventory_parses_json_and_text(): void
     {
         $json = json_encode([['slug' => 'woocommerce', 'version' => '9.1'], ['slug' => 'akismet', 'version' => '5.3']]);

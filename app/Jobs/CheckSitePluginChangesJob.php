@@ -61,7 +61,12 @@ class CheckSitePluginChangesJob implements ShouldQueue
             $ids = $kind === 'admins'
                 ? SitePluginInventory::adminIdentities($text)
                 : SitePluginInventory::identities($text);
-            if ($ids !== []) {
+
+            // An empty result is only trustworthy when the tool genuinely
+            // answered "nothing here" (a JSON empty list). Unparseable output
+            // must NOT be read as "everything was removed" — but a real
+            // emptying (the last admin deleted) has to reach the diff.
+            if ($ids !== [] || self::isEmptyInventory($text)) {
                 $current[$kind] = $ids;
             }
         }
@@ -103,6 +108,18 @@ class CheckSitePluginChangesJob implements ShouldQueue
         }
 
         $site->update(['plugin_snapshot' => $snapshot]);
+    }
+
+    /**
+     * Whether the tool's output is a SUCCESSFUL empty inventory (`[]` / `{}`)
+     * rather than text we simply failed to parse. Only the former may be
+     * diffed — otherwise a garbled response would look like a mass removal.
+     */
+    private static function isEmptyInventory(string $text): bool
+    {
+        $decoded = json_decode(trim($text), true);
+
+        return is_array($decoded) && $decoded === [];
     }
 
     /** Emoji + Hebrew noun per inventory kind. */
