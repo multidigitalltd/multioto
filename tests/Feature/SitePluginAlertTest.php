@@ -165,6 +165,48 @@ class SitePluginAlertTest extends TestCase
         $this->assertSame(['yossi'], $site->fresh()->plugin_snapshot['admins']);
     }
 
+    public function test_a_removed_admin_is_reported_and_logged_on_the_site(): void
+    {
+        $site = $this->adminSite(['admins' => ['yossi', 'dana']]);
+
+        $team = Mockery::mock(TeamNotifier::class);
+        $team->shouldReceive('alert')->once()->withArgs(fn (string $title, string $body): bool => str_contains($body, 'שהוסר: dana'));
+
+        (new CheckSitePluginChangesJob($site->id))->handle(
+            $this->mcpReturning((string) json_encode([['id' => 1, 'login' => 'yossi', 'email' => 'y@a.co.il']])),
+            $team,
+        );
+
+        $this->assertDatabaseHas('site_events', [
+            'site_id' => $site->id,
+            'type' => 'admin_removed',
+            'title' => 'משתמש מנהל הוסר: dana',
+        ]);
+    }
+
+    public function test_a_new_admin_is_recorded_as_a_dated_site_finding(): void
+    {
+        // The site page shows the customer WHAT was detected and WHEN.
+        $site = $this->adminSite(['admins' => ['yossi']]);
+
+        $team = Mockery::mock(TeamNotifier::class);
+        $team->shouldReceive('alert')->once();
+
+        (new CheckSitePluginChangesJob($site->id))->handle(
+            $this->mcpReturning((string) json_encode([
+                ['id' => 1, 'login' => 'yossi', 'email' => 'y@a.co.il'],
+                ['id' => 7, 'login' => 'hacker99', 'email' => 'x@evil.test'],
+            ])),
+            $team,
+        );
+
+        $event = $site->fresh()->events()->firstOrFail();
+        $this->assertSame('admin_added', $event->type);
+        $this->assertSame('critical', $event->severity);
+        $this->assertStringContainsString('hacker99', $event->title);
+        $this->assertNotNull($event->detected_at);
+    }
+
     public function test_inventory_parses_json_and_text(): void
     {
         $json = json_encode([['slug' => 'woocommerce', 'version' => '9.1'], ['slug' => 'akismet', 'version' => '5.3']]);

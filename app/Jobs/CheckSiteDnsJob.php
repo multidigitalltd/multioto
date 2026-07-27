@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Models\Site;
+use App\Models\SiteEvent;
 use App\Models\SystemLog;
 use App\Services\Notifications\TeamNotifier;
 use App\Services\Security\DnsLookup;
@@ -156,6 +157,9 @@ class CheckSiteDnsJob implements ShouldQueue
         })->implode("\n");
 
         $owner = $site->customer ? " ({$site->customer->name})" : '';
+
+        SiteEvent::record($site->id, 'dns', 'warning',
+            'זוהה שינוי ברשומות ה-DNS', $lines);
 
         $team->alert(
             "⚠️ שינוי DNS בדומיין {$site->domain}",

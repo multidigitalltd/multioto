@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Models\Site;
+use App\Models\SiteEvent;
 use App\Models\SystemLog;
 use App\Services\Notifications\TeamNotifier;
 use App\Services\Security\ContentFingerprint;
@@ -155,6 +156,9 @@ class CheckSiteContentJob implements ShouldQueue
         $reason = $marker !== null
             ? "זוהה סימן פריצה מובהק בתוכן: \"{$marker}\""
             : "התוכן דומה רק ב-{$similarity}% לתוכן המוכר";
+
+        SiteEvent::record($site->id, 'defacement', 'critical',
+            'חשד להשחתת האתר — דף הבית השתנה קיצונית', $reason);
 
         $team->alert(
             "🚨 חשד להשחתת האתר {$site->domain}",

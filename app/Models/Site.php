@@ -268,6 +268,12 @@ class Site extends Model
         return $this->hasMany(MonitorCheck::class);
     }
 
+    /** Durable monitoring findings shown on the site page (what + when). */
+    public function events(): HasMany
+    {
+        return $this->hasMany(SiteEvent::class);
+    }
+
     public function incidents(): HasMany
     {
         return $this->hasMany(Incident::class);
