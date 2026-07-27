@@ -58,7 +58,9 @@ class SitePluginInventory
      */
     private static function pickName(array $row): string
     {
-        foreach (['plugin', 'slug', 'stylesheet', 'file', 'name', 'title', 'theme'] as $key) {
+        // 'login' covers wp_admin_list rows: the username is the stable admin
+        // identity (an email change must not read as a brand-new admin).
+        foreach (['plugin', 'slug', 'stylesheet', 'file', 'login', 'user_login', 'name', 'title', 'theme'] as $key) {
             if (filled($row[$key] ?? null)) {
                 return (string) $row[$key];
             }
