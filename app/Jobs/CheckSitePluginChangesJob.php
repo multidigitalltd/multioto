@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Models\Site;
+use App\Models\SiteEvent;
 use App\Services\Agent\McpClient;
 use App\Services\Agent\SitePluginInventory;
 use App\Services\Notifications\TeamNotifier;
@@ -60,7 +61,12 @@ class CheckSitePluginChangesJob implements ShouldQueue
             $ids = $kind === 'admins'
                 ? SitePluginInventory::adminIdentities($text)
                 : SitePluginInventory::identities($text);
-            if ($ids !== []) {
+
+            // An empty result is only trustworthy when the tool genuinely
+            // answered "nothing here" (a JSON empty list). Unparseable output
+            // must NOT be read as "everything was removed" — but a real
+            // emptying (the last admin deleted) has to reach the diff.
+            if ($ids !== [] || self::isEmptyInventory($text)) {
                 $current[$kind] = $ids;
             }
         }
@@ -71,7 +77,7 @@ class CheckSitePluginChangesJob implements ShouldQueue
 
         $previous = (array) $site->plugin_snapshot;
         $snapshot = $previous;
-        $added = [];
+        $changes = [];
 
         foreach ($current as $kind => $ids) {
             if (! array_key_exists($kind, $previous)) {
@@ -81,45 +87,97 @@ class CheckSitePluginChangesJob implements ShouldQueue
                 continue;
             }
 
-            foreach (array_values(array_diff($ids, (array) $previous[$kind])) as $id) {
-                $added[] = [$kind, $id];
+            $before = (array) $previous[$kind];
+
+            foreach (array_values(array_diff($ids, $before)) as $id) {
+                $changes[] = [$kind, $id, 'added'];
+            }
+
+            // A removal matters too: an admin quietly deleted, or a security
+            // plugin uninstalled, is as telling as something newly installed.
+            foreach (array_values(array_diff($before, $ids)) as $id) {
+                $changes[] = [$kind, $id, 'removed'];
             }
 
             $snapshot[$kind] = $ids;
         }
 
-        if ($added !== []) {
-            $this->alert($team, $site, $added);
+        if ($changes !== []) {
+            $this->recordFindings($site, $changes);
+            $this->alert($team, $site, $changes);
         }
 
         $site->update(['plugin_snapshot' => $snapshot]);
     }
 
     /**
-     * @param  array<int, array{0: string, 1: string}>  $added
+     * Whether the tool's output is a SUCCESSFUL empty inventory (`[]` / `{}`)
+     * rather than text we simply failed to parse. Only the former may be
+     * diffed — otherwise a garbled response would look like a mass removal.
      */
-    private function alert(TeamNotifier $team, Site $site, array $added): void
+    private static function isEmptyInventory(string $text): bool
     {
-        $lines = collect($added)
-            ->map(fn (array $item): string => match ($item[0]) {
-                'themes' => '🎨 תבנית: '.$item[1],
-                'admins' => '👤 מנהל חדש: '.$item[1],
-                default => '🧩 תוסף: '.$item[1],
+        $decoded = json_decode(trim($text), true);
+
+        return is_array($decoded) && $decoded === [];
+    }
+
+    /** Emoji + Hebrew noun per inventory kind. */
+    private const KIND_LABELS = [
+        'admins' => ['👤', 'משתמש מנהל'],
+        'themes' => ['🎨', 'תבנית'],
+        'plugins' => ['🧩', 'תוסף'],
+    ];
+
+    /**
+     * Persist every change as a durable site finding, so the site page can show
+     * the customer exactly what was detected and on which date — the team alert
+     * itself is transient.
+     *
+     * @param  array<int, array{0: string, 1: string, 2: string}>  $changes
+     */
+    private function recordFindings(Site $site, array $changes): void
+    {
+        foreach ($changes as [$kind, $id, $direction]) {
+            [, $noun] = self::KIND_LABELS[$kind] ?? ['•', $kind];
+            $singular = ['admins' => 'admin', 'themes' => 'theme', 'plugins' => 'plugin'][$kind] ?? $kind;
+            $isNewAdmin = $kind === 'admins' && $direction === 'added';
+
+            SiteEvent::record(
+                $site->id,
+                "{$singular}_{$direction}",
+                $isNewAdmin ? 'critical' : 'warning',
+                $direction === 'added' ? "{$noun} חדש: {$id}" : "{$noun} הוסר: {$id}",
+                $isNewAdmin ? 'משתמש מנהל שאיש מהצוות לא יצר הוא סימן מוכר לפריצה — יש לוודא מול הלקוח.' : null,
+            );
+        }
+    }
+
+    /**
+     * @param  array<int, array{0: string, 1: string, 2: string}>  $changes
+     */
+    private function alert(TeamNotifier $team, Site $site, array $changes): void
+    {
+        $lines = collect($changes)
+            ->map(function (array $item): string {
+                [$icon, $noun] = self::KIND_LABELS[$item[0]] ?? ['•', $item[0]];
+
+                return "{$icon} {$noun} ".($item[2] === 'added' ? 'חדש' : 'שהוסר').": {$item[1]}";
             })
             ->implode("\n");
 
-        // A new ADMIN is a stronger signal than a new plugin — lead with it.
-        $hasAdmin = collect($added)->contains(fn (array $item): bool => $item[0] === 'admins');
+        // A new ADMIN is a stronger signal than anything else here — lead with it.
+        $hasNewAdmin = collect($changes)->contains(fn (array $item): bool => $item[0] === 'admins' && $item[2] === 'added');
 
         $team->alert(
-            $hasAdmin ? "🚨 משתמש מנהל חדש באתר {$site->domain}" : "🧩 התקנה חדשה באתר {$site->domain}",
-            ($hasAdmin
+            $hasNewAdmin ? "🚨 משתמש מנהל חדש באתר {$site->domain}" : "🧩 שינוי בהתקנות באתר {$site->domain}",
+            ($hasNewAdmin
                 ? "זוהה משתמש מנהל (administrator) חדש באתר {$site->domain}"
-                : "זוהתה התקנת תוסף/תבנית חדש/ה באתר {$site->domain}").
+                : "זוהה שינוי בתוספים/תבניות/משתמשי הניהול באתר {$site->domain}").
                 ($site->customer ? " ({$site->customer->name})" : '').":\n{$lines}\n\n".
-                ($hasAdmin
+                ($hasNewAdmin
                     ? 'אם אף אחד מהצוות לא יצר את המשתמש הזה — ייתכן שהאתר נפרץ. בדקו מיד והסירו משתמש לא מוכר.'
-                    : 'אם ההתקנה אינה מוכרת — כדאי לבדוק.'),
+                    : 'אם השינוי אינו מוכר — כדאי לבדוק.'),
             rtrim((string) config('app.url'), '/')."/admin/sites/{$site->id}",
         );
     }

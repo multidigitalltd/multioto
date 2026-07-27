@@ -463,4 +463,36 @@
             </table>
         </div>
     </div>
+
+    {{-- Durable findings log: what we detected on this site and when. This is
+         the record shown to the customer ("ב-27/07 זיהינו מנהל חדש"). --}}
+    <div class="rounded-xl bg-white p-4 shadow-sm dark:bg-gray-800">
+        <div class="mb-3 flex items-center justify-between">
+            <h3 class="text-sm font-semibold">יומן ממצאי אבטחה ושינויים</h3>
+            <span class="text-xs text-gray-500 dark:text-gray-400">מה זוהה באתר ומתי</span>
+        </div>
+
+        @php $events = $site->events()->latest('detected_at')->limit(30)->get(); @endphp
+
+        @forelse ($events as $event)
+            <div @class([
+                'flex flex-wrap items-start gap-x-3 gap-y-1 border-b border-gray-100 py-2 text-sm last:border-0 dark:border-gray-700',
+            ])>
+                <span class="whitespace-nowrap text-xs text-gray-500 dark:text-gray-400">
+                    {{ $event->detected_at?->format('d/m/Y H:i') }}
+                </span>
+                <x-filament::badge :color="match ($event->severity) { 'critical' => 'danger', 'warning' => 'warning', default => 'gray' }">
+                    {{ $event->label() }}
+                </x-filament::badge>
+                <span class="font-medium">{{ $event->title }}</span>
+                @if ($event->detail)
+                    <span class="w-full text-xs text-gray-500 dark:text-gray-400">{{ $event->detail }}</span>
+                @endif
+            </div>
+        @empty
+            <p class="text-sm text-gray-500 dark:text-gray-400">
+                אין ממצאים רשומים לאתר הזה. ממצאים (מנהל חדש, תוסף/תבנית שנוספו או הוסרו, מוניטין, השחתה) יופיעו כאן עם התאריך שבו זוהו.
+            </p>
+        @endforelse
+    </div>
 </x-filament-panels::page>

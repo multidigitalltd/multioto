@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Models\Site;
+use App\Models\SiteEvent;
 use App\Models\SystemLog;
 use App\Services\Agent\McpClient;
 use App\Services\Notifications\TeamNotifier;
@@ -228,6 +229,9 @@ class ScanSiteVulnerabilitiesJob implements ShouldQueue
 
         $freshCount = count($fresh);
         $owner = $site->customer ? " ({$site->customer->name})" : '';
+
+        SiteEvent::record($site->id, 'vulnerability', 'warning',
+            "נמצאו {$freshCount} פגיעויות חדשות (סה\"כ {$total})", $lines);
 
         $team->alert(
             "🛡️ פגיעות אבטחה באתר {$site->domain}",

@@ -50,19 +50,17 @@ class SitePluginInventory
      */
     public static function adminIdentities(string $text): array
     {
-        $text = trim($text);
+        $decoded = json_decode(trim($text), true);
 
-        if ($text === '') {
+        // JSON only: the bundled wp_admin_list always returns JSON, so any
+        // other output (an error page, an HTML block) is a failed read — never
+        // a user list. Parsing it line-by-line would invent admin "logins" out
+        // of error text and could even mask a real one.
+        if (! is_array($decoded)) {
             return [];
         }
 
-        $decoded = json_decode($text, true);
-
-        $rows = is_array($decoded)
-            ? self::fromJson($decoded)
-            : preg_split('/\r?\n/', $text);
-
-        return collect($rows)
+        return collect(self::fromJson($decoded))
             ->map(function ($row): string {
                 if (! is_array($row)) {
                     return mb_strtolower(trim((string) $row));

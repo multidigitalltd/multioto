@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Models\Site;
+use App\Models\SiteEvent;
 use App\Models\SystemLog;
 use App\Services\Notifications\TeamNotifier;
 use App\Services\Security\DomainReputationClient;
@@ -145,6 +146,9 @@ class CheckSiteReputationJob implements ShouldQueue
         })->implode("\n");
 
         $owner = $site->customer ? " ({$site->customer->name})" : '';
+
+        SiteEvent::record($site->id, 'reputation', 'critical',
+            'הדומיין נמצא ברשימת חסימה', $lines);
 
         $team->alert(
             "🚫 האתר {$site->domain} מופיע ברשימת חסימה",
