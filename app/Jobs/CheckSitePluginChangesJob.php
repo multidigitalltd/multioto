@@ -11,9 +11,11 @@ use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Watch a connected site for newly-installed plugins/themes. Reads the current
- * inventory via the companion plugin's wp_plugin_list / wp_theme_list tools,
- * diffs it against the last-seen snapshot, and alerts the team on any addition.
+ * Watch a connected site for newly-installed plugins/themes AND newly-added
+ * administrator users. Reads the current inventory via the companion plugin's
+ * wp_plugin_list / wp_theme_list / wp_admin_list tools, diffs it against the
+ * last-seen snapshot, and alerts the team on any addition — a new admin nobody
+ * on the team created is a classic compromise indicator.
  *
  * First sight of a site (or of a kind) is baselined silently — we only alert on
  * something that appears AFTER we already had a snapshot. Identities are
@@ -40,7 +42,7 @@ class CheckSitePluginChangesJob implements ShouldQueue
         $tools = collect((array) data_get($site->mcp_capabilities, 'tools', []))->pluck('name');
 
         $current = [];
-        foreach (['plugins' => 'wp_plugin_list', 'themes' => 'wp_theme_list'] as $kind => $tool) {
+        foreach (['plugins' => 'wp_plugin_list', 'themes' => 'wp_theme_list', 'admins' => 'wp_admin_list'] as $kind => $tool) {
             if (! $tools->contains($tool)) {
                 continue;
             }
@@ -53,7 +55,11 @@ class CheckSitePluginChangesJob implements ShouldQueue
                 continue;
             }
 
-            $ids = SitePluginInventory::identities($text);
+            // Admin logins get their own verbatim parser — the plugin/theme
+            // normalizer strips words an attacker could hide behind ("active").
+            $ids = $kind === 'admins'
+                ? SitePluginInventory::adminIdentities($text)
+                : SitePluginInventory::identities($text);
             if ($ids !== []) {
                 $current[$kind] = $ids;
             }
@@ -95,14 +101,25 @@ class CheckSitePluginChangesJob implements ShouldQueue
     private function alert(TeamNotifier $team, Site $site, array $added): void
     {
         $lines = collect($added)
-            ->map(fn (array $item): string => ($item[0] === 'themes' ? '🎨 תבנית' : '🧩 תוסף').': '.$item[1])
+            ->map(fn (array $item): string => match ($item[0]) {
+                'themes' => '🎨 תבנית: '.$item[1],
+                'admins' => '👤 מנהל חדש: '.$item[1],
+                default => '🧩 תוסף: '.$item[1],
+            })
             ->implode("\n");
 
+        // A new ADMIN is a stronger signal than a new plugin — lead with it.
+        $hasAdmin = collect($added)->contains(fn (array $item): bool => $item[0] === 'admins');
+
         $team->alert(
-            "🧩 התקנה חדשה באתר {$site->domain}",
-            "זוהתה התקנת תוסף/תבנית חדש/ה באתר {$site->domain}".
+            $hasAdmin ? "🚨 משתמש מנהל חדש באתר {$site->domain}" : "🧩 התקנה חדשה באתר {$site->domain}",
+            ($hasAdmin
+                ? "זוהה משתמש מנהל (administrator) חדש באתר {$site->domain}"
+                : "זוהתה התקנת תוסף/תבנית חדש/ה באתר {$site->domain}").
                 ($site->customer ? " ({$site->customer->name})" : '').":\n{$lines}\n\n".
-                'אם ההתקנה אינה מוכרת — כדאי לבדוק.',
+                ($hasAdmin
+                    ? 'אם אף אחד מהצוות לא יצר את המשתמש הזה — ייתכן שהאתר נפרץ. בדקו מיד והסירו משתמש לא מוכר.'
+                    : 'אם ההתקנה אינה מוכרת — כדאי לבדוק.'),
             rtrim((string) config('app.url'), '/')."/admin/sites/{$site->id}",
         );
     }

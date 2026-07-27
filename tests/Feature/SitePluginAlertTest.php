@@ -79,6 +79,92 @@ class SitePluginAlertTest extends TestCase
         );
     }
 
+    /** A site whose plugin exposes wp_admin_list; the MCP stub answers per tool. */
+    private function adminSite(?array $snapshot): Site
+    {
+        return Site::factory()->create([
+            'mcp_enabled' => true,
+            'mcp_endpoint' => 'https://site.example.com/wp-json/md-agent/v1/mcp',
+            'mcp_capabilities' => ['tools' => [['name' => 'wp_admin_list']]],
+            'plugin_snapshot' => $snapshot,
+        ]);
+    }
+
+    public function test_a_new_admin_user_alerts_the_team_loudly(): void
+    {
+        $site = $this->adminSite(['admins' => ['yossi']]);
+
+        $team = Mockery::mock(TeamNotifier::class);
+        $team->shouldReceive('alert')->once()->withArgs(fn (string $title, string $body): bool => str_contains($title, 'משתמש מנהל חדש')
+            && str_contains($body, 'hacker99')
+            && str_contains($body, 'נפרץ'));
+
+        (new CheckSitePluginChangesJob($site->id))->handle(
+            $this->mcpReturning((string) json_encode([
+                ['id' => 1, 'login' => 'yossi', 'email' => 'yossi@a.co.il'],
+                ['id' => 7, 'login' => 'hacker99', 'email' => 'x@evil.test'],
+            ])),
+            $team,
+        );
+
+        $this->assertContains('hacker99', $site->fresh()->plugin_snapshot['admins']);
+    }
+
+    public function test_an_admin_email_change_is_not_a_new_admin(): void
+    {
+        // The login is the identity — an email update must not alert.
+        $site = $this->adminSite(['admins' => ['yossi']]);
+
+        $team = Mockery::mock(TeamNotifier::class);
+        $team->shouldNotReceive('alert');
+
+        (new CheckSitePluginChangesJob($site->id))->handle(
+            $this->mcpReturning((string) json_encode([
+                ['id' => 1, 'login' => 'yossi', 'email' => 'new-mail@b.co.il'],
+            ])),
+            $team,
+        );
+    }
+
+    public function test_an_admin_named_like_a_status_word_cannot_hide_from_the_alert(): void
+    {
+        // The plugin/theme normalizer strips words like "active" and version
+        // tokens — an attacker must not be able to hide behind such a login.
+        $site = $this->adminSite(['admins' => ['yossi']]);
+
+        $team = Mockery::mock(TeamNotifier::class);
+        $team->shouldReceive('alert')->once()->withArgs(fn (string $title, string $body): bool => str_contains($body, 'active')
+            && str_contains($body, 'v1.2'));
+
+        (new CheckSitePluginChangesJob($site->id))->handle(
+            $this->mcpReturning((string) json_encode([
+                ['id' => 1, 'login' => 'yossi', 'email' => 'y@a.co.il'],
+                ['id' => 8, 'login' => 'Active', 'email' => 'a@evil.test'],
+                ['id' => 9, 'login' => 'v1.2', 'email' => 'b@evil.test'],
+            ])),
+            $team,
+        );
+
+        $snapshot = $site->fresh()->plugin_snapshot['admins'];
+        $this->assertContains('active', $snapshot);
+        $this->assertContains('v1.2', $snapshot);
+    }
+
+    public function test_the_first_admin_snapshot_baselines_silently(): void
+    {
+        $site = $this->adminSite(null);
+
+        $team = Mockery::mock(TeamNotifier::class);
+        $team->shouldNotReceive('alert');
+
+        (new CheckSitePluginChangesJob($site->id))->handle(
+            $this->mcpReturning((string) json_encode([['id' => 1, 'login' => 'yossi', 'email' => 'y@a.co.il']])),
+            $team,
+        );
+
+        $this->assertSame(['yossi'], $site->fresh()->plugin_snapshot['admins']);
+    }
+
     public function test_inventory_parses_json_and_text(): void
     {
         $json = json_encode([['slug' => 'woocommerce', 'version' => '9.1'], ['slug' => 'akismet', 'version' => '5.3']]);
