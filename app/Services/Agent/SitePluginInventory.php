@@ -39,6 +39,51 @@ class SitePluginInventory
     }
 
     /**
+     * Administrator identities from `wp_admin_list` output. Deliberately NOT
+     * the plugin/theme normalizer: that one strips version-like tokens and
+     * status words, so an attacker could hide a new admin just by naming it
+     * "active" or "v1.2". A login is kept verbatim — only case-folded and
+     * trimmed — and an email change never reads as a new admin (login is the
+     * stable identity).
+     *
+     * @return list<string> sorted, de-duplicated logins
+     */
+    public static function adminIdentities(string $text): array
+    {
+        $text = trim($text);
+
+        if ($text === '') {
+            return [];
+        }
+
+        $decoded = json_decode($text, true);
+
+        $rows = is_array($decoded)
+            ? self::fromJson($decoded)
+            : preg_split('/\r?\n/', $text);
+
+        return collect($rows)
+            ->map(function ($row): string {
+                if (! is_array($row)) {
+                    return mb_strtolower(trim((string) $row));
+                }
+
+                foreach (['login', 'user_login', 'username'] as $key) {
+                    if (filled($row[$key] ?? null)) {
+                        return mb_strtolower(trim((string) $row[$key]));
+                    }
+                }
+
+                return '';
+            })
+            ->filter()
+            ->unique()
+            ->sort()
+            ->values()
+            ->all();
+    }
+
+    /**
      * @param  array<int|string, mixed>  $decoded
      * @return list<mixed>
      */
@@ -58,9 +103,7 @@ class SitePluginInventory
      */
     private static function pickName(array $row): string
     {
-        // 'login' covers wp_admin_list rows: the username is the stable admin
-        // identity (an email change must not read as a brand-new admin).
-        foreach (['plugin', 'slug', 'stylesheet', 'file', 'login', 'user_login', 'name', 'title', 'theme'] as $key) {
+        foreach (['plugin', 'slug', 'stylesheet', 'file', 'name', 'title', 'theme'] as $key) {
             if (filled($row[$key] ?? null)) {
                 return (string) $row[$key];
             }

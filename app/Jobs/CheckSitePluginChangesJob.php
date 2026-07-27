@@ -55,7 +55,11 @@ class CheckSitePluginChangesJob implements ShouldQueue
                 continue;
             }
 
-            $ids = SitePluginInventory::identities($text);
+            // Admin logins get their own verbatim parser — the plugin/theme
+            // normalizer strips words an attacker could hide behind ("active").
+            $ids = $kind === 'admins'
+                ? SitePluginInventory::adminIdentities($text)
+                : SitePluginInventory::identities($text);
             if ($ids !== []) {
                 $current[$kind] = $ids;
             }

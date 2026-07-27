@@ -126,6 +126,30 @@ class SitePluginAlertTest extends TestCase
         );
     }
 
+    public function test_an_admin_named_like_a_status_word_cannot_hide_from_the_alert(): void
+    {
+        // The plugin/theme normalizer strips words like "active" and version
+        // tokens — an attacker must not be able to hide behind such a login.
+        $site = $this->adminSite(['admins' => ['yossi']]);
+
+        $team = Mockery::mock(TeamNotifier::class);
+        $team->shouldReceive('alert')->once()->withArgs(fn (string $title, string $body): bool => str_contains($body, 'active')
+            && str_contains($body, 'v1.2'));
+
+        (new CheckSitePluginChangesJob($site->id))->handle(
+            $this->mcpReturning((string) json_encode([
+                ['id' => 1, 'login' => 'yossi', 'email' => 'y@a.co.il'],
+                ['id' => 8, 'login' => 'Active', 'email' => 'a@evil.test'],
+                ['id' => 9, 'login' => 'v1.2', 'email' => 'b@evil.test'],
+            ])),
+            $team,
+        );
+
+        $snapshot = $site->fresh()->plugin_snapshot['admins'];
+        $this->assertContains('active', $snapshot);
+        $this->assertContains('v1.2', $snapshot);
+    }
+
     public function test_the_first_admin_snapshot_baselines_silently(): void
     {
         $site = $this->adminSite(null);
