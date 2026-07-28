@@ -166,6 +166,7 @@ class Multioto_Agent_Mcp_Server
         if (class_exists('WooCommerce')) {
             $tools[] = ['name' => 'wc_order_get', 'description' => 'קריאת הזמנת WooCommerce לפי מספר: סטטוס, תאריך, פריטים, כתובות, שיטת המשלוח שנבחרה וסכומיה, קופונים וסכום כולל.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['order_id' => ['type' => 'integer']], 'required' => ['order_id']]];
             $tools[] = ['name' => 'wc_shipping_zones_list', 'description' => 'רשימת אזורי המשלוח (Shipping Zones) של WooCommerce: לכל אזור — האזורים הגאוגרפיים, ושיטות המשלוח עם התנאים שלהן (עלות, סף למשלוח חינם, דרישות).', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => (object) []]];
+            $tools[] = ['name' => 'wc_order_stats_get', 'description' => 'דופק המכירות: מספר ההזמנות שנוצרו בכל יום ב-N הימים האחרונים (ברירת מחדל 28), כמה מהן שולמו, ופירוט 24 השעות האחרונות לפי סטטוס. משמש לזיהוי כשל שקט — חנות שפתאום מפסיקה לקבל הזמנות.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['days' => ['type' => 'integer']]]];
         }
 
         return $tools;
@@ -200,6 +201,7 @@ class Multioto_Agent_Mcp_Server
             'wp_file_get' => $this->fileGet($args),
             'wp_file_put' => $this->filePut($args),
             'wc_order_get' => $this->wcOrderGet($args),
+            'wc_order_stats_get' => $this->wcOrderStats($args),
             'wc_shipping_zones_list' => $this->wcShippingZones(),
             default => throw new Multioto_Agent_Rpc_Error(-32602, "Unknown tool: {$name}"),
         };
@@ -1038,6 +1040,80 @@ class Multioto_Agent_Mcp_Server
         }
 
         return $number;
+    }
+
+    /**
+     * Sales pulse: how many orders were CREATED on each of the last N days, how
+     * many of them were paid, plus a breakdown of the last 24 hours by status.
+     *
+     * The panel diffs this against the store's own baseline to catch a silent
+     * failure — a shop that is "up" but has stopped taking orders (broken
+     * checkout), or one still taking orders where none of them can pay
+     * (broken gateway). Counts only; no customer data leaves the site.
+     */
+    private function wcOrderStats(array $args): string
+    {
+        $this->requireWoo();
+
+        $days = isset($args['days']) ? (int) $args['days'] : 28;
+        $days = max(7, min(60, $days));
+
+        // Statuses that mean the customer actually paid.
+        $paid_statuses = function_exists('wc_get_is_paid_statuses') ? wc_get_is_paid_statuses() : ['processing', 'completed'];
+
+        $since = time() - ($days * DAY_IN_SECONDS);
+        $orders = wc_get_orders([
+            'limit' => 5000,
+            'type' => 'shop_order',
+            'date_created' => '>' . gmdate('Y-m-d H:i:s', $since),
+            'return' => 'objects',
+            'orderby' => 'date',
+            'order' => 'DESC',
+        ]);
+
+        $daily = [];
+        for ($i = $days; $i >= 1; $i--) {
+            $daily[wp_date('Y-m-d', time() - ($i * DAY_IN_SECONDS))] = ['orders' => 0, 'paid' => 0];
+        }
+        $daily[wp_date('Y-m-d')] = ['orders' => 0, 'paid' => 0];
+
+        $day_ago = time() - DAY_IN_SECONDS;
+        $last_24h = ['orders' => 0, 'paid' => 0, 'by_status' => []];
+
+        foreach ((array) $orders as $order) {
+            $created = $order->get_date_created();
+
+            if (! $created) {
+                continue;
+            }
+
+            $timestamp = $created->getTimestamp();
+            $key = wp_date('Y-m-d', $timestamp);
+            $status = $order->get_status();
+            $is_paid = in_array($status, $paid_statuses, true);
+
+            if (isset($daily[$key])) {
+                $daily[$key]['orders']++;
+                if ($is_paid) {
+                    $daily[$key]['paid']++;
+                }
+            }
+
+            if ($timestamp >= $day_ago) {
+                $last_24h['orders']++;
+                if ($is_paid) {
+                    $last_24h['paid']++;
+                }
+                $last_24h['by_status'][$status] = ($last_24h['by_status'][$status] ?? 0) + 1;
+            }
+        }
+
+        return wp_json_encode([
+            'days' => $days,
+            'daily' => $daily,
+            'last_24h' => $last_24h,
+            'currency' => get_woocommerce_currency(),
+        ], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
     }
 
     /** Read one WooCommerce order — status, items, addresses, the chosen shipping method and totals. */
