@@ -108,6 +108,31 @@ class OnboardCustomerTest extends TestCase
         $this->assertSame(0, Subscription::count());
     }
 
+    public function test_the_no_subscription_choice_is_reachable_before_the_domain_is_demanded(): void
+    {
+        Queue::fake();
+
+        // The wizard validates each step before letting you leave it. Asking
+        // about the subscription only on the last step would fail the site step
+        // over a blank domain before the answer could be given at all.
+        Livewire::test(OnboardCustomer::class)
+            ->fillForm([
+                'name' => 'ליד',
+                'phone' => '0509999999',
+                'email' => 'lead@b.co.il',
+                'business_type' => 'licensed_dealer',
+                'skip_subscription' => true,
+            ])
+            ->goToNextWizardStep()
+            ->assertHasNoFormErrors()
+            ->assertWizardCurrentStep(2)
+            ->call('create')
+            ->assertHasNoFormErrors();
+
+        $this->assertSame(1, Customer::count());
+        $this->assertSame(0, Subscription::count());
+    }
+
     public function test_a_domain_is_still_required_when_a_subscription_is_being_opened(): void
     {
         Livewire::test(OnboardCustomer::class)

@@ -142,6 +142,15 @@ class OnboardCustomer extends Page implements HasForms
                                 ))->required(),
                             Toggle::make('vat_exempt')->label('פטור ממע״מ')
                                 ->helperText('חשבוניות יונפקו ללא מע״מ'),
+                            // Asked here, on the first step, because it decides
+                            // what the rest of the wizard even asks for: the
+                            // domain stops being mandatory and the billing step
+                            // disappears. Asking it last would mean failing the
+                            // site step before the answer could be given.
+                            Toggle::make('skip_subscription')->label('ללא מנוי כרגע')
+                                ->helperText('לקוח חד-פעמי, ליד, או הסדר שעדיין לא סוכם — הלקוח ייפתח בלי חיוב תקופתי, ואפשר להוסיף לו מנוי בכל שלב מכרטיס הלקוח.')
+                                ->live()
+                                ->columnSpanFull(),
                         ])->columns(2),
 
                     Step::make('האתר')
@@ -167,45 +176,37 @@ class OnboardCustomer extends Page implements HasForms
                     Step::make('המנוי')
                         ->icon('heroicon-o-credit-card')
                         ->description('התוכנית והחיוב')
+                        // The whole step goes away when there is no subscription
+                        // to describe — a step of greyed-out fields would only
+                        // invite the question of what to put in them.
+                        ->visible(fn (Get $get): bool => ! $get('skip_subscription'))
                         ->schema([
-                            // Not every customer pays us monthly: a one-off job, a
-                            // prospect still being courted, or an arrangement not
-                            // yet agreed. Opening them without a subscription beats
-                            // inventing a placeholder one that would start charging.
-                            Toggle::make('skip_subscription')->label('ללא מנוי כרגע')
-                                ->helperText('הלקוח ייפתח בלי חיוב תקופתי. אפשר להוסיף לו מנוי בכל שלב מכרטיס הלקוח.')
-                                ->live()
-                                ->columnSpanFull(),
                             Select::make('plan_id')->label('תוכנית קבועה')
                                 ->options(Plan::where('active', true)->pluck('name', 'id'))
                                 ->live()
-                                ->visible(fn (Get $get): bool => ! $get('skip_subscription'))
                                 ->helperText('בחרו מוצר קבוע, או השאירו ריק למנוי חופשי בהתאמה אישית.'),
                             // Free-form subscription — a custom name/interval/VAT when no plan is picked.
                             TextInput::make('custom_name')->label('שם המנוי')
                                 ->required(fn (Get $get): bool => blank($get('plan_id')))
-                                ->visible(fn (Get $get): bool => ! $get('skip_subscription') && blank($get('plan_id')))
+                                ->visible(fn (Get $get): bool => blank($get('plan_id')))
                                 ->maxLength(190)->placeholder('אחסון + תחזוקה חודשית'),
                             Select::make('billing_interval')->label('תדירות חיוב')
                                 ->options(BillingInterval::class)->default(BillingInterval::Monthly->value)
-                                ->visible(fn (Get $get): bool => ! $get('skip_subscription') && blank($get('plan_id'))),
+                                ->visible(fn (Get $get): bool => blank($get('plan_id'))),
                             Toggle::make('vat_applies')->label('הוסף מע״מ על המחיר')->default(true)->inline(false)
-                                ->visible(fn (Get $get): bool => ! $get('skip_subscription') && blank($get('plan_id'))),
+                                ->visible(fn (Get $get): bool => blank($get('plan_id'))),
                             TextInput::make('price_override')
                                 ->label(fn (Get $get): string => blank($get('plan_id')) ? 'מחיר (₪)' : 'מחיר מיוחד (₪, אופציונלי)')
                                 ->numeric()->minValue(0)
                                 ->required(fn (Get $get): bool => blank($get('plan_id')))
                                 ->live(onBlur: true)
-                                ->visible(fn (Get $get): bool => ! $get('skip_subscription'))
                                 ->helperText(fn (Get $get): string => blank($get('plan_id'))
                                     ? 'המחיר החודשי/שנתי של המנוי החופשי.'
                                     : 'רק אם סוכם מחיר שונה מהתוכנית.'),
                             DatePicker::make('first_charge_at')->label('תאריך חיוב ראשון')
-                                ->required()->native(false)->displayFormat('d/m/Y')
-                                ->visible(fn (Get $get): bool => ! $get('skip_subscription')),
+                                ->required()->native(false)->displayFormat('d/m/Y'),
                             Toggle::make('send_card_link')->label('שלח ללקוח קישור להזנת כרטיס')
                                 ->default(true)
-                                ->visible(fn (Get $get): bool => ! $get('skip_subscription'))
                                 ->helperText('הלקוח יזין את הכרטיס בעצמו בעמוד המאובטח של חברת הסליקה'),
                             Placeholder::make('summary')->label('סיכום')
                                 ->content(fn (Get $get): string => $this->summaryText($get)),
@@ -220,10 +221,6 @@ class OnboardCustomer extends Page implements HasForms
 
     protected function summaryText(Get $get): string
     {
-        if ($get('skip_subscription')) {
-            return 'הלקוח ייפתח בלי מנוי ובלי חיוב תקופתי.';
-        }
-
         $plan = $get('plan_id') ? Plan::find($get('plan_id')) : null;
 
         // Fixed plan → plan price/name/VAT; free-form → the custom fields entered here.
