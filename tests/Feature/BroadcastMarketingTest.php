@@ -5,7 +5,11 @@ namespace Tests\Feature;
 use App\Enums\BroadcastChannel;
 use App\Enums\BroadcastStatus;
 use App\Enums\CustomerStatus;
+use App\Enums\SubscriptionStatus;
 use App\Enums\TicketChannel;
+use App\Enums\UserRole;
+use App\Filament\Resources\BroadcastResource\Actions\BroadcastSendActions;
+use App\Filament\Resources\BroadcastResource\Pages\ListBroadcasts;
 use App\Jobs\SendBroadcastJob;
 use App\Mail\BroadcastMail;
 use App\Models\Broadcast;
@@ -13,6 +17,7 @@ use App\Models\Customer;
 use App\Models\Plan;
 use App\Models\Site;
 use App\Models\Subscription;
+use App\Models\User;
 use App\Services\Ai\ClaudeClient;
 use App\Services\Support\BroadcastAudience;
 use App\Services\Support\BroadcastComposer;
@@ -21,6 +26,7 @@ use App\Services\Support\MarketingPreferences;
 use App\Services\Waha\WahaClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Mail;
+use Livewire\Livewire;
 use Mockery;
 use Tests\TestCase;
 
@@ -112,7 +118,7 @@ class BroadcastMarketingTest extends TestCase
 
     public function test_a_marketing_whatsapp_message_says_it_is_advertising_and_how_to_stop(): void
     {
-        config(['billing.business.name' => 'מולטי דיגיטל']);
+        config(['mail.from.name' => 'מולטי דיגיטל']);
 
         $customer = Customer::factory()->create(['name' => 'לקוח']);
         $broadcast = $this->broadcast(['channel' => BroadcastChannel::Whatsapp, 'body' => 'מבצע']);
@@ -153,7 +159,10 @@ class BroadcastMarketingTest extends TestCase
 
     public function test_a_service_email_carries_a_fixed_service_footer(): void
     {
-        config(['billing.business.name' => 'מולטי דיגיטל', 'billing.business.address' => 'רחוב הרצל 1, תל אביב']);
+        config([
+            'mail.from.name' => 'מולטי דיגיטל',
+            'billing.branding.email_footer' => 'מולטי דיגיטל · רחוב הרצל 1, תל אביב · 03-0000000',
+        ]);
 
         $customer = Customer::factory()->create(['email' => 'x@b.co.il']);
         $broadcast = $this->broadcast(['body' => 'תחזוקה בשבת', 'is_marketing' => false]);
@@ -165,14 +174,19 @@ class BroadcastMarketingTest extends TestCase
         ))->render();
 
         $this->assertStringContainsString('הודעת שירות מאת מולטי דיגיטל', $html);
+        // The address comes from the shared mail footer, printed once by the layout.
         $this->assertStringContainsString('רחוב הרצל 1, תל אביב', $html);
+        $this->assertSame(1, substr_count($html, 'רחוב הרצל 1, תל אביב'));
         // Not advertising: no "פרסומת" heading and no unsubscribe link.
         $this->assertStringNotContainsString('להסרה מרשימת התפוצה', $html);
     }
 
     public function test_a_marketing_email_carries_the_advertising_footer_and_the_opt_out_link(): void
     {
-        config(['billing.business.name' => 'מולטי דיגיטל', 'billing.business.address' => 'רחוב הרצל 1, תל אביב']);
+        config([
+            'mail.from.name' => 'מולטי דיגיטל',
+            'billing.branding.email_footer' => 'מולטי דיגיטל · רחוב הרצל 1, תל אביב · 03-0000000',
+        ]);
 
         $customer = Customer::factory()->create(['email' => 'x@b.co.il']);
         $broadcast = $this->broadcast(['body' => 'מבצע', 'is_marketing' => true]);
@@ -261,6 +275,91 @@ class BroadcastMarketingTest extends TestCase
         $this->assertSame(1, $counts['reachable']);
         $this->assertSame(1, $counts['unreachable']);
         $this->assertSame(1, $counts['opted_out']);
+    }
+
+    public function test_a_test_send_never_carries_a_link_that_could_opt_out_a_real_customer(): void
+    {
+        Mail::fake();
+
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin, 'email' => 'me@multi.co.il']));
+        $sample = Customer::factory()->create(['status' => CustomerStatus::Active, 'email' => 'real@b.co.il']);
+
+        $notification = BroadcastSendActions::sendTest($this->broadcast(['is_marketing' => true]));
+
+        $this->assertSame('הבדיקה נשלחה לתור', $notification->getTitle());
+
+        // BroadcastMail is ShouldQueue, so even a direct send() is queued.
+        Mail::assertQueued(BroadcastMail::class, function (BroadcastMail $mail) use ($sample) {
+            // The test lands in OUR inbox but the link would act on the sample
+            // CUSTOMER — one curious click must not unsubscribe them.
+            $this->assertNull($mail->footer['unsubscribe_url']);
+            $this->assertStringNotContainsString(
+                'marketing/unsubscribe/'.$sample->id, $mail->render(),
+            );
+
+            return true;
+        });
+
+        $this->assertFalse($sample->fresh()->hasOptedOutOfMarketing());
+    }
+
+    public function test_the_plan_placeholder_uses_the_current_subscription_not_a_canceled_one(): void
+    {
+        $customer = Customer::factory()->create();
+        $old = Plan::factory()->create(['name' => 'חבילה ישנה']);
+        $current = Plan::factory()->create(['name' => 'חבילה נוכחית']);
+
+        Subscription::factory()->create([
+            'customer_id' => $customer->id, 'plan_id' => $old->id,
+            'status' => SubscriptionStatus::Canceled,
+        ]);
+        Subscription::factory()->create([
+            'customer_id' => $customer->id, 'plan_id' => $current->id,
+            'status' => SubscriptionStatus::Active,
+        ]);
+
+        $broadcast = $this->broadcast(['body' => 'החבילה שלך: {{חבילה}}', 'is_marketing' => false]);
+
+        $this->assertSame('החבילה שלך: חבילה נוכחית', $this->renderer()->body($broadcast, $customer));
+    }
+
+    public function test_the_plan_placeholder_agrees_whether_or_not_the_relation_was_eager_loaded(): void
+    {
+        $customer = Customer::factory()->create();
+        $old = Plan::factory()->create(['name' => 'חבילה ישנה']);
+        $current = Plan::factory()->create(['name' => 'חבילה נוכחית']);
+
+        Subscription::factory()->create([
+            'customer_id' => $customer->id, 'plan_id' => $old->id, 'status' => SubscriptionStatus::Canceled,
+        ]);
+        Subscription::factory()->create([
+            'customer_id' => $customer->id, 'plan_id' => $current->id, 'status' => SubscriptionStatus::Active,
+        ]);
+
+        $broadcast = $this->broadcast(['body' => '{{חבילה}}', 'is_marketing' => false]);
+
+        // The send job eager-loads; the panel preview may not. Both must agree.
+        $lazy = $this->renderer()->body($broadcast, $customer);
+        $eager = $this->renderer()->body($broadcast, $customer->fresh()->load('subscriptions.plan'));
+
+        $this->assertSame('חבילה נוכחית', $lazy);
+        $this->assertSame($lazy, $eager);
+    }
+
+    public function test_a_broadcast_being_sent_survives_a_bulk_delete(): void
+    {
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+
+        $sending = $this->broadcast(['subject' => 'בשליחה', 'status' => BroadcastStatus::Sending]);
+        $draft = $this->broadcast(['subject' => 'טיוטה', 'status' => BroadcastStatus::Draft]);
+
+        Livewire::test(ListBroadcasts::class)
+            ->callTableBulkAction('delete', [$sending, $draft]);
+
+        // Deleting mid-send leaves the running job writing to a missing row
+        // while the messages keep going out.
+        $this->assertDatabaseHas('broadcasts', ['id' => $sending->id]);
+        $this->assertDatabaseMissing('broadcasts', ['id' => $draft->id]);
     }
 
     /*

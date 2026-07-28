@@ -6,6 +6,7 @@ use App\Enums\BroadcastChannel;
 use App\Enums\BroadcastStatus;
 use App\Enums\CustomerStatus;
 use App\Filament\Concerns\RespectsModuleAccess;
+use App\Filament\Pages\ManageMail;
 use App\Filament\Resources\BroadcastResource\Actions\BroadcastSendActions;
 use App\Filament\Resources\BroadcastResource\Pages;
 use App\Models\Broadcast;
@@ -20,6 +21,7 @@ use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\HtmlString;
 
 class BroadcastResource extends Resource
@@ -130,13 +132,9 @@ class BroadcastResource extends Resource
                                 0 => 'תחזוקה מתוכננת, עדכון אבטחה, שינוי בשירות. אינה פרסומת, ולכן נשלחת גם ללקוחות שהוסרו מרשימת הדיוור.',
                             ])
                             ->required(),
-                        Forms\Components\Placeholder::make('marketing_warning')
-                            ->label('')
-                            ->visible(fn (Forms\Get $get): bool => (bool) $get('is_marketing') && blank(config('billing.business.address')))
-                            ->content(new HtmlString(
-                                '<span class="text-warning-600">לא הוגדרה כתובת עסק (<code>BUSINESS_ADDRESS</code>). '
-                                .'חוק התקשורת מחייב הודעת פרסומת לשאת את שם המפרסם וכתובתו — כדאי למלא זאת לפני השליחה.</span>'
-                            )),
+                        Forms\Components\Placeholder::make('sender_details')
+                            ->label('פרטי השולח')
+                            ->content(fn (): HtmlString => static::senderDetails()),
                     ])
                     ->hidden(fn (?Broadcast $record): bool => $record?->status === BroadcastStatus::Sent),
 
@@ -199,6 +197,34 @@ class BroadcastResource extends Resource
         return $state instanceof BroadcastChannel
             ? $state
             : (BroadcastChannel::tryFrom((string) $state) ?? BroadcastChannel::Email);
+    }
+
+    /**
+     * Shows the operator exactly which sender details will appear at the bottom
+     * of the message — and where they are edited. They come from the mail
+     * settings ("שם שולח" and "כותרת תחתונה למיילים"), the same place every
+     * other customer email takes them from, so there is one thing to keep
+     * correct rather than a separate copy per feature.
+     */
+    protected static function senderDetails(): HtmlString
+    {
+        $name = e((string) (config('mail.from.name') ?: config('app.name')));
+        $footer = trim((string) config('billing.branding.email_footer'));
+
+        $link = '<a class="text-primary-600 underline" href="'.e(ManageMail::getUrl()).'">הגדרות ← מייל ושולח</a>';
+
+        if ($footer === '') {
+            return new HtmlString(
+                '<span class="text-warning-600">בתחתית ההודעה יופיע "'.$name.'" בלבד — לא הוגדרה כותרת תחתונה עם כתובת וטלפון.</span><br>'
+                .'<span class="text-sm text-gray-500">חוק התקשורת מחייב הודעת פרסומת לשאת את שם המפרסם וכתובתו. אפשר למלא ב-'.$link.'.</span>'
+            );
+        }
+
+        return new HtmlString(
+            '<span class="text-sm">בתחתית ההודעה יופיעו פרטי השולח מהגדרות הדיוור:</span><br>'
+            .'<span class="text-sm text-gray-500" style="white-space:pre-line">'.e($footer).'</span><br>'
+            .'<span class="text-sm text-gray-500">לעדכון: '.$link.'</span>'
+        );
     }
 
     /**
@@ -327,7 +353,28 @@ class BroadcastResource extends Resource
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([
-                    Tables\Actions\DeleteBulkAction::make()->label('מחיקה'),
+                    Tables\Actions\DeleteBulkAction::make()
+                        ->label('מחיקה')
+                        // Deleting a row mid-send leaves the running job writing
+                        // its progress and final status to a record that is gone,
+                        // while the messages keep going out. The single-row delete
+                        // already refuses this; the bulk path must match.
+                        ->action(function (Collection $records, Tables\Actions\DeleteBulkAction $action) {
+                            [$sending, $deletable] = $records->partition(
+                                fn (Broadcast $record): bool => $record->status === BroadcastStatus::Sending,
+                            );
+
+                            $deletable->each->delete();
+
+                            if ($sending->isNotEmpty()) {
+                                Notification::make()->warning()
+                                    ->title('חלק מהדיוורים לא נמחקו')
+                                    ->body($sending->count().' דיוורים נמצאים כרגע בשליחה ואי אפשר למחוק אותם עד שתסתיים.')
+                                    ->send();
+                            }
+
+                            $action->success();
+                        }),
                 ]),
             ])
             ->emptyStateHeading('אין דיוורים עדיין');

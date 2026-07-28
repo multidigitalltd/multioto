@@ -9,23 +9,31 @@
 
 <hr style="border:0;border-top:1px solid #e5e7eb;margin:2rem 0 1rem">
 
+{{-- זהות השולח (שם, כתובת, טלפון) מגיעה מהכותרת התחתונה שבהגדרות הדיוור
+     ומודפסת אוטומטית בתחתית כל מייל על ידי vendor/mail/html/message.
+     כאן נוסף רק מה שהיא לא מכסה: למה הלקוח קיבל את ההודעה, ובפרסומת —
+     גם קישור ההסרה שהחוק מחייב. --}}
 @if ($footer['is_marketing'] ?? false)
 <p style="margin:0;font-size:12px;color:#6b7280;line-height:1.7">
-    הודעה זו נשלחה על ידי {{ $footer['business'] }}@if (filled($footer['address'] ?? null)), {{ $footer['address'] }}@endif.<br>
+    זוהי הודעה פרסומית מאת {{ $footer['business'] }}.<br>
     אינך מעוניין לקבל דיוור פרסומי?
-    <a href="{{ $footer['unsubscribe_url'] }}" style="color:#1f6feb">להסרה מרשימת התפוצה</a>.<br>
+    @if (filled($footer['unsubscribe_url'] ?? null))
+        <a href="{{ $footer['unsubscribe_url'] }}" style="color:#1f6feb">להסרה מרשימת התפוצה</a>.<br>
+    @else
+        {{-- בדיקה פנימית: הקישור מושבת בכוונה כדי שלחיצה בטעות לא תסיר לקוח אמיתי. --}}
+        <span style="text-decoration:underline">להסרה מרשימת התפוצה</span>
+        <em>(בבדיקה הקישור מושבת — בהודעה ללקוח הוא פעיל)</em>.<br>
+    @endif
     הודעות שירות — חשבוניות, דרישות תשלום והתראות על תקלה באתר — יישלחו אליך גם לאחר ההסרה.
 </p>
 @else
-{{-- הודעת שירות: לא פרסומת, ולכן אין הסרה — אבל הלקוח עדיין צריך לדעת
-     מי שלח, למה קיבל את זה, ולאן לפנות. --}}
 <p style="margin:0;font-size:12px;color:#6b7280;line-height:1.7">
-    זוהי הודעת שירות מאת {{ $footer['business'] }}@if (filled($footer['address'] ?? null)), {{ $footer['address'] }}@endif.<br>
+    זוהי הודעת שירות מאת {{ $footer['business'] }}.<br>
     קיבלת אותה משום שאתה לקוח שלנו והיא נוגעת לשירות שאנחנו מספקים לך —
     אין מדובר בהודעה פרסומית, ולכן היא נשלחת גם למי שהוסר מרשימת הדיוור.<br>
-    @if ($support = config('billing.email.support_address'))
+    @if (filled($footer['support'] ?? null))
         לכל שאלה אפשר להשיב למייל הזה או לכתוב לנו:
-        <a href="mailto:{{ $support }}" style="color:#1f6feb">{{ $support }}</a>.
+        <a href="mailto:{{ $footer['support'] }}" style="color:#1f6feb">{{ $footer['support'] }}</a>.
     @else
         לכל שאלה אפשר פשוט להשיב למייל הזה.
     @endif

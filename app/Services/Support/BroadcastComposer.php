@@ -93,8 +93,7 @@ class BroadcastComposer
 
     private function businessName(): string
     {
-        return (string) (config('billing.business.name')
-            ?: config('mail.from.name')
-            ?: config('app.name'));
+        // "שם שולח" from the mail settings — one source for every message.
+        return (string) (config('mail.from.name') ?: config('app.name'));
     }
 }

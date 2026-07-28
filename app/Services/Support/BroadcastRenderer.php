@@ -3,6 +3,7 @@
 namespace App\Services\Support;
 
 use App\Enums\BroadcastChannel;
+use App\Enums\SubscriptionStatus;
 use App\Models\Broadcast;
 use App\Models\Customer;
 
@@ -29,6 +30,9 @@ class BroadcastRenderer
         'חבילה' => 'שם החבילה במנוי הפעיל',
         'עסק' => 'שם העסק שלך (השולח)',
     ];
+
+    /** Subscription statuses that mean "no longer the customer's package". */
+    private const ENDED_STATUSES = [SubscriptionStatus::Canceled];
 
     public function __construct(private MarketingPreferences $preferences) {}
 
@@ -62,15 +66,26 @@ class BroadcastRenderer
      * Email footer parts, rendered by the mail template rather than glued into
      * the body — an email footer wants markup and a real link, not plain text.
      *
-     * @return array{is_marketing: bool, business: string, address: ?string, unsubscribe_url: string}
+     * The sender's full identity (name, address, phone) is NOT repeated here:
+     * it comes from "כותרת תחתונה למיילים" in the mail settings and is already
+     * printed at the bottom of every email by the shared mail layout. Duplicating
+     * it would mean two conflicting addresses on the same message whenever the
+     * operator updates one of them.
+     *
+     * @param  bool  $preview  a test send to the operator's own inbox. The
+     *                         unsubscribe link is withheld: it lands in OUR
+     *                         inbox but acts on the sample CUSTOMER, so one
+     *                         curious click while checking the layout would
+     *                         opt out a real customer who never asked.
+     * @return array{is_marketing: bool, business: string, support: ?string, unsubscribe_url: ?string}
      */
-    public function emailFooter(Broadcast $broadcast, Customer $customer): array
+    public function emailFooter(Broadcast $broadcast, Customer $customer, bool $preview = false): array
     {
         return [
             'is_marketing' => (bool) $broadcast->is_marketing,
             'business' => $this->businessName(),
-            'address' => config('billing.business.address') ?: null,
-            'unsubscribe_url' => $this->preferences->unsubscribeUrl($customer),
+            'support' => config('billing.email.support_address') ?: null,
+            'unsubscribe_url' => $preview ? null : $this->preferences->unsubscribeUrl($customer),
         ];
     }
 
@@ -81,9 +96,15 @@ class BroadcastRenderer
             ? $customer->sites->first()
             : $customer->sites()->orderBy('id')->first();
 
-        $plan = $customer->relationLoaded('subscriptions')
-            ? $customer->subscriptions->first()?->plan
-            : $customer->subscriptions()->with('plan')->orderBy('id')->first()?->plan;
+        // {{חבילה}} is presented as the customer's CURRENT package, so a
+        // canceled subscription from two years ago must not win just because it
+        // has the lowest id. Both paths apply the same filter and the same
+        // ordering, or the placeholder would differ depending on whether the
+        // caller happened to eager-load.
+        $plan = ($customer->relationLoaded('subscriptions')
+            ? $customer->subscriptions->whereNotIn('status', self::ENDED_STATUSES)->sortByDesc('id')->first()
+            : $customer->subscriptions()->with('plan')->whereNotIn('status', self::ENDED_STATUSES)->latest('id')->first()
+        )?->plan;
 
         $values = [
             'שם' => (string) $customer->name,
@@ -102,11 +123,13 @@ class BroadcastRenderer
         return preg_replace('/\{\{[^{}]{0,60}\}\}/u', '', $text) ?? $text;
     }
 
+    /**
+     * The sender name, taken from "שם שולח" in the mail settings — the same
+     * source the mail header, the notification templates and every other
+     * customer-facing message already use.
+     */
     private function businessName(): string
     {
-        // Same fallback chain the notification templates use for {{business_name}}.
-        return (string) (config('billing.business.name')
-            ?: config('mail.from.name')
-            ?: config('app.name'));
+        return (string) (config('mail.from.name') ?: config('app.name'));
     }
 }

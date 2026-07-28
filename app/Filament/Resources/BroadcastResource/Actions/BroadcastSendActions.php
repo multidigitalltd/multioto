@@ -9,6 +9,7 @@ use App\Mail\BroadcastMail;
 use App\Models\AuditLog;
 use App\Models\Broadcast;
 use App\Services\Support\BroadcastAudience;
+use App\Services\Support\BroadcastRenderer;
 use App\Services\Waha\WahaClient;
 use Filament\Notifications\Notification;
 use Illuminate\Support\Facades\Mail;
@@ -128,7 +129,7 @@ class BroadcastSendActions
                 }
 
                 Mail::to($user->email)->send(new BroadcastMail(
-                    $subject, $body, $renderer->emailFooter($record, $sample),
+                    $subject, $body, $renderer->emailFooter($record, $sample, preview: true),
                 ));
 
                 return Notification::make()->success()->title('הבדיקה נשלחה לתור')
