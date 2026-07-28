@@ -82,9 +82,22 @@ class BroadcastSendActions
                 ->body('אין אף לקוח שניתן להשיג בערוץ שנבחר.');
         }
 
-        // The job claims the row itself, so a scheduled duplicate cannot double
-        // send; marking it scheduled here just makes the intent visible at once.
-        $record->update(['status' => BroadcastStatus::Scheduled, 'scheduled_at' => now()]);
+        // A scheduled broadcast can fall due while this confirmation modal sits
+        // open: the scheduler dispatches a job, that job claims the row as
+        // Sending, and an unconditional update here would hand it back as
+        // Scheduled for a second job to claim — every customer hearing from us
+        // twice, and on throttled WhatsApp for hours. Only claim a row that is
+        // still waiting; losing the race means the send is already under way.
+        $claimed = Broadcast::whereKey($record->getKey())
+            ->whereIn('status', [BroadcastStatus::Draft, BroadcastStatus::Scheduled])
+            ->update(['status' => BroadcastStatus::Scheduled, 'scheduled_at' => now()]);
+
+        if ($claimed === 0) {
+            return Notification::make()
+                ->warning()
+                ->title('הדיוור כבר בשליחה')
+                ->body('השליחה התחילה ברקע בינתיים — לא נשלח שוב כדי שאף לקוח לא יקבל אותו פעמיים.');
+        }
 
         SendBroadcastJob::dispatch($record->id);
 

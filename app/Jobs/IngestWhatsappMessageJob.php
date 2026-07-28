@@ -120,7 +120,9 @@ class IngestWhatsappMessageJob implements ShouldQueue
         // Download and store the media the customer sent (image/file), then keep
         // its metadata on the message. First ingest only — recordInbound is
         // idempotent per message id.
-        if ($message->wasRecentlyCreated && $this->messageHasMedia($payload)) {
+        // Null means the message was an opt-out request and never became
+        // support correspondence — there is nothing to attach media to.
+        if ($message?->wasRecentlyCreated && $this->messageHasMedia($payload)) {
             $stored = $this->storeMedia($waha, $attachments, $message->ticket_id, $payload);
 
             if ($stored !== null) {

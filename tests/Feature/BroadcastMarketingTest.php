@@ -5,26 +5,32 @@ namespace Tests\Feature;
 use App\Enums\BroadcastChannel;
 use App\Enums\BroadcastStatus;
 use App\Enums\CustomerStatus;
+use App\Enums\MessageChannel;
 use App\Enums\SubscriptionStatus;
 use App\Enums\TicketChannel;
 use App\Enums\UserRole;
 use App\Filament\Resources\BroadcastResource\Actions\BroadcastSendActions;
 use App\Filament\Resources\BroadcastResource\Pages\ListBroadcasts;
+use App\Jobs\NotifyTeamJob;
 use App\Jobs\SendBroadcastJob;
+use App\Jobs\SendTicketNotificationJob;
 use App\Mail\BroadcastMail;
 use App\Models\Broadcast;
 use App\Models\Customer;
 use App\Models\Plan;
 use App\Models\Site;
 use App\Models\Subscription;
+use App\Models\Ticket;
 use App\Models\User;
 use App\Services\Ai\ClaudeClient;
 use App\Services\Support\BroadcastAudience;
 use App\Services\Support\BroadcastComposer;
 use App\Services\Support\BroadcastRenderer;
 use App\Services\Support\MarketingPreferences;
+use App\Services\Support\TicketIntake;
 use App\Services\Waha\WahaClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Mail;
 use Livewire\Livewire;
 use Mockery;
@@ -390,6 +396,81 @@ class BroadcastMarketingTest extends TestCase
 
         $this->assertFalse($preferences->looksLikeOptOut('אל תסירו אותי מהרשימה'));
         $this->assertFalse($preferences->looksLikeOptOut('אפשר להסיר את התוסף מהאתר?'));
+    }
+
+    public function test_a_service_email_never_mentions_removal_at_all(): void
+    {
+        config(['mail.from.name' => 'מולטי דיגיטל']);
+
+        $customer = Customer::factory()->create(['email' => 'x@b.co.il']);
+        $broadcast = $this->broadcast(['body' => 'תחזוקה בשבת', 'is_marketing' => false]);
+
+        $html = (new BroadcastMail(
+            $this->renderer()->subject($broadcast, $customer),
+            $this->renderer()->body($broadcast, $customer),
+            $this->renderer()->emailFooter($broadcast, $customer),
+        ))->render();
+
+        // Removal belongs to advertising only. Raising it in a service notice
+        // invites a customer to try to stop receiving invoices and site-fault
+        // alerts — things they cannot opt out of.
+        $this->assertStringNotContainsString('הסרה', $html);
+        $this->assertStringNotContainsString('הוסר', $html);
+    }
+
+    public function test_replying_hasser_never_opens_a_support_ticket(): void
+    {
+        Bus::fake();
+
+        $customer = Customer::factory()->create(['whatsapp_jid' => '972500000001@c.us']);
+
+        $message = app(TicketIntake::class)->recordInbound(
+            TicketChannel::Whatsapp, MessageChannel::Whatsapp, $customer, 'הסר',
+            threadRef: '972500000001@c.us', externalMessageId: 'optout-1',
+        );
+
+        $this->assertNull($message);
+        $this->assertTrue($customer->fresh()->hasOptedOutOfMarketing());
+
+        // No ticket, so no auto-acknowledgement answering "קיבלנו את פנייתך"
+        // to somebody asking us to stop writing to them, and no team alert.
+        $this->assertSame(0, Ticket::count());
+        Bus::assertNotDispatched(SendTicketNotificationJob::class);
+        Bus::assertNotDispatched(NotifyTeamJob::class);
+    }
+
+    public function test_an_ordinary_message_still_opens_a_ticket(): void
+    {
+        Bus::fake();
+
+        $customer = Customer::factory()->create(['whatsapp_jid' => '972500000002@c.us']);
+
+        $message = app(TicketIntake::class)->recordInbound(
+            TicketChannel::Whatsapp, MessageChannel::Whatsapp, $customer, 'האתר שלי נפל',
+            threadRef: '972500000002@c.us', externalMessageId: 'normal-1',
+        );
+
+        $this->assertNotNull($message);
+        $this->assertSame(1, Ticket::count());
+        $this->assertFalse($customer->fresh()->hasOptedOutOfMarketing());
+    }
+
+    public function test_a_send_that_started_in_the_background_is_not_started_again(): void
+    {
+        Bus::fake();
+
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+        Customer::factory()->create(['status' => CustomerStatus::Active, 'email' => 'x@b.co.il']);
+
+        // The scheduler picked the row up while the confirmation modal was open
+        // and the job already claimed it.
+        $broadcast = $this->broadcast(['status' => BroadcastStatus::Sending]);
+
+        $notification = BroadcastSendActions::send($broadcast);
+
+        $this->assertSame('הדיוור כבר בשליחה', $notification->getTitle());
+        Bus::assertNotDispatched(SendBroadcastJob::class);
+        $this->assertSame(BroadcastStatus::Sending, $broadcast->fresh()->status);
     }
 
     /*
