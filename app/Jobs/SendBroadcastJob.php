@@ -142,21 +142,32 @@ class SendBroadcastJob implements ShouldQueue
                             if (blank(trim((string) $customer->email))) {
                                 continue;
                             }
+                            // The log row is created BEFORE the send so its id can
+                            // ride along in a header — that is what lets the
+                            // provider's delivery/open/bounce event find this exact
+                            // row later. Recorded as "queued", not "sent": at this
+                            // point the message has only reached our own queue.
+                            $log = NotificationLog::record(
+                                'email', NotificationType::Broadcast, $customer->email,
+                                $subject, $body, $customer->id, 'queued', null, $broadcast->id,
+                            );
+
                             Mail::to($customer->email)->queue(new BroadcastMail(
                                 $subject, $body,
                                 $this->renderer->emailFooter($broadcast, $customer),
                                 $this->renderer->bodyHtml($broadcast, $customer),
+                                $log?->id,
                             ));
-                            // Broadcast emails are queued, not sent inline — record as
-                            // "queued" so the log doesn't claim delivery that hasn't happened.
-                            NotificationLog::record('email', NotificationType::Broadcast, $customer->email, $subject, $body, $customer->id, 'queued');
                         } else {
                             $chatId = trim((string) $customer->whatsappRecipient());
                             if ($chatId === '') {
                                 continue;
                             }
                             $waha->sendMessage($chatId, $body);
-                            NotificationLog::record('whatsapp', NotificationType::Broadcast, $chatId, null, $body, $customer->id);
+                            NotificationLog::record(
+                                'whatsapp', NotificationType::Broadcast, $chatId,
+                                null, $body, $customer->id, 'sent', null, $broadcast->id,
+                            );
                             sleep((int) config('billing.waha.broadcast_throttle_seconds'));
                         }
 

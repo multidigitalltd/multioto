@@ -19,8 +19,10 @@ class NotificationLog extends Model
     use HasFactory;
 
     protected $fillable = [
-        'customer_id', 'channel', 'type', 'recipient',
+        'customer_id', 'broadcast_id', 'channel', 'type', 'recipient',
         'subject', 'body', 'status', 'error', 'sent_at',
+        'provider_message_id', 'delivered_at', 'opened_at', 'bounced_at',
+        'complained_at', 'open_count',
     ];
 
     protected function casts(): array
@@ -28,13 +30,19 @@ class NotificationLog extends Model
         return [
             'type' => NotificationType::class,
             'sent_at' => 'datetime',
+            'delivered_at' => 'datetime',
+            'opened_at' => 'datetime',
+            'bounced_at' => 'datetime',
+            'complained_at' => 'datetime',
+            'open_count' => 'integer',
         ];
     }
 
     /**
      * Record a sent (or failed) customer message. Best-effort by design:
      * logging must never break the actual send, so any failure here is
-     * swallowed to the application log rather than thrown.
+     * swallowed to the application log rather than thrown — the caller gets
+     * null and carries on sending.
      */
     public static function record(
         string $channel,
@@ -45,10 +53,12 @@ class NotificationLog extends Model
         ?int $customerId = null,
         string $status = 'sent',
         ?string $error = null,
-    ): void {
+        ?int $broadcastId = null,
+    ): ?self {
         try {
-            static::create([
+            return static::create([
                 'customer_id' => $customerId,
+                'broadcast_id' => $broadcastId,
                 'channel' => $channel,
                 'type' => $type,
                 'recipient' => $recipient !== null ? Str::limit($recipient, 250, '') : null,
@@ -60,11 +70,18 @@ class NotificationLog extends Model
             ]);
         } catch (\Throwable $e) {
             Log::warning('NotificationLog record failed', ['error' => $e->getMessage()]);
+
+            return null;
         }
     }
 
     public function customer(): BelongsTo
     {
         return $this->belongsTo(Customer::class);
+    }
+
+    public function broadcast(): BelongsTo
+    {
+        return $this->belongsTo(Broadcast::class);
     }
 }

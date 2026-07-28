@@ -20,6 +20,7 @@ class Customer extends Model
         'whatsapp_jid', 'cardcom_account_id', 'pending_card_lp_id', 'card_link_token', 'default_token_id', 'status', 'notes',
         'monitoring_report_sent_at', 'onboarding_checklist',
         'marketing_opt_out_at', 'marketing_opt_out_channel',
+        'email_bounced_at', 'email_bounce_reason',
     ];
 
     protected function casts(): array
@@ -32,6 +33,7 @@ class Customer extends Model
             'monitoring_report_sent_at' => 'datetime',
             'onboarding_checklist' => 'array',
             'marketing_opt_out_at' => 'datetime',
+            'email_bounced_at' => 'datetime',
         ];
     }
 
@@ -45,6 +47,26 @@ class Customer extends Model
     public function hasOptedOutOfMarketing(): bool
     {
         return $this->marketing_opt_out_at !== null;
+    }
+
+    /**
+     * Did this customer's address come back as permanently undeliverable?
+     * Cleared automatically the moment the address itself is corrected — a new
+     * address has not bounced, and must not inherit the old one's verdict.
+     */
+    public function emailHasBounced(): bool
+    {
+        return $this->email_bounced_at !== null;
+    }
+
+    protected static function booted(): void
+    {
+        static::updating(function (Customer $customer): void {
+            if ($customer->isDirty('email')) {
+                $customer->email_bounced_at = null;
+                $customer->email_bounce_reason = null;
+            }
+        });
     }
 
     /**

@@ -56,8 +56,11 @@ class BroadcastAudience
             $query->whereNull('marketing_opt_out_at');
         }
 
+        // An address the provider told us is dead stays out of every send.
+        // Retrying it is not just wasted — repeated bounces are what mailbox
+        // providers score a sender on, so it degrades delivery for everyone else.
         return $channel === BroadcastChannel::Email
-            ? $query->where(fn ($q) => $this->filled($q, 'email'))
+            ? $query->whereNull('email_bounced_at')->where(fn ($q) => $this->filled($q, 'email'))
             : $query->where(fn ($q) => $this->filled($q, 'whatsapp_jid')
                 ->orWhere(fn ($p) => $this->filled($p, 'phone')));
     }

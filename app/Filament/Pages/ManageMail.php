@@ -196,6 +196,10 @@ class ManageMail extends Page implements HasForms
                         Placeholder::make('inbound_url')
                             ->label('כתובת ה-Webhook להדבקה ב-Postmark')
                             ->content(fn (): string => $this->inboundWebhookUrl()),
+                        Placeholder::make('delivery_url')
+                            ->label('כתובת ה-Webhook למדדי מסירה ופתיחה')
+                            ->content(fn (): string => $this->deliveryWebhookUrl())
+                            ->helperText('ב-Postmark ← Servers ← Webhooks ← Add webhook. סמנו Delivery, Bounce, Spam Complaint ו-Open Tracking, והדביקו את הכתובת הזו. אותו סוד משמש את שני ה-Webhooks.'),
                     ])->columns(1)
                     ->footerActions([$this->saveAction()]),
             ])
@@ -355,6 +359,21 @@ class ManageMail extends Page implements HasForms
      * The exact inbound-webhook URL to paste into Postmark, with the configured
      * secret already embedded. Shown only in the team-only admin panel.
      */
+    /**
+     * Where Postmark posts what happened to a message we sent — delivered,
+     * opened, bounced, marked as spam. Same shared secret as the inbound hook;
+     * a different path so the two payload shapes never mix.
+     */
+    protected function deliveryWebhookUrl(): string
+    {
+        $base = rtrim((string) config('app.url'), '/').'/webhooks/email/delivery';
+        $secret = (string) config('billing.email.webhook_secret');
+
+        return $secret === ''
+            ? $base.'?secret=…  (הגדירו סוד למעלה, שמרו, והכתובת המלאה תופיע כאן)'
+            : $base.'?secret='.rawurlencode($secret);
+    }
+
     protected function inboundWebhookUrl(): string
     {
         $base = rtrim((string) config('app.url'), '/').'/webhooks/email';

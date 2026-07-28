@@ -11,6 +11,7 @@ use App\Filament\Resources\BroadcastResource\Actions\BroadcastSendActions;
 use App\Filament\Resources\BroadcastResource\Pages;
 use App\Models\Broadcast;
 use App\Models\Customer;
+use App\Models\NotificationLog;
 use App\Models\Plan;
 use App\Services\Support\BroadcastAudience;
 use App\Services\Support\BroadcastComposer;
@@ -264,6 +265,39 @@ class BroadcastResource extends Resource
         return new HtmlString($line);
     }
 
+    /**
+     * Delivery and open counts for one broadcast, straight from the provider's
+     * events. Shown as "—" until the first event lands, rather than as zeros —
+     * "0 נמסרו" a second after sending reads like a failure when it only means
+     * the provider has not reported back yet.
+     */
+    protected static function deliveryLabel(Broadcast $record): string
+    {
+        if ($record->channel !== BroadcastChannel::Email) {
+            return '—'; // WhatsApp gives us no delivery signal at all.
+        }
+
+        $stats = NotificationLog::query()
+            ->where('broadcast_id', $record->id)
+            ->selectRaw('COUNT(*) AS total')
+            ->selectRaw('COUNT(delivered_at) AS delivered')
+            ->selectRaw('COUNT(opened_at) AS opened')
+            ->selectRaw('COUNT(bounced_at) AS bounced')
+            ->first();
+
+        if (($stats?->total ?? 0) === 0) {
+            return '—';
+        }
+
+        $parts = [$stats->delivered.' נמסרו', $stats->opened.' נפתחו'];
+
+        if ($stats->bounced > 0) {
+            $parts[] = $stats->bounced.' חזרו';
+        }
+
+        return implode(' · ', $parts);
+    }
+
     /** A one-line, human reading of a stored segment, for the list screen. */
     protected static function segmentLabel(Broadcast $record): string
     {
@@ -321,6 +355,11 @@ class BroadcastResource extends Resource
                     ->label('נשלחו')
                     ->numeric()
                     ->sortable(),
+                Tables\Columns\TextColumn::make('delivery')
+                    ->label('נמסרו / נפתחו')
+                    ->state(fn (Broadcast $record): string => static::deliveryLabel($record))
+                    ->tooltip('מגיע מספק הדואר. פתיחות נמדדות בפיקסל ולכן הן רצפה, לא מספר מדויק — לקוח שחוסם תמונות נספר כמי שלא פתח.')
+                    ->wrap(),
                 Tables\Columns\TextColumn::make('created_at')
                     ->label('נוצר')
                     ->date('d/m/Y')

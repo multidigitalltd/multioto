@@ -17,6 +17,7 @@ use App\Http\Controllers\SupportAttachmentController;
 use App\Http\Controllers\SupportFormController;
 use App\Http\Controllers\TasksPrintController;
 use App\Http\Controllers\Webhooks\CardcomWebhookController;
+use App\Http\Controllers\Webhooks\EmailDeliveryWebhookController;
 use App\Http\Controllers\Webhooks\EmailWebhookController;
 use App\Http\Controllers\Webhooks\WahaWebhookController;
 use App\Http\Middleware\EnsureTwoFactorConfirmed;
@@ -229,4 +230,6 @@ Route::middleware('throttle:120,1')->prefix('webhooks')->group(function () {
     Route::post('/cardcom', CardcomWebhookController::class)->name('webhooks.cardcom');
     Route::post('/waha', WahaWebhookController::class)->name('webhooks.waha');
     Route::post('/email', EmailWebhookController::class)->name('webhooks.email');
+    // Delivery / open / bounce / spam-complaint events for mail WE sent.
+    Route::post('/email/delivery', EmailDeliveryWebhookController::class)->name('webhooks.email.delivery');
 });
