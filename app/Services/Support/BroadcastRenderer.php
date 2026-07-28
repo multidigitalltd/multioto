@@ -6,6 +6,8 @@ use App\Enums\BroadcastChannel;
 use App\Enums\SubscriptionStatus;
 use App\Models\Broadcast;
 use App\Models\Customer;
+use App\Support\EmailBody;
+use App\Support\RichText;
 
 /**
  * Turns one broadcast into the exact message a given customer receives:
@@ -53,13 +55,30 @@ class BroadcastRenderer
     {
         $body = $this->substitute((string) $broadcast->body, $customer);
 
-        if (! $broadcast->is_marketing) {
-            return $body;
+        // The editor stores HTML. Email keeps it; WhatsApp has no markup of its
+        // own beyond *bold*/_italic_, so the same content is converted rather
+        // than sent with tags showing.
+        if ($broadcast->channel === BroadcastChannel::Whatsapp) {
+            $body = RichText::toWhatsapp($body);
+
+            return $broadcast->is_marketing
+                ? $body."\n\n—\nפרסומת מאת ".$this->businessName()."\nלהסרה מרשימת התפוצה: השיבו \"הסר\"."
+                : $body;
         }
 
-        return $broadcast->channel === BroadcastChannel::Whatsapp
-            ? $body."\n\n—\nפרסומת מאת ".$this->businessName()."\nלהסרה מרשימת התפוצה: השיבו \"הסר\"."
-            : $body;
+        return $body;
+    }
+
+    /**
+     * The email body as safe HTML, or null when the content is plain text (a
+     * draft written before the rich editor, or one the agent wrote as text).
+     * The mail template falls back to escaping-and-nl2br in that case.
+     */
+    public function bodyHtml(Broadcast $broadcast, Customer $customer): ?string
+    {
+        $body = $this->substitute((string) $broadcast->body, $customer);
+
+        return str_contains($body, '<') ? EmailBody::toSafeHtml($body) : null;
     }
 
     /**
@@ -77,7 +96,7 @@ class BroadcastRenderer
      *                         inbox but acts on the sample CUSTOMER, so one
      *                         curious click while checking the layout would
      *                         opt out a real customer who never asked.
-     * @return array{is_marketing: bool, business: string, support: ?string, unsubscribe_url: ?string}
+     * @return array{is_marketing: bool, business: string, support: ?string, note: string, unsubscribe_url: ?string}
      */
     public function emailFooter(Broadcast $broadcast, Customer $customer, bool $preview = false): array
     {
@@ -85,8 +104,34 @@ class BroadcastRenderer
             'is_marketing' => (bool) $broadcast->is_marketing,
             'business' => $this->businessName(),
             'support' => config('billing.email.support_address') ?: null,
+            'note' => $this->footerNote((bool) $broadcast->is_marketing),
             'unsubscribe_url' => $preview ? null : $this->preferences->unsubscribeUrl($customer),
         ];
+    }
+
+    /**
+     * The explanatory line under a broadcast — "why you got this". Editable in
+     * הגדרות ← מייל ושולח, because the right wording is the owner's call.
+     *
+     * The legally required parts of an advertising message are NOT here: the
+     * "פרסומת" heading, the sender identity and the working opt-out link are
+     * added by the template regardless of what this text says, so editing it
+     * can never make a broadcast non-compliant.
+     */
+    public function footerNote(bool $isMarketing): string
+    {
+        $key = $isMarketing ? 'billing.broadcasts.marketing_note' : 'billing.broadcasts.service_note';
+
+        $custom = trim((string) config($key));
+
+        if ($custom !== '') {
+            return str_replace('{{עסק}}', $this->businessName(), $custom);
+        }
+
+        return $isMarketing
+            ? 'זוהי הודעה פרסומית מאת '.$this->businessName().'.'
+            : 'זוהי הודעת שירות מאת '.$this->businessName().'.'."\n"
+                .'קיבלת אותה משום שאתה לקוח שלנו והיא נוגעת לשירות שאנחנו מספקים לך.';
     }
 
     /** Resolve every {{token}} against this customer. */

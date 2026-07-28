@@ -105,6 +105,8 @@ class SettingsServiceProvider extends ServiceProvider
         // Business logo (public-disk path) shown across customer-facing surfaces.
         'branding.logo_path' => 'billing.branding.logo_path',
         'branding.email_footer' => 'billing.branding.email_footer',
+        'broadcasts.service_note' => 'billing.broadcasts.service_note',
+        'broadcasts.marketing_note' => 'billing.broadcasts.marketing_note',
         // Data-retention windows (days) for the self-cleaning prune jobs.
         'system.log_retention_days' => 'billing.system.log_retention_days',
         'system.monitor_check_retention_days' => 'billing.system.monitor_check_retention_days',

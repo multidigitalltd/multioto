@@ -212,6 +212,103 @@ class BroadcastMarketingTest extends TestCase
         $this->assertStringContainsString('marketing/unsubscribe/'.$customer->id, $html);
     }
 
+    public function test_the_service_footer_wording_is_editable_in_settings(): void
+    {
+        config([
+            'mail.from.name' => 'מולטי דיגיטל',
+            'billing.broadcasts.service_note' => "הודעה מאת {{עסק}}.\nאתה מקבל אותה כי יש לך אצלנו אתר.",
+        ]);
+
+        $customer = Customer::factory()->create(['email' => 'x@b.co.il']);
+        $broadcast = $this->broadcast(['body' => 'תחזוקה', 'is_marketing' => false]);
+
+        $html = (new BroadcastMail(
+            $this->renderer()->subject($broadcast, $customer),
+            $this->renderer()->body($broadcast, $customer),
+            $this->renderer()->emailFooter($broadcast, $customer),
+        ))->render();
+
+        $this->assertStringContainsString('אתה מקבל אותה כי יש לך אצלנו אתר', $html);
+        $this->assertStringContainsString('הודעה מאת מולטי דיגיטל', $html);
+        // The default wording is gone, not appended to.
+        $this->assertStringNotContainsString('זוהי הודעת שירות מאת', $html);
+    }
+
+    public function test_editing_the_footer_wording_cannot_drop_the_legally_required_parts(): void
+    {
+        config(['billing.broadcasts.marketing_note' => 'טקסט משלי בלי שום אזכור חוקי']);
+
+        $customer = Customer::factory()->create(['email' => 'x@b.co.il']);
+        $broadcast = $this->broadcast(['body' => 'מבצע', 'is_marketing' => true]);
+
+        $html = (new BroadcastMail(
+            $this->renderer()->subject($broadcast, $customer),
+            $this->renderer()->body($broadcast, $customer),
+            $this->renderer()->emailFooter($broadcast, $customer),
+        ))->render();
+
+        $this->assertStringContainsString('טקסט משלי', $html);
+        // The parts the law requires are added by the template regardless.
+        $this->assertStringContainsString('פרסומת', $html);
+        $this->assertStringContainsString('להסרה מרשימת התפוצה', $html);
+    }
+
+    public function test_formatting_written_in_the_editor_survives_into_the_email(): void
+    {
+        $customer = Customer::factory()->create(['email' => 'x@b.co.il']);
+        $broadcast = $this->broadcast([
+            'body' => '<p>שלום <strong>{{שם}}</strong></p><ul><li>פריט ראשון</li></ul>',
+            'is_marketing' => false,
+        ]);
+
+        $html = (new BroadcastMail(
+            $this->renderer()->subject($broadcast, $customer),
+            $this->renderer()->body($broadcast, $customer),
+            $this->renderer()->emailFooter($broadcast, $customer),
+            $this->renderer()->bodyHtml($broadcast, $customer),
+        ))->render();
+
+        // Laravel's mail CSS inliner adds a style attribute to every tag, so
+        // match the tag opening rather than an exact string.
+        $this->assertMatchesRegularExpression('/<strong[^>]*>'.preg_quote($customer->name, '/').'<\/strong>/u', $html);
+        $this->assertMatchesRegularExpression('/<li[^>]*>פריט ראשון<\/li>/u', $html);
+    }
+
+    public function test_the_same_formatting_becomes_whatsapp_markup_not_visible_tags(): void
+    {
+        $customer = Customer::factory()->create(['name' => 'דני']);
+        $broadcast = $this->broadcast([
+            'channel' => BroadcastChannel::Whatsapp,
+            'body' => '<p>שלום <strong>{{שם}}</strong></p><ul><li>פריט ראשון</li></ul>',
+            'is_marketing' => false,
+        ]);
+
+        $body = $this->renderer()->body($broadcast, $customer);
+
+        $this->assertStringContainsString('*דני*', $body);
+        $this->assertStringNotContainsString('<strong>', $body);
+        $this->assertStringNotContainsString('<li>', $body);
+    }
+
+    public function test_a_script_in_the_body_never_reaches_the_customers_inbox(): void
+    {
+        $customer = Customer::factory()->create(['email' => 'x@b.co.il']);
+        $broadcast = $this->broadcast([
+            'body' => '<p>שלום</p><script>alert(1)</script>',
+            'is_marketing' => false,
+        ]);
+
+        $html = (new BroadcastMail(
+            $this->renderer()->subject($broadcast, $customer),
+            $this->renderer()->body($broadcast, $customer),
+            $this->renderer()->emailFooter($broadcast, $customer),
+            $this->renderer()->bodyHtml($broadcast, $customer),
+        ))->render();
+
+        $this->assertStringNotContainsString('<script', $html);
+        $this->assertStringNotContainsString('alert(1)', $html);
+    }
+
     /*
     | ----------------------------------------------------------------
     | Opting out

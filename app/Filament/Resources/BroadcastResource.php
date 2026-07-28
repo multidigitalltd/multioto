@@ -66,14 +66,17 @@ class BroadcastResource extends Resource
                             ->helperText(fn (Forms\Get $get): ?string => static::channelOf($get('channel')) === BroadcastChannel::Whatsapp
                                 ? 'בוואטסאפ הנושא משמש לזיהוי פנימי בלבד — הלקוח רואה רק את התוכן.'
                                 : null),
-                        Forms\Components\Textarea::make('body')
+                        Forms\Components\RichEditor::make('body')
                             ->label('תוכן')
                             ->required()
-                            ->rows(8)
+                            // Same toolbar as the ticket reply box, so writing to
+                            // a customer feels the same wherever you do it.
+                            ->toolbarButtons(['bold', 'italic', 'bulletList', 'orderedList', 'link', 'undo', 'redo'])
                             ->helperText(new HtmlString(
                                 'אפשר לשלב משתנים שיוחלפו לכל לקוח: '.collect(BroadcastRenderer::TOKENS)
                                     ->map(fn (string $what, string $token): string => '<code>{{'.e($token).'}}</code> — '.e($what))
                                     ->implode(' · ')
+                                .'<br>בוואטסאפ העיצוב מומר אוטומטית לסימון של וואטסאפ (מודגש, רשימות).'
                             ))
                             ->columnSpanFull(),
                         Forms\Components\Actions::make([
