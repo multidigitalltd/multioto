@@ -17,6 +17,7 @@ use App\Jobs\SendTicketNotificationJob;
 use App\Mail\BroadcastMail;
 use App\Models\Broadcast;
 use App\Models\Customer;
+use App\Models\NotificationLog;
 use App\Models\Plan;
 use App\Models\Site;
 use App\Models\Subscription;
@@ -31,6 +32,7 @@ use App\Services\Support\TicketIntake;
 use App\Services\Waha\WahaClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Bus;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Mail;
 use Livewire\Livewire;
 use Mockery;
@@ -471,6 +473,76 @@ class BroadcastMarketingTest extends TestCase
         $this->assertSame('הדיוור כבר בשליחה', $notification->getTitle());
         Bus::assertNotDispatched(SendBroadcastJob::class);
         $this->assertSame(BroadcastStatus::Sending, $broadcast->fresh()->status);
+    }
+
+    public function test_an_unsubscribe_link_still_works_years_after_the_email_was_sent(): void
+    {
+        $customer = Customer::factory()->create();
+        $url = app(MarketingPreferences::class)->unsubscribeUrl($customer);
+
+        // An advert can sit in an inbox for years; an opt-out that 403s after a
+        // few months is not a working opt-out.
+        $this->travel(3)->years();
+
+        $this->get($url)->assertOk();
+
+        $this->assertTrue($customer->fresh()->hasOptedOutOfMarketing());
+    }
+
+    public function test_the_word_hasser_on_the_portal_is_support_text_not_an_opt_out(): void
+    {
+        $customer = Customer::factory()->create();
+
+        $message = app(TicketIntake::class)->recordInbound(
+            TicketChannel::Portal, MessageChannel::InternalNote, $customer, 'הסר',
+            subject: 'להסיר תוסף מהאתר', externalMessageId: 'portal-1',
+        );
+
+        // Only WhatsApp marketing tells the customer to reply "הסר". On the
+        // portal the same word is an ordinary request that must open a ticket.
+        $this->assertNotNull($message);
+        $this->assertSame(1, Ticket::count());
+        $this->assertFalse($customer->fresh()->hasOptedOutOfMarketing());
+    }
+
+    public function test_a_whatsapp_audience_too_large_to_finish_is_refused_instead_of_half_sent(): void
+    {
+        Http::fake(['*' => Http::response(['id' => 'stub'])]);
+        config(['billing.waha.broadcast_throttle_seconds' => 30]);
+
+        $max = SendBroadcastJob::maxWhatsappRecipients();
+        $this->assertSame(110, $max);
+
+        Customer::factory()->count($max + 1)->create([
+            'status' => CustomerStatus::Active, 'phone' => '0501234567',
+        ]);
+
+        $broadcast = $this->broadcast(['channel' => BroadcastChannel::Whatsapp]);
+
+        $this->send($broadcast);
+
+        // Half-sent is worse than unsent: the row would stay on "בשליחה" and
+        // the only way forward messages the first half a second time.
+        $this->assertSame(BroadcastStatus::Draft, $broadcast->fresh()->status);
+        $this->assertSame(0, $broadcast->fresh()->sent_count);
+        $this->assertSame(0, NotificationLog::count());
+    }
+
+    public function test_a_whatsapp_audience_within_the_limit_is_sent(): void
+    {
+        Http::fake(['*' => Http::response(['id' => 'stub'])]);
+        config(['billing.waha.broadcast_throttle_seconds' => 0]);
+
+        Customer::factory()->count(2)->create([
+            'status' => CustomerStatus::Active, 'phone' => '0501234567',
+        ]);
+
+        $broadcast = $this->broadcast(['channel' => BroadcastChannel::Whatsapp]);
+
+        $this->send($broadcast);
+
+        $this->assertSame(BroadcastStatus::Sent, $broadcast->fresh()->status);
+        $this->assertSame(2, $broadcast->fresh()->sent_count);
     }
 
     /*

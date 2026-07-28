@@ -23,16 +23,18 @@ class MarketingPreferences
     /** The word a customer replies on WhatsApp to stop marketing. */
     public const OPT_OUT_WORDS = ['הסר', 'הסירו', 'הסרה', 'להסיר', 'stop', 'unsubscribe'];
 
-    /** How long an unsubscribe link stays valid — long enough to be fair. */
-    private const LINK_DAYS = 120;
-
+    /**
+     * The opt-out link an advertising message carries.
+     *
+     * Deliberately NOT time-limited. An old advert can sit in an inbox for
+     * years, and the law asks the opt-out route to work — a link that answers
+     * 403 after a few months is not a working opt-out. The signature still
+     * stops the customer id being swapped, and the worst a leaked link can do
+     * is stop marketing to that customer, which they can undo themselves.
+     */
     public function unsubscribeUrl(Customer $customer): string
     {
-        return URL::temporarySignedRoute(
-            'marketing.unsubscribe',
-            now()->addDays(self::LINK_DAYS),
-            ['customer' => $customer->getKey()],
-        );
+        return URL::signedRoute('marketing.unsubscribe', ['customer' => $customer->getKey()]);
     }
 
     /** Does this inbound message read as an opt-out request? */

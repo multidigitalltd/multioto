@@ -98,7 +98,14 @@ class TicketIntake
         // leaves a ticket in the queue, pages the team, and answers the
         // customer with "קיבלנו את פנייתך ואנחנו כבר על זה" — in reply to a
         // request to stop hearing from us.
-        if ($customer !== null && $this->preferences->looksLikeOptOut($body)) {
+        // WhatsApp only: that is the one channel where a marketing message
+        // tells the customer to reply "הסר". On the portal or the support form
+        // the same word is ordinary support text — "הסר" as the body of a
+        // request titled "להסיר תוסף" must open a ticket, not silently
+        // unsubscribe the customer and drop their request on the floor.
+        if ($channel === TicketChannel::Whatsapp
+            && $customer !== null
+            && $this->preferences->looksLikeOptOut($body)) {
             // optOut() is idempotent, so a redelivered message is harmless
             // even though there is no stored message row to dedupe against.
             $this->preferences->optOut($customer, $channel->value);

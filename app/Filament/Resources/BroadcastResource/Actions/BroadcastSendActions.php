@@ -64,6 +64,11 @@ class BroadcastSendActions
         if ($record->channel === BroadcastChannel::Whatsapp) {
             $minutes = (int) ceil($counts['reachable'] * (int) config('billing.waha.broadcast_throttle_seconds') / 60);
             $text .= '<br>בקצב השליחה המושהה של וואטסאפ זה ייקח כ-'.$minutes.' דקות.';
+
+            if ($counts['reachable'] > ($max = SendBroadcastJob::maxWhatsappRecipients())) {
+                $text .= '<br><strong>זה יותר מדי לשליחה אחת ('.$max.' לכל היותר) — השליחה תיחסם. '
+                    .'צמצמו את הקהל או שלחו באימייל.</strong>';
+            }
         }
 
         return new HtmlString($text);
@@ -80,6 +85,17 @@ class BroadcastSendActions
                 ->danger()
                 ->title('לא נשלח')
                 ->body('אין אף לקוח שניתן להשיג בערוץ שנבחר.');
+        }
+
+        // Caught here too, not only in the job, so the operator hears about it
+        // while the segment is still in front of them.
+        if ($record->channel === BroadcastChannel::Whatsapp
+            && $counts['reachable'] > ($max = SendBroadcastJob::maxWhatsappRecipients())) {
+            return Notification::make()
+                ->danger()
+                ->title('קהל היעד גדול מדי לוואטסאפ')
+                ->body("{$counts['reachable']} נמענים, והמקסימום לשליחה אחת הוא {$max} — בגלל ההשהיה המכוונת בין הודעות. "
+                    .'צמצמו את הקהל, פצלו לכמה דיוורים, או שלחו באימייל.');
         }
 
         // A scheduled broadcast can fall due while this confirmation modal sits
