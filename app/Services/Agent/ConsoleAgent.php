@@ -2,8 +2,12 @@
 
 namespace App\Services\Agent;
 
+use App\Enums\BroadcastChannel;
+use App\Enums\BroadcastStatus;
+use App\Enums\CustomerStatus;
 use App\Enums\TicketStatus;
 use App\Jobs\InvestigateSiteJob;
+use App\Models\Broadcast;
 use App\Models\Customer;
 use App\Models\ServiceException;
 use App\Models\Site;
@@ -15,6 +19,8 @@ use App\Services\Automation\ApprovalGate;
 use App\Services\Calendar\HebrewDate;
 use App\Services\Calendar\ShabbatClock;
 use App\Services\Cloudflare\CloudflareClient;
+use App\Services\Support\BroadcastAudience;
+use App\Services\Support\BroadcastComposer;
 use App\Services\Support\ServiceStatus;
 use App\Support\Money;
 use Illuminate\Support\Carbon;
@@ -100,7 +106,7 @@ class ConsoleAgent
         return trim(implode("\n", array_filter([
             'אתה סוכן התפעול של Multi Digital, חברת אחסון ותחזוקת אתרים. אתה עוזר למנהל לבצע פעולות במערכת בשפה חופשית.',
             '',
-            'יש לך גישה מלאה לכל תחומי המערכת (דרך הצעה לאישור): פניות (מענה, סטטוס, עדיפות, שיוך, סגירה), לקוחות (עדכון פרטים), מנויים (מחיר/סטטוס/ביטול), אתרים (הוספה, השעיה, שחזור, בדיקה), גבייה ותשלומים (דרישת תשלום, סימון תשלום בוצע + חשבונית) ומשימות (פתיחה, סימון כבוצעה). מה שאין לו כלי ישיר — הצע כמשימה לאדם.',
+            'יש לך גישה מלאה לכל תחומי המערכת (דרך הצעה לאישור): פניות (מענה, סטטוס, עדיפות, שיוך, סגירה), לקוחות (עדכון פרטים), מנויים (מחיר/סטטוס/ביטול), אתרים (הוספה, השעיה, שחזור, בדיקה), גבייה ותשלומים (דרישת תשלום, סימון תשלום בוצע + חשבונית), דיוור ללקוחות (הכנת טיוטה) ומשימות (פתיחה, סימון כבוצעה). מה שאין לו כלי ישיר — הצע כמשימה לאדם.',
             '',
             $this->scheduleContext(),
             '',
@@ -110,6 +116,7 @@ class ConsoleAgent
             '- אתה לא מבצע דבר בעצמך. כל פעולה מעשית מוצעת דרך כלי propose_* ועוברת אישור מנהל.',
             '- אם יש לך מספיק מידע כדי לפעול — הצע מיד עם הכלי המתאים. אל תשאל "האם לשלוח?" או "האם לבצע?" בטקסט חופשי: עצם ההצעה היא הבקשה לאישור, והמנהל מאשר או דוחה בלחיצה. למשל אם ניסחת תשובה לפנייה — הגש אותה עם propose_reply_ticket, אל תדפיס אותה ותשאל אם לשלוח.',
             '- אפשר לשרשר: קודם קריאה כדי לזהות את היעד (מזהה לקוח/פנייה/אתר), ואז הצעה.',
+            '- כשמבקשים לדוור/להודיע/לעדכן את כל הלקוחות (או קבוצה מהם) — השתמש ב-draft_broadcast. יש לך את הכלי הזה: אל תפתח על כך משימה ואל תאמר שאין לך כלי. הכלי רק מכין טיוטה, שום דבר לא נשלח, והמנהל עורך ושולח בעצמו ממסך הדיוורים.',
             '- אם משהו אין לו כלי ישיר — הצע אותו כמשימה לאדם עם propose_task, כדי שאף בקשה לא תיפול בין הכיסאות.',
             '- כל שאלה למנהל — בין אם חסר מידע (סכום, איזה לקוח מבין כמה) ובין אם אתה צריך אישור על כיוון לפני שתפעל — חייבת לעבור דרך הכלי need_clarification, אף פעם לא כטקסט חופשי בסוף. שאלה בטקסט בלבד לא נרשמת כשאלה, המנהל לא יכול לענות עליה, והשיחה נתקעת. אחרי need_clarification המנהל עונה והשיחה ממשיכה מאותה נקודה.',
             '- סכומים בשקלים. היה תמציתי ומדויק. בסיום כתוב בעברית מה עשית ומה הוצע לאישור.',
@@ -287,6 +294,8 @@ class ConsoleAgent
                 'input_schema' => $obj(['site_id' => $int], [])],
             ['name' => 'investigate_site', 'description' => 'שלח את סוכן האתר לבדוק אתר מחובר (קריאה בלבד; תיקון יוצע לאישור). site_id + goal.',
                 'input_schema' => $obj(['site_id' => $int, 'goal' => $str], ['site_id'])],
+            ['name' => 'draft_broadcast', 'description' => 'הכן טיוטת דיוור ללקוחות (תמיכה ← דיוורים). לא נשלח דבר — נוצרת טיוטה שהמנהל עורך ושולח בעצמו. brief: תיאור בשורה של מה רוצים להגיד, והסוכן ינסח. לחלופין אפשר להעביר subject ו-body מוכנים. is_marketing: true לפרסומת (מבצע/הצעה), false להודעת שירות (תחזוקה, אבטחה, שינוי בשירות) — ברירת מחדל false. audience_status: active (ברירת מחדל) / suspended / churned / all.',
+                'input_schema' => $obj(['brief' => $str, 'subject' => $str, 'body' => $str, 'is_marketing' => ['type' => 'boolean'], 'audience_status' => $str])],
             ['name' => 'propose_task', 'description' => 'הצע פתיחת משימה לאדם — לכל דבר שאין לו כלי ישיר. title + customer_id (אופציונלי).',
                 'input_schema' => $obj(['title' => $str, 'customer_id' => $int], ['title'])],
             ['name' => 'need_clarification', 'description' => 'כשחסר מידע קריטי שאי אפשר לגלות לבד — שאל את המנהל שאלה אחת קצרה וסיים. question.',
@@ -325,6 +334,7 @@ class ConsoleAgent
                 'propose_country_rule' => $this->proposeCountryRule($input),
                 'propose_update_wordpress' => $this->proposeUpdateWordpress($input),
                 'investigate_site' => $this->investigateSite($input),
+                'draft_broadcast' => $this->draftBroadcast($input),
                 'propose_task' => $this->proposeTask($input),
                 'need_clarification' => $this->needClarification($input),
                 default => ['content' => "כלי לא מוכר: {$name}", 'is_error' => true],
@@ -826,6 +836,74 @@ class ConsoleAgent
         );
 
         return ['content' => "סוכן האתר נשלח לבדוק את {$site->domain} — התוצאה תופיע כאן בצ׳אט בסיום, וכל תיקון יוצע לאישור."];
+    }
+
+    /**
+     * Prepare a broadcast DRAFT. Nothing is sent and nobody is messaged: the
+     * row lands in תמיכה ← דיוורים as a draft, and the owner still edits it,
+     * picks the audience and presses "שלח עכשיו" behind a confirmation naming
+     * the exact recipient count.
+     *
+     * That is why this is a direct tool rather than an approval-gate proposal —
+     * approving a draft that reaches nobody would be ceremony, and the real
+     * decision (sending) already has a human in front of it.
+     */
+    private function draftBroadcast(array $input): array
+    {
+        $isMarketing = (bool) ($input['is_marketing'] ?? false);
+
+        $subject = trim((string) ($input['subject'] ?? ''));
+        $body = trim((string) ($input['body'] ?? ''));
+        $brief = trim((string) ($input['brief'] ?? ''));
+
+        // Text the agent wrote itself wins; otherwise the composer writes it
+        // from the brief in the same voice the support replies use.
+        if ($body === '') {
+            if ($brief === '') {
+                return ['content' => 'צריך brief (מה רוצים להגיד) או subject+body מוכנים.', 'is_error' => true];
+            }
+
+            $draft = app(BroadcastComposer::class)->draft($brief, BroadcastChannel::Email, $isMarketing);
+
+            if ($draft === null) {
+                return ['content' => 'לא הצלחתי לנסח את הדיוור. נסו תקציר מפורט יותר.', 'is_error' => true];
+            }
+
+            $subject = $draft['subject'];
+            $body = $draft['body'];
+        }
+
+        if ($subject === '') {
+            $subject = Str::limit($brief !== '' ? $brief : $body, 80, '');
+        }
+
+        $status = (string) ($input['audience_status'] ?? CustomerStatus::Active->value);
+
+        if ($status !== 'all' && CustomerStatus::tryFrom($status) === null) {
+            $status = CustomerStatus::Active->value;
+        }
+
+        $segment = ['status' => $status];
+
+        $broadcast = Broadcast::create([
+            'subject' => $subject,
+            'body' => $body,
+            'channel' => BroadcastChannel::Email,
+            'segment' => $segment,
+            'status' => BroadcastStatus::Draft,
+            'is_marketing' => $isMarketing,
+        ]);
+
+        $counts = app(BroadcastAudience::class)
+            ->summary(BroadcastChannel::Email, $segment, marketing: $isMarketing);
+
+        $kind = $isMarketing ? 'פרסומי' : 'שירות';
+
+        return ['content' => "נוצרה טיוטת דיוור {$kind} #{$broadcast->id} (לא נשלח דבר).\n"
+            ."נושא: {$subject}\n"
+            ."תוכן:\n{$body}\n"
+            ."קהל היעד כרגע: {$counts['reachable']} לקוחות יקבלו אותו במייל.\n"
+            .'לעריכה ולשליחה: תמיכה ← דיוורים.'];
     }
 
     private function proposeTask(array $input): array
