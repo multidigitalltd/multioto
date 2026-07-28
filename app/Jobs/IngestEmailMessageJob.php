@@ -116,7 +116,9 @@ class IngestEmailMessageJob implements ShouldQueue
         // Store any attachments (Postmark sends them base64-encoded inline) and
         // record their metadata on the just-created message. Only on first
         // ingest — recordInbound is idempotent per external id.
-        if ($message->wasRecentlyCreated) {
+        // Null means the message was an opt-out request and never became
+        // support correspondence — there is nothing to attach files to.
+        if ($message?->wasRecentlyCreated) {
             $stored = $this->storeAttachments($attachments, $message->ticket_id, $payload['Attachments'] ?? $payload['attachments'] ?? []);
 
             if ($stored !== []) {

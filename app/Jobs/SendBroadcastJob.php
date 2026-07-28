@@ -4,13 +4,14 @@ namespace App\Jobs;
 
 use App\Enums\BroadcastChannel;
 use App\Enums\BroadcastStatus;
-use App\Enums\CustomerStatus;
 use App\Enums\NotificationType;
 use App\Jobs\Concerns\PausesForShabbat;
 use App\Mail\BroadcastMail;
 use App\Models\Broadcast;
-use App\Models\Customer;
 use App\Models\NotificationLog;
+use App\Models\SystemLog;
+use App\Services\Support\BroadcastAudience;
+use App\Services\Support\BroadcastRenderer;
 use App\Services\Waha\WahaClient;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -28,9 +29,23 @@ class SendBroadcastJob implements ShouldQueue
     use PausesForShabbat;
     use Queueable;
 
+    /** Seconds a single send may take before the worker kills it. */
+    public const TIMEOUT_SECONDS = 3600;
+
+    /**
+     * Seconds reserved inside the timeout for everything that is not a
+     * throttle sleep: the segment queries, the per-recipient sends and the
+     * final status write.
+     */
+    private const OVERHEAD_SECONDS = 300;
+
     public int $tries = 1;
 
-    public $timeout = 3600;
+    public $timeout = self::TIMEOUT_SECONDS;
+
+    private BroadcastAudience $audience;
+
+    private BroadcastRenderer $renderer;
 
     public function __construct(public int $broadcastId) {}
 
@@ -40,41 +55,106 @@ class SendBroadcastJob implements ShouldQueue
         return [$this->broadcastId];
     }
 
-    public function handle(WahaClient $waha): void
+    /**
+     * How many WhatsApp recipients one run can finish before the worker kills
+     * it. The throttle sleeps alone dominate: at the default 30 seconds a
+     * 200-recipient audience needs 100 minutes, so the job would die halfway
+     * through, leaving the broadcast stuck on "בשליחה" with no safe retry —
+     * a retry would message everyone who already received it a second time.
+     */
+    public static function maxWhatsappRecipients(): int
+    {
+        $throttle = max(1, (int) config('billing.waha.broadcast_throttle_seconds'));
+
+        return max(1, intdiv(self::TIMEOUT_SECONDS - self::OVERHEAD_SECONDS, $throttle));
+    }
+
+    public function handle(WahaClient $waha, BroadcastAudience $audience, BroadcastRenderer $renderer): void
     {
         if ($this->rescheduledForShabbat()) {
             return;
         }
 
-        $broadcast = Broadcast::find($this->broadcastId);
+        $this->audience = $audience;
+        $this->renderer = $renderer;
 
-        if (! $broadcast || $broadcast->status === BroadcastStatus::Sent) {
+        // Claim the broadcast atomically. "שלח עכשיו" dispatches directly while
+        // the five-minute scheduler may dispatch the same scheduled row, so two
+        // jobs can race — and a broadcast has no per-recipient dedupe, meaning a
+        // second run would mail every customer twice. Only a row still waiting
+        // to be sent can be claimed; whoever loses the race exits here.
+        $claimed = Broadcast::whereKey($this->broadcastId)
+            ->whereIn('status', [BroadcastStatus::Draft, BroadcastStatus::Scheduled])
+            ->update(['status' => BroadcastStatus::Sending]);
+
+        if ($claimed === 0) {
             return;
         }
 
-        $broadcast->update(['status' => BroadcastStatus::Sending]);
+        $broadcast = Broadcast::find($this->broadcastId);
+
+        if (! $broadcast) {
+            return;
+        }
+
+        // A WhatsApp audience too large to finish inside the timeout must never
+        // START: a half-sent broadcast is worse than an unsent one, because the
+        // row stays on "בשליחה" and the only way forward messages the first
+        // half twice. Hand it back as a draft so the scheduler stops picking it
+        // up and the operator sees why.
+        if ($broadcast->channel === BroadcastChannel::Whatsapp) {
+            $max = self::maxWhatsappRecipients();
+            $count = $this->audience->reachable($broadcast->channel, $broadcast->segment,
+                marketing: (bool) $broadcast->is_marketing)->count();
+
+            if ($count > $max) {
+                $broadcast->update(['status' => BroadcastStatus::Draft, 'scheduled_at' => null]);
+
+                SystemLog::record('error', 'support',
+                    "הדיוור \"{$broadcast->subject}\" לא נשלח: {$count} נמענים בוואטסאפ, "
+                        ."והמקסימום לשליחה אחת הוא {$max} (בגלל ההשהיה בין הודעות). "
+                        .'צמצמו את קהל היעד או פצלו לכמה דיוורים.',
+                    ['broadcast_id' => $broadcast->id]);
+
+                return;
+            }
+        }
 
         $sent = 0;
 
-        $this->segmentQuery($broadcast)
+        $this->audience
+            ->reachable($broadcast->channel, $broadcast->segment, marketing: (bool) $broadcast->is_marketing)
+            // The placeholders need the customer's site and plan; loading them
+            // per row would be an N+1 across the whole customer base.
+            ->with(['sites:id,customer_id,domain', 'subscriptions.plan:id,name'])
             ->chunkById((int) config('billing.broadcasts.email_chunk_size'), function ($customers) use ($broadcast, $waha, &$sent) {
                 foreach ($customers as $customer) {
+                    // reachable() already excluded customers with no address on
+                    // this channel; the guards below only catch whitespace-only
+                    // values, which a NOT NULL / != '' filter still lets through.
                     try {
+                        // Rendered per customer: placeholders resolve against
+                        // this customer, and the opt-out link is theirs alone.
+                        $subject = $this->renderer->subject($broadcast, $customer);
+                        $body = $this->renderer->body($broadcast, $customer);
+
                         if ($broadcast->channel === BroadcastChannel::Email) {
-                            if (! $customer->email) {
+                            if (blank(trim((string) $customer->email))) {
                                 continue;
                             }
-                            Mail::to($customer->email)->queue(new BroadcastMail($broadcast->subject, $broadcast->body));
+                            Mail::to($customer->email)->queue(new BroadcastMail(
+                                $subject, $body, $this->renderer->emailFooter($broadcast, $customer),
+                            ));
                             // Broadcast emails are queued, not sent inline — record as
                             // "queued" so the log doesn't claim delivery that hasn't happened.
-                            NotificationLog::record('email', NotificationType::Broadcast, $customer->email, $broadcast->subject, $broadcast->body, $customer->id, 'queued');
+                            NotificationLog::record('email', NotificationType::Broadcast, $customer->email, $subject, $body, $customer->id, 'queued');
                         } else {
-                            $chatId = $customer->whatsappRecipient();
-                            if (! $chatId) {
+                            $chatId = trim((string) $customer->whatsappRecipient());
+                            if ($chatId === '') {
                                 continue;
                             }
-                            $waha->sendMessage($chatId, $broadcast->body);
-                            NotificationLog::record('whatsapp', NotificationType::Broadcast, $chatId, null, $broadcast->body, $customer->id);
+                            $waha->sendMessage($chatId, $body);
+                            NotificationLog::record('whatsapp', NotificationType::Broadcast, $chatId, null, $body, $customer->id);
                             sleep((int) config('billing.waha.broadcast_throttle_seconds'));
                         }
 
@@ -88,22 +168,5 @@ class SendBroadcastJob implements ShouldQueue
             });
 
         $broadcast->update(['status' => BroadcastStatus::Sent, 'sent_count' => $sent]);
-    }
-
-    /**
-     * Build the recipient query from the stored segment definition.
-     * Supported filters: status, plan_ids, customer_ids.
-     */
-    protected function segmentQuery(Broadcast $broadcast)
-    {
-        $segment = $broadcast->segment ?? [];
-
-        return Customer::query()
-            ->where('status', $segment['status'] ?? CustomerStatus::Active->value)
-            ->when($segment['customer_ids'] ?? null, fn ($q, $ids) => $q->whereKey($ids))
-            ->when($segment['plan_ids'] ?? null, fn ($q, $planIds) => $q->whereHas(
-                'subscriptions', fn ($sq) => $sq->whereIn('plan_id', $planIds),
-            ))
-            ->orderBy('id');
     }
 }

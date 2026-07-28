@@ -149,6 +149,17 @@ class CustomerResource extends Resource
                         CustomerStatus::Suspended => 'warning',
                         CustomerStatus::Churned => 'gray',
                     }),
+                Tables\Columns\IconColumn::make('marketing_opt_out_at')
+                    ->label('הוסר מדיוור')
+                    ->boolean()
+                    ->trueIcon('heroicon-o-no-symbol')
+                    ->trueColor('warning')
+                    ->falseIcon('heroicon-o-envelope')
+                    ->falseColor('gray')
+                    ->tooltip(fn (Customer $record): string => $record->hasOptedOutOfMarketing()
+                        ? 'ביקש להסיר אותו מדיוור פרסומי ב-'.$record->marketing_opt_out_at->format('d/m/Y')
+                        : 'מקבל דיוור פרסומי')
+                    ->toggleable(),
                 Tables\Columns\TextColumn::make('created_at')
                     ->label('נוצר')
                     ->date('d/m/Y')

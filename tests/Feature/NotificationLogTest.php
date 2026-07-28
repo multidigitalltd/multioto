@@ -23,6 +23,8 @@ use App\Models\Subscription;
 use App\Models\User;
 use App\Services\Billing\ManualChargeService;
 use App\Services\Notifications\TemplateEngine;
+use App\Services\Support\BroadcastAudience;
+use App\Services\Support\BroadcastRenderer;
 use App\Services\Waha\WahaClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Bus;
@@ -116,7 +118,7 @@ class NotificationLogTest extends TestCase
             'status' => BroadcastStatus::Scheduled,
         ]);
 
-        (new SendBroadcastJob($broadcast->id))->handle(app(WahaClient::class));
+        (new SendBroadcastJob($broadcast->id))->handle(app(WahaClient::class), app(BroadcastAudience::class), app(BroadcastRenderer::class));
 
         $log = NotificationLog::where('type', NotificationType::Broadcast)
             ->where('customer_id', $customer->id)->sole();

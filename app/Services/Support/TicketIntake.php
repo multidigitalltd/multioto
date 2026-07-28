@@ -25,6 +25,8 @@ use Illuminate\Support\Str;
  */
 class TicketIntake
 {
+    public function __construct(private MarketingPreferences $preferences) {}
+
     /**
      * Match an inbound contact to a customer by any identifier we hold.
      * WhatsApp JID is matched exactly; phone/email fall back to a lookup.
@@ -71,6 +73,9 @@ class TicketIntake
      * When $threadRef is given, the message is appended to the open ticket that
      * carries that reference (a continuing conversation); otherwise a fresh
      * ticket is opened. Redelivered messages are deduped on $externalMessageId.
+     *
+     * Returns null when the message was an opt-out request and therefore never
+     * became support correspondence at all.
      */
     public function recordInbound(
         TicketChannel $channel,
@@ -86,7 +91,28 @@ class TicketIntake
         ?int $threadTicketId = null,
         ?string $bodyHtml = null,
         array $terminalStatuses = [TicketStatus::Closed],
-    ): TicketMessage {
+    ): ?TicketMessage {
+        // A known customer whose whole message is "הסר" is exercising the
+        // opt-out the law requires us to offer — not opening a support case.
+        // This runs BEFORE any ticket exists: otherwise every unsubscribe
+        // leaves a ticket in the queue, pages the team, and answers the
+        // customer with "קיבלנו את פנייתך ואנחנו כבר על זה" — in reply to a
+        // request to stop hearing from us.
+        // WhatsApp only: that is the one channel where a marketing message
+        // tells the customer to reply "הסר". On the portal or the support form
+        // the same word is ordinary support text — "הסר" as the body of a
+        // request titled "להסיר תוסף" must open a ticket, not silently
+        // unsubscribe the customer and drop their request on the floor.
+        if ($channel === TicketChannel::Whatsapp
+            && $customer !== null
+            && $this->preferences->looksLikeOptOut($body)) {
+            // optOut() is idempotent, so a redelivered message is harmless
+            // even though there is no stored message row to dedupe against.
+            $this->preferences->optOut($customer, $channel->value);
+
+            return null;
+        }
+
         $ticket = $this->findOrCreateTicket($channel, $customer, $threadRef, $subject, $body, $contactName, $contactHandle, $threadTicketId, $terminalStatuses);
 
         $message = $ticket->messages()->firstOrCreate(
@@ -151,8 +177,8 @@ class TicketIntake
                 && $ticket->customer_id !== null
                 && $customer->id === $ticket->customer_id;
 
-            if ($senderIsTheCustomer && filled($body = trim(strip_tags((string) $message->body)))) {
-                PlanContentChangeJob::dispatch($ticket->id, $body);
+            if ($senderIsTheCustomer && filled($text = trim(strip_tags((string) $message->body)))) {
+                PlanContentChangeJob::dispatch($ticket->id, $text);
             }
         }
 

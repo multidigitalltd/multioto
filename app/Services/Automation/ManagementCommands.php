@@ -141,6 +141,12 @@ class ManagementCommands
 
         $who = $customer?->name ?? 'לקוח לא מזוהה';
 
+        // The team opening a ticket by command is never an opt-out request, so
+        // this is defensive only — never report a ticket number we don't have.
+        if ($message === null) {
+            return "לא נפתחה פנייה עבור {$who}.";
+        }
+
         return "נפתחה פנייה #{$message->ticket_id} עבור {$who}.";
     }
 
