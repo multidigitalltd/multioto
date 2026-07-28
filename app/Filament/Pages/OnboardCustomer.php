@@ -35,10 +35,14 @@ use Illuminate\Support\HtmlString;
 /**
  * לקוח חדש — אשף אחד שמקים לקוח + אתר + מנוי במסך אחד, ובסיום שולח ללקוח
  * קישור מאובטח להזנת כרטיס אשראי. מחליף מילוי של שלושה מסכים נפרדים.
+ * האתר והמנוי אופציונליים: אפשר לפתוח לקוח בלבד ולהוסיף להם מנוי בהמשך.
  *
- * A single onboarding wizard: creates the Customer, Site and Subscription in
- * one transaction, then (optionally) queues a card-capture invite. Everything
- * heavy/external happens in the queued job, not in this request.
+ * A single onboarding wizard: creates the Customer and, when wanted, the Site
+ * and Subscription with it — in one transaction — then (optionally) queues a
+ * card-capture invite. The subscription is optional on purpose: a one-off job
+ * or a prospect is a real customer long before there is anything to charge, and
+ * a placeholder subscription would start a billing cycle nobody agreed to.
+ * Everything heavy/external happens in the queued job, not in this request.
  */
 class OnboardCustomer extends Page implements HasForms
 {
@@ -62,13 +66,20 @@ class OnboardCustomer extends Page implements HasForms
 
     public function mount(): void
     {
-        $this->form->fill([
+        $this->form->fill($this->defaults());
+    }
+
+    /** The state a blank wizard starts from — and returns to after a save. */
+    private function defaults(): array
+    {
+        return [
             'business_type' => BusinessType::LicensedDealer->value,
             'vat_exempt' => false,
             'monitor_enabled' => true,
+            'skip_subscription' => false,
             'send_card_link' => true,
             'first_charge_at' => now()->format('Y-m-d'),
-        ]);
+        ];
     }
 
     /**
@@ -131,13 +142,30 @@ class OnboardCustomer extends Page implements HasForms
                                 ))->required(),
                             Toggle::make('vat_exempt')->label('פטור ממע״מ')
                                 ->helperText('חשבוניות יונפקו ללא מע״מ'),
+                            // Asked here, on the first step, because it decides
+                            // what the rest of the wizard even asks for: the
+                            // domain stops being mandatory and the billing step
+                            // disappears. Asking it last would mean failing the
+                            // site step before the answer could be given.
+                            Toggle::make('skip_subscription')->label('ללא מנוי כרגע')
+                                ->helperText('לקוח חד-פעמי, ליד, או הסדר שעדיין לא סוכם — הלקוח ייפתח בלי חיוב תקופתי, ואפשר להוסיף לו מנוי בכל שלב מכרטיס הלקוח.')
+                                ->live()
+                                ->columnSpanFull(),
                         ])->columns(2),
 
                     Step::make('האתר')
                         ->icon('heroicon-o-globe-alt')
                         ->description('הדומיין והניטור')
                         ->schema([
-                            TextInput::make('domain')->label('דומיין')->required()
+                            // Required only when a subscription is being opened —
+                            // a customer without one may not have a site with us
+                            // at all, and forcing a domain would block the whole
+                            // point of opening them.
+                            TextInput::make('domain')->label('דומיין')
+                                ->required(fn (Get $get): bool => ! $get('skip_subscription'))
+                                ->helperText(fn (Get $get): ?string => $get('skip_subscription')
+                                    ? 'אופציונלי — אפשר להשאיר ריק ולהוסיף אתר בהמשך.'
+                                    : null)
                                 ->placeholder('example.co.il')->maxLength(255),
                             TextInput::make('monitor_url')->label('כתובת לניטור')->url()
                                 ->placeholder('https://example.co.il')
@@ -148,6 +176,10 @@ class OnboardCustomer extends Page implements HasForms
                     Step::make('המנוי')
                         ->icon('heroicon-o-credit-card')
                         ->description('התוכנית והחיוב')
+                        // The whole step goes away when there is no subscription
+                        // to describe — a step of greyed-out fields would only
+                        // invite the question of what to put in them.
+                        ->visible(fn (Get $get): bool => ! $get('skip_subscription'))
                         ->schema([
                             Select::make('plan_id')->label('תוכנית קבועה')
                                 ->options(Plan::where('active', true)->pluck('name', 'id'))
@@ -220,7 +252,9 @@ class OnboardCustomer extends Page implements HasForms
     {
         $data = $this->form->getState();
 
-        $subscription = DB::transaction(function () use ($data): Subscription {
+        $skipSubscription = (bool) ($data['skip_subscription'] ?? false);
+
+        $subscription = DB::transaction(function () use ($data, $skipSubscription): ?Subscription {
             $customer = Customer::create([
                 'name' => $data['name'],
                 'phone' => $data['phone'],
@@ -231,13 +265,21 @@ class OnboardCustomer extends Page implements HasForms
                 'status' => CustomerStatus::Active,
             ]);
 
-            $site = Site::create([
-                'customer_id' => $customer->id,
-                'domain' => $data['domain'],
-                'monitor_url' => $data['monitor_url'] ?: 'https://'.$data['domain'],
-                'monitor_enabled' => (bool) ($data['monitor_enabled'] ?? true),
-                'status' => SiteStatus::Active,
-            ]);
+            // A customer opened without a subscription may have no site with us
+            // yet either — both hang off the customer, not the other way round.
+            $site = filled($data['domain'] ?? null)
+                ? Site::create([
+                    'customer_id' => $customer->id,
+                    'domain' => $data['domain'],
+                    'monitor_url' => $data['monitor_url'] ?: 'https://'.$data['domain'],
+                    'monitor_enabled' => (bool) ($data['monitor_enabled'] ?? true),
+                    'status' => SiteStatus::Active,
+                ])
+                : null;
+
+            if ($skipSubscription) {
+                return null;
+            }
 
             $freeForm = blank($data['plan_id'] ?? null);
 
@@ -249,7 +291,7 @@ class OnboardCustomer extends Page implements HasForms
                 'name' => $freeForm ? ($data['custom_name'] ?? null) : null,
                 'billing_interval' => $freeForm ? ($data['billing_interval'] ?? null) : null,
                 'vat_applies' => $freeForm ? (bool) ($data['vat_applies'] ?? true) : null,
-                'site_id' => $site->id,
+                'site_id' => $site?->id,
                 // No token yet — the customer enters their card via the link.
                 // Trialing keeps it out of the charge run until a card exists.
                 'status' => SubscriptionStatus::Trialing,
@@ -261,24 +303,22 @@ class OnboardCustomer extends Page implements HasForms
             ]);
         });
 
-        if ($data['send_card_link'] ?? false) {
+        $sendCardLink = $subscription !== null && ($data['send_card_link'] ?? false);
+
+        if ($sendCardLink) {
             SendCardCaptureLinkJob::dispatch($subscription->id);
         }
 
         Notification::make()
             ->title('הלקוח הוקם בהצלחה')
-            ->body(($data['send_card_link'] ?? false)
-                ? 'נשלח ללקוח קישור להזנת כרטיס אשראי. המנוי יופעל אוטומטית לאחר שהכרטיס יוזן.'
-                : 'המנוי נוצר. יש להזין כרטיס אשראי כדי להתחיל בחיוב.')
+            ->body(match (true) {
+                $subscription === null => 'הלקוח נפתח בלי מנוי. אפשר להוסיף לו מנוי בכל שלב מכרטיס הלקוח.',
+                $sendCardLink => 'נשלח ללקוח קישור להזנת כרטיס אשראי. המנוי יופעל אוטומטית לאחר שהכרטיס יוזן.',
+                default => 'המנוי נוצר. יש להזין כרטיס אשראי כדי להתחיל בחיוב.',
+            })
             ->success()
             ->send();
 
-        $this->form->fill([
-            'business_type' => BusinessType::LicensedDealer->value,
-            'vat_exempt' => false,
-            'monitor_enabled' => true,
-            'send_card_link' => true,
-            'first_charge_at' => now()->format('Y-m-d'),
-        ]);
+        $this->form->fill($this->defaults());
     }
 }
