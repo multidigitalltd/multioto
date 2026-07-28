@@ -406,6 +406,53 @@ class EmailDeliveryTrackingTest extends TestCase
         $this->assertNull($log->fresh()->opened_at);
     }
 
+    public function test_a_bounce_on_a_message_we_never_tagged_still_retires_the_address(): void
+    {
+        $customer = Customer::factory()->create([
+            'status' => CustomerStatus::Active, 'email' => 'dani@b.co.il',
+        ]);
+
+        // Only broadcasts carry our tracking header, so a dunning notice or a
+        // ticket reply bounces with nothing of ours to write to. The address is
+        // dead all the same, and leaving it in the audience is what wrecks the
+        // sender score for everyone else.
+        $this->event([
+            'RecordType' => 'Bounce', 'MessageID' => 'pm-untagged',
+            'Email' => 'dani@b.co.il', 'Type' => 'HardBounce', 'Inactive' => true,
+            'Description' => 'The address does not exist',
+        ])->assertOk();
+
+        $this->assertTrue($customer->fresh()->emailHasBounced());
+    }
+
+    public function test_a_soft_bounce_on_an_untagged_message_changes_nothing(): void
+    {
+        $customer = Customer::factory()->create([
+            'status' => CustomerStatus::Active, 'email' => 'dani@b.co.il',
+        ]);
+
+        $this->event([
+            'RecordType' => 'Bounce', 'MessageID' => 'pm-untagged',
+            'Email' => 'dani@b.co.il', 'Type' => 'SoftBounce', 'Description' => 'Mailbox full',
+        ])->assertOk();
+
+        $this->assertFalse($customer->fresh()->emailHasBounced());
+    }
+
+    public function test_a_spam_report_on_an_untagged_message_still_opts_the_customer_out(): void
+    {
+        $customer = Customer::factory()->create([
+            'status' => CustomerStatus::Active, 'email' => 'dani@b.co.il',
+        ]);
+
+        $this->event([
+            'RecordType' => 'SpamComplaint', 'MessageID' => 'pm-untagged',
+            'Email' => 'dani@b.co.il',
+        ])->assertOk();
+
+        $this->assertTrue($customer->fresh()->hasOptedOutOfMarketing());
+    }
+
     public function test_an_event_without_a_message_id_falls_back_to_the_recent_recipient(): void
     {
         $log = $this->log(['provider_message_id' => null]);

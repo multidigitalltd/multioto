@@ -2,6 +2,7 @@
 
 namespace App\Services\Notifications;
 
+use App\Models\Customer;
 use App\Models\NotificationLog;
 use App\Models\SystemLog;
 use Illuminate\Support\Carbon;
@@ -37,16 +38,17 @@ class DeliveryEvents
             return false;
         }
 
+        $at = $this->timestamp($payload);
         $log = $this->findLog($payload);
 
         if ($log === null) {
-            // Not ours, or older than the log retention window. Silent by
-            // design — a provider replays events, and an unmatched one is
-            // noise, not a fault.
-            return false;
+            // No row to update: most of our mail is transactional and carries no
+            // provider id, and a provider also replays old events. There is still
+            // one thing worth acting on — a permanent failure or a spam report is
+            // a fact about the ADDRESS, not about one message, and ignoring it
+            // would leave a dead address in every future send.
+            return $this->applyToAddress($type, $payload, $at);
         }
-
-        $at = $this->timestamp($payload);
 
         match ($type) {
             'Delivery' => $this->delivered($log, $at),
@@ -122,37 +124,83 @@ class DeliveryEvents
 
         // Only a permanent failure retires the address. A full mailbox or a
         // transient server error is not a reason to stop writing to a customer.
-        if ((bool) ($payload['Inactive'] ?? false) || $this->isHardBounce($payload)) {
-            $this->retireAddress($log, $reason);
+        if ($this->isPermanent($payload)) {
+            $this->retireAddress($log->customer, (string) $log->recipient, $reason);
         }
     }
 
     private function complained(NotificationLog $log, Carbon $at): void
     {
         $this->earliest($log, 'complained_at', $at);
+        $this->optOutOfMarketing($log->customer, $at);
+    }
 
-        // Someone pressing "spam" is the clearest opt-out there is; honouring it
-        // silently is both correct and the only way to protect our sending
-        // reputation for everyone else.
-        $customer = $log->customer;
+    /**
+     * What an event can still tell us when it matches no message of ours.
+     *
+     * Only broadcasts carry our tracking header, so a delivery or open for a
+     * dunning notice or a ticket reply lands here with nothing to write to. A
+     * bounce or a spam report is different in kind: it describes the ADDRESS,
+     * and acting on it is what keeps a dead one out of the next broadcast and
+     * protects the sender score every other customer's mail depends on.
+     *
+     * @param  array<string, mixed>  $payload
+     * @return bool whether anything was acted on
+     */
+    private function applyToAddress(string $type, array $payload, Carbon $at): bool
+    {
+        $address = trim((string) ($payload['Recipient'] ?? $payload['Email'] ?? ''));
 
-        if ($customer !== null && ! $customer->hasOptedOutOfMarketing()) {
-            $customer->update([
-                'marketing_opt_out_at' => $at,
-                'marketing_opt_out_channel' => 'סימון כספאם',
-            ]);
-
-            SystemLog::record('warning', 'support',
-                "הלקוח {$customer->name} סימן הודעה שלנו כספאם והוסר אוטומטית מדיוור פרסומי.",
-                ['customer_id' => $customer->id]);
+        if ($address === '' || ! in_array($type, ['Bounce', 'SpamComplaint'], true)) {
+            return false;
         }
+
+        $customer = Customer::whereRaw('LOWER(email) = ?', [$this->normalize($address)])->first();
+
+        if ($customer === null) {
+            return false;
+        }
+
+        if ($type === 'SpamComplaint') {
+            $this->optOutOfMarketing($customer, $at);
+
+            return true;
+        }
+
+        if (! $this->isPermanent($payload)) {
+            return false;
+        }
+
+        $this->retireAddress($customer, $address,
+            trim((string) ($payload['Description'] ?? $payload['Details'] ?? $payload['Type'] ?? '')));
+
+        return true;
+    }
+
+    /**
+     * Pressing "spam" is the clearest opt-out there is; honouring it silently is
+     * both correct and the only way to protect our sending reputation for
+     * everyone else.
+     */
+    private function optOutOfMarketing(?Customer $customer, Carbon $at): void
+    {
+        if ($customer === null || $customer->hasOptedOutOfMarketing()) {
+            return;
+        }
+
+        $customer->update([
+            'marketing_opt_out_at' => $at,
+            'marketing_opt_out_channel' => 'סימון כספאם',
+        ]);
+
+        SystemLog::record('warning', 'support',
+            "הלקוח {$customer->name} סימן הודעה שלנו כספאם והוסר אוטומטית מדיוור פרסומי.",
+            ['customer_id' => $customer->id]);
     }
 
     /** Stop mailing an address the provider says is permanently unreachable. */
-    private function retireAddress(NotificationLog $log, string $reason): void
+    private function retireAddress(?Customer $customer, string $bouncedAddress, string $reason): void
     {
-        $customer = $log->customer;
-
         if ($customer === null || $customer->email_bounced_at !== null) {
             return;
         }
@@ -160,7 +208,7 @@ class DeliveryEvents
         // The bounce belongs to the address it was sent to. Correcting a typo
         // is exactly what someone does while the old address is still bouncing,
         // and a late webhook for it must not suppress the replacement.
-        if ($this->normalize($customer->email) !== $this->normalize($log->recipient)) {
+        if ($this->normalize($customer->email) !== $this->normalize($bouncedAddress)) {
             return;
         }
 
@@ -172,6 +220,12 @@ class DeliveryEvents
         SystemLog::record('warning', 'support',
             "כתובת המייל של {$customer->name} ({$customer->email}) חזרה כלא קיימת ולא תקבל דיוור עד לתיקון.",
             ['customer_id' => $customer->id]);
+    }
+
+    /** @param array<string, mixed> $payload */
+    private function isPermanent(array $payload): bool
+    {
+        return (bool) ($payload['Inactive'] ?? false) || $this->isHardBounce($payload);
     }
 
     /** Email addresses compare case-insensitively and ignore stray whitespace. */

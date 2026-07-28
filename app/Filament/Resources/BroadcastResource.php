@@ -247,7 +247,20 @@ class BroadcastResource extends Resource
         ], marketing: (bool) $get('is_marketing'));
 
         if ($counts['reachable'] === 0) {
-            return new HtmlString('<span class="text-danger-600 font-semibold">אף לקוח לא יקבל את הדיוור הזה.</span>');
+            $line = '<span class="text-danger-600 font-semibold">אף לקוח לא יקבל את הדיוור הזה.</span>';
+
+            // The reason matters most exactly here: "nobody will get this" with
+            // no explanation sends the operator hunting for a missing address
+            // that is in fact filled in and dead.
+            if (($counts['bounced'] ?? 0) > 0) {
+                $line .= '<br><span class="text-sm text-gray-500">'.$counts['bounced'].' מהם עם כתובת שחזרה כלא קיימת — יש לעדכן כתובת אחרת.</span>';
+            }
+
+            if ($counts['opted_out'] > 0) {
+                $line .= '<br><span class="text-sm text-gray-500">'.$counts['opted_out'].' מהם ביקשו להסיר אותם מדיוור פרסומי.</span>';
+            }
+
+            return new HtmlString($line);
         }
 
         $missing = $channel === BroadcastChannel::Email ? 'בלי כתובת אימייל' : 'בלי מספר וואטסאפ';
