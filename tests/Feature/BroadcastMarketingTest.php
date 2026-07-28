@@ -34,6 +34,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\URL;
 use Livewire\Livewire;
 use Mockery;
 use Tests\TestCase;
@@ -543,6 +544,25 @@ class BroadcastMarketingTest extends TestCase
 
         $this->assertSame(BroadcastStatus::Sent, $broadcast->fresh()->status);
         $this->assertSame(2, $broadcast->fresh()->sent_count);
+    }
+
+    public function test_a_crawler_following_the_undo_link_cannot_re_enrol_the_customer(): void
+    {
+        $customer = Customer::factory()->create(['marketing_opt_out_at' => now()]);
+
+        $url = URL::temporarySignedRoute(
+            'marketing.resubscribe', now()->addDays(30), ['customer' => $customer->id],
+        );
+
+        // A link previewer or mail-security scanner GETs every URL on the page.
+        $this->get($url)->assertMethodNotAllowed();
+
+        $this->assertTrue($customer->fresh()->hasOptedOutOfMarketing());
+
+        // The customer pressing the button really does restore consent.
+        $this->post($url)->assertRedirect(route('marketing.resubscribed'));
+
+        $this->assertFalse($customer->fresh()->hasOptedOutOfMarketing());
     }
 
     /*

@@ -28,7 +28,10 @@ class MarketingPreferencesController extends Controller
 
         return view('marketing.unsubscribed', [
             'customer' => $customer,
-            // Same expiry as the link that got here, so the undo cannot outlive it.
+            // The undo is posted, so this signed URL is the form's action.
+            // Time-limited on purpose: unlike the opt-out, an undo does not
+            // need to work years later, and a short window limits what a
+            // forwarded confirmation page can do.
             'resubscribeUrl' => URL::temporarySignedRoute(
                 'marketing.resubscribe', now()->addDays(30), ['customer' => $customer->getKey()],
             ),

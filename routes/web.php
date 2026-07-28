@@ -94,7 +94,12 @@ Route::post('/support/rate/{ticket}', [CsatController::class, 'store'])
 Route::get('/marketing/unsubscribe/{customer}', [MarketingPreferencesController::class, 'unsubscribe'])
     ->middleware(['signed', 'throttle:30,1'])
     ->name('marketing.unsubscribe');
-Route::get('/marketing/resubscribe/{customer}', [MarketingPreferencesController::class, 'resubscribe'])
+// Restoring consent is a POST behind CSRF, unlike the unsubscribe above: a
+// link previewer or mail-security crawler that follows every URL in the page
+// would otherwise silently re-enrol a customer who just opted out. Unsubscribe
+// stays a plain GET on purpose — a crawler following it errs on the safe side,
+// and the law wants that link to work on a single click.
+Route::post('/marketing/resubscribe/{customer}', [MarketingPreferencesController::class, 'resubscribe'])
     ->middleware(['signed', 'throttle:30,1'])
     ->name('marketing.resubscribe');
 Route::get('/marketing/resubscribed', [MarketingPreferencesController::class, 'resubscribed'])

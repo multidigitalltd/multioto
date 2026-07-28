@@ -33,6 +33,7 @@
         .undo {
             display: inline-block; margin-top: .35rem; padding: .7rem 1.5rem; border-radius: 10px;
             background: var(--accent); color: var(--accent-fg); text-decoration: none; font-weight: 600;
+            border: 0; font: inherit; font-weight: 600; cursor: pointer;
         }
         .undo:hover { filter: brightness(1.08); }
         .undo:focus-visible { outline: 3px solid var(--fg); outline-offset: 3px; }
@@ -56,7 +57,12 @@
         </div>
 
         <p>הוסרת בטעות?</p>
-        <a class="undo" href="{{ $resubscribeUrl }}">החזירו אותי לרשימה</a>
+        {{-- A form, not a link: a crawler or link previewer that follows every
+             URL on this page must not quietly put the customer back on the list. --}}
+        <form method="POST" action="{{ $resubscribeUrl }}">
+            @csrf
+            <button type="submit" class="undo">החזירו אותי לרשימה</button>
+        </form>
 
         @if ($support = config('billing.email.support_address'))
             <p style="margin-top:1.5rem">לכל שאלה: <a href="mailto:{{ $support }}">{{ $support }}</a></p>
