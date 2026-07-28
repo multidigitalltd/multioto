@@ -7,10 +7,12 @@ use App\Jobs\ChargeSubscriptionJob;
 use App\Jobs\CheckDomainExpiryJob;
 use App\Jobs\CheckSiteContentJob;
 use App\Jobs\CheckSiteDnsJob;
+use App\Jobs\CheckSiteLayoutJob;
 use App\Jobs\CheckSitePluginChangesJob;
 use App\Jobs\CheckSiteReputationJob;
 use App\Jobs\CheckSlaBreachesJob;
 use App\Jobs\CheckSslExpiryJob;
+use App\Jobs\CheckStoreSalesJob;
 use App\Jobs\FollowUpPendingTicketsJob;
 use App\Jobs\MonitorSiteJob;
 use App\Jobs\ReconcileChargeJob;
@@ -108,6 +110,34 @@ Schedule::call(function () {
         ->pluck('id')
         ->each(fn (int $id) => CheckSitePluginChangesJob::dispatch($id));
 })->dailyAt('07:30')->name('monitoring:plugin-changes')->onOneServer();
+
+// Silent-failure watch for stores: a shop that answers 200 all day but stopped
+// taking orders (broken checkout) or stopped being paid (broken gateway).
+// Morning run, so a night-time breakage is caught before the business day.
+Schedule::call(function () {
+    if (! config('billing.monitoring.store_pulse.enabled', true)) {
+        return;
+    }
+
+    Site::query()
+        ->where('mcp_enabled', true)
+        ->whereNotNull('mcp_endpoint')
+        ->pluck('id')
+        ->each(fn (int $id) => CheckStoreSalesJob::dispatch($id));
+})->dailyAt('08:10')->name('monitoring:store-pulse')->onOneServer();
+
+// Layout regression watch: the homepage still answers 200, but the header/menu
+// vanished or most images stopped rendering after an update.
+Schedule::call(function () {
+    if (! config('security.layout.enabled', true)) {
+        return;
+    }
+
+    Site::query()
+        ->where('monitor_enabled', true)
+        ->pluck('id')
+        ->each(fn (int $id) => CheckSiteLayoutJob::dispatch($id));
+})->dailyAt('08:25')->name('monitoring:layout-watch')->onOneServer();
 
 // Weekly proactive maintenance: propose (or auto-run under a standing
 // approval) plugin updates for every connected site, with a homepage health

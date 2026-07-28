@@ -464,6 +464,85 @@
         </div>
     </div>
 
+    {{-- Silent-failure watches: the two ways a site fails while answering 200.
+         Always rendered, so an operator can tell "not yet checked" apart from
+         "checked and fine". --}}
+    <div class="grid gap-4 md:grid-cols-2">
+        @php
+            $pulse = $site->store_pulse ?? null;
+            $pulseStatus = data_get($pulse, 'status');
+        @endphp
+        <div class="rounded-xl bg-white p-4 shadow-sm dark:bg-gray-800">
+            <div class="mb-3 flex items-center justify-between">
+                <h3 class="text-sm font-semibold">דופק מכירות (חנות)</h3>
+                <span class="text-xs text-gray-500 dark:text-gray-400">
+                    @if (data_get($pulse, 'checked_at'))
+                        נבדק: {{ \Illuminate\Support\Carbon::parse(data_get($pulse, 'checked_at'))->format('d/m/Y H:i') }}
+                    @endif
+                </span>
+            </div>
+
+            @if ($pulseStatus === 'store_silent' || $pulseStatus === 'store_payments')
+                <div class="flex items-start gap-2 text-sm text-danger-700 dark:text-danger-400" role="status">
+                    <x-heroicon-o-exclamation-triangle class="h-5 w-5 shrink-0" />
+                    <span>
+                        @if ($pulseStatus === 'store_silent')
+                            לא נוצרה אף הזמנה ב-24 השעות האחרונות (ממוצע יומי: {{ data_get($pulse, 'baseline_orders') }}). ייתכן שתהליך הרכישה שבור.
+                        @else
+                            נוצרו {{ data_get($pulse, 'orders_24h') }} הזמנות ואף אחת לא שולמה (ממוצע תשלומים יומי: {{ data_get($pulse, 'baseline_paid') }}). חשד לתקלת סליקה.
+                        @endif
+                    </span>
+                </div>
+            @elseif ($pulseStatus === 'ok')
+                <p class="text-sm text-success-700 dark:text-success-400">
+                    ✓ תקין — {{ data_get($pulse, 'orders_24h') }} הזמנות ב-24ש, מתוכן {{ data_get($pulse, 'paid_24h') }} שולמו (ממוצע יומי: {{ data_get($pulse, 'baseline_orders') }}).
+                </p>
+            @else
+                <p class="text-sm text-gray-500 dark:text-gray-400">
+                    רלוונטי לחנויות ווקומרס מחוברות. הבדיקה רצה כל בוקר ומזהה חנות שהפסיקה לקבל הזמנות למרות שהאתר עולה תקין.
+                </p>
+            @endif
+        </div>
+
+        @php
+            $layout = $site->layout_snapshot ?? null;
+            $layoutStatus = data_get($layout, 'status');
+        @endphp
+        <div class="rounded-xl bg-white p-4 shadow-sm dark:bg-gray-800">
+            <div class="mb-3 flex items-center justify-between">
+                <h3 class="text-sm font-semibold">מבנה דף הבית</h3>
+                <span class="text-xs text-gray-500 dark:text-gray-400">
+                    @if (data_get($layout, 'checked_at'))
+                        נבדק: {{ \Illuminate\Support\Carbon::parse(data_get($layout, 'checked_at'))->format('d/m/Y H:i') }}
+                    @endif
+                </span>
+            </div>
+
+            @if ($layoutStatus === 'broken')
+                <div class="flex items-start gap-2 text-sm text-danger-700 dark:text-danger-400" role="status">
+                    <x-heroicon-o-exclamation-triangle class="h-5 w-5 shrink-0" />
+                    <div>
+                        <p>העמוד עולה תקין אך המבנה שלו נשבר:</p>
+                        <ul class="mt-1 list-inside list-disc">
+                            @foreach ((array) data_get($layout, 'reasons', []) as $reason)
+                                <li>{{ $reason }}</li>
+                            @endforeach
+                        </ul>
+                        <p class="mt-1 text-xs">אם התצוגה תקינה — לחצו "אשר את מבנה העמוד" בכפתורי הפעולה למעלה.</p>
+                    </div>
+                </div>
+            @elseif ($layoutStatus === 'ok')
+                <p class="text-sm text-success-700 dark:text-success-400">
+                    ✓ המבנה תקין — {{ data_get($layout, 'fingerprint.images') }} תמונות, {{ data_get($layout, 'fingerprint.links') }} קישורים, הכותרת והתפריט במקומם.
+                </p>
+            @else
+                <p class="text-sm text-gray-500 dark:text-gray-400">
+                    הבדיקה היומית משווה את מבנה דף הבית (תמונות, קישורים, כותרת, תפריט) לצילום האחרון — ותופסת עדכון ששבר את התצוגה למרות שהאתר עונה תקין.
+                </p>
+            @endif
+        </div>
+    </div>
+
     {{-- Durable findings log: what we detected on this site and when. This is
          the record shown to the customer ("ב-27/07 זיהינו מנהל חדש"). --}}
     <div class="rounded-xl bg-white p-4 shadow-sm dark:bg-gray-800">

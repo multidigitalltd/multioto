@@ -370,6 +370,18 @@ return [
         // Responses slower than this (ms) are flagged as "degraded" (not down).
         'slow_response_ms' => env('MONITOR_SLOW_RESPONSE_MS', 4000),
 
+        // Silent-failure watch for stores: a shop that answers 200 but stopped
+        // taking (or charging for) orders. Judged against the store's own
+        // median, so a quiet shop is never falsely accused.
+        'store_pulse' => [
+            'enabled' => env('MONITOR_STORE_PULSE_ENABLED', true),
+            // The store must normally do at least this many orders a day before
+            // a silent day counts as a failure.
+            'min_baseline_orders' => env('MONITOR_STORE_MIN_ORDERS', 2),
+            // Re-alert on the same failure at most once per this many hours.
+            'cooldown_hours' => env('MONITOR_STORE_COOLDOWN_HOURS', 24),
+        ],
+
         // When a site recovers after an APPROVED automation fix ran during the
         // incident, proactively tell the customer we detected and fixed the
         // problem ("זיהינו תקלה ותיקנו"). Template: incident.auto_resolved —

@@ -26,6 +26,9 @@ class SiteEvent extends Model
         'defacement' => ['🚨', 'חשד להשחתת אתר'],
         'vulnerability' => ['⚠️', 'פגיעות אבטחה'],
         'dns' => ['🌐', 'שינוי DNS'],
+        'store_silent' => ['🛒', 'החנות הפסיקה לקבל הזמנות'],
+        'store_payments' => ['💳', 'הזמנות שלא שולמו — חשד לתקלת סליקה'],
+        'layout_broken' => ['🧱', 'מבנה העמוד נשבר'],
     ];
 
     protected $fillable = ['site_id', 'type', 'severity', 'title', 'detail', 'detected_at'];

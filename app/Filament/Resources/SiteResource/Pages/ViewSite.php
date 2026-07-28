@@ -6,6 +6,7 @@ use App\Filament\Resources\SiteResource;
 use App\Filament\Support\SiteActions;
 use App\Jobs\CheckSiteContentJob;
 use App\Jobs\CheckSiteDnsJob;
+use App\Jobs\CheckSiteLayoutJob;
 use App\Jobs\CheckSiteReputationJob;
 use App\Jobs\DetectSiteTypeJob;
 use App\Jobs\InvestigateSiteJob;
@@ -225,6 +226,26 @@ class ViewSite extends ViewRecord
 
                     Notification::make()->title('התוכן הנוכחי אושר')
                         ->body('הבסיס יתעדכן ברקע והחשד יימחק תוך רגע.')
+                        ->success()->send();
+                }),
+
+            // Shown ONLY while the layout looks broken: "the new design is
+            // intentional" — re-baselines on the current structure.
+            Actions\Action::make('acceptLayout')
+                ->label('אשר את מבנה העמוד')
+                ->icon('heroicon-o-check-badge')
+                ->color('danger')
+                ->visible(fn (): bool => data_get($this->record->layout_snapshot, 'status') === 'broken'
+                    && (auth()->user()?->isAdmin() ?? false))
+                ->requiresConfirmation()
+                ->modalHeading('אישור מבנה העמוד הנוכחי')
+                ->modalDescription('מבנה דף הבית הנוכחי יאושר כבסיס החדש (למשל אחרי עיצוב מחודש), וההתראה תיעלם. ודאו קודם שהעמוד באמת נראה כמו שצריך!')
+                ->modalSubmitActionLabel('אשר — המבנה תקין')
+                ->action(function (): void {
+                    CheckSiteLayoutJob::dispatch($this->record->id, rebaseline: true);
+
+                    Notification::make()->title('מבנה העמוד אושר')
+                        ->body('הבסיס יתעדכן ברקע וההתראה תיעלם תוך רגע.')
                         ->success()->send();
                 }),
 

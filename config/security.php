@@ -110,6 +110,23 @@ return [
         'sample_chars' => (int) env('DEFACEMENT_SAMPLE_CHARS', 3000),
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Layout (visual) regression watch
+    |--------------------------------------------------------------------------
+    |
+    | Catches the page that still answers 200 but LOOKS broken after an update.
+    | A drop is only reported when a page element type loses this share of its
+    | count and the baseline had at least `min_elements` of them — so ordinary
+    | content edits stay quiet.
+    |
+    */
+    'layout' => [
+        'enabled' => (bool) env('LAYOUT_WATCH_ENABLED', true),
+        'drop_ratio' => (float) env('LAYOUT_DROP_RATIO', 0.6),
+        'min_elements' => (int) env('LAYOUT_MIN_ELEMENTS', 5),
+    ],
+
     'reputation' => [
         'enabled' => (bool) env('REPUTATION_SCAN_ENABLED', true),
 
