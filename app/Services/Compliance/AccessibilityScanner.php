@@ -167,10 +167,11 @@ class AccessibilityScanner
 
     private function unlabelledInputs(string $html): int
     {
-        preg_match_all('/<(input|select|textarea)\b[^>]*>/i', $html, $matches);
+        preg_match_all('/<(input|select|textarea)\b[^>]*>/i', $html, $matches, PREG_OFFSET_CAPTURE);
+        $labelRanges = $this->labelRanges($html);
         $unlabelled = 0;
 
-        foreach ($matches[0] ?? [] as $tag) {
+        foreach ($matches[0] ?? [] as [$tag, $offset]) {
             // Buttons and hidden fields need no visible label.
             if (preg_match('/\btype\s*=\s*["\']?(hidden|submit|button|image|reset)/i', $tag) === 1) {
                 continue;
@@ -188,10 +189,45 @@ class AccessibilityScanner
                 continue;
             }
 
+            // …or be WRAPPED by one: <label>אימייל <input></label> is a valid,
+            // common labelling pattern with no for/id pair at all.
+            if ($this->insideRange($offset, $labelRanges)) {
+                continue;
+            }
+
             $unlabelled++;
         }
 
         return $unlabelled;
+    }
+
+    /**
+     * Byte ranges covered by <label>…</label> blocks, for detecting implicit
+     * (wrapping) labels.
+     *
+     * @return list<array{0: int, 1: int}>
+     */
+    private function labelRanges(string $html): array
+    {
+        preg_match_all('/<label\b[^>]*>.*?<\/label>/is', $html, $matches, PREG_OFFSET_CAPTURE);
+
+        return collect($matches[0] ?? [])
+            ->map(fn (array $m): array => [$m[1], $m[1] + strlen($m[0])])
+            ->all();
+    }
+
+    /**
+     * @param  list<array{0: int, 1: int}>  $ranges
+     */
+    private function insideRange(int $offset, array $ranges): bool
+    {
+        foreach ($ranges as [$start, $end]) {
+            if ($offset > $start && $offset < $end) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function vagueLinks(string $html): int
@@ -223,9 +259,17 @@ class AccessibilityScanner
 
     private function hasStatement(string $html): bool
     {
-        foreach (self::STATEMENT_WORDS as $word) {
-            if (preg_match('/<a\b[^>]*>[^<]*'.preg_quote($word, '/').'/iu', $html) === 1) {
-                return true;
+        // Match the anchor's STRIPPED text — themes routinely wrap link labels
+        // in <span>, which a "[^<]*" pattern could never see past.
+        preg_match_all('/<a\b[^>]*>(.*?)<\/a>/is', $html, $matches);
+
+        foreach ($matches[1] ?? [] as $inner) {
+            $text = mb_strtolower(trim(html_entity_decode(strip_tags($inner), ENT_QUOTES | ENT_HTML5)));
+
+            foreach (self::STATEMENT_WORDS as $word) {
+                if ($text !== '' && str_contains($text, mb_strtolower($word))) {
+                    return true;
+                }
             }
         }
 

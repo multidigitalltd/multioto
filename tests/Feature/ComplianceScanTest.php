@@ -69,6 +69,28 @@ class ComplianceScanTest extends TestCase
         $this->assertNotContains('img_alt', collect($result['issues'])->pluck('key')->all());
     }
 
+    public function test_a_control_wrapped_in_its_label_is_not_reported_as_unlabelled(): void
+    {
+        // <label>אימייל <input></label> is valid, common labelling with no
+        // for/id pair — flagging it would cost a critical 20 points for nothing.
+        $html = '<html lang="he" dir="rtl"><body><label>אימייל <input type="email"></label></body></html>';
+
+        $result = (new AccessibilityScanner)->scan($html);
+
+        $this->assertNotContains('form_labels', collect($result['issues'])->pluck('key')->all());
+    }
+
+    public function test_a_statement_link_wrapped_in_a_span_is_still_recognised(): void
+    {
+        // CMS themes routinely wrap link text in <span>.
+        $html = '<html lang="he" dir="rtl"><body><a href="/page-77"><span>הצהרת נגישות</span></a></body></html>';
+
+        $result = (new AccessibilityScanner)->scan($html);
+
+        $this->assertTrue($result['has_statement']);
+        $this->assertNotContains('statement', collect($result['issues'])->pluck('key')->all());
+    }
+
     public function test_missing_legal_documents_are_listed_and_a_store_also_needs_a_returns_policy(): void
     {
         $html = '<html><body><a href="/privacy">מדיניות פרטיות</a></body></html>';
@@ -132,5 +154,19 @@ class ComplianceScanTest extends TestCase
         (new ScanSiteComplianceJob($site->id))->handle(new AccessibilityScanner, new LegalDocsScanner);
 
         $this->assertNull($site->fresh()->compliance_scan);
+    }
+
+    public function test_an_empty_body_behind_a_success_status_is_not_scored(): void
+    {
+        // A 204, or an empty 200 from a proxy — we never saw a page, so we must
+        // not publish "score 0, every document missing" to the customer.
+        $site = Site::factory()->create(['domain' => 'example.co.il']);
+
+        Http::fake(['*' => Http::response('', 204)]);
+
+        (new ScanSiteComplianceJob($site->id))->handle(new AccessibilityScanner, new LegalDocsScanner);
+
+        $this->assertNull($site->fresh()->compliance_scan);
+        $this->assertSame(0, SiteEvent::where('site_id', $site->id)->count());
     }
 }

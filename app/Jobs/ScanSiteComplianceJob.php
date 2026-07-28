@@ -63,11 +63,18 @@ class ScanSiteComplianceJob implements ShouldQueue
             return;
         }
 
-        if (! $response->successful()) {
-            return; // An unreachable site is the uptime monitor's story.
-        }
+        $html = $response->successful() ? $response->body() : '';
 
-        $html = $response->body();
+        // A blank body behind a 2xx (a 204, or an empty answer from a proxy) is
+        // NOT a page we inspected — scoring it would publish a near-zero score
+        // and "every document missing" for a page nobody ever saw.
+        if (trim($html) === '') {
+            SystemLog::record('info', 'monitoring',
+                "סריקת הנגישות לאתר {$site->domain} לא הושלמה — העמוד לא הוחזר (סטטוס {$response->status()}).",
+                ['site_id' => $site->id]);
+
+            return;
+        }
 
         $a11y = $accessibility->scan($html);
         $legal = $docs->scan($html, $site->site_type === SiteType::Store);
