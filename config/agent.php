@@ -108,6 +108,11 @@ return [
     // run never floods a site with a dozen simultaneous plugin changes.
     'weekly_maintenance_max_updates' => env('AGENT_WEEKLY_MAINTENANCE_MAX_UPDATES', 10),
 
+    // Customer content requests: a message like "add to the homepage that we're
+    // open on Fridays" is turned into an approvable, single-page text addition.
+    // Nothing is applied without the owner's explicit approval.
+    'content_requests' => (bool) env('AGENT_CONTENT_REQUESTS', true),
+
     'risk' => [
         3 => ['exec', 'eval', 'sql', 'db_write', 'file_write', 'file_edit', 'delete', 'drop', 'remove'],
         1 => ['cache', 'restart', 'maintenance', 'transient'],

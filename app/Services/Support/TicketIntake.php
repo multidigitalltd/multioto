@@ -10,6 +10,7 @@ use App\Enums\TicketStatus;
 use App\Jobs\ClassifyTicketJob;
 use App\Jobs\InvestigateTicketJob;
 use App\Jobs\NotifyTeamJob;
+use App\Jobs\PlanContentChangeJob;
 use App\Jobs\SendTicketNotificationJob;
 use App\Models\Contact;
 use App\Models\Customer;
@@ -136,6 +137,13 @@ class TicketIntake
             // job is a no-op when the AI layer is disabled, and never sends
             // anything to the customer — drafts await agent approval.
             ClassifyTicketJob::dispatch($ticket->id);
+
+            // A customer message may be a small content request ("add to the
+            // homepage that we're open on Fridays"). The job only PLANS it and
+            // proposes it to the owner — nothing reaches the site unapproved.
+            if (filled($body = trim(strip_tags((string) $message->body)))) {
+                PlanContentChangeJob::dispatch($ticket->id, $body);
+            }
         }
 
         return $message;
