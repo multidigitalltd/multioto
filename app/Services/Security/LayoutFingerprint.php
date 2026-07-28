@@ -97,15 +97,29 @@ class LayoutFingerprint
         return $reasons;
     }
 
+    /**
+     * Each landmark maps to ITS OWN ARIA role — a shared "any of the three"
+     * check would keep all three flags true while only one element survived,
+     * hiding exactly the breakage this watch exists to find.
+     */
+    private const LANDMARK_ROLES = [
+        'header' => 'banner',
+        'nav' => 'navigation',
+        'footer' => 'contentinfo',
+    ];
+
     /** @return array<string, bool> */
     private function landmarks(string $html): array
     {
         $found = [];
 
         foreach (self::LANDMARKS as $landmark) {
-            // The semantic element, or the ARIA/class equivalent themes use.
+            $role = self::LANDMARK_ROLES[$landmark];
+
+            // The semantic element, its ARIA role, or the id/class themes use.
             $found[$landmark] = preg_match('/<'.$landmark.'\b/i', $html) === 1
-                || preg_match('/(role=["\']?(banner|navigation|contentinfo)|(id|class)=["\'][^"\']*'.$landmark.')/i', $html) === 1;
+                || preg_match('/role=["\']?'.$role.'\b/i', $html) === 1
+                || preg_match('/(id|class)=["\'][^"\']*\b'.$landmark.'\b/i', $html) === 1;
         }
 
         return $found;

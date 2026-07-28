@@ -101,6 +101,13 @@ class CheckSiteLayoutJob implements ShouldQueue
             return;
         }
 
+        // Alert only on ENTERING the broken state (or when the breakage itself
+        // changes). A page that stays broken for a week must not produce a week
+        // of identical alarms and duplicate findings-log rows.
+        $wasBroken = data_get($site->layout_snapshot, 'status') === 'broken';
+        $sameReasons = (array) data_get($site->layout_snapshot, 'reasons', []) === $reasons;
+        $announce = ! $wasBroken || ! $sameReasons;
+
         // Broken: KEEP the old baseline, so the next run compares against the
         // last known-good page rather than against the broken one.
         $site->update(['layout_snapshot' => [
@@ -108,10 +115,13 @@ class CheckSiteLayoutJob implements ShouldQueue
             'checked_at' => $snapshot['checked_at'],
             'status' => 'broken',
             'reasons' => $reasons,
-            'broken_at' => now()->toIso8601String(),
+            'broken_at' => data_get($site->layout_snapshot, 'broken_at') ?: now()->toIso8601String(),
+            'alerted_at' => $announce ? now()->toIso8601String() : data_get($site->layout_snapshot, 'alerted_at'),
         ]]);
 
-        $this->alert($team, $site, $reasons);
+        if ($announce) {
+            $this->alert($team, $site, $reasons);
+        }
     }
 
     /**

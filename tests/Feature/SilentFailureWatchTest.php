@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Jobs\CheckSiteLayoutJob;
 use App\Jobs\CheckStoreSalesJob;
 use App\Models\Site;
+use App\Models\SiteEvent;
 use App\Services\Agent\McpClient;
 use App\Services\Notifications\TeamNotifier;
 use App\Services\Security\LayoutFingerprint;
@@ -178,6 +179,46 @@ class SilentFailureWatchTest extends TestCase
         (new CheckSiteLayoutJob($site->id))->handle(new LayoutFingerprint, $team);
 
         $this->assertSame('ok', $site->fresh()->layout_snapshot['status']);
+    }
+
+    public function test_a_layout_that_stays_broken_alerts_only_once(): void
+    {
+        $good = '<html><body><header>h</header><nav>n</nav>'
+            .str_repeat('<img src="a.jpg">', 20).str_repeat('<a href="/x">l</a>', 20)
+            .str_repeat('<h2>t</h2>', 6).str_repeat('.', 9000).'<footer>f</footer></body></html>';
+        $broken = '<html><body><p>hello</p></body></html>';
+
+        $site = Site::factory()->create(['monitor_enabled' => true, 'domain' => 'example.co.il']);
+
+        Http::fake(['*' => Http::sequence()->push($good)->push($broken)->push($broken)]);
+
+        $silent = Mockery::mock(TeamNotifier::class);
+        $silent->shouldNotReceive('alert');
+        (new CheckSiteLayoutJob($site->id))->handle(new LayoutFingerprint, $silent);
+
+        $loud = Mockery::mock(TeamNotifier::class);
+        $loud->shouldReceive('alert')->once();
+        (new CheckSiteLayoutJob($site->id))->handle(new LayoutFingerprint, $loud);
+
+        // Second broken run: same breakage → no second alarm, no duplicate row.
+        (new CheckSiteLayoutJob($site->id))->handle(new LayoutFingerprint, $silent);
+
+        $this->assertSame(1, SiteEvent::where('site_id', $site->id)->where('type', 'layout_broken')->count());
+    }
+
+    public function test_one_surviving_landmark_does_not_mask_the_others(): void
+    {
+        // A page that kept only its navigation must still report the missing
+        // header and footer — a shared ARIA check would hide both.
+        $fingerprint = new LayoutFingerprint;
+
+        $before = $fingerprint->make('<div role="banner">h</div><div role="navigation">n</div><div role="contentinfo">f</div>');
+        $after = $fingerprint->make('<div role="navigation">n</div>');
+
+        $reasons = $fingerprint->breakages($before, $after);
+
+        $this->assertContains('הכותרת העליונה (header) נעלמה מהעמוד', $reasons);
+        $this->assertContains('הכותרת התחתונה (footer) נעלמה מהעמוד', $reasons);
     }
 
     public function test_downtime_never_produces_a_layout_alert(): void
