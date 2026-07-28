@@ -100,6 +100,31 @@ class AgentPluginCompatibilityTest extends TestCase
         }
     }
 
+    public function test_the_entry_file_itself_parses_on_php_older_than_the_floor_it_guards(): void
+    {
+        // PHP compiles a whole file before running any of it, so the guard is
+        // worthless if the file around it uses newer syntax: a `: void` on the
+        // last line kills a PHP 7.0 site no matter what the check says. Only
+        // this file needs to be this conservative — includes/ is unreachable
+        // until the guard has passed.
+        $source = $this->code(self::PLUGIN_DIR.'/multioto-agent.php');
+
+        $forbidden = [
+            'a return type declaration (PHP 7.0/7.1)' => '/function[^{;]*\)\s*:\s*[?\w\\\\]+/',
+            'a scalar parameter type (PHP 7.0)' => '/function\s+\w+\s*\((?:[^)]*[^$\w\\\\])?(int|float|string|bool)\s+\$/',
+            'the null coalescing operator (PHP 7.0)' => '/\?\?/',
+            'the spaceship operator (PHP 7.0)' => '/<=>/',
+            'a group use statement (PHP 7.0)' => '/use\s+[\w\\\\]+\{/',
+            'an anonymous class (PHP 7.0)' => '/new\s+class\b/',
+        ];
+
+        foreach ($forbidden as $label => $pattern) {
+            $this->assertDoesNotMatchRegularExpression($pattern, $source,
+                "multioto-agent.php uses {$label}. The entry file must parse on ANY PHP, "
+                    .'or the version guard never runs and the site dies anyway.');
+        }
+    }
+
     public function test_the_entry_file_refuses_to_load_the_rest_on_an_old_php(): void
     {
         $main = file_get_contents(self::PLUGIN_DIR.'/multioto-agent.php');

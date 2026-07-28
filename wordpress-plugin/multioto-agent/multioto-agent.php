@@ -32,9 +32,14 @@ define('MULTIOTO_AGENT_DIR', plugin_dir_path(__FILE__));
  * whole SITE down — front end and wp-admin alike — not just this plugin, and
  * the customer cannot even log in to deactivate it. WordPress honours the
  * "Requires PHP" header on activation and auto-update, but a site whose host
- * downgrades PHP afterwards gets no such protection. So the guard lives here,
- * in the only file that must always parse everywhere, and it is deliberately
- * written in the most conservative PHP possible.
+ * downgrades PHP afterwards gets no such protection. So the guard lives here.
+ *
+ * THIS WHOLE FILE — not only the guard — must parse on every PHP a site could
+ * possibly be running, because PHP compiles the entire file before executing a
+ * single line of it. A `: void` return type further down would kill the site on
+ * PHP 7.0 no matter what this check says. Nothing here may use syntax newer
+ * than PHP 5.6; the version-specific code lives in includes/, which is only
+ * reached once the guard has passed. AgentPluginCompatibilityTest enforces it.
  *
  * The agent simply goes quiet; the site keeps working.
  */
@@ -58,8 +63,14 @@ require_once MULTIOTO_AGENT_DIR.'includes/class-settings.php';
 require_once MULTIOTO_AGENT_DIR.'includes/class-mcp-server.php';
 require_once MULTIOTO_AGENT_DIR.'includes/class-updater.php';
 
-add_action('plugins_loaded', static function (): void {
-    (new Multioto_Agent_Settings)->boot();
-    (new Multioto_Agent_Mcp_Server)->boot();
-    (new Multioto_Agent_Updater)->boot();
+// No return type here on purpose — see the note above the guard.
+add_action('plugins_loaded', function () {
+    $settings = new Multioto_Agent_Settings;
+    $settings->boot();
+
+    $server = new Multioto_Agent_Mcp_Server;
+    $server->boot();
+
+    $updater = new Multioto_Agent_Updater;
+    $updater->boot();
 });
