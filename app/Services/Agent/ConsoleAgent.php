@@ -919,22 +919,30 @@ class ConsoleAgent
         if (filled($input['plan_names'] ?? null)) {
             $names = array_filter(array_map('trim', array_map('strval', (array) $input['plan_names'])));
 
-            $planIds = Plan::query()
+            $plans = Plan::query()
                 ->where(function ($q) use ($names) {
                     foreach ($names as $name) {
                         $q->orWhereRaw('LOWER(name) = ?', [mb_strtolower($name)]);
                     }
                 })
-                ->pluck('id')->all();
+                ->get(['id', 'name']);
 
-            if ($planIds === []) {
+            // Every requested plan must resolve, not just one of them. With
+            // "תחזוקה פלוס" spelled right and a second name mistyped, matching
+            // only the first would quietly drop half the intended audience and
+            // still report success.
+            $matched = $plans->map(fn (Plan $p): string => mb_strtolower((string) $p->name))->all();
+            $missing = array_values(array_filter($names, fn (string $n): bool => ! in_array(mb_strtolower($n), $matched, true)));
+
+            if ($missing !== []) {
                 $available = Plan::orderBy('name')->pluck('name')->implode(', ');
 
-                return ['content' => 'לא נמצאה חבילה בשם שציינת, ולא יצרתי טיוטה כדי לא להרחיב את הקהל. החבילות הקיימות: '
+                return ['content' => 'לא נמצאו החבילות: '.implode(', ', $missing)
+                    .'. לא יצרתי טיוטה כדי לא לשנות את הקהל שביקשת. החבילות הקיימות: '
                     .($available !== '' ? $available : 'אין חבילות מוגדרות'), 'is_error' => true];
             }
 
-            $segment['plan_ids'] = $planIds;
+            $segment['plan_ids'] = $plans->pluck('id')->all();
         }
 
         $broadcast = Broadcast::create([

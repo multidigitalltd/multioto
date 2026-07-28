@@ -221,6 +221,25 @@ class ConsoleAgentBroadcastTest extends TestCase
         $this->assertStringContainsString('תחזוקה פלוס', $result['summary']);
     }
 
+    public function test_one_mistyped_plan_among_several_refuses_instead_of_halving_the_audience(): void
+    {
+        $wanted = Plan::factory()->create(['name' => 'תחזוקה פלוס']);
+        Plan::factory()->create(['name' => 'בסיסי']);
+
+        $customer = Customer::factory()->create(['status' => CustomerStatus::Active, 'email' => 'a@b.co.il']);
+        Subscription::factory()->create(['customer_id' => $customer->id, 'plan_id' => $wanted->id]);
+
+        $result = $this->runWith([
+            'subject' => 'נושא', 'body' => 'תוכן', 'is_marketing' => false,
+            'plan_names' => ['תחזוקה פלוס', 'חבילה שלא קיימת'],
+        ]);
+
+        // Matching only the first would drop half the intended audience and
+        // still report success.
+        $this->assertSame(0, Broadcast::count());
+        $this->assertStringContainsString('חבילה שלא קיימת', $result['summary']);
+    }
+
     public function test_a_named_customer_list_narrows_the_draft(): void
     {
         $chosen = Customer::factory()->create(['status' => CustomerStatus::Active, 'email' => 'a@b.co.il']);

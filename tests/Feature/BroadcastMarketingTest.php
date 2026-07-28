@@ -309,6 +309,27 @@ class BroadcastMarketingTest extends TestCase
         $this->assertStringNotContainsString('alert(1)', $html);
     }
 
+    public function test_a_body_that_sanitizes_to_nothing_never_shows_its_markup_to_the_customer(): void
+    {
+        $customer = Customer::factory()->create(['email' => 'x@b.co.il']);
+        $broadcast = $this->broadcast([
+            'body' => '<script>alert(1)</script>',
+            'is_marketing' => false,
+        ]);
+
+        $html = (new BroadcastMail(
+            $this->renderer()->subject($broadcast, $customer),
+            $this->renderer()->body($broadcast, $customer),
+            $this->renderer()->emailFooter($broadcast, $customer),
+            $this->renderer()->bodyHtml($broadcast, $customer),
+        ))->render();
+
+        // Falling back to the raw body would print the stripped script SOURCE
+        // as visible text in the customer's inbox.
+        $this->assertStringNotContainsString('alert(1)', $html);
+        $this->assertStringNotContainsString('&lt;script', $html);
+    }
+
     /*
     | ----------------------------------------------------------------
     | Opting out

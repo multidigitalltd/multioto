@@ -55,9 +55,10 @@ class BroadcastRenderer
     {
         $body = $this->substitute((string) $broadcast->body, $customer);
 
-        // The editor stores HTML. Email keeps it; WhatsApp has no markup of its
-        // own beyond *bold*/_italic_, so the same content is converted rather
-        // than sent with tags showing.
+        // The editor stores HTML. Neither channel wants raw markup: WhatsApp has
+        // no markup of its own beyond *bold*/_italic_, and this string is also
+        // the notification-log entry and the mail template's plain-text
+        // fallback — a customer must never be shown tag source.
         if ($broadcast->channel === BroadcastChannel::Whatsapp) {
             $body = RichText::toWhatsapp($body);
 
@@ -66,19 +67,30 @@ class BroadcastRenderer
                 : $body;
         }
 
-        return $body;
+        return $this->looksLikeHtml($body) ? EmailBody::toText(null, $body) : $body;
     }
 
     /**
-     * The email body as safe HTML, or null when the content is plain text (a
-     * draft written before the rich editor, or one the agent wrote as text).
-     * The mail template falls back to escaping-and-nl2br in that case.
+     * The email body as safe HTML, or null when the draft is plain text (one
+     * written before the rich editor, or one the agent wrote as text) and the
+     * template should escape-and-nl2br it instead.
+     *
+     * Note this returns null in two different situations — no HTML at all, and
+     * HTML the sanitizer rejected outright. Both are safe because body() has
+     * already reduced HTML content to readable text, so the fallback shows the
+     * words rather than the markup that was stripped.
      */
     public function bodyHtml(Broadcast $broadcast, Customer $customer): ?string
     {
         $body = $this->substitute((string) $broadcast->body, $customer);
 
-        return str_contains($body, '<') ? EmailBody::toSafeHtml($body) : null;
+        return $this->looksLikeHtml($body) ? EmailBody::toSafeHtml($body) : null;
+    }
+
+    /** Was this body written in the rich editor rather than typed as text? */
+    private function looksLikeHtml(string $body): bool
+    {
+        return (bool) preg_match('/<[a-z!\/][^>]*>/i', $body);
     }
 
     /**
