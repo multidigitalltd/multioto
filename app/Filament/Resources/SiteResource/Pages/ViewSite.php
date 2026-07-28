@@ -10,6 +10,7 @@ use App\Jobs\CheckSiteLayoutJob;
 use App\Jobs\CheckSiteReputationJob;
 use App\Jobs\DetectSiteTypeJob;
 use App\Jobs\InvestigateSiteJob;
+use App\Jobs\ScanSiteComplianceJob;
 use App\Jobs\ScanSiteVulnerabilitiesJob;
 use App\Jobs\SendDomainRenewalReminderJob;
 use App\Models\MonitorCheck;
@@ -226,6 +227,22 @@ class ViewSite extends ViewRecord
 
                     Notification::make()->title('התוכן הנוכחי אושר')
                         ->body('הבסיס יתעדכן ברקע והחשד יימחק תוך רגע.')
+                        ->success()->send();
+                }),
+
+            // Accessibility + legal-documents audit on demand. External (no AI
+            // connection needed) — it reads the public homepage.
+            Actions\Action::make('scanCompliance')
+                ->label('סריקת נגישות ותאימות')
+                ->icon('heroicon-o-scale')
+                ->color('warning')
+                ->visible($isAdmin)
+                ->action(function (): void {
+                    ScanSiteComplianceJob::dispatch($this->record->id);
+                    self::logManualCheck('סריקת נגישות ותאימות', $this->record->id);
+
+                    Notification::make()->title('הסריקה רצה ברקע')
+                        ->body('נבדוק נגישות (ת"י 5568) ואת קיומם של מדיניות פרטיות, תנאי שימוש והצהרת נגישות. התוצאה תופיע בעמוד האתר.')
                         ->success()->send();
                 }),
 

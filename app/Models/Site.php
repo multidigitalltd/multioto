@@ -21,7 +21,7 @@ class Site extends Model
         'expected_keyword', 'ssl_days_left', 'ssl_alerted_at', 'slow_alerted_at',
         'domain_expiry_at', 'domain_alerted_at', 'domain_registrant',
         'mcp_endpoint', 'mcp_secret', 'mcp_enabled', 'environment', 'site_type',
-        'mcp_capabilities', 'mcp_last_seen_at', 'agent_plugin_version', 'plugin_snapshot', 'vulnerability_scan', 'reputation_scan', 'dns_snapshot', 'content_snapshot', 'store_pulse', 'layout_snapshot',
+        'mcp_capabilities', 'mcp_last_seen_at', 'agent_plugin_version', 'plugin_snapshot', 'vulnerability_scan', 'reputation_scan', 'dns_snapshot', 'content_snapshot', 'store_pulse', 'layout_snapshot', 'compliance_scan',
     ];
 
     /** Never mass-assign or expose the agent token / secrets. */
@@ -46,6 +46,7 @@ class Site extends Model
             'reputation_scan' => 'array',
             'store_pulse' => 'array',
             'layout_snapshot' => 'array',
+            'compliance_scan' => 'array',
             'dns_snapshot' => 'array',
             'content_snapshot' => 'array',
             'site_type' => SiteType::class,

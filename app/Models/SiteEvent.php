@@ -29,6 +29,8 @@ class SiteEvent extends Model
         'store_silent' => ['🛒', 'החנות הפסיקה לקבל הזמנות'],
         'store_payments' => ['💳', 'הזמנות שלא שולמו — חשד לתקלת סליקה'],
         'layout_broken' => ['🧱', 'מבנה העמוד נשבר'],
+        'accessibility' => ['♿', 'ממצאי נגישות'],
+        'legal_docs' => ['📄', 'מסמכים משפטיים חסרים'],
     ];
 
     protected $fillable = ['site_id', 'type', 'severity', 'title', 'detail', 'detected_at'];

@@ -543,6 +543,79 @@
         </div>
     </div>
 
+    {{-- Accessibility + legal documents: the customer-facing compliance
+         picture, and the raw material for a remediation quote. --}}
+    @php
+        $compliance = $site->compliance_scan ?? null;
+        $a11yIssues = (array) data_get($compliance, 'issues', []);
+        $missingDocs = (array) data_get($compliance, 'missing_docs', []);
+    @endphp
+    <div class="rounded-xl bg-white p-4 shadow-sm dark:bg-gray-800">
+        <div class="mb-3 flex items-center justify-between">
+            <h3 class="text-sm font-semibold">נגישות ומסמכי חובה</h3>
+            <span class="text-xs text-gray-500 dark:text-gray-400">
+                @if (data_get($compliance, 'scanned_at'))
+                    נסרק: {{ \Illuminate\Support\Carbon::parse(data_get($compliance, 'scanned_at'))->format('d/m/Y H:i') }}
+                @endif
+            </span>
+        </div>
+
+        @if ($compliance === null)
+            <p class="text-sm text-gray-500 dark:text-gray-400">
+                הסריקה השבועית בודקת נגישות (ת"י 5568 / WCAG 2.2 AA — החלק שניתן לבדיקה אוטומטית) ואת קיומם של מדיניות פרטיות, תנאי שימוש, הצהרת נגישות ומדיניות ביטולים. אפשר להריץ עכשיו בכפתור "סריקת נגישות ותאימות".
+            </p>
+        @else
+            @php $score = (int) data_get($compliance, 'score', 100); @endphp
+            <div class="mb-3 flex items-center gap-3">
+                <span @class([
+                    'text-2xl font-bold',
+                    'text-success-600 dark:text-success-400' => $score >= 85,
+                    'text-warning-600 dark:text-warning-400' => $score >= 60 && $score < 85,
+                    'text-danger-600 dark:text-danger-400' => $score < 60,
+                ])>{{ $score }}<span class="text-sm font-normal">/100</span></span>
+                <span class="text-xs text-gray-500 dark:text-gray-400">ציון נגישות (בדיקה אוטומטית — אינו תחליף לבדיקת מורשה נגישות)</span>
+            </div>
+
+            <div class="grid gap-4 md:grid-cols-2">
+                <div>
+                    <h4 class="mb-1 text-xs font-semibold text-gray-600 dark:text-gray-300">ממצאי נגישות</h4>
+                    @forelse ($a11yIssues as $issue)
+                        <div class="border-b border-gray-100 py-1.5 text-sm last:border-0 dark:border-gray-700">
+                            <div class="flex items-start gap-2">
+                                <x-filament::badge :color="match ($issue['severity'] ?? 'info') { 'critical' => 'danger', 'warning' => 'warning', default => 'gray' }">
+                                    {{ match ($issue['severity'] ?? 'info') { 'critical' => 'קריטי', 'warning' => 'חשוב', default => 'המלצה' } }}
+                                </x-filament::badge>
+                                <span class="font-medium">{{ $issue['title'] ?? '' }}</span>
+                            </div>
+                            <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">{{ $issue['detail'] ?? '' }}</p>
+                        </div>
+                    @empty
+                        <p class="text-sm text-success-700 dark:text-success-400">✓ לא נמצאו ממצאי נגישות בבדיקה האוטומטית.</p>
+                    @endforelse
+                </div>
+
+                <div>
+                    <h4 class="mb-1 text-xs font-semibold text-gray-600 dark:text-gray-300">מסמכי חובה</h4>
+                    @forelse ($missingDocs as $doc)
+                        <div class="flex items-center gap-2 border-b border-gray-100 py-1.5 text-sm last:border-0 dark:border-gray-700">
+                            <x-filament::badge :color="($doc['severity'] ?? 'warning') === 'critical' ? 'danger' : 'warning'">חסר</x-filament::badge>
+                            <span>{{ $doc['label'] ?? '' }}</span>
+                        </div>
+                    @empty
+                        <p class="text-sm text-success-700 dark:text-success-400">✓ כל המסמכים הנדרשים מקושרים באתר.</p>
+                    @endforelse
+
+                    @unless (data_get($compliance, 'has_contact', true))
+                        <div class="mt-2 flex items-center gap-2 text-sm text-warning-700 dark:text-warning-400">
+                            <x-heroicon-o-exclamation-triangle class="h-4 w-4 shrink-0" />
+                            <span>לא נמצאו פרטי יצירת קשר (טלפון/אימייל) בדף הבית.</span>
+                        </div>
+                    @endunless
+                </div>
+            </div>
+        @endif
+    </div>
+
     {{-- Durable findings log: what we detected on this site and when. This is
          the record shown to the customer ("ב-27/07 זיהינו מנהל חדש"). --}}
     <div class="rounded-xl bg-white p-4 shadow-sm dark:bg-gray-800">
