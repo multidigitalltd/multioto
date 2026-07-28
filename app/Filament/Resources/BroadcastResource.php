@@ -11,6 +11,7 @@ use App\Filament\Resources\BroadcastResource\Actions\BroadcastSendActions;
 use App\Filament\Resources\BroadcastResource\Pages;
 use App\Models\Broadcast;
 use App\Models\Customer;
+use App\Models\NotificationLog;
 use App\Models\Plan;
 use App\Services\Support\BroadcastAudience;
 use App\Services\Support\BroadcastComposer;
@@ -246,7 +247,20 @@ class BroadcastResource extends Resource
         ], marketing: (bool) $get('is_marketing'));
 
         if ($counts['reachable'] === 0) {
-            return new HtmlString('<span class="text-danger-600 font-semibold">אף לקוח לא יקבל את הדיוור הזה.</span>');
+            $line = '<span class="text-danger-600 font-semibold">אף לקוח לא יקבל את הדיוור הזה.</span>';
+
+            // The reason matters most exactly here: "nobody will get this" with
+            // no explanation sends the operator hunting for a missing address
+            // that is in fact filled in and dead.
+            if (($counts['bounced'] ?? 0) > 0) {
+                $line .= '<br><span class="text-sm text-gray-500">'.$counts['bounced'].' מהם עם כתובת שחזרה כלא קיימת — יש לעדכן כתובת אחרת.</span>';
+            }
+
+            if ($counts['opted_out'] > 0) {
+                $line .= '<br><span class="text-sm text-gray-500">'.$counts['opted_out'].' מהם ביקשו להסיר אותם מדיוור פרסומי.</span>';
+            }
+
+            return new HtmlString($line);
         }
 
         $missing = $channel === BroadcastChannel::Email ? 'בלי כתובת אימייל' : 'בלי מספר וואטסאפ';
@@ -257,11 +271,55 @@ class BroadcastResource extends Resource
             $line .= '<br><span class="text-sm text-gray-500">'.$counts['unreachable'].' לקוחות תואמים לקהל אך ידולגו — '.$missing.'.</span>';
         }
 
+        if (($counts['bounced'] ?? 0) > 0) {
+            $line .= '<br><span class="text-sm text-gray-500">'.$counts['bounced'].' לקוחות עם כתובת שחזרה כלא קיימת ולא יקבלו עד שתעודכן כתובת אחרת.</span>';
+        }
+
         if ($counts['opted_out'] > 0) {
             $line .= '<br><span class="text-sm text-gray-500">'.$counts['opted_out'].' לקוחות ביקשו להסיר אותם מדיוור פרסומי ולא יקבלו.</span>';
         }
 
         return new HtmlString($line);
+    }
+
+    /**
+     * Delivery and open counts for one broadcast, straight from the provider's
+     * events. Shown as "—" until the first event lands, rather than as zeros —
+     * "0 נמסרו" a second after sending reads like a failure when it only means
+     * the provider has not reported back yet.
+     */
+    protected static function deliveryLabel(Broadcast $record): string
+    {
+        if ($record->channel !== BroadcastChannel::Email) {
+            return '—'; // WhatsApp gives us no delivery signal at all.
+        }
+
+        $stats = NotificationLog::query()
+            ->where('broadcast_id', $record->id)
+            ->selectRaw('COUNT(delivered_at) AS delivered')
+            ->selectRaw('COUNT(opened_at) AS opened')
+            ->selectRaw('COUNT(bounced_at) AS bounced')
+            ->first();
+
+        // The placeholder hangs on whether the PROVIDER has said anything, not
+        // on whether we queued anything: a log row exists the moment we hand the
+        // mail over, so counting rows would flip this to "0 נמסרו" a second
+        // after sending — which reads like a failed send rather than a pending one.
+        $reported = (int) ($stats?->delivered ?? 0)
+            + (int) ($stats?->opened ?? 0)
+            + (int) ($stats?->bounced ?? 0);
+
+        if ($reported === 0) {
+            return '—';
+        }
+
+        $parts = [$stats->delivered.' נמסרו', $stats->opened.' נפתחו'];
+
+        if ($stats->bounced > 0) {
+            $parts[] = $stats->bounced.' חזרו';
+        }
+
+        return implode(' · ', $parts);
     }
 
     /** A one-line, human reading of a stored segment, for the list screen. */
@@ -321,6 +379,11 @@ class BroadcastResource extends Resource
                     ->label('נשלחו')
                     ->numeric()
                     ->sortable(),
+                Tables\Columns\TextColumn::make('delivery')
+                    ->label('נמסרו / נפתחו')
+                    ->state(fn (Broadcast $record): string => static::deliveryLabel($record))
+                    ->tooltip('מגיע מספק הדואר. פתיחות נמדדות בפיקסל ולכן הן רצפה, לא מספר מדויק — לקוח שחוסם תמונות נספר כמי שלא פתח.')
+                    ->wrap(),
                 Tables\Columns\TextColumn::make('created_at')
                     ->label('נוצר')
                     ->date('d/m/Y')

@@ -2,6 +2,7 @@
 
 namespace App\Providers;
 
+use App\Listeners\RecordProviderMessageId;
 use App\Models\AuditLog;
 use App\Models\Charge;
 use App\Models\Customer;
@@ -22,6 +23,7 @@ use Filament\Forms\Components\DatePicker;
 use Filament\Forms\Components\DateTimePicker;
 use Illuminate\Auth\Events\Login;
 use Illuminate\Auth\Events\Logout;
+use Illuminate\Mail\Events\MessageSent;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\URL;
 use Illuminate\Support\ServiceProvider;
@@ -98,5 +100,9 @@ class AppServiceProvider extends ServiceProvider
             session()->forget('two_factor.confirmed');
             AuditLog::record('logout', 'התנתקות מהמערכת', actor: $event->user);
         });
+
+        // Pair our notification-log row with the provider's message id, so the
+        // delivery/open/bounce webhook can find the row it belongs to.
+        Event::listen(MessageSent::class, RecordProviderMessageId::class);
     }
 }

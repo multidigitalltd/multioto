@@ -13,6 +13,7 @@ use App\Jobs\SendBroadcastJob;
 use App\Mail\BroadcastMail;
 use App\Models\Broadcast;
 use App\Models\Customer;
+use App\Models\NotificationLog;
 use App\Models\Plan;
 use App\Models\Subscription;
 use App\Models\User;
@@ -281,6 +282,46 @@ class BroadcastAudienceTest extends TestCase
         $this->assertSame('נוסח חדש', $broadcast->fresh()->subject);
         $this->assertSame('תוכן חדש', $broadcast->fresh()->body);
         Bus::assertDispatched(SendBroadcastJob::class);
+    }
+
+    public function test_a_message_that_never_reached_the_queue_is_not_left_showing_as_pending(): void
+    {
+        Customer::factory()->create(['status' => CustomerStatus::Active, 'email' => 'one@b.co.il']);
+
+        // The log row is written before the send so its id can ride along in a
+        // header. If the queue itself is down, nothing is on the way.
+        Mail::shouldReceive('to')->andThrow(new \RuntimeException('queue unavailable'));
+
+        $broadcast = Broadcast::create([
+            'subject' => 'עדכון', 'body' => 'תוכן',
+            'channel' => BroadcastChannel::Email, 'status' => BroadcastStatus::Draft,
+        ]);
+
+        $this->runSend($broadcast);
+
+        $log = NotificationLog::where('broadcast_id', $broadcast->id)->firstOrFail();
+
+        $this->assertSame('failed', $log->status);
+        $this->assertNotNull($log->error);
+        $this->assertSame(0, $broadcast->fresh()->sent_count);
+    }
+
+    public function test_a_dead_address_is_reported_as_its_own_reason_not_as_a_missing_one(): void
+    {
+        Customer::factory()->create(['status' => CustomerStatus::Active, 'email' => 'live@b.co.il']);
+        Customer::factory()->create([
+            'status' => CustomerStatus::Active, 'email' => 'dead@b.co.il',
+            'email_bounced_at' => now(),
+        ]);
+        Customer::factory()->create(['status' => CustomerStatus::Active, 'email' => null]);
+
+        $counts = $this->audience()->summary(BroadcastChannel::Email, null);
+
+        // Telling the operator a bounced customer "has no address" sends them
+        // looking for a field that is already filled in.
+        $this->assertSame(1, $counts['reachable']);
+        $this->assertSame(1, $counts['bounced']);
+        $this->assertSame(1, $counts['unreachable']);
     }
 
     private function runSend(Broadcast $broadcast): void
