@@ -46,6 +46,19 @@ class ContentChangeRunner
             throw new \RuntimeException('לא ניתן לקרוא את תוכן העמוד.');
         }
 
+        // The page may have been unpublished, made private or trashed between
+        // the proposal and the approval. Editing it anyway would mark the action
+        // executed and tell the customer the text is live on a page nobody can
+        // see — better to fail loudly and let a human look.
+        $status = (string) ($current['status'] ?? '');
+        $type = (string) ($current['type'] ?? 'page');
+
+        if ($type !== 'page' || $status !== 'publish') {
+            throw new \RuntimeException(
+                "העמוד אינו עמוד מפורסם יותר (סוג: {$type}, סטטוס: ".($status !== '' ? $status : 'לא ידוע').') — השינוי לא בוצע.'
+            );
+        }
+
         $before = (string) $current['content'];
         $paragraph = '<p>'.e($addition).'</p>';
 

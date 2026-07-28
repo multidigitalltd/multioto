@@ -163,6 +163,7 @@ class ContentChangeRequestTest extends TestCase
             ->andReturn(['content' => []]);
         $mcp->shouldReceive('textContent')->andReturn((string) json_encode([
             'id' => 12, 'title' => 'דף הבית', 'content' => '<p>תוכן שנכתב אחרי ההצעה</p>',
+            'status' => 'publish', 'type' => 'page',
         ]));
         $mcp->shouldReceive('callTool')->withArgs(function ($s, string $tool, array $params = []) use (&$sent) {
             if ($tool === 'wp_content_update') {
@@ -181,6 +182,39 @@ class ContentChangeRequestTest extends TestCase
         $this->assertStringContainsString('תוכן שנכתב אחרי ההצעה', $sent['content']);
         $this->assertStringContainsString('פתוחים בשישי', $sent['content']);
         $this->assertDatabaseHas('site_events', ['site_id' => $site->id, 'type' => 'content_change']);
+    }
+
+    public function test_a_page_that_stopped_being_published_is_never_edited(): void
+    {
+        // The page was trashed/unpublished between proposal and approval —
+        // editing it would mark the action done and tell the customer their
+        // text is live on a page nobody can see.
+        $site = Site::factory()->create([
+            'mcp_enabled' => true,
+            'mcp_endpoint' => 'https://site1.co.il/wp-json/md-agent/v1/mcp',
+        ]);
+
+        $action = PendingAction::create([
+            'type' => 'content_change',
+            'status' => ActionStatus::Approved,
+            'summary' => 'הוספת שעות פתיחה',
+            'payload' => ['site_id' => $site->id, 'page_id' => 12, 'page_title' => 'דף הבית', 'addition' => 'פתוחים בשישי'],
+            'proposed_by' => 'ai',
+        ]);
+
+        $mcp = Mockery::mock(McpClient::class);
+        $mcp->shouldReceive('callTool')->with(Mockery::any(), 'wp_content_get', Mockery::any())->andReturn(['content' => []]);
+        $mcp->shouldReceive('textContent')->andReturn((string) json_encode([
+            'id' => 12, 'title' => 'דף הבית', 'content' => '<p>x</p>', 'status' => 'draft', 'type' => 'page',
+        ]));
+        $mcp->shouldNotReceive('callTool')->with(Mockery::any(), 'wp_content_update', Mockery::any());
+
+        $reply = Mockery::mock(AgentReply::class);
+        $reply->shouldNotReceive('send');
+
+        $this->expectException(\RuntimeException::class);
+
+        (new ContentChangeRunner($mcp, $reply))->run($action);
     }
 
     public function test_a_content_change_can_never_get_a_standing_approval(): void
