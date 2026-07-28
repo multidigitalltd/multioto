@@ -45,16 +45,32 @@ class EmailDeliveryWebhookController extends Controller
         // exact replay while letting a genuine second read through.
         $id = $request->input('MessageID');
 
-        [$event, $fresh] = WebhookEvent::record(
+        [$event] = WebhookEvent::record(
             WebhookSource::Email,
             'delivery_'.strtolower($type),
             ($type !== 'Open' && filled($id)) ? $type.':'.$id : null,
             $payload,
         );
 
-        if ($fresh) {
-            $events->apply($payload);
-            $event->markProcessed();
+        // Claim on processed_at, not on "was this row just created". A delivery
+        // that recorded the row and then failed mid-apply left processed_at
+        // null, so the provider's retry still gets to finish the job; had we
+        // keyed on freshness, that retry would see an existing row and drop the
+        // event for good. Only the writer that flips null → now() does the work.
+        $claimed = WebhookEvent::whereKey($event->getKey())
+            ->whereNull('processed_at')
+            ->update(['processed_at' => now()]);
+
+        if ($claimed === 1) {
+            try {
+                $events->apply($payload);
+            } catch (\Throwable $e) {
+                // Not processed after all — release the claim so the retry can
+                // pick it up instead of finding it permanently taken.
+                WebhookEvent::whereKey($event->getKey())->update(['processed_at' => null]);
+
+                throw $e;
+            }
         }
 
         return response('OK', 200);

@@ -6,13 +6,18 @@ use App\Enums\BroadcastChannel;
 use App\Enums\BroadcastStatus;
 use App\Enums\CustomerStatus;
 use App\Enums\NotificationType;
+use App\Enums\UserRole;
+use App\Filament\Resources\BroadcastResource\Pages\ListBroadcasts;
 use App\Models\Broadcast;
 use App\Models\Customer;
 use App\Models\NotificationLog;
+use App\Models\User;
 use App\Models\WebhookEvent;
+use App\Services\Notifications\DeliveryEvents;
 use App\Services\Support\BroadcastAudience;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
+use Livewire\Livewire;
 use Tests\TestCase;
 
 /**
@@ -148,6 +153,46 @@ class EmailDeliveryTrackingTest extends TestCase
         $this->assertSame(1, WebhookEvent::count());
     }
 
+    public function test_an_event_that_failed_halfway_is_finished_by_the_providers_retry(): void
+    {
+        $log = $this->log();
+
+        $flaky = new class extends DeliveryEvents
+        {
+            public int $calls = 0;
+
+            public function apply(array $payload): bool
+            {
+                $this->calls++;
+
+                if ($this->calls === 1) {
+                    throw new \RuntimeException('transient database error');
+                }
+
+                return parent::apply($payload);
+            }
+        };
+
+        $this->instance(DeliveryEvents::class, $flaky);
+
+        $payload = ['RecordType' => 'Delivery', 'MessageID' => 'pm-1'];
+
+        try {
+            $this->event($payload);
+        } catch (\Throwable) {
+            // The 500 is the point: the provider will resend.
+        }
+
+        $this->assertNull($log->fresh()->delivered_at);
+
+        // Having RECORDED the event is not the same as having PROCESSED it —
+        // otherwise the retry would find the row and drop the delivery for good.
+        $this->event($payload)->assertOk();
+
+        $this->assertNotNull($log->fresh()->delivered_at);
+        $this->assertSame(1, WebhookEvent::count());
+    }
+
     public function test_a_delivery_and_an_open_for_one_message_are_two_events_not_a_duplicate(): void
     {
         $log = $this->log();
@@ -253,6 +298,20 @@ class EmailDeliveryTrackingTest extends TestCase
         $this->assertSame(0, NotificationLog::whereNotNull('delivered_at')->count());
     }
 
+    public function test_an_unknown_message_id_never_lands_on_a_different_message(): void
+    {
+        $log = $this->log();
+
+        // Most of our mail is transactional and records no provider id. An event
+        // for one of those must not be pinned onto the customer's newest
+        // broadcast just because it went to the same address.
+        $this->event(['RecordType' => 'Open', 'MessageID' => 'pm-other', 'Recipient' => 'dani@b.co.il'])
+            ->assertOk();
+
+        $this->assertSame(0, $log->fresh()->open_count);
+        $this->assertNull($log->fresh()->opened_at);
+    }
+
     public function test_an_event_without_a_message_id_falls_back_to_the_recent_recipient(): void
     {
         $log = $this->log(['provider_message_id' => null]);
@@ -276,6 +335,28 @@ class EmailDeliveryTrackingTest extends TestCase
     | Per-broadcast totals
     | ----------------------------------------------------------------
     */
+
+    public function test_a_broadcast_still_awaiting_the_provider_shows_no_numbers_at_all(): void
+    {
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+
+        $broadcast = Broadcast::create([
+            'subject' => 'עדכון', 'body' => 'x', 'channel' => BroadcastChannel::Email,
+            'status' => BroadcastStatus::Sent,
+        ]);
+        $this->log(['broadcast_id' => $broadcast->id]);
+
+        // A log row exists the moment we hand the mail over, so counting rows
+        // would show "0 נמסרו" a second after sending — which reads like a
+        // failed send rather than one the provider has yet to report on.
+        Livewire::test(ListBroadcasts::class)
+            ->assertTableColumnStateSet('delivery', '—', $broadcast);
+
+        $this->event(['RecordType' => 'Delivery', 'MessageID' => 'pm-1'])->assertOk();
+
+        Livewire::test(ListBroadcasts::class)
+            ->assertTableColumnStateSet('delivery', '1 נמסרו · 0 נפתחו', $broadcast);
+    }
 
     public function test_each_broadcasts_numbers_stay_its_own(): void
     {

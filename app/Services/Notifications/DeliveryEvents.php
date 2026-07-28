@@ -67,14 +67,21 @@ class DeliveryEvents
 
     private function opened(NotificationLog $log, Carbon $at): void
     {
+        // The count moves in the database, not in PHP: two opens of the same
+        // message can be handled at the same moment, and a read-modify-write
+        // would have both write the same number and lose one.
+        NotificationLog::whereKey($log->getKey())->increment('open_count');
+
         // First open is the interesting one; later opens only raise the count,
         // so forwarding a mail around cannot rewrite when it was first read.
-        $log->forceFill([
-            'opened_at' => $log->opened_at ?? $at,
-            'open_count' => $log->open_count + 1,
-            // An open proves delivery even if that event never arrived.
-            'delivered_at' => $log->delivered_at ?? $at,
-        ])->save();
+        // An open also proves delivery even if that event never arrived.
+        NotificationLog::whereKey($log->getKey())
+            ->whereNull('opened_at')
+            ->update(['opened_at' => $at]);
+
+        NotificationLog::whereKey($log->getKey())
+            ->whereNull('delivered_at')
+            ->update(['delivered_at' => $at]);
     }
 
     private function bounced(NotificationLog $log, Carbon $at, array $payload): void
@@ -140,16 +147,17 @@ class DeliveryEvents
         $messageId = trim((string) ($payload['MessageID'] ?? ''));
 
         if ($messageId !== '') {
-            $log = NotificationLog::where('provider_message_id', $messageId)->first();
-
-            if ($log !== null) {
-                return $log;
-            }
+            // A present id is the answer, match or no match. Most of our mail
+            // is transactional and never records a provider id, so falling
+            // through to the recipient would pin those events onto whatever we
+            // happened to send that customer last — which is usually the newest
+            // broadcast, whose numbers would then be wrong.
+            return NotificationLog::where('provider_message_id', $messageId)->first();
         }
 
-        // Fallback for a provider that does not echo our id back on every event
-        // type: the most recent email we sent to that address. Bounded to a
-        // week so an old row is never rewritten by a stray replay.
+        // Fallback only for a payload that truly omits the id: the most recent
+        // email we sent to that address. Bounded to a week so an old row is
+        // never rewritten by a stray replay.
         $recipient = trim((string) ($payload['Recipient'] ?? $payload['Email'] ?? ''));
 
         if ($recipient === '') {

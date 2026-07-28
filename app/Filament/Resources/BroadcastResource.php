@@ -279,13 +279,20 @@ class BroadcastResource extends Resource
 
         $stats = NotificationLog::query()
             ->where('broadcast_id', $record->id)
-            ->selectRaw('COUNT(*) AS total')
             ->selectRaw('COUNT(delivered_at) AS delivered')
             ->selectRaw('COUNT(opened_at) AS opened')
             ->selectRaw('COUNT(bounced_at) AS bounced')
             ->first();
 
-        if (($stats?->total ?? 0) === 0) {
+        // The placeholder hangs on whether the PROVIDER has said anything, not
+        // on whether we queued anything: a log row exists the moment we hand the
+        // mail over, so counting rows would flip this to "0 נמסרו" a second
+        // after sending — which reads like a failed send rather than a pending one.
+        $reported = (int) ($stats?->delivered ?? 0)
+            + (int) ($stats?->opened ?? 0)
+            + (int) ($stats?->bounced ?? 0);
+
+        if ($reported === 0) {
             return '—';
         }
 
