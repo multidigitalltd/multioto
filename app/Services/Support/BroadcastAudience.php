@@ -69,10 +69,15 @@ class BroadcastAudience
      * Recipient counts for the panel: how many the segment selects, how many are
      * reachable on the chosen channel, and how many will therefore be skipped.
      *
-     * `opted_out` is split out from `unreachable` so the panel can say why: a
-     * missing address is something the operator can fix, an opt-out is not.
+     * `opted_out` and `bounced` are split out from `unreachable` so the panel can
+     * say why each customer is skipped: a missing address is something the
+     * operator can fix by typing one in, a dead address needs a different one
+     * from the customer, and an opt-out is not to be worked around at all.
      *
-     * @return array{total: int, reachable: int, unreachable: int, opted_out: int}
+     * The buckets do not overlap — a customer who both opted out and bounced is
+     * counted once, under the reason that comes first.
+     *
+     * @return array{total: int, reachable: int, unreachable: int, opted_out: int, bounced: int}
      */
     public function summary(BroadcastChannel $channel, ?array $segment, bool $marketing = false): array
     {
@@ -80,14 +85,22 @@ class BroadcastAudience
         $reachable = $this->reachable($channel, $segment, $marketing)->count();
 
         $optedOut = $marketing
-            ? (clone $this->query($segment))->whereNotNull('marketing_opt_out_at')->count()
+            ? $this->query($segment)->whereNotNull('marketing_opt_out_at')->count()
+            : 0;
+
+        $bounced = $channel === BroadcastChannel::Email
+            ? $this->query($segment)
+                ->when($marketing, fn ($q) => $q->whereNull('marketing_opt_out_at'))
+                ->whereNotNull('email_bounced_at')
+                ->count()
             : 0;
 
         return [
             'total' => $total,
             'reachable' => $reachable,
-            'unreachable' => max(0, $total - $reachable - $optedOut),
+            'unreachable' => max(0, $total - $reachable - $optedOut - $bounced),
             'opted_out' => $optedOut,
+            'bounced' => $bounced,
         ];
     }
 

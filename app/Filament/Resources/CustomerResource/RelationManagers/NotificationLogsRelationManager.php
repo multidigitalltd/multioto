@@ -62,6 +62,18 @@ class NotificationLogsRelationManager extends RelationManager
                     ->label('נושא')
                     ->placeholder('—')
                     ->limit(45),
+                // Reported by the mail provider, not by us. Blank means it has
+                // not told us yet — which is not the same as "did not arrive".
+                Tables\Columns\TextColumn::make('delivered_at')
+                    ->label('נמסר')
+                    ->dateTime('d/m/Y H:i')
+                    ->placeholder('—')
+                    ->toggleable(),
+                Tables\Columns\TextColumn::make('opened_at')
+                    ->label('נפתח')
+                    ->dateTime('d/m/Y H:i')
+                    ->placeholder('—')
+                    ->toggleable(),
                 Tables\Columns\TextColumn::make('status')
                     ->label('סטטוס')
                     ->badge()
@@ -93,6 +105,18 @@ class NotificationLogsRelationManager extends RelationManager
                         TextEntry::make('channel')->label('ערוץ')
                             ->formatStateUsing(fn (string $state): string => $channels[$state] ?? $state),
                         TextEntry::make('recipient')->label('נמען')->placeholder('—'),
+                        TextEntry::make('delivered_at')->label('נמסר')->dateTime('d/m/Y H:i')
+                            ->placeholder('טרם דווח על ידי ספק הדואר'),
+                        TextEntry::make('opened_at')->label('נפתח')->dateTime('d/m/Y H:i')
+                            ->placeholder('—')
+                            // Pixel-based, so it is a floor and not an exact number:
+                            // a customer who blocks images reads as "not opened".
+                            ->helperText(fn (NotificationLog $record): ?string => $record->open_count > 1
+                                ? "נפתח {$record->open_count} פעמים"
+                                : null),
+                        TextEntry::make('bounced_at')->label('חזרה')->dateTime('d/m/Y H:i')
+                            ->visible(fn (NotificationLog $record): bool => $record->bounced_at !== null)
+                            ->color('danger'),
                         TextEntry::make('subject')->label('נושא')->placeholder('—'),
                         TextEntry::make('body')->label('תוכן')->placeholder('—')->columnSpanFull(),
                         TextEntry::make('error')->label('שגיאה')

@@ -16,6 +16,7 @@ use App\Services\Waha\WahaClient;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Str;
 
 /**
  * Deliver a broadcast to its customer segment.
@@ -129,6 +130,8 @@ class SendBroadcastJob implements ShouldQueue
             ->with(['sites:id,customer_id,domain', 'subscriptions.plan:id,name'])
             ->chunkById((int) config('billing.broadcasts.email_chunk_size'), function ($customers) use ($broadcast, $waha, &$sent) {
                 foreach ($customers as $customer) {
+                    $log = null;
+
                     // reachable() already excluded customers with no address on
                     // this channel; the guards below only catch whitespace-only
                     // values, which a NOT NULL / != '' filter still lets through.
@@ -173,6 +176,15 @@ class SendBroadcastJob implements ShouldQueue
 
                         $sent++;
                     } catch (\Throwable $e) {
+                        // The row was written before the send so its id could ride
+                        // along in a header. If the dispatch itself failed there is
+                        // nothing on the way, and leaving the row as "בתור" would
+                        // show the team a message that was never actually queued.
+                        $log?->forceFill([
+                            'status' => 'failed',
+                            'error' => Str::limit($e->getMessage(), 250, ''),
+                        ])->save();
+
                         report($e); // One bad recipient must not kill the whole send.
                     }
                 }

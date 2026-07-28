@@ -258,6 +258,10 @@ class BroadcastResource extends Resource
             $line .= '<br><span class="text-sm text-gray-500">'.$counts['unreachable'].' לקוחות תואמים לקהל אך ידולגו — '.$missing.'.</span>';
         }
 
+        if (($counts['bounced'] ?? 0) > 0) {
+            $line .= '<br><span class="text-sm text-gray-500">'.$counts['bounced'].' לקוחות עם כתובת שחזרה כלא קיימת ולא יקבלו עד שתעודכן כתובת אחרת.</span>';
+        }
+
         if ($counts['opted_out'] > 0) {
             $line .= '<br><span class="text-sm text-gray-500">'.$counts['opted_out'].' לקוחות ביקשו להסיר אותם מדיוור פרסומי ולא יקבלו.</span>';
         }
