@@ -15,6 +15,7 @@ use App\Models\PendingAction;
 use App\Models\Site;
 use App\Models\StandingApproval;
 use App\Models\SystemLog;
+use App\Services\Agent\ContentChangeRunner;
 use App\Services\Agent\IncidentMemory;
 use App\Services\Agent\MaintenanceRunner;
 use App\Services\Agent\SiteActionRunner;
@@ -300,6 +301,7 @@ class ApprovalGate
             'system_action' => app(SystemActionRunner::class)->run($action),
             'maintenance_update' => app(MaintenanceRunner::class)->run($action),
             'monitoring_report' => $this->executeMonitoringReport($action),
+            'content_change' => app(ContentChangeRunner::class)->run($action),
             default => throw new \RuntimeException("סוג פעולה לא מוכר: {$action->type}"),
         };
     }

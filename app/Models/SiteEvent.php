@@ -31,6 +31,7 @@ class SiteEvent extends Model
         'layout_broken' => ['🧱', 'מבנה העמוד נשבר'],
         'accessibility' => ['♿', 'ממצאי נגישות'],
         'legal_docs' => ['📄', 'מסמכים משפטיים חסרים'],
+        'content_change' => ['✏️', 'עדכון תוכן לבקשת הלקוח'],
     ];
 
     protected $fillable = ['site_id', 'type', 'severity', 'title', 'detail', 'detected_at'];

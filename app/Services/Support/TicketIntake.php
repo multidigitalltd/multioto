@@ -10,6 +10,7 @@ use App\Enums\TicketStatus;
 use App\Jobs\ClassifyTicketJob;
 use App\Jobs\InvestigateTicketJob;
 use App\Jobs\NotifyTeamJob;
+use App\Jobs\PlanContentChangeJob;
 use App\Jobs\SendTicketNotificationJob;
 use App\Models\Contact;
 use App\Models\Customer;
@@ -136,6 +137,23 @@ class TicketIntake
             // job is a no-op when the AI layer is disabled, and never sends
             // anything to the customer — drafts await agent approval.
             ClassifyTicketJob::dispatch($ticket->id);
+
+            // A customer message may be a small content request ("add to the
+            // homepage that we're open on Fridays"). The job only PLANS it and
+            // proposes it to the owner — nothing reaches the site unapproved.
+            //
+            // Gated on the SENDER being the ticket's customer, not merely on the
+            // ticket belonging to one: a message carrying a ticket reference is
+            // threaded onto that ticket whoever sent it, so trusting the
+            // ticket's association would let a stranger propose an edit to
+            // someone else's site under that customer's name.
+            $senderIsTheCustomer = $customer !== null
+                && $ticket->customer_id !== null
+                && $customer->id === $ticket->customer_id;
+
+            if ($senderIsTheCustomer && filled($body = trim(strip_tags((string) $message->body)))) {
+                PlanContentChangeJob::dispatch($ticket->id, $body);
+            }
         }
 
         return $message;
