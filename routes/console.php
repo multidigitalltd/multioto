@@ -16,6 +16,7 @@ use App\Jobs\CheckStoreSalesJob;
 use App\Jobs\FollowUpPendingTicketsJob;
 use App\Jobs\MonitorSiteJob;
 use App\Jobs\ReconcileChargeJob;
+use App\Jobs\ScanSiteComplianceJob;
 use App\Jobs\ScanSiteVulnerabilitiesJob;
 use App\Jobs\SendBroadcastJob;
 use App\Jobs\SendDemandRemindersJob;
@@ -138,6 +139,20 @@ Schedule::call(function () {
         ->pluck('id')
         ->each(fn (int $id) => CheckSiteLayoutJob::dispatch($id));
 })->dailyAt('08:25')->name('monitoring:layout-watch')->onOneServer();
+
+// Weekly accessibility + legal-documents audit for every site with a domain.
+// Sunday morning, so the week starts with a current picture of what each
+// customer is missing (and what we can offer to fix).
+Schedule::call(function () {
+    if (! config('security.compliance.enabled', true)) {
+        return;
+    }
+
+    Site::query()
+        ->whereNotNull('domain')
+        ->pluck('id')
+        ->each(fn (int $id) => ScanSiteComplianceJob::dispatch($id));
+})->weeklyOn(0, '05:40')->name('monitoring:compliance-scan')->onOneServer();
 
 // Weekly proactive maintenance: propose (or auto-run under a standing
 // approval) plugin updates for every connected site, with a homepage health

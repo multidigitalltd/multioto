@@ -127,6 +127,21 @@ return [
         'min_elements' => (int) env('LAYOUT_MIN_ELEMENTS', 5),
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Compliance scan (accessibility + legal documents)
+    |--------------------------------------------------------------------------
+    |
+    | Weekly audit of every customer site: the machine-checkable part of ת"י
+    | 5568 / WCAG 2.2 AA, and whether the site publishes the documents an
+    | Israeli business is expected to have (privacy, terms, accessibility
+    | statement, returns policy for a store).
+    |
+    */
+    'compliance' => [
+        'enabled' => (bool) env('COMPLIANCE_SCAN_ENABLED', true),
+    ],
+
     'reputation' => [
         'enabled' => (bool) env('REPUTATION_SCAN_ENABLED', true),
 
