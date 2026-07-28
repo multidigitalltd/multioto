@@ -8,6 +8,7 @@ use App\Models\WebhookEvent;
 use App\Services\Notifications\DeliveryEvents;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Delivery, open, bounce and spam-complaint events from the email provider.
@@ -52,26 +53,25 @@ class EmailDeliveryWebhookController extends Controller
             $payload,
         );
 
-        // Claim on processed_at, not on "was this row just created". A delivery
-        // that recorded the row and then failed mid-apply left processed_at
-        // null, so the provider's retry still gets to finish the job; had we
-        // keyed on freshness, that retry would see an existing row and drop the
-        // event for good. Only the writer that flips null → now() does the work.
-        $claimed = WebhookEvent::whereKey($event->getKey())
-            ->whereNull('processed_at')
-            ->update(['processed_at' => now()]);
+        // Claim on processed_at, not on "was this row just created" — a delivery
+        // that recorded the row and then failed mid-apply must still be finished
+        // by the provider's retry, and keying on freshness would drop it for
+        // good. Only the writer that flips null → now() does the work; a
+        // concurrent delivery blocks on that row and then finds it taken.
+        //
+        // Claim and apply share one transaction so a failure halfway leaves
+        // nothing behind: the claim rolls back together with whatever the event
+        // had already written, and the retry starts from a clean slate instead
+        // of adding a second open to the same read.
+        DB::transaction(function () use ($event, $events, $payload): void {
+            $claimed = WebhookEvent::whereKey($event->getKey())
+                ->whereNull('processed_at')
+                ->update(['processed_at' => now()]);
 
-        if ($claimed === 1) {
-            try {
+            if ($claimed === 1) {
                 $events->apply($payload);
-            } catch (\Throwable $e) {
-                // Not processed after all — release the claim so the retry can
-                // pick it up instead of finding it permanently taken.
-                WebhookEvent::whereKey($event->getKey())->update(['processed_at' => null]);
-
-                throw $e;
             }
-        }
+        });
 
         return response('OK', 200);
     }

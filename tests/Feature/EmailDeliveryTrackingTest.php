@@ -125,6 +125,19 @@ class EmailDeliveryTrackingTest extends TestCase
         $this->assertNotNull($log->delivered_at);
     }
 
+    public function test_opens_arriving_out_of_order_keep_the_earliest_read(): void
+    {
+        $log = $this->log();
+
+        // Events are not promised in order, so the first one we process is not
+        // necessarily the first one that happened.
+        $this->event(['RecordType' => 'Open', 'MessageID' => 'pm-1', 'ReceivedAt' => '2026-07-28T15:00:00Z'])->assertOk();
+        $this->event(['RecordType' => 'Open', 'MessageID' => 'pm-1', 'ReceivedAt' => '2026-07-28T10:00:00Z'])->assertOk();
+
+        $this->assertTrue($log->fresh()->opened_at->equalTo(Carbon::parse('2026-07-28T10:00:00Z')));
+        $this->assertSame(2, $log->fresh()->open_count);
+    }
+
     public function test_an_open_without_a_delivery_event_stops_showing_the_mail_as_queued(): void
     {
         $log = $this->log();
@@ -211,6 +224,46 @@ class EmailDeliveryTrackingTest extends TestCase
 
         $this->assertNotNull($log->fresh()->delivered_at);
         $this->assertSame(1, WebhookEvent::count());
+    }
+
+    public function test_an_open_that_fails_halfway_is_not_counted_twice_by_the_retry(): void
+    {
+        $log = $this->log();
+
+        $flaky = new class extends DeliveryEvents
+        {
+            public int $calls = 0;
+
+            public function apply(array $payload): bool
+            {
+                $applied = parent::apply($payload);
+
+                // Fail AFTER the count has already moved.
+                if (++$this->calls === 1) {
+                    throw new \RuntimeException('transient database error');
+                }
+
+                return $applied;
+            }
+        };
+
+        $this->instance(DeliveryEvents::class, $flaky);
+
+        $payload = ['RecordType' => 'Open', 'MessageID' => 'pm-1', 'ReceivedAt' => '2026-07-28T10:00:00Z'];
+
+        try {
+            $this->event($payload);
+        } catch (\Throwable) {
+            // The 500 is the point.
+        }
+
+        // The failed attempt rolled back whole — count included.
+        $this->assertSame(0, $log->fresh()->open_count);
+
+        $this->event($payload)->assertOk();
+
+        // One read, counted once, however many times it took to land.
+        $this->assertSame(1, $log->fresh()->open_count);
     }
 
     public function test_a_delivery_and_an_open_for_one_message_are_two_events_not_a_duplicate(): void

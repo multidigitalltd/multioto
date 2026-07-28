@@ -60,9 +60,35 @@ class DeliveryEvents
 
     private function delivered(NotificationLog $log, Carbon $at): void
     {
+        $this->earliest($log, 'delivered_at', $at);
+
         // "sent" here means the provider accepted AND delivered it — a stronger
-        // claim than the "queued" the send path is allowed to make.
-        $log->forceFill(['delivered_at' => $log->delivered_at ?? $at, 'status' => 'sent'])->save();
+        // claim than the "queued" the send path is allowed to make. A row that
+        // already failed keeps its verdict rather than being talked out of it
+        // by a stale replay.
+        $this->markSent($log);
+    }
+
+    /**
+     * Keep the EARLIEST time in a timestamp column.
+     *
+     * Events arrive out of order, so "the first one we processed" is not the
+     * same as "the first one that happened" — writing only when the column is
+     * empty would freeze a later read in place of the actual first one.
+     */
+    private function earliest(NotificationLog $log, string $column, Carbon $at): void
+    {
+        NotificationLog::whereKey($log->getKey())
+            ->where(fn ($query) => $query->whereNull($column)->orWhere($column, '>', $at))
+            ->update([$column => $at]);
+    }
+
+    /** A message the provider has accounted for is no longer "בתור". */
+    private function markSent(NotificationLog $log): void
+    {
+        NotificationLog::whereKey($log->getKey())
+            ->where('status', 'queued')
+            ->update(['status' => 'sent']);
     }
 
     private function opened(NotificationLog $log, Carbon $at): void
@@ -75,31 +101,24 @@ class DeliveryEvents
         // First open is the interesting one; later opens only raise the count,
         // so forwarding a mail around cannot rewrite when it was first read.
         // An open also proves delivery even if that event never arrived.
-        NotificationLog::whereKey($log->getKey())
-            ->whereNull('opened_at')
-            ->update(['opened_at' => $at]);
+        $this->earliest($log, 'opened_at', $at);
+        $this->earliest($log, 'delivered_at', $at);
 
-        NotificationLog::whereKey($log->getKey())
-            ->whereNull('delivered_at')
-            ->update(['delivered_at' => $at]);
-
-        // A message someone read is not "בתור" — and open tracking can be the
-        // only signal we get. A row the provider already failed keeps its
-        // verdict; only a still-queued one moves.
-        NotificationLog::whereKey($log->getKey())
-            ->where('status', 'queued')
-            ->update(['status' => 'sent']);
+        // Open tracking can be the only signal enabled, and a mail proven to
+        // have been read must not sit in the history as "בתור".
+        $this->markSent($log);
     }
 
     private function bounced(NotificationLog $log, Carbon $at, array $payload): void
     {
         $reason = trim((string) ($payload['Description'] ?? $payload['Details'] ?? $payload['Type'] ?? ''));
 
-        $log->forceFill([
-            'bounced_at' => $log->bounced_at ?? $at,
+        $this->earliest($log, 'bounced_at', $at);
+
+        NotificationLog::whereKey($log->getKey())->update([
             'status' => 'failed',
             'error' => $reason !== '' ? Str::limit($reason, 250, '') : 'הודעה חזרה (bounce)',
-        ])->save();
+        ]);
 
         // Only a permanent failure retires the address. A full mailbox or a
         // transient server error is not a reason to stop writing to a customer.
@@ -110,7 +129,7 @@ class DeliveryEvents
 
     private function complained(NotificationLog $log, Carbon $at): void
     {
-        $log->forceFill(['complained_at' => $log->complained_at ?? $at])->save();
+        $this->earliest($log, 'complained_at', $at);
 
         // Someone pressing "spam" is the clearest opt-out there is; honouring it
         // silently is both correct and the only way to protect our sending
