@@ -143,7 +143,9 @@ class SendBroadcastJob implements ShouldQueue
                                 continue;
                             }
                             Mail::to($customer->email)->queue(new BroadcastMail(
-                                $subject, $body, $this->renderer->emailFooter($broadcast, $customer),
+                                $subject, $body,
+                                $this->renderer->emailFooter($broadcast, $customer),
+                                $this->renderer->bodyHtml($broadcast, $customer),
                             ));
                             // Broadcast emails are queued, not sent inline — record as
                             // "queued" so the log doesn't claim delivery that hasn't happened.

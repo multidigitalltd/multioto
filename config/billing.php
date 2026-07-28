@@ -402,6 +402,13 @@ return [
 
     'broadcasts' => [
         'email_chunk_size' => env('BROADCAST_EMAIL_CHUNK', 50),
+
+        // ההסבר בתחתית דיוור — "למה קיבלת את ההודעה הזו". ניתן לעריכה
+        // בהגדרות ← מייל ושולח. ריק = נוסח ברירת המחדל. {{עסק}} מוחלף בשם
+        // השולח. החלקים שהחוק מחייב בהודעת פרסומת (הכותרת "פרסומת", זהות
+        // המפרסם וקישור ההסרה) נוספים בכל מקרה ואינם תלויים בטקסט הזה.
+        'service_note' => env('BROADCAST_SERVICE_NOTE'),
+        'marketing_note' => env('BROADCAST_MARKETING_NOTE'),
     ],
 
     /*

@@ -158,7 +158,9 @@ class BroadcastSendActions
                 }
 
                 Mail::to($user->email)->send(new BroadcastMail(
-                    $subject, $body, $renderer->emailFooter($record, $sample, preview: true),
+                    $subject, $body,
+                    $renderer->emailFooter($record, $sample, preview: true),
+                    $renderer->bodyHtml($record, $sample),
                 ));
 
                 return Notification::make()->success()->title('הבדיקה נשלחה לתור')

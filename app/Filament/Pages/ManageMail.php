@@ -53,7 +53,7 @@ class ManageMail extends Page implements HasForms
     protected static string $view = 'filament.pages.manage-mail';
 
     /** Non-secret keys pre-filled from config; secrets are always left blank. */
-    private const IDENTITY_KEYS = ['mail.from_address', 'mail.from_name', 'mail.reply_to', 'notifications.team_email', 'notifications.reply_signature', 'notifications.reply_signature_whatsapp', 'branding.logo_path', 'branding.email_footer'];
+    private const IDENTITY_KEYS = ['mail.from_address', 'mail.from_name', 'mail.reply_to', 'notifications.team_email', 'notifications.reply_signature', 'notifications.reply_signature_whatsapp', 'branding.logo_path', 'branding.email_footer', 'broadcasts.service_note', 'broadcasts.marketing_note'];
 
     private const SECRET_KEYS = ['postmark.token', 'postmark.account_token', 'email.webhook_secret'];
 
@@ -80,6 +80,8 @@ class ManageMail extends Page implements HasForms
         data_set($values, 'notifications.reply_signature_whatsapp', config('billing.notifications.reply_signature_whatsapp'));
         data_set($values, 'branding.logo_path', config('billing.branding.logo_path'));
         data_set($values, 'branding.email_footer', config('billing.branding.email_footer'));
+        data_set($values, 'broadcasts.service_note', config('billing.broadcasts.service_note'));
+        data_set($values, 'broadcasts.marketing_note', config('billing.broadcasts.marketing_note'));
 
         $this->form->fill($values);
     }
@@ -138,6 +140,22 @@ class ManageMail extends Page implements HasForms
                             ->helperText('מופיעה בתחתית כל מייל ללקוח. השאירו ריק לברירת מחדל עם שם העסק והשנה.')
                             ->placeholder("Multi Digital · multidigital.co.il · 03-0000000\nרח׳ הדוגמה 1, תל אביב"),
                     ])
+                    ->footerActions([$this->saveAction()]),
+
+                Section::make('הסבר בתחתית דיוור')
+                    ->description('השורות שמסבירות ללקוח למה קיבל את ההודעה, מתחת לתוכן הדיוור. אפשר להשתמש ב-{{עסק}} לשם השולח. השאירו ריק לנוסח ברירת המחדל. הכותרת "פרסומת", זהות המפרסם וקישור ההסרה נוספים אוטומטית להודעה פרסומית ואינם תלויים בטקסטים כאן.')
+                    ->schema([
+                        Textarea::make('broadcasts.service_note')
+                            ->label('בהודעת שירות')
+                            ->rows(3)
+                            ->helperText('תחזוקה, אבטחה, שינוי בשירות — הודעות שאינן פרסומת ונשלחות גם למי שהוסר מרשימת הדיוור.')
+                            ->placeholder("זוהי הודעת שירות מאת {{עסק}}.\nקיבלת אותה משום שאתה לקוח שלנו והיא נוגעת לשירות שאנחנו מספקים לך."),
+                        Textarea::make('broadcasts.marketing_note')
+                            ->label('בהודעה פרסומית')
+                            ->rows(3)
+                            ->helperText('מבצע, הצעה, שירות חדש. קישור ההסרה מתווסף מתחת לטקסט הזה בכל מקרה.')
+                            ->placeholder('זוהי הודעה פרסומית מאת {{עסק}}.'),
+                    ])->columns(2)
                     ->footerActions([$this->saveAction()]),
 
                 Section::make('חתימת תשובות')
