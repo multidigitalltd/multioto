@@ -17,6 +17,7 @@ use App\Jobs\FollowUpPendingTicketsJob;
 use App\Jobs\MonitorSiteJob;
 use App\Jobs\ReconcileChargeJob;
 use App\Jobs\ScanSiteComplianceJob;
+use App\Jobs\ScanSiteOpportunitiesJob;
 use App\Jobs\ScanSiteVulnerabilitiesJob;
 use App\Jobs\SendBroadcastJob;
 use App\Jobs\SendDemandRemindersJob;
@@ -153,6 +154,21 @@ Schedule::call(function () {
         ->pluck('id')
         ->each(fn (int $id) => ScanSiteComplianceJob::dispatch($id));
 })->weeklyOn(0, '05:40')->name('monitoring:compliance-scan')->onOneServer();
+
+// Weekly opportunity sweep: turn what we already know about every site into a
+// priced list of work worth offering (accessibility, legal docs, speed, broken
+// links, SEO basics, old PHP). Runs after the compliance scan so it sees fresh
+// findings.
+Schedule::call(function () {
+    if (! config('growth.opportunities.enabled', true)) {
+        return;
+    }
+
+    Site::query()
+        ->whereNotNull('domain')
+        ->pluck('id')
+        ->each(fn (int $id) => ScanSiteOpportunitiesJob::dispatch($id));
+})->weeklyOn(0, '06:10')->name('growth:opportunity-radar')->onOneServer();
 
 // Weekly proactive maintenance: propose (or auto-run under a standing
 // approval) plugin updates for every connected site, with a homepage health
