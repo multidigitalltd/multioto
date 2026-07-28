@@ -77,7 +77,8 @@ class OpportunityRadar
 
     private function vulnerabilities(Site $site): ?array
     {
-        $findings = (array) data_get($site->vulnerability_scan, 'findings', []);
+        // 'items' is the key ScanSiteVulnerabilitiesJob actually writes.
+        $findings = (array) data_get($site->vulnerability_scan, 'items', []);
 
         if ($findings === []) {
             return null;

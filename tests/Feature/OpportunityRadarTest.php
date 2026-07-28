@@ -145,6 +145,78 @@ class OpportunityRadarTest extends TestCase
         $this->assertStringContainsString('/gone', $broken['evidence']);
     }
 
+    public function test_known_vulnerabilities_become_an_opportunity(): void
+    {
+        // The scan job writes its results under 'items' — reading any other key
+        // would silently hide every security engagement.
+        $site = Site::factory()->create([
+            'monitor_enabled' => true,
+            'vulnerability_scan' => ['items' => [
+                ['name' => 'Contact Form 7', 'severity' => 'high'],
+                ['name' => 'Elementor', 'severity' => 'medium'],
+            ]],
+        ]);
+
+        $vuln = collect((new OpportunityRadar)->build($site))->firstWhere('key', 'vulnerabilities');
+
+        $this->assertNotNull($vuln);
+        $this->assertStringContainsString('Contact Form 7', $vuln['evidence']);
+    }
+
+    public function test_a_meta_description_is_recognised_whatever_the_attribute_order(): void
+    {
+        $site = Site::factory()->create(['domain' => 'example.co.il', 'monitor_enabled' => true]);
+
+        // content BEFORE name — valid HTML, and a common CMS output.
+        Http::fake(['https://example.co.il/' => Http::response(
+            '<html><head><title>כותרת</title><meta content="תיאור העמוד" name="description">'
+            .'<meta property="og:title" content="x"></head><body></body></html>'
+        )]);
+
+        (new ScanSiteOpportunitiesJob($site->id))->handle(new OpportunityRadar, $this->mcpWithoutTools());
+
+        $this->assertNull(collect($site->fresh()->opportunities['items'])->firstWhere('key', 'seo_basics'));
+    }
+
+    public function test_a_failed_homepage_probe_keeps_the_previous_findings(): void
+    {
+        $site = Site::factory()->create([
+            'domain' => 'example.co.il',
+            'monitor_enabled' => true,
+            'opportunities' => ['scanned_at' => '2026-07-01T00:00:00+00:00', 'items' => [
+                ['key' => 'broken_links', 'title' => 'תיקון קישורים שבורים', 'evidence' => '3 קישורים', 'price_agorot' => 40000, 'severity' => 'medium'],
+            ], 'total_agorot' => 40000],
+        ]);
+
+        Http::fake(['*' => Http::response('', 503)]);
+
+        (new ScanSiteOpportunitiesJob($site->id))->handle(new OpportunityRadar, $this->mcpWithoutTools());
+
+        // An outage is not evidence that the site became clean.
+        $stored = $site->fresh()->opportunities;
+        $this->assertSame('2026-07-01T00:00:00+00:00', $stored['scanned_at']);
+        $this->assertSame(40000, $stored['total_agorot']);
+    }
+
+    public function test_a_link_that_disguises_another_host_is_never_probed(): void
+    {
+        $site = Site::factory()->create(['domain' => 'example.co.il', 'monitor_enabled' => true]);
+
+        // Credentials-in-URL (real host: 127.0.0.1) and a suffix look-alike.
+        Http::fake([
+            'https://example.co.il/' => Http::response(
+                '<html><body><a href="https://example.co.il@127.0.0.1/admin">a</a>'
+                .'<a href="https://example.co.il.attacker.test/x">b</a></body></html>'
+            ),
+            '*' => Http::response('', 404),
+        ]);
+
+        (new ScanSiteOpportunitiesJob($site->id))->handle(new OpportunityRadar, $this->mcpWithoutTools());
+
+        Http::assertNotSent(fn ($request) => str_contains($request->url(), '127.0.0.1')
+            || str_contains($request->url(), 'attacker.test'));
+    }
+
     public function test_external_links_are_never_probed(): void
     {
         $site = Site::factory()->create(['domain' => 'example.co.il', 'monitor_enabled' => true]);

@@ -47,15 +47,24 @@ class ScanSiteOpportunitiesJob implements ShouldQueue
             return;
         }
 
-        $probe = ['broken_links' => [], 'seo' => [], 'php_version' => null];
         $html = $this->homepage($site);
 
-        if ($html !== null) {
-            $probe['seo'] = $this->seoSignals($html);
-            $probe['broken_links'] = $this->brokenLinks($site, $html);
+        if ($html === null) {
+            // A timeout or an empty answer is NOT evidence that the site is
+            // clean. Rewriting the list from an empty probe would silently
+            // erase real SEO/broken-link findings and stamp a fresh scan date.
+            SystemLog::record('info', 'monitoring',
+                "סריקת ההזדמנויות לאתר {$site->domain} דולגה — דף הבית לא נטען. הממצאים הקודמים נשמרו.",
+                ['site_id' => $site->id]);
+
+            return;
         }
 
-        $probe['php_version'] = $this->phpVersion($site, $mcp);
+        $probe = [
+            'seo' => $this->seoSignals($html),
+            'broken_links' => $this->brokenLinks($site, $html),
+            'php_version' => $this->phpVersion($site, $mcp),
+        ];
 
         $opportunities = $radar->build($site, $probe);
 
@@ -94,10 +103,34 @@ class ScanSiteOpportunitiesJob implements ShouldQueue
 
         return [
             'has_title' => preg_match('/<title[^>]*>\s*\S/i', $html) === 1,
-            'has_description' => preg_match('/<meta[^>]*name\s*=\s*["\']description["\'][^>]*content\s*=\s*["\']\s*\S/i', $html) === 1,
+            'has_description' => $this->hasMetaDescription($html),
             'has_og' => preg_match('/<meta[^>]*property\s*=\s*["\']og:/i', $html) === 1,
             'images_without_lazy' => $withoutLazy,
         ];
+    }
+
+    /**
+     * A non-empty <meta name="description" content="…">. Attribute ORDER is
+     * insignificant in HTML, so each meta tag is inspected on its own rather
+     * than matched with one order-dependent pattern (which would invent a
+     * "missing description" opportunity for a perfectly good page).
+     */
+    private function hasMetaDescription(string $html): bool
+    {
+        preg_match_all('/<meta\b[^>]*>/i', $html, $matches);
+
+        foreach ($matches[0] ?? [] as $tag) {
+            if (preg_match('/\bname\s*=\s*["\']?description["\']?/i', $tag) !== 1) {
+                continue;
+            }
+
+            if (preg_match('/\bcontent\s*=\s*(["\'])(.*?)\1/is', $tag, $content) === 1
+                && trim(html_entity_decode($content[2], ENT_QUOTES | ENT_HTML5)) !== '') {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -115,19 +148,7 @@ class ScanSiteOpportunitiesJob implements ShouldQueue
         $base = 'https://'.$site->domain;
 
         $links = collect($matches[1] ?? [])
-            ->map(function (string $href) use ($base): ?string {
-                $href = trim($href);
-
-                if ($href === '' || str_starts_with($href, 'mailto:') || str_starts_with($href, 'tel:') || str_starts_with($href, 'javascript:')) {
-                    return null;
-                }
-
-                if (str_starts_with($href, '/')) {
-                    return $base.$href;
-                }
-
-                return str_starts_with($href, $base) ? $href : null; // same site only
-            })
+            ->map(fn (string $href): ?string => $this->sameSiteUrl(trim($href), $site->domain, $base))
             ->filter()
             ->unique()
             ->take($sample);
@@ -147,6 +168,54 @@ class ScanSiteOpportunitiesJob implements ShouldQueue
         }
 
         return $broken;
+    }
+
+    /**
+     * The absolute URL to probe, or null when the link does not belong to this
+     * site. The host is PARSED and compared exactly — a raw prefix check would
+     * accept `https://example.co.il@127.0.0.1/` (whose real host is localhost)
+     * and `https://example.co.il.attacker.test/`, turning the queue worker into
+     * a probe of internal services or a stranger's site.
+     */
+    private function sameSiteUrl(string $href, string $domain, string $base): ?string
+    {
+        if ($href === '') {
+            return null;
+        }
+
+        // Root-relative links are ours by construction.
+        if (str_starts_with($href, '/') && ! str_starts_with($href, '//')) {
+            return $base.$href;
+        }
+
+        $parts = parse_url($href);
+
+        if ($parts === false || ! isset($parts['host'])) {
+            return null; // relative, mailto:, tel:, javascript:, or malformed
+        }
+
+        if (! in_array(strtolower($parts['scheme'] ?? ''), ['http', 'https'], true)) {
+            return null;
+        }
+
+        // Credentials in a URL only ever serve to disguise the real host here.
+        if (isset($parts['user']) || isset($parts['pass'])) {
+            return null;
+        }
+
+        if (isset($parts['port']) && ! in_array((int) $parts['port'], [80, 443], true)) {
+            return null;
+        }
+
+        $host = strtolower(rtrim($parts['host'], '.'));
+        $domain = strtolower(ltrim($domain, '.'));
+
+        // Exactly the site's host, or a subdomain of it — never a suffix match.
+        if ($host !== $domain && ! str_ends_with($host, '.'.$domain)) {
+            return null;
+        }
+
+        return $href;
     }
 
     /** The site's PHP version, when the agent plugin is connected. */
