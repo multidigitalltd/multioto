@@ -12,7 +12,7 @@ class Broadcast extends Model
     use HasFactory;
 
     protected $fillable = [
-        'subject', 'body', 'channel', 'segment', 'status', 'scheduled_at', 'sent_count',
+        'subject', 'body', 'channel', 'segment', 'status', 'scheduled_at', 'sent_count', 'is_marketing',
     ];
 
     protected function casts(): array
@@ -23,6 +23,7 @@ class Broadcast extends Model
             'status' => BroadcastStatus::class,
             'scheduled_at' => 'datetime',
             'sent_count' => 'integer',
+            'is_marketing' => 'boolean',
         ];
     }
 }

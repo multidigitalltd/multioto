@@ -45,9 +45,16 @@ class BroadcastAudience
      * A customer with no email is not a failed email — they were never a
      * recipient, and counting them would make every send look partly broken.
      */
-    public function reachable(BroadcastChannel $channel, ?array $segment): Builder
+    public function reachable(BroadcastChannel $channel, ?array $segment, bool $marketing = false): Builder
     {
         $query = $this->query($segment);
+
+        // An opt-out silences advertising only. A service announcement — planned
+        // maintenance, a security notice — is not advertising, and withholding it
+        // would leave the customer uninformed about their own site.
+        if ($marketing) {
+            $query->whereNull('marketing_opt_out_at');
+        }
 
         return $channel === BroadcastChannel::Email
             ? $query->where(fn ($q) => $this->filled($q, 'email'))
@@ -59,17 +66,25 @@ class BroadcastAudience
      * Recipient counts for the panel: how many the segment selects, how many are
      * reachable on the chosen channel, and how many will therefore be skipped.
      *
-     * @return array{total: int, reachable: int, unreachable: int}
+     * `opted_out` is split out from `unreachable` so the panel can say why: a
+     * missing address is something the operator can fix, an opt-out is not.
+     *
+     * @return array{total: int, reachable: int, unreachable: int, opted_out: int}
      */
-    public function summary(BroadcastChannel $channel, ?array $segment): array
+    public function summary(BroadcastChannel $channel, ?array $segment, bool $marketing = false): array
     {
         $total = $this->query($segment)->count();
-        $reachable = $this->reachable($channel, $segment)->count();
+        $reachable = $this->reachable($channel, $segment, $marketing)->count();
+
+        $optedOut = $marketing
+            ? (clone $this->query($segment))->whereNotNull('marketing_opt_out_at')->count()
+            : 0;
 
         return [
             'total' => $total,
             'reachable' => $reachable,
-            'unreachable' => max(0, $total - $reachable),
+            'unreachable' => max(0, $total - $reachable - $optedOut),
+            'opted_out' => $optedOut,
         ];
     }
 

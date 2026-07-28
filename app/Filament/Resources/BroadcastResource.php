@@ -12,8 +12,11 @@ use App\Models\Broadcast;
 use App\Models\Customer;
 use App\Models\Plan;
 use App\Services\Support\BroadcastAudience;
+use App\Services\Support\BroadcastComposer;
+use App\Services\Support\BroadcastRenderer;
 use Filament\Forms;
 use Filament\Forms\Form;
+use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
@@ -65,8 +68,77 @@ class BroadcastResource extends Resource
                             ->label('תוכן')
                             ->required()
                             ->rows(8)
+                            ->helperText(new HtmlString(
+                                'אפשר לשלב משתנים שיוחלפו לכל לקוח: '.collect(BroadcastRenderer::TOKENS)
+                                    ->map(fn (string $what, string $token): string => '<code>{{'.e($token).'}}</code> — '.e($what))
+                                    ->implode(' · ')
+                            ))
                             ->columnSpanFull(),
+                        Forms\Components\Actions::make([
+                            Forms\Components\Actions\Action::make('compose')
+                                ->label('נסח לי עם הסוכן')
+                                ->icon('heroicon-o-sparkles')
+                                ->color('primary')
+                                ->visible(fn (): bool => app(BroadcastComposer::class)->isAvailable())
+                                ->modalHeading('ניסוח דיוור')
+                                ->modalDescription('כתוב בשורה מה רוצים להגיד, והסוכן ינסח בשפת התמיכה שלנו. הנוסח ייכנס לטופס ותוכל לערוך אותו לפני שליחה.')
+                                ->modalSubmitActionLabel('נסח')
+                                ->form([
+                                    Forms\Components\Textarea::make('brief')
+                                        ->label('מה רוצים להגיד?')
+                                        ->placeholder('לדוגמה: בשבת הקרובה בין 2 ל-5 לפנות בוקר נעשה תחזוקה בשרתים, ייתכנו כמה דקות של אי-זמינות')
+                                        ->required()
+                                        ->rows(3)
+                                        ->maxLength(1500),
+                                ])
+                                ->action(function (array $data, Forms\Set $set, Forms\Get $get) {
+                                    $draft = app(BroadcastComposer::class)->draft(
+                                        (string) $data['brief'],
+                                        static::channelOf($get('channel')),
+                                        (bool) $get('is_marketing'),
+                                    );
+
+                                    if ($draft === null) {
+                                        Notification::make()->danger()
+                                            ->title('הסוכן לא הצליח לנסח')
+                                            ->body('נסו שוב עם תקציר מפורט יותר, או בדקו שחיבור ה-AI פעיל.')
+                                            ->send();
+
+                                        return;
+                                    }
+
+                                    $set('subject', $draft['subject']);
+                                    $set('body', $draft['body']);
+
+                                    Notification::make()->success()
+                                        ->title('הנוסח מוכן')
+                                        ->body('עברו עליו ותקנו מה שצריך — שום דבר לא נשלח עדיין.')
+                                        ->send();
+                                }),
+                        ])->columnSpanFull(),
                     ])->columns(2),
+
+                Forms\Components\Section::make('סוג ההודעה')
+                    ->schema([
+                        Forms\Components\Radio::make('is_marketing')
+                            ->label('')
+                            ->boolean('הודעה פרסומית', 'הודעת שירות')
+                            ->default(true)
+                            ->live()
+                            ->descriptions([
+                                1 => 'מבצע, שירות חדש, הצעה. תתווסף הכותרת "פרסומת", פרטי העסק וקישור הסרה, ולקוחות שביקשו להסיר אותם לא יקבלו — כנדרש בחוק התקשורת.',
+                                0 => 'תחזוקה מתוכננת, עדכון אבטחה, שינוי בשירות. אינה פרסומת, ולכן נשלחת גם ללקוחות שהוסרו מרשימת הדיוור.',
+                            ])
+                            ->required(),
+                        Forms\Components\Placeholder::make('marketing_warning')
+                            ->label('')
+                            ->visible(fn (Forms\Get $get): bool => (bool) $get('is_marketing') && blank(config('billing.business.address')))
+                            ->content(new HtmlString(
+                                '<span class="text-warning-600">לא הוגדרה כתובת עסק (<code>BUSINESS_ADDRESS</code>). '
+                                .'חוק התקשורת מחייב הודעת פרסומת לשאת את שם המפרסם וכתובתו — כדאי למלא זאת לפני השליחה.</span>'
+                            )),
+                    ])
+                    ->hidden(fn (?Broadcast $record): bool => $record?->status === BroadcastStatus::Sent),
 
                 Forms\Components\Section::make('קהל יעד')
                     ->description('השאירו הכל כברירת המחדל כדי לשלוח לכל הלקוחות הפעילים.')
@@ -142,7 +214,7 @@ class BroadcastResource extends Resource
             'status' => $get('segment.status'),
             'plan_ids' => $get('segment.plan_ids'),
             'customer_ids' => $get('segment.customer_ids'),
-        ]);
+        ], marketing: (bool) $get('is_marketing'));
 
         if ($counts['reachable'] === 0) {
             return new HtmlString('<span class="text-danger-600 font-semibold">אף לקוח לא יקבל את הדיוור הזה.</span>');
@@ -154,6 +226,10 @@ class BroadcastResource extends Resource
 
         if ($counts['unreachable'] > 0) {
             $line .= '<br><span class="text-sm text-gray-500">'.$counts['unreachable'].' לקוחות תואמים לקהל אך ידולגו — '.$missing.'.</span>';
+        }
+
+        if ($counts['opted_out'] > 0) {
+            $line .= '<br><span class="text-sm text-gray-500">'.$counts['opted_out'].' לקוחות ביקשו להסיר אותם מדיוור פרסומי ולא יקבלו.</span>';
         }
 
         return new HtmlString($line);

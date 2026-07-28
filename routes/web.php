@@ -7,6 +7,7 @@ use App\Http\Controllers\BrandingController;
 use App\Http\Controllers\CsatController;
 use App\Http\Controllers\CustomerCardPdfController;
 use App\Http\Controllers\IntegrationKeysFallbackController;
+use App\Http\Controllers\MarketingPreferencesController;
 use App\Http\Controllers\Portal\PortalAuthController;
 use App\Http\Controllers\Portal\PortalController;
 use App\Http\Controllers\PushSubscriptionController;
@@ -83,6 +84,22 @@ Route::get('/support/rate/{ticket}', [CsatController::class, 'show'])
 Route::post('/support/rate/{ticket}', [CsatController::class, 'store'])
     ->middleware(['signed', 'throttle:30,1'])
     ->name('csat.store');
+
+/*
+ | Marketing opt-out. Every advertising message carries the signed link below,
+ | as חוק התקשורת ס' 30א requires; the signature stops the customer id being
+ | swapped to unsubscribe somebody else. The confirmation page is unsigned —
+ | it carries no customer data and no action.
+ */
+Route::get('/marketing/unsubscribe/{customer}', [MarketingPreferencesController::class, 'unsubscribe'])
+    ->middleware(['signed', 'throttle:30,1'])
+    ->name('marketing.unsubscribe');
+Route::get('/marketing/resubscribe/{customer}', [MarketingPreferencesController::class, 'resubscribe'])
+    ->middleware(['signed', 'throttle:30,1'])
+    ->name('marketing.resubscribe');
+Route::get('/marketing/resubscribed', [MarketingPreferencesController::class, 'resubscribed'])
+    ->middleware('throttle:60,1')
+    ->name('marketing.resubscribed');
 
 /*
  | Inbound support attachments — served only to a signed-in team member

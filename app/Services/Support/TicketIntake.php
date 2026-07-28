@@ -25,6 +25,8 @@ use Illuminate\Support\Str;
  */
 class TicketIntake
 {
+    public function __construct(private MarketingPreferences $preferences) {}
+
     /**
      * Match an inbound contact to a customer by any identifier we hold.
      * WhatsApp JID is matched exactly; phone/email fall back to a lookup.
@@ -151,8 +153,15 @@ class TicketIntake
                 && $ticket->customer_id !== null
                 && $customer->id === $ticket->customer_id;
 
-            if ($senderIsTheCustomer && filled($body = trim(strip_tags((string) $message->body)))) {
-                PlanContentChangeJob::dispatch($ticket->id, $body);
+            if ($senderIsTheCustomer && filled($text = trim(strip_tags((string) $message->body)))) {
+                // "הסר" on the channel a marketing message arrived on is an
+                // opt-out request the law requires us to honour — and it is not
+                // a content-change request, so it stops here.
+                if ($this->preferences->looksLikeOptOut($text)) {
+                    $this->preferences->optOut($customer, $channel->value);
+                } else {
+                    PlanContentChangeJob::dispatch($ticket->id, $text);
+                }
             }
         }
 

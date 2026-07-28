@@ -38,7 +38,8 @@ class BroadcastSendActions
      */
     public static function confirmation(Broadcast $record): HtmlString
     {
-        $counts = app(BroadcastAudience::class)->summary($record->channel, $record->segment);
+        $counts = app(BroadcastAudience::class)
+            ->summary($record->channel, $record->segment, marketing: (bool) $record->is_marketing);
         $channel = $record->channel->getLabel();
 
         if ($counts['reachable'] === 0) {
@@ -49,6 +50,14 @@ class BroadcastSendActions
 
         if ($counts['unreachable'] > 0) {
             $text .= '<br>'.$counts['unreachable'].' לקוחות בקהל ידולגו — אין להם כתובת בערוץ הזה.';
+        }
+
+        if ($counts['opted_out'] > 0) {
+            $text .= '<br>'.$counts['opted_out'].' לקוחות ביקשו להסיר אותם מדיוור פרסומי ולא יקבלו.';
+        }
+
+        if ($record->is_marketing) {
+            $text .= '<br><em>ההודעה תישלח כפרסומת: תתווסף הכותרת "פרסומת", פרטי העסק וקישור הסרה.</em>';
         }
 
         if ($record->channel === BroadcastChannel::Whatsapp) {
@@ -62,7 +71,8 @@ class BroadcastSendActions
     /** Queue the real send. Returns the Filament notification to show. */
     public static function send(Broadcast $record): Notification
     {
-        $counts = app(BroadcastAudience::class)->summary($record->channel, $record->segment);
+        $counts = app(BroadcastAudience::class)
+            ->summary($record->channel, $record->segment, marketing: (bool) $record->is_marketing);
 
         if ($counts['reachable'] === 0) {
             return Notification::make()
@@ -94,15 +104,35 @@ class BroadcastSendActions
     {
         $user = auth()->user();
 
+        // Render against a real customer from the segment, so the test shows the
+        // placeholders and the footer exactly as a customer would see them —
+        // sending the raw text would hide the one thing worth checking.
+        $sample = app(BroadcastAudience::class)
+            ->reachable($record->channel, $record->segment, marketing: (bool) $record->is_marketing)
+            ->with(['sites:id,customer_id,domain', 'subscriptions.plan:id,name'])
+            ->first();
+
+        if ($sample === null) {
+            return Notification::make()->danger()->title('אין לקוח בקהל היעד')
+                ->body('בלי לקוח לדוגמה אי אפשר להראות איך ההודעה תיראה בפועל.');
+        }
+
+        $renderer = app(BroadcastRenderer::class);
+        $subject = '[בדיקה] '.$renderer->subject($record, $sample);
+        $body = $renderer->body($record, $sample);
+
         try {
             if ($record->channel === BroadcastChannel::Email) {
                 if (blank($user?->email)) {
                     return Notification::make()->danger()->title('אין כתובת אימייל למשתמש שלך');
                 }
 
-                Mail::to($user->email)->send(new BroadcastMail('[בדיקה] '.$record->subject, $record->body));
+                Mail::to($user->email)->send(new BroadcastMail(
+                    $subject, $body, $renderer->emailFooter($record, $sample),
+                ));
 
-                return Notification::make()->success()->title('נשלחה בדיקה')->body('נשלח אל '.$user->email);
+                return Notification::make()->success()->title('הבדיקה נשלחה לתור')
+                    ->body('תגיע אל '.$user->email.' — מוצגת כפי שיראה אותה הלקוח '.$sample->name.'.');
             }
 
             if (blank($user?->phone)) {
@@ -110,9 +140,10 @@ class BroadcastSendActions
                     ->body('הוסיפו מספר בפרופיל כדי לשלוח בדיקת וואטסאפ.');
             }
 
-            app(WahaClient::class)->sendMessage($user->phone, $record->body);
+            app(WahaClient::class)->sendMessage($user->phone, $body);
 
-            return Notification::make()->success()->title('נשלחה בדיקה')->body('נשלח אל '.$user->phone);
+            return Notification::make()->success()->title('נשלחה בדיקה')
+                ->body('נשלח אל '.$user->phone.' — מוצגת כפי שיראה אותה הלקוח '.$sample->name.'.');
         } catch (\Throwable $e) {
             report($e);
 

@@ -19,6 +19,7 @@ class Customer extends Model
         'address', 'payment_method', 'terms_accepted_at', 'signature_path', 'signed_ip', 'signed_pdf_path',
         'whatsapp_jid', 'cardcom_account_id', 'pending_card_lp_id', 'card_link_token', 'default_token_id', 'status', 'notes',
         'monitoring_report_sent_at', 'onboarding_checklist',
+        'marketing_opt_out_at', 'marketing_opt_out_channel',
     ];
 
     protected function casts(): array
@@ -30,7 +31,20 @@ class Customer extends Model
             'terms_accepted_at' => 'datetime',
             'monitoring_report_sent_at' => 'datetime',
             'onboarding_checklist' => 'array',
+            'marketing_opt_out_at' => 'datetime',
         ];
+    }
+
+    /**
+     * Has this customer asked to stop receiving marketing?
+     *
+     * Only advertising is affected. Invoices, payment demands, dunning and
+     * site-fault alerts are service messages and keep going out — the customer
+     * asked not to be marketed to, not to be left in the dark.
+     */
+    public function hasOptedOutOfMarketing(): bool
+    {
+        return $this->marketing_opt_out_at !== null;
     }
 
     /**

@@ -246,6 +246,17 @@ return [
         'support_address' => env('SUPPORT_EMAIL', 'support@multi.digital'),
     ],
 
+    /*
+    | זהות השולח, כפי שהיא מופיעה בתחתית דיוור פרסומי. חוק התקשורת
+    | (בזק ושידורים), סעיף 30א, מחייב הודעת פרסומת לשאת את שם המפרסם
+    | וכתובתו לצד דרך הסרה פעילה. הכתובת ריקה כברירת מחדל — יש למלא
+    | אותה לפני שליחת דיוור פרסומי.
+    */
+    'business' => [
+        'name' => env('BUSINESS_NAME'),
+        'address' => env('BUSINESS_ADDRESS'),
+    ],
+
     'hosting' => [
         // Driver behind HostingClient: 'flywp' (real) or 'log' (records intent only).
         'driver' => env('HOSTING_DRIVER', 'log'),

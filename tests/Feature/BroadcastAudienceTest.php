@@ -17,6 +17,7 @@ use App\Models\Plan;
 use App\Models\Subscription;
 use App\Models\User;
 use App\Services\Support\BroadcastAudience;
+use App\Services\Support\BroadcastRenderer;
 use App\Services\Waha\WahaClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Bus;
@@ -284,6 +285,6 @@ class BroadcastAudienceTest extends TestCase
 
     private function runSend(Broadcast $broadcast): void
     {
-        (new SendBroadcastJob($broadcast->id))->handle(app(WahaClient::class), $this->audience());
+        (new SendBroadcastJob($broadcast->id))->handle(app(WahaClient::class), $this->audience(), app(BroadcastRenderer::class));
     }
 }
