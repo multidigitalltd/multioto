@@ -7,6 +7,8 @@ use App\Enums\BroadcastStatus;
 use App\Enums\CustomerStatus;
 use App\Models\Broadcast;
 use App\Models\Customer;
+use App\Models\Plan;
+use App\Models\Subscription;
 use App\Services\Agent\ConsoleAgent;
 use App\Services\Ai\ClaudeClient;
 use App\Services\Automation\ApprovalGate;
@@ -157,6 +159,92 @@ class ConsoleAgentBroadcastTest extends TestCase
 
         $this->assertSame(['status' => 'all'], Broadcast::sole()->segment);
         $this->assertStringContainsString('2 לקוחות', $result['summary']);
+    }
+
+    public function test_an_unstated_classification_defaults_to_advertising_not_service(): void
+    {
+        Customer::factory()->create(['status' => CustomerStatus::Active, 'email' => 'a@b.co.il']);
+
+        $this->runWith(['subject' => 'מבצע לחג', 'body' => 'תוכן']);
+
+        // The two mistakes are not symmetrical: a service notice labelled
+        // advertising is odd; advertising labelled service loses the "פרסומת"
+        // heading and the opt-out link and reaches people who opted out.
+        $this->assertTrue(Broadcast::sole()->is_marketing);
+    }
+
+    public function test_an_opted_out_customer_is_excluded_from_the_count_of_an_unclassified_draft(): void
+    {
+        Customer::factory()->create(['status' => CustomerStatus::Active, 'email' => 'a@b.co.il']);
+        Customer::factory()->create([
+            'status' => CustomerStatus::Active, 'email' => 'b@b.co.il', 'marketing_opt_out_at' => now(),
+        ]);
+
+        $result = $this->runWith(['subject' => 'מבצע', 'body' => 'תוכן']);
+
+        $this->assertStringContainsString('1 לקוחות', $result['summary']);
+    }
+
+    public function test_a_request_for_one_plan_narrows_the_draft_to_that_plan(): void
+    {
+        $wanted = Plan::factory()->create(['name' => 'תחזוקה פלוס']);
+        $other = Plan::factory()->create(['name' => 'בסיסי']);
+
+        $in = Customer::factory()->create(['status' => CustomerStatus::Active, 'email' => 'in@b.co.il']);
+        $out = Customer::factory()->create(['status' => CustomerStatus::Active, 'email' => 'out@b.co.il']);
+
+        Subscription::factory()->create(['customer_id' => $in->id, 'plan_id' => $wanted->id]);
+        Subscription::factory()->create(['customer_id' => $out->id, 'plan_id' => $other->id]);
+
+        $result = $this->runWith([
+            'subject' => 'נושא', 'body' => 'תוכן', 'is_marketing' => false,
+            'plan_names' => ['תחזוקה פלוס'],
+        ]);
+
+        $this->assertSame([$wanted->id], Broadcast::sole()->segment['plan_ids']);
+        $this->assertStringContainsString('1 לקוחות', $result['summary']);
+    }
+
+    public function test_a_plan_name_that_matches_nothing_refuses_rather_than_mailing_everyone(): void
+    {
+        Plan::factory()->create(['name' => 'תחזוקה פלוס']);
+        Customer::factory()->count(5)->create(['status' => CustomerStatus::Active, 'email' => 'a@b.co.il']);
+
+        $result = $this->runWith([
+            'subject' => 'נושא', 'body' => 'תוכן', 'is_marketing' => false,
+            'plan_names' => ['חבילה שלא קיימת'],
+        ]);
+
+        // Silently dropping the filter would hand back a draft aimed at all
+        // five — the one direction that cannot be undone once sent.
+        $this->assertSame(0, Broadcast::count());
+        $this->assertStringContainsString('תחזוקה פלוס', $result['summary']);
+    }
+
+    public function test_a_named_customer_list_narrows_the_draft(): void
+    {
+        $chosen = Customer::factory()->create(['status' => CustomerStatus::Active, 'email' => 'a@b.co.il']);
+        Customer::factory()->count(4)->create(['status' => CustomerStatus::Active, 'email' => 'b@b.co.il']);
+
+        $result = $this->runWith([
+            'subject' => 'נושא', 'body' => 'תוכן', 'is_marketing' => false,
+            'customer_ids' => [$chosen->id],
+        ]);
+
+        $this->assertSame([$chosen->id], Broadcast::sole()->segment['customer_ids']);
+        $this->assertStringContainsString('1 לקוחות', $result['summary']);
+    }
+
+    public function test_customer_ids_that_match_nothing_refuse_rather_than_widening(): void
+    {
+        Customer::factory()->count(3)->create(['status' => CustomerStatus::Active, 'email' => 'a@b.co.il']);
+
+        $this->runWith([
+            'subject' => 'נושא', 'body' => 'תוכן', 'is_marketing' => false,
+            'customer_ids' => [9991, 9992],
+        ]);
+
+        $this->assertSame(0, Broadcast::count());
     }
 
     public function test_a_marketing_draft_is_marked_as_advertising(): void

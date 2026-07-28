@@ -9,6 +9,7 @@ use App\Enums\TicketStatus;
 use App\Jobs\InvestigateSiteJob;
 use App\Models\Broadcast;
 use App\Models\Customer;
+use App\Models\Plan;
 use App\Models\ServiceException;
 use App\Models\Site;
 use App\Models\Subscription;
@@ -294,8 +295,14 @@ class ConsoleAgent
                 'input_schema' => $obj(['site_id' => $int], [])],
             ['name' => 'investigate_site', 'description' => 'שלח את סוכן האתר לבדוק אתר מחובר (קריאה בלבד; תיקון יוצע לאישור). site_id + goal.',
                 'input_schema' => $obj(['site_id' => $int, 'goal' => $str], ['site_id'])],
-            ['name' => 'draft_broadcast', 'description' => 'הכן טיוטת דיוור ללקוחות (תמיכה ← דיוורים). לא נשלח דבר — נוצרת טיוטה שהמנהל עורך ושולח בעצמו. brief: תיאור בשורה של מה רוצים להגיד, והסוכן ינסח. לחלופין אפשר להעביר subject ו-body מוכנים. is_marketing: true לפרסומת (מבצע/הצעה), false להודעת שירות (תחזוקה, אבטחה, שינוי בשירות) — ברירת מחדל false. audience_status: active (ברירת מחדל) / suspended / churned / all.',
-                'input_schema' => $obj(['brief' => $str, 'subject' => $str, 'body' => $str, 'is_marketing' => ['type' => 'boolean'], 'audience_status' => $str])],
+            ['name' => 'draft_broadcast', 'description' => 'הכן טיוטת דיוור ללקוחות (תמיכה ← דיוורים). לא נשלח דבר — נוצרת טיוטה שהמנהל עורך ושולח בעצמו. brief: תיאור בשורה של מה רוצים להגיד, והסוכן ינסח. לחלופין אפשר להעביר subject ו-body מוכנים. is_marketing חובה: true לפרסומת (מבצע, הצעה, שירות חדש), false להודעת שירות (תחזוקה, אבטחה, שינוי בשירות) — קבע לפי התוכן, ובספק בחר true. קהל היעד: audience_status — active (ברירת מחדל) / suspended / churned / all; plan_names — לצמצום ללקוחות בחבילות מסוימות (שמות החבילות כפי שהם במערכת); customer_ids — לצמצום ללקוחות מסוימים. אם ביקשו קהל מצומצם, ציין אותו כאן ואל תשאיר את ברירת המחדל.',
+                'input_schema' => $obj([
+                    'brief' => $str, 'subject' => $str, 'body' => $str,
+                    'is_marketing' => ['type' => 'boolean'],
+                    'audience_status' => $str,
+                    'plan_names' => ['type' => 'array', 'items' => $str],
+                    'customer_ids' => ['type' => 'array', 'items' => $int],
+                ], ['is_marketing'])],
             ['name' => 'propose_task', 'description' => 'הצע פתיחת משימה לאדם — לכל דבר שאין לו כלי ישיר. title + customer_id (אופציונלי).',
                 'input_schema' => $obj(['title' => $str, 'customer_id' => $int], ['title'])],
             ['name' => 'need_clarification', 'description' => 'כשחסר מידע קריטי שאי אפשר לגלות לבד — שאל את המנהל שאלה אחת קצרה וסיים. question.',
@@ -850,7 +857,12 @@ class ConsoleAgent
      */
     private function draftBroadcast(array $input): array
     {
-        $isMarketing = (bool) ($input['is_marketing'] ?? false);
+        // Defaults to advertising when the model leaves it out, matching the
+        // form. The two mistakes are not symmetrical: a service notice wrongly
+        // labelled advertising is odd but harmless, while advertising wrongly
+        // labelled service loses the "פרסומת" heading and the opt-out link and
+        // goes to customers who asked not to be marketed to — a legal problem.
+        $isMarketing = (bool) ($input['is_marketing'] ?? true);
 
         $subject = trim((string) ($input['subject'] ?? ''));
         $body = trim((string) ($input['body'] ?? ''));
@@ -884,6 +896,41 @@ class ConsoleAgent
         }
 
         $segment = ['status' => $status];
+
+        // A narrower audience the operator asked for must survive into the
+        // draft. Silently dropping "only the maintenance-plan customers" would
+        // hand back a draft aimed at everyone, which is the one direction that
+        // cannot be undone once sent.
+        if (filled($input['customer_ids'] ?? null)) {
+            $ids = Customer::whereKey(array_map('intval', (array) $input['customer_ids']))->pluck('id')->all();
+
+            if ($ids === []) {
+                return ['content' => 'אף אחד מהלקוחות שציינת לא נמצא — לא יצרתי טיוטה כדי לא לדוור לקהל רחב מהמבוקש.', 'is_error' => true];
+            }
+
+            $segment['customer_ids'] = $ids;
+        }
+
+        if (filled($input['plan_names'] ?? null)) {
+            $names = array_filter(array_map('trim', array_map('strval', (array) $input['plan_names'])));
+
+            $planIds = Plan::query()
+                ->where(function ($q) use ($names) {
+                    foreach ($names as $name) {
+                        $q->orWhereRaw('LOWER(name) = ?', [mb_strtolower($name)]);
+                    }
+                })
+                ->pluck('id')->all();
+
+            if ($planIds === []) {
+                $available = Plan::orderBy('name')->pluck('name')->implode(', ');
+
+                return ['content' => 'לא נמצאה חבילה בשם שציינת, ולא יצרתי טיוטה כדי לא להרחיב את הקהל. החבילות הקיימות: '
+                    .($available !== '' ? $available : 'אין חבילות מוגדרות'), 'is_error' => true];
+            }
+
+            $segment['plan_ids'] = $planIds;
+        }
 
         $broadcast = Broadcast::create([
             'subject' => $subject,
