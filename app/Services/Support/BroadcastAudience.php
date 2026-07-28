@@ -22,6 +22,9 @@ use Illuminate\Database\Eloquent\Builder;
  */
 class BroadcastAudience
 {
+    /** The only columns filled() will interpolate into SQL. */
+    private const ADDRESS_COLUMNS = ['email', 'phone', 'whatsapp_jid'];
+
     /** Every customer the segment selects, regardless of how we can reach them. */
     public function query(?array $segment): Builder
     {
@@ -70,9 +73,24 @@ class BroadcastAudience
         ];
     }
 
-    /** A column that is present and not an empty string. */
+    /**
+     * A column holding a real address: present, and not blank once trimmed.
+     *
+     * The trim matters — the send job trims before dispatching and skips what
+     * is left empty, so a plain `!= ''` here would count a whitespace-only
+     * value as a recipient. The count would then overstate the audience, and a
+     * segment of nothing but such values would pass the "someone will receive
+     * this" guard and be marked sent with zero deliveries.
+     *
+     * @param  'email'|'phone'|'whatsapp_jid'  $column
+     */
     private function filled(Builder $query, string $column): Builder
     {
-        return $query->whereNotNull($column)->where($column, '!=', '');
+        // Whitelisted above; never interpolate anything caller-supplied here.
+        if (! in_array($column, self::ADDRESS_COLUMNS, true)) {
+            throw new \InvalidArgumentException("עמודה לא נתמכת לבדיקת כתובת: {$column}");
+        }
+
+        return $query->whereNotNull($column)->whereRaw("TRIM({$column}) <> ''");
     }
 }

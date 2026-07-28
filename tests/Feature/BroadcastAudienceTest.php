@@ -6,6 +6,8 @@ use App\Enums\BroadcastChannel;
 use App\Enums\BroadcastStatus;
 use App\Enums\CustomerStatus;
 use App\Enums\UserRole;
+use App\Filament\Resources\BroadcastResource\Pages\CreateBroadcast;
+use App\Filament\Resources\BroadcastResource\Pages\EditBroadcast;
 use App\Filament\Resources\BroadcastResource\Pages\ListBroadcasts;
 use App\Jobs\SendBroadcastJob;
 use App\Mail\BroadcastMail;
@@ -199,6 +201,85 @@ class BroadcastAudienceTest extends TestCase
         // The action only queues the job; the claim and the send happen there.
         Bus::assertDispatched(SendBroadcastJob::class);
         $this->assertSame(BroadcastStatus::Scheduled, $broadcast->fresh()->status);
+    }
+
+    public function test_a_whitespace_only_address_is_not_counted_as_a_recipient(): void
+    {
+        // The send job trims and skips these, so counting them here would
+        // promise deliveries that never happen.
+        Customer::factory()->create(['status' => CustomerStatus::Active, 'email' => '   ']);
+        Customer::factory()->create(['status' => CustomerStatus::Active, 'email' => 'real@b.co.il']);
+
+        $summary = $this->audience()->summary(BroadcastChannel::Email, null);
+
+        $this->assertSame(1, $summary['reachable']);
+        $this->assertSame(1, $summary['unreachable']);
+    }
+
+    public function test_a_broadcast_scheduled_at_creation_time_is_actually_dispatchable(): void
+    {
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+
+        $at = now()->addDay();
+
+        Livewire::test(CreateBroadcast::class)
+            ->fillForm([
+                'subject' => 'עדכון מתוזמן',
+                'body' => 'תוכן',
+                'channel' => BroadcastChannel::Email->value,
+                'scheduled_at' => $at,
+            ])
+            ->call('create')
+            ->assertHasNoFormErrors();
+
+        // The scheduler only picks up "scheduled" rows; a create screen that
+        // left the column default would mean the broadcast never goes out.
+        $this->assertSame(BroadcastStatus::Scheduled, Broadcast::sole()->status);
+    }
+
+    public function test_clearing_the_send_time_returns_a_broadcast_to_draft(): void
+    {
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+
+        $broadcast = Broadcast::create([
+            'subject' => 'עדכון',
+            'body' => 'תוכן',
+            'channel' => BroadcastChannel::Email,
+            'status' => BroadcastStatus::Scheduled,
+            'scheduled_at' => now()->addDay(),
+        ]);
+
+        Livewire::test(EditBroadcast::class, ['record' => $broadcast->getKey()])
+            ->fillForm(['scheduled_at' => null])
+            ->call('save')
+            ->assertHasNoFormErrors();
+
+        $this->assertSame(BroadcastStatus::Draft, $broadcast->fresh()->status);
+    }
+
+    public function test_sending_from_the_edit_screen_uses_the_text_on_screen_not_the_last_save(): void
+    {
+        Mail::fake();
+        Bus::fake([SendBroadcastJob::class]);
+
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+        Customer::factory()->create(['status' => CustomerStatus::Active, 'email' => 'x@b.co.il']);
+
+        $broadcast = Broadcast::create([
+            'subject' => 'נוסח ישן',
+            'body' => 'תוכן ישן',
+            'channel' => BroadcastChannel::Email,
+            'status' => BroadcastStatus::Draft,
+        ]);
+
+        Livewire::test(EditBroadcast::class, ['record' => $broadcast->getKey()])
+            ->fillForm(['subject' => 'נוסח חדש', 'body' => 'תוכן חדש'])
+            // No save() — the operator edits and presses send straight away.
+            ->callAction('sendNow');
+
+        $this->assertSame('נוסח חדש', $broadcast->fresh()->subject);
+        $this->assertSame('תוכן חדש', $broadcast->fresh()->body);
+        Bus::assertDispatched(SendBroadcastJob::class);
     }
 
     private function runSend(Broadcast $broadcast): void

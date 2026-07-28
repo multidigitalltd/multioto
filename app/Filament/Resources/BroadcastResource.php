@@ -51,14 +51,14 @@ class BroadcastResource extends Resource
                             ->default(BroadcastChannel::Email)
                             ->required()
                             ->live()
-                            ->helperText(fn (?string $state): string => $state === BroadcastChannel::Whatsapp->value
+                            ->helperText(fn ($state): string => static::channelOf($state) === BroadcastChannel::Whatsapp
                                 ? 'וואטסאפ נשלח לאט במכוון ('.config('billing.waha.broadcast_throttle_seconds').' שניות בין הודעה להודעה) כדי לא לסכן חסימה של המספר. לדיוור רחב עדיף אימייל.'
                                 : 'האימייל נשלח בקבוצות דרך התור — מתאים לדיוור רחב.'),
                         Forms\Components\TextInput::make('subject')
                             ->label('נושא')
                             ->required()
                             ->maxLength(255)
-                            ->helperText(fn (Forms\Get $get): ?string => $get('channel') === BroadcastChannel::Whatsapp->value
+                            ->helperText(fn (Forms\Get $get): ?string => static::channelOf($get('channel')) === BroadcastChannel::Whatsapp
                                 ? 'בוואטסאפ הנושא משמש לזיהוי פנימי בלבד — הלקוח רואה רק את התוכן.'
                                 : null),
                         Forms\Components\Textarea::make('body')
@@ -118,13 +118,25 @@ class BroadcastResource extends Resource
     }
 
     /**
+     * Form state for an enum-backed select arrives as the enum on first render
+     * (from the default or the cast model) and as its plain value after the
+     * field is touched — comparing one shape only silently breaks the other.
+     */
+    protected static function channelOf(mixed $state): BroadcastChannel
+    {
+        return $state instanceof BroadcastChannel
+            ? $state
+            : (BroadcastChannel::tryFrom((string) $state) ?? BroadcastChannel::Email);
+    }
+
+    /**
      * The live "who will get this" line under the segment builder — the same
      * count the send confirmation shows, so nobody presses send without knowing
      * how many people are about to hear from them.
      */
     protected static function audienceSummary(Forms\Get $get): HtmlString
     {
-        $channel = BroadcastChannel::tryFrom((string) $get('channel')) ?? BroadcastChannel::Email;
+        $channel = static::channelOf($get('channel'));
 
         $counts = app(BroadcastAudience::class)->summary($channel, [
             'status' => $get('segment.status'),
