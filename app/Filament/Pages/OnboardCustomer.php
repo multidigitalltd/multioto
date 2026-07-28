@@ -35,10 +35,14 @@ use Illuminate\Support\HtmlString;
 /**
  * לקוח חדש — אשף אחד שמקים לקוח + אתר + מנוי במסך אחד, ובסיום שולח ללקוח
  * קישור מאובטח להזנת כרטיס אשראי. מחליף מילוי של שלושה מסכים נפרדים.
+ * האתר והמנוי אופציונליים: אפשר לפתוח לקוח בלבד ולהוסיף להם מנוי בהמשך.
  *
- * A single onboarding wizard: creates the Customer, Site and Subscription in
- * one transaction, then (optionally) queues a card-capture invite. Everything
- * heavy/external happens in the queued job, not in this request.
+ * A single onboarding wizard: creates the Customer and, when wanted, the Site
+ * and Subscription with it — in one transaction — then (optionally) queues a
+ * card-capture invite. The subscription is optional on purpose: a one-off job
+ * or a prospect is a real customer long before there is anything to charge, and
+ * a placeholder subscription would start a billing cycle nobody agreed to.
+ * Everything heavy/external happens in the queued job, not in this request.
  */
 class OnboardCustomer extends Page implements HasForms
 {
@@ -62,13 +66,20 @@ class OnboardCustomer extends Page implements HasForms
 
     public function mount(): void
     {
-        $this->form->fill([
+        $this->form->fill($this->defaults());
+    }
+
+    /** The state a blank wizard starts from — and returns to after a save. */
+    private function defaults(): array
+    {
+        return [
             'business_type' => BusinessType::LicensedDealer->value,
             'vat_exempt' => false,
             'monitor_enabled' => true,
+            'skip_subscription' => false,
             'send_card_link' => true,
             'first_charge_at' => now()->format('Y-m-d'),
-        ]);
+        ];
     }
 
     /**
@@ -137,7 +148,15 @@ class OnboardCustomer extends Page implements HasForms
                         ->icon('heroicon-o-globe-alt')
                         ->description('הדומיין והניטור')
                         ->schema([
-                            TextInput::make('domain')->label('דומיין')->required()
+                            // Required only when a subscription is being opened —
+                            // a customer without one may not have a site with us
+                            // at all, and forcing a domain would block the whole
+                            // point of opening them.
+                            TextInput::make('domain')->label('דומיין')
+                                ->required(fn (Get $get): bool => ! $get('skip_subscription'))
+                                ->helperText(fn (Get $get): ?string => $get('skip_subscription')
+                                    ? 'אופציונלי — אפשר להשאיר ריק ולהוסיף אתר בהמשך.'
+                                    : null)
                                 ->placeholder('example.co.il')->maxLength(255),
                             TextInput::make('monitor_url')->label('כתובת לניטור')->url()
                                 ->placeholder('https://example.co.il')
@@ -149,32 +168,44 @@ class OnboardCustomer extends Page implements HasForms
                         ->icon('heroicon-o-credit-card')
                         ->description('התוכנית והחיוב')
                         ->schema([
+                            // Not every customer pays us monthly: a one-off job, a
+                            // prospect still being courted, or an arrangement not
+                            // yet agreed. Opening them without a subscription beats
+                            // inventing a placeholder one that would start charging.
+                            Toggle::make('skip_subscription')->label('ללא מנוי כרגע')
+                                ->helperText('הלקוח ייפתח בלי חיוב תקופתי. אפשר להוסיף לו מנוי בכל שלב מכרטיס הלקוח.')
+                                ->live()
+                                ->columnSpanFull(),
                             Select::make('plan_id')->label('תוכנית קבועה')
                                 ->options(Plan::where('active', true)->pluck('name', 'id'))
                                 ->live()
+                                ->visible(fn (Get $get): bool => ! $get('skip_subscription'))
                                 ->helperText('בחרו מוצר קבוע, או השאירו ריק למנוי חופשי בהתאמה אישית.'),
                             // Free-form subscription — a custom name/interval/VAT when no plan is picked.
                             TextInput::make('custom_name')->label('שם המנוי')
                                 ->required(fn (Get $get): bool => blank($get('plan_id')))
-                                ->visible(fn (Get $get): bool => blank($get('plan_id')))
+                                ->visible(fn (Get $get): bool => ! $get('skip_subscription') && blank($get('plan_id')))
                                 ->maxLength(190)->placeholder('אחסון + תחזוקה חודשית'),
                             Select::make('billing_interval')->label('תדירות חיוב')
                                 ->options(BillingInterval::class)->default(BillingInterval::Monthly->value)
-                                ->visible(fn (Get $get): bool => blank($get('plan_id'))),
+                                ->visible(fn (Get $get): bool => ! $get('skip_subscription') && blank($get('plan_id'))),
                             Toggle::make('vat_applies')->label('הוסף מע״מ על המחיר')->default(true)->inline(false)
-                                ->visible(fn (Get $get): bool => blank($get('plan_id'))),
+                                ->visible(fn (Get $get): bool => ! $get('skip_subscription') && blank($get('plan_id'))),
                             TextInput::make('price_override')
                                 ->label(fn (Get $get): string => blank($get('plan_id')) ? 'מחיר (₪)' : 'מחיר מיוחד (₪, אופציונלי)')
                                 ->numeric()->minValue(0)
                                 ->required(fn (Get $get): bool => blank($get('plan_id')))
                                 ->live(onBlur: true)
+                                ->visible(fn (Get $get): bool => ! $get('skip_subscription'))
                                 ->helperText(fn (Get $get): string => blank($get('plan_id'))
                                     ? 'המחיר החודשי/שנתי של המנוי החופשי.'
                                     : 'רק אם סוכם מחיר שונה מהתוכנית.'),
                             DatePicker::make('first_charge_at')->label('תאריך חיוב ראשון')
-                                ->required()->native(false)->displayFormat('d/m/Y'),
+                                ->required()->native(false)->displayFormat('d/m/Y')
+                                ->visible(fn (Get $get): bool => ! $get('skip_subscription')),
                             Toggle::make('send_card_link')->label('שלח ללקוח קישור להזנת כרטיס')
                                 ->default(true)
+                                ->visible(fn (Get $get): bool => ! $get('skip_subscription'))
                                 ->helperText('הלקוח יזין את הכרטיס בעצמו בעמוד המאובטח של חברת הסליקה'),
                             Placeholder::make('summary')->label('סיכום')
                                 ->content(fn (Get $get): string => $this->summaryText($get)),
@@ -189,6 +220,10 @@ class OnboardCustomer extends Page implements HasForms
 
     protected function summaryText(Get $get): string
     {
+        if ($get('skip_subscription')) {
+            return 'הלקוח ייפתח בלי מנוי ובלי חיוב תקופתי.';
+        }
+
         $plan = $get('plan_id') ? Plan::find($get('plan_id')) : null;
 
         // Fixed plan → plan price/name/VAT; free-form → the custom fields entered here.
@@ -220,7 +255,9 @@ class OnboardCustomer extends Page implements HasForms
     {
         $data = $this->form->getState();
 
-        $subscription = DB::transaction(function () use ($data): Subscription {
+        $skipSubscription = (bool) ($data['skip_subscription'] ?? false);
+
+        $subscription = DB::transaction(function () use ($data, $skipSubscription): ?Subscription {
             $customer = Customer::create([
                 'name' => $data['name'],
                 'phone' => $data['phone'],
@@ -231,13 +268,21 @@ class OnboardCustomer extends Page implements HasForms
                 'status' => CustomerStatus::Active,
             ]);
 
-            $site = Site::create([
-                'customer_id' => $customer->id,
-                'domain' => $data['domain'],
-                'monitor_url' => $data['monitor_url'] ?: 'https://'.$data['domain'],
-                'monitor_enabled' => (bool) ($data['monitor_enabled'] ?? true),
-                'status' => SiteStatus::Active,
-            ]);
+            // A customer opened without a subscription may have no site with us
+            // yet either — both hang off the customer, not the other way round.
+            $site = filled($data['domain'] ?? null)
+                ? Site::create([
+                    'customer_id' => $customer->id,
+                    'domain' => $data['domain'],
+                    'monitor_url' => $data['monitor_url'] ?: 'https://'.$data['domain'],
+                    'monitor_enabled' => (bool) ($data['monitor_enabled'] ?? true),
+                    'status' => SiteStatus::Active,
+                ])
+                : null;
+
+            if ($skipSubscription) {
+                return null;
+            }
 
             $freeForm = blank($data['plan_id'] ?? null);
 
@@ -249,7 +294,7 @@ class OnboardCustomer extends Page implements HasForms
                 'name' => $freeForm ? ($data['custom_name'] ?? null) : null,
                 'billing_interval' => $freeForm ? ($data['billing_interval'] ?? null) : null,
                 'vat_applies' => $freeForm ? (bool) ($data['vat_applies'] ?? true) : null,
-                'site_id' => $site->id,
+                'site_id' => $site?->id,
                 // No token yet — the customer enters their card via the link.
                 // Trialing keeps it out of the charge run until a card exists.
                 'status' => SubscriptionStatus::Trialing,
@@ -261,24 +306,22 @@ class OnboardCustomer extends Page implements HasForms
             ]);
         });
 
-        if ($data['send_card_link'] ?? false) {
+        $sendCardLink = $subscription !== null && ($data['send_card_link'] ?? false);
+
+        if ($sendCardLink) {
             SendCardCaptureLinkJob::dispatch($subscription->id);
         }
 
         Notification::make()
             ->title('הלקוח הוקם בהצלחה')
-            ->body(($data['send_card_link'] ?? false)
-                ? 'נשלח ללקוח קישור להזנת כרטיס אשראי. המנוי יופעל אוטומטית לאחר שהכרטיס יוזן.'
-                : 'המנוי נוצר. יש להזין כרטיס אשראי כדי להתחיל בחיוב.')
+            ->body(match (true) {
+                $subscription === null => 'הלקוח נפתח בלי מנוי. אפשר להוסיף לו מנוי בכל שלב מכרטיס הלקוח.',
+                $sendCardLink => 'נשלח ללקוח קישור להזנת כרטיס אשראי. המנוי יופעל אוטומטית לאחר שהכרטיס יוזן.',
+                default => 'המנוי נוצר. יש להזין כרטיס אשראי כדי להתחיל בחיוב.',
+            })
             ->success()
             ->send();
 
-        $this->form->fill([
-            'business_type' => BusinessType::LicensedDealer->value,
-            'vat_exempt' => false,
-            'monitor_enabled' => true,
-            'send_card_link' => true,
-            'first_charge_at' => now()->format('Y-m-d'),
-        ]);
+        $this->form->fill($this->defaults());
     }
 }
