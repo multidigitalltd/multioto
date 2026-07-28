@@ -81,12 +81,22 @@ class Multioto_Agent_Mcp_Server
         }
 
         try {
-            $result = match ($method) {
-                'initialize' => $this->initialize(),
-                'tools/list' => ['tools' => $this->toolDefinitions()],
-                'tools/call' => $this->callTool((string) ($params['name'] ?? ''), (array) ($params['arguments'] ?? [])),
-                default => throw new Multioto_Agent_Rpc_Error(-32601, "Method not found: {$method}"),
-            };
+            // A switch rather than match(): the plugin declares "Requires PHP
+            // 7.4", and match() is PHP 8.0 — on an older host the file would not
+            // parse at all, taking the whole SITE down, not just the agent.
+            switch ($method) {
+                case 'initialize':
+                    $result = $this->initialize();
+                    break;
+                case 'tools/list':
+                    $result = ['tools' => $this->toolDefinitions()];
+                    break;
+                case 'tools/call':
+                    $result = $this->callTool((string) ($params['name'] ?? ''), (array) ($params['arguments'] ?? []));
+                    break;
+                default:
+                    throw new Multioto_Agent_Rpc_Error(-32601, "Method not found: {$method}");
+            }
         } catch (Multioto_Agent_Rpc_Error $e) {
             return $this->rpc($id, null, ['code' => $e->getCode(), 'message' => $e->getMessage()]);
         } catch (\Throwable $e) {
@@ -175,36 +185,50 @@ class Multioto_Agent_Mcp_Server
     /** Execute an allow-listed tool. Unknown names are rejected. */
     private function callTool(string $name, array $args): array
     {
-        $text = match ($name) {
-            'wp_health' => $this->health(),
-            'wp_plugin_list' => $this->pluginList(),
-            'wp_theme_list' => $this->themeList(),
-            'wp_admin_list' => $this->adminList(),
-            'wp_option_get' => $this->optionGet($args),
-            'wp_error_log_tail' => $this->errorLogTail($args),
-            'wp_cache_flush' => $this->cacheFlush(),
-            'wp_plugin_update' => $this->pluginUpdate($args),
-            'wp_core_update' => $this->coreUpdate(),
-            'wp_core_rollback' => $this->coreRollback($args),
-            'wp_plugin_activate' => $this->setPluginState($args, true),
-            'wp_plugin_deactivate' => $this->setPluginState($args, false),
-            'wp_menu_list' => $this->menuList(),
-            'wp_menu_item_add' => $this->menuItemAdd($args),
-            'wp_menu_item_update' => $this->menuItemUpdate($args),
-            'wp_menu_item_unlink' => $this->menuItemUnlink($args),
-            'wp_content_list' => $this->contentList($args),
-            'wp_content_get' => $this->contentGet($args),
-            'wp_content_create' => $this->contentCreate($args),
-            'wp_content_update' => $this->contentUpdate($args),
-            'wp_content_trash' => $this->contentTrash($args),
-            'wp_file_list' => $this->fileList($args),
-            'wp_file_get' => $this->fileGet($args),
-            'wp_file_put' => $this->filePut($args),
-            'wc_order_get' => $this->wcOrderGet($args),
-            'wc_order_stats_get' => $this->wcOrderStats($args),
-            'wc_shipping_zones_list' => $this->wcShippingZones(),
-            default => throw new Multioto_Agent_Rpc_Error(-32602, "Unknown tool: {$name}"),
-        };
+        // A name => method map instead of match(): same allow-list guarantee,
+        // and it parses on PHP 7.4 (see the note in handle()). An unknown name
+        // is still rejected — nothing outside this list can ever be called.
+        $handlers = [
+            'wp_health' => 'health',
+            'wp_plugin_list' => 'pluginList',
+            'wp_theme_list' => 'themeList',
+            'wp_admin_list' => 'adminList',
+            'wp_option_get' => 'optionGet',
+            'wp_error_log_tail' => 'errorLogTail',
+            'wp_cache_flush' => 'cacheFlush',
+            'wp_plugin_update' => 'pluginUpdate',
+            'wp_core_update' => 'coreUpdate',
+            'wp_core_rollback' => 'coreRollback',
+            'wp_menu_list' => 'menuList',
+            'wp_menu_item_add' => 'menuItemAdd',
+            'wp_menu_item_update' => 'menuItemUpdate',
+            'wp_menu_item_unlink' => 'menuItemUnlink',
+            'wp_content_list' => 'contentList',
+            'wp_content_get' => 'contentGet',
+            'wp_content_create' => 'contentCreate',
+            'wp_content_update' => 'contentUpdate',
+            'wp_content_trash' => 'contentTrash',
+            'wp_file_list' => 'fileList',
+            'wp_file_get' => 'fileGet',
+            'wp_file_put' => 'filePut',
+            'wc_order_get' => 'wcOrderGet',
+            'wc_order_stats_get' => 'wcOrderStats',
+            'wc_shipping_zones_list' => 'wcShippingZones',
+        ];
+
+        // Tools whose signature takes no arguments, or a second flag.
+        $noArgs = ['wp_health', 'wp_plugin_list', 'wp_theme_list', 'wp_admin_list', 'wp_cache_flush', 'wp_core_update', 'wp_menu_list', 'wc_shipping_zones_list'];
+
+        if ($name === 'wp_plugin_activate') {
+            $text = $this->setPluginState($args, true);
+        } elseif ($name === 'wp_plugin_deactivate') {
+            $text = $this->setPluginState($args, false);
+        } elseif (isset($handlers[$name])) {
+            $method = $handlers[$name];
+            $text = in_array($name, $noArgs, true) ? $this->{$method}() : $this->{$method}($args);
+        } else {
+            throw new Multioto_Agent_Rpc_Error(-32602, "Unknown tool: {$name}");
+        }
 
         return ['content' => [['type' => 'text', 'text' => $text]], 'isError' => false];
     }
