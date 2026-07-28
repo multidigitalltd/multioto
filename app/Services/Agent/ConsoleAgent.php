@@ -889,6 +889,11 @@ class ConsoleAgent
             $subject = Str::limit($brief !== '' ? $brief : $body, 80, '');
         }
 
+        // broadcasts.subject is varchar(255). Trimming here rather than letting
+        // Postgres reject the insert: an over-long subject from the model would
+        // otherwise lose the whole draft, wording included.
+        $subject = Str::limit($subject, 250, '');
+
         $status = (string) ($input['audience_status'] ?? CustomerStatus::Active->value);
 
         if ($status !== 'all' && CustomerStatus::tryFrom($status) === null) {

@@ -247,6 +247,24 @@ class ConsoleAgentBroadcastTest extends TestCase
         $this->assertSame(0, Broadcast::count());
     }
 
+    public function test_an_over_long_subject_is_trimmed_rather_than_losing_the_whole_draft(): void
+    {
+        Customer::factory()->create(['status' => CustomerStatus::Active, 'email' => 'a@b.co.il']);
+
+        // broadcasts.subject is varchar(255): letting this reach Postgres would
+        // reject the insert and lose the wording along with it.
+        $this->runWith([
+            'subject' => str_repeat('א', 400),
+            'body' => 'תוכן',
+            'is_marketing' => false,
+        ]);
+
+        $broadcast = Broadcast::sole();
+
+        $this->assertLessThanOrEqual(255, mb_strlen($broadcast->subject));
+        $this->assertSame('תוכן', $broadcast->body);
+    }
+
     public function test_a_marketing_draft_is_marked_as_advertising(): void
     {
         Customer::factory()->create(['status' => CustomerStatus::Active, 'email' => 'a@b.co.il']);
