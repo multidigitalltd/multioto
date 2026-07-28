@@ -125,6 +125,26 @@ class EmailDeliveryTrackingTest extends TestCase
         $this->assertNotNull($log->delivered_at);
     }
 
+    public function test_an_open_without_a_delivery_event_stops_showing_the_mail_as_queued(): void
+    {
+        $log = $this->log();
+
+        $this->event(['RecordType' => 'Open', 'MessageID' => 'pm-1'])->assertOk();
+
+        // Open tracking can be the only signal enabled. A mail proven to have
+        // been read must not sit in the history as "בתור" forever.
+        $this->assertSame('sent', $log->fresh()->status);
+    }
+
+    public function test_an_open_after_a_bounce_does_not_undo_the_failure(): void
+    {
+        $log = $this->log(['status' => 'failed', 'bounced_at' => now()]);
+
+        $this->event(['RecordType' => 'Open', 'MessageID' => 'pm-1'])->assertOk();
+
+        $this->assertSame('failed', $log->fresh()->status);
+    }
+
     public function test_the_exact_same_open_replayed_is_not_counted_again(): void
     {
         $log = $this->log();
@@ -250,6 +270,27 @@ class EmailDeliveryTrackingTest extends TestCase
         $this->assertFalse($customer->fresh()->emailHasBounced());
         $this->assertSame(1, app(BroadcastAudience::class)
             ->reachable(BroadcastChannel::Email, null)->count());
+    }
+
+    public function test_a_late_bounce_for_an_address_already_corrected_leaves_the_new_one_alone(): void
+    {
+        $customer = Customer::factory()->create([
+            'status' => CustomerStatus::Active, 'email' => 'typo@b.co.il',
+        ]);
+        $log = $this->log(['customer_id' => $customer->id, 'recipient' => 'typo@b.co.il']);
+
+        // Fixing the typo is exactly what someone does while the old address is
+        // still bouncing.
+        $customer->update(['email' => 'correct@b.co.il']);
+
+        $this->event([
+            'RecordType' => 'Bounce', 'MessageID' => 'pm-1',
+            'Type' => 'HardBounce', 'Inactive' => true,
+        ])->assertOk();
+
+        // The message failed; the replacement address did not.
+        $this->assertSame('failed', $log->fresh()->status);
+        $this->assertFalse($customer->fresh()->emailHasBounced());
     }
 
     public function test_correcting_the_address_clears_the_bounce(): void

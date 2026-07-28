@@ -82,6 +82,13 @@ class DeliveryEvents
         NotificationLog::whereKey($log->getKey())
             ->whereNull('delivered_at')
             ->update(['delivered_at' => $at]);
+
+        // A message someone read is not "בתור" — and open tracking can be the
+        // only signal we get. A row the provider already failed keeps its
+        // verdict; only a still-queued one moves.
+        NotificationLog::whereKey($log->getKey())
+            ->where('status', 'queued')
+            ->update(['status' => 'sent']);
     }
 
     private function bounced(NotificationLog $log, Carbon $at, array $payload): void
@@ -131,6 +138,13 @@ class DeliveryEvents
             return;
         }
 
+        // The bounce belongs to the address it was sent to. Correcting a typo
+        // is exactly what someone does while the old address is still bouncing,
+        // and a late webhook for it must not suppress the replacement.
+        if ($this->normalize($customer->email) !== $this->normalize($log->recipient)) {
+            return;
+        }
+
         $customer->update([
             'email_bounced_at' => now(),
             'email_bounce_reason' => $reason !== '' ? Str::limit($reason, 250, '') : null,
@@ -139,6 +153,12 @@ class DeliveryEvents
         SystemLog::record('warning', 'support',
             "כתובת המייל של {$customer->name} ({$customer->email}) חזרה כלא קיימת ולא תקבל דיוור עד לתיקון.",
             ['customer_id' => $customer->id]);
+    }
+
+    /** Email addresses compare case-insensitively and ignore stray whitespace. */
+    private function normalize(?string $address): string
+    {
+        return mb_strtolower(trim((string) $address));
     }
 
     /** @param array<string, mixed> $payload */
