@@ -374,13 +374,43 @@ class CloudflareClient
     }
 
     /**
-     * Allow each country through, one IP Access Rule per country.
+     * Make the allow list BE the given countries, one IP Access Rule each.
+     *
+     * A replacement, like every other mode: a country dropped from the list is
+     * dropped from Cloudflare too. Upserting alone would leave a country the
+     * operator deliberately removed still bypassing every protection, while the
+     * screen told them the list they saved is the list in force.
+     *
+     * Only rules carrying our own marker are withdrawn — an allow rule somebody
+     * else put there is theirs to remove.
      *
      * @param  list<string>  $countries
      * @return array{ok: bool, message: string}
      */
     private function allowCountries(string $token, array $countries): array
     {
+        try {
+            foreach ($this->listZones($token) as $zone) {
+                $zoneId = (string) $zone['id'];
+
+                foreach ($this->countryAccessRules($token, $zoneId) as $rule) {
+                    $country = strtoupper((string) data_get($rule, 'configuration.value'));
+
+                    if ((string) data_get($rule, 'mode') !== 'whitelist'
+                        || in_array($country, $countries, true)
+                        || ! str_contains((string) data_get($rule, 'notes'), 'Multi Digital')) {
+                        continue;
+                    }
+
+                    $this->request($token)
+                        ->delete(self::BASE."/zones/{$zoneId}/firewall/access_rules/rules/".data_get($rule, 'id'))
+                        ->throw();
+                }
+            }
+        } catch (\Throwable) {
+            return $this->fail('הסרת מדינות שהוצאו מרשימת ההיתר נכשלה — הרשימה לא עודכנה. נסו שוב.');
+        }
+
         foreach ($countries as $country) {
             $result = $this->applyCountryRuleEverywhere($token, $country, 'whitelist', self::COUNTRY_RULE_DESCRIPTION);
 
@@ -392,6 +422,29 @@ class CloudflareClient
         }
 
         return $this->ok(count($countries).' מדינות סומנו כמעבר חופשי בכל האתרים.');
+    }
+
+    /**
+     * Every country-targeted IP Access Rule on a zone, across all pages.
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function countryAccessRules(string $token, string $zoneId, int $page = 1): array
+    {
+        $body = $this->request($token)->get(self::BASE."/zones/{$zoneId}/firewall/access_rules/rules", [
+            'configuration.target' => 'country',
+            'per_page' => 100,
+            'page' => $page,
+        ])->throw()->json();
+
+        $rules = (array) data_get($body, 'result', []);
+        $totalPages = (int) data_get($body, 'result_info.total_pages', 1);
+
+        if ($page < $totalPages) {
+            $rules = array_merge($rules, $this->countryAccessRules($token, $zoneId, $page + 1));
+        }
+
+        return array_values($rules);
     }
 
     /**
@@ -426,44 +479,28 @@ class CloudflareClient
             foreach ($this->listZones($token) as $zone) {
                 $zoneId = (string) $zone['id'];
 
-                // Deleting shifts every later page back by one, so paging
-                // forward would step over rules. Re-reading the first page after
-                // each sweep is the only way to see them all; the sweep count is
-                // bounded so a rule we decline to delete cannot loop forever.
-                for ($sweep = 0; $sweep < 50; $sweep++) {
-                    $rules = (array) data_get($this->request($token)
-                        ->get(self::BASE."/zones/{$zoneId}/firewall/access_rules/rules", [
-                            'configuration.target' => 'country',
-                            'per_page' => 100,
-                            'page' => 1,
-                        ])->throw()->json(), 'result', []);
-
-                    $deletable = array_filter($rules, function (array $rule) use ($removable, $covered): bool {
+                // Read every page BEFORE deleting anything. Deleting shifts the
+                // later pages back by one, so interleaving the two would step
+                // over rules — and stopping at the first page that happens to
+                // hold nothing of ours would miss the rest entirely.
+                $deletable = array_filter(
+                    $this->countryAccessRules($token, $zoneId),
+                    function (array $rule) use ($removable, $covered): bool {
                         if (! in_array((string) data_get($rule, 'mode'), $removable, true)) {
                             return false;
                         }
 
                         return str_contains((string) data_get($rule, 'notes'), 'Multi Digital')
                             || in_array(strtoupper((string) data_get($rule, 'configuration.value')), $covered, true);
-                    });
+                    },
+                );
 
-                    if ($deletable === []) {
-                        break;
-                    }
+                foreach ($deletable as $rule) {
+                    $this->request($token)
+                        ->delete(self::BASE."/zones/{$zoneId}/firewall/access_rules/rules/".data_get($rule, 'id'))
+                        ->throw();
 
-                    foreach ($deletable as $rule) {
-                        $this->request($token)
-                            ->delete(self::BASE."/zones/{$zoneId}/firewall/access_rules/rules/".data_get($rule, 'id'))
-                            ->throw();
-
-                        $removed++;
-                    }
-
-                    // A full page deleted may have had more behind it; a partial
-                    // one means everything left is somebody else's.
-                    if (count($rules) < 100) {
-                        break;
-                    }
+                    $removed++;
                 }
             }
         } catch (\Throwable) {
@@ -616,7 +653,12 @@ class CloudflareClient
             return $this->fail('הפנייה ל-Cloudflare נכשלה — בדקו את הטוקן והחיבור לרשת.') + $empty;
         }
 
-        $consistent = count($variants) <= 1;
+        // A zone MISSING the rule is a disagreement too — that is what a partial
+        // removal leaves behind, and preloading the surviving list would let a
+        // re-save recreate the rule on the zones it was already deleted from.
+        $consistent = count($variants) <= 1
+            && ($withRule === 0 || $withRule === count($zones));
+
         $first = reset($variants) ?: ['countries' => [], 'mode' => null];
 
         return [

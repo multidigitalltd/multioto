@@ -336,6 +336,90 @@ class CloudflareCountryListTest extends TestCase
             && data_get($request->data(), 'expression') === '(ip.src.country in {"HK" "IR" "MX"})');
     }
 
+    public function test_a_zone_missing_the_rule_counts_as_a_disagreement(): void
+    {
+        Http::fake([
+            '*/zones/z1/rulesets/phases/*' => Http::response(['success' => true, 'result' => ['id' => 'rs1', 'rules' => [[
+                'id' => 'r', 'description' => CloudflareClient::COUNTRY_RULE_DESCRIPTION,
+                'expression' => '(ip.src.country in {"MX"})', 'action' => 'block',
+            ]]]]),
+            '*/zones/z2/rulesets/phases/*' => Http::response(['success' => true, 'result' => ['id' => 'rs2', 'rules' => []]]),
+            '*/zones*' => Http::response([
+                'success' => true,
+                'result' => [['id' => 'z1', 'name' => 'a.com'], ['id' => 'z2', 'name' => 'b.com']],
+                'result_info' => ['total_pages' => 1],
+            ]),
+        ]);
+
+        $overview = $this->client()->countryListOverview('cf-token');
+
+        // What a removal that failed halfway looks like. Offering the surviving
+        // list would let a re-save put the rule back where it was just deleted.
+        $this->assertFalse($overview['consistent']);
+        $this->assertSame([], $overview['countries']);
+    }
+
+    public function test_the_allow_list_drops_a_country_left_out_of_it(): void
+    {
+        $this->fakeLegacyRules([
+            ['id' => 'keep', 'mode' => 'whitelist', 'notes' => CloudflareClient::COUNTRY_RULE_DESCRIPTION,
+                'configuration' => ['target' => 'country', 'value' => 'US']],
+            ['id' => 'drop', 'mode' => 'whitelist', 'notes' => CloudflareClient::COUNTRY_RULE_DESCRIPTION,
+                'configuration' => ['target' => 'country', 'value' => 'IL']],
+            ['id' => 'theirs', 'mode' => 'whitelist', 'notes' => 'Added by the ops team',
+                'configuration' => ['target' => 'country', 'value' => 'DE']],
+        ]);
+
+        $result = $this->client()->applyCountryListEverywhere('cf-token', ['US'], 'whitelist');
+
+        $this->assertTrue($result['ok']);
+
+        // The saved list IS the list: a country taken out of it stops bypassing
+        // Cloudflare. Somebody else's allow rule is theirs to remove.
+        Http::assertSent(fn ($request): bool => $request->method() === 'DELETE'
+            && str_contains($request->url(), 'access_rules/rules/drop'));
+        Http::assertNotSent(fn ($request): bool => $request->method() === 'DELETE'
+            && str_contains($request->url(), 'access_rules/rules/theirs'));
+    }
+
+    public function test_legacy_cleanup_reaches_rules_past_the_first_page(): void
+    {
+        $filler = [];
+
+        for ($i = 0; $i < 100; $i++) {
+            $filler[] = ['id' => "w{$i}", 'mode' => 'whitelist', 'notes' => '',
+                'configuration' => ['target' => 'country', 'value' => 'IL']];
+        }
+
+        Http::fake([
+            '*/access_rules/rules/*' => Http::response(['success' => true]),
+            '*/access_rules/rules*' => function ($request) use ($filler) {
+                $page = (int) (data_get($request->data(), 'page') ?: 1);
+
+                // A first page of nothing but allow rules must not end the scan.
+                return Http::response([
+                    'success' => true,
+                    'result' => $page === 1 ? $filler : [[
+                        'id' => 'ours', 'mode' => 'block', 'notes' => CloudflareClient::COUNTRY_RULE_DESCRIPTION,
+                        'configuration' => ['target' => 'country', 'value' => 'MX'],
+                    ]],
+                    'result_info' => ['total_pages' => 2],
+                ]);
+            },
+            '*/zones*' => Http::response([
+                'success' => true,
+                'result' => [['id' => 'z1', 'name' => 'a.com']],
+                'result_info' => ['total_pages' => 1],
+            ]),
+        ]);
+
+        $result = $this->client()->removeLegacyCountryRulesEverywhere('cf-token');
+
+        $this->assertSame(1, $result['removed']);
+        Http::assertSent(fn ($request): bool => $request->method() === 'DELETE'
+            && str_contains($request->url(), 'access_rules/rules/ours'));
+    }
+
     public function test_the_modal_opens_with_the_list_that_is_in_force(): void
     {
         config(['billing.cloudflare.api_token' => 'saved-token']);
