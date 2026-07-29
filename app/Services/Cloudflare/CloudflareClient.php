@@ -287,14 +287,50 @@ class CloudflareClient
             return $this->fail('יש להזין לפחות מדינה אחת.');
         }
 
-        // Letting a country THROUGH is an IP Access Rule and has no custom-rule
-        // equivalent, so it still costs one rule per country. That is fine: an
-        // allow list is a handful of countries, not the dozens that made the
-        // rule budget the problem in the first place.
+        // The setting has two possible shapes on Cloudflare — a combined WAF rule
+        // for blocking/challenging, and one access rule per country for allowing
+        // — and only one of them can be in force. Whichever mode is chosen, the
+        // other shape is withdrawn: leaving it would keep enforcing a policy the
+        // operator has just replaced, while the screen shows only the new one.
         if ($mode === 'whitelist') {
-            return $this->allowCountries($token, $countries);
+            // Letting a country THROUGH has no custom-rule equivalent, so it
+            // still costs one rule per country. That is fine: an allow list is a
+            // handful of countries, not the dozens that made the rule budget the
+            // problem in the first place.
+            $allowed = $this->allowCountries($token, $countries);
+
+            if (! $allowed['ok']) {
+                return $allowed;
+            }
+
+            $cleared = $this->applyCombinedRule($token, [], 'remove');
+
+            return $cleared['ok']
+                ? $allowed
+                : $this->fail('רשימת ההיתר עודכנה, אך הכלל המשולב הקודם לא הוסר — יש להריץ שוב.');
         }
 
+        $combined = $this->applyCombinedRule($token, $countries, $mode);
+
+        if (! $combined['ok']) {
+            return $combined;
+        }
+
+        // Blocking, challenging or removing all mean the same thing about the
+        // other shape: no allow list of ours is in force any more.
+        return $this->withdrawAllowRules($token, [])
+            ? $combined
+            : $this->fail('הכלל המשולב עודכן, אך רשימת ההיתר הקודמת לא הוסרה — יש להריץ שוב.');
+    }
+
+    /**
+     * The combined WAF rule across every zone the token can see.
+     *
+     * @param  list<string>  $countries
+     * @return array{ok: bool, message: string}
+     */
+    private function applyCombinedRule(string $token, array $countries, string $mode): array
+    {
         try {
             $zones = $this->listZones($token);
         } catch (\Throwable) {
@@ -389,25 +425,7 @@ class CloudflareClient
      */
     private function allowCountries(string $token, array $countries): array
     {
-        try {
-            foreach ($this->listZones($token) as $zone) {
-                $zoneId = (string) $zone['id'];
-
-                foreach ($this->countryAccessRules($token, $zoneId) as $rule) {
-                    $country = strtoupper((string) data_get($rule, 'configuration.value'));
-
-                    if ((string) data_get($rule, 'mode') !== 'whitelist'
-                        || in_array($country, $countries, true)
-                        || ! str_contains((string) data_get($rule, 'notes'), 'Multi Digital')) {
-                        continue;
-                    }
-
-                    $this->request($token)
-                        ->delete(self::BASE."/zones/{$zoneId}/firewall/access_rules/rules/".data_get($rule, 'id'))
-                        ->throw();
-                }
-            }
-        } catch (\Throwable) {
+        if (! $this->withdrawAllowRules($token, $countries)) {
             return $this->fail('הסרת מדינות שהוצאו מרשימת ההיתר נכשלה — הרשימה לא עודכנה. נסו שוב.');
         }
 
@@ -422,6 +440,40 @@ class CloudflareClient
         }
 
         return $this->ok(count($countries).' מדינות סומנו כמעבר חופשי בכל האתרים.');
+    }
+
+    /**
+     * Withdraw our own country allow rules, except for the countries in $keep.
+     * Somebody else's allow rule is theirs to remove.
+     *
+     * @param  list<string>  $keep
+     * @return bool whether every withdrawal succeeded
+     */
+    private function withdrawAllowRules(string $token, array $keep): bool
+    {
+        try {
+            foreach ($this->listZones($token) as $zone) {
+                $zoneId = (string) $zone['id'];
+
+                foreach ($this->countryAccessRules($token, $zoneId) as $rule) {
+                    $country = strtoupper((string) data_get($rule, 'configuration.value'));
+
+                    if ((string) data_get($rule, 'mode') !== 'whitelist'
+                        || in_array($country, $keep, true)
+                        || ! str_contains((string) data_get($rule, 'notes'), 'Multi Digital')) {
+                        continue;
+                    }
+
+                    $this->request($token)
+                        ->delete(self::BASE."/zones/{$zoneId}/firewall/access_rules/rules/".data_get($rule, 'id'))
+                        ->throw();
+                }
+            }
+        } catch (\Throwable) {
+            return false;
+        }
+
+        return true;
     }
 
     /**

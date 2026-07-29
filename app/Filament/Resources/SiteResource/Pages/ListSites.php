@@ -116,16 +116,22 @@ class ListSites extends ListRecords
                 );
 
                 $message = $result['message'];
+                $ok = $result['ok'];
 
                 // Only after the combined rule is actually in place: clearing the
                 // old rules first would leave the sites unprotected in between.
                 // The applied list is passed in so the cleanup can only touch
                 // rules the new one has genuinely made redundant.
-                if ($result['ok'] && ($data['remove_legacy'] ?? false)) {
+                if ($ok && ($data['remove_legacy'] ?? false)) {
                     $cleanup = $client->removeLegacyCountryRulesEverywhere(
                         $token,
                         CloudflareClient::countryCodesIn($data['countries'] ?? []),
                     );
+
+                    // A cleanup that stopped halfway is not a success, even
+                    // though the rule itself went out fine — the operator has a
+                    // half-migrated account and needs to know.
+                    $ok = $cleanup['ok'];
                     $message .= ' '.$cleanup['message'];
                 }
 
@@ -137,7 +143,7 @@ class ListSites extends ListRecords
                 Notification::make()
                     ->title('כללי מדינה ב-Cloudflare')
                     ->body($message)
-                    ->{$result['ok'] ? 'success' : 'danger'}()
+                    ->{$ok ? 'success' : 'danger'}()
                     ->send();
             });
     }

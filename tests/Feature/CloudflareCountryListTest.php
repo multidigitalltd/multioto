@@ -67,8 +67,10 @@ class CloudflareCountryListTest extends TestCase
         $this->assertTrue($result['ok']);
         $this->assertStringContainsString('2 אתרים', $result['message']);
 
-        // One POST per zone — not one per country, which is the whole point.
-        Http::assertSentCount(5); // 1 zones list + (1 entrypoint + 1 create) × 2
+        // One rule written per zone — not one per country, which is the point.
+        $this->assertSame(2, Http::recorded(fn ($request): bool => $request->method() === 'POST'
+            && str_contains($request->url(), '/rules'))->count());
+
         Http::assertSent(fn ($request): bool => $request->method() === 'POST'
             && str_contains($request->url(), '/rulesets/rs1/rules')
             && data_get($request->data(), 'expression') === '(ip.src.country in {"CN" "HK" "IR" "MX"})'
@@ -418,6 +420,68 @@ class CloudflareCountryListTest extends TestCase
         $this->assertSame(1, $result['removed']);
         Http::assertSent(fn ($request): bool => $request->method() === 'DELETE'
             && str_contains($request->url(), 'access_rules/rules/ours'));
+    }
+
+    public function test_switching_to_an_allow_list_takes_down_the_block_rule(): void
+    {
+        Http::fake([
+            '*/access_rules/rules/*' => Http::response(['success' => true]),
+            '*/access_rules/rules*' => Http::response(['success' => true, 'result' => [], 'result_info' => ['total_pages' => 1]]),
+            '*/rulesets/phases/*' => Http::response(['success' => true, 'result' => ['id' => 'rs1', 'rules' => [[
+                'id' => 'combined', 'description' => CloudflareClient::COUNTRY_RULE_DESCRIPTION,
+                'expression' => '(ip.src.country in {"CN" "RU"})', 'action' => 'block',
+            ]]]]),
+            '*/rulesets*' => Http::response(['success' => true, 'result' => ['id' => 'new']]),
+            '*/zones*' => Http::response([
+                'success' => true,
+                'result' => [['id' => 'z1', 'name' => 'a.com']],
+                'result_info' => ['total_pages' => 1],
+            ]),
+        ]);
+
+        $result = $this->client()->applyCountryListEverywhere('cf-token', ['US'], 'whitelist');
+
+        $this->assertTrue($result['ok']);
+
+        // One setting, one policy: saving "allow US" must not leave RU and CN
+        // blocked by a rule the screen no longer shows.
+        Http::assertSent(fn ($request): bool => $request->method() === 'DELETE'
+            && str_contains($request->url(), '/rulesets/rs1/rules/combined'));
+    }
+
+    public function test_switching_back_to_blocking_takes_down_our_allow_rules(): void
+    {
+        Http::fake([
+            '*/access_rules/rules/*' => Http::response(['success' => true]),
+            '*/access_rules/rules*' => Http::response([
+                'success' => true,
+                'result' => [
+                    ['id' => 'allow', 'mode' => 'whitelist', 'notes' => CloudflareClient::COUNTRY_RULE_DESCRIPTION,
+                        'configuration' => ['target' => 'country', 'value' => 'US']],
+                    ['id' => 'theirs', 'mode' => 'whitelist', 'notes' => 'Ops team',
+                        'configuration' => ['target' => 'country', 'value' => 'DE']],
+                ],
+                'result_info' => ['total_pages' => 1],
+            ]),
+            '*/rulesets/phases/*' => Http::response(['success' => true, 'result' => ['id' => 'rs1', 'rules' => []]]),
+            '*/rulesets*' => Http::response(['success' => true, 'result' => ['id' => 'new']]),
+            '*/zones*' => Http::response([
+                'success' => true,
+                'result' => [['id' => 'z1', 'name' => 'a.com']],
+                'result_info' => ['total_pages' => 1],
+            ]),
+        ]);
+
+        $result = $this->client()->applyCountryListEverywhere('cf-token', ['MX'], 'block');
+
+        $this->assertTrue($result['ok']);
+
+        // The allow list was the previous answer to the same question; it is not
+        // part of the policy the operator just saved. Somebody else's is.
+        Http::assertSent(fn ($request): bool => $request->method() === 'DELETE'
+            && str_contains($request->url(), 'access_rules/rules/allow'));
+        Http::assertNotSent(fn ($request): bool => $request->method() === 'DELETE'
+            && str_contains($request->url(), 'access_rules/rules/theirs'));
     }
 
     public function test_the_modal_opens_with_the_list_that_is_in_force(): void
