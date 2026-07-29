@@ -289,8 +289,8 @@ class ConsoleAgent
                 'input_schema' => $obj(['site_id' => $int], ['site_id'])],
             ['name' => 'propose_purge_cloudflare_cache', 'description' => 'הצע ניקוי קאש (CDN) של האתר ב-Cloudflare. site_id.',
                 'input_schema' => $obj(['site_id' => $int], ['site_id'])],
-            ['name' => 'propose_country_rule', 'description' => 'הצע כלל מדינה ב-Cloudflare שיחול על כל האתרים בבת אחת. country (קוד ISO בן 2 אותיות, למשל US) + action: managed_challenge (אתגר מנוהל), js_challenge, block (חסימה), whitelist (מעבר חופשי), remove (הסרת הכלל).',
-                'input_schema' => $obj(['country' => $str, 'action' => $str], ['country', 'action'])],
+            ['name' => 'propose_country_rule', 'description' => 'הצע כלל מדינות ב-Cloudflare שיחול על כל האתרים בבת אחת. countries = קודי ISO בני 2 אותיות מופרדים בפסיקים (למשל "MX,HK,IR") — כולן נכנסות לכלל אחד, אז אין צורך בהצעה נפרדת לכל מדינה. action: managed_challenge (אתגר מנוהל), js_challenge, challenge, block (חסימה), whitelist (מעבר חופשי), remove. שים לב: הרשימה מחליפה את הרשימה הקיימת ואינה מתווספת אליה, ו-remove מוחק את הכלל כולו על כל המדינות שבו — אין הסרה של מדינה בודדת, ולכן ב-remove אין להעביר countries.',
+                'input_schema' => $obj(['countries' => $str, 'action' => $str], ['action'])],
             ['name' => 'propose_update_wordpress', 'description' => 'הצע עדכון ליבת וורדפרס (WordPress core) לגרסה האחרונה. site_id לאתר בודד, או השמט אותו לעדכון כל האתרים המחוברים בבת אחת.',
                 'input_schema' => $obj(['site_id' => $int], [])],
             ['name' => 'investigate_site', 'description' => 'שלח את סוכן האתר לבדוק אתר מחובר (קריאה בלבד; תיקון יוצע לאישור). site_id + goal.',
@@ -752,27 +752,66 @@ class ConsoleAgent
         return $this->proposedOk($action->id, "{$label}: {$site->domain}");
     }
 
-    /** Propose a Cloudflare country rule that applies to ALL zones at once. */
+    /**
+     * Propose one Cloudflare country rule, covering any number of countries, that
+     * applies to ALL zones at once. A list rather than a country at a time: the
+     * countries share a single rule, so proposing them separately would be one
+     * approval per country for one decision.
+     */
     private function proposeCountryRule(array $input): array
     {
-        $country = strtoupper(trim((string) ($input['country'] ?? '')));
+        // Accepts "MX, HK" or a list, and the older single `country` key so an
+        // approval proposed before this change still reads correctly.
+        $raw = $input['countries'] ?? $input['country'] ?? '';
+        $raw = is_array($raw) ? $raw : preg_split('/[^A-Za-z]+/', (string) $raw, -1, PREG_SPLIT_NO_EMPTY);
+
+        $countries = [];
+
+        foreach ((array) $raw as $country) {
+            $country = strtoupper(trim((string) $country));
+
+            if ($country === '') {
+                continue;
+            }
+            if (preg_match('/^[A-Z]{2}$/', $country) !== 1) {
+                return ['content' => "קוד מדינה לא תקין: {$country}. נדרשים קודי ISO של שתי אותיות, למשל MX.", 'is_error' => true];
+            }
+
+            $countries[$country] = true;
+        }
+
+        $countries = array_keys($countries);
+        sort($countries);
         $mode = (string) ($input['action'] ?? '');
 
-        if (preg_match('/^[A-Z]{2}$/', $country) !== 1) {
-            return ['content' => 'קוד מדינה חייב להיות שתי אותיות (ISO), למשל US.', 'is_error' => true];
+        if (! in_array($mode, CloudflareClient::COUNTRY_LIST_MODES, true)) {
+            return ['content' => 'פעולה לא מוכרת לכלל מדינות.', 'is_error' => true];
         }
-        if (! in_array($mode, CloudflareClient::COUNTRY_MODES, true)) {
-            return ['content' => 'פעולה לא מוכרת לכלל מדינה.', 'is_error' => true];
+
+        // Removal takes the whole rule, every country in it. Naming a country in
+        // the summary would describe something narrower than what gets approved.
+        if ($mode === 'remove') {
+            $countries = [];
+        }
+
+        if ($countries === []) {
+            if ($mode !== 'remove') {
+                return ['content' => 'יש לציין לפחות מדינה אחת.', 'is_error' => true];
+            }
+
+            $what = 'הסרת הכלל כולו, על כל המדינות שבו';
+        } else {
+            $what = implode(', ', $countries);
         }
 
         $action = $this->gate->propose(
             type: 'system_action',
-            summary: "🌍 כלל מדינה ב-Cloudflare (כל האתרים) — {$country}: {$mode}",
-            payload: ['operation' => 'cloudflare_country_rule', 'country' => $country, 'mode' => $mode, 'source' => 'console_agent'],
+            summary: "🌍 כלל מדינות ב-Cloudflare (כל האתרים) — {$what}: {$mode}",
+            payload: ['operation' => 'cloudflare_country_rule', 'countries' => $countries, 'mode' => $mode, 'source' => 'console_agent'],
             proposedBy: 'console',
         );
 
-        return $this->proposedOk($action->id, "כלל מדינה {$country} ({$mode})");
+        return $this->proposedOk($action->id, "כלל מדינות {$what} ({$mode})");
     }
 
     /**

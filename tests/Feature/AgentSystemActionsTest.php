@@ -193,10 +193,8 @@ class AgentSystemActionsTest extends TestCase
     {
         config(['agent.system_actions_enabled' => true, 'billing.cloudflare.api_token' => 'saved-token']);
         Http::fake([
-            '*/access_rules/rules/*' => Http::response(['success' => true]),
-            '*/access_rules/rules*' => fn ($request) => $request->method() === 'GET'
-                ? Http::response(['success' => true, 'result' => []])
-                : Http::response(['success' => true, 'result' => ['id' => 'new']]),
+            '*/rulesets/phases/*' => Http::response(['success' => true, 'result' => ['id' => 'rs1', 'rules' => []]]),
+            '*/rulesets*' => Http::response(['success' => true, 'result' => ['id' => 'new']]),
             '*/zones*' => Http::response([
                 'success' => true,
                 'result' => [['id' => 'z1', 'name' => 'a.com']],
@@ -204,14 +202,39 @@ class AgentSystemActionsTest extends TestCase
             ]),
         ]);
 
-        $action = $this->systemAction(['operation' => 'cloudflare_country_rule', 'country' => 'RU', 'mode' => 'block']);
+        $action = $this->systemAction(['operation' => 'cloudflare_country_rule', 'countries' => ['RU', 'CN'], 'mode' => 'block']);
         app(ApprovalGate::class)->approve($action);
 
         $this->assertSame(ActionStatus::Executed, $action->fresh()->status);
         Http::assertSent(fn ($request): bool => $request->method() === 'POST'
-            && str_contains($request->url(), 'access_rules/rules')
-            && data_get($request->data(), 'configuration.value') === 'RU'
-            && data_get($request->data(), 'mode') === 'block');
+            && str_contains($request->url(), '/rulesets/rs1/rules')
+            && data_get($request->data(), 'expression') === '(ip.src.country in {"CN" "RU"})'
+            && data_get($request->data(), 'action') === 'block');
+    }
+
+    public function test_an_approval_proposed_before_the_combined_rule_runs_the_way_it_was_approved(): void
+    {
+        config(['agent.system_actions_enabled' => true, 'billing.cloudflare.api_token' => 'saved-token']);
+        Http::fake([
+            '*/access_rules/rules/*' => Http::response(['success' => true]),
+            '*/access_rules/rules*' => Http::response(['success' => true, 'result' => [['id' => 'r1']]]),
+            '*/zones*' => Http::response([
+                'success' => true,
+                'result' => [['id' => 'z1', 'name' => 'a.com']],
+                'result_info' => ['total_pages' => 1],
+            ]),
+        ]);
+
+        // The old payload carried a single `country` and was approved against the
+        // old mechanism. Running "remove RU" through the combined rule would
+        // delete that rule instead — unblocking every other country in it.
+        $action = $this->systemAction(['operation' => 'cloudflare_country_rule', 'country' => 'RU', 'mode' => 'remove']);
+        app(ApprovalGate::class)->approve($action);
+
+        $this->assertSame(ActionStatus::Executed, $action->fresh()->status);
+        Http::assertSent(fn ($request): bool => $request->method() === 'DELETE'
+            && str_contains($request->url(), 'access_rules/rules/r1'));
+        Http::assertNotSent(fn ($request): bool => str_contains($request->url(), '/rulesets'));
     }
 
     public function test_a_cloudflare_purge_fails_cleanly_without_a_saved_token(): void
