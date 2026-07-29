@@ -294,11 +294,14 @@ class SystemActionRunner
             throw new \RuntimeException('לא הוגדר טוקן API של Cloudflare — הגדירו אותו בהגדרות ← אינטגרציות.');
         }
 
-        $result = app(CloudflareClient::class)->applyCountryRuleEverywhere(
+        // `country` is the older single-value payload: an approval proposed
+        // before the combined rule existed must still execute as approved.
+        $countries = (array) ($p['countries'] ?? array_filter([$p['country'] ?? null]));
+
+        $result = app(CloudflareClient::class)->applyCountryListEverywhere(
             $token,
-            (string) ($p['country'] ?? ''),
+            $countries,
             (string) ($p['mode'] ?? ''),
-            'Multi Digital agent — country rule',
         );
 
         if (! $result['ok']) {
