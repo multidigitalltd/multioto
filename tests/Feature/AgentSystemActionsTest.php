@@ -212,12 +212,12 @@ class AgentSystemActionsTest extends TestCase
             && data_get($request->data(), 'action') === 'block');
     }
 
-    public function test_an_approval_proposed_before_the_combined_rule_still_executes(): void
+    public function test_an_approval_proposed_before_the_combined_rule_runs_the_way_it_was_approved(): void
     {
         config(['agent.system_actions_enabled' => true, 'billing.cloudflare.api_token' => 'saved-token']);
         Http::fake([
-            '*/rulesets/phases/*' => Http::response(['success' => true, 'result' => ['id' => 'rs1', 'rules' => []]]),
-            '*/rulesets*' => Http::response(['success' => true, 'result' => ['id' => 'new']]),
+            '*/access_rules/rules/*' => Http::response(['success' => true]),
+            '*/access_rules/rules*' => Http::response(['success' => true, 'result' => [['id' => 'r1']]]),
             '*/zones*' => Http::response([
                 'success' => true,
                 'result' => [['id' => 'z1', 'name' => 'a.com']],
@@ -225,14 +225,16 @@ class AgentSystemActionsTest extends TestCase
             ]),
         ]);
 
-        // The old payload carried a single `country`. An approval already waiting
-        // when this changed must still do what it was approved for.
-        $action = $this->systemAction(['operation' => 'cloudflare_country_rule', 'country' => 'RU', 'mode' => 'block']);
+        // The old payload carried a single `country` and was approved against the
+        // old mechanism. Running "remove RU" through the combined rule would
+        // delete that rule instead — unblocking every other country in it.
+        $action = $this->systemAction(['operation' => 'cloudflare_country_rule', 'country' => 'RU', 'mode' => 'remove']);
         app(ApprovalGate::class)->approve($action);
 
         $this->assertSame(ActionStatus::Executed, $action->fresh()->status);
-        Http::assertSent(fn ($request): bool => $request->method() === 'POST'
-            && data_get($request->data(), 'expression') === '(ip.src.country in {"RU"})');
+        Http::assertSent(fn ($request): bool => $request->method() === 'DELETE'
+            && str_contains($request->url(), 'access_rules/rules/r1'));
+        Http::assertNotSent(fn ($request): bool => str_contains($request->url(), '/rulesets'));
     }
 
     public function test_a_cloudflare_purge_fails_cleanly_without_a_saved_token(): void

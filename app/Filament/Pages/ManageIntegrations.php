@@ -273,7 +273,7 @@ class ManageIntegrations extends Page implements HasForms
                     ->footerActions($this->groupActions('flywp')),
 
                 Section::make('Cloudflare')
-                    ->description('טוקן API של Cloudflare (אופציונלי) — מאפשר למערכת ולסוכן להחריג את כתובת ה-IP של הפאנל ולנקות קאש לאתרים. צרו Custom Token עם ההרשאות: Zone·Read, Firewall Services·Edit (החרגת IP), Cache Purge·Purge (ניקוי קאש). נשמר מוצפן; השאירו ריק כדי לא לשנות.')
+                    ->description('טוקן API של Cloudflare (אופציונלי) — מאפשר למערכת ולסוכן להחריג את כתובת ה-IP של הפאנל, לנקות קאש ולנהל כללי מדינות. צרו Custom Token עם ההרשאות: Zone·Read, Firewall Services·Edit (החרגת IP וכללי מדינה ישנים), Zone WAF·Edit (כלל המדינות המשולב), Cache Purge·Purge (ניקוי קאש). נשמר מוצפן; השאירו ריק כדי לא לשנות.')
                     ->schema([
                         $this->secretInput('cloudflare.api_token', 'API Token')
                             ->helperText('משמש לכל האתרים שמנוהלים תחת חשבון ה-Cloudflare הזה. אפשר גם להזין טוקן חד-פעמי בפעולה עצמה במקום לשמור כאן.'),

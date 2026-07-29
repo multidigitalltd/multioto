@@ -195,30 +195,51 @@ class CloudflareCountryListTest extends TestCase
         $overview = $this->client()->countryListOverview('cf-token');
 
         $this->assertTrue($overview['ok']);
-        $this->assertSame(['MX', 'HK', 'IR'], $overview['countries']);
+        // Sorted, so that two zones holding the same set compare as the same set.
+        $this->assertSame(['HK', 'IR', 'MX'], $overview['countries']);
+        $this->assertTrue($overview['consistent']);
         $this->assertSame('managed_challenge', $overview['mode']);
         $this->assertSame(2, $overview['zones']);
         $this->assertSame(2, $overview['total_zones']);
     }
 
-    public function test_cleaning_up_removes_the_old_per_country_rules_but_keeps_allow_rules(): void
+    /** Fake a zone whose legacy country access rules are $rules. */
+    private function fakeLegacyRules(array $rules): void
     {
+        $deleted = [];
+
         Http::fake([
-            '*/access_rules/rules/*' => Http::response(['success' => true]),
-            '*/access_rules/rules*' => Http::response([
-                'success' => true,
-                'result' => [
-                    ['id' => 'r1', 'mode' => 'block', 'configuration' => ['target' => 'country', 'value' => 'MX']],
-                    ['id' => 'r2', 'mode' => 'managed_challenge', 'configuration' => ['target' => 'country', 'value' => 'HK']],
-                    ['id' => 'r3', 'mode' => 'whitelist', 'configuration' => ['target' => 'country', 'value' => 'IL']],
-                ],
-                'result_info' => ['total_pages' => 1],
-            ]),
+            '*/access_rules/rules/*' => function ($request) use (&$deleted) {
+                $deleted[] = basename(parse_url($request->url(), PHP_URL_PATH));
+
+                return Http::response(['success' => true]);
+            },
+            '*/access_rules/rules*' => function () use ($rules, &$deleted) {
+                // Deleted rules really disappear, so a re-read after a sweep
+                // cannot hand the same rule back forever.
+                return Http::response([
+                    'success' => true,
+                    'result' => array_values(array_filter($rules, fn (array $r): bool => ! in_array($r['id'], $deleted, true))),
+                    'result_info' => ['total_pages' => 1],
+                ]);
+            },
             '*/zones*' => Http::response([
                 'success' => true,
                 'result' => [['id' => 'z1', 'name' => 'a.com']],
                 'result_info' => ['total_pages' => 1],
             ]),
+        ]);
+    }
+
+    public function test_cleaning_up_removes_the_old_per_country_rules_but_keeps_allow_rules(): void
+    {
+        $this->fakeLegacyRules([
+            ['id' => 'r1', 'mode' => 'block', 'notes' => CloudflareClient::COUNTRY_RULE_DESCRIPTION,
+                'configuration' => ['target' => 'country', 'value' => 'MX']],
+            ['id' => 'r2', 'mode' => 'managed_challenge', 'notes' => 'Multi Digital agent — country rule',
+                'configuration' => ['target' => 'country', 'value' => 'HK']],
+            ['id' => 'r3', 'mode' => 'whitelist', 'notes' => CloudflareClient::COUNTRY_RULE_DESCRIPTION,
+                'configuration' => ['target' => 'country', 'value' => 'IL']],
         ]);
 
         $result = $this->client()->removeLegacyCountryRulesEverywhere('cf-token');
@@ -230,6 +251,68 @@ class CloudflareCountryListTest extends TestCase
         // access rather than free up budget.
         Http::assertNotSent(fn ($request): bool => $request->method() === 'DELETE'
             && str_contains($request->url(), 'access_rules/rules/r3'));
+    }
+
+    public function test_cleaning_up_never_deletes_a_rule_somebody_else_made(): void
+    {
+        $this->fakeLegacyRules([
+            ['id' => 'ours', 'mode' => 'block', 'notes' => CloudflareClient::COUNTRY_RULE_DESCRIPTION,
+                'configuration' => ['target' => 'country', 'value' => 'MX']],
+            ['id' => 'theirs', 'mode' => 'block', 'notes' => 'Ops team — do not remove',
+                'configuration' => ['target' => 'country', 'value' => 'BR']],
+        ]);
+
+        $result = $this->client()->removeLegacyCountryRulesEverywhere('cf-token');
+
+        // A rule made by hand or by another integration did not ask us to tidy
+        // up after it.
+        $this->assertSame(1, $result['removed']);
+        Http::assertNotSent(fn ($request): bool => $request->method() === 'DELETE'
+            && str_contains($request->url(), 'access_rules/rules/theirs'));
+    }
+
+    public function test_cleaning_up_also_takes_a_foreign_rule_the_new_list_now_covers(): void
+    {
+        $this->fakeLegacyRules([
+            ['id' => 'theirs', 'mode' => 'block', 'notes' => 'Added in the dashboard',
+                'configuration' => ['target' => 'country', 'value' => 'BR']],
+            ['id' => 'unrelated', 'mode' => 'block', 'notes' => 'Added in the dashboard',
+                'configuration' => ['target' => 'country', 'value' => 'RU']],
+        ]);
+
+        // BR is now handled by the combined rule, so the old rule for it is
+        // redundant whoever wrote it. RU is not covered and stays.
+        $result = $this->client()->removeLegacyCountryRulesEverywhere('cf-token', ['BR']);
+
+        $this->assertSame(1, $result['removed']);
+        Http::assertNotSent(fn ($request): bool => $request->method() === 'DELETE'
+            && str_contains($request->url(), 'access_rules/rules/unrelated'));
+    }
+
+    public function test_the_overview_refuses_to_offer_a_list_when_the_zones_disagree(): void
+    {
+        $rule = fn (string $expression): array => [[
+            'id' => 'r', 'description' => CloudflareClient::COUNTRY_RULE_DESCRIPTION,
+            'expression' => $expression, 'action' => 'block',
+        ]];
+
+        Http::fake([
+            '*/zones/z1/rulesets/phases/*' => Http::response(['success' => true, 'result' => ['id' => 'rs1', 'rules' => $rule('(ip.src.country in {"MX"})')]]),
+            '*/zones/z2/rulesets/phases/*' => Http::response(['success' => true, 'result' => ['id' => 'rs2', 'rules' => $rule('(ip.src.country in {"MX" "HK"})')]]),
+            '*/zones*' => Http::response([
+                'success' => true,
+                'result' => [['id' => 'z1', 'name' => 'a.com'], ['id' => 'z2', 'name' => 'b.com']],
+                'result_info' => ['total_pages' => 1],
+            ]),
+        ]);
+
+        $overview = $this->client()->countryListOverview('cf-token');
+
+        // A run that failed halfway leaves this behind. Preloading either list
+        // would let a re-save quietly push the wrong countries back out.
+        $this->assertFalse($overview['consistent']);
+        $this->assertSame([], $overview['countries']);
+        $this->assertNull($overview['mode']);
     }
 
     public function test_the_panel_applies_a_pasted_country_list_in_one_action(): void
@@ -251,6 +334,24 @@ class CloudflareCountryListTest extends TestCase
         Http::assertSent(fn ($request): bool => $request->method() === 'POST'
             && str_contains($request->url(), '/rulesets/rs1/rules')
             && data_get($request->data(), 'expression') === '(ip.src.country in {"HK" "IR" "MX"})');
+    }
+
+    public function test_the_modal_opens_with_the_list_that_is_in_force(): void
+    {
+        config(['billing.cloudflare.api_token' => 'saved-token']);
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+        $this->fakeZones(['z1'], [[
+            'id' => 'existing',
+            'description' => CloudflareClient::COUNTRY_RULE_DESCRIPTION,
+            'expression' => '(ip.src.country in {"MX" "HK"})',
+            'action' => 'block',
+        ]]);
+
+        // Adding a country must be adding, not retyping two dozen codes from
+        // memory and losing one.
+        Livewire::test(ListSites::class)
+            ->mountAction('countryRule')
+            ->assertActionDataSet(['countries' => ['HK', 'MX'], 'mode' => 'block']);
     }
 
     public function test_nothing_is_sent_without_a_token(): void

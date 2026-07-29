@@ -351,6 +351,29 @@ class CloudflareClient
     }
 
     /**
+     * The valid country codes in whatever was typed — for callers that need the
+     * list itself rather than to apply it. Invalid entries are dropped here
+     * because this is used to NARROW a destructive cleanup: a typo must shrink
+     * what gets deleted, never widen it.
+     *
+     * @return list<string>
+     */
+    public static function countryCodesIn(array|string $countries): array
+    {
+        $codes = [];
+
+        foreach ((new self)->splitCountries($countries) as $country) {
+            $country = strtoupper($country);
+
+            if (preg_match('/^[A-Z]{2}$/', $country) === 1) {
+                $codes[$country] = true;
+            }
+        }
+
+        return array_keys($codes);
+    }
+
+    /**
      * Allow each country through, one IP Access Rule per country.
      *
      * @param  list<string>  $countries
@@ -372,16 +395,22 @@ class CloudflareClient
     }
 
     /**
-     * Delete the legacy per-country IP Access Rules across all zones — exactly
-     * the ones the combined rule now covers.
+     * Delete the legacy per-country IP Access Rules that the combined rule has
+     * made redundant.
      *
-     * Only blocking/challenging rules are removed. A country on 'whitelist' is
-     * there to let someone THROUGH, and deleting it would quietly tighten access
-     * rather than loosen it, so those are left alone.
+     * Three conditions, all of them narrowing:
+     *  - Only blocking/challenging rules. A country on 'whitelist' is there to
+     *    let someone THROUGH, and deleting it would quietly tighten access.
+     *  - Only rules that are ours (by their notes) or whose country the combined
+     *    rule now covers. Anything else belongs to a person or an integration
+     *    that did not ask us to clean up after it.
+     *  - Nothing at all when $covered is empty and the rule carries no marker,
+     *    so a cleanup can never be broader than the rule that justified it.
      *
+     * @param  list<string>  $covered  countries the combined rule now handles
      * @return array{ok: bool, message: string, removed: int}
      */
-    public function removeLegacyCountryRulesEverywhere(string $token): array
+    public function removeLegacyCountryRulesEverywhere(string $token, array $covered = []): array
     {
         $token = trim($token);
 
@@ -390,27 +419,51 @@ class CloudflareClient
         }
 
         $removable = ['block', 'challenge', 'js_challenge', 'managed_challenge'];
+        $covered = array_map(fn ($c): string => strtoupper(trim((string) $c)), $covered);
         $removed = 0;
 
         try {
             foreach ($this->listZones($token) as $zone) {
                 $zoneId = (string) $zone['id'];
 
-                $body = $this->request($token)->get(self::BASE."/zones/{$zoneId}/firewall/access_rules/rules", [
-                    'configuration.target' => 'country',
-                    'per_page' => 100,
-                ])->throw()->json();
+                // Deleting shifts every later page back by one, so paging
+                // forward would step over rules. Re-reading the first page after
+                // each sweep is the only way to see them all; the sweep count is
+                // bounded so a rule we decline to delete cannot loop forever.
+                for ($sweep = 0; $sweep < 50; $sweep++) {
+                    $rules = (array) data_get($this->request($token)
+                        ->get(self::BASE."/zones/{$zoneId}/firewall/access_rules/rules", [
+                            'configuration.target' => 'country',
+                            'per_page' => 100,
+                            'page' => 1,
+                        ])->throw()->json(), 'result', []);
 
-                foreach ((array) data_get($body, 'result', []) as $rule) {
-                    if (! in_array((string) data_get($rule, 'mode'), $removable, true)) {
-                        continue;
+                    $deletable = array_filter($rules, function (array $rule) use ($removable, $covered): bool {
+                        if (! in_array((string) data_get($rule, 'mode'), $removable, true)) {
+                            return false;
+                        }
+
+                        return str_contains((string) data_get($rule, 'notes'), 'Multi Digital')
+                            || in_array(strtoupper((string) data_get($rule, 'configuration.value')), $covered, true);
+                    });
+
+                    if ($deletable === []) {
+                        break;
                     }
 
-                    $this->request($token)
-                        ->delete(self::BASE."/zones/{$zoneId}/firewall/access_rules/rules/".data_get($rule, 'id'))
-                        ->throw();
+                    foreach ($deletable as $rule) {
+                        $this->request($token)
+                            ->delete(self::BASE."/zones/{$zoneId}/firewall/access_rules/rules/".data_get($rule, 'id'))
+                            ->throw();
 
-                    $removed++;
+                        $removed++;
+                    }
+
+                    // A full page deleted may have had more behind it; a partial
+                    // one means everything left is somebody else's.
+                    if (count($rules) < 100) {
+                        break;
+                    }
                 }
             }
         } catch (\Throwable) {
@@ -418,7 +471,7 @@ class CloudflareClient
         }
 
         return $this->ok($removed === 0
-            ? 'לא נמצאו כללי מדינה ישנים לניקוי.'
+            ? 'לא נמצאו כללי מדינה ישנים שלנו לניקוי.'
             : "{$removed} כללי מדינה ישנים הוסרו ופינו מקום במכסת הכללים.") + ['removed' => $removed];
     }
 
@@ -520,12 +573,17 @@ class CloudflareClient
      * it covers, with which action, and on how many zones — so the operator edits
      * the real list instead of retyping it from memory.
      *
-     * @return array{ok: bool, message: string, total_zones: int, countries: list<string>, mode: ?string, zones: int}
+     * `consistent` is false when the zones do not all carry the SAME list and
+     * action — which is what a run that failed halfway leaves behind. The list is
+     * then not safe to preload: re-saving it would quietly restore whichever
+     * version happened to be read first onto the zones that already moved on.
+     *
+     * @return array{ok: bool, message: string, total_zones: int, countries: list<string>, mode: ?string, zones: int, consistent: bool}
      */
     public function countryListOverview(string $token): array
     {
         $token = trim($token);
-        $empty = ['total_zones' => 0, 'countries' => [], 'mode' => null, 'zones' => 0];
+        $empty = ['total_zones' => 0, 'countries' => [], 'mode' => null, 'zones' => 0, 'consistent' => true];
 
         if ($token === '') {
             return $this->fail('חסר טוקן API של Cloudflare.') + $empty;
@@ -533,8 +591,7 @@ class CloudflareClient
 
         try {
             $zones = $this->listZones($token);
-            $countries = [];
-            $mode = null;
+            $variants = [];
             $withRule = 0;
 
             foreach ($zones as $zone) {
@@ -546,24 +603,34 @@ class CloudflareClient
                     }
 
                     $withRule++;
-                    // The rule is written by us on every zone alike, so the first
-                    // one read describes them all; a zone edited by hand simply
-                    // shows up as fewer zones carrying the rule.
-                    $countries = $countries ?: $this->countriesIn((string) ($rule['expression'] ?? ''));
-                    $mode ??= (string) ($rule['action'] ?? '');
+                    $countries = $this->countriesIn((string) ($rule['expression'] ?? ''));
+                    sort($countries);
+                    $action = (string) ($rule['action'] ?? '');
+
+                    // Keyed by content, so two zones agreeing collapse into one
+                    // entry and two disagreeing do not.
+                    $variants[$action.'|'.implode(',', $countries)] = ['countries' => $countries, 'mode' => $action];
                 }
             }
         } catch (\Throwable) {
             return $this->fail('הפנייה ל-Cloudflare נכשלה — בדקו את הטוקן והחיבור לרשת.') + $empty;
         }
 
+        $consistent = count($variants) <= 1;
+        $first = reset($variants) ?: ['countries' => [], 'mode' => null];
+
         return [
             'ok' => true,
-            'message' => count($countries).' מדינות בכלל המשולב',
+            'message' => $consistent
+                ? count($first['countries']).' מדינות בכלל המשולב'
+                : 'הכלל אינו זהה בכל האתרים — '.count($variants).' גרסאות שונות',
             'total_zones' => count($zones),
-            'countries' => $countries,
-            'mode' => $mode,
+            // Nothing is offered for editing when the zones disagree: the
+            // operator must re-apply a list deliberately, not inherit one.
+            'countries' => $consistent ? $first['countries'] : [],
+            'mode' => $consistent ? $first['mode'] : null,
             'zones' => $withRule,
+            'consistent' => $consistent,
         ];
     }
 

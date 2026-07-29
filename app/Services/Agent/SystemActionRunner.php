@@ -294,15 +294,17 @@ class SystemActionRunner
             throw new \RuntimeException('לא הוגדר טוקן API של Cloudflare — הגדירו אותו בהגדרות ← אינטגרציות.');
         }
 
-        // `country` is the older single-value payload: an approval proposed
-        // before the combined rule existed must still execute as approved.
-        $countries = (array) ($p['countries'] ?? array_filter([$p['country'] ?? null]));
+        $client = app(CloudflareClient::class);
+        $mode = (string) ($p['mode'] ?? '');
 
-        $result = app(CloudflareClient::class)->applyCountryListEverywhere(
-            $token,
-            $countries,
-            (string) ($p['mode'] ?? ''),
-        );
+        // An approval proposed before the combined rule existed carries a single
+        // `country` and was approved against the OLD mechanism — an IP Access
+        // Rule for that one country. Running it through the new path would mean
+        // doing something else entirely: "remove RU" would delete the combined
+        // rule and unblock every other country in it.
+        $result = isset($p['countries'])
+            ? $client->applyCountryListEverywhere($token, (array) $p['countries'], $mode)
+            : $client->applyCountryRuleEverywhere($token, (string) ($p['country'] ?? ''), $mode, 'Multi Digital agent — country rule');
 
         if (! $result['ok']) {
             throw new \RuntimeException($result['message']);

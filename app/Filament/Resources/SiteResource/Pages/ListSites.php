@@ -70,7 +70,7 @@ class ListSites extends ListRecords
             ->color('gray')
             ->visible(fn (): bool => auth()->user()?->isAdmin() ?? false)
             ->modalHeading('כלל מדינות ב-Cloudflare — לכל האתרים')
-            ->modalDescription('כל המדינות שתזינו נכנסות לכלל WAF אחד לכל אתר, במקום כלל נפרד לכל מדינה. הכלל יוחל על כל הזונים בחשבון בבת אחת. נדרשת הרשאת Firewall Services · Edit בטוקן.')
+            ->modalDescription('כל המדינות שתזינו נכנסות לכלל WAF אחד לכל אתר, במקום כלל נפרד לכל מדינה. הכלל יוחל על כל הזונים בחשבון בבת אחת. נדרשות בטוקן ההרשאות Zone WAF · Edit (לכלל המשולב) ו-Firewall Services · Edit (לכללים הישנים ולמעבר חופשי).')
             ->modalSubmitActionLabel('החל על כל האתרים')
             ->fillForm(fn (): array => $this->currentCountryList())
             ->form([
@@ -119,8 +119,13 @@ class ListSites extends ListRecords
 
                 // Only after the combined rule is actually in place: clearing the
                 // old rules first would leave the sites unprotected in between.
+                // The applied list is passed in so the cleanup can only touch
+                // rules the new one has genuinely made redundant.
                 if ($result['ok'] && ($data['remove_legacy'] ?? false)) {
-                    $cleanup = $client->removeLegacyCountryRulesEverywhere($token);
+                    $cleanup = $client->removeLegacyCountryRulesEverywhere(
+                        $token,
+                        CloudflareClient::countryCodesIn($data['countries'] ?? []),
+                    );
                     $message .= ' '.$cleanup['message'];
                 }
 
@@ -188,6 +193,14 @@ class ListSites extends ListRecords
 
         if (! ($overview['ok'] ?? false)) {
             return '<div style="'.$muted.'">'.e($overview['message'] ?? 'לא ניתן לקרוא את הכללים הקיימים.').'</div>';
+        }
+
+        // A run that failed halfway leaves different lists on different zones.
+        // Showing one of them as "the" list would invite a re-save that quietly
+        // pushes the wrong countries back onto the zones that already moved on.
+        if (! ($overview['consistent'] ?? true)) {
+            return '<div style="font-size:.875rem;color:rgb(180 83 9)"><strong>הכלל אינו זהה בכל האתרים.</strong><br>'
+                .'<span style="'.$muted.'">כנראה החלה שנכשלה באמצע. הזינו את הרשימה המבוקשת מחדש והחילו — כך כל האתרים יחזרו לאותו מצב.</span></div>';
         }
 
         if (($overview['countries'] ?? []) === []) {
