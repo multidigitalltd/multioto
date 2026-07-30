@@ -1,0 +1,47 @@
+<?php
+
+namespace App\Jobs;
+
+use App\Services\Backup\BackupRunner;
+use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Support\Facades\Cache;
+
+/**
+ * Take one backup in the background — the nightly run, or the button.
+ *
+ * Held under a lock rather than trusted to run once. The archive can take
+ * longer than the queue's reclaim window, and a second worker picking up the
+ * same payload would write a second archive over the top of the first; the lock
+ * makes that attempt a no-op instead. Same reason ChargeSubscriptionJob holds
+ * one: the queue guarantees at-least-once, and some work must be at-most-once.
+ */
+class RunBackupJob implements ShouldQueue
+{
+    use Queueable;
+
+    public int $tries = 1;
+
+    public int $timeout = 1800;
+
+    public function __construct(public ?int $userId = null) {}
+
+    public function handle(BackupRunner $runner): void
+    {
+        if (! (bool) config('backup.enabled', true)) {
+            return;
+        }
+
+        $lock = Cache::lock('backup:run', 3600);
+
+        if (! $lock->get()) {
+            return; // Already running.
+        }
+
+        try {
+            $runner->run($this->userId);
+        } finally {
+            $lock->release();
+        }
+    }
+}

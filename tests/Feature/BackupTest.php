@@ -1,0 +1,295 @@
+<?php
+
+namespace Tests\Feature;
+
+use App\Enums\BackupStatus;
+use App\Enums\UserRole;
+use App\Filament\Pages\ManageBackups;
+use App\Jobs\RestoreBackupJob;
+use App\Jobs\RunBackupJob;
+use App\Models\Backup;
+use App\Models\Customer;
+use App\Models\Site;
+use App\Models\User;
+use App\Services\Backup\BackupRestorer;
+use App\Services\Backup\BackupRunner;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Storage;
+use Livewire\Livewire;
+use Tests\TestCase;
+use ZipArchive;
+
+/**
+ * A copy of the business, off the machine that holds it, that can actually be
+ * put back.
+ *
+ * The tests that earn their place here are the ones about trust: that a failed
+ * run leaves a visible failure rather than silence, that the archive really
+ * contains the rows, that restoring returns exactly what was there, and that
+ * restoring into a schema the archive was not taken from is refused rather than
+ * half-applied.
+ */
+class BackupTest extends TestCase
+{
+    use RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        Storage::fake('backups');
+        Storage::fake('local');
+        Storage::fake('public');
+
+        config([
+            'backup.enabled' => true,
+            'backup.disk' => 'backups',
+            'backup.path' => 'archives',
+            'backup.files' => ['local' => [], 'public' => []],
+        ]);
+    }
+
+    private function runBackup(?int $userId = null): Backup
+    {
+        return app(BackupRunner::class)->run($userId);
+    }
+
+    /*
+    | ----------------------------------------------------------------
+    | Taking a backup
+    | ----------------------------------------------------------------
+    */
+
+    public function test_a_backup_is_written_to_the_external_destination(): void
+    {
+        Customer::factory()->count(3)->create();
+
+        $backup = $this->runBackup();
+
+        $this->assertSame(BackupStatus::Completed, $backup->status);
+        Storage::disk('backups')->assertExists($backup->path);
+        $this->assertGreaterThan(0, $backup->size_bytes);
+        $this->assertStringStartsWith('archives/', $backup->path);
+    }
+
+    public function test_the_archive_contains_the_rows_and_the_uploaded_files(): void
+    {
+        Customer::factory()->create(['name' => 'דני כהן']);
+        Storage::disk('local')->put('attachments/note.txt', 'תוכן הצרופה');
+
+        $backup = $this->runBackup();
+
+        $local = $this->pullArchive($backup);
+        $zip = new ZipArchive;
+        $this->assertTrue($zip->open($local) === true);
+
+        $rows = (string) $zip->getFromName('database/customers.ndjson');
+        $this->assertStringContainsString('דני כהן', $rows);
+
+        $this->assertSame('תוכן הצרופה', $zip->getFromName('files/local/attachments/note.txt'));
+        $zip->close();
+
+        $this->assertSame(1, $backup->manifest['tables']['customers']);
+        $this->assertSame(1, $backup->fileCount());
+    }
+
+    public function test_runtime_tables_are_left_out(): void
+    {
+        $backup = $this->runBackup();
+        $tables = array_keys($backup->manifest['tables']);
+
+        // Queue payloads and sessions describe what the server was doing, not
+        // the business — restoring them would resurrect stale jobs.
+        $this->assertNotContains('jobs', $tables);
+        $this->assertNotContains('sessions', $tables);
+        // And the backup history itself, or a restore would delete the list of
+        // archives while running from one of them.
+        $this->assertNotContains('backups', $tables);
+    }
+
+    public function test_a_failed_run_is_recorded_rather_than_silent(): void
+    {
+        // A destination that does not exist — the realistic misconfiguration.
+        config(['backup.disk' => 'nope']);
+
+        try {
+            $this->runBackup();
+            $this->fail('a broken destination must not pass quietly');
+        } catch (\Throwable) {
+            // expected
+        }
+
+        $backup = Backup::sole();
+        $this->assertSame(BackupStatus::Failed, $backup->status);
+        $this->assertNotNull($backup->error);
+    }
+
+    public function test_the_button_records_who_pressed_it(): void
+    {
+        $user = User::factory()->create();
+
+        $manual = $this->runBackup($user->id);
+        $nightly = $this->runBackup();
+
+        $this->assertFalse($manual->isAutomatic());
+        $this->assertTrue($nightly->isAutomatic());
+    }
+
+    public function test_the_job_does_nothing_while_backups_are_switched_off(): void
+    {
+        config(['backup.enabled' => false]);
+
+        (new RunBackupJob)->handle(app(BackupRunner::class));
+
+        $this->assertSame(0, Backup::count());
+    }
+
+    /*
+    | ----------------------------------------------------------------
+    | Retention
+    | ----------------------------------------------------------------
+    */
+
+    public function test_old_archives_are_pruned_but_never_the_last_few(): void
+    {
+        config(['backup.retention_days' => 7, 'backup.keep_at_least' => 2]);
+
+        // Four old archives; the two newest must survive their own age.
+        for ($i = 0; $i < 4; $i++) {
+            $backup = $this->runBackup();
+            Backup::whereKey($backup->id)->update(['created_at' => now()->subDays(30)]);
+        }
+
+        app(BackupRunner::class)->prune();
+
+        // The floor protects the two newest completed archives; a retention
+        // window set too tight must never leave the business with nothing.
+        $this->assertSame(2, Backup::count());
+    }
+
+    /*
+    | ----------------------------------------------------------------
+    | Putting it back
+    | ----------------------------------------------------------------
+    */
+
+    public function test_restoring_brings_back_what_was_there(): void
+    {
+        $customer = Customer::factory()->create(['name' => 'לקוח מהגיבוי']);
+        Storage::disk('local')->put('attachments/keep.txt', 'קובץ מהגיבוי');
+
+        $backup = $this->runBackup();
+
+        // Everything changes after the backup.
+        Customer::query()->delete();
+        Storage::disk('local')->delete('attachments/keep.txt');
+        Customer::factory()->create(['name' => 'לקוח שנוצר אחרי']);
+
+        app(BackupRestorer::class)->restore($backup);
+
+        $this->assertSame(1, Customer::count());
+        $this->assertSame('לקוח מהגיבוי', Customer::sole()->name);
+        $this->assertSame($customer->id, Customer::sole()->id);
+        $this->assertSame('קובץ מהגיבוי', Storage::disk('local')->get('attachments/keep.txt'));
+        $this->assertSame(BackupStatus::Completed, $backup->fresh()->restore_status);
+    }
+
+    public function test_restoring_puts_related_rows_back_in_an_order_the_keys_allow(): void
+    {
+        // A site points at a customer: restoring the child before the parent
+        // would fail on the foreign key.
+        $site = Site::factory()->create(['customer_id' => Customer::factory()->create()->id]);
+
+        $backup = $this->runBackup();
+
+        Site::query()->delete();
+        Customer::query()->delete();
+
+        app(BackupRestorer::class)->restore($backup);
+
+        $this->assertSame(1, Site::count());
+        $this->assertSame($site->customer_id, Site::sole()->customer_id);
+    }
+
+    public function test_a_restore_into_a_changed_schema_is_refused(): void
+    {
+        $backup = $this->runBackup();
+
+        // As if the archive came from an older release.
+        $manifest = $backup->manifest;
+        $manifest['migrations'][] = '9999_01_01_000000_a_migration_this_code_does_not_have';
+        $backup->update(['manifest' => $manifest]);
+
+        $this->assertNotNull(app(BackupRestorer::class)->blockedReason($backup->fresh()));
+    }
+
+    public function test_a_restore_that_fails_says_so_on_the_backup(): void
+    {
+        $backup = $this->runBackup();
+
+        // The archive is gone from the destination.
+        Storage::disk('backups')->delete($backup->path);
+
+        try {
+            app(BackupRestorer::class)->restore($backup);
+            $this->fail('a missing archive must not restore quietly');
+        } catch (\Throwable) {
+            // expected
+        }
+
+        $this->assertSame(BackupStatus::Failed, $backup->fresh()->restore_status);
+        $this->assertNotNull($backup->fresh()->restore_error);
+    }
+
+    public function test_an_unfinished_backup_cannot_be_restored_from(): void
+    {
+        $backup = Backup::create([
+            'status' => BackupStatus::Running,
+            'disk' => 'backups',
+            'path' => 'archives/half-written.zip',
+        ]);
+
+        $this->assertNotNull(app(BackupRestorer::class)->blockedReason($backup));
+
+        (new RestoreBackupJob($backup->id))->handle(app(BackupRestorer::class));
+
+        // Never even attempted.
+        $this->assertNull($backup->fresh()->restore_status);
+    }
+
+    /*
+    | ----------------------------------------------------------------
+    | Who may see any of this
+    | ----------------------------------------------------------------
+    */
+
+    public function test_the_screen_is_admin_only(): void
+    {
+        // An archive is a file full of customer names, phone numbers and
+        // payment history — it is not a screen for every team member.
+        $this->actingAs(User::factory()->create(['role' => UserRole::Agent]));
+        $this->assertFalse(ManageBackups::canAccess());
+
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+        $this->assertTrue(ManageBackups::canAccess());
+    }
+
+    public function test_the_screen_opens_and_lists_the_backups(): void
+    {
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+        $backup = $this->runBackup();
+
+        Livewire::test(ManageBackups::class)
+            ->assertOk()
+            ->assertCanSeeTableRecords([$backup]);
+    }
+
+    /** Copy the stored archive to a local file the test can open. */
+    private function pullArchive(Backup $backup): string
+    {
+        $local = tempnam(sys_get_temp_dir(), 'test-archive-');
+        file_put_contents($local, Storage::disk($backup->disk)->get($backup->path));
+
+        return $local;
+    }
+}

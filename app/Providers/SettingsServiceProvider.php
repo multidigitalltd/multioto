@@ -43,6 +43,13 @@ class SettingsServiceProvider extends ServiceProvider
         // Optional security-scan / domain-reputation keys. The defaults
         // (Wordfence feed, URLhaus + Spamhaus DBL) are keyless — these only
         // ADD sources (WPScan feed, Google Safe Browsing).
+        // Automatic backup: destination and schedule, editable without a deploy
+        // — the one thing an operator must be able to fix at 2am.
+        'backup.enabled' => 'backup.enabled',
+        'backup.disk' => 'backup.disk',
+        'backup.path' => 'backup.path',
+        'backup.daily_at' => 'backup.daily_at',
+        'backup.retention_days' => 'backup.retention_days',
         'security.wpscan_token' => 'security.vulnerabilities.wpscan_token',
         'security.urlhaus_auth_key' => 'security.reputation.urlhaus_auth_key',
         'security.wordfence_api_key' => 'security.vulnerabilities.wordfence_api_key',
@@ -137,6 +144,13 @@ class SettingsServiceProvider extends ServiceProvider
         'system.monitor_check_retention_days' => 'billing.system.monitor_check_retention_days',
         'system.webhook_retention_days' => 'billing.system.webhook_retention_days',
         'system.notification_retention_days' => 'billing.system.notification_retention_days',
+        // Backup destination and window: a cleared field must fall back to the
+        // config-file default, not leave the old destination in a live worker
+        // still writing archives somewhere nobody is looking.
+        'backup.disk' => 'backup.disk',
+        'backup.path' => 'backup.path',
+        'backup.daily_at' => 'backup.daily_at',
+        'backup.retention_days' => 'backup.retention_days',
     ];
 
     /** Pristine config-file defaults for RESET_ON_CLEAR keys, memoized once. */

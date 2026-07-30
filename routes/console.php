@@ -16,6 +16,7 @@ use App\Jobs\CheckStoreSalesJob;
 use App\Jobs\FollowUpPendingTicketsJob;
 use App\Jobs\MonitorSiteJob;
 use App\Jobs\ReconcileChargeJob;
+use App\Jobs\RunBackupJob;
 use App\Jobs\ScanSiteComplianceJob;
 use App\Jobs\ScanSiteOpportunitiesJob;
 use App\Jobs\ScanSiteVulnerabilitiesJob;
@@ -286,6 +287,18 @@ Schedule::call(function () {
         ->pluck('id')
         ->each(fn (int $id) => SendBroadcastJob::dispatch($id));
 })->everyFiveMinutes()->name('broadcasts:dispatch-scheduled')->when($awake)->onOneServer();
+
+// Nightly backup to the external destination. Deliberately NOT gated on
+// $awake: a backup sends nothing outward and touches no customer, so pausing it
+// over Shabbat would only mean a day of the year with no copy of the business.
+// The job holds a lock, so a slow run can never be started twice.
+Schedule::call(function () {
+    (new SettingsServiceProvider(app()))->boot();
+
+    if ((bool) config('backup.enabled', true)) {
+        RunBackupJob::dispatch();
+    }
+})->dailyAt((string) config('backup.daily_at', '03:30'))->name('system:daily-backup')->onOneServer();
 
 // Horizon metrics snapshot.
 Schedule::command('horizon:snapshot')->everyFiveMinutes();
