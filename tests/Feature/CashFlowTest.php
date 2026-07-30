@@ -105,7 +105,7 @@ class CashFlowTest extends TestCase
             ->assertSee('גבייה ידנית — 30 יום')
             ->assertSee(Money::ils(25000))  // automatic: 100 + 150
             ->assertSee(Money::ils(20000))  // manual: 200
-            ->assertSee('חידושים בלי כרטיס — לא ייגבו לבד');
+            ->assertSee('חידושים שלא ייגבו לבד — בלי כרטיס או בתקופת ניסיון');
     }
 
     public function test_a_renewal_without_a_card_is_marked_as_manual_in_the_table(): void
@@ -117,6 +117,59 @@ class CashFlowTest extends TestCase
             ->assertCanSeeTableRecords([$automatic, $manual])
             ->assertSee('גבייה אוטומטית')
             ->assertSee('גבייה ידנית — אין כרטיס');
+    }
+
+    /**
+     * A trial can hold a saved card, but Subscription::AUTO_CHARGE_STATUSES
+     * excludes trialing — the scheduler will never charge it. Counting it as
+     * automatic would promise money nothing is going to fetch.
+     */
+    public function test_a_trialing_renewal_with_a_card_still_counts_as_manual(): void
+    {
+        $trialing = $this->sub(20000, now()->addDays(4), status: SubscriptionStatus::Trialing);
+        $this->assertNotNull($trialing->token_id);
+        $this->assertFalse($trialing->collectsAutomatically());
+
+        Livewire::test(CashFlowStats::class)
+            ->assertSee('גבייה ידנית — 30 יום')
+            ->assertSee(Money::ils(20000))
+            ->assertSee(Money::ils(0)); // the automatic square stays empty
+
+        Livewire::test(UpcomingRenewalsTable::class)
+            ->assertCanSeeTableRecords([$trialing])
+            ->assertSee('גבייה ידנית — בתקופת ניסיון');
+    }
+
+    public function test_the_manual_filter_catches_trialing_cards_as_well_as_missing_ones(): void
+    {
+        $automatic = $this->sub(10000, now()->addDays(3));
+        $noCard = $this->sub(20000, now()->addDays(4), withCard: false);
+        $trialing = $this->sub(30000, now()->addDays(5), status: SubscriptionStatus::Trialing);
+
+        Livewire::test(UpcomingRenewalsTable::class)
+            ->filterTable('manual_only')
+            ->assertCanSeeTableRecords([$noCard, $trialing])
+            ->assertCanNotSeeTableRecords([$automatic]);
+    }
+
+    public function test_the_renewals_table_totals_whatever_horizon_is_filtered(): void
+    {
+        $this->sub(10000, now()->addDays(3));    // inside 7
+        $this->sub(15000, now()->addDays(20));   // inside 30
+        $this->sub(20000, now()->addDays(50));   // inside 60
+        $this->sub(30000, now()->addDays(80));   // inside 90
+
+        // The horizon totals the old forecast squares showed are obtainable
+        // again: filter, and the summary row states the sum.
+        Livewire::test(UpcomingRenewalsTable::class)
+            ->filterTable('horizon', '7')
+            ->assertSee(Money::ils(10000))
+            ->filterTable('horizon', '30')
+            ->assertSee(Money::ils(25000))
+            ->filterTable('horizon', '60')
+            ->assertSee(Money::ils(45000))
+            ->filterTable('horizon', '90')
+            ->assertSee(Money::ils(75000));
     }
 
     public function test_the_renewals_table_lists_only_what_is_still_ahead(): void

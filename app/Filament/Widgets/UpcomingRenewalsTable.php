@@ -10,6 +10,7 @@ use Filament\Tables;
 use Filament\Tables\Table;
 use Filament\Widgets\TableWidget as BaseWidget;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Query\Builder as QueryBuilder;
 
 /**
  * Money still ahead of us: subscriptions due to renew, soonest first.
@@ -41,6 +42,35 @@ class UpcomingRenewalsTable extends BaseWidget
             ->where('next_charge_at', '>=', now()->startOfDay());
     }
 
+    /** Why a renewal will or will not collect itself, in the customer's words. */
+    private static function method(Subscription $subscription): string
+    {
+        if ($subscription->collectsAutomatically()) {
+            return 'גבייה אוטומטית';
+        }
+
+        return $subscription->token_id === null
+            ? 'גבייה ידנית — אין כרטיס'
+            : 'גבייה ידנית — בתקופת ניסיון';
+    }
+
+    /**
+     * VAT-inclusive total of the rows a summary covers. The amount is computed
+     * per subscription (override / plan price / customer VAT exemption), so it
+     * cannot be summed in SQL — the ids come from the filtered query and the
+     * models do the arithmetic.
+     */
+    private static function sumOf(QueryBuilder $query): int
+    {
+        $ids = $query->pluck('subscriptions.id');
+
+        return (int) Subscription::query()
+            ->whereKey($ids)
+            ->with(['plan', 'customer'])
+            ->get()
+            ->sum(fn (Subscription $s): int => $s->totalChargeAgorot());
+    }
+
     public function table(Table $table): Table
     {
         return $table
@@ -60,14 +90,17 @@ class UpcomingRenewalsTable extends BaseWidget
                     ->label('אתר')->placeholder('—')->toggleable(),
                 Tables\Columns\TextColumn::make('amount')
                     ->label('סכום צפוי')
-                    ->state(fn (Subscription $r): string => Money::ils($r->totalChargeAgorot())),
+                    ->state(fn (Subscription $r): string => Money::ils($r->totalChargeAgorot()))
+                    // The total for whatever horizon is filtered — this is where
+                    // the old forecast screen's 7/30/60/90 squares now live.
+                    ->summarize(Tables\Columns\Summarizers\Summarizer::make()
+                        ->label('סה״כ בטווח המוצג')
+                        ->using(fn (QueryBuilder $query): string => Money::ils(self::sumOf($query)))),
                 Tables\Columns\TextColumn::make('method')
                     ->label('אופן גבייה')
                     ->badge()
-                    ->state(fn (Subscription $r): string => $r->token_id !== null
-                        ? 'גבייה אוטומטית'
-                        : 'גבייה ידנית — אין כרטיס')
-                    ->color(fn (Subscription $r): string => $r->token_id !== null ? 'success' : 'danger'),
+                    ->state(fn (Subscription $r): string => self::method($r))
+                    ->color(fn (Subscription $r): string => $r->collectsAutomatically() ? 'success' : 'danger'),
                 Tables\Columns\TextColumn::make('next_charge_at')
                     ->label('חיוב הבא')->date('d/m/Y')->sortable(),
                 Tables\Columns\TextColumn::make('days_left')
@@ -81,13 +114,18 @@ class UpcomingRenewalsTable extends BaseWidget
                 // The horizons the old forecast screen showed as separate squares.
                 Tables\Filters\SelectFilter::make('horizon')
                     ->label('טווח')
-                    ->options(['7' => '7 ימים', '30' => '30 יום', '90' => '90 יום'])
+                    ->options(['7' => '7 ימים', '30' => '30 יום', '60' => '60 יום', '90' => '90 יום'])
                     ->query(fn (Builder $query, array $data): Builder => filled($data['value'] ?? null)
                         ? $query->where('next_charge_at', '<=', now()->addDays((int) $data['value']))
                         : $query),
                 Tables\Filters\Filter::make('manual_only')
                     ->label('רק מה שלא ייגבה לבד')
-                    ->query(fn (Builder $query): Builder => $query->whereNull('token_id')),
+                    // Mirrors collectsAutomatically(): no card, OR a card the
+                    // scheduler will not act on because of the status.
+                    ->query(fn (Builder $query): Builder => $query->where(
+                        fn (Builder $q) => $q->whereNull('token_id')
+                            ->orWhereNotIn('status', Subscription::AUTO_CHARGE_STATUSES)
+                    )),
             ])
             ->emptyStateHeading('אין חידושים צפויים')
             ->emptyStateDescription('לא נמצאו מנויים עם תאריך חיוב עתידי.');

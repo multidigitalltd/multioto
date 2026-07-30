@@ -44,12 +44,16 @@ class CashFlowStats extends BaseWidget
             ->whereIn('status', [SubscriptionStatus::Active, SubscriptionStatus::Trialing, SubscriptionStatus::PastDue])
             ->whereNotNull('next_charge_at')
             ->whereBetween('next_charge_at', [now()->startOfDay(), now()->addDays(self::HORIZON_DAYS)])
-            ->with('plan')
+            ->with(['plan', 'customer'])
             ->get();
 
-        // A saved token is the whole difference: with one the scheduler charges
-        // the card, without one the date passes and nothing happens.
-        [$automatic, $manual] = $renewals->partition(fn (Subscription $s): bool => $s->token_id !== null);
+        // Not "has a card" — what the SCHEDULER would actually charge. A
+        // trialing subscription can hold a token and still never be collected
+        // (Subscription::AUTO_CHARGE_STATUSES), so counting it as automatic
+        // would promise money nothing is going to fetch.
+        [$automatic, $manual] = $renewals->partition(
+            fn (Subscription $s): bool => $s->collectsAutomatically()
+        );
 
         $automaticTotal = (int) $automatic->sum(fn (Subscription $s): int => $s->totalChargeAgorot());
         $manualTotal = (int) $manual->sum(fn (Subscription $s): int => $s->totalChargeAgorot());
@@ -71,7 +75,7 @@ class CashFlowStats extends BaseWidget
                 ->color($automatic->isEmpty() ? 'gray' : 'success'),
 
             Stat::make('גבייה ידנית — '.self::HORIZON_DAYS.' יום', Money::ils($manualTotal))
-                ->description($manual->count().' חידושים בלי כרטיס — לא ייגבו לבד')
+                ->description($manual->count().' חידושים שלא ייגבו לבד — בלי כרטיס או בתקופת ניסיון')
                 ->color($manual->isEmpty() ? 'gray' : 'danger'),
 
             Stat::make('חשבוניות עסקה פתוחות', Money::ils($demandTotal))

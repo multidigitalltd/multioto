@@ -95,15 +95,34 @@ class Subscription extends Model
     }
 
     /**
+     * The only statuses the scheduler charges on its own. Trialing and Suspended
+     * are deliberately out: a trial has nothing to bill yet, and a suspended
+     * debtor is collected by hand (isChargeable) rather than auto-retried.
+     */
+    public const AUTO_CHARGE_STATUSES = [SubscriptionStatus::Active, SubscriptionStatus::PastDue];
+
+    /**
      * Subscriptions whose next charge is due now — the scheduler's work list.
      */
     public function scopeDueForCharge(Builder $query): Builder
     {
         return $query
-            ->whereIn('status', [SubscriptionStatus::Active, SubscriptionStatus::PastDue])
+            ->whereIn('status', self::AUTO_CHARGE_STATUSES)
             ->whereNotNull('token_id')
             ->whereNotNull('next_charge_at')
             ->where('next_charge_at', '<=', now());
+    }
+
+    /**
+     * Will this renewal collect itself when the date arrives? dueForCharge()
+     * minus the date — so a screen may promise "ייגבה לבד" only for rows the
+     * scheduler would genuinely pick up. A saved card is not enough on its own:
+     * a trialing subscription holding a token is still never auto-charged.
+     */
+    public function collectsAutomatically(): bool
+    {
+        return $this->token_id !== null
+            && in_array($this->status, self::AUTO_CHARGE_STATUSES, true);
     }
 
     /**
