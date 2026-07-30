@@ -1,42 +1,38 @@
 <?php
 
-namespace App\Filament\Pages;
+namespace App\Filament\Widgets;
 
 use App\Enums\ChargeStatus;
-use App\Filament\Concerns\RespectsModuleAccess;
 use App\Filament\Resources\CustomerResource;
-use App\Filament\Widgets\CollectionForecastStats;
 use App\Models\Charge;
-use Filament\Pages\Page;
 use Filament\Tables;
-use Filament\Tables\Concerns\InteractsWithTable;
-use Filament\Tables\Contracts\HasTable;
 use Filament\Tables\Table;
+use Filament\Widgets\TableWidget as BaseWidget;
 use Illuminate\Database\Eloquent\Builder;
 
 /**
- * חיזוי גבייה — כל הכסף הפתוח (דרישות תשלום שטרם שולמו) לפי גיל החוב, כדי לראות
- * כמה צפוי להיגבות ומה כבר "תקוע". החלוקה לטווחי גיל (0–30 / 31–60 / 61–90 / 90+
- * ימים) מוצגת בכותרת, והטבלה מפרטת כל דרישה מהישנה לחדשה.
+ * Money already asked for and not yet paid: proforma invoices (חשבוניות עסקה)
+ * that went out and are still open, oldest debt first.
+ *
+ * Nothing here collects itself — every row is waiting on a person, which is why
+ * it sits beside the renewals rather than inside them. The age comes from the
+ * immutable creation date, not from the last reminder: reminders overwrite
+ * demand_sent_at, so reading it would make an old debt look new every nudge.
  */
-class CollectionForecast extends Page implements HasTable
+class OpenDemandsTable extends BaseWidget
 {
-    use InteractsWithTable;
-    use RespectsModuleAccess;
+    public static function canView(): bool
+    {
+        return auth()->user()?->canAccessModule('finance') ?? false;
+    }
 
-    protected static ?string $navigationIcon = 'heroicon-o-chart-bar-square';
+    protected static bool $isDiscovered = false;
 
-    protected static ?string $navigationGroup = 'כספים';
+    protected int|string|array $columnSpan = 'full';
 
-    protected static ?string $navigationLabel = 'חיזוי גבייה';
+    protected static ?string $pollingInterval = '30s';
 
-    protected static ?string $title = 'חיזוי גבייה (Aging)';
-
-    protected static ?int $navigationSort = 22;
-
-    protected static string $view = 'filament.pages.collections';
-
-    /** Age buckets in days: [label, min-inclusive, max-inclusive|null]. */
+    /** Age buckets in days: [label, min-inclusive, max-inclusive|null, color]. */
     private const BUCKETS = [
         ['0–30 ימים', 0, 30, 'gray'],
         ['31–60 ימים', 31, 60, 'warning'],
@@ -52,20 +48,6 @@ class CollectionForecast extends Page implements HasTable
             ->whereNotNull('demand_sent_at');
     }
 
-    /**
-     * The aging breakdown as stat squares at the TOP of the page (not on the
-     * navigation badge — the numbers show only when you open the page).
-     */
-    protected function getHeaderWidgets(): array
-    {
-        return [CollectionForecastStats::class];
-    }
-
-    /**
-     * Age of the DEBT in days — from the immutable creation date, not
-     * demand_sent_at (which the reminder flows overwrite on every nudge, so it
-     * tracks last contact, not the age of the unpaid demand).
-     */
     private static function ageDays(Charge $charge): int
     {
         return $charge->created_at
@@ -88,13 +70,14 @@ class CollectionForecast extends Page implements HasTable
     public function table(Table $table): Table
     {
         return $table
+            ->heading('חשבוניות עסקה פתוחות — כסף שממתין לגבייה ידנית')
+            ->description('דרישות תשלום שנשלחו וטרם שולמו, מהחוב הישן לחדש. אף אחת מהן לא תיגבה מעצמה.')
             ->query(self::baseQuery()->with(['customer', 'subscription.customer']))
-            ->defaultSort('created_at', 'asc') // oldest debt first (immutable date)
-            ->poll('30s')
+            ->defaultSort('created_at', 'asc')
             ->columns([
                 Tables\Columns\TextColumn::make('customer_name')
                     ->label('לקוח')->weight('bold')
-                    ->getStateUsing(fn (Charge $r): ?string => $r->subscription?->customer?->name ?? $r->customer?->name),
+                    ->state(fn (Charge $r): ?string => $r->subscription?->customer?->name ?? $r->customer?->name),
                 Tables\Columns\TextColumn::make('description')
                     ->label('עבור')->wrap()->placeholder('—'),
                 Tables\Columns\TextColumn::make('total_agorot')
@@ -107,11 +90,34 @@ class CollectionForecast extends Page implements HasTable
                     ->toggleable(),
                 Tables\Columns\TextColumn::make('age')
                     ->label('גיל החוב (ימים)')
-                    ->getStateUsing(fn (Charge $r): int => self::ageDays($r)),
+                    ->state(fn (Charge $r): int => self::ageDays($r)),
                 Tables\Columns\TextColumn::make('bucket')
                     ->label('טווח')->badge()
-                    ->getStateUsing(fn (Charge $r): string => self::bucketFor(self::ageDays($r))[0])
+                    ->state(fn (Charge $r): string => self::bucketFor(self::ageDays($r))[0])
                     ->color(fn (Charge $r): string => self::bucketFor(self::ageDays($r))[1]),
+            ])
+            ->filters([
+                // The age breakdown the old collection screen showed as squares.
+                Tables\Filters\SelectFilter::make('bucket')
+                    ->label('טווח גיל')
+                    ->options(collect(self::BUCKETS)->mapWithKeys(
+                        fn (array $b, int $i): array => [$i => $b[0]]
+                    )->all())
+                    ->query(function (Builder $query, array $data): Builder {
+                        $bucket = self::BUCKETS[$data['value']] ?? null;
+
+                        if ($bucket === null) {
+                            return $query;
+                        }
+
+                        // Older debt = earlier created_at, so the day bounds invert.
+                        [, $min, $max] = $bucket;
+                        $query->where('created_at', '<=', now()->startOfDay()->subDays($min)->endOfDay());
+
+                        return $max === null
+                            ? $query
+                            : $query->where('created_at', '>=', now()->startOfDay()->subDays($max));
+                    }),
             ])
             ->actions([
                 Tables\Actions\Action::make('viewCustomer')

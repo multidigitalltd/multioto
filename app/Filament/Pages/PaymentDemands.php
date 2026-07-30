@@ -108,7 +108,7 @@ class PaymentDemands extends Page implements HasTable
                     ->requiredWithout('items'),
                 Forms\Components\DatePicker::make('due_at')
                     ->label('לתשלום עד')
-                    ->helperText('התאריך שעד אליו מצופה שהתשלום יתקבל — מוצג במעקב ומשמש את חיזוי התזרים.')
+                    ->helperText('התאריך שעד אליו מצופה שהתשלום יתקבל — מוצג במעקב ומשמש את מסך תזרים וגבייה.')
                     ->default(fn (): Carbon => now()->addDays((int) config('billing.demands.due_days', 14)))
                     ->minDate(fn (): Carbon => now()->startOfDay())
                     ->native(false)->firstDayOfWeek(7),
