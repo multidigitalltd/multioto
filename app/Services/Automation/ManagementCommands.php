@@ -303,6 +303,33 @@ class ManagementCommands
     }
 
     /**
+     * The soonest day/month that is both a real date and not already behind us.
+     *
+     * Two cases a single "use this year" would get wrong: "2/1" said on the 30th
+     * of December means the coming January, not ten months ago; and "29/2" in a
+     * non-leap year means the next leap year, not "no deadline at all". The
+     * search is bounded — the widest gap between leap years is eight.
+     */
+    private function nextOccurrence(int $day, int $month): ?Carbon
+    {
+        $from = (int) now()->year;
+
+        for ($year = $from; $year <= $from + 8; $year++) {
+            if (! checkdate($month, $day, $year)) {
+                continue;
+            }
+
+            $due = Carbon::create($year, $month, $day)->endOfDay();
+
+            if (! $due->isBefore(now()->startOfDay())) {
+                return $due;
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * A leading date word → [due date, the rest of the text]. Only the forms a
      * person actually types in a hurry; anything else is left as plain text so a
      * description that merely starts with a number is never eaten as a date.
@@ -325,22 +352,22 @@ class ManagementCommands
 
         // "15/8" or "15/8/2026" — day/month, the Israeli written order.
         if (preg_match('/^(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\s+(.+)/us', $text, $m)) {
+            $day = (int) $m[1];
+            $month = (int) $m[2];
             // A group before the last one is filled with '' when it does not
             // participate, so an omitted year must be tested for content.
             $given = filled($m[3] ?? null);
-            $year = $given ? (int) $m[3] : (int) now()->year;
-            $year = $year < 100 ? 2000 + $year : $year;
 
-            if (checkdate((int) $m[2], (int) $m[1], $year)) {
-                $due = Carbon::create($year, (int) $m[2], (int) $m[1])->endOfDay();
+            if ($given) {
+                $year = (int) $m[3];
+                $year = $year < 100 ? 2000 + $year : $year;
 
-                // "2/1" said on the 30th of December means the coming January,
-                // not ten months ago. Only when the year was left out — a year
-                // typed in full is taken at face value, including a past one.
-                if (! $given && $due->isBefore(now()->startOfDay())) {
-                    $due->addYear();
+                // A year typed in full is taken at face value, past included —
+                // someone back-dating a task means it.
+                if (checkdate($month, $day, $year)) {
+                    return [Carbon::create($year, $month, $day)->endOfDay(), trim($m[4])];
                 }
-
+            } elseif (($due = $this->nextOccurrence($day, $month)) !== null) {
                 return [$due, trim($m[4])];
             }
         }

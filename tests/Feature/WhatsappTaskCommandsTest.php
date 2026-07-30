@@ -132,6 +132,19 @@ class WhatsappTaskCommandsTest extends TestCase
         $this->assertSame('2027-01-02', Task::sole()->due_at->toDateString());
     }
 
+    public function test_a_leap_day_in_a_non_leap_year_means_the_next_leap_year(): void
+    {
+        Carbon::setTestNow('2026-08-10 09:00:00');
+
+        // Not a real date in 2026 — but "no deadline, and 29/2 left stuck in
+        // the title" is not what anyone meant.
+        $this->inbound('משימה 29/2 להגיש דוח');
+
+        $task = Task::sole();
+        $this->assertSame('להגיש דוח', $task->title);
+        $this->assertSame('2028-02-29', $task->due_at->toDateString());
+    }
+
     public function test_a_year_typed_in_full_is_taken_at_face_value(): void
     {
         Carbon::setTestNow('2026-12-30 09:00:00');
