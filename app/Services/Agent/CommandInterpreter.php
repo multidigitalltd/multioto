@@ -63,7 +63,7 @@ class CommandInterpreter
             // Pass the operator's user id so any async work the agent kicks off
             // (e.g. a background site investigation) can post its result back
             // into THIS chat thread when it finishes, not only to the event log.
-            $result = $this->agent->run($effective, $userId);
+            $result = $this->agent->run($effective, $userId, $source);
         } catch (\Throwable $e) {
             return $this->finish($command, AgentCommandOutcome::Failed, 'הפעולה נכשלה: '.Str::limit($e->getMessage(), 160));
         }

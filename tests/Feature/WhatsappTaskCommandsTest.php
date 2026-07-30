@@ -6,13 +6,17 @@ use App\Enums\AgentCommandOutcome;
 use App\Enums\TaskStatus;
 use App\Enums\TicketChannel;
 use App\Enums\TicketStatus;
+use App\Jobs\InvestigateSiteJob;
 use App\Jobs\NotifyTaskCreatedJob;
 use App\Jobs\RunAgentInstructionJob;
 use App\Models\AgentCommand;
 use App\Models\Customer;
+use App\Models\Site;
 use App\Models\Task;
 use App\Models\Ticket;
 use App\Services\Agent\CommandInterpreter;
+use App\Services\Agent\SiteAgent;
+use App\Services\Agent\SiteMemoryStore;
 use App\Services\Waha\WahaClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
@@ -132,6 +136,20 @@ class WhatsappTaskCommandsTest extends TestCase
         $this->inbound('משימה לבדוק את הגיבויים');
 
         Queue::assertPushed(NotifyTaskCreatedJob::class);
+    }
+
+    /**
+     * The ingestion job retries, and the task is created inside it. Without a
+     * key tied to the message, one sentence said once could become two
+     * identical tasks — and two notifications.
+     */
+    public function test_the_same_message_delivered_twice_opens_one_task(): void
+    {
+        $this->inbound('משימה לבדוק את הגיבויים', 'wa-dup');
+        $this->inbound('משימה לבדוק את הגיבויים', 'wa-dup');
+
+        $this->assertSame(1, Task::count());
+        Queue::assertPushed(NotifyTaskCreatedJob::class, 1);
     }
 
     public function test_the_group_can_list_and_complete_tasks(): void
@@ -310,6 +328,69 @@ class WhatsappTaskCommandsTest extends TestCase
         // Left "in progress" forever, it would look like someone is on it.
         $this->assertSame(TaskStatus::Open, $task->fresh()->status);
         $this->assertStringContainsString('לא הצליח להשלים', $this->lastReply());
+    }
+
+    /**
+     * A disabled AI, a thrown agent and an empty answer all come back as a
+     * Failed record rather than an exception — so failed() never runs, and the
+     * task would sit "in progress" with nobody working on it.
+     */
+    public function test_a_delegated_task_is_released_when_the_agent_reports_failure(): void
+    {
+        $task = Task::create(['title' => 'משהו', 'status' => TaskStatus::InProgress]);
+
+        $interpreter = $this->mock(CommandInterpreter::class);
+        $interpreter->shouldReceive('run')->once()->andReturn(new AgentCommand([
+            'outcome' => AgentCommandOutcome::Failed,
+            'result' => 'סוכן ה-AI כבוי או ללא מפתח.',
+        ]));
+
+        (new RunAgentInstructionJob(self::MGMT, 'משהו', $task->id))
+            ->handle($interpreter, app(WahaClient::class));
+
+        $this->assertSame(TaskStatus::Open, $task->fresh()->status);
+        $this->assertStringContainsString('כבוי', $this->lastReply());
+    }
+
+    public function test_releasing_never_undoes_a_person_who_completed_the_task_meanwhile(): void
+    {
+        // Marked done by a manager while the agent was still running: that
+        // decision is newer than ours and must survive the failure.
+        $task = Task::create(['title' => 'משהו', 'status' => TaskStatus::Done]);
+
+        (new RunAgentInstructionJob(self::MGMT, 'משהו', $task->id))
+            ->failed(new \RuntimeException('boom'));
+
+        $this->assertSame(TaskStatus::Done, $task->fresh()->status);
+    }
+
+    /**
+     * A site investigation runs in its own background job and reports back
+     * later. Asked from the group there is no operator id to post to, so
+     * without carrying the source the group would be told "I sent the site
+     * agent" and never hear what it found.
+     */
+    public function test_a_site_investigation_asked_from_the_group_reports_back_to_the_group(): void
+    {
+        $site = Site::factory()->create([
+            'mcp_enabled' => true,
+            'mcp_endpoint' => 'https://site.test/wp-json/md-agent/mcp',
+        ]);
+
+        $agent = $this->mock(SiteAgent::class);
+        $agent->shouldReceive('investigate')->once()->andReturn('האתר תקין, לא נמצאו תקלות.');
+
+        (new InvestigateSiteJob($site->id, 'בדוק את האתר', 1, null, null, AgentCommand::SOURCE_WHATSAPP))
+            ->handle($agent, app(SiteMemoryStore::class));
+
+        $this->assertStringContainsString('האתר תקין', $this->lastReply());
+
+        // Also recorded on the group's thread, so a follow-up has the findings
+        // as context.
+        $this->assertSame(1, AgentCommand::query()
+            ->where('source', AgentCommand::SOURCE_WHATSAPP)
+            ->where('role', 'system')
+            ->count());
     }
 
     /*

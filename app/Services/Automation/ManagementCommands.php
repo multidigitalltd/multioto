@@ -90,7 +90,7 @@ class ManagementCommands
         // ("משימה מחר להתקשר לדני"). Matched before the ticket commands below
         // because it takes free text rather than a phone number.
         if (preg_match('/^\s*(?:משימה|מטלה|todo)\s+(.+)/ius', $text, $m)) {
-            return $this->openTask(trim($m[1]));
+            return $this->openTask(trim($m[1]), $messageId);
         }
 
         // "ענה #12 <טקסט>" / "תשובה 12 <טקסט>" — reply to the ticket's customer.
@@ -125,7 +125,7 @@ class ManagementCommands
      * description ("משימה מחר להתקשר לדני") — a thought worth capturing usually
      * arrives with its deadline attached, and typing it later never happens.
      */
-    private function openTask(string $text): string
+    private function openTask(string $text, ?string $messageId = null): string
     {
         [$dueAt, $title] = $this->splitDue($text);
 
@@ -133,7 +133,13 @@ class ManagementCommands
             return 'צריך תיאור למשימה. לדוגמה: *משימה מחר להתקשר לדני*';
         }
 
-        $task = Task::create([
+        // Keyed on the WhatsApp message so a retry of the ingestion job cannot
+        // turn one sentence said once into two identical tasks — the same
+        // idempotency the ticket-opening path uses. Falls back to a random key
+        // only when no message id is available.
+        $ref = 'mgmt-task-'.($messageId ?? Str::random(12));
+
+        $task = Task::firstOrCreate(['source_ref' => $ref], [
             'title' => Str::limit($title, 120, ''),
             // Nothing is lost when the title is trimmed for the list view.
             'description' => Str::length($title) > 120 ? $title : null,
@@ -143,8 +149,11 @@ class ManagementCommands
         ]);
 
         // Unassigned, so this reaches the managers who are not in the group —
-        // the same path every other "new task" entry point uses.
-        NotifyTaskCreatedJob::dispatch($task->id);
+        // the same path every other "new task" entry point uses. Only on the
+        // first pass: a retry must not notify twice either.
+        if ($task->wasRecentlyCreated) {
+            NotifyTaskCreatedJob::dispatch($task->id);
+        }
 
         $when = $dueAt !== null ? ' · עד '.$dueAt->format('d/m/Y') : '';
 

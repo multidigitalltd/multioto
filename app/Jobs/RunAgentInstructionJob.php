@@ -44,7 +44,33 @@ class RunAgentInstructionJob implements ShouldQueue
             source: AgentCommand::SOURCE_WHATSAPP,
         );
 
+        // The interpreter turns a disabled AI, a thrown agent and an empty
+        // answer into a Failed record rather than an exception, so failed()
+        // never runs for those — a delegated task would sit "in progress"
+        // forever with nobody working on it.
+        if ($command->outcome === AgentCommandOutcome::Failed) {
+            $this->releaseTask();
+        }
+
         $waha->sendMessage($this->chatId, $this->message($command));
+    }
+
+    /**
+     * Give a delegated task back to the humans. Only from "in progress": if
+     * someone marked it done while the agent was running, that decision is
+     * newer than ours and must not be undone.
+     */
+    private function releaseTask(): void
+    {
+        if ($this->taskId === null) {
+            return;
+        }
+
+        Task::whereKey($this->taskId)
+            ->where('status', TaskStatus::InProgress)
+            // reminded_at cleared here because a conditional update bypasses
+            // TaskObserver, and a released task must be remindable again.
+            ->update(['status' => TaskStatus::Open, 'reminded_at' => null]);
     }
 
     /** The group's answer: what the agent produced, plus how to continue. */
@@ -76,9 +102,7 @@ class RunAgentInstructionJob implements ShouldQueue
      */
     public function failed(\Throwable $e): void
     {
-        if ($this->taskId !== null) {
-            Task::whereKey($this->taskId)->update(['status' => TaskStatus::Open]);
-        }
+        $this->releaseTask();
 
         Log::warning('RunAgentInstructionJob failed', ['error' => $e->getMessage()]);
 

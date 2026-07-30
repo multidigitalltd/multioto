@@ -7,6 +7,7 @@ use App\Enums\BroadcastStatus;
 use App\Enums\CustomerStatus;
 use App\Enums\TicketStatus;
 use App\Jobs\InvestigateSiteJob;
+use App\Models\AgentCommand;
 use App\Models\Broadcast;
 use App\Models\Customer;
 use App\Models\Plan;
@@ -57,6 +58,14 @@ class ConsoleAgent
     /** The console user this run belongs to, so async results can post back to their chat. */
     private ?int $conversationUserId = null;
 
+    /**
+     * Which console this run came from (AgentCommand::SOURCE_*). Carried into
+     * async work alongside the user id: an instruction from the WhatsApp group
+     * has no user, so without the source a background result would have nowhere
+     * to go and the group would never hear the answer it was promised.
+     */
+    private string $conversationSource = AgentCommand::SOURCE_PANEL;
+
     public function __construct(
         private ClaudeClient $ai,
         private ApprovalGate $gate,
@@ -67,12 +76,13 @@ class ConsoleAgent
      *
      * @return array{summary: ?string, proposed: list<int>, clarification: ?string, customer_id: ?int, ticket_id: ?int, site_id: ?int}
      */
-    public function run(string $instruction, ?int $userId = null): array
+    public function run(string $instruction, ?int $userId = null, string $source = AgentCommand::SOURCE_PANEL): array
     {
         $this->proposed = [];
         $this->clarification = null;
         $this->customerId = $this->ticketId = $this->siteId = null;
         $this->conversationUserId = $userId;
+        $this->conversationSource = $source;
 
         $summary = $this->ai->converse(
             system: $this->systemPrompt(),
@@ -892,6 +902,7 @@ class ConsoleAgent
             trim((string) ($input['goal'] ?? '')) ?: 'בדיקת מצב האתר',
             1,
             $this->conversationUserId,
+            chatSource: $this->conversationSource,
         );
 
         return ['content' => "סוכן האתר נשלח לבדוק את {$site->domain} — התוצאה תופיע כאן בצ׳אט בסיום, וכל תיקון יוצע לאישור."];

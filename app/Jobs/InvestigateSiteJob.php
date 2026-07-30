@@ -55,15 +55,26 @@ class InvestigateSiteJob implements ShouldQueue
      */
     public ?int $verifiesResolutionId = null;
 
+    /**
+     * Which console asked (AgentCommand::SOURCE_*). The WhatsApp management
+     * group has no user id, so without this a group-requested investigation
+     * would report its findings nowhere and the group would wait forever for
+     * the answer it was promised. Class-level default for queue-payload BC, for
+     * the same reason as $chatUserId above.
+     */
+    public string $chatSource = AgentCommand::SOURCE_PANEL;
+
     public function __construct(
         public int $siteId,
         public string $goal,
         public int $round = 1,
         ?int $chatUserId = null,
         ?int $verifiesResolutionId = null,
+        string $chatSource = AgentCommand::SOURCE_PANEL,
     ) {
         $this->chatUserId = $chatUserId;
         $this->verifiesResolutionId = $verifiesResolutionId;
+        $this->chatSource = $chatSource;
     }
 
     public function handle(SiteAgent $agent, SiteMemoryStore $memory): void
@@ -120,21 +131,50 @@ class InvestigateSiteJob implements ShouldQueue
         $this->postToChat($site, "🔎 תוצאת בדיקת האתר {$site->domain}:\n".Str::limit($summary, 1500));
     }
 
-    /** Post a result back into the chat of the operator who asked (if from chat). */
+    /**
+     * Post a result back into the conversation that asked for it. The panel
+     * console reads its thread from the database, so a system turn is the whole
+     * delivery there; the WhatsApp group reads its thread on the phone, so it
+     * needs the message sent as well as recorded.
+     */
     private function postToChat(Site $site, string $body): void
     {
-        if ($this->chatUserId === null) {
-            return;
+        $fromWhatsapp = $this->chatSource === AgentCommand::SOURCE_WHATSAPP;
+
+        if ($this->chatUserId === null && ! $fromWhatsapp) {
+            return; // Not asked from a chat at all (monitoring, scheduler).
         }
 
+        // Recorded either way, so a follow-up in that conversation has the
+        // findings as context.
         AgentCommand::create([
             'user_id' => $this->chatUserId,
+            'source' => $this->chatSource,
             'role' => 'system',
             'instruction' => "בדיקת אתר {$site->domain}",
             'outcome' => AgentCommandOutcome::Dispatched,
             'result' => $body,
             'site_id' => $site->id,
         ]);
+
+        if (! $fromWhatsapp) {
+            return;
+        }
+
+        $chat = app(ApprovalGate::class)->ownerChatId();
+
+        if ($chat === null) {
+            return;
+        }
+
+        try {
+            app(WahaClient::class)->sendMessage($chat, '🤖 '.Str::limit($body, 1200));
+        } catch (\Throwable $e) {
+            Log::warning('InvestigateSiteJob: chat result delivery failed', [
+                'site_id' => $site->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     /** Push a verification-pass summary to the owner's WhatsApp (best-effort). */

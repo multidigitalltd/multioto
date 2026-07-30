@@ -24,6 +24,7 @@ class Task extends Model
     protected $fillable = [
         'title', 'description', 'subtasks', 'customer_id', 'ticket_id',
         'status', 'priority', 'due_at', 'completed_at', 'reminded_at',
+        'source_ref',
     ];
 
     protected function casts(): array
