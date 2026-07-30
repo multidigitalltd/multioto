@@ -15,8 +15,13 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 class AgentCommand extends Model
 {
+    /** Where an instruction was typed: the panel console, or the WhatsApp group. */
+    public const SOURCE_PANEL = 'panel';
+
+    public const SOURCE_WHATSAPP = 'whatsapp';
+
     protected $fillable = [
-        'user_id', 'role', 'instruction', 'outcome', 'result',
+        'user_id', 'source', 'role', 'instruction', 'outcome', 'result',
         'customer_id', 'ticket_id', 'site_id', 'pending_action_id',
     ];
 
