@@ -14,6 +14,7 @@ use App\Models\Ticket;
 use App\Services\Support\AgentReply;
 use App\Services\Support\TicketIntake;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 /**
@@ -149,14 +150,20 @@ class ManagementCommands
         ]);
 
         // Unassigned, so this reaches the managers who are not in the group —
-        // the same path every other "new task" entry point uses. Stamped rather
-        // than keyed on "was just created": a retry that reaches an existing row
-        // must still notify if the first pass never got this far, and an
-        // unassigned task is not picked up by the reminder job either, so a lost
-        // notification here is lost for good.
-        if ($task->creation_notified_at === null) {
-            NotifyTaskCreatedJob::dispatch($task->id);
-            $task->forceFill(['creation_notified_at' => now()])->save();
+        // the same path every other "new task" entry point uses. Deliberately
+        // non-fatal: the task is already saved and the group is waiting to hear
+        // its number, so letting a queue hiccup abort the command would leave a
+        // captured task looking unhandled, and the retyped command would open a
+        // second one under a new message id.
+        if ($task->wasRecentlyCreated) {
+            try {
+                NotifyTaskCreatedJob::dispatch($task->id);
+            } catch (\Throwable $e) {
+                Log::warning('ManagementCommands: task notification not queued', [
+                    'task_id' => $task->id,
+                    'error' => $e->getMessage(),
+                ]);
+            }
         }
 
         $when = $dueAt !== null ? ' · עד '.$dueAt->format('d/m/Y') : '';

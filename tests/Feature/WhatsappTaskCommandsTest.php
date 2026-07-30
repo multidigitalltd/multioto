@@ -161,24 +161,22 @@ class WhatsappTaskCommandsTest extends TestCase
     }
 
     /**
-     * A retry that reaches an existing row must still notify if the first pass
-     * never got that far. An unassigned task is skipped by the reminder job
-     * too, so a notification lost here is lost for good.
+     * The task is already saved and the group is waiting to hear its number.
+     * Aborting the command over a queue hiccup would leave a captured task
+     * looking unhandled — and the retyped command carries a new message id, so
+     * it would open a second one.
      */
-    public function test_a_retry_still_notifies_when_the_first_pass_did_not(): void
+    public function test_a_failed_notification_does_not_hide_the_task_that_was_created(): void
     {
-        $commands = app(ManagementCommands::class);
+        $this->mock(Dispatcher::class, function ($mock): void {
+            $mock->shouldReceive('dispatch')->andThrow(new \RuntimeException('queue down'));
+        });
 
-        $commands->handle(self::MGMT, 'משימה לבדוק את הגיבויים', 'wa-dup');
+        $reply = app(ManagementCommands::class)
+            ->handle(self::MGMT, 'משימה לבדוק את הגיבויים', 'wa-notify');
 
-        // As if the dispatch had failed after the row was written.
-        Task::sole()->forceFill(['creation_notified_at' => null])->save();
-
-        $commands->handle(self::MGMT, 'משימה לבדוק את הגיבויים', 'wa-dup');
-
-        $this->assertSame(1, Task::count());
-        Queue::assertPushed(NotifyTaskCreatedJob::class, 2);
-        $this->assertNotNull(Task::sole()->creation_notified_at);
+        $task = Task::sole();
+        $this->assertStringContainsString("נפתחה משימה #{$task->id}", (string) $reply);
     }
 
     /**
