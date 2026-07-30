@@ -33,6 +33,7 @@ return [
             'accessibility' => (int) env('PRICE_ACCESSIBILITY', 180000),
             'legal_docs' => (int) env('PRICE_LEGAL_DOCS', 90000),
             'vulnerabilities' => (int) env('PRICE_VULNERABILITIES', 60000),
+            'reputation' => (int) env('PRICE_REPUTATION', 80000),
             'speed' => (int) env('PRICE_SPEED', 150000),
             'broken_links' => (int) env('PRICE_BROKEN_LINKS', 40000),
             'seo_basics' => (int) env('PRICE_SEO_BASICS', 70000),
