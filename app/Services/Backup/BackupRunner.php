@@ -27,8 +27,6 @@ class BackupRunner
     public function run(?int $userId = null): Backup
     {
         $disk = (string) config('backup.disk');
-        $this->assertPrivate($disk);
-
         $path = $this->pathFor();
 
         $backup = Backup::create([
@@ -41,6 +39,12 @@ class BackupRunner
         $local = tempnam(sys_get_temp_dir(), 'multioto-backup-');
 
         try {
+            // Inside the recorded lifecycle on purpose. Thrown before the row
+            // exists, a misconfigured destination would make the nightly run
+            // vanish with no failed row and no alert — exactly the silence this
+            // whole design is built to avoid.
+            $this->assertUsableDestination($disk);
+
             $manifest = $this->archive->write($local);
 
             $stream = fopen($local, 'rb');
@@ -103,7 +107,7 @@ class BackupRunner
      * .env — and this archive holds every customer record under a predictable
      * name, so the check belongs where the writing happens.
      */
-    private function assertPrivate(string $disk): void
+    private function assertUsableDestination(string $disk): void
     {
         if ((config("filesystems.disks.{$disk}.visibility") ?? null) === 'public') {
             throw new \RuntimeException(

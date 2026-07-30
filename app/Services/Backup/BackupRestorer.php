@@ -84,7 +84,7 @@ class BackupRestorer
                 });
 
                 $this->resetSequences($order);
-                $this->restoreFiles($zip);
+                $this->restoreFiles($zip, $manifest);
             } finally {
                 $zip->close();
             }
@@ -507,14 +507,14 @@ class BackupRestorer
      * restore whose attachments and logo never came back — with the database
      * already replaced, so there is nothing to compare against and notice.
      */
-    private function restoreFiles(ZipArchive $zip): void
+    private function restoreFiles(ZipArchive $zip, array $manifest): void
     {
         $failed = [];
         // Driven by the list the backup WROTE, not by whatever members happen
         // to still be in the archive. Walking the members can only ever see
         // what survived — a file that went missing is invisible that way, and
         // the restore would report success without it.
-        foreach ($this->declaredFiles($zip) as $entry) {
+        foreach ($this->declaredFiles($zip, $manifest) as $entry) {
             $slash = strpos($entry, '/');
 
             if ($slash === false) {
@@ -565,34 +565,34 @@ class BackupRestorer
     }
 
     /**
-     * The files the backup recorded. An archive written before this list
-     * existed falls back to its own members, so an older archive still
-     * restores — just without the missing-member check.
+     * The files the backup recorded.
      *
+     * No fallback to "whatever members are still here": that can only see what
+     * survived, so a list lost along with an attachment would look like an
+     * archive that simply had fewer files. Every archive of this format carries
+     * the list, and the count is checked against the manifest.
+     *
+     * @param  array<string, mixed>  $manifest
      * @return list<string> "disk/path"
      */
-    private function declaredFiles(ZipArchive $zip): array
+    private function declaredFiles(ZipArchive $zip, array $manifest): array
     {
         $raw = $zip->getFromName(BackupArchive::FILE_LIST);
+        $list = $raw === false ? null : json_decode((string) $raw, true);
 
-        if ($raw !== false) {
-            $list = json_decode((string) $raw, true);
-
-            if (is_array($list)) {
-                return array_values(array_filter($list, 'is_string'));
-            }
+        if (! is_array($list)) {
+            throw new RuntimeException('קובץ הגיבוי פגום: חסרה רשימת הקבצים.');
         }
 
-        $found = [];
+        $list = array_values(array_filter($list, 'is_string'));
+        $expected = (int) ($manifest['files'] ?? count($list));
 
-        for ($i = 0; $i < $zip->numFiles; $i++) {
-            $name = (string) $zip->getNameIndex($i);
-
-            if (str_starts_with($name, 'files/')) {
-                $found[] = substr($name, strlen('files/'));
-            }
+        if (count($list) !== $expected) {
+            throw new RuntimeException(
+                'קובץ הגיבוי פגום: רשימת הקבצים חלקית ('.count($list)." מתוך {$expected})."
+            );
         }
 
-        return $found;
+        return $list;
     }
 }

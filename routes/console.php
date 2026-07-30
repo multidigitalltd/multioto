@@ -292,13 +292,26 @@ Schedule::call(function () {
 // $awake: a backup sends nothing outward and touches no customer, so pausing it
 // over Shabbat would only mean a day of the year with no copy of the business.
 // The job holds a lock, so a slow run can never be started twice.
+//
+// Checked every minute rather than declared with dailyAt(): the schedule is
+// built once, and `schedule:work` is a long-lived process — a time changed in
+// the panel would otherwise be ignored until someone restarted the scheduler,
+// which is not a thing anyone would think to do. The settings overlay is
+// re-applied here because a Schedule::call closure never passes through
+// Queue::before.
 Schedule::call(function () {
-    (new SettingsServiceProvider(app()))->boot();
+    SettingsServiceProvider::refreshFromDatabase();
 
     if ((bool) config('backup.enabled', true)) {
         RunBackupJob::dispatch();
     }
-})->dailyAt((string) config('backup.daily_at', '03:30'))->name('system:daily-backup')->onOneServer();
+})->everyMinute()
+    ->when(function (): bool {
+        SettingsServiceProvider::refreshFromDatabase();
+
+        return now()->format('H:i') === trim((string) config('backup.daily_at', '03:30'));
+    })
+    ->name('system:daily-backup')->onOneServer();
 
 // Horizon metrics snapshot.
 Schedule::command('horizon:snapshot')->everyFiveMinutes();

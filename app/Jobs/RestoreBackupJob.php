@@ -38,7 +38,15 @@ class RestoreBackupJob implements ShouldQueue
         $lock = Cache::lock(RunBackupJob::LOCK, 3600);
 
         if (! $lock->get()) {
-            return; // A backup or another restore is already in flight.
+            // The panel already told the operator the restore had started.
+            // Returning quietly would leave that promise unkept with nothing
+            // to show for it — and the job is never retried.
+            $backup->update([
+                'restore_status' => BackupStatus::Failed,
+                'restore_error' => 'פעולת גיבוי או שחזור אחרת רצה באותו רגע — השחזור לא בוצע. נסו שוב בעוד כמה דקות.',
+            ]);
+
+            return;
         }
 
         try {

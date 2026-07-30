@@ -197,6 +197,14 @@ class ManageBackups extends Page implements HasForms, HasTable
                         : '—'),
                 Tables\Columns\TextColumn::make('error')
                     ->label('שגיאה')->wrap()->placeholder('—')->toggleable(),
+                // The restore's own outcome. Without it a failed restore reads
+                // as a healthy backup row — even when the database was already
+                // replaced and the files never came back.
+                Tables\Columns\TextColumn::make('restore_status')
+                    ->label('שחזור')->badge()->placeholder('—'),
+                Tables\Columns\TextColumn::make('restore_error')
+                    ->label('שגיאת שחזור')->wrap()->placeholder('—')
+                    ->visible(fn (): bool => Backup::query()->whereNotNull('restore_error')->exists()),
                 Tables\Columns\TextColumn::make('restored_at')
                     ->label('שוחזר')->dateTime('d/m/Y H:i')->placeholder('—')->toggleable(),
             ])

@@ -2,6 +2,8 @@
 
 namespace App\Jobs;
 
+use App\Enums\BackupStatus;
+use App\Models\Backup;
 use App\Services\Backup\BackupRunner;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -50,5 +52,25 @@ class RunBackupJob implements ShouldQueue
         } finally {
             $lock->release();
         }
+    }
+
+    /**
+     * A worker killed on timeout dies outside the runner's own handling, so the
+     * row it created would sit on "running" for ever and the team would never
+     * be told. The lock means at most one run is in flight, so the row still
+     * marked running is this one.
+     */
+    public function failed(\Throwable $e): void
+    {
+        $backup = Backup::query()
+            ->where('status', BackupStatus::Running)
+            ->latest('id')
+            ->first();
+
+        $backup?->update([
+            'status' => BackupStatus::Failed,
+            'error' => mb_substr($e->getMessage(), 0, 2000),
+            'finished_at' => now(),
+        ]);
     }
 }

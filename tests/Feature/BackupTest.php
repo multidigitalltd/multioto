@@ -7,6 +7,7 @@ use App\Enums\UserRole;
 use App\Filament\Pages\ManageBackups;
 use App\Jobs\RestoreBackupJob;
 use App\Jobs\RunBackupJob;
+use App\Mail\NotificationMail;
 use App\Models\Backup;
 use App\Models\Customer;
 use App\Models\PaymentToken;
@@ -16,6 +17,7 @@ use App\Services\Backup\BackupRestorer;
 use App\Services\Backup\BackupRunner;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Storage;
 use Livewire\Livewire;
 use Tests\TestCase;
@@ -329,6 +331,70 @@ class BackupTest extends TestCase
         $this->assertSame(0, Backup::count());
 
         $lock->release();
+    }
+
+    public function test_a_misconfigured_destination_still_leaves_a_failed_row_and_an_alert(): void
+    {
+        Mail::fake();
+        config([
+            'backup.disk' => 'public',
+            'billing.notifications.team_email' => 'team@multi.test',
+        ]);
+
+        try {
+            $this->runBackup();
+            $this->fail('a public destination must not pass');
+        } catch (\Throwable) {
+            // expected
+        }
+
+        // The nightly run must never disappear without a trace.
+        $this->assertSame(BackupStatus::Failed, Backup::sole()->status);
+        Mail::assertSent(NotificationMail::class);
+    }
+
+    public function test_a_restore_blocked_by_the_lock_says_so_instead_of_vanishing(): void
+    {
+        $backup = $this->runBackup();
+
+        $lock = Cache::lock(RunBackupJob::LOCK, 60);
+        $this->assertTrue($lock->get());
+
+        // The panel already promised the operator that the restore started.
+        (new RestoreBackupJob($backup->id))->handle(app(BackupRestorer::class));
+
+        $this->assertSame(BackupStatus::Failed, $backup->fresh()->restore_status);
+        $this->assertStringContainsString('נסו שוב', (string) $backup->fresh()->restore_error);
+
+        $lock->release();
+    }
+
+    public function test_a_killed_worker_does_not_leave_a_backup_stuck_on_running(): void
+    {
+        Backup::create(['status' => BackupStatus::Running, 'disk' => 'backups', 'path' => 'archives/x.zip']);
+
+        (new RunBackupJob)->failed(new \RuntimeException('worker timed out'));
+
+        $this->assertSame(BackupStatus::Failed, Backup::sole()->status);
+        $this->assertNotNull(Backup::sole()->error);
+    }
+
+    public function test_an_archive_without_its_file_list_is_refused(): void
+    {
+        Storage::disk('local')->put('attachments/keep.txt', 'קובץ');
+        $backup = $this->runBackup();
+
+        // Losing the list must not silently downgrade to "whatever survived".
+        $this->corruptArchive($backup, fn (ZipArchive $zip) => $zip->deleteName('files.json'));
+
+        try {
+            app(BackupRestorer::class)->restore($backup);
+            $this->fail('an archive without its file list must not restore');
+        } catch (\Throwable) {
+            // expected
+        }
+
+        $this->assertSame(BackupStatus::Failed, $backup->fresh()->restore_status);
     }
 
     public function test_a_restore_into_a_changed_schema_is_refused(): void
