@@ -71,6 +71,25 @@ class OpportunityDismissalTest extends TestCase
         $this->assertSame(30000, $page->instance()->totalAgorot);
     }
 
+    public function test_the_rendered_buttons_carry_the_site_and_the_opportunity(): void
+    {
+        $site = $this->site();
+
+        // Every callback reads `site` and `key` off the arguments. Calling an
+        // action directly in a test proves the callback; only the rendered
+        // markup proves the button actually hands it those values.
+        $html = $this->page()->assertOk()->html();
+
+        foreach (['dismiss', 'markOffered', 'openTask'] as $action) {
+            $this->assertStringContainsString(
+                "mountAction('{$action}', JSON.parse('"
+                    ."{\\u0022site\\u0022:{$site->id},\\u0022key\\u0022:\\u0022accessibility\\u0022}'))",
+                $html,
+                "הכפתור {$action} אינו מעביר את האתר וההזדמנות",
+            );
+        }
+    }
+
     public function test_a_rescan_does_not_bring_a_dismissed_opportunity_back(): void
     {
         $site = $this->site();

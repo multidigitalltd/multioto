@@ -88,11 +88,11 @@
 
                         <div class="mt-2 flex flex-wrap gap-2">
                             @if ($this->filter === 'open')
-                                {{ ($this->openTaskAction)(['arguments' => $arguments]) }}
-                                {{ ($this->markOfferedAction)(['arguments' => $arguments]) }}
-                                {{ ($this->dismissAction)(['arguments' => $arguments]) }}
+                                {{ ($this->openTaskAction)($arguments) }}
+                                {{ ($this->markOfferedAction)($arguments) }}
+                                {{ ($this->dismissAction)($arguments) }}
                             @else
-                                {{ ($this->restoreAction)(['arguments' => $arguments]) }}
+                                {{ ($this->restoreAction)($arguments) }}
                             @endif
                         </div>
                     </div>
