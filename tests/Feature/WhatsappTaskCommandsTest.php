@@ -17,7 +17,9 @@ use App\Models\Ticket;
 use App\Services\Agent\CommandInterpreter;
 use App\Services\Agent\SiteAgent;
 use App\Services\Agent\SiteMemoryStore;
+use App\Services\Automation\ManagementCommands;
 use App\Services\Waha\WahaClient;
+use Illuminate\Contracts\Bus\Dispatcher;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
@@ -143,13 +145,41 @@ class WhatsappTaskCommandsTest extends TestCase
      * key tied to the message, one sentence said once could become two
      * identical tasks — and two notifications.
      */
-    public function test_the_same_message_delivered_twice_opens_one_task(): void
+    /**
+     * The ingestion job retries the SAME event, so this runs the handler twice
+     * directly — a second webhook POST would be stopped by webhook_events long
+     * before reaching here, and would prove nothing about this key.
+     */
+    public function test_a_retry_of_the_same_message_opens_one_task(): void
     {
-        $this->inbound('משימה לבדוק את הגיבויים', 'wa-dup');
-        $this->inbound('משימה לבדוק את הגיבויים', 'wa-dup');
+        $commands = app(ManagementCommands::class);
+
+        $commands->handle(self::MGMT, 'משימה לבדוק את הגיבויים', 'wa-dup');
+        $commands->handle(self::MGMT, 'משימה לבדוק את הגיבויים', 'wa-dup');
 
         $this->assertSame(1, Task::count());
         Queue::assertPushed(NotifyTaskCreatedJob::class, 1);
+    }
+
+    /**
+     * A retry that reaches an existing row must still notify if the first pass
+     * never got that far. An unassigned task is skipped by the reminder job
+     * too, so a notification lost here is lost for good.
+     */
+    public function test_a_retry_still_notifies_when_the_first_pass_did_not(): void
+    {
+        $commands = app(ManagementCommands::class);
+
+        $commands->handle(self::MGMT, 'משימה לבדוק את הגיבויים', 'wa-dup');
+
+        // As if the dispatch had failed after the row was written.
+        Task::sole()->forceFill(['creation_notified_at' => null])->save();
+
+        $commands->handle(self::MGMT, 'משימה לבדוק את הגיבויים', 'wa-dup');
+
+        $this->assertSame(1, Task::count());
+        Queue::assertPushed(NotifyTaskCreatedJob::class, 2);
+        $this->assertNotNull(Task::sole()->creation_notified_at);
     }
 
     public function test_the_group_can_list_and_complete_tasks(): void
@@ -259,6 +289,43 @@ class WhatsappTaskCommandsTest extends TestCase
                 && str_contains($job->instruction, 'הלקוח מתלונן על עמוד ישן')
                 && str_contains($job->instruction, 'דני'),
         );
+    }
+
+    /**
+     * Sending the command twice, or two managers sending it at once, would
+     * otherwise run the agent twice on one task — duplicate work and duplicate
+     * proposals to approve.
+     */
+    public function test_a_task_already_being_worked_on_is_not_handed_over_again(): void
+    {
+        $task = Task::create(['title' => 'לנקות קאש', 'status' => TaskStatus::Open]);
+
+        $this->inbound("סוכן משימה {$task->id}", 'wa-d1');
+        $this->inbound("סוכן משימה {$task->id}", 'wa-d2');
+
+        Queue::assertPushed(RunAgentInstructionJob::class, 1);
+        $this->assertStringContainsString('כבר בטיפול', $this->lastReply());
+    }
+
+    public function test_a_task_is_handed_back_when_the_agent_cannot_be_queued(): void
+    {
+        $task = Task::create(['title' => 'לנקות קאש', 'status' => TaskStatus::Open]);
+
+        $this->mock(Dispatcher::class, function ($mock): void {
+            $mock->shouldReceive('dispatch')->andThrow(new \RuntimeException('queue down'));
+        });
+
+        // The failure must propagate so the ingestion job retries the whole
+        // command — but the task must not be left claimed by an agent that was
+        // never started.
+        try {
+            app(ManagementCommands::class)->handle(self::MGMT, "סוכן משימה {$task->id}");
+            $this->fail('a failed enqueue must not be swallowed');
+        } catch (\RuntimeException) {
+            // expected
+        }
+
+        $this->assertSame(TaskStatus::Open, $task->fresh()->status);
     }
 
     public function test_a_completed_task_is_not_handed_to_the_agent(): void

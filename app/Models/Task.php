@@ -24,7 +24,7 @@ class Task extends Model
     protected $fillable = [
         'title', 'description', 'subtasks', 'customer_id', 'ticket_id',
         'status', 'priority', 'due_at', 'completed_at', 'reminded_at',
-        'source_ref',
+        'source_ref', 'creation_notified_at',
     ];
 
     protected function casts(): array
@@ -36,6 +36,7 @@ class Task extends Model
             'due_at' => 'datetime',
             'completed_at' => 'datetime',
             'reminded_at' => 'datetime',
+            'creation_notified_at' => 'datetime',
         ];
     }
 

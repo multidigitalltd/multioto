@@ -149,10 +149,14 @@ class ManagementCommands
         ]);
 
         // Unassigned, so this reaches the managers who are not in the group —
-        // the same path every other "new task" entry point uses. Only on the
-        // first pass: a retry must not notify twice either.
-        if ($task->wasRecentlyCreated) {
+        // the same path every other "new task" entry point uses. Stamped rather
+        // than keyed on "was just created": a retry that reaches an existing row
+        // must still notify if the first pass never got this far, and an
+        // unassigned task is not picked up by the reminder job either, so a lost
+        // notification here is lost for good.
+        if ($task->creation_notified_at === null) {
             NotifyTaskCreatedJob::dispatch($task->id);
+            $task->forceFill(['creation_notified_at' => now()])->save();
         }
 
         $when = $dueAt !== null ? ' · עד '.$dueAt->format('d/m/Y') : '';
@@ -254,11 +258,40 @@ class ManagementCommands
             $instruction .= "\n(המשימה משויכת ללקוח: {$task->customer->name})";
         }
 
-        $task->markStatus(TaskStatus::InProgress);
+        // Claim it conditionally: sending the command twice, or two managers
+        // sending it at once, would otherwise set the status a second time and
+        // dispatch a second agent — duplicate AI work and duplicate proposals
+        // for one task.
+        $claimed = Task::whereKey($taskId)
+            ->where('status', TaskStatus::Open)
+            ->update(['status' => TaskStatus::InProgress, 'reminded_at' => null]);
 
-        RunAgentInstructionJob::dispatch($chatId, $instruction, $taskId);
+        if ($claimed !== 1) {
+            return "משימה #{$taskId} כבר בטיפול — לא הועברה שוב לסוכן.";
+        }
+
+        try {
+            RunAgentInstructionJob::dispatch($chatId, $instruction, $taskId);
+        } catch (\Throwable $e) {
+            // Nothing exists to run failed() for us, so hand the task back
+            // before letting the ingestion job retry the whole command.
+            $this->releaseTask($taskId);
+
+            throw $e;
+        }
 
         return "🤖 משימה #{$taskId} הועברה לסוכן — אענה כאן כשיסיים.";
+    }
+
+    /**
+     * Hand a claimed task back to the humans. Only from "in progress": a status
+     * a person set since is newer than ours and must stand.
+     */
+    private function releaseTask(int $taskId): void
+    {
+        Task::whereKey($taskId)
+            ->where('status', TaskStatus::InProgress)
+            ->update(['status' => TaskStatus::Open, 'reminded_at' => null]);
     }
 
     /**
