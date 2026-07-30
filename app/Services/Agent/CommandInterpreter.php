@@ -25,7 +25,14 @@ class CommandInterpreter
         private ConsoleAgent $agent,
     ) {}
 
-    public function run(string $instruction, ?int $userId = null): AgentCommand
+    /**
+     * @param  string  $source  AgentCommand::SOURCE_* — which console this came
+     *                          from. Instructions from the WhatsApp management
+     *                          group have no user, so the source is what keeps
+     *                          the group's conversation threaded and separate
+     *                          from every panel operator's.
+     */
+    public function run(string $instruction, ?int $userId = null, string $source = AgentCommand::SOURCE_PANEL): AgentCommand
     {
         $instruction = trim($instruction);
 
@@ -34,10 +41,11 @@ class CommandInterpreter
         // a multi-step clarification keep the full chain — the original request,
         // each answer, and the agent's own questions are all stored turns, so
         // context is reconstructed from history rather than a single prior row.
-        $effective = $this->withConversationContext($instruction, $userId);
+        $effective = $this->withConversationContext($instruction, $userId, $source);
 
         $command = AgentCommand::create([
             'user_id' => $userId,
+            'source' => $source,
             'role' => 'user',
             'instruction' => $instruction, // the raw turn; context is passed to the agent only
             'outcome' => AgentCommandOutcome::Unclear,
@@ -102,14 +110,17 @@ class CommandInterpreter
      * (the agent sees what was just discussed). Context only — the agent is told
      * not to re-run past actions. Bounded to the last few turns to stay cheap.
      */
-    private function withConversationContext(string $instruction, ?int $userId): string
+    private function withConversationContext(string $instruction, ?int $userId, string $source): string
     {
-        if ($userId === null) {
-            return $instruction;
-        }
-
         $recent = AgentCommand::query()
-            ->where('user_id', $userId)
+            ->where('source', $source)
+            // One thread per operator in the panel; one shared thread for the
+            // WhatsApp group, which has no user of its own.
+            ->when(
+                $userId !== null,
+                fn ($query) => $query->where('user_id', $userId),
+                fn ($query) => $query->whereNull('user_id'),
+            )
             ->latest('id')
             ->limit(6)
             ->get()
