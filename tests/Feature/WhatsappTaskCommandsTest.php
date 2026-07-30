@@ -122,6 +122,25 @@ class WhatsappTaskCommandsTest extends TestCase
         $this->assertSame('2026-09-15', $task->due_at->toDateString());
     }
 
+    public function test_a_yearless_date_already_past_means_next_year(): void
+    {
+        Carbon::setTestNow('2026-12-30 09:00:00');
+
+        // Nobody types "2/1" on December 30 meaning ten months ago.
+        $this->inbound('משימה 2/1 להגיש דוח שנתי');
+
+        $this->assertSame('2027-01-02', Task::sole()->due_at->toDateString());
+    }
+
+    public function test_a_year_typed_in_full_is_taken_at_face_value(): void
+    {
+        Carbon::setTestNow('2026-12-30 09:00:00');
+
+        $this->inbound('משימה 2/1/2026 לסגור את השנה');
+
+        $this->assertSame('2026-01-02', Task::sole()->due_at->toDateString());
+    }
+
     /**
      * "משימה 3 מכתבים ללקוחות" is a description that happens to start with a
      * number — not a date. Eating it would silently lose the first word.

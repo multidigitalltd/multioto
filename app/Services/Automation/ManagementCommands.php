@@ -327,11 +327,19 @@ class ManagementCommands
         if (preg_match('/^(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\s+(.+)/us', $text, $m)) {
             // A group before the last one is filled with '' when it does not
             // participate, so an omitted year must be tested for content.
-            $year = filled($m[3] ?? null) ? (int) $m[3] : (int) now()->year;
+            $given = filled($m[3] ?? null);
+            $year = $given ? (int) $m[3] : (int) now()->year;
             $year = $year < 100 ? 2000 + $year : $year;
 
             if (checkdate((int) $m[2], (int) $m[1], $year)) {
                 $due = Carbon::create($year, (int) $m[2], (int) $m[1])->endOfDay();
+
+                // "2/1" said on the 30th of December means the coming January,
+                // not ten months ago. Only when the year was left out — a year
+                // typed in full is taken at face value, including a past one.
+                if (! $given && $due->isBefore(now()->startOfDay())) {
+                    $due->addYear();
+                }
 
                 return [$due, trim($m[4])];
             }
