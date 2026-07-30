@@ -72,8 +72,12 @@ class ListSites extends ListRecords
             ->modalHeading('כלל מדינות ב-Cloudflare — לכל האתרים')
             ->modalDescription('לכל פעולה יש רשימת מדינות משלה, בכלל WAF אחד לכל אתר. אפשר להחליף את הרשימה, להוסיף אליה או להוריד ממנה — בלי לגעת ברשימות של הפעולות האחרות. השינוי חל על כל הזונים בחשבון בבת אחת. נדרשות בטוקן ההרשאות Zone WAF · Edit (לכלל המשולב) ו-Firewall Services · Edit (למעבר חופשי ולכללים הישנים).')
             ->modalSubmitActionLabel('החל על כל האתרים')
-            ->fillForm(fn (): array => ['mode' => 'managed_challenge', 'operation' => 'add', 'remove_legacy' => false]
-                + $this->currentCountryList('managed_challenge'))
+            // Opens on "add" with an EMPTY field: the box means "which countries
+            // to add", and the list already in force is shown above it. Only
+            // "replace" loads the current list, because only there does the box
+            // mean "the whole list from now on".
+            ->fillForm(fn (): array => ['mode' => 'managed_challenge', 'operation' => 'add',
+                'countries' => [], 'remove_legacy' => false])
             ->form([
                 Forms\Components\Placeholder::make('current_rules')
                     ->label('מה קיים היום')
@@ -88,18 +92,13 @@ class ListSites extends ListRecords
                         'whitelist' => 'מעבר חופשי (Allow)',
                         'remove' => 'מחיקת כל כללי המדינות שלנו',
                     ])
-                    // Switching action loads THAT action's list, because each one
-                    // is its own list and editing the wrong one would be a silent
-                    // way to wipe a policy.
+                    // Switching action reloads the box only in "replace" mode,
+                    // where it holds a whole list; in add/subtract it holds the
+                    // few countries being changed and must not fill itself.
                     ->afterStateUpdated(function (Forms\Set $set, Forms\Get $get, ?string $state): void {
-                        $list = $this->currentCountryList((string) $state)['countries'] ?? [];
-
-                        // Only when there is a list to load. Blanking a field the
-                        // operator has already typed into, because they glanced at
-                        // another action, would be its own small betrayal.
-                        if ($list !== [] || blank($get('countries'))) {
-                            $set('countries', $list);
-                        }
+                        $set('countries', $get('operation') === 'replace'
+                            ? ($this->currentCountryList((string) $state)['countries'] ?? [])
+                            : []);
                     })
                     ->helperText(fn (Forms\Get $get): ?string => match ($get('mode')) {
                         'whitelist' => 'מעבר חופשי נשמר ככלל נפרד לכל מדינה (IP Access Rule) — אין לו מקבילה בכלל משולב. לרשימת היתר קצרה זה בסדר.',
@@ -115,13 +114,28 @@ class ListSites extends ListRecords
                     ])
                     ->default('add')
                     ->required()
+                    ->live()
                     ->visible(fn (Forms\Get $get): bool => $get('mode') !== 'remove')
-                    ->helperText('"החלפה" מוחקת מהרשימה כל מדינה שלא הוזנה כאן. להוספה או להורדה של מדינה בודדת אין צורך להקליד את השאר.'),
+                    // Choosing "replace" loads the list in force, so it can be
+                    // edited; choosing add/subtract empties the box, so nobody
+                    // submits the whole list as the thing to add or remove.
+                    ->afterStateUpdated(function (Forms\Set $set, Forms\Get $get, ?string $state): void {
+                        $set('countries', $state === 'replace'
+                            ? ($this->currentCountryList((string) $get('mode'))['countries'] ?? [])
+                            : []);
+                    })
+                    ->helperText('"החלפה" מוחקת מהרשימה כל מדינה שלא הוזנה כאן. בהוספה ובהסרה מזינים רק את המדינות שמשתנות — הרשימה הקיימת מופיעה למעלה.'),
                 Forms\Components\TagsInput::make('countries')
-                    ->label('מדינות (קודי ISO של שתי אותיות)')
+                    ->label(fn (Forms\Get $get): string => match ($get('operation')) {
+                        'subtract' => 'מדינות להסרה (קודי ISO של שתי אותיות)',
+                        'replace' => 'הרשימה החדשה במלואה (קודי ISO של שתי אותיות)',
+                        default => 'מדינות להוספה (קודי ISO של שתי אותיות)',
+                    })
                     ->placeholder('MX')
                     ->separator(',')
-                    ->helperText('אפשר להדביק רשימה מופרדת בפסיקים: MX,HK,IR,CN. הרשימה שמופיעה כאן היא זו שבתוקף לפעולה שנבחרה.')
+                    ->helperText(fn (Forms\Get $get): string => $get('operation') === 'replace'
+                        ? 'אפשר להדביק רשימה מופרדת בפסיקים: MX,HK,IR,CN. מה שלא יופיע כאן יוסר מהרשימה.'
+                        : 'רק המדינות שמשתנות. אפשר להדביק רשימה מופרדת בפסיקים: MX,HK,IR,CN.')
                     ->required(fn (Forms\Get $get): bool => $get('mode') !== 'remove')
                     ->visible(fn (Forms\Get $get): bool => $get('mode') !== 'remove'),
                 Forms\Components\Toggle::make('remove_legacy')
@@ -151,9 +165,14 @@ class ListSites extends ListRecords
                 // The applied list is passed in so the cleanup can only touch
                 // rules the new one has genuinely made redundant.
                 if ($ok && ($data['remove_legacy'] ?? false)) {
+                    // Countries that were just SUBTRACTED are no longer covered
+                    // by the combined rule, so cleaning their old rules away too
+                    // would leave them with no protection at all.
                     $cleanup = $client->removeLegacyCountryRulesEverywhere(
                         $token,
-                        CloudflareClient::countryCodesIn($data['countries'] ?? []),
+                        ($data['operation'] ?? 'replace') === 'subtract'
+                            ? []
+                            : CloudflareClient::countryCodesIn($data['countries'] ?? []),
                     );
 
                     // A cleanup that stopped halfway is not a success, even

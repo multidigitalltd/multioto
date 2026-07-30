@@ -557,7 +557,7 @@ class CloudflareCountryListTest extends TestCase
             && data_get($request->data(), 'action') === 'managed_challenge');
     }
 
-    public function test_the_modal_opens_with_the_list_that_is_in_force(): void
+    public function test_the_modal_opens_empty_and_loads_the_list_only_to_replace_it(): void
     {
         config(['billing.cloudflare.api_token' => 'saved-token']);
         $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
@@ -568,11 +568,17 @@ class CloudflareCountryListTest extends TestCase
             'action' => 'managed_challenge',
         ]]);
 
-        // Adding a country must be adding, not retyping two dozen codes from
-        // memory and losing one.
-        Livewire::test(ListSites::class)
-            ->mountAction('countryRule')
-            ->assertActionDataSet(['countries' => ['HK', 'MX'], 'mode' => 'managed_challenge']);
+        $component = Livewire::test(ListSites::class)->mountAction('countryRule');
+
+        // The default is "add", where the box means "which countries to add".
+        // Preloading it there would make one careless submit re-add everything —
+        // and in "subtract" it would remove the entire list.
+        $component->assertActionDataSet(['operation' => 'add', 'countries' => []]);
+
+        // Only replacing means "this is the whole list from now on", so only
+        // there is the list in force worth loading for editing.
+        $component->setActionData(['mode' => 'managed_challenge', 'operation' => 'replace'])
+            ->assertActionDataSet(['countries' => ['HK', 'MX']]);
     }
 
     public function test_nothing_is_sent_without_a_token(): void
