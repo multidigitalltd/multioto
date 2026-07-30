@@ -90,6 +90,22 @@ class OpportunityDismissalTest extends TestCase
         }
     }
 
+    public function test_who_decided_is_shown_even_without_a_reason(): void
+    {
+        $site = $this->site();
+        $page = $this->page();
+
+        // "Offered" never carries a reason, and a dismissal may skip it — but
+        // "who moved this out of the open list" is the whole point of recording
+        // the user, so it must survive an empty reason.
+        $page->callAction('markOffered', arguments: ['site' => $site->id, 'key' => 'monitoring']);
+
+        $html = $page->set('filter', 'offered')->html();
+
+        $this->assertStringContainsString('סומן על ידי', $html);
+        $this->assertStringContainsString(auth()->user()->name, $html);
+    }
+
     public function test_a_rescan_does_not_bring_a_dismissed_opportunity_back(): void
     {
         $site = $this->site();

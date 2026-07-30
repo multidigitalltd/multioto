@@ -79,9 +79,16 @@
                             <span class="text-sm text-gray-500 dark:text-gray-400">{{ $money((int) ($item['price_agorot'] ?? 0)) }}</span>
                             <p class="w-full text-xs text-gray-500 dark:text-gray-400">{{ $item['evidence'] ?? '' }}</p>
 
-                            @if ($item['reason'] ?? null)
+                            {{-- Who decided matters even without a reason, and an
+                                 "offered" verdict never carries one at all. --}}
+                            @if (($item['reason'] ?? null) || ($item['decided_by'] ?? null))
                                 <p class="w-full text-xs text-gray-400 dark:text-gray-500">
-                                    סיבה: {{ $item['reason'] }}@if ($item['decided_by'] ?? null) · {{ $item['decided_by'] }}@endif
+                                    @if ($item['reason'] ?? null)
+                                        סיבה: {{ $item['reason'] }}@if ($item['decided_by'] ?? null) · @endif
+                                    @endif
+                                    @if ($item['decided_by'] ?? null)
+                                        סומן על ידי {{ $item['decided_by'] }}
+                                    @endif
                                 </p>
                             @endif
                         </div>
