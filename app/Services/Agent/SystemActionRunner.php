@@ -303,7 +303,7 @@ class SystemActionRunner
         // doing something else entirely: "remove RU" would delete the combined
         // rule and unblock every other country in it.
         $result = isset($p['countries'])
-            ? $client->applyCountryListEverywhere($token, (array) $p['countries'], $mode)
+            ? $client->applyCountryListEverywhere($token, (array) $p['countries'], $mode, (string) ($p['list_operation'] ?? 'replace'))
             : $client->applyCountryRuleEverywhere($token, (string) ($p['country'] ?? ''), $mode, 'Multi Digital agent — country rule');
 
         if (! $result['ok']) {

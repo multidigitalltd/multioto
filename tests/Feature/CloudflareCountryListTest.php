@@ -61,7 +61,7 @@ class CloudflareCountryListTest extends TestCase
         $this->fakeZones(['z1', 'z2']);
 
         $result = $this->client()->applyCountryListEverywhere(
-            'cf-token', ['mx', 'HK', 'ir', 'CN'], 'block',
+            'cf-token', ['mx', 'HK', 'ir', 'CN'], 'block', 'replace',
         );
 
         $this->assertTrue($result['ok']);
@@ -83,10 +83,10 @@ class CloudflareCountryListTest extends TestCase
             'id' => 'existing',
             'description' => CloudflareClient::COUNTRY_RULE_DESCRIPTION,
             'expression' => '(ip.src.country in {"MX"})',
-            'action' => 'block',
+            'action' => 'managed_challenge',
         ]]);
 
-        $result = $this->client()->applyCountryListEverywhere('cf-token', ['MX', 'HK'], 'managed_challenge');
+        $result = $this->client()->applyCountryListEverywhere('cf-token', ['MX', 'HK'], 'managed_challenge', 'replace');
 
         $this->assertTrue($result['ok']);
 
@@ -112,19 +112,35 @@ class CloudflareCountryListTest extends TestCase
             && data_get($request->data(), 'rules.0.expression') === '(ip.src.country in {"MX"})');
     }
 
-    public function test_removing_deletes_the_combined_rule(): void
+    public function test_removing_wipes_every_country_rule_of_ours(): void
     {
-        $this->fakeZones(['z1'], [[
-            'id' => 'existing',
-            'description' => CloudflareClient::COUNTRY_RULE_DESCRIPTION,
-            'expression' => '(ip.src.country in {"MX"})',
-            'action' => 'block',
-        ]]);
+        Http::fake([
+            '*/access_rules/rules*' => Http::response(['success' => true, 'result' => [], 'result_info' => ['total_pages' => 1]]),
+            '*/rulesets/phases/*' => Http::response(['success' => true, 'result' => ['id' => 'rs1', 'rules' => [
+                ['id' => 'blocked', 'description' => CloudflareClient::COUNTRY_RULE_DESCRIPTION.' (block)',
+                    'expression' => '(ip.src.country in {"MX"})', 'action' => 'block'],
+                ['id' => 'challenged', 'description' => CloudflareClient::COUNTRY_RULE_DESCRIPTION.' (managed_challenge)',
+                    'expression' => '(ip.src.country in {"HK"})', 'action' => 'managed_challenge'],
+                ['id' => 'theirs', 'description' => 'Block bad bots',
+                    'expression' => '(http.user_agent contains "curl")', 'action' => 'block'],
+            ]]]),
+            '*/rulesets*' => Http::response(['success' => true, 'result' => ['id' => 'new']]),
+            '*/zones*' => Http::response([
+                'success' => true,
+                'result' => [['id' => 'z1', 'name' => 'a.com']],
+                'result_info' => ['total_pages' => 1],
+            ]),
+        ]);
 
         $this->assertTrue($this->client()->applyCountryListEverywhere('cf-token', [], 'remove')['ok']);
 
+        // A clean slate takes every action's list, and nothing that is not ours.
         Http::assertSent(fn ($request): bool => $request->method() === 'DELETE'
-            && str_contains($request->url(), '/rulesets/rs1/rules/existing'));
+            && str_contains($request->url(), '/rulesets/rs1/rules/blocked'));
+        Http::assertSent(fn ($request): bool => $request->method() === 'DELETE'
+            && str_contains($request->url(), '/rulesets/rs1/rules/challenged'));
+        Http::assertNotSent(fn ($request): bool => $request->method() === 'DELETE'
+            && str_contains($request->url(), '/rulesets/rs1/rules/theirs'));
     }
 
     public function test_a_rule_we_do_not_own_is_never_touched(): void
@@ -198,10 +214,9 @@ class CloudflareCountryListTest extends TestCase
 
         $this->assertTrue($overview['ok']);
         // Sorted, so that two zones holding the same set compare as the same set.
-        $this->assertSame(['HK', 'IR', 'MX'], $overview['countries']);
-        $this->assertTrue($overview['consistent']);
-        $this->assertSame('managed_challenge', $overview['mode']);
-        $this->assertSame(2, $overview['zones']);
+        $this->assertSame(['HK', 'IR', 'MX'], $overview['actions']['managed_challenge']['countries']);
+        $this->assertTrue($overview['actions']['managed_challenge']['consistent']);
+        $this->assertSame(2, $overview['actions']['managed_challenge']['zones']);
         $this->assertSame(2, $overview['total_zones']);
     }
 
@@ -312,9 +327,8 @@ class CloudflareCountryListTest extends TestCase
 
         // A run that failed halfway leaves this behind. Preloading either list
         // would let a re-save quietly push the wrong countries back out.
-        $this->assertFalse($overview['consistent']);
-        $this->assertSame([], $overview['countries']);
-        $this->assertNull($overview['mode']);
+        $this->assertFalse($overview['actions']['block']['consistent']);
+        $this->assertSame([], $overview['actions']['block']['countries']);
     }
 
     public function test_the_panel_applies_a_pasted_country_list_in_one_action(): void
@@ -327,8 +341,9 @@ class CloudflareCountryListTest extends TestCase
         // them — the shape the client has to survive.
         Livewire::test(ListSites::class)
             ->callAction('countryRule', data: [
-                'countries' => ['MX', 'HK', 'IR'],
                 'mode' => 'block',
+                'operation' => 'replace',
+                'countries' => ['MX', 'HK', 'IR'],
                 'remove_legacy' => false,
             ])
             ->assertHasNoActionErrors();
@@ -357,8 +372,8 @@ class CloudflareCountryListTest extends TestCase
 
         // What a removal that failed halfway looks like. Offering the surviving
         // list would let a re-save put the rule back where it was just deleted.
-        $this->assertFalse($overview['consistent']);
-        $this->assertSame([], $overview['countries']);
+        $this->assertFalse($overview['actions']['block']['consistent']);
+        $this->assertSame([], $overview['actions']['block']['countries']);
     }
 
     public function test_the_allow_list_drops_a_country_left_out_of_it(): void
@@ -372,7 +387,7 @@ class CloudflareCountryListTest extends TestCase
                 'configuration' => ['target' => 'country', 'value' => 'DE']],
         ]);
 
-        $result = $this->client()->applyCountryListEverywhere('cf-token', ['US'], 'whitelist');
+        $result = $this->client()->applyCountryListEverywhere('cf-token', ['US'], 'whitelist', 'replace');
 
         $this->assertTrue($result['ok']);
 
@@ -422,13 +437,13 @@ class CloudflareCountryListTest extends TestCase
             && str_contains($request->url(), 'access_rules/rules/ours'));
     }
 
-    public function test_switching_to_an_allow_list_takes_down_the_block_rule(): void
+    public function test_an_allow_list_leaves_the_block_list_alone(): void
     {
         Http::fake([
             '*/access_rules/rules/*' => Http::response(['success' => true]),
             '*/access_rules/rules*' => Http::response(['success' => true, 'result' => [], 'result_info' => ['total_pages' => 1]]),
             '*/rulesets/phases/*' => Http::response(['success' => true, 'result' => ['id' => 'rs1', 'rules' => [[
-                'id' => 'combined', 'description' => CloudflareClient::COUNTRY_RULE_DESCRIPTION,
+                'id' => 'blocked', 'description' => CloudflareClient::COUNTRY_RULE_DESCRIPTION.' (block)',
                 'expression' => '(ip.src.country in {"CN" "RU"})', 'action' => 'block',
             ]]]]),
             '*/rulesets*' => Http::response(['success' => true, 'result' => ['id' => 'new']]),
@@ -439,17 +454,17 @@ class CloudflareCountryListTest extends TestCase
             ]),
         ]);
 
-        $result = $this->client()->applyCountryListEverywhere('cf-token', ['US'], 'whitelist');
+        $result = $this->client()->applyCountryListEverywhere('cf-token', ['US'], 'whitelist', 'replace');
 
         $this->assertTrue($result['ok']);
 
-        // One setting, one policy: saving "allow US" must not leave RU and CN
-        // blocked by a rule the screen no longer shows.
-        Http::assertSent(fn ($request): bool => $request->method() === 'DELETE'
-            && str_contains($request->url(), '/rulesets/rs1/rules/combined'));
+        // Allowing US says nothing about RU and CN. Wiping their rule because a
+        // different question was answered is how a policy disappears unnoticed.
+        Http::assertNotSent(fn ($request): bool => $request->method() === 'DELETE'
+            && str_contains($request->url(), '/rulesets/'));
     }
 
-    public function test_switching_back_to_blocking_takes_down_our_allow_rules(): void
+    public function test_a_block_list_leaves_the_allow_list_alone(): void
     {
         Http::fake([
             '*/access_rules/rules/*' => Http::response(['success' => true]),
@@ -458,8 +473,6 @@ class CloudflareCountryListTest extends TestCase
                 'result' => [
                     ['id' => 'allow', 'mode' => 'whitelist', 'notes' => CloudflareClient::COUNTRY_RULE_DESCRIPTION,
                         'configuration' => ['target' => 'country', 'value' => 'US']],
-                    ['id' => 'theirs', 'mode' => 'whitelist', 'notes' => 'Ops team',
-                        'configuration' => ['target' => 'country', 'value' => 'DE']],
                 ],
                 'result_info' => ['total_pages' => 1],
             ]),
@@ -472,16 +485,76 @@ class CloudflareCountryListTest extends TestCase
             ]),
         ]);
 
-        $result = $this->client()->applyCountryListEverywhere('cf-token', ['MX'], 'block');
+        $this->assertTrue($this->client()->applyCountryListEverywhere('cf-token', ['MX'], 'block', 'replace')['ok']);
 
-        $this->assertTrue($result['ok']);
-
-        // The allow list was the previous answer to the same question; it is not
-        // part of the policy the operator just saved. Somebody else's is.
-        Http::assertSent(fn ($request): bool => $request->method() === 'DELETE'
-            && str_contains($request->url(), 'access_rules/rules/allow'));
         Http::assertNotSent(fn ($request): bool => $request->method() === 'DELETE'
-            && str_contains($request->url(), 'access_rules/rules/theirs'));
+            && str_contains($request->url(), 'access_rules/rules/allow'));
+    }
+
+    public function test_a_country_can_be_added_without_restating_the_list(): void
+    {
+        $this->fakeZones(['z1'], [[
+            'id' => 'existing',
+            'description' => CloudflareClient::COUNTRY_RULE_DESCRIPTION.' (block)',
+            'expression' => '(ip.src.country in {"CN" "RU"})',
+            'action' => 'block',
+        ]]);
+
+        $this->assertTrue($this->client()->applyCountryListEverywhere('cf-token', ['MX'], 'block', 'add')['ok']);
+
+        Http::assertSent(fn ($request): bool => $request->method() === 'PATCH'
+            && data_get($request->data(), 'expression') === '(ip.src.country in {"CN" "MX" "RU"})');
+    }
+
+    public function test_a_country_can_be_dropped_without_restating_the_list(): void
+    {
+        $this->fakeZones(['z1'], [[
+            'id' => 'existing',
+            'description' => CloudflareClient::COUNTRY_RULE_DESCRIPTION.' (block)',
+            'expression' => '(ip.src.country in {"CN" "MX" "RU"})',
+            'action' => 'block',
+        ]]);
+
+        $this->assertTrue($this->client()->applyCountryListEverywhere('cf-token', ['MX'], 'block', 'subtract')['ok']);
+
+        Http::assertSent(fn ($request): bool => $request->method() === 'PATCH'
+            && data_get($request->data(), 'expression') === '(ip.src.country in {"CN" "RU"})');
+    }
+
+    public function test_dropping_the_last_country_deletes_the_rule(): void
+    {
+        $this->fakeZones(['z1'], [[
+            'id' => 'existing',
+            'description' => CloudflareClient::COUNTRY_RULE_DESCRIPTION.' (block)',
+            'expression' => '(ip.src.country in {"MX"})',
+            'action' => 'block',
+        ]]);
+
+        $this->assertTrue($this->client()->applyCountryListEverywhere('cf-token', ['MX'], 'block', 'subtract')['ok']);
+
+        // An empty rule matches nobody but reads on the dashboard as if
+        // something is still set.
+        Http::assertSent(fn ($request): bool => $request->method() === 'DELETE'
+            && str_contains($request->url(), '/rulesets/rs1/rules/existing'));
+    }
+
+    public function test_each_action_keeps_its_own_list(): void
+    {
+        $this->fakeZones(['z1'], [[
+            'id' => 'blocked',
+            'description' => CloudflareClient::COUNTRY_RULE_DESCRIPTION.' (block)',
+            'expression' => '(ip.src.country in {"RU"})',
+            'action' => 'block',
+        ]]);
+
+        $this->assertTrue($this->client()->applyCountryListEverywhere('cf-token', ['MX'], 'managed_challenge', 'add')['ok']);
+
+        // A challenge list is a second rule beside the block list, not a rewrite
+        // of it.
+        Http::assertNotSent(fn ($request): bool => $request->method() === 'PATCH');
+        Http::assertSent(fn ($request): bool => $request->method() === 'POST'
+            && data_get($request->data(), 'expression') === '(ip.src.country in {"MX"})'
+            && data_get($request->data(), 'action') === 'managed_challenge');
     }
 
     public function test_the_modal_opens_with_the_list_that_is_in_force(): void
@@ -490,16 +563,16 @@ class CloudflareCountryListTest extends TestCase
         $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
         $this->fakeZones(['z1'], [[
             'id' => 'existing',
-            'description' => CloudflareClient::COUNTRY_RULE_DESCRIPTION,
+            'description' => CloudflareClient::COUNTRY_RULE_DESCRIPTION.' (managed_challenge)',
             'expression' => '(ip.src.country in {"MX" "HK"})',
-            'action' => 'block',
+            'action' => 'managed_challenge',
         ]]);
 
         // Adding a country must be adding, not retyping two dozen codes from
         // memory and losing one.
         Livewire::test(ListSites::class)
             ->mountAction('countryRule')
-            ->assertActionDataSet(['countries' => ['HK', 'MX'], 'mode' => 'block']);
+            ->assertActionDataSet(['countries' => ['HK', 'MX'], 'mode' => 'managed_challenge']);
     }
 
     public function test_nothing_is_sent_without_a_token(): void

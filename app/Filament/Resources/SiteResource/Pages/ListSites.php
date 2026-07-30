@@ -70,20 +70,14 @@ class ListSites extends ListRecords
             ->color('gray')
             ->visible(fn (): bool => auth()->user()?->isAdmin() ?? false)
             ->modalHeading('כלל מדינות ב-Cloudflare — לכל האתרים')
-            ->modalDescription('כל המדינות שתזינו נכנסות לכלל WAF אחד לכל אתר, במקום כלל נפרד לכל מדינה. הכלל יוחל על כל הזונים בחשבון בבת אחת. נדרשות בטוקן ההרשאות Zone WAF · Edit (לכלל המשולב) ו-Firewall Services · Edit (לכללים הישנים ולמעבר חופשי).')
+            ->modalDescription('לכל פעולה יש רשימת מדינות משלה, בכלל WAF אחד לכל אתר. אפשר להחליף את הרשימה, להוסיף אליה או להוריד ממנה — בלי לגעת ברשימות של הפעולות האחרות. השינוי חל על כל הזונים בחשבון בבת אחת. נדרשות בטוקן ההרשאות Zone WAF · Edit (לכלל המשולב) ו-Firewall Services · Edit (למעבר חופשי ולכללים הישנים).')
             ->modalSubmitActionLabel('החל על כל האתרים')
-            ->fillForm(fn (): array => $this->currentCountryList())
+            ->fillForm(fn (): array => ['mode' => 'managed_challenge', 'operation' => 'add', 'remove_legacy' => false]
+                + $this->currentCountryList('managed_challenge'))
             ->form([
                 Forms\Components\Placeholder::make('current_rules')
                     ->label('מה קיים היום')
                     ->content(fn (): HtmlString => $this->currentCountryRules()),
-                Forms\Components\TagsInput::make('countries')
-                    ->label('מדינות (קודי ISO של שתי אותיות)')
-                    ->placeholder('MX')
-                    ->separator(',')
-                    ->helperText('אפשר להדביק רשימה מופרדת בפסיקים: MX,HK,IR,CN. הרשימה כאן מחליפה את הרשימה הקיימת — מה שלא ברשימה, לא נחסם.')
-                    ->required(fn (Forms\Get $get): bool => $get('mode') !== 'remove')
-                    ->visible(fn (Forms\Get $get): bool => $get('mode') !== 'remove'),
                 Forms\Components\Select::make('mode')
                     ->label('פעולה')->required()->native(false)->default('managed_challenge')->live()
                     ->options([
@@ -92,11 +86,44 @@ class ListSites extends ListRecords
                         'challenge' => 'אתגר (CAPTCHA)',
                         'block' => 'חסימה',
                         'whitelist' => 'מעבר חופשי (Allow)',
-                        'remove' => 'הסרת הכלל המשולב',
+                        'remove' => 'מחיקת כל כללי המדינות שלנו',
                     ])
-                    ->helperText(fn (Forms\Get $get): ?string => $get('mode') === 'whitelist'
-                        ? 'מעבר חופשי נשמר ככלל נפרד לכל מדינה (IP Access Rule) — אין לו מקבילה בכלל משולב. לרשימת היתר קצרה זה בסדר.'
-                        : null),
+                    // Switching action loads THAT action's list, because each one
+                    // is its own list and editing the wrong one would be a silent
+                    // way to wipe a policy.
+                    ->afterStateUpdated(function (Forms\Set $set, Forms\Get $get, ?string $state): void {
+                        $list = $this->currentCountryList((string) $state)['countries'] ?? [];
+
+                        // Only when there is a list to load. Blanking a field the
+                        // operator has already typed into, because they glanced at
+                        // another action, would be its own small betrayal.
+                        if ($list !== [] || blank($get('countries'))) {
+                            $set('countries', $list);
+                        }
+                    })
+                    ->helperText(fn (Forms\Get $get): ?string => match ($get('mode')) {
+                        'whitelist' => 'מעבר חופשי נשמר ככלל נפרד לכל מדינה (IP Access Rule) — אין לו מקבילה בכלל משולב. לרשימת היתר קצרה זה בסדר.',
+                        'remove' => 'מוחק את כל כללי המדינות שהמערכת יצרה — חסימה, אתגרים ומעבר חופשי כאחד. להורדת מדינות בודדות בחרו את הפעולה עצמה ואז "הסרה מהרשימה".',
+                        default => null,
+                    }),
+                Forms\Components\Radio::make('operation')
+                    ->label('מה לעשות עם המדינות שמתחת')
+                    ->options([
+                        'add' => 'הוספה לרשימה הקיימת',
+                        'subtract' => 'הסרה מהרשימה הקיימת',
+                        'replace' => 'החלפת הרשימה כולה',
+                    ])
+                    ->default('add')
+                    ->required()
+                    ->visible(fn (Forms\Get $get): bool => $get('mode') !== 'remove')
+                    ->helperText('"החלפה" מוחקת מהרשימה כל מדינה שלא הוזנה כאן. להוספה או להורדה של מדינה בודדת אין צורך להקליד את השאר.'),
+                Forms\Components\TagsInput::make('countries')
+                    ->label('מדינות (קודי ISO של שתי אותיות)')
+                    ->placeholder('MX')
+                    ->separator(',')
+                    ->helperText('אפשר להדביק רשימה מופרדת בפסיקים: MX,HK,IR,CN. הרשימה שמופיעה כאן היא זו שבתוקף לפעולה שנבחרה.')
+                    ->required(fn (Forms\Get $get): bool => $get('mode') !== 'remove')
+                    ->visible(fn (Forms\Get $get): bool => $get('mode') !== 'remove'),
                 Forms\Components\Toggle::make('remove_legacy')
                     ->label('נקה גם את כללי המדינה הישנים')
                     ->helperText('מוחק את כללי ה-IP Access Rule הישנים (כלל לכל מדינה) שהכלל המשולב מחליף, ומפנה מקום במכסת הכללים. כללי "מעבר חופשי" לא נמחקים.')
@@ -113,6 +140,7 @@ class ListSites extends ListRecords
                     $token,
                     $data['countries'] ?? [],
                     (string) ($data['mode'] ?? ''),
+                    (string) ($data['operation'] ?? 'replace'),
                 );
 
                 $message = $result['message'];
@@ -149,26 +177,24 @@ class ListSites extends ListRecords
     }
 
     /**
-     * Open the modal with the list that is actually in force, so editing it is
-     * editing — not retyping twenty codes from memory and losing one.
+     * The list in force for one action, so editing it is editing — not retyping
+     * twenty codes from memory and losing one.
      *
      * @return array<string, mixed>
      */
-    private function currentCountryList(): array
+    private function currentCountryList(string $mode): array
     {
-        $overview = $this->countryOverview();
+        $entry = $this->countryOverview()['actions'][$mode] ?? null;
 
-        if (! ($overview['ok'] ?? false) || ($overview['countries'] ?? []) === []) {
+        // A list the zones disagree on is deliberately not offered: re-saving it
+        // would push one zone's version onto the others.
+        if ($entry === null || ! $entry['consistent'] || $entry['countries'] === []) {
             return [];
         }
 
-        return array_filter([
-            // Joined, not a list: the tags field stores a delimited string.
-            'countries' => implode(',', $overview['countries']),
-            'mode' => in_array($overview['mode'], CloudflareClient::COUNTRY_LIST_MODES, true)
-                ? $overview['mode']
-                : null,
-        ]);
+        // A list, not a joined string: the tags field keeps its state as an
+        // array, and Livewire cannot even serialise anything else into it.
+        return ['countries' => $entry['countries']];
     }
 
     /**
@@ -192,7 +218,7 @@ class ListSites extends ListRecords
         return new HtmlString(implode('', array_filter($sections)));
     }
 
-    /** The combined rule: which countries, which action, on how many zones. */
+    /** Every action's list side by side — they coexist, so they are shown together. */
     private function combinedRuleLine(string $muted): string
     {
         $overview = $this->countryOverview();
@@ -201,26 +227,32 @@ class ListSites extends ListRecords
             return '<div style="'.$muted.'">'.e($overview['message'] ?? 'לא ניתן לקרוא את הכללים הקיימים.').'</div>';
         }
 
-        // A run that failed halfway leaves different lists on different zones.
-        // Showing one of them as "the" list would invite a re-save that quietly
-        // pushes the wrong countries back onto the zones that already moved on.
-        if (! ($overview['consistent'] ?? true)) {
-            return '<div style="font-size:.875rem;color:rgb(180 83 9)"><strong>הכלל אינו זהה בכל האתרים.</strong><br>'
-                .'<span style="'.$muted.'">כנראה החלה שנכשלה באמצע. הזינו את הרשימה המבוקשת מחדש והחילו — כך כל האתרים יחזרו לאותו מצב.</span></div>';
+        if (($overview['actions'] ?? []) === []) {
+            return '<div style="'.$muted.'">אין כרגע כללי מדינות ('.$overview['total_zones'].' זונים בחשבון).</div>';
         }
 
-        if (($overview['countries'] ?? []) === []) {
-            return '<div style="'.$muted.'">אין כרגע כלל מדינות משולב ('.$overview['total_zones'].' זונים בחשבון).</div>';
+        $lines = [];
+
+        foreach ($overview['actions'] as $mode => $entry) {
+            $label = e(CloudflareClient::COUNTRY_MODE_LABELS[$mode] ?? $mode);
+
+            // A run that failed halfway leaves different lists on different
+            // zones. Showing one of them as "the" list would invite a re-save
+            // that pushes the wrong countries onto the zones that moved on.
+            if (! $entry['consistent']) {
+                $lines[] = '<div style="font-size:.875rem;color:rgb(180 83 9)"><strong>'.$label.'</strong> — '
+                    .'הכלל אינו זהה בכל האתרים (קיים ב-'.$entry['zones'].' מתוך '.$overview['total_zones'].'). '
+                    .'הזינו את הרשימה המבוקשת ובחרו "החלפת הרשימה כולה" כדי ליישר את כולם.</div>';
+
+                continue;
+            }
+
+            $lines[] = '<div style="font-size:.875rem"><strong>'.$label.'</strong> — '
+                .count($entry['countries']).' מדינות, בכל האתרים:<br>'
+                .'<span style="'.$muted.'">'.e(implode(', ', $entry['countries'])).'</span></div>';
         }
 
-        $mode = CloudflareClient::COUNTRY_MODE_LABELS[$overview['mode']] ?? $overview['mode'];
-        $scope = $overview['zones'] === $overview['total_zones']
-            ? 'בכל האתרים'
-            : "ב-{$overview['zones']} מתוך {$overview['total_zones']} אתרים";
-
-        return '<div style="font-size:.875rem"><strong>הכלל המשולב</strong> — '
-            .count($overview['countries']).' מדינות, '.e($mode).', '.$scope.':<br>'
-            .'<span style="'.$muted.'">'.e(implode(', ', $overview['countries'])).'</span></div>';
+        return implode('', $lines);
     }
 
     /** Leftovers from the rule-per-country era, if any are still in place. */
