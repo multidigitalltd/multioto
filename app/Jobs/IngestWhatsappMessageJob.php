@@ -65,6 +65,22 @@ class IngestWhatsappMessageJob implements ShouldQueue
         $managementChat = $gate->ownerChatId();
 
         if ($managementChat !== null && $chatId === $managementChat) {
+            // Claim BEFORE acting, not after. A management command has effects
+            // that must not happen twice — an agent run files proposals and
+            // spends tokens, a new task notifies the team — and this job
+            // retries, so a failure anywhere after a successful effect would
+            // repeat it. At most once is the right side of that trade here: a
+            // command that does not run is visible (no reply comes back to the
+            // group) and can simply be retyped, whereas a command that runs
+            // twice is silent and expensive.
+            $claimed = WebhookEvent::whereKey($event->getKey())
+                ->whereNull('processed_at')
+                ->update(['processed_at' => now()]);
+
+            if ($claimed !== 1) {
+                return;
+            }
+
             $reply = app(ManagementCommands::class)->handle($chatId, $body, $messageId ? (string) $messageId : null);
 
             if ($reply !== null) {
@@ -74,8 +90,6 @@ class IngestWhatsappMessageJob implements ShouldQueue
                     // The action is already recorded; the panel shows the outcome.
                 }
             }
-
-            $event->markProcessed();
 
             return;
         }

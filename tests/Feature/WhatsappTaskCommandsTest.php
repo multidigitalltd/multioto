@@ -6,6 +6,7 @@ use App\Enums\AgentCommandOutcome;
 use App\Enums\TaskStatus;
 use App\Enums\TicketChannel;
 use App\Enums\TicketStatus;
+use App\Jobs\IngestWhatsappMessageJob;
 use App\Jobs\InvestigateSiteJob;
 use App\Jobs\NotifyTaskCreatedJob;
 use App\Jobs\RunAgentInstructionJob;
@@ -14,10 +15,13 @@ use App\Models\Customer;
 use App\Models\Site;
 use App\Models\Task;
 use App\Models\Ticket;
+use App\Models\WebhookEvent;
 use App\Services\Agent\CommandInterpreter;
 use App\Services\Agent\SiteAgent;
 use App\Services\Agent\SiteMemoryStore;
 use App\Services\Automation\ManagementCommands;
+use App\Services\Support\AttachmentStore;
+use App\Services\Support\TicketIntake;
 use App\Services\Waha\WahaClient;
 use Illuminate\Contracts\Bus\Dispatcher;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -141,14 +145,9 @@ class WhatsappTaskCommandsTest extends TestCase
     }
 
     /**
-     * The ingestion job retries, and the task is created inside it. Without a
-     * key tied to the message, one sentence said once could become two
-     * identical tasks — and two notifications.
-     */
-    /**
-     * The ingestion job retries the SAME event, so this runs the handler twice
-     * directly — a second webhook POST would be stopped by webhook_events long
-     * before reaching here, and would prove nothing about this key.
+     * The ingestion job claims the event before acting, so a retry should not
+     * reach the handler at all. These keys are the second line: this runs the
+     * handler twice directly, the way a duplicate delivery would.
      */
     public function test_a_retry_of_the_same_message_opens_one_task(): void
     {
@@ -180,6 +179,28 @@ class WhatsappTaskCommandsTest extends TestCase
         $this->assertSame(1, Task::count());
         Queue::assertPushed(NotifyTaskCreatedJob::class, 2);
         $this->assertNotNull(Task::sole()->creation_notified_at);
+    }
+
+    /**
+     * The command is claimed before it runs, so a retry of the ingestion job
+     * cannot run the agent a second time — spending tokens again and filing
+     * every proposal twice.
+     */
+    public function test_a_retried_ingestion_does_not_run_the_command_twice(): void
+    {
+        $this->inbound('סוכן בדוק חובות', 'wa-once');
+
+        Queue::assertPushed(RunAgentInstructionJob::class, 1);
+
+        // Replay the very same event, as a retry of the job would.
+        $event = WebhookEvent::latest('id')->first();
+        (new IngestWhatsappMessageJob($event->id))->handle(
+            app(TicketIntake::class),
+            app(WahaClient::class),
+            app(AttachmentStore::class),
+        );
+
+        Queue::assertPushed(RunAgentInstructionJob::class, 1);
     }
 
     public function test_the_group_can_list_and_complete_tasks(): void

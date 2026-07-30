@@ -273,8 +273,9 @@ class ManagementCommands
         try {
             RunAgentInstructionJob::dispatch($chatId, $instruction, $taskId);
         } catch (\Throwable $e) {
-            // Nothing exists to run failed() for us, so hand the task back
-            // before letting the ingestion job retry the whole command.
+            // No job exists to run failed() for us, so hand the task back
+            // before the failure surfaces — otherwise it stays claimed by an
+            // agent that never started.
             $this->releaseTask($taskId);
 
             throw $e;

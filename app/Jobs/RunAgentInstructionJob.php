@@ -28,7 +28,16 @@ class RunAgentInstructionJob implements ShouldQueue
 
     public int $tries = 1;
 
-    public int $timeout = 300;
+    /**
+     * Must stay UNDER the queue's retry_after (90s by default — config/queue.php
+     * for both the redis and database connections). A run that outlives the
+     * reclaim window can be picked up by a second worker, and with tries = 1
+     * that second run would call the agent again: duplicate proposals, and a
+     * failure message racing the original's success. Cut off at the deadline
+     * instead — failed() releases the task and tells the group, which is honest
+     * and happens exactly once. Raise this only together with retry_after.
+     */
+    public int $timeout = 80;
 
     public function __construct(
         public string $chatId,
