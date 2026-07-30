@@ -289,8 +289,8 @@ class ConsoleAgent
                 'input_schema' => $obj(['site_id' => $int], ['site_id'])],
             ['name' => 'propose_purge_cloudflare_cache', 'description' => 'הצע ניקוי קאש (CDN) של האתר ב-Cloudflare. site_id.',
                 'input_schema' => $obj(['site_id' => $int], ['site_id'])],
-            ['name' => 'propose_country_rule', 'description' => 'הצע כלל מדינות ב-Cloudflare שיחול על כל האתרים בבת אחת. countries = קודי ISO בני 2 אותיות מופרדים בפסיקים (למשל "MX,HK,IR") — כולן נכנסות לכלל אחד, אז אין צורך בהצעה נפרדת לכל מדינה. action: managed_challenge (אתגר מנוהל), js_challenge, challenge, block (חסימה), whitelist (מעבר חופשי), remove. שים לב: הרשימה מחליפה את הרשימה הקיימת ואינה מתווספת אליה, ו-remove מוחק את הכלל כולו על כל המדינות שבו — אין הסרה של מדינה בודדת, ולכן ב-remove אין להעביר countries.',
-                'input_schema' => $obj(['countries' => $str, 'action' => $str], ['action'])],
+            ['name' => 'propose_country_rule', 'description' => 'הצע כלל מדינות ב-Cloudflare שיחול על כל האתרים בבת אחת. countries = קודי ISO בני 2 אותיות מופרדים בפסיקים (למשל "MX,HK,IR") — כולן נכנסות לכלל אחד, אז אין צורך בהצעה נפרדת לכל מדינה. action: managed_challenge (אתגר מנוהל), js_challenge, challenge, block (חסימה), whitelist (מעבר חופשי), remove (מחיקת כל כללי המדינות של המערכת, בכל הפעולות — אז אין להעביר countries). לכל action יש רשימה משלו והן אינן משפיעות זו על זו. operation: add (ברירת מחדל — הוספת המדינות לרשימה הקיימת), subtract (הסרתן ממנה), replace (החלפת הרשימה כולה, כלומר כל מה שלא הוזכר יורד).',
+                'input_schema' => $obj(['countries' => $str, 'action' => $str, 'operation' => $str], ['action'])],
             ['name' => 'propose_update_wordpress', 'description' => 'הצע עדכון ליבת וורדפרס (WordPress core) לגרסה האחרונה. site_id לאתר בודד, או השמט אותו לעדכון כל האתרים המחוברים בבת אחת.',
                 'input_schema' => $obj(['site_id' => $int], [])],
             ['name' => 'investigate_site', 'description' => 'שלח את סוכן האתר לבדוק אתר מחובר (קריאה בלבד; תיקון יוצע לאישור). site_id + goal.',
@@ -783,9 +783,13 @@ class ConsoleAgent
         $countries = array_keys($countries);
         sort($countries);
         $mode = (string) ($input['action'] ?? '');
+        $operation = (string) ($input['operation'] ?? 'add');
 
         if (! in_array($mode, CloudflareClient::COUNTRY_LIST_MODES, true)) {
             return ['content' => 'פעולה לא מוכרת לכלל מדינות.', 'is_error' => true];
+        }
+        if (! in_array($operation, CloudflareClient::COUNTRY_LIST_OPERATIONS, true)) {
+            return ['content' => 'אופן עדכון לא מוכר — add, subtract או replace.', 'is_error' => true];
         }
 
         // Removal takes the whole rule, every country in it. Naming a country in
@@ -799,19 +803,28 @@ class ConsoleAgent
                 return ['content' => 'יש לציין לפחות מדינה אחת.', 'is_error' => true];
             }
 
-            $what = 'הסרת הכלל כולו, על כל המדינות שבו';
+            $what = 'מחיקת כל כללי המדינות שלנו, בכל הפעולות';
+            $verb = '';
         } else {
             $what = implode(', ', $countries);
+            // The verb is the difference between adding one country and wiping
+            // nineteen, so the approval has to carry it.
+            $verb = match ($operation) {
+                'add' => 'הוספה ',
+                'subtract' => 'הסרה ',
+                default => 'החלפת הרשימה כולה ב-',
+            };
         }
 
         $action = $this->gate->propose(
             type: 'system_action',
-            summary: "🌍 כלל מדינות ב-Cloudflare (כל האתרים) — {$what}: {$mode}",
-            payload: ['operation' => 'cloudflare_country_rule', 'countries' => $countries, 'mode' => $mode, 'source' => 'console_agent'],
+            summary: "🌍 כלל מדינות ב-Cloudflare (כל האתרים) — {$verb}{$what}: {$mode}",
+            payload: ['operation' => 'cloudflare_country_rule', 'countries' => $countries, 'mode' => $mode,
+                'list_operation' => $operation, 'source' => 'console_agent'],
             proposedBy: 'console',
         );
 
-        return $this->proposedOk($action->id, "כלל מדינות {$what} ({$mode})");
+        return $this->proposedOk($action->id, "כלל מדינות — {$verb}{$what} ({$mode})");
     }
 
     /**
