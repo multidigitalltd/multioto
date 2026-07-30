@@ -31,7 +31,9 @@ class CashFlow extends Page
 
     protected static ?string $title = 'תזרים וגבייה — מה ייגבה לבד ומה ממתין לנו';
 
-    protected static ?int $navigationSort = 22;
+    // Ahead of the collection screens: this is the overview they act on.
+    // (22 is taken by "גבייה ידנית (מנויים)".)
+    protected static ?int $navigationSort = 19;
 
     protected static string $view = 'filament.pages.cash-flow';
 

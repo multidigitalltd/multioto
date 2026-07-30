@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Enums\ChargeStatus;
 use App\Enums\SubscriptionStatus;
+use App\Enums\UserRole;
 use App\Filament\Pages\CashFlow;
 use App\Filament\Widgets\CashFlowStats;
 use App\Filament\Widgets\OpenDemandsTable;
@@ -236,6 +237,19 @@ class CashFlowTest extends TestCase
 
         // The total is intentionally kept off the tab — it shows only inside.
         $this->assertNull(CashFlow::getNavigationBadge());
+    }
+
+    public function test_a_team_member_without_the_finance_module_cannot_reach_the_screen(): void
+    {
+        $this->actingAs(User::factory()->create([
+            'role' => UserRole::Agent,
+            'allowed_modules' => ['support'],
+        ]));
+
+        $this->assertFalse(CashFlow::canAccess());
+        $this->assertFalse(CashFlowStats::canView());
+        $this->assertFalse(UpcomingRenewalsTable::canView());
+        $this->assertFalse(OpenDemandsTable::canView());
     }
 
     public function test_the_widgets_are_not_auto_discovered_onto_the_dashboard(): void
