@@ -404,6 +404,52 @@ class WhatsappTaskCommandsTest extends TestCase
         $this->assertStringContainsString('סוכן', $reply);
     }
 
+    /**
+     * The agent finished and its proposals exist. A transient WAHA error on the
+     * final send must not read as an agent failure — failed() would release the
+     * task and invite the group to re-delegate work that already succeeded.
+     */
+    public function test_a_delivery_failure_does_not_undo_work_the_agent_completed(): void
+    {
+        $task = Task::create(['title' => 'משהו', 'status' => TaskStatus::InProgress]);
+
+        $interpreter = $this->mock(CommandInterpreter::class);
+        $interpreter->shouldReceive('run')->once()->andReturn(new AgentCommand([
+            'outcome' => AgentCommandOutcome::Proposed,
+            'result' => 'הוגשה פעולה לאישור.',
+        ]));
+
+        $waha = $this->mock(WahaClient::class);
+        $waha->shouldReceive('sendMessage')->andThrow(new \RuntimeException('waha down'));
+
+        // Must not throw: throwing is what would trigger failed().
+        (new RunAgentInstructionJob(self::MGMT, 'משהו', $task->id))->handle($interpreter, $waha);
+
+        $this->assertSame(TaskStatus::InProgress, $task->fresh()->status);
+    }
+
+    /**
+     * The agent stopped to ask a question, and the answer arrives as a fresh
+     * instruction carrying no task id. Holding the task would strand it:
+     * still claimed, never released, and re-delegating requires "open".
+     */
+    public function test_a_task_is_released_when_the_agent_stops_to_ask(): void
+    {
+        $task = Task::create(['title' => 'משהו', 'status' => TaskStatus::InProgress]);
+
+        $interpreter = $this->mock(CommandInterpreter::class);
+        $interpreter->shouldReceive('run')->once()->andReturn(new AgentCommand([
+            'outcome' => AgentCommandOutcome::Unclear,
+            'result' => 'איזה סכום לגבות?',
+        ]));
+
+        (new RunAgentInstructionJob(self::MGMT, 'משהו', $task->id))
+            ->handle($interpreter, app(WahaClient::class));
+
+        $this->assertSame(TaskStatus::Open, $task->fresh()->status);
+        $this->assertStringContainsString('חזרה למצב פתוח', $this->lastReply());
+    }
+
     public function test_a_delegated_task_is_released_when_the_agent_run_fails(): void
     {
         $task = Task::create(['title' => 'משהו', 'status' => TaskStatus::InProgress]);

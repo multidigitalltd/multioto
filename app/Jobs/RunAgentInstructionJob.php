@@ -53,15 +53,34 @@ class RunAgentInstructionJob implements ShouldQueue
             source: AgentCommand::SOURCE_WHATSAPP,
         );
 
-        // The interpreter turns a disabled AI, a thrown agent and an empty
-        // answer into a Failed record rather than an exception, so failed()
-        // never runs for those — a delegated task would sit "in progress"
-        // forever with nobody working on it.
-        if ($command->outcome === AgentCommandOutcome::Failed) {
+        // "In progress" means an agent is working on it. Two outcomes end the
+        // run without that being true any more:
+        //
+        //   Failed  — the interpreter turns a disabled AI, a thrown agent and
+        //             an empty answer into a record rather than an exception,
+        //             so failed() never runs for exactly those.
+        //   Unclear — the agent stopped to ask a question. The next move is a
+        //             person's, and the answer arrives as a fresh instruction
+        //             that carries no task id, so holding the task here would
+        //             strand it: still claimed, never released, and the claim
+        //             requires "open" to delegate it again.
+        if (in_array($command->outcome, [AgentCommandOutcome::Failed, AgentCommandOutcome::Unclear], true)) {
             $this->releaseTask();
         }
 
-        $waha->sendMessage($this->chatId, $this->message($command));
+        try {
+            $waha->sendMessage($this->chatId, $this->message($command));
+        } catch (\Throwable $e) {
+            // Best-effort on purpose. The agent's work is done and recorded on
+            // the console thread; a transient WAHA error must not be mistaken
+            // for an agent failure, because failed() would then release a task
+            // whose proposals already exist and invite the group to re-delegate
+            // work that succeeded.
+            Log::warning('RunAgentInstructionJob: result delivery failed', [
+                'task_id' => $this->taskId,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**
@@ -95,7 +114,8 @@ class RunAgentInstructionJob implements ShouldQueue
         // A question needs an answer routed back to the agent, and plain group
         // chatter is never treated as one — so say exactly how to reply.
         if ($command->outcome === AgentCommandOutcome::Unclear) {
-            return $prefix.'🤖 '.$body."\n\nלהמשך השיבו: *סוכן <התשובה שלכם>*";
+            return $prefix.'🤖 '.$body."\n\nלהמשך השיבו: *סוכן <התשובה שלכם>*"
+                .($this->taskId !== null ? "\n(המשימה חזרה למצב פתוח בינתיים.)" : '');
         }
 
         if ($command->outcome === AgentCommandOutcome::Proposed) {
