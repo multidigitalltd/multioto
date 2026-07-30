@@ -28,6 +28,9 @@ class BackupArchive
 
     public const MANIFEST = 'manifest.json';
 
+    /** The list of uploaded files inside the archive (kept out of the manifest). */
+    public const FILE_LIST = 'files.json';
+
     /**
      * Write the archive to $zipPath and return its manifest.
      *
@@ -44,26 +47,39 @@ class BackupArchive
         // Temp files stay open inside the zip until close(), so they are
         // removed only once the archive is sealed.
         $temp = [];
+        $open = true;
 
         try {
-            // Every table read inside ONE snapshot. Read table by table with no
-            // snapshot and an ordinary concurrent write lands between two of
-            // them — a site exported without the customer it points at, which
-            // is an archive that cannot be restored. Read-only: nothing here
-            // writes, the transaction exists purely for the consistent read.
-            $tables = $this->consistently(fn (): array => $this->addTables($zip, $temp));
+            // Every table AND the migration list read inside ONE snapshot. Read
+            // them separately and an ordinary concurrent write lands between
+            // two of them — a site exported without the customer it points at,
+            // or a deployment migrating mid-run so the archive claims a shape
+            // it does not have. Either way: an archive that cannot be restored.
+            // Read-only; the transaction exists purely for the consistent read.
+            [$tables, $migrations] = $this->consistently(fn (): array => [
+                $this->addTables($zip, $temp),
+                $this->migrations(),
+            ]);
 
             [$files, $skipped] = $this->addFiles($zip);
+
+            // The file list lives in the ARCHIVE, not the manifest: the manifest
+            // is also stored on the backups row, and a list of every attachment
+            // does not belong in a database column. The restore needs it to
+            // notice a member that went missing.
+            $zip->addFromString(self::FILE_LIST, (string) json_encode(
+                $files, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES,
+            ));
 
             $manifest = [
                 'format' => self::FORMAT,
                 'created_at' => now()->toIso8601String(),
                 'app_version' => $this->appVersion(),
                 'connection' => DB::getDefaultConnection(),
-                'migrations' => $this->migrations(),
+                'migrations' => $migrations,
                 'tables' => $tables,
                 'rows' => array_sum($tables),
-                'files' => $files,
+                'files' => count($files),
                 'skipped_files' => $skipped,
             ];
 
@@ -71,8 +87,19 @@ class BackupArchive
                 $manifest,
                 JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES,
             ));
+
+            $open = false;
+
+            // Sealing is where a full disk shows up. Ignore it and the runner
+            // uploads a truncated file and calls the backup a success — an
+            // archive that only fails to open on the day it is needed.
+            if ($zip->close() !== true) {
+                throw new RuntimeException('לא ניתן היה לסגור את קובץ הגיבוי — ייתכן שאין מקום פנוי בשרת.');
+            }
         } finally {
-            $zip->close();
+            if ($open) {
+                $zip->close();
+            }
 
             foreach ($temp as $file) {
                 if (file_exists($file)) {
@@ -200,12 +227,12 @@ class BackupArchive
      * Copy the uploaded files in, keeping disk and path so a restore can put
      * each one back where it came from.
      *
-     * @return array{0: int, 1: list<string>} [count, skipped]
+     * @return array{0: list<string>, 1: list<string>} [added "disk/path", skipped]
      */
     private function addFiles(ZipArchive $zip): array
     {
         $max = (int) config('backup.max_file_bytes');
-        $count = 0;
+        $added = [];
         $skipped = [];
 
         foreach ((array) config('backup.files', []) as $disk => $prefixes) {
@@ -230,11 +257,11 @@ class BackupArchive
                 }
 
                 $zip->addFromString("files/{$disk}/{$path}", $contents);
-                $count++;
+                $added[] = "{$disk}/{$path}";
             }
         }
 
-        return [$count, $skipped];
+        return [$added, $skipped];
     }
 
     /**

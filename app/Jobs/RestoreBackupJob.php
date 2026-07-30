@@ -35,10 +35,10 @@ class RestoreBackupJob implements ShouldQueue
             return;
         }
 
-        $lock = Cache::lock('backup:restore', 3600);
+        $lock = Cache::lock(RunBackupJob::LOCK, 3600);
 
         if (! $lock->get()) {
-            return; // Another restore is already in flight.
+            return; // A backup or another restore is already in flight.
         }
 
         try {

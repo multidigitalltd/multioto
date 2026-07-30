@@ -15,6 +15,7 @@ use App\Models\User;
 use App\Services\Backup\BackupRestorer;
 use App\Services\Backup\BackupRunner;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Storage;
 use Livewire\Livewire;
 use Tests\TestCase;
@@ -286,6 +287,48 @@ class BackupTest extends TestCase
         $this->expectException(\RuntimeException::class);
 
         $this->runBackup();
+    }
+
+    public function test_a_disk_that_is_itself_backed_up_is_refused_as_the_destination(): void
+    {
+        // It lives on this server, so it is not disaster recovery — and each
+        // run would archive the previous archives, for ever.
+        config(['backup.disk' => 'local']);
+
+        $this->expectException(\RuntimeException::class);
+
+        $this->runBackup();
+    }
+
+    public function test_a_file_missing_from_the_archive_fails_the_restore(): void
+    {
+        Storage::disk('local')->put('attachments/keep.txt', 'קובץ');
+        $backup = $this->runBackup();
+
+        $this->corruptArchive($backup, fn (ZipArchive $zip) => $zip->deleteName('files/local/attachments/keep.txt'));
+
+        try {
+            app(BackupRestorer::class)->restore($backup);
+            $this->fail('a missing attachment must not restore quietly');
+        } catch (\Throwable) {
+            // expected
+        }
+
+        $this->assertSame(BackupStatus::Failed, $backup->fresh()->restore_status);
+    }
+
+    public function test_a_backup_will_not_start_while_a_restore_holds_the_lock(): void
+    {
+        $lock = Cache::lock(RunBackupJob::LOCK, 60);
+        $this->assertTrue($lock->get());
+
+        // Reading rows from one state and files from another would produce an
+        // archive that looks fine and is internally inconsistent.
+        (new RunBackupJob)->handle(app(BackupRunner::class));
+
+        $this->assertSame(0, Backup::count());
+
+        $lock->release();
     }
 
     public function test_a_restore_into_a_changed_schema_is_refused(): void

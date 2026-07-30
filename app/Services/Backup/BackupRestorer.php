@@ -478,12 +478,23 @@ class BackupRestorer
                 continue;
             }
 
+            // Resolve the sequence FIRST. Not every id is a counter —
+            // notifications.id is a UUID — and asking setval about a table that
+            // has no sequence, or coalescing a uuid with an integer, throws.
+            // That would fail every restore on PostgreSQL at the very last
+            // step, with the database already replaced.
+            $sequence = DB::scalar('SELECT pg_get_serial_sequence(?, ?)', [$table, 'id']);
+
+            if (! is_string($sequence) || $sequence === '') {
+                continue;
+            }
+
             // Bindings only — the table name comes from the schema listing, not
             // from anything a user typed.
             DB::statement(
-                'SELECT setval(pg_get_serial_sequence(?, ?), COALESCE((SELECT MAX(id) FROM '
+                'SELECT setval(?, COALESCE((SELECT MAX(id) FROM '
                 .DB::getQueryGrammar()->wrapTable($table).'), 1), true)',
-                [$table, 'id'],
+                [$sequence],
             );
         }
     }
@@ -499,23 +510,21 @@ class BackupRestorer
     private function restoreFiles(ZipArchive $zip): void
     {
         $failed = [];
-        for ($i = 0; $i < $zip->numFiles; $i++) {
-            $name = (string) $zip->getNameIndex($i);
-
-            if (! str_starts_with($name, 'files/')) {
-                continue;
-            }
-
-            // files/<disk>/<path...>
-            $rest = substr($name, strlen('files/'));
-            $slash = strpos($rest, '/');
+        // Driven by the list the backup WROTE, not by whatever members happen
+        // to still be in the archive. Walking the members can only ever see
+        // what survived — a file that went missing is invisible that way, and
+        // the restore would report success without it.
+        foreach ($this->declaredFiles($zip) as $entry) {
+            $slash = strpos($entry, '/');
 
             if ($slash === false) {
+                $failed[] = $entry;
+
                 continue;
             }
 
-            $disk = substr($rest, 0, $slash);
-            $path = substr($rest, $slash + 1);
+            $disk = substr($entry, 0, $slash);
+            $path = substr($entry, $slash + 1);
 
             // Only disks this installation backs up, and only paths that stay
             // inside them — an archive is a file like any other, and a crafted
@@ -528,9 +537,11 @@ class BackupRestorer
                 continue;
             }
 
-            $stream = $zip->getStream($name);
+            $stream = $zip->getStream("files/{$disk}/{$path}");
 
             if ($stream === false) {
+                $failed[] = "{$disk}:{$path}";
+
                 continue;
             }
 
@@ -547,9 +558,41 @@ class BackupRestorer
 
         if ($failed !== []) {
             throw new RuntimeException(
-                'הנתונים שוחזרו אך '.count($failed).' קבצים לא נכתבו (בדקו הרשאות אחסון): '
+                'הנתונים שוחזרו אך '.count($failed).' קבצים לא הוחזרו (חסרים בגיבוי או בעיית הרשאות): '
                 .implode(', ', array_slice($failed, 0, 5))
             );
         }
+    }
+
+    /**
+     * The files the backup recorded. An archive written before this list
+     * existed falls back to its own members, so an older archive still
+     * restores — just without the missing-member check.
+     *
+     * @return list<string> "disk/path"
+     */
+    private function declaredFiles(ZipArchive $zip): array
+    {
+        $raw = $zip->getFromName(BackupArchive::FILE_LIST);
+
+        if ($raw !== false) {
+            $list = json_decode((string) $raw, true);
+
+            if (is_array($list)) {
+                return array_values(array_filter($list, 'is_string'));
+            }
+        }
+
+        $found = [];
+
+        for ($i = 0; $i < $zip->numFiles; $i++) {
+            $name = (string) $zip->getNameIndex($i);
+
+            if (str_starts_with($name, 'files/')) {
+                $found[] = substr($name, strlen('files/'));
+            }
+        }
+
+        return $found;
     }
 }

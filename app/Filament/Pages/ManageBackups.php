@@ -112,6 +112,15 @@ class ManageBackups extends Page implements HasForms, HasTable
                                 // not a configuration preference.
                                 if (($disks[(string) $value]['visibility'] ?? null) === 'public') {
                                     $fail('היעד הזה ציבורי — הגיבוי מכיל פרטי לקוחות וחייב יעד פרטי.');
+
+                                    return;
+                                }
+
+                                // A disk we back up sits on this server, so it
+                                // is not disaster recovery — and it would end
+                                // up archiving its own previous archives.
+                                if (array_key_exists((string) $value, (array) config('backup.files', []))) {
+                                    $fail('היעד הזה הוא אחד מהמקורות שמגובים — צריך יעד חיצוני, מחוץ לשרת.');
                                 }
                             }),
                         TextInput::make('backup.path')

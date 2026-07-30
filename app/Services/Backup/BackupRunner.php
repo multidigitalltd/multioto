@@ -110,6 +110,16 @@ class BackupRunner
                 "יעד הגיבוי \"{$disk}\" ציבורי — הארכיון מכיל פרטי לקוחות וחייב יעד פרטי."
             );
         }
+
+        // A disk we back UP cannot also be where the backup lands. It sits on
+        // the same machine, so it is not disaster recovery at all — and since
+        // that disk is itself archived, every run would swallow the previous
+        // archives and grow without end.
+        if (array_key_exists($disk, (array) config('backup.files', []))) {
+            throw new \RuntimeException(
+                "יעד הגיבוי \"{$disk}\" הוא אחד מהמקורות שמגובים — צריך יעד חיצוני, מחוץ לשרת."
+            );
+        }
     }
 
     /**

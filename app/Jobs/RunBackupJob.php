@@ -20,6 +20,13 @@ class RunBackupJob implements ShouldQueue
 {
     use Queueable;
 
+    /**
+     * ONE lock for backing up and restoring alike. A backup running while a
+     * restore replaces the database would read its rows from one state and its
+     * files from another, and call the result a good archive.
+     */
+    public const LOCK = 'backup:operation';
+
     public int $tries = 1;
 
     public int $timeout = 1800;
@@ -32,7 +39,7 @@ class RunBackupJob implements ShouldQueue
             return;
         }
 
-        $lock = Cache::lock('backup:run', 3600);
+        $lock = Cache::lock(self::LOCK, 3600);
 
         if (! $lock->get()) {
             return; // Already running.
