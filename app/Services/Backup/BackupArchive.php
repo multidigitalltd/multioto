@@ -41,8 +41,18 @@ class BackupArchive
             throw new RuntimeException("לא ניתן ליצור את קובץ הגיבוי: {$zipPath}");
         }
 
+        // Temp files stay open inside the zip until close(), so they are
+        // removed only once the archive is sealed.
+        $temp = [];
+
         try {
-            $tables = $this->addTables($zip);
+            // Every table read inside ONE snapshot. Read table by table with no
+            // snapshot and an ordinary concurrent write lands between two of
+            // them — a site exported without the customer it points at, which
+            // is an archive that cannot be restored. Read-only: nothing here
+            // writes, the transaction exists purely for the consistent read.
+            $tables = $this->consistently(fn (): array => $this->addTables($zip, $temp));
+
             [$files, $skipped] = $this->addFiles($zip);
 
             $manifest = [
@@ -63,9 +73,48 @@ class BackupArchive
             ));
         } finally {
             $zip->close();
+
+            foreach ($temp as $file) {
+                if (file_exists($file)) {
+                    unlink($file);
+                }
+            }
         }
 
         return $manifest;
+    }
+
+    /**
+     * Run the export inside one consistent read of the database.
+     *
+     * PostgreSQL needs the isolation level raised before the first statement,
+     * so the transaction is opened by hand rather than through the helper.
+     * SQLite's default transaction already gives a stable read.
+     *
+     * @template T
+     *
+     * @param  callable(): T  $read
+     * @return T
+     */
+    private function consistently(callable $read): mixed
+    {
+        DB::beginTransaction();
+
+        try {
+            if (DB::getDriverName() === 'pgsql') {
+                DB::statement('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY');
+            }
+
+            $result = $read();
+
+            DB::commit();
+
+            return $result;
+        } catch (\Throwable $e) {
+            DB::rollBack();
+
+            throw $e;
+        }
     }
 
     /**
@@ -92,22 +141,36 @@ class BackupArchive
     /**
      * One NDJSON entry per backed-up table.
      *
+     * Each table is streamed straight to a temp file. Building the whole table
+     * as one string would throw away what the cursor gains and could exhaust
+     * the worker's memory on the biggest table — and a fatal allocation error
+     * can skip the failure handling entirely, leaving the run stuck on
+     * "running" with no archive and no explanation.
+     *
+     * @param  list<string>  $temp  collects the temp files to delete after close()
      * @return array<string, int> table => row count
      */
-    private function addTables(ZipArchive $zip): array
+    private function addTables(ZipArchive $zip, array &$temp): array
     {
         $counts = [];
 
         foreach ($this->tables() as $table) {
-            $lines = '';
+            $file = tempnam(sys_get_temp_dir(), 'multioto-table-');
+            $temp[] = $file;
+
+            $handle = fopen($file, 'wb');
             $rows = 0;
 
-            foreach (DB::table($table)->cursor() as $row) {
-                $lines .= $this->encodeRow((array) $row)."\n";
-                $rows++;
+            try {
+                foreach (DB::table($table)->cursor() as $row) {
+                    fwrite($handle, $this->encodeRow((array) $row)."\n");
+                    $rows++;
+                }
+            } finally {
+                fclose($handle);
             }
 
-            $zip->addFromString("database/{$table}.ndjson", $lines);
+            $zip->addFile($file, "database/{$table}.ndjson");
             $counts[$table] = $rows;
         }
 

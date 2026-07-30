@@ -9,6 +9,7 @@ use App\Jobs\RestoreBackupJob;
 use App\Jobs\RunBackupJob;
 use App\Models\Backup;
 use App\Models\Customer;
+use App\Models\PaymentToken;
 use App\Models\Site;
 use App\Models\User;
 use App\Services\Backup\BackupRestorer;
@@ -211,6 +212,82 @@ class BackupTest extends TestCase
         $this->assertSame($site->customer_id, Site::sole()->customer_id);
     }
 
+    /**
+     * A customer points at their default payment token and the token points
+     * back at the customer. No insert order satisfies both, so this is the
+     * ordinary saved-card state failing to restore at all — the case the first
+     * round trip missed because its customers had no card.
+     */
+    public function test_a_customer_with_a_saved_card_restores(): void
+    {
+        $customer = Customer::factory()->create();
+        $token = PaymentToken::factory()->create(['customer_id' => $customer->id]);
+        $customer->update(['default_token_id' => $token->id]);
+
+        $backup = $this->runBackup();
+
+        PaymentToken::query()->update(['customer_id' => $customer->id]);
+        Customer::query()->update(['default_token_id' => null]);
+        PaymentToken::query()->delete();
+        Customer::query()->delete();
+
+        app(BackupRestorer::class)->restore($backup);
+
+        $this->assertSame($token->id, Customer::sole()->default_token_id);
+        $this->assertSame($customer->id, PaymentToken::sole()->customer_id);
+    }
+
+    public function test_an_archive_missing_a_table_is_refused_before_anything_is_deleted(): void
+    {
+        Customer::factory()->count(2)->create();
+        $backup = $this->runBackup();
+
+        $this->corruptArchive($backup, fn (ZipArchive $zip) => $zip->deleteName('database/customers.ndjson'));
+
+        try {
+            app(BackupRestorer::class)->restore($backup);
+            $this->fail('a corrupt archive must not be restored');
+        } catch (\Throwable) {
+            // expected
+        }
+
+        // Nothing was emptied on the way to finding out.
+        $this->assertSame(2, Customer::count());
+    }
+
+    public function test_a_truncated_table_is_refused_rather_than_restored_short(): void
+    {
+        Customer::factory()->count(3)->create();
+        $backup = $this->runBackup();
+
+        // One row lost in transit — the manifest still says three.
+        $this->corruptArchive($backup, function (ZipArchive $zip): void {
+            $lines = explode("\n", trim((string) $zip->getFromName('database/customers.ndjson')));
+            array_pop($lines);
+            $zip->addFromString('database/customers.ndjson', implode("\n", $lines)."\n");
+        });
+
+        try {
+            app(BackupRestorer::class)->restore($backup);
+            $this->fail('a short table must not restore quietly');
+        } catch (\Throwable) {
+            // expected
+        }
+
+        // The transaction rolled back, so the live data is untouched.
+        $this->assertSame(3, Customer::count());
+    }
+
+    public function test_a_public_destination_is_refused(): void
+    {
+        // The archive's name is predictable and it holds every customer record.
+        config(['backup.disk' => 'public']);
+
+        $this->expectException(\RuntimeException::class);
+
+        $this->runBackup();
+    }
+
     public function test_a_restore_into_a_changed_schema_is_refused(): void
     {
         $backup = $this->runBackup();
@@ -282,6 +359,19 @@ class BackupTest extends TestCase
         Livewire::test(ManageBackups::class)
             ->assertOk()
             ->assertCanSeeTableRecords([$backup]);
+    }
+
+    /** Rewrite the stored archive through $mutate, to fake corruption. */
+    private function corruptArchive(Backup $backup, callable $mutate): void
+    {
+        $local = $this->pullArchive($backup);
+
+        $zip = new ZipArchive;
+        $zip->open($local);
+        $mutate($zip);
+        $zip->close();
+
+        Storage::disk($backup->disk)->put($backup->path, (string) file_get_contents($local));
     }
 
     /** Copy the stored archive to a local file the test can open. */

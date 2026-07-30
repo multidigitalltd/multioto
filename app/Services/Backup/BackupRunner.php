@@ -27,6 +27,8 @@ class BackupRunner
     public function run(?int $userId = null): Backup
     {
         $disk = (string) config('backup.disk');
+        $this->assertPrivate($disk);
+
         $path = $this->pathFor();
 
         $backup = Backup::create([
@@ -93,6 +95,21 @@ class BackupRunner
         }
 
         return $backup->fresh();
+    }
+
+    /**
+     * Refuse to write an archive somewhere the web can read it. The panel
+     * rejects a public disk too, but BACKUP_DISK can also be set straight in
+     * .env — and this archive holds every customer record under a predictable
+     * name, so the check belongs where the writing happens.
+     */
+    private function assertPrivate(string $disk): void
+    {
+        if ((config("filesystems.disks.{$disk}.visibility") ?? null) === 'public') {
+            throw new \RuntimeException(
+                "יעד הגיבוי \"{$disk}\" ציבורי — הארכיון מכיל פרטי לקוחות וחייב יעד פרטי."
+            );
+        }
     }
 
     /**

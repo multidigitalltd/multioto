@@ -96,10 +96,22 @@ class ManageBackups extends Page implements HasForms, HasTable
                         TextInput::make('backup.disk')
                             ->label('יעד אחסון (disk)')
                             ->required()
-                            ->helperText('שם ה-disk מתוך config/filesystems.php. ברירת המחדל s3.')
+                            ->helperText('שם ה-disk מתוך config/filesystems.php. ברירת המחדל s3. יעד ציבורי אינו מתקבל.')
                             ->rule(fn (): \Closure => function (string $attribute, $value, \Closure $fail): void {
-                                if (! array_key_exists((string) $value, (array) config('filesystems.disks', []))) {
+                                $disks = (array) config('filesystems.disks', []);
+
+                                if (! array_key_exists((string) $value, $disks)) {
                                     $fail('לא קיים יעד אחסון בשם הזה.');
+
+                                    return;
+                                }
+
+                                // A public disk is served over the web. The
+                                // archive holds every customer record, and its
+                                // name is predictable — that is a data leak,
+                                // not a configuration preference.
+                                if (($disks[(string) $value]['visibility'] ?? null) === 'public') {
+                                    $fail('היעד הזה ציבורי — הגיבוי מכיל פרטי לקוחות וחייב יעד פרטי.');
                                 }
                             }),
                         TextInput::make('backup.path')
