@@ -28,12 +28,18 @@ class OpportunityRadar
             $this->accessibility($site),
             $this->legalDocs($site),
             $this->vulnerabilities($site),
+            $this->reputation($site),
             $this->speed($site),
             $this->brokenLinks($probe),
             $this->seoBasics($probe),
             $this->phpUpgrade($probe),
             $this->monitoring($site),
-        ])->filter()->values()->all();
+        ])
+            ->filter()
+            // Urgent first, then by value: the list is read top-down in a sales
+            // call, and what a customer must fix outranks what would be nice.
+            ->sortBy(fn (array $o): array => [$o['severity'] === 'high' ? 0 : 1, -$o['price_agorot']])
+            ->values()->all();
     }
 
     /** Total indicative value of a list of opportunities, in agorot. */
@@ -87,6 +93,26 @@ class OpportunityRadar
         return $this->opportunity('vulnerabilities', 'טיפול בפגיעויות אבטחה ידועות',
             count($findings).' רכיבים עם פגיעות ידועה: '
                 .collect($findings)->pluck('name')->filter()->take(3)->implode(', '),
+            'high');
+    }
+
+    /**
+     * A domain listed by a malware or spam feed. The most urgent work there is:
+     * while it is listed, its mail lands in spam and Chrome may warn visitors
+     * away — the customer is losing business today, not in theory.
+     */
+    private function reputation(Site $site): ?array
+    {
+        $listings = (array) data_get($site->reputation_scan, 'listings', []);
+
+        if ($listings === []) {
+            return null;
+        }
+
+        return $this->opportunity('reputation', 'ניקוי הדומיין מרשימות שחורות',
+            'הדומיין מופיע ב-'.count($listings).' רשימות: '
+                .collect($listings)->pluck('provider')->filter()->unique()->take(3)->implode(', ')
+                .' — מיילים נכנסים לספאם וגוגל עלול להזהיר מפני האתר.',
             'high');
     }
 
