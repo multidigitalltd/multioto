@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Enums\BackupStatus;
 use App\Models\Backup;
 use App\Services\Backup\BackupRestorer;
+use Illuminate\Contracts\Database\Query\Builder;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Cache;
@@ -56,13 +57,7 @@ class RestoreBackupJob implements ShouldQueue
         $started = Backup::whereKey($backup->id)
             ->where('restore_status', BackupStatus::Running)
             ->whereNull('restore_started_at')
-            // Always matched, including when this payload has no attempt id of
-            // its own: skipping the comparison would let a payload from before
-            // the ids existed take a claim made with one, which is exactly the
-            // stale restore the ids are here to stop.
-            ->where(fn ($q) => $this->attempt === null
-                ? $q->whereNull('restore_attempt')
-                : $q->where('restore_attempt', $this->attempt))
+            ->where(fn ($q) => $this->matchesAttempt($q))
             ->update(['restore_started_at' => now()]);
 
         if ($started !== 1) {
@@ -90,6 +85,21 @@ class RestoreBackupJob implements ShouldQueue
         }
     }
 
+    /**
+     * The claim this payload was made for, and no other.
+     *
+     * Always matched, including when the payload has no attempt id of its own:
+     * skipping the comparison would let one written before the ids existed take
+     * a claim made with one, which is exactly the stale restore the ids are
+     * here to stop.
+     */
+    private function matchesAttempt(Builder $query): Builder
+    {
+        return $this->attempt === null
+            ? $query->whereNull('restore_attempt')
+            : $query->where('restore_attempt', $this->attempt);
+    }
+
     /** Leave a visible failure rather than a row stuck on "running". */
     public function failed(\Throwable $e): void
     {
@@ -99,6 +109,11 @@ class RestoreBackupJob implements ShouldQueue
             // reads as "nothing happened, try again", and trying again would
             // delete everything accepted since it landed.
             ->whereNull('restored_at')
+            // And only over the claim THIS payload was made for. A superseded
+            // one that throws on its way to the claim check — a database blip
+            // in find(), say — would otherwise cancel whichever attempt is
+            // current, or make a running restore look reclaimable.
+            ->where(fn ($q) => $this->matchesAttempt($q))
             ->update([
                 'restore_status' => BackupStatus::Failed,
                 'restore_error' => mb_substr($e->getMessage(), 0, 2000),

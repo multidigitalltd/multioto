@@ -840,6 +840,27 @@ class BackupTest extends TestCase
         $this->assertSame(1, Customer::where('name', 'לקוח שהתקבל אחרי')->count());
     }
 
+    public function test_a_superseded_payload_cannot_cancel_the_claim_that_replaced_it(): void
+    {
+        $backup = $this->runBackup();
+
+        $backup->update([
+            'restore_status' => BackupStatus::Running,
+            'restore_attempt' => 'the-new-one',
+            'restore_queued_at' => now(),
+            'restore_started_at' => null,
+        ]);
+
+        // The superseded payload throws on its way to the claim check — a
+        // database blip, say — and its failure handler runs.
+        (new RestoreBackupJob($backup->id, 'the-lost-one'))->failed(new \RuntimeException('blip'));
+
+        // Cancelling the current attempt would leave its valid payload with
+        // nothing to restore into, or make a running restore look reclaimable.
+        $this->assertSame(BackupStatus::Running, $backup->fresh()->restore_status);
+        $this->assertSame('the-new-one', $backup->fresh()->restore_attempt);
+    }
+
     public function test_a_redelivered_restore_job_does_not_run_a_second_time(): void
     {
         $customer = Customer::factory()->create(['name' => 'לקוח מהגיבוי']);
