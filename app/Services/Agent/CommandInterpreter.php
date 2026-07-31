@@ -31,9 +31,16 @@ class CommandInterpreter
      *                          group have no user, so the source is what keeps
      *                          the group's conversation threaded and separate
      *                          from every panel operator's.
+     * @param  int|null  $taskId  the existing task this instruction came from
+     *                            (delegated with "סוכן משימה 7"), so the agent
+     *                            works on it rather than opening it a second time
      */
-    public function run(string $instruction, ?int $userId = null, string $source = AgentCommand::SOURCE_PANEL): AgentCommand
-    {
+    public function run(
+        string $instruction,
+        ?int $userId = null,
+        string $source = AgentCommand::SOURCE_PANEL,
+        ?int $taskId = null,
+    ): AgentCommand {
         $instruction = trim($instruction);
 
         // Every turn is threaded with the recent conversation, so both an
@@ -42,6 +49,13 @@ class CommandInterpreter
         // each answer, and the agent's own questions are all stored turns, so
         // context is reconstructed from history rather than a single prior row.
         $effective = $this->withConversationContext($instruction, $userId, $source);
+
+        // Which question this turn is answering, if any. Two clarification
+        // flows can be answered with the same word ("מחר"), and the words alone
+        // would then look like the same request — so the reply is identified by
+        // the question it belongs to as well. Read BEFORE this turn is
+        // recorded, and unchanged by a retry of the same answer.
+        $answering = $this->openQuestionId($userId, $source);
 
         $command = AgentCommand::create([
             'user_id' => $userId,
@@ -63,7 +77,16 @@ class CommandInterpreter
             // Pass the operator's user id so any async work the agent kicks off
             // (e.g. a background site investigation) can post its result back
             // into THIS chat thread when it finishes, not only to the event log.
-            $result = $this->agent->run($effective, $userId, $source);
+            $result = $this->agent->run(
+                $effective,
+                $userId,
+                $source,
+                $taskId,
+                // The RAW instruction, never $effective: the conversation
+                // context prepended to it changes with every turn, so a retry
+                // of the same words would not look like the same request.
+                requestKey: $this->requestKey($instruction, $userId, $source, $answering),
+            );
         } catch (\Throwable $e) {
             return $this->finish($command, AgentCommandOutcome::Failed, 'הפעולה נכשלה: '.Str::limit($e->getMessage(), 160));
         }
@@ -76,26 +99,49 @@ class CommandInterpreter
         $summary = trim((string) ($result['summary'] ?? ''));
         $proposed = $result['proposed'] ?? [];
 
+        // Work the agent already carried out (open_task acts immediately). It is
+        // named in every outcome below, so the operator — and the next turn,
+        // which is threaded with this result — can see it is done and must not
+        // be asked for again.
+        $done = $this->openedTasks($result['opened'] ?? []);
+
         // The agent explicitly asked for something → needs clarification (continue).
         if (filled($result['clarification'] ?? null)) {
-            return $this->finish($command, AgentCommandOutcome::Unclear, (string) $result['clarification']);
+            return $this->finish($command, AgentCommandOutcome::Unclear, $this->body($done, (string) $result['clarification']));
         }
 
         // Actions were filed for approval.
         if ($proposed !== []) {
             $count = count($proposed);
-            $body = trim(($summary !== '' ? $summary."\n\n" : '')."הוגשו {$count} פעולות לאישור במסך אישורי האוטומציה.");
+            $body = $this->body($done, $summary, "הוגשו {$count} פעולות לאישור במסך אישורי האוטומציה.");
 
             return $this->finish($command, AgentCommandOutcome::Proposed, $body);
         }
 
         // No proposal and no question — the agent gave an answer / did a read-only
         // lookup. Terminal (not a clarification), so the next command starts fresh.
+        // The summary is the model's own words and may be as vague as "בוצע",
+        // so the opened tasks are named here too rather than trusted to it —
+        // this line is what the operator reads and what the next turn is
+        // threaded with, and without it the same task can be opened again.
         if ($summary !== '') {
-            return $this->finish($command, AgentCommandOutcome::Dispatched, $summary);
+            return $this->finish($command, AgentCommandOutcome::Dispatched, $this->body($done, $summary));
         }
 
         $reason = trim((string) ($result['error'] ?? ''));
+
+        // The closing AI turn produced nothing — but a task was already opened
+        // and its notification already sent. Calling that a failure invites the
+        // operator to repeat the instruction, and the repeat opens a second
+        // identical task. What happened is reported instead of what didn't.
+        if ($done !== '') {
+            return $this->finish($command, AgentCommandOutcome::Dispatched, $this->body(
+                $done,
+                '',
+                'תקציר הסוכן לא התקבל (תקלה בספק ה-AI), אבל הפעולה עצמה בוצעה — אין צורך לחזור על ההוראה.',
+            ));
+        }
+
         $message = 'לא התקבלה תשובה מהסוכן — בדקו את חיבור ה-AI ("סוכן AI ← בדיקת חיבור").';
 
         if ($reason !== '') {
@@ -103,6 +149,74 @@ class CommandInterpreter
         }
 
         return $this->finish($command, AgentCommandOutcome::Failed, $message);
+    }
+
+    /**
+     * One line naming the tasks this run actually opened, or '' if none.
+     *
+     * @param  list<array{id: int, title: string}>|mixed  $opened
+     */
+    private function openedTasks(mixed $opened): string
+    {
+        if (! is_array($opened) || $opened === []) {
+            return '';
+        }
+
+        $names = collect($opened)
+            ->map(fn (array $task): string => '#'.$task['id'].' '.Str::limit((string) $task['title'], 80))
+            ->implode(', ');
+
+        return 'נפתחו משימות: '.$names.'.';
+    }
+
+    /** Join the non-empty parts of a result body into one message. */
+    private function body(string ...$parts): string
+    {
+        return trim(implode("\n\n", array_filter($parts, fn (string $p): bool => trim($p) !== '')));
+    }
+
+    /**
+     * A short, stable fingerprint of one request: the same words from the same
+     * console mean the same request, so a manager retyping an instruction after
+     * a run died is recognised as a repeat rather than as new work. Whitespace
+     * is normalised because a retype is rarely character-identical.
+     */
+    private function requestKey(string $instruction, ?int $userId, string $source, ?int $answering): string
+    {
+        $normalised = trim((string) preg_replace('/\s+/u', ' ', $instruction));
+
+        return substr(hash(
+            'sha256',
+            $source.'|'.((string) $userId).'|'.((string) $answering).'|'.$normalised,
+        ), 0, 32);
+    }
+
+    /**
+     * The last question the agent asked in this thread and has not been asked
+     * again since — what an answer given now belongs to.
+     *
+     * Only a turn that FINISHED as a question counts. Every turn is recorded
+     * with "unclear" as its provisional outcome, so a run still in flight — or
+     * one whose worker was killed halfway — would otherwise look like a fresh
+     * question and shift the key, which is exactly when a retry must find the
+     * task the interrupted run already opened. A finished question always has
+     * the question itself as its result; a provisional row has nothing.
+     */
+    private function openQuestionId(?int $userId, string $source): ?int
+    {
+        return AgentCommand::query()
+            ->where('source', $source)
+            ->when(
+                $userId !== null,
+                fn ($query) => $query->where('user_id', $userId),
+                fn ($query) => $query->whereNull('user_id'),
+            )
+            ->where('role', 'user')
+            ->where('outcome', AgentCommandOutcome::Unclear)
+            ->whereNotNull('result')
+            ->where('result', '<>', '')
+            ->latest('id')
+            ->value('id');
     }
 
     /**

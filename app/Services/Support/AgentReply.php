@@ -2,7 +2,6 @@
 
 namespace App\Services\Support;
 
-use App\Enums\ActionStatus;
 use App\Enums\MessageAuthor;
 use App\Enums\MessageChannel;
 use App\Enums\MessageDirection;
@@ -95,10 +94,7 @@ class AgentReply
         }
 
         // A manual reply supersedes any pending AI reply proposal for this ticket.
-        PendingAction::where('ticket_id', $ticket->id)
-            ->where('type', 'ticket_reply')
-            ->where('status', ActionStatus::Pending)
-            ->update(['status' => ActionStatus::Rejected, 'decided_at' => now(), 'error' => 'בוטלה — נשלחה תשובה ידנית.']);
+        PendingAction::supersedeTicketReplies($ticket->id, 'בוטלה — נשלחה תשובה ידנית.');
 
         SendTicketReplyJob::dispatch($message->id);
 

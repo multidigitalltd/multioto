@@ -25,6 +25,13 @@ class SiteAgent
 
     private int $currentRound = 1;
 
+    /**
+     * A team task that was delegated to this investigation, stamped onto any
+     * proposal it files: the task stays claimed while that decision is pending,
+     * and the approval gate hands it back once the decision is made.
+     */
+    private ?int $currentTaskId = null;
+
     public function __construct(
         private ClaudeClient $ai,
         private McpClient $mcp,
@@ -40,7 +47,7 @@ class SiteAgent
      * unavailable or the site isn't connected. $round marks which fix round of
      * the same original problem this is (1 = first look).
      */
-    public function investigate(Site $site, string $goal, int $round = 1): ?string
+    public function investigate(Site $site, string $goal, int $round = 1, ?int $taskId = null): ?string
     {
         if (! $this->ai->isEnabled() || ! $site->mcp_enabled || blank($site->mcp_endpoint)) {
             return null;
@@ -48,6 +55,7 @@ class SiteAgent
 
         $this->currentGoal = $goal;
         $this->currentRound = max(1, $round);
+        $this->currentTaskId = $taskId;
 
         $siteTools = collect((array) data_get($site->mcp_capabilities, 'tools', []));
 
@@ -190,6 +198,7 @@ class SiteAgent
             payload: $payload,
             customerId: $site->customer_id,
             proposedBy: 'ai',
+            taskId: $this->currentTaskId,
         );
 
         return ['content' => "הפעולה הוצעה (#{$action->id}) ונשלחה לאישור מנהל. אל תציע אותה שוב."];

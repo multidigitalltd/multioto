@@ -15,6 +15,7 @@ use App\Models\PendingAction;
 use App\Models\Site;
 use App\Models\StandingApproval;
 use App\Models\SystemLog;
+use App\Models\Task;
 use App\Services\Agent\ContentChangeRunner;
 use App\Services\Agent\IncidentMemory;
 use App\Services\Agent\MaintenanceRunner;
@@ -104,12 +105,16 @@ class ApprovalGate
         ?int $customerId = null,
         ?int $ticketId = null,
         string $proposedBy = 'ai',
+        ?int $taskId = null,
     ): PendingAction {
         $action = PendingAction::create([
             'type' => $type,
             'status' => ActionStatus::Pending,
             'customer_id' => $customerId,
             'ticket_id' => $ticketId,
+            // A delegated task waiting on this decision: it stays claimed until
+            // the decision is made, and is handed back here when it is.
+            'task_id' => $taskId,
             'summary' => $summary,
             'payload' => $payload,
             'proposed_by' => $proposedBy,
@@ -246,6 +251,20 @@ class ApprovalGate
      */
     protected function approveInternal(PendingAction $action): array
     {
+        try {
+            return $this->decide($action);
+        } finally {
+            // Every way out of decide() ends with this action no longer
+            // pending — expired, lost the race, executed or failed — and a task
+            // that was waiting on the decision must not stay claimed for one
+            // that has been made.
+            Task::releaseIfIdle($action->task_id);
+        }
+    }
+
+    /** @return array{claimed: bool, message: string} */
+    private function decide(PendingAction $action): array
+    {
         if ($action->created_at->lt(now()->subDays(self::MAX_AGE_DAYS))) {
             $action->update(['status' => ActionStatus::Rejected, 'decided_at' => now(), 'error' => 'פג תוקף — ההצעה ישנה מדי לביצוע.']);
 
@@ -282,7 +301,22 @@ class ApprovalGate
     /** Reject without executing. */
     public function reject(PendingAction $action): string
     {
-        $action->update(['status' => ActionStatus::Rejected, 'decided_at' => now()]);
+        // Claimed the same way an approval is: a rejection arriving while
+        // another request is already executing the action must not overwrite
+        // "approved" with "rejected" — the external call is under way, and the
+        // false status would then read as a settled decision and hand a waiting
+        // task back mid-execution.
+        $claimed = PendingAction::whereKey($action->id)
+            ->where('status', ActionStatus::Pending)
+            ->update(['status' => ActionStatus::Rejected, 'decided_at' => now()]);
+
+        if ($claimed === 0) {
+            return "פעולה #{$action->id} כבר טופלה.";
+        }
+
+        // Nothing is pending on the task any more — a rejected fix is still a
+        // decision, and the work goes back to a person.
+        Task::releaseIfIdle($action->task_id);
 
         return "פעולה #{$action->id} נדחתה. לא בוצע דבר.";
     }
@@ -363,6 +397,14 @@ class ApprovalGate
 
         $tool = (string) data_get($action->payload, 'tool');
 
+        // A delegated task waiting on this fix is not free the moment the fix
+        // runs: the verification round is the rest of the same work. It is held
+        // for that job BEFORE the dispatch, so the decision's own release —
+        // which happens as soon as this returns — cannot hand the task back
+        // mid-verification, where it could be delegated all over again.
+        $token = (string) Str::uuid();
+        Task::hold($action->task_id, $token);
+
         try {
             InvestigateSiteJob::dispatch(
                 (int) data_get($action->payload, 'site_id'),
@@ -372,8 +414,15 @@ class ApprovalGate
                 $round + 1,
                 null,
                 $resolutionId,
+                // The verification carries the task too, so a next-step proposal
+                // it files is linked the same way this one was.
+                releasesTaskId: $action->task_id,
+                holdToken: $token,
             );
         } catch (\Throwable $e) {
+            // Nothing will run, so nothing may keep holding the task.
+            Task::dropHold($action->task_id, $token);
+
             // The fix itself already ran and succeeded — a failure to enqueue
             // the FOLLOW-UP must not bubble up and mark the executed action as
             // failed (a false audit trail that invites re-running a

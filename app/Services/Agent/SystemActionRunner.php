@@ -19,6 +19,7 @@ use App\Models\Ticket;
 use App\Services\Billing\SubscriptionCollectionService;
 use App\Services\Cloudflare\CloudflareClient;
 use App\Services\Hosting\HostingClient;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 /**
@@ -69,18 +70,53 @@ class SystemActionRunner
         };
     }
 
-    /** @param array<string, mixed> $p */
-    private function openTask(array $p): void
+    /**
+     * Open a task and tell whoever needs to know.
+     *
+     * Public because the console agent opens tasks directly rather than through
+     * an approval: a task has no effect on a customer, on money or on a site,
+     * and one that waits for approval before it exists is a note that gets
+     * lost. The creation itself stays here so both routes make the same row and
+     * send the same notification.
+     *
+     * @param  array<string, mixed>  $p
+     */
+    public function openTask(array $p): Task
     {
-        $task = Task::create([
+        $attributes = [
             'title' => (string) ($p['title'] ?? 'משימה'),
             'customer_id' => $p['customer_id'] ?? null,
             'status' => TaskStatus::Open,
             'priority' => TicketPriority::Normal,
-        ]);
+        ];
+
+        // With a reference, creation is keyed on it: two runs of the same
+        // request race only to decide which one inserts, and the loser gets the
+        // row rather than a twin of it. The column is unique, so this holds
+        // even across workers.
+        $task = isset($p['source_ref'])
+            ? Task::firstOrCreate(['source_ref' => $p['source_ref']], $attributes)
+            : Task::create($attributes);
+
+        if (! $task->wasRecentlyCreated) {
+            return $task;
+        }
 
         // No assignee → the managers are notified a task landed (same as the UI).
-        NotifyTaskCreatedJob::dispatch($task->id);
+        // Deliberately non-fatal, like the WhatsApp path: the task is already
+        // saved, so letting a queue hiccup throw would hide a task that exists
+        // and invite a retry that opens a second one. The task itself is what
+        // must not be lost; a missing notification is visible in the log.
+        try {
+            NotifyTaskCreatedJob::dispatch($task->id);
+        } catch (\Throwable $e) {
+            Log::warning('SystemActionRunner: task notification not queued', [
+                'task_id' => $task->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        return $task;
     }
 
     /** @param array<string, mixed> $p */

@@ -285,6 +285,12 @@ return [
         'model' => env('AI_MODEL', 'claude-opus-4-8'),
         'effort' => env('AI_EFFORT', 'low'),
 
+        // How long the agent treats an identical task (same title, same
+        // customer, still open) as the one it already opened, instead of
+        // opening a twin. Covers a run that died after creating the task and a
+        // manager who was told to try again. 0 disables the check.
+        'task_repeat_minutes' => (int) env('AI_TASK_REPEAT_MINUTES', 15),
+
         // Editable agent instructions. The persona sets the tone/role; the rules
         // are the guardrails (what's allowed/forbidden). Non-negotiable safety
         // rules are always appended in code on top of these.

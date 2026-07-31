@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Enums\ActionStatus;
 use App\Enums\MessageAuthor;
 use App\Enums\MessageDirection;
+use App\Enums\TaskStatus;
 use App\Enums\TicketChannel;
 use App\Enums\TicketStatus;
 use App\Enums\WebhookSource;
@@ -12,9 +13,11 @@ use App\Jobs\IngestWhatsappMessageJob;
 use App\Jobs\SendTicketReplyJob;
 use App\Models\Customer;
 use App\Models\PendingAction;
+use App\Models\Task;
 use App\Models\Ticket;
 use App\Models\WebhookEvent;
 use App\Services\Automation\ApprovalGate;
+use App\Services\Support\AgentReply;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
@@ -124,6 +127,53 @@ class ApprovalGateTest extends TestCase
         $this->assertStringContainsString('נדחתה', $reply);
         $this->assertSame(ActionStatus::Rejected, $action->fresh()->status);
         Queue::assertNothingPushed();
+    }
+
+    /**
+     * A rejection arriving while another request is already executing the
+     * action must not overwrite "approved" with "rejected": the external call
+     * is under way, and the false status reads as a settled decision — which is
+     * how a task waiting on it would be handed back mid-execution.
+     */
+    public function test_a_rejection_that_lost_the_race_leaves_the_decision_alone(): void
+    {
+        $ticket = $this->ticketWithCustomer();
+        $action = PendingAction::create([
+            'type' => 'ticket_reply', 'status' => ActionStatus::Pending,
+            'ticket_id' => $ticket->id, 'summary' => 'x', 'payload' => ['reply' => 'y'],
+        ]);
+
+        // Someone else already claimed it and is executing.
+        PendingAction::whereKey($action->id)->update(['status' => ActionStatus::Approved]);
+
+        $reply = app(ApprovalGate::class)->reject($action);
+
+        $this->assertStringContainsString('כבר טופלה', $reply);
+        $this->assertSame(ActionStatus::Approved, $action->fresh()->status);
+    }
+
+    /**
+     * Answering the customer by hand cancels the AI's draft — that IS the
+     * decision, even though nobody pressed approve or reject. A task delegated
+     * in order to produce that draft must not stay claimed for a proposal that
+     * will never be decided any other way.
+     */
+    public function test_a_manual_reply_hands_back_the_task_that_waited_on_the_draft(): void
+    {
+        Queue::fake([SendTicketReplyJob::class]);
+
+        $ticket = $this->ticketWithCustomer();
+        $task = Task::create(['title' => 'לענות ללקוח', 'status' => TaskStatus::InProgress]);
+        $action = PendingAction::create([
+            'type' => 'ticket_reply', 'status' => ActionStatus::Pending,
+            'ticket_id' => $ticket->id, 'task_id' => $task->id,
+            'summary' => 'x', 'payload' => ['reply' => 'y'],
+        ]);
+
+        app(AgentReply::class)->send($ticket, 'תשובה ידנית מהצוות.');
+
+        $this->assertSame(ActionStatus::Rejected, $action->fresh()->status);
+        $this->assertSame(TaskStatus::Open, $task->fresh()->status);
     }
 
     public function test_a_regular_customer_message_is_not_intercepted(): void

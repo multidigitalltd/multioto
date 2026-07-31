@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Enums\ActionStatus;
 use App\Enums\AgentCommandOutcome;
+use App\Enums\TaskStatus;
 use App\Enums\TicketChannel;
 use App\Enums\TicketStatus;
 use App\Filament\Pages\AgentConsole;
@@ -13,11 +14,14 @@ use App\Models\AgentCommand;
 use App\Models\Customer;
 use App\Models\PendingAction;
 use App\Models\Site;
+use App\Models\Task;
 use App\Models\Ticket;
 use App\Models\User;
 use App\Services\Agent\CommandInterpreter;
 use App\Services\Ai\ClaudeClient;
+use Illuminate\Contracts\Bus\Dispatcher as BusDispatcher;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Queue;
 use Livewire\Livewire;
 use Mockery;
@@ -34,12 +38,13 @@ class CommandConsoleTest extends TestCase
      *
      * @param  list<array{0: string, 1: array}>  $toolCalls
      */
-    private function fakeAgent(array $toolCalls, string $summary = 'בוצע'): void
+    private function fakeAgent(array $toolCalls, ?string $summary = 'בוצע'): void
     {
         $claude = Mockery::mock(ClaudeClient::class);
         $claude->shouldReceive('isEnabled')->andReturn(true);
+        $claude->shouldReceive('lastError')->andReturn('HTTP 529 — overloaded');
         $claude->shouldReceive('converse')->andReturnUsing(
-            function (string $system, string $prompt, array $tools, callable $handler) use ($toolCalls, $summary): string {
+            function (string $system, string $prompt, array $tools, callable $handler) use ($toolCalls, $summary): ?string {
                 foreach ($toolCalls as [$name, $input]) {
                     $handler($name, $input);
                 }
@@ -94,16 +99,260 @@ class CommandConsoleTest extends TestCase
         $this->assertSame(30000, data_get($action->payload, 'amount_agorot'));
     }
 
-    public function test_an_unactionable_request_falls_back_to_a_task(): void
+    public function test_an_unactionable_request_opens_a_task_without_waiting_for_approval(): void
     {
         $this->fakeAgent([
-            ['propose_task', ['title' => 'להתקשר לספק הדומיינים ולברר החידוש']],
+            ['open_task', ['title' => 'להתקשר לספק הדומיינים ולברר החידוש']],
         ]);
 
         $command = app(CommandInterpreter::class)->run('תדבר עם רשם הדומיינים על החידוש');
 
+        // A task touches nobody — no customer, no money, no site — and one that
+        // waits for approval before it exists is a note that gets lost.
+        $this->assertSame('להתקשר לספק הדומיינים ולברר החידוש', Task::sole()->title);
+        $this->assertSame(0, PendingAction::count());
+        $this->assertSame(AgentCommandOutcome::Dispatched, $command->outcome);
+    }
+
+    public function test_the_old_tool_name_still_opens_a_task(): void
+    {
+        // A model working off a cached prompt still says "propose_task"; it
+        // means the same thing and must not silently do nothing.
+        $this->fakeAgent([
+            ['propose_task', ['title' => 'לחדש את הדומיין']],
+        ]);
+
+        app(CommandInterpreter::class)->run('תטפל בחידוש הדומיין');
+
+        $this->assertSame('לחדש את הדומיין', Task::sole()->title);
+    }
+
+    public function test_a_task_already_opened_is_reported_even_when_the_closing_ai_turn_fails(): void
+    {
+        // The tool ran: the task exists and its notification is out. If the
+        // provider then dies before the closing summary, calling the whole
+        // command "failed" invites the operator to repeat it — and the repeat
+        // opens a second identical task and notifies again.
+        $this->fakeAgent([
+            ['open_task', ['title' => 'להתקשר לספק הדומיינים']],
+        ], summary: null);
+
+        $command = app(CommandInterpreter::class)->run('תדבר עם רשם הדומיינים');
+
+        $task = Task::sole();
+        $this->assertSame(AgentCommandOutcome::Dispatched, $command->outcome);
+        $this->assertStringContainsString('#'.$task->id, $command->result);
+        $this->assertStringContainsString('אין צורך לחזור', $command->result);
+    }
+
+    public function test_the_opened_task_is_named_even_when_the_agents_summary_is_vague(): void
+    {
+        // "בוצע" tells nobody which task exists. The number has to come from us,
+        // not from the model's own wording — the result line is also what the
+        // next turn is threaded with.
+        $this->fakeAgent([
+            ['open_task', ['title' => 'לחדש את הדומיין']],
+        ], summary: 'בוצע');
+
+        $command = app(CommandInterpreter::class)->run('תטפל בחידוש');
+
+        $this->assertStringContainsString('#'.Task::sole()->id, $command->result);
+        $this->assertStringContainsString('לחדש את הדומיין', $command->result);
+    }
+
+    public function test_a_queue_failure_does_not_hide_a_task_that_was_already_created(): void
+    {
+        // The row is inserted before the notification is queued. If queueing
+        // throws, the task exists — reporting an error would invite a retry
+        // that opens a second one, and the first would sit there unmentioned.
+        $bus = Mockery::mock(BusDispatcher::class)->shouldIgnoreMissing();
+        $bus->shouldReceive('dispatch')->andThrow(new \RuntimeException('queue down'));
+        $bus->shouldReceive('dispatchToQueue')->andThrow(new \RuntimeException('queue down'));
+        $this->app->instance(BusDispatcher::class, $bus);
+
+        $this->fakeAgent([
+            ['open_task', ['title' => 'להתקשר לספק']],
+        ], summary: null);
+
+        $command = app(CommandInterpreter::class)->run('תדבר עם הספק');
+
+        $this->assertSame('להתקשר לספק', Task::sole()->title);
+        $this->assertSame(AgentCommandOutcome::Dispatched, $command->outcome);
+        $this->assertStringContainsString('#'.Task::sole()->id, $command->result);
+    }
+
+    public function test_repeating_the_same_instruction_does_not_open_a_second_identical_task(): void
+    {
+        // In-memory tracking cannot survive a killed worker: the run that dies
+        // after creating the task tells the manager to try again, and the retry
+        // arrives as a brand-new run. The task itself is what the second run
+        // recognises.
+        $this->fakeAgent([['open_task', ['title' => 'להתקשר לספק הדומיינים']]]);
+        $first = app(CommandInterpreter::class)->run('תדבר עם רשם הדומיינים');
+
+        $this->fakeAgent([['open_task', ['title' => 'להתקשר לספק הדומיינים']]]);
+        $second = app(CommandInterpreter::class)->run('תדבר עם רשם הדומיינים');
+
+        $task = Task::sole();
+        $this->assertStringContainsString('#'.$task->id, $first->result);
+        $this->assertStringContainsString('#'.$task->id, $second->result);
+    }
+
+    public function test_a_retry_is_recognised_even_when_the_model_words_the_task_differently(): void
+    {
+        // The retry is a fresh run of the model: it can phrase the title
+        // differently, or attach a customer it did not attach the first time.
+        // What identifies the repeat is the manager's own instruction.
+        $this->fakeAgent([['open_task', ['title' => 'להתקשר לספק הדומיינים']]]);
+        app(CommandInterpreter::class)->run('תדבר עם רשם הדומיינים');
+
+        $this->fakeAgent([['open_task', ['title' => 'לברר מול רשם הדומיינים לגבי החידוש']]]);
+        $second = app(CommandInterpreter::class)->run('תדבר עם רשם הדומיינים');
+
+        $this->assertSame(1, Task::count());
+        $this->assertStringContainsString('#'.Task::sole()->id, $second->result);
+    }
+
+    public function test_the_same_instruction_after_the_task_was_closed_opens_a_new_one(): void
+    {
+        // The first task is done. Asking again is not a retry of anything — it
+        // is the work coming round again, and it needs a task of its own.
+        $this->fakeAgent([['open_task', ['title' => 'להתקשר לספק']]]);
+        app(CommandInterpreter::class)->run('תדבר עם הספק');
+        Task::sole()->update(['status' => TaskStatus::Done]);
+
+        $this->fakeAgent([['open_task', ['title' => 'להתקשר לספק']]]);
+        $second = app(CommandInterpreter::class)->run('תדבר עם הספק');
+
+        $this->assertSame(2, Task::count());
+        $this->assertStringContainsString('#'.Task::latest('id')->first()->id, $second->result);
+    }
+
+    public function test_the_replacement_task_is_recognised_by_a_retry_of_its_own(): void
+    {
+        // The first task is closed, so asking again opens a replacement — and
+        // that replacement needs a reference of its own, or a retry moments
+        // later would open a third one.
+        $this->fakeAgent([['open_task', ['title' => 'להתקשר לספק']]]);
+        app(CommandInterpreter::class)->run('תדבר עם הספק');
+        Task::sole()->update(['status' => TaskStatus::Done]);
+
+        $this->fakeAgent([['open_task', ['title' => 'להתקשר לספק']]]);
+        app(CommandInterpreter::class)->run('תדבר עם הספק');
+
+        $this->fakeAgent([['open_task', ['title' => 'להתקשר לספק']]]);
+        $retry = app(CommandInterpreter::class)->run('תדבר עם הספק');
+
+        $this->assertSame(2, Task::count());
+        $this->assertStringContainsString('#'.Task::latest('id')->first()->id, $retry->result);
+    }
+
+    public function test_a_deleted_task_in_the_series_does_not_block_the_next_one(): void
+    {
+        // Tasks can be deleted by hand, so "how many are there" says nothing
+        // about which reference is free. Asking again must still open a task —
+        // not quietly hand back a closed one.
+        $this->fakeAgent([['open_task', ['title' => 'להתקשר לספק']]]);
+        app(CommandInterpreter::class)->run('תדבר עם הספק');
+        $first = Task::sole();
+        $first->update(['status' => TaskStatus::Done]);
+
+        $this->fakeAgent([['open_task', ['title' => 'להתקשר לספק']]]);
+        app(CommandInterpreter::class)->run('תדבר עם הספק');
+        Task::latest('id')->first()->update(['status' => TaskStatus::Done]);
+
+        // The middle of the series is gone.
+        $first->delete();
+
+        $this->fakeAgent([['open_task', ['title' => 'להתקשר לספק']]]);
+        app(CommandInterpreter::class)->run('תדבר עם הספק');
+
+        $this->assertSame(2, Task::count());
+        $this->assertSame(TaskStatus::Open, Task::latest('id')->first()->status);
+    }
+
+    public function test_the_same_answer_to_two_different_questions_opens_two_tasks(): void
+    {
+        // "מחר" means one thing as an answer to "when should I call the
+        // supplier?" and another as an answer to "when should I send the
+        // reminder?". The words alone cannot tell them apart — the question
+        // they answer can.
+        $this->fakeAgent([['need_clarification', ['question' => 'מתי להתקשר לספק?']]], summary: 'צריך מועד.');
+        app(CommandInterpreter::class)->run('תדבר עם הספק');
+
+        $this->fakeAgent([['open_task', ['title' => 'להתקשר לספק מחר']]]);
+        app(CommandInterpreter::class)->run('מחר');
+
+        $this->fakeAgent([['need_clarification', ['question' => 'מתי לשלוח את התזכורת?']]], summary: 'צריך מועד.');
+        app(CommandInterpreter::class)->run('תשלח תזכורת לדנה');
+
+        $this->fakeAgent([['open_task', ['title' => 'לשלוח תזכורת לדנה מחר']]]);
+        app(CommandInterpreter::class)->run('מחר');
+
+        $this->assertSame(2, Task::count());
+    }
+
+    public function test_a_turn_that_died_halfway_is_not_mistaken_for_a_question(): void
+    {
+        // Every turn is recorded as "unclear" until it finishes. A run whose
+        // worker was killed leaves such a row behind — and if that counted as a
+        // question, the retry would key differently and open a second task,
+        // which is precisely the case this key exists to survive.
+        $this->fakeAgent([['open_task', ['title' => 'להתקשר לספק']]]);
+        app(CommandInterpreter::class)->run('תדבר עם הספק');
+
+        AgentCommand::create([
+            'source' => AgentCommand::SOURCE_PANEL,
+            'role' => 'user',
+            'instruction' => 'תדבר עם הספק',
+            'outcome' => AgentCommandOutcome::Unclear,
+        ]);
+
+        $this->fakeAgent([['open_task', ['title' => 'להתקשר לספק']]]);
+        $retry = app(CommandInterpreter::class)->run('תדבר עם הספק');
+
+        $this->assertSame(1, Task::count());
+        $this->assertStringContainsString('#'.Task::sole()->id, $retry->result);
+    }
+
+    public function test_two_different_instructions_each_open_their_own_task(): void
+    {
+        $this->fakeAgent([['open_task', ['title' => 'להתקשר לספק']]]);
+        app(CommandInterpreter::class)->run('תדבר עם הספק');
+
+        $this->fakeAgent([['open_task', ['title' => 'להזמין ציוד']]]);
+        app(CommandInterpreter::class)->run('תזמין ציוד למשרד');
+
+        $this->assertSame(2, Task::count());
+    }
+
+    public function test_the_same_title_opens_a_new_task_once_the_window_has_passed(): void
+    {
+        // Two hours later the same sentence is a new request, not a retry.
+        Carbon::setTestNow('2026-08-10 09:00:00');
+        $this->fakeAgent([['open_task', ['title' => 'להתקשר לספק']]]);
+        app(CommandInterpreter::class)->run('תדבר עם הספק');
+
+        Carbon::setTestNow('2026-08-10 11:00:00');
+        $this->fakeAgent([['open_task', ['title' => 'להתקשר לספק']]]);
+        app(CommandInterpreter::class)->run('תדבר עם הספק שוב');
+
+        $this->assertSame(2, Task::count());
+    }
+
+    public function test_a_task_opened_alongside_a_proposal_is_named_in_the_result(): void
+    {
+        $customer = Customer::factory()->create(['name' => 'דנה']);
+        $this->fakeAgent([
+            ['open_task', ['title' => 'לבדוק מול הבנק']],
+            ['propose_payment_request', ['customer_id' => $customer->id, 'amount_ils' => 300, 'description' => 'אחסון']],
+        ], summary: 'טיפלתי.');
+
+        $command = app(CommandInterpreter::class)->run('תטפל בגבייה של דנה');
+
         $this->assertSame(AgentCommandOutcome::Proposed, $command->outcome);
-        $this->assertSame('open_task', data_get(PendingAction::find($command->pending_action_id)->payload, 'operation'));
+        $this->assertStringContainsString('#'.Task::sole()->id, $command->result);
+        $this->assertStringContainsString('לאישור', $command->result);
     }
 
     public function test_it_fails_gracefully_when_the_ai_is_off(): void
@@ -292,12 +541,15 @@ class CommandConsoleTest extends TestCase
     {
         $this->actingAs(User::factory()->create());
 
+        $first = Customer::factory()->create(['name' => 'יוסי']);
+        $second = Customer::factory()->create(['name' => 'דנה']);
+
         // One run files two proposals; only the first links to the turn.
         $this->fakeAgent([
-            ['propose_task', ['title' => 'להתקשר ליוסי']],
-            ['propose_task', ['title' => 'לבדוק את הדומיין של דנה']],
+            ['propose_payment_request', ['customer_id' => $first->id, 'amount_ils' => 100, 'description' => 'להתקשר ליוסי']],
+            ['propose_payment_request', ['customer_id' => $second->id, 'amount_ils' => 200, 'description' => 'לבדוק את הדומיין של דנה']],
         ]);
-        Livewire::test(AgentConsole::class)->set('data.instruction', 'תפתח שתי משימות')->call('run');
+        Livewire::test(AgentConsole::class)->set('data.instruction', 'תשלח שתי דרישות תשלום')->call('run');
 
         $this->assertSame(2, PendingAction::where('status', ActionStatus::Pending)->count());
 

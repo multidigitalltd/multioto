@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Enums\ActionStatus;
 use App\Enums\AgentCommandOutcome;
 use App\Enums\TaskStatus;
 use App\Enums\TicketChannel;
@@ -12,6 +13,7 @@ use App\Jobs\NotifyTaskCreatedJob;
 use App\Jobs\RunAgentInstructionJob;
 use App\Models\AgentCommand;
 use App\Models\Customer;
+use App\Models\PendingAction;
 use App\Models\Site;
 use App\Models\Task;
 use App\Models\Ticket;
@@ -19,6 +21,8 @@ use App\Models\WebhookEvent;
 use App\Services\Agent\CommandInterpreter;
 use App\Services\Agent\SiteAgent;
 use App\Services\Agent\SiteMemoryStore;
+use App\Services\Ai\ClaudeClient;
+use App\Services\Automation\ApprovalGate;
 use App\Services\Automation\ManagementCommands;
 use App\Services\Support\AttachmentStore;
 use App\Services\Support\TicketIntake;
@@ -28,6 +32,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
+use Mockery;
 use Tests\TestCase;
 
 /**
@@ -71,6 +76,19 @@ class WhatsappTaskCommandsTest extends TestCase
             'event' => 'message',
             'payload' => ['id' => $id, 'from' => self::MGMT, 'body' => $body],
         ])->assertOk();
+    }
+
+    /** A proposal from this run, waiting for a decision on that task. */
+    private function pendingActionFor(Task $task): PendingAction
+    {
+        return PendingAction::create([
+            'type' => 'system_action',
+            'status' => ActionStatus::Pending,
+            'task_id' => $task->id,
+            'summary' => 'פעולה שממתינה להחלטה',
+            'payload' => ['operation' => 'open_task'],
+            'proposed_by' => 'console',
+        ]);
     }
 
     /** The text we sent back to the group. */
@@ -404,7 +422,7 @@ class WhatsappTaskCommandsTest extends TestCase
         $interpreter = $this->mock(CommandInterpreter::class);
         $interpreter->shouldReceive('run')
             ->once()
-            ->with('בדוק חובות', null, AgentCommand::SOURCE_WHATSAPP)
+            ->with('בדוק חובות', null, AgentCommand::SOURCE_WHATSAPP, null)
             ->andReturn($command);
 
         (new RunAgentInstructionJob(self::MGMT, 'בדוק חובות'))
@@ -444,6 +462,7 @@ class WhatsappTaskCommandsTest extends TestCase
     public function test_a_delivery_failure_does_not_undo_work_the_agent_completed(): void
     {
         $task = Task::create(['title' => 'משהו', 'status' => TaskStatus::InProgress]);
+        $this->pendingActionFor($task);
 
         $interpreter = $this->mock(CommandInterpreter::class);
         $interpreter->shouldReceive('run')->once()->andReturn(new AgentCommand([
@@ -514,6 +533,414 @@ class WhatsappTaskCommandsTest extends TestCase
 
         $this->assertSame(TaskStatus::Open, $task->fresh()->status);
         $this->assertStringContainsString('כבוי', $this->lastReply());
+    }
+
+    /**
+     * An answer with nothing filed for approval means the agent is finished and
+     * the work is a person's again — "in progress" would keep it out of the
+     * open list and out of the reminders, claimed by nobody.
+     */
+    public function test_a_delegated_task_is_released_when_the_agent_files_nothing(): void
+    {
+        $task = Task::create(['title' => 'להתקשר לספק', 'status' => TaskStatus::InProgress]);
+
+        $interpreter = $this->mock(CommandInterpreter::class);
+        $interpreter->shouldReceive('run')->once()->andReturn(new AgentCommand([
+            'outcome' => AgentCommandOutcome::Dispatched,
+            'result' => 'אין לזה כלי — צריך טלפון לספק.',
+        ]));
+
+        (new RunAgentInstructionJob(self::MGMT, 'להתקשר לספק', $task->id))
+            ->handle($interpreter, app(WahaClient::class));
+
+        $this->assertSame(TaskStatus::Open, $task->fresh()->status);
+    }
+
+    /** A proposal IS something to act on, so the task stays claimed until a person decides. */
+    public function test_a_delegated_task_stays_claimed_while_a_proposal_waits(): void
+    {
+        $task = Task::create(['title' => 'משהו', 'status' => TaskStatus::InProgress]);
+        $action = $this->pendingActionFor($task);
+
+        $command = new AgentCommand([
+            'outcome' => AgentCommandOutcome::Dispatched,
+            'result' => 'הוגשה פעולה.',
+        ]);
+        $command->pending_action_id = $action->id;
+
+        $interpreter = $this->mock(CommandInterpreter::class);
+        $interpreter->shouldReceive('run')->once()->andReturn($command);
+
+        (new RunAgentInstructionJob(self::MGMT, 'משהו', $task->id))
+            ->handle($interpreter, app(WahaClient::class));
+
+        $this->assertSame(TaskStatus::InProgress, $task->fresh()->status);
+    }
+
+    /**
+     * A site investigation outlives the run that asked for it. Handing the task
+     * back the moment the agent answers would put it on the open list while the
+     * check is still running — where it can be delegated all over again.
+     */
+    public function test_a_delegated_task_stays_claimed_until_the_investigation_reports(): void
+    {
+        Queue::fake([RunAgentInstructionJob::class, NotifyTaskCreatedJob::class, InvestigateSiteJob::class]);
+
+        $site = Site::factory()->create([
+            'customer_id' => Customer::factory()->create()->id,
+            'mcp_enabled' => true,
+            'mcp_endpoint' => 'https://site.test/mcp',
+        ]);
+        $task = Task::create(['title' => 'לבדוק את האתר', 'status' => TaskStatus::InProgress]);
+
+        $claude = Mockery::mock(ClaudeClient::class);
+        $claude->shouldReceive('isEnabled')->andReturn(true);
+        $claude->shouldReceive('lastError')->andReturnNull();
+        $claude->shouldReceive('converse')->andReturnUsing(
+            function (string $system, string $prompt, array $tools, callable $handler) use ($site): string {
+                $handler('investigate_site', ['site_id' => $site->id, 'goal' => 'בדיקה']);
+
+                return 'הפעלתי בדיקה מלאה של האתר.';
+            }
+        );
+        $this->app->instance(ClaudeClient::class, $claude);
+
+        (new RunAgentInstructionJob(self::MGMT, 'לבדוק את האתר', $task->id))
+            ->handle(app(CommandInterpreter::class), app(WahaClient::class));
+
+        $this->assertSame(TaskStatus::InProgress, $task->fresh()->status);
+        Queue::assertPushed(
+            InvestigateSiteJob::class,
+            fn (InvestigateSiteJob $job): bool => $job->releasesTaskId === $task->id,
+        );
+    }
+
+    public function test_the_investigation_hands_the_task_back_when_it_ends(): void
+    {
+        $task = Task::create([
+            'title' => 'לבדוק את האתר',
+            'status' => TaskStatus::InProgress,
+            'background_holds' => ['hold-1'],
+        ]);
+
+        (new InvestigateSiteJob(1, 'בדיקה', releasesTaskId: $task->id, holdToken: 'hold-1'))
+            ->failed(new \RuntimeException('boom'));
+
+        $this->assertSame(TaskStatus::Open, $task->fresh()->status);
+    }
+
+    /**
+     * The run that queued the investigation can still time out afterwards — its
+     * own limit is shorter than a single provider call. Its failure handler
+     * must not take back a task the investigation is already working on.
+     */
+    public function test_a_timed_out_run_does_not_take_back_a_task_it_handed_to_an_investigation(): void
+    {
+        $task = Task::create([
+            'title' => 'לבדוק את האתר',
+            'status' => TaskStatus::InProgress,
+            'background_holds' => ['hold-1'],
+        ]);
+
+        (new RunAgentInstructionJob(self::MGMT, 'לבדוק את האתר', $task->id))
+            ->failed(new \RuntimeException('timed out'));
+
+        $this->assertSame(TaskStatus::InProgress, $task->fresh()->status);
+
+        // …and the investigation still gives it back when it is done.
+        $site = Site::factory()->create(['customer_id' => Customer::factory()->create()->id]);
+        $agent = $this->mock(SiteAgent::class);
+        $agent->shouldReceive('investigate')->andReturn('האתר תקין.');
+
+        (new InvestigateSiteJob($site->id, 'בדיקה', releasesTaskId: $task->id, holdToken: 'hold-1'))
+            ->handle($agent, app(SiteMemoryStore::class));
+
+        $task->refresh();
+        $this->assertSame(TaskStatus::Open, $task->status);
+        $this->assertSame([], $task->background_holds);
+    }
+
+    /**
+     * The run itself is work in progress. An investigation that finishes while
+     * the agent is still reasoning must not hand the task back underneath it —
+     * the same run may still queue another check or file a proposal.
+     */
+    public function test_the_running_agent_holds_the_task_for_as_long_as_it_runs(): void
+    {
+        $task = Task::create(['title' => 'לבדוק את האתר', 'status' => TaskStatus::InProgress]);
+
+        $claude = Mockery::mock(ClaudeClient::class);
+        $claude->shouldReceive('isEnabled')->andReturn(true);
+        $claude->shouldReceive('lastError')->andReturnNull();
+        $claude->shouldReceive('converse')->andReturnUsing(function () use ($task): string {
+            // Mid-run: a background check finishes and asks whether the task is
+            // free. It is not — this run is still going.
+            Task::releaseIfIdle($task->id);
+            $this->assertSame(TaskStatus::InProgress, $task->fresh()->status);
+
+            return 'בדקתי, הכול תקין.';
+        });
+        $this->app->instance(ClaudeClient::class, $claude);
+
+        (new RunAgentInstructionJob(self::MGMT, 'לבדוק את האתר', $task->id))
+            ->handle(app(CommandInterpreter::class), app(WahaClient::class));
+
+        // …and once the run is over, with nothing left running, it is.
+        $task->refresh();
+        $this->assertSame(TaskStatus::Open, $task->status);
+        $this->assertSame([], $task->background_holds);
+    }
+
+    /**
+     * The decision can land while the run is still going — a standing approval
+     * executes the action on the spot, or an operator answers during the
+     * closing AI turn. The gate's release then finds the run still holding the
+     * task, so the run has to ask again on its way out; judging by its own
+     * outcome ("proposed → stay claimed") would strand the task for good.
+     */
+    public function test_a_task_is_handed_back_when_its_proposal_was_decided_mid_run(): void
+    {
+        $task = Task::create(['title' => 'משהו', 'status' => TaskStatus::InProgress]);
+
+        $interpreter = $this->mock(CommandInterpreter::class);
+        $interpreter->shouldReceive('run')->once()->andReturnUsing(function () use ($task): AgentCommand {
+            $action = $this->pendingActionFor($task);
+
+            // Decided while the run is still in progress.
+            app(ApprovalGate::class)->reject($action);
+            $this->assertSame(TaskStatus::InProgress, $task->fresh()->status);
+
+            $command = new AgentCommand([
+                'outcome' => AgentCommandOutcome::Proposed,
+                'result' => 'הוגשה פעולה לאישור.',
+            ]);
+            $command->pending_action_id = $action->id;
+
+            return $command;
+        });
+
+        (new RunAgentInstructionJob(self::MGMT, 'משהו', $task->id))
+            ->handle($interpreter, app(WahaClient::class));
+
+        $this->assertSame(TaskStatus::Open, $task->fresh()->status);
+    }
+
+    /**
+     * A task delegated in order to produce one proposal — "send Dana a payment
+     * request" — stays claimed while that decision waits. The link has to be on
+     * the proposal, or the decision can never end the claim.
+     */
+    public function test_a_decision_on_a_delegated_runs_proposal_hands_the_task_back(): void
+    {
+        $customer = Customer::factory()->create(['name' => 'דנה']);
+        $task = Task::create(['title' => 'לשלוח לדנה דרישת תשלום', 'status' => TaskStatus::InProgress]);
+
+        $claude = Mockery::mock(ClaudeClient::class);
+        $claude->shouldReceive('isEnabled')->andReturn(true);
+        $claude->shouldReceive('lastError')->andReturnNull();
+        $claude->shouldReceive('converse')->andReturnUsing(
+            function (string $system, string $prompt, array $tools, callable $handler) use ($customer): string {
+                $handler('propose_payment_request', [
+                    'customer_id' => $customer->id,
+                    'amount_ils' => 300,
+                    'description' => 'אחסון',
+                ]);
+
+                return 'הגשתי דרישת תשלום לאישור.';
+            }
+        );
+        $this->app->instance(ClaudeClient::class, $claude);
+
+        (new RunAgentInstructionJob(self::MGMT, 'לשלוח לדנה דרישת תשלום', $task->id))
+            ->handle(app(CommandInterpreter::class), app(WahaClient::class));
+
+        $action = PendingAction::sole();
+        $this->assertSame($task->id, $action->task_id);
+        $this->assertSame(TaskStatus::InProgress, $task->fresh()->status);
+
+        app(ApprovalGate::class)->reject($action);
+
+        $this->assertSame(TaskStatus::Open, $task->fresh()->status);
+    }
+
+    /**
+     * A job that threw releases in its finally AND is then failed by the
+     * worker. Counting its hold off twice would eat a hold belonging to the
+     * other investigation and hand the task back underneath it.
+     */
+    public function test_a_failed_investigation_gives_up_its_own_hold_only(): void
+    {
+        $task = Task::create([
+            'title' => 'לבדוק את שני האתרים',
+            'status' => TaskStatus::InProgress,
+            'background_holds' => ['hold-1', 'hold-2'],
+        ]);
+
+        $agent = $this->mock(SiteAgent::class);
+        $agent->shouldReceive('investigate')->andThrow(new \RuntimeException('boom'));
+
+        $siteId = Site::factory()->create(['customer_id' => Customer::factory()->create()->id])->id;
+        $make = fn (): InvestigateSiteJob => new InvestigateSiteJob(
+            $siteId,
+            'בדיקה',
+            releasesTaskId: $task->id,
+            holdToken: 'hold-1',
+        );
+
+        try {
+            $make()->handle($agent, app(SiteMemoryStore::class));
+        } catch (\RuntimeException) {
+            // The worker gets the exception and then fails the job — on a FRESH
+            // instance built from the payload, which is why the hold has to be
+            // given back by name rather than counted off.
+        }
+
+        $make()->failed(new \RuntimeException('boom'));
+
+        $task->refresh();
+        $this->assertSame(['hold-2'], $task->background_holds);
+        $this->assertSame(TaskStatus::InProgress, $task->status);
+    }
+
+    /**
+     * One instruction can start two checks. The first to finish must not hand
+     * the task back while the second is still running.
+     */
+    public function test_the_last_investigation_is_the_one_that_hands_the_task_back(): void
+    {
+        $site = Site::factory()->create(['customer_id' => Customer::factory()->create()->id]);
+        $task = Task::create([
+            'title' => 'לבדוק את שני האתרים',
+            'status' => TaskStatus::InProgress,
+            'background_holds' => ['hold-1', 'hold-2'],
+        ]);
+
+        $agent = $this->mock(SiteAgent::class);
+        $agent->shouldReceive('investigate')->andReturn('האתר תקין.');
+
+        (new InvestigateSiteJob($site->id, 'בדיקה', releasesTaskId: $task->id, holdToken: 'hold-1'))
+            ->handle($agent, app(SiteMemoryStore::class));
+
+        $this->assertSame(TaskStatus::InProgress, $task->fresh()->status);
+
+        (new InvestigateSiteJob($site->id, 'בדיקה', releasesTaskId: $task->id, holdToken: 'hold-2'))
+            ->handle($agent, app(SiteMemoryStore::class));
+
+        $this->assertSame(TaskStatus::Open, $task->fresh()->status);
+    }
+
+    /**
+     * Nothing but the holder may release a held task, so a hold counted for an
+     * investigation that never started would strand the task for good.
+     */
+    public function test_a_hold_is_given_up_when_the_investigation_cannot_be_queued(): void
+    {
+        $site = Site::factory()->create([
+            'customer_id' => Customer::factory()->create()->id,
+            'mcp_enabled' => true,
+            'mcp_endpoint' => 'https://site.test/mcp',
+        ]);
+        $task = Task::create(['title' => 'לבדוק את האתר', 'status' => TaskStatus::InProgress]);
+
+        $this->mock(Dispatcher::class, function ($mock): void {
+            $mock->shouldReceive('dispatch')->andThrow(new \RuntimeException('queue down'));
+        });
+
+        $claude = Mockery::mock(ClaudeClient::class);
+        $claude->shouldReceive('isEnabled')->andReturn(true);
+        $claude->shouldReceive('lastError')->andReturnNull();
+        $claude->shouldReceive('converse')->andReturnUsing(
+            function (string $system, string $prompt, array $tools, callable $handler) use ($site): string {
+                $handler('investigate_site', ['site_id' => $site->id, 'goal' => 'בדיקה']);
+
+                return 'לא הצלחתי להפעיל את הבדיקה.';
+            }
+        );
+        $this->app->instance(ClaudeClient::class, $claude);
+
+        (new RunAgentInstructionJob(self::MGMT, 'לבדוק את האתר', $task->id))
+            ->handle(app(CommandInterpreter::class), app(WahaClient::class));
+
+        // Nothing is running, so the task is a person's again — not stuck
+        // "in progress" behind a hold nobody will ever count down.
+        $task->refresh();
+        $this->assertSame([], $task->background_holds);
+        $this->assertSame(TaskStatus::Open, $task->status);
+    }
+
+    /**
+     * A fix waiting for approval is something to act on, so the task stays
+     * claimed — exactly as it would had the agent proposed it in the
+     * foreground. The link is on the proposal, so the decision can hand the
+     * task back; a claim nobody can end is how a task disappears.
+     */
+    public function test_a_task_waits_for_the_decision_on_the_fix_its_investigation_proposed(): void
+    {
+        $site = Site::factory()->create(['customer_id' => Customer::factory()->create()->id]);
+        $task = Task::create([
+            'title' => 'לבדוק את האתר',
+            'status' => TaskStatus::InProgress,
+            'background_holds' => ['hold-1'],
+        ]);
+
+        $agent = $this->mock(SiteAgent::class);
+        $agent->shouldReceive('investigate')->andReturnUsing(
+            function (Site $site, string $goal, int $round, ?int $taskId) use ($task): string {
+                // The task travels into the investigation, so its proposal
+                // carries the link.
+                $this->assertSame($task->id, $taskId);
+
+                app(ApprovalGate::class)->propose(
+                    type: 'site_action',
+                    summary: 'להחליף תוסף שבור',
+                    payload: ['site_id' => $site->id, 'tool' => 'wp_plugin_update', 'arguments' => []],
+                    taskId: $taskId,
+                );
+
+                return 'מצאתי תוסף שבור והצעתי תיקון.';
+            }
+        );
+
+        (new InvestigateSiteJob($site->id, 'בדיקה', releasesTaskId: $task->id, holdToken: 'hold-1'))
+            ->handle($agent, app(SiteMemoryStore::class));
+
+        $task->refresh();
+        $this->assertSame(TaskStatus::InProgress, $task->status);
+        // Nothing is running any more — the pending decision is what it waits on.
+        $this->assertSame([], $task->background_holds);
+
+        app(ApprovalGate::class)->reject(PendingAction::sole());
+
+        $this->assertSame(TaskStatus::Open, $task->fresh()->status);
+    }
+
+    /**
+     * The delegated instruction IS the task's own text, so an agent told to
+     * "open a task when there is no tool" would open a copy of the task it was
+     * just handed: a second notification, and the original still claimed.
+     */
+    public function test_a_delegated_run_does_not_reopen_the_task_it_was_given(): void
+    {
+        $task = Task::create(['title' => 'להתקשר לספק הדומיינים', 'status' => TaskStatus::InProgress]);
+
+        $claude = Mockery::mock(ClaudeClient::class);
+        $claude->shouldReceive('isEnabled')->andReturn(true);
+        $claude->shouldReceive('lastError')->andReturnNull();
+        $claude->shouldReceive('converse')->andReturnUsing(
+            function (string $system, string $prompt, array $tools, callable $handler) use (&$toolResult): string {
+                $toolResult = $handler('open_task', ['title' => 'להתקשר לספק הדומיינים']);
+
+                return 'צריך טלפון לספק.';
+            }
+        );
+        $this->app->instance(ClaudeClient::class, $claude);
+
+        (new RunAgentInstructionJob(self::MGMT, 'להתקשר לספק הדומיינים', $task->id))
+            ->handle(app(CommandInterpreter::class), app(WahaClient::class));
+
+        $this->assertSame(1, Task::count());
+        $this->assertTrue($toolResult['is_error'] ?? false);
+        $this->assertStringContainsString("#{$task->id}", $toolResult['content']);
     }
 
     public function test_releasing_never_undoes_a_person_who_completed_the_task_meanwhile(): void

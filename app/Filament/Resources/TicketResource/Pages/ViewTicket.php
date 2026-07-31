@@ -2,7 +2,6 @@
 
 namespace App\Filament\Resources\TicketResource\Pages;
 
-use App\Enums\ActionStatus;
 use App\Enums\MessageAuthor;
 use App\Enums\MessageChannel;
 use App\Enums\MessageDirection;
@@ -211,10 +210,7 @@ class ViewTicket extends ViewRecord
         // that could otherwise still be approved from the panel/WhatsApp and sent.
         // Reject it too, exactly as sending a manual reply does — otherwise "דחה"
         // wouldn't actually prevent the draft from reaching the customer.
-        PendingAction::where('ticket_id', $this->record->id)
-            ->where('type', 'ticket_reply')
-            ->where('status', ActionStatus::Pending)
-            ->update(['status' => ActionStatus::Rejected, 'decided_at' => now(), 'error' => 'בוטלה — הטיוטה נדחתה מהשיחה.']);
+        PendingAction::supersedeTicketReplies($this->record->id, 'בוטלה — הטיוטה נדחתה מהשיחה.');
 
         Notification::make()->title('ההמלצה נדחתה')->success()->send();
     }
@@ -286,10 +282,7 @@ class ViewTicket extends ViewRecord
             // A manual reply supersedes any pending AI reply proposal for this
             // ticket — cancel it so a later WhatsApp/panel approval can't send the
             // original draft as a duplicate second reply.
-            PendingAction::where('ticket_id', $this->record->id)
-                ->where('type', 'ticket_reply')
-                ->where('status', ActionStatus::Pending)
-                ->update(['status' => ActionStatus::Rejected, 'decided_at' => now(), 'error' => 'בוטלה — נשלחה תשובה ידנית מהשיחה.']);
+            PendingAction::supersedeTicketReplies($this->record->id, 'בוטלה — נשלחה תשובה ידנית מהשיחה.');
 
             SendTicketReplyJob::dispatch($message->id);
         }

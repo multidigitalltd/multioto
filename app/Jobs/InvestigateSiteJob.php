@@ -6,6 +6,7 @@ use App\Enums\AgentCommandOutcome;
 use App\Models\AgentCommand;
 use App\Models\Site;
 use App\Models\SystemLog;
+use App\Models\Task;
 use App\Services\Agent\IncidentMemory;
 use App\Services\Agent\SiteAgent;
 use App\Services\Agent\SiteMemoryStore;
@@ -64,6 +65,24 @@ class InvestigateSiteJob implements ShouldQueue
      */
     public string $chatSource = AgentCommand::SOURCE_PANEL;
 
+    /**
+     * A delegated task ("סוכן משימה 7") that is waiting on THIS investigation.
+     * The console run that queued this job has already finished, so the task
+     * cannot be handed back there — it would go back on the open list while the
+     * investigation is still running and could be delegated all over again.
+     * Released here instead, when the findings are in. Class-level default for
+     * queue-payload BC, for the same reason as $chatUserId above.
+     */
+    public ?int $releasesTaskId = null;
+
+    /**
+     * This job's name on that task's holder list. Serialized with the job, so
+     * the fresh instance the worker builds to run failed() gives back the SAME
+     * hold rather than one belonging to another investigation. Class-level
+     * default for queue-payload BC, as above.
+     */
+    public ?string $holdToken = null;
+
     public function __construct(
         public int $siteId,
         public string $goal,
@@ -71,13 +90,61 @@ class InvestigateSiteJob implements ShouldQueue
         ?int $chatUserId = null,
         ?int $verifiesResolutionId = null,
         string $chatSource = AgentCommand::SOURCE_PANEL,
+        ?int $releasesTaskId = null,
+        ?string $holdToken = null,
     ) {
         $this->chatUserId = $chatUserId;
         $this->verifiesResolutionId = $verifiesResolutionId;
         $this->chatSource = $chatSource;
+        $this->releasesTaskId = $releasesTaskId;
+        $this->holdToken = $holdToken;
     }
 
     public function handle(SiteAgent $agent, SiteMemoryStore $memory): void
+    {
+        try {
+            $this->investigate($agent, $memory);
+        } finally {
+            $this->releaseTask();
+        }
+    }
+
+    /**
+     * Give up this job's hold on a waiting task, and hand the task back if it
+     * was the last thing keeping it claimed.
+     *
+     * Runs more than once by design — handle() releases in a finally, and a job
+     * that threw is then failed by the worker on a fresh instance of itself —
+     * which is why the hold is given back BY NAME. Removing a token that is
+     * already gone changes nothing; counting one off twice would take a hold
+     * belonging to another investigation still running.
+     */
+    private function releaseTask(): void
+    {
+        if ($this->releasesTaskId === null || $this->holdToken === null) {
+            return;
+        }
+
+        Task::dropHold($this->releasesTaskId, $this->holdToken);
+
+        // One instruction can start two investigations, and one of them may
+        // have filed a fix that is waiting for approval — the task is handed
+        // back only when neither is true any more.
+        Task::releaseIfIdle($this->releasesTaskId);
+    }
+
+    /**
+     * The hold is given up even when the job never gets to run — the findings
+     * will not arrive, so this investigation is not working on anything. A fix
+     * it managed to file before dying still holds the task through the approval
+     * gate, so releasing here cannot lose a pending decision.
+     */
+    public function failed(\Throwable $e): void
+    {
+        $this->releaseTask();
+    }
+
+    private function investigate(SiteAgent $agent, SiteMemoryStore $memory): void
     {
         $site = Site::find($this->siteId);
 
@@ -85,7 +152,7 @@ class InvestigateSiteJob implements ShouldQueue
             return;
         }
 
-        $summary = $agent->investigate($site, $this->goal, $this->round);
+        $summary = $agent->investigate($site, $this->goal, $this->round, $this->releasesTaskId);
 
         if (blank($summary)) {
             $reason = $this->blankReason($site);
