@@ -1247,9 +1247,24 @@ class ConsoleAgent
             return null;
         }
 
-        $taken = Task::where('source_ref', 'like', $key.'%')->count();
+        // Probed, not counted: a row in the series can be deleted by hand, and
+        // then the count points at a reference that is still taken — filing
+        // under it would hand back that finished task as though it had just
+        // been opened. One query, and the free reference is found in memory.
+        $taken = Task::where('source_ref', 'like', $key.'%')->pluck('source_ref')->all();
 
-        return $taken === 0 ? $key : $key.'-r'.($taken + 1);
+        if (! in_array($key, $taken, true)) {
+            return $key;
+        }
+
+        // One more candidate than there are rows, so a free one always exists.
+        for ($revision = 2; $revision <= count($taken) + 2; $revision++) {
+            if (! in_array($key.'-r'.$revision, $taken, true)) {
+                return $key.'-r'.$revision;
+            }
+        }
+
+        return null;
     }
 
     /**

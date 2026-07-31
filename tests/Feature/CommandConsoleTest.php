@@ -247,6 +247,30 @@ class CommandConsoleTest extends TestCase
         $this->assertStringContainsString('#'.Task::latest('id')->first()->id, $retry->result);
     }
 
+    public function test_a_deleted_task_in_the_series_does_not_block_the_next_one(): void
+    {
+        // Tasks can be deleted by hand, so "how many are there" says nothing
+        // about which reference is free. Asking again must still open a task —
+        // not quietly hand back a closed one.
+        $this->fakeAgent([['open_task', ['title' => 'להתקשר לספק']]]);
+        app(CommandInterpreter::class)->run('תדבר עם הספק');
+        $first = Task::sole();
+        $first->update(['status' => TaskStatus::Done]);
+
+        $this->fakeAgent([['open_task', ['title' => 'להתקשר לספק']]]);
+        app(CommandInterpreter::class)->run('תדבר עם הספק');
+        Task::latest('id')->first()->update(['status' => TaskStatus::Done]);
+
+        // The middle of the series is gone.
+        $first->delete();
+
+        $this->fakeAgent([['open_task', ['title' => 'להתקשר לספק']]]);
+        app(CommandInterpreter::class)->run('תדבר עם הספק');
+
+        $this->assertSame(2, Task::count());
+        $this->assertSame(TaskStatus::Open, Task::latest('id')->first()->status);
+    }
+
     public function test_two_different_instructions_each_open_their_own_task(): void
     {
         $this->fakeAgent([['open_task', ['title' => 'להתקשר לספק']]]);
