@@ -72,6 +72,29 @@ class Backup extends Model
             && $this->restore_queued_at->lt(now()->subMinutes($minutes));
     }
 
+    /**
+     * A restore that started and then stopped existing.
+     *
+     * Started claims deliberately do not expire — a restore that got as far as
+     * replacing data must never be repeated. But a worker killed before its
+     * transaction committed replaced nothing, and left the row on "running"
+     * with no way back except editing the database by hand. Three things have
+     * to be true to say that safely: the run did not commit (its transaction
+     * writes the token, so the absence of one is the absence of a commit), the
+     * row has not been touched for longer than an operation could plausibly go
+     * without a heartbeat, and nothing is running now.
+     */
+    public function restoreAbandoned(): bool
+    {
+        $minutes = max(1, (int) config('backup.operation_window_minutes', 60));
+
+        return $this->restore_status === BackupStatus::Running
+            && $this->restore_started_at !== null
+            && $this->restore_journal === null
+            && $this->updated_at !== null
+            && $this->updated_at->lt(now()->subMinutes($minutes));
+    }
+
     public function isAutomatic(): bool
     {
         return $this->user_id === null;

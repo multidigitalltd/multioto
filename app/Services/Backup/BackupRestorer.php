@@ -370,6 +370,10 @@ class BackupRestorer
 
         if ($backup->restore_status === BackupStatus::Running
             && ! $backup->restoreClaimExpired()
+            // A run that stopped without committing: nothing was replaced, so
+            // there is nothing a second attempt could destroy — and without
+            // this the row would refuse every future restore for ever.
+            && ! ($backup->restoreAbandoned() && ! app(OperationGate::class)->isRunning($backup->id))
             && ! ($adoptUnstarted && $unstartedClaim)) {
             // A second run would finish AFTER the first and put the same old
             // snapshot back, wiping everything accepted in between. Unless the
@@ -529,6 +533,22 @@ class BackupRestorer
             // only shows up later.
             throw new RuntimeException(
                 'מבנה בסיס הנתונים השתנה מאז הגיבוי ('.count($drift).' שינויים) — השחזור נעצר.'
+            );
+        }
+
+        // Only the declared tables are emptied and reloaded, so a manifest
+        // missing one leaves that table's live rows standing beside a database
+        // restored around them — and reports success. An archive declaring no
+        // tables at all would replace nothing whatsoever.
+        $missing = array_values(array_diff(
+            $this->archive->tables(),
+            array_keys((array) ($manifest['tables'] ?? [])),
+        ));
+
+        if ($missing !== []) {
+            throw new RuntimeException(
+                'הגיבוי אינו כולל את כל הטבלאות ('.implode(', ', array_slice($missing, 0, 5))
+                .(count($missing) > 5 ? ', ...' : '').') — השחזור נעצר כדי לא להשאיר נתונים ישנים לצד משוחזרים.'
             );
         }
     }
@@ -1765,7 +1785,12 @@ class BackupRestorer
     /** @param  array{disk: string, path: string, at: int|null, len: int}  $entry */
     private function entryKey(array $entry): string
     {
-        return $entry['disk'].'|'.$entry['path'];
+        // The offset is part of the identity. One path can legitimately be
+        // journalled twice — overlapping prefixes in backup.files list it
+        // twice — and collapsing both to one key would let the later record's
+        // "recovered" mark hide the earlier one, which is the copy holding the
+        // true pre-restore contents.
+        return $entry['disk'].'|'.$entry['path'].'|'.($entry['at'] ?? 'none');
     }
 
     /**

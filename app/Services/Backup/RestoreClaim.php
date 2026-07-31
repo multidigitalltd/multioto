@@ -47,7 +47,17 @@ class RestoreClaim
                 // and re-running it would delete everything accepted since.
                 ->orWhere(fn ($done) => $done->where('restore_status', BackupStatus::Completed)
                     ->whereNull('restore_error'))
-                ->orWhere(fn ($stale) => $this->unstarted($stale, $takeOverUnstarted)))
+                ->orWhere(fn ($stale) => $this->unstarted($stale, $takeOverUnstarted))
+                // A run that started, did not commit, and has not been heard
+                // from since. Its transaction rolled itself back, so there is
+                // nothing left of it to protect — and the row would otherwise
+                // refuse every later restore for ever.
+                ->orWhere(fn ($dead) => $dead->where('restore_status', BackupStatus::Running)
+                    ->whereNotNull('restore_started_at')
+                    ->whereNull('restore_journal')
+                    ->where('updated_at', '<', now()->subMinutes(
+                        max(1, (int) config('backup.operation_window_minutes', 60))
+                    ))))
             ->update([
                 'restore_status' => BackupStatus::Running,
                 'restore_error' => null,

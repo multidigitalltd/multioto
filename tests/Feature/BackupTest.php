@@ -2135,6 +2135,43 @@ class BackupTest extends TestCase
         $this->assertFalse(app(OperationGate::class)->isRunning());
     }
 
+    public function test_a_restore_that_died_without_committing_can_be_tried_again(): void
+    {
+        $backup = $this->runBackup();
+
+        // Started, never committed — no token — and not heard from since.
+        $backup->update([
+            'restore_status' => BackupStatus::Running,
+            'restore_attempt' => 'attempt-dead',
+            'restore_started_at' => now()->subHours(4),
+        ]);
+        Backup::whereKey($backup->id)->update(['updated_at' => now()->subHours(4)]);
+
+        // Its transaction rolled itself back, so there is nothing a second
+        // attempt could destroy — and without this the row would refuse every
+        // future restore for ever.
+        $this->assertNull(app(BackupRestorer::class)->blockedReason($backup->fresh()));
+        $this->assertNotNull(app(RestoreClaim::class)->take($backup->fresh()));
+    }
+
+    public function test_a_restore_that_committed_is_still_never_repeated(): void
+    {
+        $backup = $this->runBackup();
+
+        // Same age, but this one's transaction landed.
+        $backup->update([
+            'restore_status' => BackupStatus::Running,
+            'restore_attempt' => 'attempt-landed',
+            'restore_journal' => 'attempt-landed',
+            'restore_started_at' => now()->subHours(4),
+        ]);
+        Backup::whereKey($backup->id)->update(['updated_at' => now()->subHours(4)]);
+
+        // Repeating it would delete everything accepted since it landed.
+        $this->assertNotNull(app(BackupRestorer::class)->blockedReason($backup->fresh()));
+        $this->assertNull(app(RestoreClaim::class)->take($backup->fresh()));
+    }
+
     public function test_a_restore_refuses_an_archive_from_a_disk_this_install_does_not_have(): void
     {
         Storage::disk('local')->put('attachments/keep.txt', 'צרופה');
