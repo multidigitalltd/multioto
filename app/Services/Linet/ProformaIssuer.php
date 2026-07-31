@@ -4,6 +4,7 @@ namespace App\Services\Linet;
 
 use App\Enums\VatCategory;
 use App\Models\Charge;
+use App\Services\Backup\OperationGate;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
 
@@ -29,6 +30,16 @@ class ProformaIssuer
         // don't issue one — the demand still goes out.
         if (blank(config('billing.linet.doctype_proforma'))) {
             return ['ok' => true, 'error' => null, 'skipped' => true];
+        }
+
+        // Linet emails the document to the customer, and the id linking it to
+        // the charge lives in a row a restore is about to replace — after which
+        // nothing here knows the document exists and a second one gets issued.
+        if (app(OperationGate::class)->isRunning()) {
+            return [
+                'ok' => false,
+                'error' => 'פעולת גיבוי או שחזור רצה כרגע — לא הונפקה חשבונית עסקה. נסו שוב בעוד כמה דקות.',
+            ];
         }
 
         $charge->loadMissing(['subscription.customer', 'customer']);

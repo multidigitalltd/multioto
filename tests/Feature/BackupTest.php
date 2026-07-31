@@ -9,9 +9,11 @@ use App\Filament\Pages\ManageBackups;
 use App\Jobs\ChargeSubscriptionJob;
 use App\Jobs\ImportBackupsJob;
 use App\Jobs\IssueInvoiceJob;
+use App\Jobs\IssueProformaJob;
 use App\Jobs\ProcessManualChargeJob;
 use App\Jobs\RestoreBackupJob;
 use App\Jobs\RunBackupJob;
+use App\Jobs\SendPaymentLinkJob;
 use App\Mail\NotificationMail;
 use App\Models\Backup;
 use App\Models\Charge;
@@ -24,8 +26,12 @@ use App\Services\Backup\BackupRestorer;
 use App\Services\Backup\BackupRunner;
 use App\Services\Backup\OperationGate;
 use App\Services\Billing\DunningMachine;
+use App\Services\Billing\ManualChargeService;
 use App\Services\Cardcom\CardcomClient;
 use App\Services\Linet\InvoiceIssuer;
+use App\Services\Linet\ProformaIssuer;
+use App\Services\Notifications\TemplateEngine;
+use App\Services\Waha\WahaClient;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
@@ -917,6 +923,30 @@ class BackupTest extends TestCase
 
         $this->assertFalse($result['ok']);
         $this->assertStringContainsString('גיבוי או שחזור', (string) $result['error']);
+    }
+
+    public function test_a_payment_link_and_a_proforma_wait_for_the_restore_too(): void
+    {
+        Queue::fake([SendPaymentLinkJob::class, IssueProformaJob::class]);
+
+        $backup = $this->runBackup();
+        $backup->update(['restore_status' => BackupStatus::Running]);
+
+        $customer = Customer::factory()->create();
+
+        // A payment page is payable the moment it exists; a proforma is emailed
+        // and its id lives in a row the restore is about to replace.
+        (new SendPaymentLinkJob($customer->id, 11800, 'דרישת תשלום', 'email'))
+            ->handle(app(ManualChargeService::class), app(TemplateEngine::class), app(WahaClient::class));
+        (new IssueProformaJob(1))->handle(app(ProformaIssuer::class));
+
+        Queue::assertPushed(SendPaymentLinkJob::class);
+        Queue::assertPushed(IssueProformaJob::class);
+
+        // And the services refuse directly too, for the panel paths that call
+        // them without a queue.
+        $this->expectException(\RuntimeException::class);
+        app(ManualChargeService::class)->createHostedPage($customer, 11800, 'דרישת תשלום');
     }
 
     public function test_a_forgotten_running_row_does_not_stop_billing_for_ever(): void

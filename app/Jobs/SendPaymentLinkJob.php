@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Jobs\Concerns\WaitsForRestore;
 use App\Models\Customer;
 use App\Services\Billing\DemandDispatcher;
 use App\Services\Billing\ManualChargeService;
@@ -22,6 +23,7 @@ use Illuminate\Foundation\Queue\Queueable;
 class SendPaymentLinkJob implements ShouldQueue
 {
     use Queueable;
+    use WaitsForRestore;
 
     public int $tries = 2;
 
@@ -41,8 +43,24 @@ class SendPaymentLinkJob implements ShouldQueue
         public ?string $dueAt = null, // 'Y-m-d' — the demand's "pay by" date
     ) {}
 
+    /** @return array<int, mixed> */
+    protected function backupWaitDispatchArgs(): array
+    {
+        return [
+            $this->customerId, $this->totalAgorot, $this->description,
+            $this->channel, $this->lines, $this->methods, $this->dueAt,
+        ];
+    }
+
     public function handle(ManualChargeService $service, TemplateEngine $templates, WahaClient $waha): void
     {
+        // A payment page the customer can pay into, whose charge row a restore
+        // is about to replace, leaves money arriving with nothing to match it
+        // to. Held until the operation is over.
+        if ($this->heldForBackupOperation()) {
+            return;
+        }
+
         $customer = Customer::find($this->customerId);
 
         if (! $customer) {
