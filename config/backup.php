@@ -114,6 +114,17 @@ return [
      */
     'operation_window_minutes' => (int) env('BACKUP_OPERATION_WINDOW_MINUTES', 60),
 
+    /**
+     * How many external references (Cardcom pages/transactions, Linet documents)
+     * a restore compares against the archive before it stops collecting.
+     *
+     * A bound is needed — the comparison runs inside the restore transaction —
+     * but reaching it is reported rather than hidden: the references are read
+     * oldest first, so a scan that fills up never reached the newest rows, which
+     * are the ones a restore is most likely to drop.
+     */
+    'reconcile_limit' => (int) env('BACKUP_RECONCILE_LIMIT', 5000),
+
     /** A single file larger than this is skipped and noted in the manifest. */
     'max_file_bytes' => (int) env('BACKUP_MAX_FILE_BYTES', 64 * 1024 * 1024),
 

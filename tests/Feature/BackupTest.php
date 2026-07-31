@@ -983,6 +983,60 @@ class BackupTest extends TestCase
         $this->assertStringContainsString('lp-still-payable', implode(' ', $report['items']));
     }
 
+    public function test_a_reconciliation_that_ran_out_of_room_says_so_even_when_it_found_nothing(): void
+    {
+        Mail::fake();
+        config([
+            'billing.notifications.team_email' => 'team@multi.test',
+            // Two references fill the ceiling. On a real install the same thing
+            // happens with 5,000 older payments that are all safely archived.
+            'backup.reconcile_limit' => 2,
+        ]);
+
+        $customer = Customer::factory()->create();
+
+        foreach (['tx-old-one', 'tx-old-two'] as $reference) {
+            Charge::create([
+                'customer_id' => $customer->id,
+                'status' => ChargeStatus::Succeeded,
+                'amount_agorot' => 10000,
+                'vat_agorot' => 1800,
+                'total_agorot' => 11800,
+                'attempt_number' => 1,
+                'period_start' => now()->startOfMonth(),
+                'period_end' => now()->endOfMonth(),
+                'cardcom_transaction_id' => $reference,
+            ]);
+        }
+
+        // Both are in the archive, so the scan confirms nothing missing — and
+        // fills its quota on them before it ever reaches the one below.
+        $backup = $this->runBackup();
+
+        Charge::create([
+            'customer_id' => $customer->id,
+            'status' => ChargeStatus::Pending,
+            'amount_agorot' => 10000,
+            'vat_agorot' => 1800,
+            'total_agorot' => 11800,
+            'attempt_number' => 1,
+            'period_start' => now()->startOfMonth(),
+            'period_end' => now()->endOfMonth(),
+            'cardcom_low_profile_id' => 'lp-never-reached',
+        ]);
+
+        app(BackupRestorer::class)->restore($backup);
+
+        // "Found none" and "never looked" are not the same answer. Staying quiet
+        // here would tell the team the money is accounted for at exactly the
+        // moment the check could not see the newest payment.
+        $report = $backup->fresh()->restore_report;
+        $this->assertNotNull($report);
+        $this->assertTrue($report['truncated']);
+        $this->assertSame(0, $report['count']);
+        Mail::assertSent(NotificationMail::class);
+    }
+
     public function test_a_restore_does_not_report_the_payments_it_puts_back(): void
     {
         Mail::fake();

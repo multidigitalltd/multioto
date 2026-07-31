@@ -410,14 +410,21 @@ class ManageBackups extends Page implements HasForms, HasTable
                     ->label('רשימת ההתאמות')
                     ->icon('heroicon-o-clipboard-document-list')
                     ->color('warning')
-                    ->visible(fn (Backup $r): bool => filled($r->restore_report['items'] ?? null))
+                    // Also shown for a scan that ran out of room before it
+                    // finished: an empty list there means "not checked", and
+                    // hiding it would read as "nothing to do".
+                    ->visible(fn (Backup $r): bool => filled($r->restore_report['items'] ?? null)
+                        || ($r->restore_report['truncated'] ?? false))
                     ->modalHeading('רשומות שאינן בגיבוי — לבדוק מול קארדקום ולינט')
                     ->modalDescription(fn (Backup $r): string => 'אלה חיובים ומסמכים שהיו במערכת לפני השחזור ואינם בגיבוי. '
                         .'קארדקום ולינט עדיין מכירים אותם, ולכן צריך להשוות מולם לפני שממשיכים לגבות. '
                         .'סה"כ: '.(int) ($r->restore_report['count'] ?? 0)
-                        .(($r->restore_report['truncated'] ?? false) ? ' (ייתכן שיש נוספים)' : ''))
+                        .(($r->restore_report['truncated'] ?? false)
+                            ? ' — הבדיקה נעצרה בתקרה ולא הגיעה לרשומות האחרונות, שהן דווקא החשודות ביותר.'
+                            : ''))
                     ->modalContent(fn (Backup $r) => view('filament.pages.partials.restore-report', [
                         'items' => (array) ($r->restore_report['items'] ?? []),
+                        'truncated' => (bool) ($r->restore_report['truncated'] ?? false),
                     ]))
                     ->modalSubmitAction(false)
                     ->modalCancelActionLabel('סגירה'),

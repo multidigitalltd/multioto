@@ -35,7 +35,10 @@ class BackupRestorer
     private const READ_CHUNK = 262144;
 
     /** How many external references to gather before calling it enough. */
-    private const ARTIFACT_LIMIT = 5000;
+    private function artifactLimit(): int
+    {
+        return max(1, (int) config('backup.reconcile_limit', 5000));
+    }
 
     public function __construct(private BackupArchive $archive) {}
 
@@ -144,7 +147,7 @@ class BackupRestorer
                         // backup puts back is not lost, and reporting it would
                         // bury the handful that genuinely are.
                         $discarded = $this->referencesNotRestored($orphaned);
-                        $truncated = count($orphaned) >= self::ARTIFACT_LIMIT;
+                        $truncated = count($orphaned) >= $this->artifactLimit();
 
                         // Files INSIDE the transaction, which makes the restore
                         // all-or-nothing the useful way round: a file that cannot
@@ -544,9 +547,10 @@ class BackupRestorer
     private function externalReferences(array $order): array
     {
         $refs = [];
+        $limit = $this->artifactLimit();
 
-        $collect = function (string $table, array $columns, callable $label) use (&$refs, $order): void {
-            if (! in_array($table, $order, true) || count($refs) >= self::ARTIFACT_LIMIT) {
+        $collect = function (string $table, array $columns, callable $label) use (&$refs, $order, $limit): void {
+            if (! in_array($table, $order, true) || count($refs) >= $limit) {
                 return;
             }
 
@@ -558,11 +562,18 @@ class BackupRestorer
                 })
                 ->orderBy('id')
                 ->select(array_merge(['id'], $columns))
-                ->chunkById(self::CHUNK, function ($rows) use (&$refs, $table, $columns, $label): bool {
+                ->chunkById(self::CHUNK, function ($rows) use (&$refs, $table, $columns, $label, $limit): bool {
                     foreach ($rows as $row) {
                         foreach ($columns as $column) {
                             if (blank($row->{$column})) {
                                 continue;
+                            }
+
+                            // Checked per reference, not per chunk: a ceiling
+                            // that only applies between chunks is not a ceiling,
+                            // and the report says how many were compared.
+                            if (count($refs) >= $limit) {
+                                return false;
                             }
 
                             $refs[] = [
@@ -574,9 +585,9 @@ class BackupRestorer
                         }
                     }
 
-                    // Bounded, but never silently: the count of what was left
-                    // out travels with the report.
-                    return count($refs) < self::ARTIFACT_LIMIT;
+                    // Bounded, but never silently: reaching the ceiling travels
+                    // with the report.
+                    return count($refs) < $limit;
                 });
         };
 
@@ -633,16 +644,27 @@ class BackupRestorer
      * carries a sample and the count, because an email is where someone finds
      * out, not where they reconcile.
      *
+     * A scan that hit its ceiling is reported even when it found nothing. The
+     * references are collected by ascending id, so a system with more than the
+     * ceiling's worth of older references — all of them safely in the archive —
+     * fills the quota before it ever reaches the newest rows, which are exactly
+     * the ones a restore is likely to drop. "Found none" and "never looked" are
+     * not the same answer, and only one of them means everything is accounted
+     * for.
+     *
      * @param  list<string>  $discarded
      */
     private function reportDiscardedArtifacts(Backup $backup, array $discarded, bool $truncated): void
     {
-        if ($discarded === []) {
+        if ($discarded === [] && ! $truncated) {
             return;
         }
 
         $count = count($discarded);
-        $note = $truncated ? " (נאספו עד {$count} — ייתכן שיש נוספים)" : '';
+        $ceiling = $this->artifactLimit();
+        $note = $truncated
+            ? " הבדיקה נעצרה בתקרה של {$ceiling} רשומות ולא הגיעה לסופן, ולכן ייתכן שיש נוספות שלא נבדקו."
+            : '';
 
         $backup->update(['restore_report' => [
             'at' => now()->toIso8601String(),
@@ -651,7 +673,11 @@ class BackupRestorer
             'items' => $discarded,
         ]]);
 
-        SystemLog::record('warning', 'backup', "שחזור גיבוי #{$backup->id}: {$count} חיובים/מסמכים חיצוניים אינם קיימים בגיבוי{$note}.", [
+        $headline = $count > 0
+            ? "{$count} חיובים/מסמכים חיצוניים אינם קיימים בגיבוי."
+            : 'לא נמצאו חיובים/מסמכים חסרים בטווח שנבדק.';
+
+        SystemLog::record('warning', 'backup', "שחזור גיבוי #{$backup->id}: {$headline}{$note}", [
             'backup_id' => $backup->id,
         ]);
 
@@ -661,14 +687,23 @@ class BackupRestorer
             return;
         }
 
-        $sample = implode("\n", array_slice($discarded, 0, 20));
+        $body = 'השחזור החזיר את המערכת לתמונת המצב של הגיבוי. ';
+
+        if ($count > 0) {
+            $sample = implode("\n", array_slice($discarded, 0, 20));
+
+            $body .= "{$count} רשומות היו קיימות לפני השחזור ואינן בגיבוי, ולכן אין להן יותר שורה במערכת — "
+                ."אבל קארדקום ולינט עדיין מכירים אותן.{$note}\n\nלדוגמה:\n{$sample}\n\n"
+                .'הרשימה המלאה שמורה על שורת הגיבוי במסך "גיבוי ושחזור" — כפתור "רשימת ההתאמות". ';
+        } else {
+            $body .= "בטווח שנבדק לא נמצאו רשומות חסרות, אבל הבדיקה לא הושלמה:{$note}\n\n"
+                .'הרשומות נסרקות מהישנות לחדשות, ולכן דווקא החיובים והמסמכים האחרונים — אלה שסביר שאינם בגיבוי — '
+                ."הם שלא נבדקו.\n\n";
+        }
 
         rescue(fn () => Mail::to($to)->send(new NotificationMail(
             'שוחזר גיבוי — יש לבדוק חיובים ומסמכים מול קארדקום ולינט',
-            "השחזור החזיר את המערכת לתמונת המצב של הגיבוי. {$count} רשומות היו קיימות לפני השחזור ואינן בגיבוי{$note}, "
-            ."ולכן אין להן יותר שורה במערכת — אבל קארדקום ולינט עדיין מכירים אותן.\n\nלדוגמה:\n{$sample}\n\n"
-            .'הרשימה המלאה שמורה על שורת הגיבוי במסך "גיבוי ושחזור" — כפתור "רשימת ההתאמות". '
-            .'יש להשוות מול הדוחות בקארדקום ובלינט לפני שממשיכים לגבות.',
+            $body.'יש להשוות מול הדוחות בקארדקום ובלינט לפני שממשיכים לגבות.',
         )), report: false);
     }
 
