@@ -956,32 +956,60 @@ class ConsoleAgent
         }
 
         $this->siteId = $site->id;
-        $this->background = true;
 
-        // Written down BEFORE the hand-off, because the run that is queuing this
+        // Counted up BEFORE the hand-off, because the run that is queuing this
         // can still die afterwards — its own timeout is shorter than a single
         // provider call — and its failure handler would otherwise give the task
-        // back while the investigation is still on its way to the answer.
-        if ($this->delegatedTaskId !== null) {
-            Task::whereKey($this->delegatedTaskId)
-                ->whereNull('held_by')
-                ->update(['held_by' => Task::HELD_BY_INVESTIGATION]);
+        // back while the investigation is still on its way to the answer. A
+        // count, not a flag: one instruction may check two sites, and the task
+        // belongs to the humans again only when the last check is done.
+        $this->holdTask();
+
+        try {
+            InvestigateSiteJob::dispatch(
+                $site->id,
+                trim((string) ($input['goal'] ?? '')) ?: 'בדיקת מצב האתר',
+                1,
+                $this->conversationUserId,
+                chatSource: $this->conversationSource,
+                // A delegated task is waiting on this investigation. This run
+                // ends long before the findings exist, so the job hands the
+                // task back when it has them.
+                releasesTaskId: $this->delegatedTaskId,
+            );
+        } catch (\Throwable $e) {
+            // No job exists to count the hold back down, and nothing else may
+            // release a held task — so it would sit "in progress" with nobody
+            // working on it. Undone here before the failure surfaces.
+            $this->unholdTask();
+
+            throw $e;
         }
 
-        InvestigateSiteJob::dispatch(
-            $site->id,
-            trim((string) ($input['goal'] ?? '')) ?: 'בדיקת מצב האתר',
-            1,
-            $this->conversationUserId,
-            chatSource: $this->conversationSource,
-            // A delegated task is waiting on this investigation. This run ends
-            // long before the findings exist, so the job hands the task back —
-            // released here it would return to the open list while the check is
-            // still running, and could be delegated a second time.
-            releasesTaskId: $this->delegatedTaskId,
-        );
+        // Only once something really is running: a dispatch that threw leaves
+        // nothing to wait for, and claiming otherwise would keep a delegated
+        // task claimed for an investigation that does not exist.
+        $this->background = true;
 
         return ['content' => "סוכן האתר נשלח לבדוק את {$site->domain} — התוצאה תופיע כאן בצ׳אט בסיום, וכל תיקון יוצע לאישור."];
+    }
+
+    /** One more background job is holding the delegated task, if there is one. */
+    private function holdTask(): void
+    {
+        if ($this->delegatedTaskId !== null) {
+            Task::whereKey($this->delegatedTaskId)->increment('background_holds');
+        }
+    }
+
+    /** Undo a hold that was counted for work which never started. */
+    private function unholdTask(): void
+    {
+        if ($this->delegatedTaskId !== null) {
+            Task::whereKey($this->delegatedTaskId)
+                ->where('background_holds', '>', 0)
+                ->decrement('background_holds');
+        }
     }
 
     /**

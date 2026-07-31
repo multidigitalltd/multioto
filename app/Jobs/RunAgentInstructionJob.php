@@ -119,8 +119,8 @@ class RunAgentInstructionJob implements ShouldQueue
             // work. failed() runs on a timeout too — including a timeout that
             // happens after a site investigation was queued — and reopening it
             // then would let the same task be delegated a second time while the
-            // investigation is still running. The holder gives it back.
-            ->whereNull('held_by')
+            // investigation is still running. The holders give it back.
+            ->where('background_holds', 0)
             // reminded_at cleared here because a conditional update bypasses
             // TaskObserver, and a released task must be remindable again.
             ->update(['status' => TaskStatus::Open, 'reminded_at' => null]);

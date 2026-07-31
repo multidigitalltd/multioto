@@ -5,35 +5,36 @@ use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
 
 /**
- * Who is holding a claimed task, when it is not the run that claimed it.
+ * How many background jobs are still holding a claimed task.
  *
  * A task handed to the AI agent is marked "in progress" for the length of that
  * run. But the agent can start work that OUTLIVES the run — a site
  * investigation reports its findings minutes later — and the run that queued it
  * may then time out and be told the instruction failed. Without a persisted
- * holder, its failure handler hands the task back while the investigation is
+ * hold, its failure handler gives the task back while the investigation is
  * still running, and the task can be delegated a second time.
  *
- * So ownership is written down before the hand-off, and only the holder gives
- * the task back.
+ * A count rather than a flag because one instruction may start more than one
+ * investigation: the task goes back to the humans when the LAST of them is
+ * done, not when the first happens to finish.
  */
 return new class extends Migration
 {
     public function up(): void
     {
-        if (Schema::hasColumn('tasks', 'held_by')) {
+        if (Schema::hasColumn('tasks', 'background_holds')) {
             return;
         }
 
         Schema::table('tasks', function (Blueprint $table): void {
-            $table->string('held_by')->nullable()->after('status');
+            $table->unsignedSmallInteger('background_holds')->default(0)->after('status');
         });
     }
 
     public function down(): void
     {
         Schema::table('tasks', function (Blueprint $table): void {
-            $table->dropColumn('held_by');
+            $table->dropColumn('background_holds');
         });
     }
 };

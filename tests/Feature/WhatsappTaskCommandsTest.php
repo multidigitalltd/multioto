@@ -617,7 +617,7 @@ class WhatsappTaskCommandsTest extends TestCase
         $task = Task::create([
             'title' => 'לבדוק את האתר',
             'status' => TaskStatus::InProgress,
-            'held_by' => Task::HELD_BY_INVESTIGATION,
+            'background_holds' => 1,
         ]);
 
         (new RunAgentInstructionJob(self::MGMT, 'לבדוק את האתר', $task->id))
@@ -636,7 +636,74 @@ class WhatsappTaskCommandsTest extends TestCase
 
         $task->refresh();
         $this->assertSame(TaskStatus::Open, $task->status);
-        $this->assertNull($task->held_by);
+        $this->assertSame(0, (int) $task->background_holds);
+    }
+
+    /**
+     * One instruction can start two checks. The first to finish must not hand
+     * the task back while the second is still running.
+     */
+    public function test_the_last_investigation_is_the_one_that_hands_the_task_back(): void
+    {
+        $site = Site::factory()->create(['customer_id' => Customer::factory()->create()->id]);
+        $task = Task::create([
+            'title' => 'לבדוק את שני האתרים',
+            'status' => TaskStatus::InProgress,
+            'background_holds' => 2,
+        ]);
+
+        $agent = $this->mock(SiteAgent::class);
+        $agent->shouldReceive('investigate')->andReturn('האתר תקין.');
+        $agent->shouldReceive('lastProposals')->andReturn([]);
+
+        (new InvestigateSiteJob($site->id, 'בדיקה', releasesTaskId: $task->id))
+            ->handle($agent, app(SiteMemoryStore::class));
+
+        $this->assertSame(TaskStatus::InProgress, $task->fresh()->status);
+
+        (new InvestigateSiteJob($site->id, 'בדיקה', releasesTaskId: $task->id))
+            ->handle($agent, app(SiteMemoryStore::class));
+
+        $this->assertSame(TaskStatus::Open, $task->fresh()->status);
+    }
+
+    /**
+     * Nothing but the holder may release a held task, so a hold counted for an
+     * investigation that never started would strand the task for good.
+     */
+    public function test_a_hold_is_given_up_when_the_investigation_cannot_be_queued(): void
+    {
+        $site = Site::factory()->create([
+            'customer_id' => Customer::factory()->create()->id,
+            'mcp_enabled' => true,
+            'mcp_endpoint' => 'https://site.test/mcp',
+        ]);
+        $task = Task::create(['title' => 'לבדוק את האתר', 'status' => TaskStatus::InProgress]);
+
+        $this->mock(Dispatcher::class, function ($mock): void {
+            $mock->shouldReceive('dispatch')->andThrow(new \RuntimeException('queue down'));
+        });
+
+        $claude = Mockery::mock(ClaudeClient::class);
+        $claude->shouldReceive('isEnabled')->andReturn(true);
+        $claude->shouldReceive('lastError')->andReturnNull();
+        $claude->shouldReceive('converse')->andReturnUsing(
+            function (string $system, string $prompt, array $tools, callable $handler) use ($site): string {
+                $handler('investigate_site', ['site_id' => $site->id, 'goal' => 'בדיקה']);
+
+                return 'לא הצלחתי להפעיל את הבדיקה.';
+            }
+        );
+        $this->app->instance(ClaudeClient::class, $claude);
+
+        (new RunAgentInstructionJob(self::MGMT, 'לבדוק את האתר', $task->id))
+            ->handle(app(CommandInterpreter::class), app(WahaClient::class));
+
+        // Nothing is running, so the task is a person's again — not stuck
+        // "in progress" behind a hold nobody will ever count down.
+        $task->refresh();
+        $this->assertSame(0, (int) $task->background_holds);
+        $this->assertSame(TaskStatus::Open, $task->status);
     }
 
     /** A fix waiting for approval is something to act on — the task stays claimed. */
@@ -646,7 +713,7 @@ class WhatsappTaskCommandsTest extends TestCase
         $task = Task::create([
             'title' => 'לבדוק את האתר',
             'status' => TaskStatus::InProgress,
-            'held_by' => Task::HELD_BY_INVESTIGATION,
+            'background_holds' => 1,
         ]);
 
         $agent = $this->mock(SiteAgent::class);
@@ -660,7 +727,7 @@ class WhatsappTaskCommandsTest extends TestCase
         $this->assertSame(TaskStatus::InProgress, $task->status);
         // No longer held by the investigation — the pending approval is what it
         // is waiting on now.
-        $this->assertNull($task->held_by);
+        $this->assertSame(0, (int) $task->background_holds);
     }
 
     /**

@@ -96,10 +96,6 @@ class InvestigateSiteJob implements ShouldQueue
         try {
             $this->investigate($agent, $memory);
         } finally {
-            // A fix waiting for approval is something to act on, so the task
-            // stays claimed until a person decides — exactly as it would had
-            // the agent proposed it in the foreground. Otherwise the agent is
-            // finished and the work is a person's again.
             $this->releaseTask(
                 // Only asked when something is actually waiting on this run.
                 filedProposal: $this->releasesTaskId !== null && $agent->lastProposals() !== [],
@@ -108,9 +104,9 @@ class InvestigateSiteJob implements ShouldQueue
     }
 
     /**
-     * Stop holding a waiting task, and hand it back unless a decision is
-     * pending on it. Only from "in progress": a status a person set meanwhile
-     * is newer than ours and must stand.
+     * Stop holding a waiting task, and hand it back unless something is still
+     * running or a decision is pending on it. Only from "in progress": a status
+     * a person set meanwhile is newer than ours and must stand.
      */
     private function releaseTask(bool $filedProposal = false): void
     {
@@ -118,23 +114,35 @@ class InvestigateSiteJob implements ShouldQueue
             return;
         }
 
-        $task = Task::whereKey($this->releasesTaskId)->where('status', TaskStatus::InProgress);
+        // This job's own hold, dropped first so the count reflects reality
+        // whichever way the rest of this goes.
+        Task::whereKey($this->releasesTaskId)
+            ->where('background_holds', '>', 0)
+            ->decrement('background_holds');
 
-        if ($filedProposal) {
-            // Still claimed, but no longer held by this job: the proposal in
-            // the approvals inbox is what the task is now waiting on.
-            $task->update(['held_by' => null]);
+        // One instruction can start two investigations. The task goes back to
+        // the humans when the LAST of them is done — otherwise the first to
+        // finish reopens it while the other is still working, and it could be
+        // delegated all over again.
+        $stillHeld = Task::whereKey($this->releasesTaskId)
+            ->where('background_holds', '>', 0)
+            ->exists();
 
+        // A fix waiting for approval is something to act on, so the task stays
+        // claimed until a person decides — exactly as it would had the agent
+        // proposed it in the foreground.
+        if ($stillHeld || $filedProposal) {
             return;
         }
 
-        $task->update([
-            'status' => TaskStatus::Open,
-            'held_by' => null,
-            // Cleared because a conditional update bypasses TaskObserver, and a
-            // released task must be remindable again.
-            'reminded_at' => null,
-        ]);
+        Task::whereKey($this->releasesTaskId)
+            ->where('status', TaskStatus::InProgress)
+            ->update([
+                'status' => TaskStatus::Open,
+                // Cleared because a conditional update bypasses TaskObserver,
+                // and a released task must be remindable again.
+                'reminded_at' => null,
+            ]);
     }
 
     /**
