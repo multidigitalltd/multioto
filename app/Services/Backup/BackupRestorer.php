@@ -12,6 +12,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use RuntimeException;
 use Throwable;
 use ZipArchive;
@@ -46,6 +47,25 @@ class BackupRestorer
     /** Open handle on the journal of file writes, for undoing after a kill. */
     private mixed $journal = null;
 
+    /**
+     * Identifies this run's journal. Written to the backup row INSIDE the
+     * replacement transaction, so its presence there is the same fact as the
+     * transaction having committed — which is what tells a later recovery
+     * whether the archived files belong beside the rows that are live now.
+     */
+    private ?string $journalToken = null;
+
+    private ?int $journalOwner = null;
+
+    /**
+     * Entries whose undo failed. They keep their staged copies and stay in the
+     * journal: throwing away the only remaining copy of a live file because
+     * putting it back did not work is the one outcome worse than the failure.
+     *
+     * @var list<array{disk: string, path: string, from: string|null}>
+     */
+    private array $unrecovered = [];
+
     public function __construct(private BackupArchive $archive) {}
 
     public function restore(Backup $backup): void
@@ -66,6 +86,10 @@ class BackupRestorer
         // replaced and nothing running to put them back. Doing it here as well
         // as on demand means the next attempt does not build on that mess.
         $this->recoverInterruptedFiles();
+
+        $this->journalToken = (string) Str::uuid();
+        $this->journalOwner = $backup->id;
+        $this->unrecovered = [];
 
         $local = tempnam(sys_get_temp_dir(), 'multioto-restore-');
         $sequenceError = null;
@@ -171,18 +195,27 @@ class BackupRestorer
                         // instead of leaving it replaced with its attachments
                         // missing and nothing left to compare against.
                         $this->restoreFiles($zip, $manifest, $previous, $staged);
+
+                        // The commit marker, written where the commit itself
+                        // decides its fate. Killed a moment later, the journal
+                        // on disk looks exactly like a rolled-back restore —
+                        // and putting those files back would strip the archive
+                        // files off a database that IS the archive.
+                        DB::table('backups')->where('id', $this->journalOwner)
+                            ->update(['restore_journal' => $this->journalToken]);
                     });
 
                     $committed = true;
                 } catch (Throwable $e) {
                     // Rows roll back on their own; files do not.
-                    $this->putFilesBack($previous);
+                    $this->unrecovered = $this->putFilesBack($previous);
 
                     throw $e;
                 } finally {
                     // Both in one place: the journal is only meaningful while
-                    // the copies it points at are still there.
-                    $this->discard($staged);
+                    // the copies it points at are still there — so anything
+                    // still waiting to be put back keeps both.
+                    $this->discard($staged, $this->stagedStillNeeded());
                     $this->closeJournal();
                 }
 
@@ -1323,17 +1356,31 @@ class BackupRestorer
         if (! is_resource($this->journal)) {
             $this->stagingDir();
             $this->journal = fopen($this->journalPath(), 'ab');
+
+            if (! is_resource($this->journal)) {
+                throw new RuntimeException('לא ניתן לכתוב את יומן השחזור — השחזור הופסק לפני שנגע בקבצים.');
+            }
+
+            // Whose journal this is, and under which token, so a recovery can
+            // ask the database whether that run's transaction committed.
+            $this->write(['journal' => $this->journalToken, 'backup_id' => $this->journalOwner]);
         }
 
-        if (! is_resource($this->journal)) {
-            throw new RuntimeException('לא ניתן לכתוב את יומן השחזור — השחזור הופסק לפני שנגע בקבצים.');
-        }
+        $this->write($record);
+    }
 
+    /** @param  array<string, mixed>  $record */
+    private function write(array $record): void
+    {
         fwrite($this->journal, json_encode($record, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES).PHP_EOL);
         fflush($this->journal);
     }
 
-    /** The journal has done its job once the writes are settled either way. */
+    /**
+     * The journal has done its job once the writes are settled either way —
+     * unless something could not be put back, in which case what is left is
+     * the whole record of it and stays on disk to be retried.
+     */
     private function closeJournal(): void
     {
         if (is_resource($this->journal)) {
@@ -1342,33 +1389,96 @@ class BackupRestorer
 
         $this->journal = null;
 
-        if (file_exists($this->journalPath())) {
-            @unlink($this->journalPath());
+        if ($this->unrecovered === []) {
+            if (file_exists($this->journalPath())) {
+                @unlink($this->journalPath());
+            }
+
+            return;
         }
+
+        $this->rewriteJournal($this->unrecovered);
+
+        SystemLog::record('error', 'backup', count($this->unrecovered)
+            .' קבצים לא הוחזרו למצבם הקודם ונשמרו להחזרה חוזרת — הריצו php artisan backup:recover-files.');
+    }
+
+    /**
+     * Leave exactly these entries in the journal, with a header of their own.
+     *
+     * The token deliberately does NOT come along: a retry must decide by the
+     * same question the first attempt did, and the run that wrote these is
+     * over.
+     *
+     * @param  list<array{disk: string, path: string, from: string|null}>  $entries
+     */
+    private function rewriteJournal(array $entries): void
+    {
+        $this->stagingDir();
+
+        $lines = [json_encode(['journal' => null, 'backup_id' => $this->journalOwner],
+            JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)];
+
+        foreach ($entries as $entry) {
+            $lines[] = json_encode($entry, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        }
+
+        file_put_contents($this->journalPath(), implode(PHP_EOL, $lines).PHP_EOL);
+    }
+
+    /**
+     * Staged copies that must survive: they are the only remaining version of
+     * a live file whose undo has not worked yet.
+     *
+     * @return list<string>
+     */
+    private function stagedStillNeeded(): array
+    {
+        return array_values(array_filter(array_column($this->unrecovered, 'from')));
     }
 
     /**
      * Finish the undo a killed restore could not.
      *
-     * Returns how many files were put back. Safe to call at any time: with no
-     * journal there is nothing to do, and replaying one is the same work the
-     * restore itself would have done had it lived long enough.
+     * Returns how many files were put back and how many still could not be —
+     * the second number matters, because those keep their staged copies and
+     * stay in the journal to be retried. Throwing the last remaining copy of a
+     * live file away because putting it back failed would turn a bad moment
+     * into permanent loss.
+     *
+     * A journal whose run COMMITTED is not replayed. The token it carries was
+     * written to the backup row inside the replacement transaction, so finding
+     * it there says the archived rows are live — and the archived files belong
+     * beside them. Putting the old files back then would be the corruption,
+     * not the cure.
+     *
+     * @return array{restored: int, failed: int}
      */
-    public function recoverInterruptedFiles(): int
+    public function recoverInterruptedFiles(): array
     {
         $path = $this->journalPath();
 
         if (! file_exists($path)) {
-            return 0;
+            return ['restored' => 0, 'failed' => 0];
         }
 
+        $header = null;
         $entries = [];
 
         foreach (file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $line) {
             $record = json_decode($line, true);
 
-            if (is_array($record) && isset($record['disk'], $record['path'])
-                && array_key_exists('from', $record)) {
+            if (! is_array($record)) {
+                continue;
+            }
+
+            if (array_key_exists('journal', $record)) {
+                $header = $record;
+
+                continue;
+            }
+
+            if (isset($record['disk'], $record['path']) && array_key_exists('from', $record)) {
                 $entries[] = [
                     'disk' => (string) $record['disk'],
                     'path' => (string) $record['path'],
@@ -1377,21 +1487,77 @@ class BackupRestorer
             }
         }
 
-        $this->putFilesBack($entries);
-        $this->discard(array_values(array_filter(array_column($entries, 'from'))));
+        $this->journalOwner = isset($header['backup_id']) ? (int) $header['backup_id'] : null;
 
-        @unlink($path);
+        if ($this->committedRun($header)) {
+            // The database IS the archive. The files from the archive are the
+            // right ones; only the copies of what they replaced are stale.
+            $this->discard(array_values(array_filter(array_column($entries, 'from'))));
+            @unlink($path);
 
-        SystemLog::record('warning', 'backup',
-            'שחזור שנקטע השאיר קבצים מהגיבוי במקום הקיימים — '.count($entries).' קבצים הוחזרו למצבם הקודם.');
+            SystemLog::record('warning', 'backup',
+                'שחזור שנקטע הושלם בבסיס הנתונים — הקבצים מהגיבוי נשארו במקומם, והעותקים הזמניים נמחקו.');
 
-        return count($entries);
+            return ['restored' => 0, 'failed' => 0];
+        }
+
+        $failed = $this->putFilesBack($entries);
+        $restored = count($entries) - count($failed);
+
+        $this->discard(
+            array_values(array_filter(array_column($entries, 'from'))),
+            array_values(array_filter(array_column($failed, 'from'))),
+        );
+
+        $this->unrecovered = $failed;
+
+        if ($failed === []) {
+            @unlink($path);
+        } else {
+            $this->rewriteJournal($failed);
+        }
+
+        SystemLog::record($failed === [] ? 'warning' : 'error', 'backup',
+            "שחזור שנקטע השאיר קבצים מהגיבוי במקום הקיימים — {$restored} הוחזרו, "
+            .count($failed).' נותרו להחזרה חוזרת.');
+
+        return ['restored' => $restored, 'failed' => count($failed)];
     }
 
-    /** Is there an unfinished file rollback waiting to be replayed? */
+    /**
+     * Did the run that wrote this journal commit its database transaction?
+     *
+     * @param  array<string, mixed>|null  $header
+     */
+    private function committedRun(?array $header): bool
+    {
+        $token = $header['journal'] ?? null;
+        $owner = $header['backup_id'] ?? null;
+
+        if (! is_string($token) || $token === '' || $owner === null) {
+            return false;
+        }
+
+        // rescue(): a database that cannot answer is not a database that said
+        // "committed", and the safe reading of silence here is to keep the
+        // originals rather than discard them.
+        return (bool) rescue(
+            fn (): bool => Backup::whereKey((int) $owner)->where('restore_journal', $token)->exists(),
+            false,
+            report: false,
+        );
+    }
+
+    /**
+     * Is there an unfinished file rollback waiting, with nobody working on it?
+     *
+     * The journal exists throughout every normal restore, so its presence
+     * alone says nothing. Only once no operation is running does it mean what
+     * the screen would be claiming it means.
+     */
     public function hasInterruptedFiles(): bool
     {
-        return file_exists($this->journalPath());
+        return file_exists($this->journalPath()) && ! app(OperationGate::class)->isRunning();
     }
 
     /**
@@ -1402,10 +1568,16 @@ class BackupRestorer
      * restore is failing anyway, and the reason it failed is the more useful
      * one to surface.
      *
+     * Returns the entries whose undo did NOT work, so the caller can keep
+     * their staged copies and try again later.
+     *
      * @param  list<array{disk: string, path: string, from: string|null}>  $previous
+     * @return list<array{disk: string, path: string, from: string|null}>
      */
-    private function putFilesBack(array $previous): void
+    private function putFilesBack(array $previous): array
     {
+        $failed = [];
+
         foreach (array_reverse($previous) as $file) {
             try {
                 if ($file['from'] === null) {
@@ -1423,21 +1595,31 @@ class BackupRestorer
                 }
 
                 if (! $undone) {
+                    $failed[] = $file;
+
                     SystemLog::record('error', 'backup',
                         "הקובץ {$file['disk']}:{$file['path']} לא הוחזר למצבו הקודם — הוא נשאר בגרסה מהגיבוי.");
                 }
             } catch (Throwable $e) {
+                $failed[] = $file;
+
                 SystemLog::record('error', 'backup', "החזרת הקובץ {$file['disk']}:{$file['path']} למצבו הקודם נכשלה: "
                     .mb_substr($e->getMessage(), 0, 200));
             }
         }
+
+        return $failed;
     }
 
-    /** @param  list<string>  $temp */
-    private function discard(array $temp): void
+    /**
+     * @param  list<string>  $temp
+     * @param  list<string>  $keep  staged copies that are still the only version
+     *                              of a live file and must not be deleted
+     */
+    private function discard(array $temp, array $keep = []): void
     {
         foreach ($temp as $file) {
-            if (file_exists($file)) {
+            if (! in_array($file, $keep, true) && file_exists($file)) {
                 unlink($file);
             }
         }

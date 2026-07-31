@@ -23,7 +23,7 @@ class Backup extends Model
     protected $fillable = [
         'status', 'disk', 'path', 'size_bytes', 'manifest', 'error',
         'user_id', 'run_attempt', 'finished_at', 'restore_status', 'restore_error', 'restored_at',
-        'restore_attempt', 'restore_queued_at', 'restore_started_at', 'restore_report',
+        'restore_attempt', 'restore_queued_at', 'restore_started_at', 'restore_report', 'restore_journal',
     ];
 
     protected function casts(): array
