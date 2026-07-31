@@ -840,6 +840,28 @@ class BackupTest extends TestCase
         $this->assertSame(1, Customer::where('name', 'לקוח שהתקבל אחרי')->count());
     }
 
+    public function test_a_second_restore_of_the_same_archive_can_still_be_recorded_as_failed(): void
+    {
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+        Queue::fake([RestoreBackupJob::class]);
+
+        $backup = $this->runBackup();
+        $backup->update(['restore_status' => BackupStatus::Completed, 'restored_at' => now()->subHour()]);
+
+        Livewire::test(ManageBackups::class)
+            ->callTableAction('restore', $backup, ['confirm' => config('backup.restore_confirmation')]);
+
+        // The previous attempt's completion mark would otherwise stop the
+        // failure handler from recording THIS attempt going wrong, and the
+        // claim would sit on "running" with nothing able to clear it.
+        $this->assertNull($backup->fresh()->restored_at);
+
+        (new RestoreBackupJob($backup->id, $backup->fresh()->restore_attempt))
+            ->failed(new \RuntimeException('the worker died'));
+
+        $this->assertSame(BackupStatus::Failed, $backup->fresh()->restore_status);
+    }
+
     public function test_a_superseded_payload_cannot_cancel_the_claim_that_replaced_it(): void
     {
         $backup = $this->runBackup();

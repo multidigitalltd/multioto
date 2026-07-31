@@ -361,6 +361,13 @@ class ManageBackups extends Page implements HasForms, HasTable
                                 'restore_attempt' => $attempt,
                                 'restore_queued_at' => now(),
                                 'restore_started_at' => null,
+                                // The previous attempt's completion mark, which
+                                // says "this row already replaced the data".
+                                // Left standing it would stop the failure
+                                // handler from recording THIS attempt going
+                                // wrong, and the claim would then sit on
+                                // "running" with nothing able to clear it.
+                                'restored_at' => null,
                             ]);
 
                         if ($claimed !== 1) {

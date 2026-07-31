@@ -41,6 +41,10 @@ class BackupRestorer
             'restore_status' => BackupStatus::Running,
             'restore_error' => null,
             'restore_started_at' => now(),
+            // A restore that is under way has not completed, whatever an
+            // earlier one did — and the mark is what tells the failure handler
+            // whether this attempt may be recorded as failed.
+            'restored_at' => null,
         ]);
 
         $local = tempnam(sys_get_temp_dir(), 'multioto-restore-');
