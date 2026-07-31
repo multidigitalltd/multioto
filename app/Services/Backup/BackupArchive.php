@@ -69,7 +69,7 @@ class BackupArchive
             // notice a member that went missing.
             $this->add($zip, self::FILE_LIST, fn (): bool => $zip->addFromString(
                 self::FILE_LIST,
-                (string) json_encode($files, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                json_encode($files, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR),
             ));
 
             $manifest = [
@@ -86,9 +86,9 @@ class BackupArchive
 
             $this->add($zip, self::MANIFEST, fn (): bool => $zip->addFromString(
                 self::MANIFEST,
-                (string) json_encode(
+                json_encode(
                     $manifest,
-                    JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES,
+                    JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR,
                 ),
             ));
 
@@ -237,7 +237,9 @@ class BackupArchive
             }
         }
 
-        return (string) json_encode($row, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        // Never cast: json_encode returns false on a value it cannot represent,
+        // and "" is a row silently dropped from the archive.
+        return json_encode($row, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
     }
 
     /**
@@ -265,6 +267,17 @@ class BackupArchive
                 : collect($prefixes)->flatMap(fn (string $p): array => $storage->allFiles($p))->all();
 
             foreach ($paths as $path) {
+                // A POSIX filesystem accepts bytes that are not valid UTF-8 in
+                // a file name. Such a name cannot go into the file list, and
+                // writing it as an empty list would produce an archive every
+                // restore refuses — so the file is left out and reported, the
+                // same as one that is too large to include.
+                if (! mb_check_encoding($path, 'UTF-8')) {
+                    $skipped[] = "{$disk}:".base64_encode($path).' (שם קובץ שאינו UTF-8)';
+
+                    continue;
+                }
+
                 // A size we cannot read is a size we cannot check the copy
                 // against, and an unchecked copy is how a truncated file ends
                 // up in the archive under a valid checksum. Left out and

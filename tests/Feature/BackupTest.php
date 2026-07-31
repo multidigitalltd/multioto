@@ -2424,6 +2424,32 @@ class BackupTest extends TestCase
         Mail::assertSent(NotificationMail::class);
     }
 
+    public function test_a_file_name_that_is_not_utf8_is_left_out_and_reported(): void
+    {
+        Mail::fake();
+        config(['billing.notifications.team_email' => 'team@multi.test']);
+
+        // POSIX allows it; JSON does not. Writing the file list would fail and,
+        // cast to a string, become an empty list — an archive every restore
+        // refuses, recorded as a completed backup.
+        $root = storage_path('framework/testing/disks/local/attachments');
+
+        if (! is_dir($root)) {
+            mkdir($root, 0775, true);
+        }
+
+        file_put_contents($root."/\xB1\xC3.txt", 'צרופה');
+        Storage::disk('local')->put('attachments/fine.txt', 'צרופה תקינה');
+
+        $backup = $this->runBackup();
+
+        // The backup still happens, and the team is told what was left out.
+        $this->assertSame(BackupStatus::Completed, $backup->status);
+        $this->assertSame(1, $backup->fileCount());
+        $this->assertNotSame([], (array) ($backup->manifest['skipped_files'] ?? []));
+        Mail::assertSent(NotificationMail::class);
+    }
+
     public function test_a_backup_refuses_a_destination_on_this_server(): void
     {
         Mail::fake();
