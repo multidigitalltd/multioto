@@ -1261,7 +1261,8 @@ class BackupRestorer
             $this->journal($record);
 
             try {
-                if (Storage::disk($disk)->put($path, $stream) === false) {
+                if (Storage::disk($disk)->put($path, $stream) === false
+                    || ! $this->settle($disk, $path)) {
                     $failed[] = "{$disk}:{$path}";
                 }
             } finally {
@@ -1367,6 +1368,41 @@ class BackupRestorer
         return ['disk' => $disk, 'path' => $path, 'at' => $offset, 'len' => $copied];
     }
 
+    /**
+     * Push a file just written to a LOCAL destination all the way to the disk.
+     *
+     * A successful put() means the operating system has it, not that the disk
+     * does. If the database commits and the machine then loses power, recovery
+     * reads the committed token, deliberately refuses to put the original back
+     * — and the live file is the old one, or half of the new one. Remote
+     * destinations answer for their own durability; there is nothing here to
+     * sync and path() does not name a file on this machine.
+     */
+    private function settle(string $disk, string $path): bool
+    {
+        $absolute = rescue(fn (): ?string => Storage::disk($disk)->path($path), null, report: false);
+
+        if (! is_string($absolute) || ! is_file($absolute)) {
+            return true;
+        }
+
+        if (! function_exists('fsync')) {
+            return true;
+        }
+
+        $handle = @fopen($absolute, 'rb');
+
+        if (! is_resource($handle)) {
+            return false;
+        }
+
+        try {
+            return (bool) @fsync($handle);
+        } finally {
+            fclose($handle);
+        }
+    }
+
     /** Where the copies live: one file, appended to, never renamed. */
     private function stagePath(): string
     {
@@ -1376,6 +1412,43 @@ class BackupRestorer
     private function journalPath(): string
     {
         return storage_path('backups/restore-journal.jsonl');
+    }
+
+    /**
+     * Make sure the journal and the staging file exist, before anything needs
+     * them.
+     *
+     * Called from the migration, so a deployment creates them while nothing is
+     * at stake — and again on the way into a restore, for an installation that
+     * has not migrated since this was added. PHP cannot sync a directory entry,
+     * so the only thing that can be done about a name is to create it long
+     * before the moment it has to survive.
+     */
+    public static function provision(): void
+    {
+        $dir = storage_path('backups');
+
+        if (! is_dir($dir)) {
+            mkdir($dir, 0775, true);
+        }
+
+        foreach ([$dir.'/restore-journal.jsonl', $dir.'/restore-staging.blob'] as $path) {
+            if (file_exists($path)) {
+                continue;
+            }
+
+            $handle = @fopen($path, 'cb');
+
+            if (is_resource($handle)) {
+                @fflush($handle);
+
+                if (function_exists('fsync')) {
+                    @fsync($handle);
+                }
+
+                fclose($handle);
+            }
+        }
     }
 
     private function directory(): string
@@ -1399,7 +1472,11 @@ class BackupRestorer
      */
     private function openJournal(): void
     {
-        $this->directory();
+        // Provisioned rather than created here: the first restore on a fresh
+        // installation would otherwise be the one creating these names, and a
+        // name PHP cannot fsync is exactly what this design exists to avoid.
+        // Deployment runs migrate, and the migration provisions them.
+        self::provision();
 
         $this->journal = fopen($this->journalPath(), 'c+b');
         $this->stage = fopen($this->stagePath(), 'c+b');
