@@ -42,6 +42,16 @@ return [
      */
     'stale_after_hours' => (int) env('BACKUP_STALE_AFTER_HOURS', 36),
 
+    /**
+     * How long a restore claim may sit unstarted before it can be taken over.
+     *
+     * A queue that accepted the job and never ran it would otherwise leave the
+     * row refusing every later attempt for ever. Taking it over is safe because
+     * the attempt id changes with it — a payload that turns up late finds
+     * itself superseded and stops.
+     */
+    'restore_claim_minutes' => (int) env('BACKUP_RESTORE_CLAIM_MINUTES', 30),
+
     /** Archives older than this are pruned after each successful run. */
     'retention_days' => (int) env('BACKUP_RETENTION_DAYS', 30),
 

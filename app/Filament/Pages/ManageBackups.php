@@ -6,6 +6,7 @@ use App\Enums\BackupStatus;
 use App\Filament\Clusters\Settings;
 use App\Filament\Concerns\AdminOnly;
 use App\Filament\Concerns\PersistsSettings;
+use App\Jobs\ImportBackupsJob;
 use App\Jobs\RestoreBackupJob;
 use App\Jobs\RunBackupJob;
 use App\Models\Backup;
@@ -27,6 +28,7 @@ use Filament\Tables\Concerns\InteractsWithTable;
 use Filament\Tables\Contracts\HasTable;
 use Filament\Tables\Table;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 
 /**
  * גיבוי ושחזור — עותק לילי של כל נתוני המערכת ליעד אחסון חיצוני, ואפשרות
@@ -268,19 +270,21 @@ class ManageBackups extends Page implements HasForms, HasTable
                     ->modalHeading('לסרוק את יעד האחסון?')
                     ->modalDescription('כל ארכיון שנמצא ביעד ואינו ברשימה יתווסף אליה. שימושי אחרי התקנה מחדש — רשימת הגיבויים עצמה אינה נשמרת בתוך הגיבוי.')
                     ->action(function (): void {
-                        $found = app(BackupRunner::class)->importFromDisk();
-
-                        if ($found['imported'] === 0 && $found['unreadable'] === 0) {
-                            Notification::make()->title('לא נמצאו גיבויים חדשים ביעד.')->success()->send();
+                        // In the background: the scan reads every unknown
+                        // archive to get its manifest, and after a rebuild that
+                        // can be a whole bucket — far past the time limit a web
+                        // request is given.
+                        try {
+                            ImportBackupsJob::dispatch();
+                        } catch (\Throwable) {
+                            Notification::make()->title('הסריקה לא התחילה — התור אינו זמין.')->danger()->send();
 
                             return;
                         }
 
                         Notification::make()
-                            ->title("נוספו {$found['imported']} גיבויים מהיעד.")
-                            ->body($found['unreadable'] > 0
-                                ? "בנוסף נמצאו {$found['unreadable']} קבצים שלא ניתן לקרוא — הם מסומנים כנכשלים."
-                                : null)
+                            ->title('הסריקה התחילה — הגיבויים שיימצאו יופיעו ברשימה.')
+                            ->body('סריקה של ארכיונים גדולים עשויה לקחת כמה דקות.')
                             ->success()->send();
                     }),
             ])
@@ -333,12 +337,31 @@ class ManageBackups extends Page implements HasForms, HasTable
                         // also completed, and re-running it would delete
                         // everything accepted since it landed. The model above
                         // may be a stale copy from before that happened.
+                        $attempt = (string) Str::uuid();
+
                         $claimed = Backup::whereKey($record->id)
                             ->where(fn ($q) => $q->whereNull('restore_status')
                                 ->orWhere('restore_status', BackupStatus::Failed)
                                 ->orWhere(fn ($done) => $done->where('restore_status', BackupStatus::Completed)
-                                    ->whereNull('restore_error')))
-                            ->update(['restore_status' => BackupStatus::Running, 'restore_error' => null]);
+                                    ->whereNull('restore_error'))
+                                // A claim whose job never started can be taken
+                                // over after a while, or a queue that lost the
+                                // payload would leave the row refusing every
+                                // later attempt for ever. Safe only because the
+                                // attempt id changes with it: the lost payload,
+                                // if it ever arrives, finds itself superseded.
+                                ->orWhere(fn ($stale) => $stale->where('restore_status', BackupStatus::Running)
+                                    ->whereNull('restore_started_at')
+                                    ->where('restore_queued_at', '<', now()->subMinutes(
+                                        max(1, (int) config('backup.restore_claim_minutes', 30))
+                                    ))))
+                            ->update([
+                                'restore_status' => BackupStatus::Running,
+                                'restore_error' => null,
+                                'restore_attempt' => $attempt,
+                                'restore_queued_at' => now(),
+                                'restore_started_at' => null,
+                            ]);
 
                         if ($claimed !== 1) {
                             Notification::make()->title('שחזור מהגיבוי הזה כבר רץ.')->warning()->send();
@@ -347,17 +370,23 @@ class ManageBackups extends Page implements HasForms, HasTable
                         }
 
                         try {
-                            RestoreBackupJob::dispatch($record->id);
+                            RestoreBackupJob::dispatch($record->id, $attempt);
                         } catch (\Throwable $e) {
-                            // No job exists to run a failure handler, so the
-                            // claim would sit there for ever: every later
-                            // attempt refused, and the row undeletable.
+                            // NOT marked failed: a queue can accept the payload
+                            // and still fail to say so, and "failed" would let
+                            // somebody start a second restore on top of a first
+                            // one that is already running. The claim is left
+                            // standing and expires on its own — the one outcome
+                            // that is safe whichever way the dispatch went.
                             $record->update([
-                                'restore_status' => BackupStatus::Failed,
-                                'restore_error' => 'לא ניתן היה להעביר את השחזור לתור: '.mb_substr($e->getMessage(), 0, 300),
+                                'restore_error' => 'לא ברור אם השחזור הועבר לתור: '.mb_substr($e->getMessage(), 0, 300)
+                                    .' — אם לא יתחיל, אפשר יהיה לנסות שוב בעוד '
+                                    .max(1, (int) config('backup.restore_claim_minutes', 30)).' דקות.',
                             ]);
 
-                            Notification::make()->title('השחזור לא התחיל — התור אינו זמין.')->danger()->send();
+                            Notification::make()
+                                ->title('לא ברור אם השחזור הועבר לתור — אין להתחיל שחזור נוסף כרגע.')
+                                ->danger()->persistent()->send();
 
                             return;
                         }
@@ -374,7 +403,7 @@ class ManageBackups extends Page implements HasForms, HasTable
                     // mid-restore removes the record of a restore that is
                     // still replacing production data.
                     ->hidden(fn (Backup $r): bool => $r->status === BackupStatus::Running
-                        || $r->restore_status === BackupStatus::Running)
+                        || ($r->restore_status === BackupStatus::Running && ! $r->restoreClaimExpired()))
                     ->requiresConfirmation()
                     ->modalHeading('למחוק את הגיבוי?')
                     ->modalDescription('הארכיון יימחק מיעד האחסון ולא ניתן יהיה לשחזר ממנו.')

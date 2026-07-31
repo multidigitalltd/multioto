@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Enums\BackupStatus;
 use App\Enums\UserRole;
 use App\Filament\Pages\ManageBackups;
+use App\Jobs\ImportBackupsJob;
 use App\Jobs\RestoreBackupJob;
 use App\Jobs\RunBackupJob;
 use App\Mail\NotificationMail;
@@ -22,6 +23,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use Livewire\Livewire;
 use Tests\TestCase;
@@ -976,6 +978,83 @@ class BackupTest extends TestCase
         $this->assertSame('חי', Storage::disk('local')->get('attachments/b.txt'));
     }
 
+    public function test_a_file_whose_size_cannot_be_read_is_left_out_rather_than_archived_unchecked(): void
+    {
+        Mail::fake();
+        config(['billing.notifications.team_email' => 'team@multi.test']);
+        Storage::disk('local')->put('attachments/a.txt', 'תוכן');
+
+        // Metadata forbidden while reads still work: with no size there is
+        // nothing to check the copy against, and an unchecked copy is how a
+        // truncated file ends up in the archive under a valid checksum.
+        $disk = \Mockery::mock(Storage::disk('local'))->makePartial();
+        $disk->shouldReceive('size')->andThrow(new \RuntimeException('HEAD forbidden'));
+        Storage::set('local', $disk);
+
+        $backup = $this->runBackup();
+
+        $this->assertContains('local:attachments/a.txt', $backup->manifest['skipped_files']);
+        Mail::assertSent(NotificationMail::class);
+    }
+
+    public function test_an_ambiguous_dispatch_does_not_reopen_the_restore(): void
+    {
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+        $backup = $this->runBackup();
+
+        config([
+            'queue.default' => 'broken',
+            'queue.connections.broken' => ['driver' => 'no-such-driver'],
+        ]);
+
+        Livewire::test(ManageBackups::class)
+            ->callTableAction('restore', $backup, ['confirm' => config('backup.restore_confirmation')]);
+
+        // The queue may have taken the payload and failed only to say so.
+        // "Failed" would let somebody start a second restore on top of a first
+        // one that is already running.
+        $this->assertSame(BackupStatus::Running, $backup->fresh()->restore_status);
+        $this->assertNotNull(app(BackupRestorer::class)->blockedReason($backup->fresh()));
+    }
+
+    public function test_a_claim_whose_job_never_started_can_be_taken_over_later(): void
+    {
+        config(['backup.restore_claim_minutes' => 30]);
+        $backup = $this->runBackup();
+
+        $backup->update([
+            'restore_status' => BackupStatus::Running,
+            'restore_attempt' => 'the-lost-one',
+            'restore_queued_at' => now()->subHours(2),
+            'restore_started_at' => null,
+        ]);
+
+        // Left alone it would refuse every later attempt for ever and hide its
+        // own delete action.
+        $this->assertNull(app(BackupRestorer::class)->blockedReason($backup->fresh()));
+
+        // And the payload that was lost, if it ever turns up, finds itself
+        // superseded rather than restoring on top of a newer attempt.
+        $backup->update(['restore_attempt' => 'the-new-one']);
+        Customer::factory()->create(['name' => 'לקוח שהתקבל אחרי']);
+
+        (new RestoreBackupJob($backup->id, 'the-lost-one'))->handle(app(BackupRestorer::class));
+
+        $this->assertSame(1, Customer::where('name', 'לקוח שהתקבל אחרי')->count());
+    }
+
+    public function test_the_destination_scan_runs_in_the_background(): void
+    {
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+        Queue::fake([ImportBackupsJob::class]);
+
+        // Reading every unknown archive can take far longer than a web request
+        // is given — and the recovery it serves is exactly when that matters.
+        Livewire::test(ManageBackups::class)->callTableAction('import');
+
+        Queue::assertPushed(ImportBackupsJob::class);
+    }
+
     public function test_a_live_file_that_cannot_be_read_stops_the_restore_instead_of_being_lost(): void
     {
         Storage::disk('local')->put('attachments/a.txt', 'מהגיבוי');
@@ -1257,27 +1336,6 @@ class BackupTest extends TestCase
         // Dropping the row would leave a file full of customer details at the
         // destination with nothing left to find it by.
         $this->assertNotNull(Backup::find($backup->id));
-    }
-
-    public function test_a_restore_that_cannot_be_queued_releases_its_claim(): void
-    {
-        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
-        $backup = $this->runBackup();
-
-        // The job never reaches a queue, so nothing exists to run its failure
-        // handler and clear the claim.
-        config([
-            'queue.default' => 'broken',
-            'queue.connections.broken' => ['driver' => 'no-such-driver'],
-        ]);
-
-        Livewire::test(ManageBackups::class)
-            ->callTableAction('restore', $backup, ['confirm' => config('backup.restore_confirmation')]);
-
-        // Left on "running" the row would refuse every later attempt for ever,
-        // and the delete action would stay hidden.
-        $this->assertSame(BackupStatus::Failed, $backup->fresh()->restore_status);
-        $this->assertNotNull($backup->fresh()->restore_error);
     }
 
     public function test_a_backup_row_survives_when_its_archive_cannot_be_deleted(): void

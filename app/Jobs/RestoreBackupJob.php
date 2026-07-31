@@ -25,7 +25,7 @@ class RestoreBackupJob implements ShouldQueue
 
     public int $timeout = 1800;
 
-    public function __construct(public int $backupId) {}
+    public function __construct(public int $backupId, public ?string $attempt = null) {}
 
     public function handle(BackupRestorer $restorer): void
     {
@@ -43,6 +43,18 @@ class RestoreBackupJob implements ShouldQueue
         if ($backup->restore_status !== BackupStatus::Running) {
             return;
         }
+
+        // And it must be THIS attempt. A claim abandoned because the queue
+        // swallowed its payload can be taken over by a later one; if the
+        // original message then turns up after all, this is what stops it from
+        // restoring a second time on top of the newer attempt.
+        if ($this->attempt !== null && $backup->restore_attempt !== $this->attempt) {
+            return;
+        }
+
+        // Marks the difference between "queued and never picked up", which may
+        // be taken over, and "running", which may not.
+        $backup->update(['restore_started_at' => now()]);
 
         $lock = Cache::lock(RunBackupJob::LOCK, 3600);
 

@@ -35,7 +35,13 @@ class BackupRestorer
 
     public function restore(Backup $backup): void
     {
-        $backup->update(['restore_status' => BackupStatus::Running, 'restore_error' => null]);
+        // started_at as well as running: a claim that never got as far as here
+        // may be taken over later, and one that did may not.
+        $backup->update([
+            'restore_status' => BackupStatus::Running,
+            'restore_error' => null,
+            'restore_started_at' => now(),
+        ]);
 
         $local = tempnam(sys_get_temp_dir(), 'multioto-restore-');
         $sequenceError = null;
@@ -209,9 +215,10 @@ class BackupRestorer
             return 'הגיבוי לא הושלם — אין ממה לשחזר.';
         }
 
-        if ($backup->restore_status === BackupStatus::Running) {
+        if ($backup->restore_status === BackupStatus::Running && ! $backup->restoreClaimExpired()) {
             // A second run would finish AFTER the first and put the same old
-            // snapshot back, wiping everything accepted in between.
+            // snapshot back, wiping everything accepted in between. Unless the
+            // claim was never taken up at all — see restoreClaimExpired().
             return 'שחזור מהגיבוי הזה כבר רץ.';
         }
 

@@ -282,7 +282,7 @@ class BackupRunner
             }
 
             if ($backup->status === BackupStatus::Running
-                || $backup->restore_status === BackupStatus::Running) {
+                || ($backup->restore_status === BackupStatus::Running && ! $backup->restoreClaimExpired())) {
                 return 'busy';
             }
 
