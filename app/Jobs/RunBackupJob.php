@@ -37,7 +37,11 @@ class RunBackupJob implements ShouldQueue
 
     public function handle(BackupRunner $runner): void
     {
-        if (! (bool) config('backup.enabled', true)) {
+        // The switch governs the NIGHTLY run — that is what it is labelled as.
+        // A button press is an explicit request, and discarding it silently
+        // after the panel said the backup started is worse than either
+        // honouring it or refusing it out loud.
+        if ($this->userId === null && ! (bool) config('backup.enabled', true)) {
             return;
         }
 

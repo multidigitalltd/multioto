@@ -12,6 +12,10 @@ return [
     | It is written to an EXTERNAL disk on purpose — a backup that lives on the
     | same server as the thing it protects is not a backup.
     |
+    | The switch below governs the NIGHTLY run only. "גבה עכשיו" is an explicit
+    | request and still runs — a button that quietly does nothing is worse than
+    | one that is not there.
+    |
     */
 
     'enabled' => (bool) env('BACKUP_ENABLED', true),

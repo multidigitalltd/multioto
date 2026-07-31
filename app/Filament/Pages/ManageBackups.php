@@ -11,6 +11,7 @@ use App\Jobs\RunBackupJob;
 use App\Models\Backup;
 use App\Models\Setting;
 use App\Services\Backup\BackupRestorer;
+use App\Services\Backup\BackupRunner;
 use Filament\Forms\Components\Actions\Action;
 use Filament\Forms\Components\Section;
 use Filament\Forms\Components\TextInput;
@@ -92,7 +93,7 @@ class ManageBackups extends Page implements HasForms, HasTable
                     ->schema([
                         Toggle::make('backup.enabled')
                             ->label('גיבוי אוטומטי יומי פעיל')
-                            ->helperText('כשהוא כבוי לא נלקח גיבוי — כולל הגיבוי הלילי.'),
+                            ->helperText('כשהוא כבוי הגיבוי הלילי אינו רץ. "גבה עכשיו" ימשיך לעבוד — לחיצה מפורשת אינה מבוטלת בשקט.'),
                         TextInput::make('backup.disk')
                             ->label('יעד אחסון (disk)')
                             ->required()
@@ -224,7 +225,21 @@ class ManageBackups extends Page implements HasForms, HasTable
                     ->modalHeading('לבצע גיבוי עכשיו?')
                     ->modalDescription('הגיבוי רץ ברקע ויופיע ברשימה כשיסתיים.')
                     ->action(function (): void {
-                        RunBackupJob::dispatch(auth()->id());
+                        try {
+                            RunBackupJob::dispatch(auth()->id());
+                        } catch (\Throwable $e) {
+                            // Thrown before the runner exists, so nothing else
+                            // will record this run: without a row here the
+                            // request leaves no trace at all in the history.
+                            app(BackupRunner::class)->recordUnstarted(
+                                auth()->id(),
+                                'לא ניתן היה להעביר את הגיבוי לתור: '.mb_substr($e->getMessage(), 0, 300),
+                            );
+
+                            Notification::make()->title('הגיבוי לא התחיל — התור אינו זמין.')->danger()->send();
+
+                            return;
+                        }
 
                         Notification::make()->title('הגיבוי התחיל — יופיע ברשימה בסיום.')->success()->send();
                     }),

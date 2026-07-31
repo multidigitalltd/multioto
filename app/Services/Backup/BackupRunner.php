@@ -121,6 +121,20 @@ class BackupRunner
      */
     public function recordBlocked(?int $userId): Backup
     {
+        return $this->recordUnstarted(
+            $userId,
+            'פעולת גיבוי או שחזור אחרת רצה באותו רגע — הגיבוי לא בוצע.'
+        );
+    }
+
+    /**
+     * Record a run that never got as far as writing anything — the lock was
+     * taken, or the queue would not accept the job at all. It gets a row and an
+     * alert like any other failure: a request that vanishes without a trace is
+     * indistinguishable from a night nobody looked at.
+     */
+    public function recordUnstarted(?int $userId, string $reason): Backup
+    {
         $backup = Backup::create([
             'status' => BackupStatus::Running,
             'disk' => (string) config('backup.disk'),
@@ -128,7 +142,7 @@ class BackupRunner
             'user_id' => $userId,
         ]);
 
-        $this->fail($backup, 'פעולת גיבוי או שחזור אחרת רצה באותו רגע — הגיבוי לא בוצע.');
+        $this->fail($backup, $reason);
 
         return $backup;
     }

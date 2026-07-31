@@ -13,6 +13,7 @@ use App\Models\Customer;
 use App\Models\PaymentToken;
 use App\Models\Site;
 use App\Models\User;
+use App\Services\Backup\BackupArchive;
 use App\Services\Backup\BackupRestorer;
 use App\Services\Backup\BackupRunner;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -548,6 +549,39 @@ class BackupTest extends TestCase
         $this->assertSame('שונה אחרי', Storage::disk('local')->get('attachments/a.txt'));
     }
 
+    public function test_the_sequences_are_left_alone_when_the_restore_does_not_commit(): void
+    {
+        Storage::disk('local')->put('attachments/keep.txt', 'קובץ מהגיבוי');
+        $backup = $this->runBackup();
+
+        // The last thing a restore does before committing is write the files.
+        $disk = \Mockery::mock(Storage::disk('local'))->makePartial();
+        $disk->shouldReceive('put')->andReturn(false);
+        Storage::set('local', $disk);
+
+        $restorer = new class(app(BackupArchive::class)) extends BackupRestorer
+        {
+            public bool $sequencesReset = false;
+
+            protected function resetSequences(array $tables): void
+            {
+                $this->sequencesReset = true;
+            }
+        };
+
+        try {
+            $restorer->restore($backup);
+            $this->fail('a failed file write must not restore quietly');
+        } catch (\Throwable) {
+            // expected
+        }
+
+        // setval() does not roll back with the transaction: rewinding the
+        // sequences and then losing the rows they were rewound for would make
+        // every following insert in production collide with a live primary key.
+        $this->assertFalse($restorer->sequencesReset);
+    }
+
     public function test_a_corrupt_file_payload_is_caught_before_any_live_file_is_touched(): void
     {
         Storage::disk('local')->put('attachments/a.txt', 'מקורי א');
@@ -572,6 +606,40 @@ class BackupTest extends TestCase
         // which is the one a mid-way failure would already have overwritten.
         $this->assertSame('שונה אחרי', Storage::disk('local')->get('attachments/a.txt'));
         $this->assertSame('שונה אחרי', Storage::disk('local')->get('attachments/b.txt'));
+    }
+
+    public function test_the_button_still_backs_up_while_the_nightly_run_is_switched_off(): void
+    {
+        // The switch turns off the NIGHTLY run. A button press is explicit, and
+        // the panel says the backup started — discarding it silently would make
+        // that a lie.
+        config(['backup.enabled' => false]);
+        $user = User::factory()->create();
+
+        (new RunBackupJob($user->id))->handle(app(BackupRunner::class));
+
+        $this->assertSame(BackupStatus::Completed, Backup::sole()->status);
+    }
+
+    public function test_a_manual_backup_that_cannot_be_queued_is_recorded(): void
+    {
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+        Mail::fake();
+        config(['billing.notifications.team_email' => 'team@multi.test']);
+
+        // The job never reaches a queue, so nothing downstream will ever create
+        // the row that failures are recorded on.
+        config([
+            'queue.default' => 'broken',
+            'queue.connections.broken' => ['driver' => 'no-such-driver'],
+        ]);
+
+        Livewire::test(ManageBackups::class)->callTableAction('runNow');
+
+        $backup = Backup::sole();
+        $this->assertSame(BackupStatus::Failed, $backup->status);
+        $this->assertNotNull($backup->error);
+        Mail::assertSent(NotificationMail::class);
     }
 
     public function test_the_backup_row_stays_when_the_manual_delete_cannot_remove_the_archive(): void

@@ -96,8 +96,6 @@ class BackupRestorer
                     // every row they point at exists.
                     $this->applyDeferred($pending);
 
-                    $this->resetSequences($order);
-
                     // Files INSIDE the transaction, which makes the restore
                     // all-or-nothing the useful way round: a file that cannot
                     // be written rolls the database back to what it was,
@@ -105,6 +103,14 @@ class BackupRestorer
                     // missing and nothing left to compare against.
                     $this->restoreFiles($zip, $manifest);
                 });
+
+                // AFTER the commit, never inside it: setval() is not
+                // transactional on PostgreSQL. Rewound from within a
+                // transaction that then rolls back, the sequences would stay
+                // pointing at the archive's lower maxima while the live rows
+                // came back — and the next insert in production would collide
+                // with an existing primary key, over and over.
+                $this->resetSequences($order);
             } finally {
                 $zip->close();
             }
@@ -564,7 +570,7 @@ class BackupRestorer
      *
      * @param  list<string>  $tables
      */
-    private function resetSequences(array $tables): void
+    protected function resetSequences(array $tables): void
     {
         if (DB::getDriverName() !== 'pgsql') {
             return;
