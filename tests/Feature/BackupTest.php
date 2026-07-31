@@ -5,7 +5,9 @@ namespace Tests\Feature;
 use App\Enums\BackupStatus;
 use App\Enums\UserRole;
 use App\Filament\Pages\ManageBackups;
+use App\Jobs\ChargeSubscriptionJob;
 use App\Jobs\ImportBackupsJob;
+use App\Jobs\IssueInvoiceJob;
 use App\Jobs\RestoreBackupJob;
 use App\Jobs\RunBackupJob;
 use App\Mail\NotificationMail;
@@ -17,6 +19,9 @@ use App\Models\User;
 use App\Services\Backup\BackupArchive;
 use App\Services\Backup\BackupRestorer;
 use App\Services\Backup\BackupRunner;
+use App\Services\Billing\DunningMachine;
+use App\Services\Cardcom\CardcomClient;
+use App\Services\Linet\InvoiceIssuer;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
@@ -860,6 +865,23 @@ class BackupTest extends TestCase
             ->failed(new \RuntimeException('the worker died'));
 
         $this->assertSame(BackupStatus::Failed, $backup->fresh()->restore_status);
+    }
+
+    public function test_money_jobs_hold_themselves_while_a_restore_is_running(): void
+    {
+        Queue::fake([ChargeSubscriptionJob::class, IssueInvoiceJob::class]);
+
+        $backup = $this->runBackup();
+        $backup->update(['restore_status' => BackupStatus::Running]);
+
+        // A charge that lands while a restore replaces the row recording it
+        // leaves the customer charged with nothing to show for it — the one
+        // outcome no later repair can undo.
+        (new ChargeSubscriptionJob(1))->handle(app(CardcomClient::class), app(DunningMachine::class));
+        (new IssueInvoiceJob(1))->handle(app(InvoiceIssuer::class));
+
+        Queue::assertPushed(ChargeSubscriptionJob::class);
+        Queue::assertPushed(IssueInvoiceJob::class);
     }
 
     public function test_a_superseded_payload_cannot_cancel_the_claim_that_replaced_it(): void

@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Enums\ChargeStatus;
+use App\Jobs\Concerns\WaitsForRestore;
 use App\Models\Charge;
 use App\Services\Linet\InvoiceIssuer;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -17,6 +18,7 @@ use Illuminate\Foundation\Queue\Queueable;
 class IssueInvoiceJob implements ShouldQueue
 {
     use Queueable;
+    use WaitsForRestore;
 
     public int $tries = 3;
 
@@ -24,8 +26,20 @@ class IssueInvoiceJob implements ShouldQueue
 
     public function __construct(public int $chargeId) {}
 
+    /** @return array<int, mixed> */
+    protected function backupWaitDispatchArgs(): array
+    {
+        return [$this->chargeId];
+    }
+
     public function handle(InvoiceIssuer $issuer): void
     {
+        // A tax document issued against a charge a restore is about to replace
+        // cannot be taken back — Linet has already emailed it to the customer.
+        if ($this->heldForBackupOperation()) {
+            return;
+        }
+
         $charge = Charge::find($this->chargeId);
 
         if (! $charge || $charge->status !== ChargeStatus::Succeeded || $charge->invoice()->exists()) {

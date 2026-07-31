@@ -84,12 +84,26 @@ return [
     | Uploaded files to include, as disk => list of path prefixes. Empty list
     | means the whole disk.
     */
-    'files' => [
+    'files' => array_fill_keys(array_values(array_unique([
         // Ticket attachments (private).
-        'local' => [],
+        'local',
         // Branding: the logo shown in customer emails and the portal.
-        'public' => [],
-    ],
+        'public',
+        // Wherever attachments actually go. Reading it from the same place the
+        // store does means a deployment that moved them cannot end up with a
+        // backup that quietly leaves them out — the rows referencing them are
+        // archived either way, so the gap would only show at a restore.
+        (string) env('ATTACHMENT_DISK', 'local'),
+    ])), []),
+
+    /**
+     * How long a money job holds itself when a backup or restore is running.
+     *
+     * A charge or an invoice cannot be taken back once the outside world has
+     * accepted it, so those jobs wait rather than run alongside a restore that
+     * is about to replace the rows recording them.
+     */
+    'worker_hold_minutes' => (int) env('BACKUP_WORKER_HOLD_MINUTES', 5),
 
     /** A single file larger than this is skipped and noted in the manifest. */
     'max_file_bytes' => (int) env('BACKUP_MAX_FILE_BYTES', 64 * 1024 * 1024),
