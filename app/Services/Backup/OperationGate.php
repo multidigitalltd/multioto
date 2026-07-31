@@ -31,6 +31,20 @@ class OperationGate
     {
         $since = now()->subMinutes(max(1, (int) config('backup.operation_window_minutes', 60)));
 
+        // The file-recovery command replaces live files without a row of its
+        // own, so it says so on disk instead. Same age bound as everything
+        // else here: a marker left by a killed process expires rather than
+        // holding the business shut.
+        $marker = BackupRestorer::recoveryMarkerPath();
+
+        if (file_exists($marker)) {
+            clearstatcache(true, $marker);
+
+            if (filemtime($marker) > $since->getTimestamp()) {
+                return true;
+            }
+        }
+
         return Backup::query()
             ->when($exceptId !== null, fn ($q) => $q->whereKeyNot($exceptId))
             ->where(fn ($q) => $q->where('status', BackupStatus::Running)

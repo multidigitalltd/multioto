@@ -54,18 +54,25 @@ class RecoverRestoreFilesCommand extends Command
             return self::FAILURE;
         }
 
+        // The lock has a lease and this has no timeout — replaying thousands
+        // of files onto a slow disk can outlast it. The marker is what the
+        // gate reads, and it is refreshed as the replay works, so a backup
+        // that finds the lock free still finds this running.
+        $restorer->markRecoveryActive();
+
         try {
             $result = $restorer->recoverInterruptedFiles();
         } finally {
+            $restorer->clearRecoveryMarker();
             $lock->release();
         }
 
         $this->info("{$result['restored']} קבצים הוחזרו למצבם שלפני השחזור שנקטע.");
 
-        if ($result['failed'] > 0) {
+        if ($result['pending'] > 0) {
             // Kept, not cleared: their staged copies are still the only version
             // of those files, and the journal still points at them.
-            $this->error("{$result['failed']} קבצים לא הוחזרו ונשמרו לניסיון נוסף — בדקו את הרשאות הדיסק ואת יומן המערכת, והריצו שוב.");
+            $this->error("{$result['pending']} קבצים לא הוחזרו ונשמרו לניסיון נוסף — בדקו את יומן המערכת (הרשאות דיסק, או חיבור לבסיס הנתונים), והריצו שוב.");
 
             return self::FAILURE;
         }

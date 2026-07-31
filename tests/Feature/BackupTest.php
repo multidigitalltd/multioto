@@ -1892,13 +1892,88 @@ class BackupTest extends TestCase
 
             // The database IS the archive now. Putting the old files back would
             // be the corruption, not the cure.
-            $this->assertSame(['restored' => 0, 'failed' => 0], $result);
+            $this->assertSame(['restored' => 0, 'failed' => 0, 'pending' => 0], $result);
             $this->assertSame('מהגיבוי', Storage::disk('local')->get('attachments/keep.txt'));
             $this->assertFileDoesNotExist($journal);
         } finally {
             @unlink($staged);
             @unlink($journal);
         }
+    }
+
+    public function test_a_recovery_that_cannot_read_the_commit_state_touches_nothing(): void
+    {
+        Storage::disk('local')->put('attachments/keep.txt', 'מהגיבוי');
+
+        $staged = storage_path('backups/staged/prev-unknown');
+        $journal = storage_path('backups/restore-journal.jsonl');
+
+        if (! is_dir(dirname($staged))) {
+            mkdir(dirname($staged), 0775, true);
+        }
+
+        file_put_contents($staged, 'מלפני השחזור');
+        file_put_contents($journal,
+            json_encode(['journal' => 'token-xyz', 'backup_id' => 999999]).PHP_EOL
+            .json_encode(['disk' => 'local', 'path' => 'attachments/keep.txt', 'from' => $staged]).PHP_EOL);
+
+        // The one question that decides everything cannot be asked.
+        $connection = config('database.default');
+        config(['database.connections.broken' => [
+            'driver' => 'sqlite', 'database' => '/nonexistent/multioto.sqlite', 'prefix' => '',
+        ]]);
+        config(['database.default' => 'broken']);
+
+        try {
+            $result = app(BackupRestorer::class)->recoverInterruptedFiles();
+
+            // "Cannot say" is not "did not commit". Guessing wrong here pairs a
+            // restored database with the files it replaced.
+            $this->assertSame(1, $result['pending']);
+            $this->assertSame('מהגיבוי', Storage::disk('local')->get('attachments/keep.txt'));
+            $this->assertFileExists($journal);
+            $this->assertFileExists($staged);
+        } finally {
+            config(['database.default' => $connection]);
+            @unlink($staged);
+            @unlink($journal);
+        }
+    }
+
+    public function test_a_restore_refuses_to_run_over_an_unfinished_rollback(): void
+    {
+        $backup = $this->runBackup();
+
+        $staged = storage_path('backups/staged/prev-left');
+        $journal = storage_path('backups/restore-journal.jsonl');
+
+        if (! is_dir(dirname($staged))) {
+            mkdir(dirname($staged), 0775, true);
+        }
+
+        file_put_contents($staged, 'הקובץ החי היחיד שנשאר');
+        file_put_contents($journal,
+            json_encode(['journal' => null, 'backup_id' => null]).PHP_EOL
+            .json_encode(['disk' => 'local', 'path' => 'attachments/gone.txt', 'from' => $staged]).PHP_EOL);
+
+        // The disk still refuses, so the earlier rollback still cannot finish.
+        $stubborn = \Mockery::mock(Storage::disk('local'))->makePartial();
+        $stubborn->shouldReceive('put')->andReturn(false);
+        Storage::set('local', $stubborn);
+
+        try {
+            app(BackupRestorer::class)->restore($backup);
+            $this->fail('a restore must not run on top of an unfinished rollback');
+        } catch (\Throwable $e) {
+            $this->assertStringContainsString('recover-files', $e->getMessage());
+        } finally {
+            @unlink($staged);
+            @unlink($journal);
+        }
+
+        // Starting would have taken the old journal with it, orphaning the one
+        // copy of a file nothing else has.
+        $this->assertSame(BackupStatus::Failed, $backup->fresh()->restore_status);
     }
 
     public function test_a_recovery_that_cannot_write_keeps_what_it_needs_to_try_again(): void
