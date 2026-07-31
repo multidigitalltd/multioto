@@ -31,9 +31,16 @@ class CommandInterpreter
      *                          group have no user, so the source is what keeps
      *                          the group's conversation threaded and separate
      *                          from every panel operator's.
+     * @param  int|null  $taskId  the existing task this instruction came from
+     *                            (delegated with "סוכן משימה 7"), so the agent
+     *                            works on it rather than opening it a second time
      */
-    public function run(string $instruction, ?int $userId = null, string $source = AgentCommand::SOURCE_PANEL): AgentCommand
-    {
+    public function run(
+        string $instruction,
+        ?int $userId = null,
+        string $source = AgentCommand::SOURCE_PANEL,
+        ?int $taskId = null,
+    ): AgentCommand {
         $instruction = trim($instruction);
 
         // Every turn is threaded with the recent conversation, so both an
@@ -63,7 +70,7 @@ class CommandInterpreter
             // Pass the operator's user id so any async work the agent kicks off
             // (e.g. a background site investigation) can post its result back
             // into THIS chat thread when it finishes, not only to the event log.
-            $result = $this->agent->run($effective, $userId, $source);
+            $result = $this->agent->run($effective, $userId, $source, $taskId);
         } catch (\Throwable $e) {
             return $this->finish($command, AgentCommandOutcome::Failed, 'הפעולה נכשלה: '.Str::limit($e->getMessage(), 160));
         }

@@ -51,6 +51,10 @@ class RunAgentInstructionJob implements ShouldQueue
             $this->instruction,
             userId: null,
             source: AgentCommand::SOURCE_WHATSAPP,
+            // The instruction IS the task's own text when it was delegated, so
+            // the agent is told which task it is working on — otherwise "if
+            // there is no tool for it, open a task" opens a copy of it.
+            taskId: $this->taskId,
         );
 
         // "In progress" means an agent is working on it. Two outcomes end the
@@ -64,7 +68,16 @@ class RunAgentInstructionJob implements ShouldQueue
         //             that carries no task id, so holding the task here would
         //             strand it: still claimed, never released, and the claim
         //             requires "open" to delegate it again.
-        if (in_array($command->outcome, [AgentCommandOutcome::Failed, AgentCommandOutcome::Unclear], true)) {
+        //
+        // An answer with nothing filed for approval is the same situation: the
+        // agent said its piece and there is no proposal for anyone to act on,
+        // so the work is a person's again. Left "in progress" it would drop out
+        // of the open list and out of the reminders — claimed forever by an
+        // agent that has already finished.
+        $nothingFiled = $command->outcome === AgentCommandOutcome::Dispatched
+            && $command->pending_action_id === null;
+
+        if ($nothingFiled || in_array($command->outcome, [AgentCommandOutcome::Failed, AgentCommandOutcome::Unclear], true)) {
             $this->releaseTask();
         }
 

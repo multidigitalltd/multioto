@@ -20,6 +20,7 @@ use App\Services\Agent\CommandInterpreter;
 use App\Services\Ai\ClaudeClient;
 use Illuminate\Contracts\Bus\Dispatcher as BusDispatcher;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Queue;
 use Livewire\Livewire;
 use Mockery;
@@ -177,6 +178,37 @@ class CommandConsoleTest extends TestCase
         $this->assertSame('להתקשר לספק', Task::sole()->title);
         $this->assertSame(AgentCommandOutcome::Dispatched, $command->outcome);
         $this->assertStringContainsString('#'.Task::sole()->id, $command->result);
+    }
+
+    public function test_repeating_the_same_instruction_does_not_open_a_second_identical_task(): void
+    {
+        // In-memory tracking cannot survive a killed worker: the run that dies
+        // after creating the task tells the manager to try again, and the retry
+        // arrives as a brand-new run. The task itself is what the second run
+        // recognises.
+        $this->fakeAgent([['open_task', ['title' => 'להתקשר לספק הדומיינים']]]);
+        $first = app(CommandInterpreter::class)->run('תדבר עם רשם הדומיינים');
+
+        $this->fakeAgent([['open_task', ['title' => 'להתקשר לספק הדומיינים']]]);
+        $second = app(CommandInterpreter::class)->run('תדבר עם רשם הדומיינים');
+
+        $task = Task::sole();
+        $this->assertStringContainsString('#'.$task->id, $first->result);
+        $this->assertStringContainsString('#'.$task->id, $second->result);
+    }
+
+    public function test_the_same_title_opens_a_new_task_once_the_window_has_passed(): void
+    {
+        // Two hours later the same sentence is a new request, not a retry.
+        Carbon::setTestNow('2026-08-10 09:00:00');
+        $this->fakeAgent([['open_task', ['title' => 'להתקשר לספק']]]);
+        app(CommandInterpreter::class)->run('תדבר עם הספק');
+
+        Carbon::setTestNow('2026-08-10 11:00:00');
+        $this->fakeAgent([['open_task', ['title' => 'להתקשר לספק']]]);
+        app(CommandInterpreter::class)->run('תדבר עם הספק שוב');
+
+        $this->assertSame(2, Task::count());
     }
 
     public function test_a_task_opened_alongside_a_proposal_is_named_in_the_result(): void

@@ -19,6 +19,7 @@ use App\Models\WebhookEvent;
 use App\Services\Agent\CommandInterpreter;
 use App\Services\Agent\SiteAgent;
 use App\Services\Agent\SiteMemoryStore;
+use App\Services\Ai\ClaudeClient;
 use App\Services\Automation\ManagementCommands;
 use App\Services\Support\AttachmentStore;
 use App\Services\Support\TicketIntake;
@@ -28,6 +29,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
+use Mockery;
 use Tests\TestCase;
 
 /**
@@ -404,7 +406,7 @@ class WhatsappTaskCommandsTest extends TestCase
         $interpreter = $this->mock(CommandInterpreter::class);
         $interpreter->shouldReceive('run')
             ->once()
-            ->with('בדוק חובות', null, AgentCommand::SOURCE_WHATSAPP)
+            ->with('בדוק חובות', null, AgentCommand::SOURCE_WHATSAPP, null)
             ->andReturn($command);
 
         (new RunAgentInstructionJob(self::MGMT, 'בדוק חובות'))
@@ -514,6 +516,76 @@ class WhatsappTaskCommandsTest extends TestCase
 
         $this->assertSame(TaskStatus::Open, $task->fresh()->status);
         $this->assertStringContainsString('כבוי', $this->lastReply());
+    }
+
+    /**
+     * An answer with nothing filed for approval means the agent is finished and
+     * the work is a person's again — "in progress" would keep it out of the
+     * open list and out of the reminders, claimed by nobody.
+     */
+    public function test_a_delegated_task_is_released_when_the_agent_files_nothing(): void
+    {
+        $task = Task::create(['title' => 'להתקשר לספק', 'status' => TaskStatus::InProgress]);
+
+        $interpreter = $this->mock(CommandInterpreter::class);
+        $interpreter->shouldReceive('run')->once()->andReturn(new AgentCommand([
+            'outcome' => AgentCommandOutcome::Dispatched,
+            'result' => 'אין לזה כלי — צריך טלפון לספק.',
+        ]));
+
+        (new RunAgentInstructionJob(self::MGMT, 'להתקשר לספק', $task->id))
+            ->handle($interpreter, app(WahaClient::class));
+
+        $this->assertSame(TaskStatus::Open, $task->fresh()->status);
+    }
+
+    /** A proposal IS something to act on, so the task stays claimed until a person decides. */
+    public function test_a_delegated_task_stays_claimed_while_a_proposal_waits(): void
+    {
+        $task = Task::create(['title' => 'משהו', 'status' => TaskStatus::InProgress]);
+
+        $command = new AgentCommand([
+            'outcome' => AgentCommandOutcome::Dispatched,
+            'result' => 'הוגשה פעולה.',
+        ]);
+        $command->pending_action_id = 7;
+
+        $interpreter = $this->mock(CommandInterpreter::class);
+        $interpreter->shouldReceive('run')->once()->andReturn($command);
+
+        (new RunAgentInstructionJob(self::MGMT, 'משהו', $task->id))
+            ->handle($interpreter, app(WahaClient::class));
+
+        $this->assertSame(TaskStatus::InProgress, $task->fresh()->status);
+    }
+
+    /**
+     * The delegated instruction IS the task's own text, so an agent told to
+     * "open a task when there is no tool" would open a copy of the task it was
+     * just handed: a second notification, and the original still claimed.
+     */
+    public function test_a_delegated_run_does_not_reopen_the_task_it_was_given(): void
+    {
+        $task = Task::create(['title' => 'להתקשר לספק הדומיינים', 'status' => TaskStatus::InProgress]);
+
+        $claude = Mockery::mock(ClaudeClient::class);
+        $claude->shouldReceive('isEnabled')->andReturn(true);
+        $claude->shouldReceive('lastError')->andReturnNull();
+        $claude->shouldReceive('converse')->andReturnUsing(
+            function (string $system, string $prompt, array $tools, callable $handler) use (&$toolResult): string {
+                $toolResult = $handler('open_task', ['title' => 'להתקשר לספק הדומיינים']);
+
+                return 'צריך טלפון לספק.';
+            }
+        );
+        $this->app->instance(ClaudeClient::class, $claude);
+
+        (new RunAgentInstructionJob(self::MGMT, 'להתקשר לספק הדומיינים', $task->id))
+            ->handle(app(CommandInterpreter::class), app(WahaClient::class));
+
+        $this->assertSame(1, Task::count());
+        $this->assertTrue($toolResult['is_error'] ?? false);
+        $this->assertStringContainsString("#{$task->id}", $toolResult['content']);
     }
 
     public function test_releasing_never_undoes_a_person_who_completed_the_task_meanwhile(): void
