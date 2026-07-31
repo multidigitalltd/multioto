@@ -439,16 +439,7 @@ class BackupRunner
             return 0;
         }
 
-        // By archive date, not by id. Rows adopted from the destination after a
-        // rebuild carry the date of the file they describe, and the ids follow
-        // whatever order the bucket happened to list them in — protecting the
-        // last few ids could keep the oldest recovery points and delete the
-        // newest.
-        $protected = Backup::query()->restorable()
-            ->orderByDesc('created_at')
-            ->orderByDesc('id')
-            ->limit($keep)
-            ->pluck('id');
+        $protected = $this->floor($keep);
 
         $stale = Backup::query()
             ->where('created_at', '<', now()->subDays($days))
@@ -477,6 +468,40 @@ class BackupRunner
         }
 
         return $removed;
+    }
+
+    /**
+     * The newest archives retention must never drop, whatever the window says.
+     *
+     * By archive date, not by id: rows adopted from the destination after a
+     * rebuild carry the date of the file they describe, while their ids follow
+     * whatever order the bucket happened to list them in.
+     *
+     * And only archives that are really there. A row whose object was removed
+     * at the destination — by an operator, or by a bucket lifecycle rule — is
+     * not a recovery point; counting it towards the floor would let the last
+     * real archives be pruned away behind it.
+     *
+     * @return list<int>
+     */
+    private function floor(int $keep): array
+    {
+        $protected = [];
+
+        foreach (Backup::query()->restorable()->orderByDesc('created_at')->orderByDesc('id')->cursor() as $candidate) {
+            if (count($protected) >= $keep) {
+                break;
+            }
+
+            // A destination that cannot answer counts as present. Treating an
+            // unreachable bucket as an empty one would delete every archive
+            // the business has over one bad connection.
+            if (rescue(fn (): bool => $candidate->existsOnDisk(), true, report: false)) {
+                $protected[] = $candidate->id;
+            }
+        }
+
+        return $protected;
     }
 
     /**

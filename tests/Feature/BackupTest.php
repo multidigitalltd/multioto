@@ -194,6 +194,25 @@ class BackupTest extends TestCase
         $this->assertNull(Backup::find($second->id));
     }
 
+    public function test_a_row_whose_archive_is_gone_does_not_fill_the_retention_floor(): void
+    {
+        config(['backup.retention_days' => 1, 'backup.keep_at_least' => 1]);
+
+        $real = $this->runBackup();
+        $ghost = $this->runBackup();
+
+        // Removed at the destination by an operator or a bucket lifecycle rule.
+        Storage::disk('backups')->delete($ghost->path);
+        Backup::query()->update(['created_at' => now()->subDays(30)]);
+
+        app(BackupRunner::class)->prune();
+
+        // The floor is meant to guarantee a recovery point. A row pointing at
+        // nothing is not one, and must not stand in for the last real archive.
+        $this->assertNotNull(Backup::find($real->id));
+        Storage::disk('backups')->assertExists($real->path);
+    }
+
     public function test_retention_leaves_an_archive_claimed_for_restore_alone(): void
     {
         config(['backup.retention_days' => 1, 'backup.keep_at_least' => 1]);
