@@ -1024,6 +1024,36 @@ class BackupTest extends TestCase
         $this->assertSame(BackupStatus::Completed, $backup->fresh()->restore_status);
         $this->assertStringContainsString('איפוס מוני המזהים נכשל', (string) $backup->fresh()->restore_error);
         $this->assertSame('לקוח מהגיבוי', Customer::sole()->name);
+
+        // And the screen must not offer to run it again: the second run would
+        // only delete what has been accepted since the first one landed.
+        $this->assertNotNull(app(BackupRestorer::class)->blockedReason($backup->fresh()));
+    }
+
+    public function test_a_live_file_whose_existence_cannot_be_checked_stops_the_restore(): void
+    {
+        Storage::disk('local')->put('attachments/a.txt', 'מהגיבוי');
+        $backup = $this->runBackup();
+
+        Storage::disk('local')->put('attachments/a.txt', 'חי');
+
+        // "No" and "cannot say" are different answers: recorded as absent, the
+        // undo path would delete the live file.
+        $healthy = Storage::disk('local');
+        $blind = \Mockery::mock($healthy)->makePartial();
+        $blind->shouldReceive('exists')->andThrow(new \RuntimeException('HEAD forbidden'));
+        Storage::set('local', $blind);
+
+        try {
+            app(BackupRestorer::class)->restore($backup);
+            $this->fail('an unverifiable live file must stop the restore');
+        } catch (\Throwable) {
+            // expected
+        }
+
+        Storage::set('local', $healthy);
+
+        $this->assertSame('חי', Storage::disk('local')->get('attachments/a.txt'));
     }
 
     public function test_a_recent_backup_raises_no_stale_alert(): void

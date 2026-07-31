@@ -38,6 +38,8 @@ class BackupRestorer
 
         $local = tempnam(sys_get_temp_dir(), 'multioto-restore-');
         $sequenceError = null;
+        $previous = [];
+        $staged = [];
 
         try {
             $this->download($backup, $local);
@@ -62,48 +64,61 @@ class BackupRestorer
                 $this->assertComplete($zip, $order);
                 $this->assertFilesReadable($zip, $manifest);
 
-                DB::transaction(function () use ($zip, $order, $deferred, $declared, $manifest): void {
-                    // Shut the writers out for the duration. The panel and the
-                    // queue workers keep running during a restore, and a row
-                    // committed after its table was emptied would survive
-                    // alongside the archived ones — a database that is neither
-                    // the backup nor what was there before, reported as a
-                    // success. Anything mid-write waits; anything that cannot
-                    // wait fails loudly rather than half-applying.
-                    $this->lockTables($order);
+                // The staged originals live OUT here, not inside the callback:
+                // a commit can still fail after the callback returns, and the
+                // one thing that could put the files back must not have been
+                // thrown away by then.
+                try {
+                    DB::transaction(function () use ($zip, $order, $deferred, $declared, $manifest, &$previous, &$staged): void {
+                        // Shut the writers out for the duration. The panel and the
+                        // queue workers keep running during a restore, and a row
+                        // committed after its table was emptied would survive
+                        // alongside the archived ones — a database that is neither
+                        // the backup nor what was there before, reported as a
+                        // success. Anything mid-write waits; anything that cannot
+                        // wait fails loudly rather than half-applying.
+                        $this->lockTables($order);
 
-                    // Children first: a parent row cannot go while something
-                    // still points at it.
-                    foreach (array_reverse($order) as $table) {
-                        DB::table($table)->delete();
-                    }
-
-                    $pending = [];
-
-                    foreach ($order as $table) {
-                        $loaded = $this->loadTable($zip, $table, $deferred[$table] ?? [], $pending);
-
-                        // The manifest says how many rows this table had. A
-                        // truncated member would otherwise restore quietly as a
-                        // shorter table — the failure nobody notices.
-                        if (array_key_exists($table, $declared) && $loaded !== (int) $declared[$table]) {
-                            throw new RuntimeException(
-                                "טבלה \"{$table}\" בגיבוי פגומה: {$loaded} שורות במקום {$declared[$table]}."
-                            );
+                        // Children first: a parent row cannot go while something
+                        // still points at it.
+                        foreach (array_reverse($order) as $table) {
+                            DB::table($table)->delete();
                         }
-                    }
 
-                    // The back-references held back to break a cycle, now that
-                    // every row they point at exists.
-                    $this->applyDeferred($pending);
+                        $pending = [];
 
-                    // Files INSIDE the transaction, which makes the restore
-                    // all-or-nothing the useful way round: a file that cannot
-                    // be written rolls the database back to what it was,
-                    // instead of leaving it replaced with its attachments
-                    // missing and nothing left to compare against.
-                    $this->restoreFiles($zip, $manifest);
-                });
+                        foreach ($order as $table) {
+                            $loaded = $this->loadTable($zip, $table, $deferred[$table] ?? [], $pending);
+
+                            // The manifest says how many rows this table had. A
+                            // truncated member would otherwise restore quietly as a
+                            // shorter table — the failure nobody notices.
+                            if (array_key_exists($table, $declared) && $loaded !== (int) $declared[$table]) {
+                                throw new RuntimeException(
+                                    "טבלה \"{$table}\" בגיבוי פגומה: {$loaded} שורות במקום {$declared[$table]}."
+                                );
+                            }
+                        }
+
+                        // The back-references held back to break a cycle, now that
+                        // every row they point at exists.
+                        $this->applyDeferred($pending);
+
+                        // Files INSIDE the transaction, which makes the restore
+                        // all-or-nothing the useful way round: a file that cannot
+                        // be written rolls the database back to what it was,
+                        // instead of leaving it replaced with its attachments
+                        // missing and nothing left to compare against.
+                        $this->restoreFiles($zip, $manifest, $previous, $staged);
+                    });
+                } catch (Throwable $e) {
+                    // Rows roll back on their own; files do not.
+                    $this->putFilesBack($previous);
+
+                    throw $e;
+                } finally {
+                    $this->discard($staged);
+                }
 
                 // AFTER the commit, never inside it: setval() is not
                 // transactional on PostgreSQL. Rewound from within a
@@ -177,6 +192,15 @@ class BackupRestorer
             // A second run would finish AFTER the first and put the same old
             // snapshot back, wiping everything accepted in between.
             return 'שחזור מהגיבוי הזה כבר רץ.';
+        }
+
+        // A restore that landed but left something to repair — the sequences.
+        // Running it again is the worst possible response: production is
+        // already at this snapshot, so the second run would only delete what
+        // has been accepted since. The row is cleared by fixing it, not by
+        // repeating it.
+        if ($backup->restore_status === BackupStatus::Completed && $backup->restore_error !== null) {
+            return 'השחזור הזה כבר בוצע ונותרה בו פעולה לתיקון — אין להריץ אותו שוב. ראו את שגיאת השחזור.';
         }
 
         // A destination that cannot answer is not the same as a missing file,
@@ -677,32 +701,23 @@ class BackupRestorer
      * is a far larger change than the problem deserves. An orphaned file is
      * unreachable (nothing links to it) and costs disk; a deleted one is gone.
      */
-    private function restoreFiles(ZipArchive $zip, array $manifest): void
+    private function restoreFiles(ZipArchive $zip, array $manifest, array &$previous, array &$temp): void
     {
         $failed = [];
-        $previous = [];
-        $temp = [];
 
-        try {
-            $this->writeFiles($zip, $manifest, $previous, $temp, $failed);
+        $this->writeFiles($zip, $manifest, $previous, $temp, $failed);
 
-            if ($failed !== []) {
-                throw new RuntimeException(
-                    'הנתונים שוחזרו אך '.count($failed).' קבצים לא הוחזרו (חסרים בגיבוי או בעיית הרשאות): '
-                    .implode(', ', array_slice($failed, 0, 5))
-                );
-            }
-        } catch (Throwable $e) {
-            $this->putFilesBack($previous);
-
-            throw $e;
-        } finally {
-            $this->discard($temp);
+        if ($failed !== []) {
+            throw new RuntimeException(
+                'הנתונים שוחזרו אך '.count($failed).' קבצים לא הוחזרו (חסרים בגיבוי או בעיית הרשאות): '
+                .implode(', ', array_slice($failed, 0, 5))
+            );
         }
     }
 
     /**
-     * The write half, so the caller can undo it as one unit.
+     * The write half. Undoing it belongs to the caller, which is the only place
+     * that knows whether the database commit went through.
      *
      * @param  array<string, mixed>  $manifest
      * @param  list<array{disk: string, path: string, from: string|null}>  $previous
@@ -781,7 +796,18 @@ class BackupRestorer
     {
         $storage = Storage::disk($disk);
 
-        if (! rescue(fn (): bool => $storage->exists($path), false, report: false)) {
+        // "No" and "cannot say" are different answers. A disk that refuses the
+        // check while accepting writes would otherwise have its file recorded
+        // as absent — and undoing would then delete it.
+        $present = rescue(fn (): ?bool => $storage->exists($path), null, report: false);
+
+        if ($present === null) {
+            throw new RuntimeException(
+                "לא ניתן לבדוק אם הקובץ \"{$disk}:{$path}\" קיים — השחזור הופסק כדי לא לדרוס אותו בלי אפשרות חזרה."
+            );
+        }
+
+        if (! $present) {
             return ['disk' => $disk, 'path' => $path, 'from' => null];
         }
 
