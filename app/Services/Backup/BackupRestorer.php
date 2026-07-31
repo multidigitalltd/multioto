@@ -1377,6 +1377,14 @@ class BackupRestorer
      * — and the live file is the old one, or half of the new one. Remote
      * destinations answer for their own durability; there is nothing here to
      * sync and path() does not name a file on this machine.
+     *
+     * What this CANNOT do is persist the directory entry of a file the restore
+     * creates for the first time: PHP cannot open a directory as a stream, so
+     * there is no handle to fsync, and shelling out is not allowed here. The
+     * contents are made durable; the name is left to the filesystem, which on
+     * the journalling filesystems this runs on records it with the same
+     * transaction. It is the one gap in the chain, and it is written down
+     * rather than papered over.
      */
     private function settle(string $disk, string $path): bool
     {
@@ -1428,25 +1436,26 @@ class BackupRestorer
     {
         $dir = storage_path('backups');
 
-        if (! is_dir($dir)) {
-            mkdir($dir, 0775, true);
+        if (! is_dir($dir) && ! @mkdir($dir, 0775, true) && ! is_dir($dir)) {
+            throw new RuntimeException("לא ניתן ליצור את התיקייה {$dir} — יומן השחזור לא יוכל להישמר.");
         }
 
         foreach ([$dir.'/restore-journal.jsonl', $dir.'/restore-staging.blob'] as $path) {
-            if (file_exists($path)) {
-                continue;
-            }
-
             $handle = @fopen($path, 'cb');
 
-            if (is_resource($handle)) {
-                @fflush($handle);
+            // Loudly, not quietly: these two names have to exist before a
+            // restore needs them, and an installation that could not create
+            // them should find out at deployment rather than mid-restore.
+            if (! is_resource($handle)) {
+                throw new RuntimeException("לא ניתן ליצור את {$path} — יומן השחזור לא יוכל להישמר.");
+            }
 
-                if (function_exists('fsync')) {
-                    @fsync($handle);
-                }
+            $ok = @fflush($handle) && (! function_exists('fsync') || @fsync($handle));
 
-                fclose($handle);
+            fclose($handle);
+
+            if (! $ok || ! is_file($path)) {
+                throw new RuntimeException("לא ניתן לשמור את {$path} — יומן השחזור לא יוכל להישמר.");
             }
         }
     }
@@ -1733,6 +1742,14 @@ class BackupRestorer
                     $undone = Storage::disk($file['disk'])->delete($file['path']);
                 } else {
                     $undone = $this->putSliceBack($file);
+                }
+
+                // Pushed to the disk BEFORE it is called done. The mark is
+                // fsynced; if the bytes it refers to are not, a power cut
+                // leaves a journal telling the next recovery to skip a file
+                // that never actually came back.
+                if ($undone && $file['at'] !== null) {
+                    $undone = $this->settle($file['disk'], $file['path']);
                 }
 
                 if (! $undone) {
