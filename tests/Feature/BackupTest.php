@@ -1717,6 +1717,74 @@ class BackupTest extends TestCase
         $this->assertStringContainsString('אין גישה למטמון', (string) $recorded->error);
     }
 
+    public function test_a_legacy_backup_payload_does_not_fail_a_live_backup(): void
+    {
+        Mail::fake();
+
+        // A payload enqueued before runs carried an id — in flight across the
+        // deployment that added it.
+        $legacy = new RunBackupJob;
+        $legacy->attempt = null;
+
+        // Somebody's backup, started a moment ago and still being written.
+        $live = Backup::create([
+            'status' => BackupStatus::Running,
+            'disk' => 'backups',
+            'path' => 'archives/live.zip',
+        ]);
+
+        $legacy->failed(new \RuntimeException('העובד נהרג'));
+
+        // Too recent to be the work of a worker that already died: leaving it
+        // alone is the only safe reading.
+        $this->assertSame(BackupStatus::Running, $live->fresh()->status);
+
+        // And the failure is still recorded — on a row of its own.
+        $this->assertSame(1, Backup::query()->where('status', BackupStatus::Failed)->count());
+    }
+
+    public function test_a_long_restore_keeps_saying_it_is_still_running(): void
+    {
+        // The gate answers "is a restore under way" from how recently the row
+        // was written to, so that a row abandoned by a dead worker cannot stop
+        // the business billing for ever. A restore slower than that window must
+        // keep proving it is alive — otherwise a charge goes through Cardcom
+        // while the rows recording it are minutes from being replaced.
+        config(['backup.operation_window_minutes' => 60]);
+        Carbon::setTestNow('2026-08-01 01:00:00');
+
+        Storage::disk('local')->put('attachments/keep.txt', 'קובץ');
+        $backup = $this->runBackup();
+
+        // Pulling a very large archive off a remote destination: three hours
+        // pass before the first table is even read.
+        $archives = Storage::disk('backups');
+        $slow = \Mockery::mock($archives)->makePartial();
+        $slow->shouldReceive('readStream')->andReturnUsing(function (string $path) use ($archives) {
+            Carbon::setTestNow(now()->addHours(3));
+
+            return $archives->readStream($path);
+        });
+        Storage::set('backups', $slow);
+
+        // Asked while the restore is actually replacing things — after that it
+        // writes its own completion and every answer looks alive.
+        $gateDuringRestore = null;
+        $local = Storage::disk('local');
+        $watched = \Mockery::mock($local)->makePartial();
+        $watched->shouldReceive('put')->andReturnUsing(
+            function (string $path, $contents) use ($local, &$gateDuringRestore) {
+                $gateDuringRestore ??= app(OperationGate::class)->isRunning();
+
+                return $local->put($path, $contents);
+            });
+        Storage::set('local', $watched);
+
+        app(BackupRestorer::class)->restore($backup);
+
+        $this->assertTrue($gateDuringRestore, 'שחזור ארוך חדל להיראות כפעולה שרצה');
+    }
+
     public function test_a_restore_can_be_run_from_the_console_without_a_worker(): void
     {
         // The documented procedure: stop the queue worker, then restore. With

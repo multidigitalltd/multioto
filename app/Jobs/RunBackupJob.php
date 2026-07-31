@@ -114,24 +114,35 @@ class RunBackupJob implements ShouldQueue
      */
     public function failed(\Throwable $e): void
     {
-        $backup = Backup::query()
-            ->where(fn ($q) => $this->attempt === null
-                ? $q->whereNull('run_attempt')
-                : $q->where('run_attempt', $this->attempt))
-            ->latest('id')
-            ->first();
+        if ($this->attempt !== null) {
+            $backup = Backup::query()->where('run_attempt', $this->attempt)->latest('id')->first();
 
-        // No row at all: this run never got as far as creating one. It still
+            // A run that finished is not reopened by whatever failed after it.
+            if ($backup !== null && $backup->status !== BackupStatus::Running) {
+                return;
+            }
+        } else {
+            // A payload written before runs carried an id — only in flight
+            // across a deployment. There is no way to tell its row from anyone
+            // else's, so only a row too old to be the work of a living worker
+            // is attributed to it: a backup that is genuinely under way was
+            // written to when it started, and neither job may run past half an
+            // hour.
+            $backup = Backup::query()
+                ->whereNull('run_attempt')
+                ->where('status', BackupStatus::Running)
+                ->where('updated_at', '<', now()->subSeconds($this->timeout))
+                ->latest('id')
+                ->first();
+        }
+
+        // No row of ours: this run never got as far as creating one. It still
         // has to be visible — a request that vanishes without a trace is
-        // indistinguishable from a night nobody looked at.
+        // indistinguishable from a night nobody looked at — but it gets a row
+        // of its own rather than taking somebody else's.
         if ($backup === null) {
             app(BackupRunner::class)->recordUnstarted($this->userId, 'הגיבוי נכשל לפני שהתחיל: '.$e->getMessage());
 
-            return;
-        }
-
-        // A run that finished is not reopened by whatever failed after it.
-        if ($backup->status !== BackupStatus::Running) {
             return;
         }
 

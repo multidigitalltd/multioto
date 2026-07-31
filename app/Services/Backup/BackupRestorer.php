@@ -40,6 +40,9 @@ class BackupRestorer
         return max(1, (int) config('backup.reconcile_limit', 5000));
     }
 
+    /** When the row was last touched to say this restore is still alive. */
+    private ?float $lastBeat = null;
+
     public function __construct(private BackupArchive $archive) {}
 
     public function restore(Backup $backup): void
@@ -84,8 +87,8 @@ class BackupRestorer
                 // half way through would leave a table emptied, or live files
                 // half overwritten with older contents, and the failure would
                 // arrive too late to undo either.
-                $this->assertComplete($zip, $order);
-                $this->assertFilesReadable($zip, $manifest);
+                $this->assertComplete($zip, $order, $backup);
+                $this->assertFilesReadable($zip, $manifest, $backup);
 
                 // The staged originals live OUT here, not inside the callback:
                 // a commit can still fail after the callback returns, and the
@@ -352,7 +355,19 @@ class BackupRestorer
         $out = fopen($to, 'wb');
 
         try {
-            stream_copy_to_stream($stream, $out);
+            // Copied in pieces rather than in one call, so the row can be
+            // touched as it goes. Pulling a large archive off a remote
+            // destination can outlast the window the operation gate believes a
+            // running restore in — and a restore that has aged out of that
+            // window lets a charge through, which is the one thing this whole
+            // arrangement exists to prevent.
+            while (! feof($stream)) {
+                if (stream_copy_to_stream($stream, $out, self::READ_CHUNK) === false) {
+                    throw new RuntimeException('קריאת קובץ הגיבוי מהיעד נכשלה.');
+                }
+
+                $this->beat($backup);
+            }
         } finally {
             fclose($out);
 
@@ -360,6 +375,31 @@ class BackupRestorer
                 fclose($stream);
             }
         }
+    }
+
+    /**
+     * Say "still here" on the backup row, at most once a minute.
+     *
+     * OperationGate answers "is a restore under way" from how recently the row
+     * was written to, because a row abandoned by a dead worker must not stop
+     * the business billing for ever. The price of that is that a long restore
+     * has to keep proving it is alive. Everything from the transaction onwards
+     * is covered by the table locks it takes — a charge would block on its
+     * write — so what needs this is the work BEFORE it: downloading and
+     * checking an archive that can be very large.
+     *
+     * Best-effort by design: failing to write a heartbeat must not fail a
+     * restore that is otherwise fine.
+     */
+    private function beat(Backup $backup): void
+    {
+        if ($this->lastBeat !== null && $this->lastBeat > microtime(true) - 60) {
+            return;
+        }
+
+        $this->lastBeat = microtime(true);
+
+        rescue(fn () => $backup->touch(), null, report: false);
     }
 
     /** @param  array<string, mixed>|null  $manifest */
@@ -534,9 +574,13 @@ class BackupRestorer
      *
      * @param  list<string>  $tables
      */
-    private function assertComplete(ZipArchive $zip, array $tables): void
+    private function assertComplete(ZipArchive $zip, array $tables, Backup $backup): void
     {
         foreach ($tables as $table) {
+            // Checking a large archive is long work in itself, and it happens
+            // before the transaction's locks are there to hold the writers off.
+            $this->beat($backup);
+
             // Read to the end, not just opened. A bit flip inside a row can
             // leave the line structure intact, so the row count would match and
             // the restore would commit quietly altered business data — the
@@ -817,9 +861,11 @@ class BackupRestorer
      *
      * @param  array<string, mixed>  $manifest
      */
-    private function assertFilesReadable(ZipArchive $zip, array $manifest): void
+    private function assertFilesReadable(ZipArchive $zip, array $manifest, Backup $backup): void
     {
         foreach ($this->declaredFiles($zip, $manifest) as $entry) {
+            $this->beat($backup);
+
             $this->assertMemberIntact(
                 $zip,
                 'files/'.$entry,

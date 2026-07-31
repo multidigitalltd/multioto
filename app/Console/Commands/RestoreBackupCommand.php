@@ -9,6 +9,7 @@ use App\Services\Backup\BackupRestorer;
 use App\Services\Backup\RestoreClaim;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Queue;
 
 /**
  * Restore from an archive here and now, without the queue.
@@ -49,6 +50,22 @@ class RestoreBackupCommand extends Command
         }
 
         $this->warn("שחזור מגיבוי #{$backup->id} ({$backup->path}) — כל הנתונים הנוכחיים יימחקו ויוחלפו.");
+
+        // "horizon:terminate" asks for a shutdown and returns; a job that is
+        // already inside a call to Cardcom or Linet keeps going. Anything still
+        // in the queue means a worker may still be alive, and the money it is
+        // spending right now cannot be recalled once its row is replaced.
+        $pending = rescue(fn (): int => (int) Queue::size(), 0, report: false);
+
+        if ($pending > 0) {
+            $this->warn("יש עוד {$pending} משימות בתור — ודאו שעובד התור באמת נעצר (horizon:status מדווח inactive) לפני שממשיכים.");
+
+            if (! $this->option('force') && ! $this->confirm('להמשיך בכל זאת?', false)) {
+                $this->line('בוטל.');
+
+                return self::FAILURE;
+            }
+        }
 
         $word = (string) config('backup.restore_confirmation');
 
