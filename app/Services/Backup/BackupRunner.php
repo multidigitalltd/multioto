@@ -512,6 +512,20 @@ class BackupRunner
                 "יעד הגיבוי \"{$disk}\" הוא אחד מהמקורות שמגובים — צריך יעד חיצוני, מחוץ לשרת."
             );
         }
+
+        // And not merely a disk that is not a source: a plain local folder is
+        // on the same machine as the data it protects, so the server loss this
+        // whole feature exists for would take the live data and every recovery
+        // point with it — while the screen showed a healthy backup history.
+        // A mounted remote volume also looks "local" to PHP, so there is a
+        // switch for it, off by default.
+        if ((string) (config("filesystems.disks.{$disk}.driver") ?? '') === 'local'
+            && ! (bool) config('backup.allow_local_destination', false)) {
+            throw new \RuntimeException(
+                "יעד הגיבוי \"{$disk}\" נמצא על אותו שרת — גיבוי ששוכן על המכונה שהוא מגן עליה אינו גיבוי. "
+                .'יש להגדיר יעד S3 (או תואם). אם זו תיקייה שמחוברת לאחסון חיצוני, הפעילו BACKUP_ALLOW_LOCAL_DESTINATION.'
+            );
+        }
     }
 
     /**

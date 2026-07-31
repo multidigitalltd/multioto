@@ -27,6 +27,16 @@ return [
     */
     'disk' => env('BACKUP_DISK', 's3'),
 
+    /**
+     * Allow a destination that PHP sees as a local folder.
+     *
+     * Off by default, because a backup on the same machine as the data is not
+     * a backup: the server loss this feature exists for would take both. Turn
+     * it on only when that folder is a mounted volume that lives somewhere
+     * else — PHP cannot tell the difference, so this is the operator saying so.
+     */
+    'allow_local_destination' => (bool) env('BACKUP_ALLOW_LOCAL_DESTINATION', false),
+
     /** Folder inside that disk. */
     'path' => env('BACKUP_PATH', 'multioto-backups'),
 

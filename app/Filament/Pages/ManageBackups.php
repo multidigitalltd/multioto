@@ -124,6 +124,17 @@ class ManageBackups extends Page implements HasForms, HasTable
                                 // up archiving its own previous archives.
                                 if (array_key_exists((string) $value, (array) config('backup.files', []))) {
                                     $fail('היעד הזה הוא אחד מהמקורות שמגובים — צריך יעד חיצוני, מחוץ לשרת.');
+
+                                    return;
+                                }
+
+                                // A plain folder on this machine is not a
+                                // backup destination: losing the server would
+                                // take the data and every recovery point.
+                                if (($disks[(string) $value]['driver'] ?? null) === 'local'
+                                    && ! (bool) config('backup.allow_local_destination', false)) {
+                                    $fail('היעד הזה נמצא על אותו שרת — צריך יעד חיצוני (S3 או תואם). '
+                                        .'אם זו תיקייה המחוברת לאחסון חיצוני, הפעילו BACKUP_ALLOW_LOCAL_DESTINATION.');
                                 }
                             }),
                         TextInput::make('backup.path')

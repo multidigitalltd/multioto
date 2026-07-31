@@ -72,6 +72,12 @@ class BackupTest extends TestCase
             'backup.disk' => 'backups',
             'backup.path' => 'archives',
             'backup.files' => ['local' => [], 'public' => []],
+            // The faked destination IS a local folder — Storage::fake does not
+            // register it in config, so the driver is declared here to keep the
+            // destination check exercised — and a real deployment has to allow
+            // that deliberately. There is a test for the refusal below.
+            'filesystems.disks.backups' => ['driver' => 'local', 'root' => storage_path('framework/testing/disks/backups')],
+            'backup.allow_local_destination' => true,
         ]);
     }
 
@@ -2343,6 +2349,32 @@ class BackupTest extends TestCase
         }
 
         $this->assertSame(BackupStatus::Failed, $backup->fresh()->restore_status);
+    }
+
+    public function test_a_backup_refuses_a_destination_on_this_server(): void
+    {
+        Mail::fake();
+        config([
+            'billing.notifications.team_email' => 'team@multi.test',
+            // The default: a plain folder on this machine is not a destination.
+            'backup.allow_local_destination' => false,
+        ]);
+
+        $thrown = null;
+
+        try {
+            $this->runBackup();
+        } catch (\Throwable $e) {
+            $thrown = $e;
+        }
+
+        $this->assertNotNull($thrown, 'a backup must refuse a destination on the same server');
+        $this->assertStringContainsString('אותו שרת', $thrown->getMessage());
+
+        // Recorded and alerted, not silently skipped: an operator who thinks
+        // they are backed up is worse off than one who knows they are not.
+        $this->assertSame(BackupStatus::Failed, Backup::sole()->status);
+        Mail::assertSent(NotificationMail::class);
     }
 
     public function test_a_restore_refuses_an_archive_from_a_disk_this_install_does_not_have(): void
