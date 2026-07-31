@@ -1108,6 +1108,36 @@ class BackupTest extends TestCase
         Mail::assertNothingSent();
     }
 
+    public function test_a_second_restore_does_not_inherit_the_first_ones_reconciliation(): void
+    {
+        Mail::fake();
+        config(['billing.notifications.team_email' => 'team@multi.test']);
+
+        $backup = $this->runBackup();
+
+        $customer = Customer::factory()->create();
+        Charge::create([
+            'customer_id' => $customer->id,
+            'status' => ChargeStatus::Pending,
+            'amount_agorot' => 10000,
+            'vat_agorot' => 1800,
+            'total_agorot' => 11800,
+            'attempt_number' => 1,
+            'period_start' => now()->startOfMonth(),
+            'period_end' => now()->endOfMonth(),
+            'cardcom_low_profile_id' => 'lp-lost-the-first-time',
+        ]);
+
+        app(BackupRestorer::class)->restore($backup);
+        $this->assertNotNull($backup->fresh()->restore_report);
+
+        // The second run loses nothing — the page it would have named is
+        // already gone.
+        app(BackupRestorer::class)->restore($backup->fresh());
+
+        $this->assertNull($backup->fresh()->restore_report);
+    }
+
     public function test_a_scan_that_examined_everything_is_not_called_truncated(): void
     {
         Mail::fake();

@@ -90,6 +90,10 @@ class BackupRestorer
             // earlier one did — and the mark is what tells the failure handler
             // whether this attempt may be recorded as failed.
             'restored_at' => null,
+            // The previous run's reconciliation list belongs to the previous
+            // run. Left standing, a restore that loses nothing would still show
+            // the charges an earlier one lost, as if they were its own.
+            'restore_report' => null,
         ]);
 
         // Held from here to the very end — before the recovery pass, not after
@@ -229,7 +233,14 @@ class BackupRestorer
                         // Compared AFTER the archive has been loaded: what the
                         // backup puts back is not lost, and reporting it would
                         // bury the handful that genuinely are.
-                        $discarded = $this->referencesNotRestored($orphaned);
+                        // The collector reads one reference past the ceiling so
+                        // "finished" can be told from "ran out". That extra one
+                        // is for counting only: comparing it too would let the
+                        // report name more records than the ceiling it says it
+                        // stopped at.
+                        $discarded = $this->referencesNotRestored(
+                            array_slice($orphaned, 0, $this->artifactLimit())
+                        );
                         // Strictly more: the collector deliberately fetches one
                         // reference beyond the ceiling, so "exactly the ceiling"
                         // means every reference was examined. Calling that
