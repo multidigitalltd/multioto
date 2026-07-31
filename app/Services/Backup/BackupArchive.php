@@ -190,7 +190,18 @@ class BackupArchive
 
             try {
                 foreach (DB::table($table)->cursor() as $row) {
-                    fwrite($handle, $this->encodeRow((array) $row)."\n");
+                    $line = $this->encodeRow((array) $row)."\n";
+
+                    // Counted only once it is all there. A short write on a
+                    // full temporary volume would otherwise be sealed into an
+                    // archive whose manifest claims the row — a backup that
+                    // looks complete and fails on the day it is needed.
+                    if (@fwrite($handle, $line) !== strlen($line)) {
+                        throw new RuntimeException(
+                            "כתיבת נתוני הטבלה \"{$table}\" נכשלה (ייתכן שאין מקום בדיסק) — הגיבוי הופסק."
+                        );
+                    }
+
                     $rows++;
                 }
             } finally {

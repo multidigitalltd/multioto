@@ -1998,6 +1998,46 @@ class BackupTest extends TestCase
         }
     }
 
+    public function test_a_committed_restore_is_never_marked_failed_by_a_dying_worker(): void
+    {
+        $backup = $this->runBackup();
+
+        // The transaction landed — the token is written inside it — and the
+        // worker was killed before the completion bookkeeping that follows.
+        $backup->update([
+            'restore_status' => BackupStatus::Running,
+            'restore_attempt' => 'attempt-1',
+            'restore_journal' => 'token-committed',
+            'restored_at' => null,
+        ]);
+
+        (new RestoreBackupJob($backup->id, 'attempt-1'))->failed(new \RuntimeException('הועד נהרג'));
+
+        // "Failed" reads as "nothing happened, try again" — and trying again
+        // would delete everything accepted since this one landed.
+        $this->assertSame(BackupStatus::Running, $backup->fresh()->restore_status);
+    }
+
+    public function test_a_restore_refuses_an_archive_from_a_disk_this_install_does_not_have(): void
+    {
+        Storage::disk('local')->put('attachments/keep.txt', 'צרופה');
+        $backup = $this->runBackup();
+
+        // A rebuilt server configured with different disks: restoring the rows
+        // that reference these files while silently installing none of them
+        // would be reported as a success.
+        config(['backup.files' => ['public' => []]]);
+
+        try {
+            app(BackupRestorer::class)->restore($backup);
+            $this->fail('a restore must refuse files it cannot put anywhere');
+        } catch (\Throwable $e) {
+            $this->assertStringContainsString('local', $e->getMessage());
+        }
+
+        $this->assertSame(BackupStatus::Failed, $backup->fresh()->restore_status);
+    }
+
     public function test_a_backup_does_not_start_when_the_lock_expired_under_a_running_restore(): void
     {
         Mail::fake();

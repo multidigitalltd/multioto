@@ -60,6 +60,9 @@ class RestoreClaim
                 // the claim would then sit on "running" with nothing able to
                 // clear it.
                 'restored_at' => null,
+                // And the commit token of whatever ran before: from here on,
+                // a token on this row means THIS attempt's transaction landed.
+                'restore_journal' => null,
             ]);
 
         return $claimed === 1 ? $attempt : null;

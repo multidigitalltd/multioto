@@ -89,6 +89,7 @@ class BackupRestorer
             // earlier one did — and the mark is what tells the failure handler
             // whether this attempt may be recorded as failed.
             'restored_at' => null,
+            'restore_journal' => null,
         ]);
 
         // A restore that was killed mid-write left the live files half
@@ -1230,12 +1231,24 @@ class BackupRestorer
             // Only disks this installation backs up, and only paths that stay
             // inside them — an archive is a file like any other, and a crafted
             // one must not be able to write outside the disk root.
+            //
+            // Refused, not skipped: an installation configured with different
+            // disks — a different ATTACHMENT_DISK after a rebuild — would
+            // otherwise restore the rows that reference these files and none
+            // of the files, and call it a success. The operator can fix the
+            // configuration and run it again; what they cannot fix is a
+            // restore that already said it worked.
             if ($path === '' || ! array_key_exists($disk, (array) config('backup.files', []))) {
-                continue;
+                throw new RuntimeException(
+                    "הגיבוי מכיל קבצים מיעד אחסון \"{$disk}\" שאינו מוגדר בהתקנה הזו — "
+                    .'יש להגדיר את אותם יעדי אחסון (ATTACHMENT_DISK ו-backup.files) ואז לשחזר שוב.'
+                );
             }
 
             if (in_array('..', explode('/', $path), true) || str_starts_with($path, '/')) {
-                continue;
+                throw new RuntimeException(
+                    "קובץ הגיבוי מכיל נתיב לא חוקי (\"{$path}\") — הארכיון אינו תקין והשחזור הופסק."
+                );
             }
 
             $stream = $zip->getStream("files/{$disk}/{$path}");
