@@ -37,6 +37,7 @@ class BackupRestorer
         $backup->update(['restore_status' => BackupStatus::Running, 'restore_error' => null]);
 
         $local = tempnam(sys_get_temp_dir(), 'multioto-restore-');
+        $sequenceError = null;
 
         try {
             $this->download($backup, $local);
@@ -111,7 +112,18 @@ class BackupRestorer
                 // came back — and the next insert in production would collide
                 // with an existing primary key, over and over. It takes its
                 // own locks for the same reason the replacement did.
-                $this->resetSequences($order);
+                //
+                // A failure HERE is not a failed restore. The replacement is
+                // committed and production is already at the archived snapshot;
+                // calling that "failed" would invite a second attempt, and the
+                // second attempt would delete everything accepted since the
+                // first one landed. It is recorded on the completed restore
+                // instead, as work still to be done.
+                try {
+                    $this->resetSequences($order);
+                } catch (Throwable $e) {
+                    $sequenceError = mb_substr($e->getMessage(), 0, 1500);
+                }
             } finally {
                 $zip->close();
             }
@@ -119,11 +131,19 @@ class BackupRestorer
             $backup->update([
                 'restore_status' => BackupStatus::Completed,
                 'restored_at' => now(),
+                'restore_error' => $sequenceError === null ? null
+                    : 'השחזור הושלם, אך איפוס מוני המזהים נכשל: '.$sequenceError
+                    .' — יש להריץ אותו שוב לפני שנוצרות רשומות חדשות, אחרת הן עלולות להתנגש במזהים משוחזרים. אין לשחזר שוב.',
             ]);
 
-            SystemLog::record('warning', 'backup', "שוחזר גיבוי #{$backup->id} ({$backup->path})", [
-                'backup_id' => $backup->id,
-            ]);
+            SystemLog::record(
+                $sequenceError === null ? 'warning' : 'error',
+                'backup',
+                $sequenceError === null
+                    ? "שוחזר גיבוי #{$backup->id} ({$backup->path})"
+                    : "שוחזר גיבוי #{$backup->id}, אך איפוס המונים נכשל: ".mb_substr($sequenceError, 0, 200),
+                ['backup_id' => $backup->id],
+            );
         } catch (Throwable $e) {
             $backup->update([
                 'restore_status' => BackupStatus::Failed,
@@ -660,6 +680,8 @@ class BackupRestorer
     private function restoreFiles(ZipArchive $zip, array $manifest): void
     {
         $failed = [];
+        $previous = [];
+        $temp = [];
 
         // Driven by the list the backup WROTE, not by whatever members happen
         // to still be in the archive. Walking the members can only ever see
@@ -696,6 +718,12 @@ class BackupRestorer
                 continue;
             }
 
+            // What is there now, kept aside first. A write that fails half way
+            // through the list would otherwise leave the live database (rolled
+            // back with the transaction) beside files from the archive — a
+            // pairing that was never true at any point in time.
+            $previous[] = $this->setAside($disk, $path, $temp);
+
             try {
                 if (Storage::disk($disk)->put($path, $stream) === false) {
                     $failed[] = "{$disk}:{$path}";
@@ -705,15 +733,107 @@ class BackupRestorer
                     fclose($stream);
                 }
             }
+
+            if ($failed !== []) {
+                break;
+            }
         }
 
         if ($failed !== []) {
+            $this->putFilesBack($previous);
+            $this->discard($temp);
+
             throw new RuntimeException(
                 'הנתונים שוחזרו אך '.count($failed).' קבצים לא הוחזרו (חסרים בגיבוי או בעיית הרשאות): '
                 .implode(', ', array_slice($failed, 0, 5))
             );
         }
 
+        $this->discard($temp);
+    }
+
+    /**
+     * Copy what is currently at a path somewhere safe, so it can be put back.
+     *
+     * A path with nothing at it is recorded too, as null: undoing means
+     * deleting the file the restore created, not leaving it behind.
+     *
+     * @param  list<string>  $temp
+     * @return array{disk: string, path: string, from: string|null}
+     */
+    private function setAside(string $disk, string $path, array &$temp): array
+    {
+        $storage = Storage::disk($disk);
+
+        if (! rescue(fn (): bool => $storage->exists($path), false, report: false)) {
+            return ['disk' => $disk, 'path' => $path, 'from' => null];
+        }
+
+        $copy = tempnam(sys_get_temp_dir(), 'multioto-prev-');
+        $temp[] = $copy;
+
+        $source = $storage->readStream($path);
+
+        if (! is_resource($source)) {
+            // Unreadable now means unrecoverable later; treat it as absent
+            // rather than pretend there is something to put back.
+            return ['disk' => $disk, 'path' => $path, 'from' => null];
+        }
+
+        $out = fopen($copy, 'wb');
+
+        try {
+            stream_copy_to_stream($source, $out);
+        } finally {
+            fclose($out);
+            fclose($source);
+        }
+
+        return ['disk' => $disk, 'path' => $path, 'from' => $copy];
+    }
+
+    /**
+     * Undo the file writes of a restore that could not finish.
+     *
+     * Best effort by necessity — the storage that just refused a write may
+     * refuse this too — so every failure is logged rather than thrown: the
+     * restore is failing anyway, and the reason it failed is the more useful
+     * one to surface.
+     *
+     * @param  list<array{disk: string, path: string, from: string|null}>  $previous
+     */
+    private function putFilesBack(array $previous): void
+    {
+        foreach (array_reverse($previous) as $file) {
+            try {
+                if ($file['from'] === null) {
+                    Storage::disk($file['disk'])->delete($file['path']);
+
+                    continue;
+                }
+
+                $handle = fopen($file['from'], 'rb');
+
+                try {
+                    Storage::disk($file['disk'])->put($file['path'], $handle);
+                } finally {
+                    fclose($handle);
+                }
+            } catch (Throwable $e) {
+                SystemLog::record('error', 'backup', "החזרת הקובץ {$file['disk']}:{$file['path']} למצבו הקודם נכשלה: "
+                    .mb_substr($e->getMessage(), 0, 200));
+            }
+        }
+    }
+
+    /** @param  list<string>  $temp */
+    private function discard(array $temp): void
+    {
+        foreach ($temp as $file) {
+            if (file_exists($file)) {
+                unlink($file);
+            }
+        }
     }
 
     /**

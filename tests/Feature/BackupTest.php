@@ -923,6 +923,83 @@ class BackupTest extends TestCase
             ->assertSee('לא הושלם אף גיבוי');
     }
 
+    public function test_a_fresh_row_whose_archive_is_missing_is_not_treated_as_a_backup(): void
+    {
+        config(['backup.stale_after_hours' => 36]);
+
+        $backup = $this->runBackup();
+
+        // A lifecycle rule on the bucket, or an operator tidying up, removes
+        // the objects and leaves the rows — and every night would then quietly
+        // renew a promise that nothing can keep.
+        Storage::disk('backups')->delete($backup->path);
+
+        $this->assertStringContainsString(
+            'אינו נמצא ביעד האחסון',
+            (string) app(BackupRunner::class)->staleWarning(),
+        );
+    }
+
+    public function test_files_go_back_to_what_they_were_when_a_restore_cannot_finish(): void
+    {
+        Storage::disk('local')->put('attachments/a.txt', 'מהגיבוי');
+        Storage::disk('local')->put('attachments/b.txt', 'מהגיבוי');
+        $backup = $this->runBackup();
+
+        Storage::disk('local')->put('attachments/a.txt', 'חי');
+        Storage::disk('local')->put('attachments/b.txt', 'חי');
+
+        // The storage refuses the second write. The database rolls back with
+        // the transaction; the files cannot, unless something puts them back.
+        $written = 0;
+        $healthy = Storage::disk('local');
+        $flaky = \Mockery::mock($healthy)->makePartial();
+        $flaky->shouldReceive('put')->andReturnUsing(function (string $path, $contents) use (&$written, $healthy): bool {
+            // Only the second write is refused — putting the originals back
+            // has to be allowed to work, or the test proves nothing.
+            return ++$written === 2 ? false : (bool) $healthy->put($path, $contents);
+        });
+        Storage::set('local', $flaky);
+
+        try {
+            app(BackupRestorer::class)->restore($backup);
+            $this->fail('a failed file write must not pass');
+        } catch (\Throwable) {
+            // expected
+        }
+
+        Storage::set('local', $healthy);
+
+        // Live database beside archive-aged files is a pairing that was never
+        // true at any moment — worse than either state on its own.
+        $this->assertSame('חי', Storage::disk('local')->get('attachments/a.txt'));
+        $this->assertSame('חי', Storage::disk('local')->get('attachments/b.txt'));
+    }
+
+    public function test_a_committed_restore_is_not_offered_again_when_only_the_sequences_failed(): void
+    {
+        Customer::factory()->create(['name' => 'לקוח מהגיבוי']);
+        $backup = $this->runBackup();
+        Customer::query()->delete();
+
+        $restorer = new class(app(BackupArchive::class)) extends BackupRestorer
+        {
+            protected function resetSequences(array $tables): void
+            {
+                throw new \RuntimeException('lock timeout');
+            }
+        };
+
+        $restorer->restore($backup);
+
+        // The replacement is committed and production is already at the
+        // archived snapshot. Calling that "failed" invites a second attempt,
+        // and the second attempt deletes everything accepted since the first.
+        $this->assertSame(BackupStatus::Completed, $backup->fresh()->restore_status);
+        $this->assertStringContainsString('איפוס מוני המזהים נכשל', (string) $backup->fresh()->restore_error);
+        $this->assertSame('לקוח מהגיבוי', Customer::sole()->name);
+    }
+
     public function test_a_recent_backup_raises_no_stale_alert(): void
     {
         Mail::fake();

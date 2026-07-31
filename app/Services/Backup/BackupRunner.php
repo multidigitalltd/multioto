@@ -31,6 +31,9 @@ class BackupRunner
      */
     public const IMPORT_UNREADABLE = 'הארכיון נמצא ביעד אך לא ניתן לקרוא את תוכנו.';
 
+    /** How many recent archives to check for before declaring none is there. */
+    private const FRESHNESS_CANDIDATES = 10;
+
     public function __construct(private BackupArchive $archive) {}
 
     /** @param  int|null  $userId  who pressed the button; null for the nightly run */
@@ -225,11 +228,31 @@ class BackupRunner
             return null;
         }
 
-        $latest = Backup::query()->restorable()->max('created_at');
+        // A completed row is not a recovery point on its own. A lifecycle rule
+        // on the bucket, or an operator tidying up, removes the objects and
+        // leaves the rows — and every night would then quietly renew a promise
+        // that nothing can keep.
+        $recent = Backup::query()->restorable()
+            ->where('created_at', '>', now()->subHours($hours))
+            ->orderByDesc('created_at')
+            ->orderByDesc('id')
+            ->limit(self::FRESHNESS_CANDIDATES)
+            ->get();
 
-        if ($latest !== null && Carbon::parse($latest)->gt(now()->subHours($hours))) {
-            return null;
+        foreach ($recent as $candidate) {
+            // A destination that cannot answer counts as present: this decides
+            // whether to shout, and shouting on every network hiccup teaches
+            // people to ignore it.
+            if (rescue(fn (): bool => $candidate->existsOnDisk(), true, report: false)) {
+                return null;
+            }
         }
+
+        if ($recent->isNotEmpty()) {
+            return "נלקחו גיבויים ב-{$hours} השעות האחרונות, אך אף אחד מהם אינו נמצא ביעד האחסון.";
+        }
+
+        $latest = Backup::query()->restorable()->max('created_at');
 
         $since = $latest === null
             ? 'מעולם לא הושלם גיבוי'
