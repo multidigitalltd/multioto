@@ -403,6 +403,25 @@ class ManageBackups extends Page implements HasForms, HasTable
                             ->warning()->persistent()->send();
                     }),
 
+                // The list of payments and documents a restore left without a
+                // row. Kept on this row because the backup table is the one a
+                // restore does not replace — and useless if nobody can read it.
+                Tables\Actions\Action::make('reconcile')
+                    ->label('רשימת ההתאמות')
+                    ->icon('heroicon-o-clipboard-document-list')
+                    ->color('warning')
+                    ->visible(fn (Backup $r): bool => filled($r->restore_report['items'] ?? null))
+                    ->modalHeading('רשומות שאינן בגיבוי — לבדוק מול קארדקום ולינט')
+                    ->modalDescription(fn (Backup $r): string => 'אלה חיובים ומסמכים שהיו במערכת לפני השחזור ואינם בגיבוי. '
+                        .'קארדקום ולינט עדיין מכירים אותם, ולכן צריך להשוות מולם לפני שממשיכים לגבות. '
+                        .'סה"כ: '.(int) ($r->restore_report['count'] ?? 0)
+                        .(($r->restore_report['truncated'] ?? false) ? ' (ייתכן שיש נוספים)' : ''))
+                    ->modalContent(fn (Backup $r) => view('filament.pages.partials.restore-report', [
+                        'items' => (array) ($r->restore_report['items'] ?? []),
+                    ]))
+                    ->modalSubmitAction(false)
+                    ->modalCancelActionLabel('סגירה'),
+
                 Tables\Actions\Action::make('delete')
                     ->label('מחיקה')->icon('heroicon-o-trash')->color('gray')
                     // Not while something is using it: deleting mid-backup

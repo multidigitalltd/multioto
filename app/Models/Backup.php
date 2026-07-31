@@ -23,7 +23,7 @@ class Backup extends Model
     protected $fillable = [
         'status', 'disk', 'path', 'size_bytes', 'manifest', 'error',
         'user_id', 'finished_at', 'restore_status', 'restore_error', 'restored_at',
-        'restore_attempt', 'restore_queued_at', 'restore_started_at',
+        'restore_attempt', 'restore_queued_at', 'restore_started_at', 'restore_report',
     ];
 
     protected function casts(): array
@@ -32,6 +32,7 @@ class Backup extends Model
             'status' => BackupStatus::class,
             'restore_status' => BackupStatus::class,
             'manifest' => 'array',
+            'restore_report' => 'array',
             'finished_at' => 'datetime',
             'restored_at' => 'datetime',
             'restore_queued_at' => 'datetime',

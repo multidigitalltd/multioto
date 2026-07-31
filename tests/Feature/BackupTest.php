@@ -974,8 +974,42 @@ class BackupTest extends TestCase
         app(BackupRestorer::class)->restore($backup);
 
         // The restore cannot recall the page — but it must not let it vanish
-        // in silence either.
+        // in silence either, and the whole list has to survive the restore
+        // that caused it.
         Mail::assertSent(NotificationMail::class);
+
+        $report = $backup->fresh()->restore_report;
+        $this->assertSame(1, $report['count']);
+        $this->assertStringContainsString('lp-still-payable', implode(' ', $report['items']));
+    }
+
+    public function test_a_restore_does_not_report_the_payments_it_puts_back(): void
+    {
+        Mail::fake();
+        config(['billing.notifications.team_email' => 'team@multi.test']);
+
+        $customer = Customer::factory()->create();
+        Charge::create([
+            'customer_id' => $customer->id,
+            'status' => ChargeStatus::Succeeded,
+            'amount_agorot' => 10000,
+            'vat_agorot' => 1800,
+            'total_agorot' => 11800,
+            'attempt_number' => 1,
+            'period_start' => now()->startOfMonth(),
+            'period_end' => now()->endOfMonth(),
+            'cardcom_transaction_id' => 'tx-in-the-archive',
+        ]);
+
+        // In the archive, so the restore puts it straight back.
+        $backup = $this->runBackup();
+
+        app(BackupRestorer::class)->restore($backup);
+
+        // Naming it would bury the handful that genuinely went missing, and an
+        // alert nobody reads is the same as no alert.
+        $this->assertNull($backup->fresh()->restore_report);
+        Mail::assertNothingSent();
     }
 
     public function test_a_forgotten_running_row_does_not_stop_billing_for_ever(): void

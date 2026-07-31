@@ -34,8 +34,8 @@ class BackupRestorer
     /** Bytes pulled per read when checking a member is intact. */
     private const READ_CHUNK = 262144;
 
-    /** How many discarded external references to name in the report. */
-    private const ARTIFACT_LIMIT = 200;
+    /** How many external references to gather before calling it enough. */
+    private const ARTIFACT_LIMIT = 5000;
 
     public function __construct(private BackupArchive $archive) {}
 
@@ -59,6 +59,7 @@ class BackupRestorer
         $staged = [];
         $committed = false;
         $discarded = [];
+        $truncated = false;
 
         try {
             $this->download($backup, $local);
@@ -88,7 +89,7 @@ class BackupRestorer
                 // one thing that could put the files back must not have been
                 // thrown away by then.
                 try {
-                    DB::transaction(function () use ($zip, $order, $deferred, $declared, $manifest, &$previous, &$staged, &$discarded): void {
+                    DB::transaction(function () use ($zip, $order, $deferred, $declared, $manifest, &$previous, &$staged, &$discarded, &$truncated): void {
                         // Shut the writers out for the duration. The panel and the
                         // queue workers keep running during a restore, and a row
                         // committed after its table was emptied would survive
@@ -110,7 +111,7 @@ class BackupRestorer
                         // still pay into, a Linet document already emailed.
                         // The restore cannot recall either — it can only make
                         // sure somebody is told which ones lost their row.
-                        $orphaned = $this->externalArtifactsBeingDiscarded($order);
+                        $orphaned = $this->externalReferences($order);
 
                         // Children first: a parent row cannot go while something
                         // still points at it.
@@ -139,7 +140,11 @@ class BackupRestorer
 
                         $this->reapplyAttribution($attribution);
 
-                        $discarded = $orphaned;
+                        // Compared AFTER the archive has been loaded: what the
+                        // backup puts back is not lost, and reporting it would
+                        // bury the handful that genuinely are.
+                        $discarded = $this->referencesNotRestored($orphaned);
+                        $truncated = count($orphaned) >= self::ARTIFACT_LIMIT;
 
                         // Files INSIDE the transaction, which makes the restore
                         // all-or-nothing the useful way round: a file that cannot
@@ -190,7 +195,7 @@ class BackupRestorer
                     .' — יש להריץ אותו שוב לפני שנוצרות רשומות חדשות, אחרת הן עלולות להתנגש במזהים משוחזרים. אין לשחזר שוב.',
             ]);
 
-            $this->reportDiscardedArtifacts($backup, $discarded);
+            $this->reportDiscardedArtifacts($backup, $discarded, $truncated);
 
             SystemLog::record(
                 $sequenceError === null ? 'warning' : 'error',
@@ -526,66 +531,128 @@ class BackupRestorer
     }
 
     /**
-     * Charges and documents the outside world still knows about, whose rows
-     * this restore is about to delete.
+     * Every external reference the system currently holds — a Cardcom page or
+     * transaction, a Linet document.
      *
-     * A Cardcom page created after the snapshot stays payable; a Linet document
-     * issued after it has already reached the customer. Neither can be recalled
-     * from here, and quietly dropping the row that ties them to a customer is
-     * how money arrives with nothing to match it to. So they are counted and
-     * named, and somebody is told.
+     * Collected BEFORE the tables are replaced so it can be compared with what
+     * the archive puts back: the ones that do not come back are the ones the
+     * outside world still knows about and this system no longer does.
      *
      * @param  list<string>  $order
-     * @return list<string>
+     * @return list<array{table: string, column: string, value: string, label: string}>
      */
-    private function externalArtifactsBeingDiscarded(array $order): array
+    private function externalReferences(array $order): array
     {
-        $found = [];
+        $refs = [];
 
-        if (in_array('charges', $order, true)) {
-            $charges = DB::table('charges')
-                ->where(fn ($q) => $q->whereNotNull('cardcom_low_profile_id')
-                    ->orWhereNotNull('cardcom_transaction_id')
-                    ->orWhereNotNull('proforma_document_id'))
-                ->orderByDesc('id')
-                ->limit(self::ARTIFACT_LIMIT)
-                ->get(['id', 'cardcom_low_profile_id', 'cardcom_transaction_id', 'proforma_document_id']);
-
-            foreach ($charges as $charge) {
-                $found[] = "חיוב #{$charge->id}: "
-                    .collect([
-                        'עמוד תשלום' => $charge->cardcom_low_profile_id,
-                        'עסקה' => $charge->cardcom_transaction_id,
-                        'חשבונית עסקה' => $charge->proforma_document_id,
-                    ])->filter()->map(fn ($v, $k) => "{$k} {$v}")->join(', ');
+        $collect = function (string $table, array $columns, callable $label) use (&$refs, $order): void {
+            if (! in_array($table, $order, true) || count($refs) >= self::ARTIFACT_LIMIT) {
+                return;
             }
-        }
 
-        if (in_array('invoices', $order, true)) {
-            foreach (DB::table('invoices')->orderByDesc('id')->limit(self::ARTIFACT_LIMIT)
-                ->get(['id', 'linet_document_id']) as $invoice) {
-                $found[] = "חשבונית #{$invoice->id}: מסמך לינט {$invoice->linet_document_id}";
-            }
-        }
+            DB::table($table)
+                ->where(function ($q) use ($columns) {
+                    foreach ($columns as $column) {
+                        $q->orWhereNotNull($column);
+                    }
+                })
+                ->orderBy('id')
+                ->select(array_merge(['id'], $columns))
+                ->chunkById(self::CHUNK, function ($rows) use (&$refs, $table, $columns, $label): bool {
+                    foreach ($rows as $row) {
+                        foreach ($columns as $column) {
+                            if (blank($row->{$column})) {
+                                continue;
+                            }
 
-        return $found;
+                            $refs[] = [
+                                'table' => $table,
+                                'column' => $column,
+                                'value' => (string) $row->{$column},
+                                'label' => $label($row, $column),
+                            ];
+                        }
+                    }
+
+                    // Bounded, but never silently: the count of what was left
+                    // out travels with the report.
+                    return count($refs) < self::ARTIFACT_LIMIT;
+                });
+        };
+
+        $collect('charges', ['cardcom_low_profile_id', 'cardcom_transaction_id', 'proforma_document_id'],
+            fn ($row, $column): string => match ($column) {
+                'cardcom_low_profile_id' => "חיוב #{$row->id}: עמוד תשלום {$row->cardcom_low_profile_id}",
+                'cardcom_transaction_id' => "חיוב #{$row->id}: עסקה בקארדקום {$row->cardcom_transaction_id}",
+                default => "חיוב #{$row->id}: חשבונית עסקה {$row->proforma_document_id}",
+            });
+
+        $collect('invoices', ['linet_document_id'],
+            fn ($row): string => "חשבונית #{$row->id}: מסמך לינט {$row->linet_document_id}");
+
+        return $refs;
     }
 
     /**
+     * Of those references, the ones the archive did not bring back.
+     *
+     * Without this the report would name every payment and document the backup
+     * restores perfectly well — noise that buries the handful that matter, and
+     * an alert nobody reads is the same as no alert.
+     *
+     * @param  list<array{table: string, column: string, value: string, label: string}>  $refs
+     * @return list<string>
+     */
+    private function referencesNotRestored(array $refs): array
+    {
+        $missing = [];
+
+        foreach (collect($refs)->groupBy(fn (array $ref): string => $ref['table'].'|'.$ref['column']) as $key => $group) {
+            [$table, $column] = explode('|', (string) $key);
+
+            foreach ($group->chunk(self::CHUNK) as $chunk) {
+                $values = $chunk->pluck('value')->all();
+                $restored = DB::table($table)->whereIn($column, $values)->pluck($column)->all();
+
+                foreach ($chunk as $ref) {
+                    if (! in_array($ref['value'], $restored, true)) {
+                        $missing[] = $ref['label'];
+                    }
+                }
+            }
+        }
+
+        return $missing;
+    }
+
+    /**
+     * Tell the team what the restore took away from them.
+     *
+     * The whole list is kept on the backup row — the one table a restore does
+     * not replace, so it is still there afterwards to work through. The email
+     * carries a sample and the count, because an email is where someone finds
+     * out, not where they reconcile.
+     *
      * @param  list<string>  $discarded
      */
-    private function reportDiscardedArtifacts(Backup $backup, array $discarded): void
+    private function reportDiscardedArtifacts(Backup $backup, array $discarded, bool $truncated): void
     {
         if ($discarded === []) {
             return;
         }
 
         $count = count($discarded);
-        $sample = implode("\n", array_slice($discarded, 0, 20));
+        $note = $truncated ? " (נאספו עד {$count} — ייתכן שיש נוספים)" : '';
 
-        SystemLog::record('warning', 'backup', "שחזור גיבוי #{$backup->id}: {$count} חיובים/מסמכים שהיו במערכת לפני השחזור אינם קיימים בגיבוי.", [
+        $backup->update(['restore_report' => [
+            'at' => now()->toIso8601String(),
+            'count' => $count,
+            'truncated' => $truncated,
+            'items' => $discarded,
+        ]]);
+
+        SystemLog::record('warning', 'backup', "שחזור גיבוי #{$backup->id}: {$count} חיובים/מסמכים חיצוניים אינם קיימים בגיבוי{$note}.", [
             'backup_id' => $backup->id,
-            'artifacts' => array_slice($discarded, 0, 100),
         ]);
 
         $to = EmailList::parse(config('billing.notifications.team_email'));
@@ -594,10 +661,13 @@ class BackupRestorer
             return;
         }
 
+        $sample = implode("\n", array_slice($discarded, 0, 20));
+
         rescue(fn () => Mail::to($to)->send(new NotificationMail(
             'שוחזר גיבוי — יש לבדוק חיובים ומסמכים מול קארדקום ולינט',
-            'השחזור החזיר את המערכת לתמונת המצב של הגיבוי. הרשומות הבאות היו קיימות לפני השחזור ואינן בגיבוי, '
-            ."ולכן אין להן יותר שורה במערכת — אבל קארדקום ולינט עדיין מכירים אותן:\n\n{$sample}\n\n"
+            "השחזור החזיר את המערכת לתמונת המצב של הגיבוי. {$count} רשומות היו קיימות לפני השחזור ואינן בגיבוי{$note}, "
+            ."ולכן אין להן יותר שורה במערכת — אבל קארדקום ולינט עדיין מכירים אותן.\n\nלדוגמה:\n{$sample}\n\n"
+            .'הרשימה המלאה שמורה על שורת הגיבוי במסך "גיבוי ושחזור" — כפתור "רשימת ההתאמות". '
             .'יש להשוות מול הדוחות בקארדקום ובלינט לפני שממשיכים לגבות.',
         )), report: false);
     }
