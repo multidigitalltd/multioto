@@ -25,4 +25,8 @@ yarn-error.log
 
 # Local backups directory
 /backups
+
+# Restore journal + staging file: runtime state of a restore in progress.
+# Shipping one would look to a fresh install like an interrupted restore.
+/storage/backups
 wordpress-plugin/dist/

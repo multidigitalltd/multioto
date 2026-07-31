@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Enums\ChargeStatus;
 use App\Enums\TokenStatus;
+use App\Jobs\Concerns\WaitsForRestore;
 use App\Models\Charge;
 use App\Models\PaymentToken;
 use App\Services\Cardcom\CardcomClient;
@@ -22,13 +23,26 @@ use Illuminate\Support\Facades\Cache;
 class ProcessManualChargeJob implements ShouldQueue
 {
     use Queueable;
+    use WaitsForRestore;
 
     public int $tries = 1; // A charge must never be retried automatically.
 
     public function __construct(public int $chargeId) {}
 
+    /** @return array<int, mixed> */
+    protected function backupWaitDispatchArgs(): array
+    {
+        return [$this->chargeId];
+    }
+
     public function handle(CardcomClient $cardcom): void
     {
+        // Money taken while a restore replaces the row recording it cannot be
+        // undone from either side.
+        if ($this->heldForBackupOperation()) {
+            return;
+        }
+
         $lock = Cache::lock("manual-charge:{$this->chargeId}", 120);
 
         if (! $lock->get()) {

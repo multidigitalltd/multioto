@@ -16,6 +16,7 @@ use App\Jobs\CheckStoreSalesJob;
 use App\Jobs\FollowUpPendingTicketsJob;
 use App\Jobs\MonitorSiteJob;
 use App\Jobs\ReconcileChargeJob;
+use App\Jobs\RunBackupJob;
 use App\Jobs\ScanSiteComplianceJob;
 use App\Jobs\ScanSiteOpportunitiesJob;
 use App\Jobs\ScanSiteVulnerabilitiesJob;
@@ -33,6 +34,7 @@ use App\Models\Subscription;
 use App\Models\SystemLog;
 use App\Models\WebhookEvent;
 use App\Providers\SettingsServiceProvider;
+use App\Services\Backup\BackupRunner;
 use App\Services\Calendar\ShabbatClock;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schedule;
@@ -42,6 +44,13 @@ use Illuminate\Support\Facades\Schedule;
  | itself only enqueues (§1). Run with `php artisan schedule:work` (dev) or a
  | single system cron entry (prod).
  */
+
+// The scheduler's own locks go through the database, not the default cache.
+// In production that cache is Redis, and Redis is also the queue: a Redis
+// outage would stop ->onOneServer() from ever handing control to the callback,
+// so the very code meant to notice and report the outage would never run. The
+// database is already required for anything here to mean anything.
+Schedule::useCache('database');
 
 // Outward automations pause over Shabbat and Yom Tov. Each job also rechecks
 // the clock in handle() (PausesForShabbat) and re-queues itself for the day
@@ -286,6 +295,44 @@ Schedule::call(function () {
         ->pluck('id')
         ->each(fn (int $id) => SendBroadcastJob::dispatch($id));
 })->everyFiveMinutes()->name('broadcasts:dispatch-scheduled')->when($awake)->onOneServer();
+
+// Nightly backup to the external destination. Deliberately NOT gated on
+// $awake: a backup sends nothing outward and touches no customer, so pausing it
+// over Shabbat would only mean a day of the year with no copy of the business.
+// The job holds a lock, so a slow run can never be started twice.
+//
+// Checked every minute rather than declared with dailyAt(): the schedule is
+// built once, and `schedule:work` is a long-lived process — a time changed in
+// the panel would otherwise be ignored until someone restarted the scheduler,
+// which is not a thing anyone would think to do. The settings overlay is
+// re-applied here because a Schedule::call closure never passes through
+// Queue::before.
+Schedule::call(function () {
+    SettingsServiceProvider::refreshFromDatabase();
+
+    RunBackupJob::dispatchNightly();
+})->everyMinute()
+    ->when(function (): bool {
+        SettingsServiceProvider::refreshFromDatabase();
+
+        return now()->format('H:i') === trim((string) config('backup.daily_at', '03:30'));
+    })
+    ->name('system:daily-backup')->onOneServer();
+
+// And a look each morning at whether the backup actually happened. A queue that
+// accepted the job but has no worker to run it leaves no failed row at all —
+// the silence looks exactly like a healthy night, until the day somebody needs
+// the archive.
+//
+// It cannot report a scheduler that has stopped, because it IS the scheduler.
+// That case is covered from the other side: the backup screen asks the same
+// question on every page load, and an external uptime monitor is the only real
+// answer (see docs/deployment.md).
+Schedule::call(function () {
+    SettingsServiceProvider::refreshFromDatabase();
+
+    app(BackupRunner::class)->alertIfStale();
+})->dailyAt('09:00')->name('system:backup-stale-check')->onOneServer();
 
 // Horizon metrics snapshot.
 Schedule::command('horizon:snapshot')->everyFiveMinutes();

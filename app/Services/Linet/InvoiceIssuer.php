@@ -6,6 +6,7 @@ use App\Enums\ChargeStatus;
 use App\Enums\DocumentType;
 use App\Enums\VatCategory;
 use App\Models\Charge;
+use App\Services\Backup\OperationGate;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
@@ -52,6 +53,17 @@ class InvoiceIssuer
         // invoice must match. For a normal charge this is identical to the
         // customer's flag (exempt customer → 0 VAT → exempt invoice).
         $vatCategory = $charge->vat_agorot <= 0 ? VatCategory::Exempt : VatCategory::Taxable;
+
+        // A document Linet has issued is emailed to the customer and cannot be
+        // withdrawn, so it must not be created against a charge that a restore
+        // is about to replace. Here rather than only in the job, because the
+        // panel's "issue invoice" button calls this directly.
+        if (app(OperationGate::class)->isRunning()) {
+            return [
+                'ok' => false,
+                'error' => 'פעולת גיבוי או שחזור רצה כרגע — הנפקת חשבונית נעצרה כדי שלא יונפק מסמך על חיוב שעומד להיות מוחלף. נסו שוב בעוד כמה דקות.',
+            ];
+        }
 
         // Preflight: never call Linet with missing configuration. Linet's own
         // errors for these cases are cryptic ("סוג מסמך לא תקין" וכד'); this

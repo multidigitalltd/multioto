@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Jobs\Concerns\WaitsForRestore;
 use App\Models\Charge;
 use App\Services\Linet\ProformaIssuer;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -15,6 +16,7 @@ use Illuminate\Foundation\Queue\Queueable;
 class IssueProformaJob implements ShouldQueue
 {
     use Queueable;
+    use WaitsForRestore;
 
     public int $tries = 3;
 
@@ -22,8 +24,21 @@ class IssueProformaJob implements ShouldQueue
 
     public function __construct(public int $chargeId) {}
 
+    /** @return array<int, mixed> */
+    protected function backupWaitDispatchArgs(): array
+    {
+        return [$this->chargeId];
+    }
+
     public function handle(ProformaIssuer $issuer): void
     {
+        // Held rather than failed: the issuer refuses during a restore anyway,
+        // and a refusal here would spend one of this job's few attempts on a
+        // condition that clears by itself.
+        if ($this->heldForBackupOperation()) {
+            return;
+        }
+
         $charge = Charge::find($this->chargeId);
 
         if (! $charge) {

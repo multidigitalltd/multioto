@@ -6,6 +6,7 @@ use App\Enums\BillingInterval;
 use App\Enums\ChargeStatus;
 use App\Enums\SubscriptionStatus;
 use App\Jobs\Concerns\PausesForShabbat;
+use App\Jobs\Concerns\WaitsForRestore;
 use App\Models\Charge;
 use App\Models\Subscription;
 use App\Services\Billing\DunningMachine;
@@ -30,6 +31,7 @@ class ChargeSubscriptionJob implements ShouldQueue
 {
     use PausesForShabbat;
     use Queueable;
+    use WaitsForRestore;
 
     public int $tries = 1;
 
@@ -47,9 +49,21 @@ class ChargeSubscriptionJob implements ShouldQueue
         return [$this->subscriptionId, $this->manual];
     }
 
+    /** @return array<int, mixed> */
+    protected function backupWaitDispatchArgs(): array
+    {
+        return [$this->subscriptionId, $this->manual];
+    }
+
     public function handle(CardcomClient $cardcom, DunningMachine $dunning): void
     {
         if (! $this->manual && $this->rescheduledForShabbat()) {
+            return;
+        }
+
+        // Money leaving the customer's card while a restore replaces the row
+        // recording it is the one outcome no later repair can undo.
+        if ($this->heldForBackupOperation()) {
             return;
         }
 

@@ -7,6 +7,7 @@ use App\Enums\TokenStatus;
 use App\Jobs\ProcessManualChargeJob;
 use App\Models\Charge;
 use App\Models\Customer;
+use App\Services\Backup\OperationGate;
 use App\Services\Cardcom\CardcomClient;
 use App\Support\CardcomWebhook;
 use App\Support\PaymentLink;
@@ -54,6 +55,15 @@ class ManualChargeService
      */
     public function createHostedPage(Customer $customer, int $totalAgorot, string $description, ?string $notes = null, array $lines = [], ?bool $vatExempt = null): array
     {
+        // A payment page is payable the moment it exists, and the row that says
+        // which charge it belongs to is what a restore would replace — leaving
+        // a customer able to pay into nothing this system can match.
+        if (app(OperationGate::class)->isRunning()) {
+            throw new \RuntimeException(
+                'פעולת גיבוי או שחזור רצה כרגע — לא נוצר עמוד תשלום. נסו שוב בעוד כמה דקות.'
+            );
+        }
+
         $charge = $this->createPendingCharge($customer, $totalAgorot, $description, $notes, $lines, $vatExempt);
 
         try {
