@@ -7,6 +7,7 @@ use App\Mail\NotificationMail;
 use App\Models\Backup;
 use App\Models\SystemLog;
 use App\Support\EmailList;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -145,6 +146,107 @@ class BackupRunner
         $this->fail($backup, $reason);
 
         return $backup;
+    }
+
+    /**
+     * Adopt archives that are at the destination but have no row here.
+     *
+     * This is the disaster the whole feature exists for: the server is gone,
+     * the database with it, and the only thing left is a bucket full of ZIPs.
+     * A fresh installation knows nothing about them — the history table is
+     * deliberately left OUT of every archive, so it cannot bring itself back.
+     * Without this the feature would work for every case except the one it was
+     * built for.
+     *
+     * @return array{imported: int, unreadable: int}
+     */
+    public function importFromDisk(): array
+    {
+        $disk = (string) config('backup.disk');
+        $prefix = trim((string) config('backup.path'), '/');
+        $known = Backup::query()->where('disk', $disk)->pluck('path')->all();
+
+        $imported = 0;
+        $unreadable = 0;
+
+        foreach (Storage::disk($disk)->files($prefix) as $path) {
+            if (! str_ends_with(mb_strtolower($path), '.zip') || in_array($path, $known, true)) {
+                continue;
+            }
+
+            $manifest = $this->manifestAt($disk, $path);
+
+            if ($manifest === null) {
+                $unreadable++;
+            } else {
+                $imported++;
+            }
+
+            $when = rescue(
+                fn (): ?int => Storage::disk($disk)->lastModified($path),
+                null,
+                report: false,
+            );
+
+            $backup = new Backup([
+                // An archive whose manifest cannot be read is listed too, but
+                // as a failure: it is not restorable, and leaving it invisible
+                // would just mean paying to store something nobody can see.
+                'status' => $manifest === null ? BackupStatus::Failed : BackupStatus::Completed,
+                'disk' => $disk,
+                'path' => $path,
+                'size_bytes' => rescue(fn (): int => (int) Storage::disk($disk)->size($path), 0, report: false),
+                'manifest' => $manifest,
+                'error' => $manifest === null ? 'הארכיון נמצא ביעד אך לא ניתן לקרוא את תוכנו.' : null,
+                'finished_at' => $when !== null ? Carbon::createFromTimestamp($when) : null,
+            ]);
+
+            // Dated by the file itself, so the list stays in the order the
+            // archives were actually taken and retention keeps working.
+            if ($when !== null) {
+                $backup->created_at = Carbon::createFromTimestamp($when);
+                $backup->updated_at = $backup->created_at;
+            }
+
+            $backup->save();
+        }
+
+        if ($imported > 0 || $unreadable > 0) {
+            SystemLog::record('warning', 'backup', "יובאו {$imported} גיבויים מהיעד ({$unreadable} לא קריאים).");
+        }
+
+        return ['imported' => $imported, 'unreadable' => $unreadable];
+    }
+
+    /** Read one archive's manifest without keeping the whole file around. */
+    private function manifestAt(string $disk, string $path): ?array
+    {
+        $local = tempnam(sys_get_temp_dir(), 'multioto-import-');
+
+        try {
+            $source = Storage::disk($disk)->readStream($path);
+
+            if (! is_resource($source)) {
+                return null;
+            }
+
+            $target = fopen($local, 'wb');
+
+            try {
+                stream_copy_to_stream($source, $target);
+            } finally {
+                fclose($target);
+                fclose($source);
+            }
+
+            return $this->archive->manifestOf($local);
+        } catch (Throwable) {
+            return null;
+        } finally {
+            if (is_string($local) && file_exists($local)) {
+                unlink($local);
+            }
+        }
     }
 
     /**

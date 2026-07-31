@@ -360,6 +360,7 @@ class BackupTest extends TestCase
     public function test_a_restore_blocked_by_the_lock_says_so_instead_of_vanishing(): void
     {
         $backup = $this->runBackup();
+        $backup->update(['restore_status' => BackupStatus::Running]);
 
         $lock = Cache::lock(RunBackupJob::LOCK, 60);
         $this->assertTrue($lock->get());
@@ -547,6 +548,73 @@ class BackupTest extends TestCase
 
         // File writes cannot be rolled back, so the check has to happen first.
         $this->assertSame('שונה אחרי', Storage::disk('local')->get('attachments/a.txt'));
+    }
+
+    public function test_archives_at_the_destination_are_found_again_after_the_database_is_lost(): void
+    {
+        Customer::factory()->create(['name' => 'לקוח מהגיבוי']);
+        $original = $this->runBackup();
+
+        // The disaster the whole feature exists for: the server and its
+        // database are gone, and only the bucket is left. The history table is
+        // deliberately not inside the archive, so it cannot bring itself back.
+        Backup::query()->delete();
+
+        $found = app(BackupRunner::class)->importFromDisk();
+
+        $this->assertSame(1, $found['imported']);
+
+        $imported = Backup::sole();
+        $this->assertSame($original->path, $imported->path);
+        $this->assertSame(BackupStatus::Completed, $imported->status);
+        $this->assertNull(app(BackupRestorer::class)->blockedReason($imported));
+
+        // And it really is restorable, which is the only thing that matters.
+        Customer::query()->delete();
+        app(BackupRestorer::class)->restore($imported);
+        $this->assertSame('לקוח מהגיבוי', Customer::sole()->name);
+    }
+
+    public function test_a_second_scan_does_not_list_the_same_archive_twice(): void
+    {
+        $this->runBackup();
+
+        app(BackupRunner::class)->importFromDisk();
+        $found = app(BackupRunner::class)->importFromDisk();
+
+        $this->assertSame(0, $found['imported']);
+        $this->assertSame(1, Backup::count());
+    }
+
+    public function test_an_unreadable_archive_at_the_destination_is_listed_as_failed(): void
+    {
+        Storage::disk('backups')->put('archives/not-really-a-backup.zip', 'לא ארכיון');
+
+        $found = app(BackupRunner::class)->importFromDisk();
+
+        // Listed rather than hidden: it is taking up paid storage, and someone
+        // has to be able to see it in order to delete it.
+        $this->assertSame(1, $found['unreadable']);
+        $this->assertSame(BackupStatus::Failed, Backup::sole()->status);
+    }
+
+    public function test_a_redelivered_restore_job_does_not_run_a_second_time(): void
+    {
+        $customer = Customer::factory()->create(['name' => 'לקוח מהגיבוי']);
+        $backup = $this->runBackup();
+
+        $backup->update(['restore_status' => BackupStatus::Running]);
+        (new RestoreBackupJob($backup->id))->handle(app(BackupRestorer::class));
+
+        // Accepted after the restore finished — a worker that died before
+        // acknowledging its payload gets the same job again, and running it
+        // twice would wipe this.
+        $after = Customer::factory()->create(['name' => 'לקוח שהתקבל אחרי השחזור']);
+
+        (new RestoreBackupJob($backup->id))->handle(app(BackupRestorer::class));
+
+        $this->assertNotNull(Customer::find($after->id));
+        $this->assertNotNull(Customer::find($customer->id));
     }
 
     public function test_the_sequences_are_left_alone_when_the_restore_does_not_commit(): void

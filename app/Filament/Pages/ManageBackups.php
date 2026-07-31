@@ -243,6 +243,34 @@ class ManageBackups extends Page implements HasForms, HasTable
 
                         Notification::make()->title('הגיבוי התחיל — יופיע ברשימה בסיום.')->success()->send();
                     }),
+
+                // The list lives in the database, and the database is exactly
+                // what a disaster takes. After a rebuild the bucket still holds
+                // the archives and this screen would show nothing — this is how
+                // they are found again.
+                Tables\Actions\Action::make('import')
+                    ->label('חפש גיבויים ביעד')
+                    ->icon('heroicon-o-magnifying-glass')
+                    ->color('gray')
+                    ->requiresConfirmation()
+                    ->modalHeading('לסרוק את יעד האחסון?')
+                    ->modalDescription('כל ארכיון שנמצא ביעד ואינו ברשימה יתווסף אליה. שימושי אחרי התקנה מחדש — רשימת הגיבויים עצמה אינה נשמרת בתוך הגיבוי.')
+                    ->action(function (): void {
+                        $found = app(BackupRunner::class)->importFromDisk();
+
+                        if ($found['imported'] === 0 && $found['unreadable'] === 0) {
+                            Notification::make()->title('לא נמצאו גיבויים חדשים ביעד.')->success()->send();
+
+                            return;
+                        }
+
+                        Notification::make()
+                            ->title("נוספו {$found['imported']} גיבויים מהיעד.")
+                            ->body($found['unreadable'] > 0
+                                ? "בנוסף נמצאו {$found['unreadable']} קבצים שלא ניתן לקרוא — הם מסומנים כנכשלים."
+                                : null)
+                            ->success()->send();
+                    }),
             ])
             ->actions([
                 Tables\Actions\Action::make('download')
@@ -344,7 +372,7 @@ class ManageBackups extends Page implements HasForms, HasTable
                     }),
             ])
             ->emptyStateHeading('עדיין אין גיבויים')
-            ->emptyStateDescription('הגיבוי הלילי ירוץ בשעה שנקבעה, או אפשר ללחוץ "גבה עכשיו".');
+            ->emptyStateDescription('הגיבוי הלילי ירוץ בשעה שנקבעה, או אפשר ללחוץ "גבה עכשיו". אחרי התקנה מחדש — "חפש גיבויים ביעד" יאתר ארכיונים קיימים.');
     }
 
     private function humanSize(?int $bytes): string

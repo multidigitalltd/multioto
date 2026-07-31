@@ -35,6 +35,15 @@ class RestoreBackupJob implements ShouldQueue
             return;
         }
 
+        // The claim the panel made before dispatching must still be open. The
+        // queue delivers at least once, so a worker that finished the restore
+        // and died before acknowledging its payload gets handed the same job
+        // again — and running it a second time would put the old snapshot back
+        // over everything accepted since the first one finished.
+        if ($backup->restore_status !== BackupStatus::Running) {
+            return;
+        }
+
         $lock = Cache::lock(RunBackupJob::LOCK, 3600);
 
         if (! $lock->get()) {
