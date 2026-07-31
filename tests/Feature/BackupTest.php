@@ -1803,6 +1803,26 @@ class BackupTest extends TestCase
         $this->assertNotNull($backup->fresh()->restored_at);
     }
 
+    public function test_a_backup_does_not_start_when_the_lock_expired_under_a_running_restore(): void
+    {
+        Mail::fake();
+        config(['billing.notifications.team_email' => 'team@multi.test']);
+
+        // A console restore has no timeout, so its lock's lease can run out
+        // while it is still very much alive — pulling a huge archive off a
+        // remote destination. The lock is free; the restore is not over.
+        $restoring = $this->runBackup();
+        $restoring->update(['restore_status' => BackupStatus::Running]);
+
+        (new RunBackupJob)->handle(app(BackupRunner::class));
+
+        // Backing up now would read the rows from one state and the files from
+        // another and call the result a good archive.
+        $started = Backup::query()->where('status', BackupStatus::Failed)->latest('id')->first();
+        $this->assertNotNull($started);
+        $this->assertStringContainsString('רצה באותו רגע', (string) $started->error);
+    }
+
     public function test_the_console_asks_before_restoring_over_a_live_application(): void
     {
         Queue::fake();

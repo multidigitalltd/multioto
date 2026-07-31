@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Enums\BackupStatus;
 use App\Models\Backup;
 use App\Services\Backup\BackupRestorer;
+use App\Services\Backup\OperationGate;
 use Illuminate\Contracts\Database\Query\Builder;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -66,7 +67,13 @@ class RestoreBackupJob implements ShouldQueue
 
         $lock = Cache::lock(RunBackupJob::LOCK, 3600);
 
-        if (! $lock->get()) {
+        // The lock's lease can run out under an operation that has none — a
+        // console restore of a very large archive — and a free lock would then
+        // let this one start on top of it. Its own claim is excluded, since
+        // that is the row this job just took.
+        if (! $lock->get() || app(OperationGate::class)->isRunning(exceptId: $backup->id)) {
+            $lock->release();
+
             // The panel already told the operator the restore had started.
             // Returning quietly would leave that promise unkept with nothing
             // to show for it — and the job is never retried.

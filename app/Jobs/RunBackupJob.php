@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Enums\BackupStatus;
 use App\Models\Backup;
 use App\Services\Backup\BackupRunner;
+use App\Services\Backup\OperationGate;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Cache;
@@ -85,7 +86,14 @@ class RunBackupJob implements ShouldQueue
 
         $lock = Cache::lock(self::LOCK, 3600);
 
-        if (! $lock->get()) {
+        // The lock has a lease, and a restore run from the console has no
+        // timeout at all: a very large archive can still be coming down when
+        // the lease runs out, leaving the lock free while the restore is very
+        // much alive. The rows are the backstop — a running restore keeps
+        // touching its own — so both are asked, and neither alone decides.
+        if (! $lock->get() || app(OperationGate::class)->isRunning()) {
+            $lock->release();
+
             // Not silence: a night that produced no copy of the business has
             // to be visible, and a manual request was already announced in the
             // panel as having started.

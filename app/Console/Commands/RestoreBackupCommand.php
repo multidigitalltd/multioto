@@ -6,6 +6,7 @@ use App\Enums\BackupStatus;
 use App\Jobs\RunBackupJob;
 use App\Models\Backup;
 use App\Services\Backup\BackupRestorer;
+use App\Services\Backup\OperationGate;
 use App\Services\Backup\RestoreClaim;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Cache;
@@ -108,7 +109,12 @@ class RestoreBackupCommand extends Command
         // whichever direction it runs in.
         $lock = Cache::lock(RunBackupJob::LOCK, 3600);
 
-        if (! $lock->get()) {
+        // The lock and the rows both. This command has no timeout, so its own
+        // lease can expire under it — which is exactly why the row it keeps
+        // touching, and not the lock alone, is what the other side reads.
+        if (! $lock->get() || app(OperationGate::class)->isRunning(exceptId: $backup->id)) {
+            $lock->release();
+
             $backup->update([
                 'restore_status' => BackupStatus::Failed,
                 'restore_error' => 'פעולת גיבוי או שחזור אחרת רצה באותו רגע — השחזור לא בוצע.',

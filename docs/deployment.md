@@ -225,23 +225,41 @@ Postmark משמש לשני הכיוונים:
   עדיין רץ, ומסמן ככישלון פעולה שממש עכשיו מחליפה נתונים.
 - **נוהל השחזור — להשתיק את המערכת, לוודא שהשתתקה, ורק אז לשחזר:**
 
+  בהתקנת Docker (docker-compose.yml שבמאגר) — עוצרים ממש את שירותי ה-web והתור,
+  ומריצים את השחזור ב-container חד-פעמי:
+
   ```bash
-  php artisan down                                    # אין בקשות חדשות
-  php artisan horizon:terminate                       # בקשת עצירה — לא עצירה מיידית
-  until php artisan horizon:status 2>&1 | grep -q inactive; do sleep 5; done
-  # ולהמתין גם לבקשות ה-web שכבר רצות: עד שאין php-fpm/worker פעיל
-  php artisan backup:restore <מזהה הגיבוי>
-  php artisan up
+  docker compose exec app php artisan down                 # אין בקשות חדשות
+  docker compose exec queue php artisan horizon:terminate  # בקשה, לא עצירה מיידית
+  # להמתין עד ששני התהליכים באמת יצאו (stop ממתין לסיום, ואז מוודאים):
+  docker compose stop --timeout 120 app queue scheduler
+  docker compose ps --status running app queue scheduler   # צריך לחזור ריק
+  docker compose run --rm app php artisan backup:restore <מזהה הגיבוי>
+  docker compose start app queue scheduler
+  docker compose exec app php artisan up
   ```
 
-  **שתי שורות ההמתנה אינן קישוט.** `horizon:terminate` מבקש עצירה מסודרת ומחזיר
+  בהתקנה ללא Docker, אותו רעיון:
+
+  ```bash
+  php artisan down
+  php artisan horizon:terminate
+  until php artisan horizon:status 2>&1 | grep -q inactive; do sleep 5; done
+  sudo systemctl stop php8.3-fpm            # או שירות ה-web שלכם
+  until ! pgrep -f 'php-fpm|artisan serve' >/dev/null; do sleep 2; done
+  php artisan backup:restore <מזהה הגיבוי>
+  sudo systemctl start php8.3-fpm && php artisan up
+  ```
+
+  **שורות ההמתנה אינן קישוט.** `horizon:terminate` מבקש עצירה מסודרת ומחזיר
   שליטה מיד, בעוד המשימות שכבר רצות ממשיכות עד שיסתיימו — ו-`down` מונע בקשות
-  **חדשות** אבל אינו קוטע בקשה שכבר באמצע. גם התור וגם בקשת web יכולים להיות
-  באותו רגע בתוך קריאה לקארדקום או ללינט: השער כבר נעבר, הכסף יורד או המסמך
-  מונפק, ואם השחזור מתחיל באותו רגע — השורה שרושמת את זה נמחקת או נכתבת על נתונים
-  משוחזרים. לכן ממתינים עד ש-Horizon מדווח `inactive` (בעצירת container: עד
-  שהוא באמת יצא) ועד שאין בקשות web פעילות. הפקודה `backup:restore` בודקת בעצמה
-  אם המערכת במצב תחזוקה וכמה משימות נותרו בתור, ומבקשת אישור אם לא.
+  **חדשות** אבל אינו קוטע בקשה שכבר באמצע. גם משימת תור וגם בקשת web יכולות
+  להיות באותו רגע בתוך קריאה לקארדקום או ללינט: השער כבר נעבר, הכסף יורד או
+  המסמך מונפק, ואם השחזור מתחיל באותו רגע — השורה שרושמת את זה נמחקת או נכתבת על
+  נתונים משוחזרים. לכן ממתינים עד שהתהליכים באמת יצאו: `docker compose stop`
+  שולח SIGTERM וממתין (כאן עד שתי דקות) לפני שהוא הורג, ו-`ps --status running`
+  מאשר שאין יותר מה להמתין לו. הפקודה `backup:restore` בודקת בעצמה אם המערכת
+  במצב תחזוקה וכמה משימות נותרו בתור, ומבקשת אישור אם לא.
 
   עוצרים את ה-worker כי חיובים והנפקת חשבוניות נעצרים מעצמם כל עוד שחזור רץ,
   אבל משימה שכבר באמצע קריאה לקארדקום/לינט אי אפשר להחזיר — הכסף יורד או המסמך
