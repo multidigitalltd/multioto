@@ -25,7 +25,19 @@ class RestoreBackupJob implements ShouldQueue
 
     public int $timeout = 1800;
 
-    public function __construct(public int $backupId, public ?string $attempt = null) {}
+    /**
+     * Declared with a default rather than promoted: a payload serialized before
+     * this property existed is rebuilt without calling the constructor, and a
+     * promoted property would be left uninitialized — reading it would throw,
+     * and the failure handler would then take that out on whichever claim
+     * happens to be current.
+     */
+    public ?string $attempt = null;
+
+    public function __construct(public int $backupId, ?string $attempt = null)
+    {
+        $this->attempt = $attempt;
+    }
 
     public function handle(BackupRestorer $restorer): void
     {

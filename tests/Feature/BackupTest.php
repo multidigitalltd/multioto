@@ -830,7 +830,12 @@ class BackupTest extends TestCase
             'restore_started_at' => null,
         ]);
 
-        (new RestoreBackupJob($backup->id))->handle(app(BackupRestorer::class));
+        // Rebuilt the way the queue rebuilds it — without the constructor, and
+        // without a property that did not exist when it was written.
+        $legacy = unserialize('O:25:"App\Jobs\RestoreBackupJob":1:{s:8:"backupId";i:'.$backup->id.';}');
+        $this->assertNull($legacy->attempt);
+
+        $legacy->handle(app(BackupRestorer::class));
 
         $this->assertSame(1, Customer::where('name', 'לקוח שהתקבל אחרי')->count());
     }
