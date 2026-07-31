@@ -33,6 +33,15 @@ return [
     /** Time of day (server timezone) the nightly backup runs. */
     'daily_at' => env('BACKUP_DAILY_AT', '03:30'),
 
+    /**
+     * Alert the team when no backup has completed for this many hours.
+     *
+     * The safety net under everything else: a queue with no worker, or a
+     * scheduler that stopped, produces no failed row at all, and that silence
+     * is indistinguishable from a healthy night. Set to 0 to switch off.
+     */
+    'stale_after_hours' => (int) env('BACKUP_STALE_AFTER_HOURS', 36),
+
     /** Archives older than this are pruned after each successful run. */
     'retention_days' => (int) env('BACKUP_RETENTION_DAYS', 30),
 

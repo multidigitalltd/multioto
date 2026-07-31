@@ -248,7 +248,9 @@ class BackupArchive
                 : collect($prefixes)->flatMap(fn (string $p): array => $storage->allFiles($p))->all();
 
             foreach ($paths as $path) {
-                if ($max > 0 && $storage->size($path) > $max) {
+                $expected = rescue(fn (): ?int => $storage->size($path), null, report: false);
+
+                if ($max > 0 && $expected !== null && $expected > $max) {
                     $skipped[] = "{$disk}:{$path}";
 
                     continue;
@@ -274,7 +276,11 @@ class BackupArchive
                     fclose($source);
                 }
 
-                if ($copied === false) {
+                // A short copy is not an error the stream reports: a source
+                // truncated or replaced mid-read simply ends early, and the
+                // archive would then hold — and a restore would install — a
+                // shortened file with a perfectly valid checksum over it.
+                if ($copied === false || ($expected !== null && $copied !== $expected)) {
                     $skipped[] = "{$disk}:{$path}";
 
                     continue;

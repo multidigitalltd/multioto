@@ -187,6 +187,40 @@ class BackupRunner
     }
 
     /**
+     * Say something when no backup has completed for too long.
+     *
+     * Every other guard here reports a run that went wrong. This one reports
+     * the runs that never happened at all — a queue that accepted the job but
+     * has no worker to run it, a scheduler nobody restarted, a container that
+     * came back without its cron. Those leave no failed row, because nothing
+     * ever got far enough to write one, and the silence looks exactly like a
+     * quiet, healthy night.
+     */
+    public function alertIfStale(): void
+    {
+        $hours = (int) config('backup.stale_after_hours', 36);
+
+        if (! (bool) config('backup.enabled', true) || $hours <= 0) {
+            return;
+        }
+
+        $latest = Backup::query()->restorable()->max('created_at');
+
+        if ($latest !== null && Carbon::parse($latest)->gt(now()->subHours($hours))) {
+            return;
+        }
+
+        $since = $latest === null
+            ? 'מעולם לא הושלם גיבוי'
+            : 'הגיבוי האחרון שהושלם היה ב-'.Carbon::parse($latest)->format('d/m/Y H:i');
+
+        SystemLog::record('error', 'backup', "אין גיבוי תקין כבר {$hours} שעות — {$since}.");
+
+        $this->alert("לא הושלם אף גיבוי ב-{$hours} השעות האחרונות. {$since}. ".
+            'ייתכן שה-worker של התור אינו פועל, או שהמתזמן אינו רץ.');
+    }
+
+    /**
      * Remove one archive and its row, but only while nothing is using it.
      *
      * The row is re-read under a row lock and released only once the object is

@@ -861,6 +861,67 @@ class BackupTest extends TestCase
         $this->assertSame('שונה אחרי', Storage::disk('local')->get('attachments/b.txt'));
     }
 
+    public function test_a_file_that_arrives_short_is_not_passed_off_as_backed_up(): void
+    {
+        Mail::fake();
+        config(['billing.notifications.team_email' => 'team@multi.test']);
+        Storage::disk('local')->put('attachments/big.bin', str_repeat('x', 4096));
+
+        // The source is replaced mid-read: the stream simply ends early and
+        // reports no error at all.
+        $disk = \Mockery::mock(Storage::disk('local'))->makePartial();
+        $disk->shouldReceive('readStream')->andReturnUsing(function (): mixed {
+            $handle = fopen('php://temp', 'r+');
+            fwrite($handle, str_repeat('x', 100));
+            rewind($handle);
+
+            return $handle;
+        });
+        Storage::set('local', $disk);
+
+        $backup = $this->runBackup();
+
+        // Kept out and reported, rather than archived at the wrong length with
+        // a valid checksum over it — which a restore would put back in silence.
+        $this->assertContains('local:attachments/big.bin', $backup->manifest['skipped_files']);
+        $this->assertSame(0, $backup->fileCount());
+        Mail::assertSent(NotificationMail::class);
+    }
+
+    public function test_no_backup_for_too_long_is_reported_even_though_nothing_failed(): void
+    {
+        Mail::fake();
+        config([
+            'billing.notifications.team_email' => 'team@multi.test',
+            'backup.stale_after_hours' => 36,
+        ]);
+
+        $backup = $this->runBackup();
+        Backup::whereKey($backup->id)->update(['created_at' => now()->subDays(3)]);
+
+        // Nothing failed: a queue with no worker, or a scheduler nobody
+        // restarted, leaves no failed row at all — and that silence looks
+        // exactly like a healthy night.
+        app(BackupRunner::class)->alertIfStale();
+
+        Mail::assertSent(NotificationMail::class);
+    }
+
+    public function test_a_recent_backup_raises_no_stale_alert(): void
+    {
+        Mail::fake();
+        config([
+            'billing.notifications.team_email' => 'team@multi.test',
+            'backup.stale_after_hours' => 36,
+        ]);
+
+        $this->runBackup();
+
+        app(BackupRunner::class)->alertIfStale();
+
+        Mail::assertNothingSent();
+    }
+
     public function test_a_nightly_backup_that_cannot_be_queued_is_recorded(): void
     {
         Mail::fake();

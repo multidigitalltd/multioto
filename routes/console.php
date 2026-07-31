@@ -34,6 +34,7 @@ use App\Models\Subscription;
 use App\Models\SystemLog;
 use App\Models\WebhookEvent;
 use App\Providers\SettingsServiceProvider;
+use App\Services\Backup\BackupRunner;
 use App\Services\Calendar\ShabbatClock;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schedule;
@@ -43,6 +44,13 @@ use Illuminate\Support\Facades\Schedule;
  | itself only enqueues (§1). Run with `php artisan schedule:work` (dev) or a
  | single system cron entry (prod).
  */
+
+// The scheduler's own locks go through the database, not the default cache.
+// In production that cache is Redis, and Redis is also the queue: a Redis
+// outage would stop ->onOneServer() from ever handing control to the callback,
+// so the very code meant to notice and report the outage would never run. The
+// database is already required for anything here to mean anything.
+Schedule::useCache('database');
 
 // Outward automations pause over Shabbat and Yom Tov. Each job also rechecks
 // the clock in handle() (PausesForShabbat) and re-queues itself for the day
@@ -310,6 +318,16 @@ Schedule::call(function () {
         return now()->format('H:i') === trim((string) config('backup.daily_at', '03:30'));
     })
     ->name('system:daily-backup')->onOneServer();
+
+// And a look each morning at whether the backup actually happened. A queue that
+// accepted the job but has no worker to run it, or a scheduler nobody restarted
+// after a deploy, leaves no failed row at all — the silence looks exactly like a
+// healthy night, until the day somebody needs the archive.
+Schedule::call(function () {
+    SettingsServiceProvider::refreshFromDatabase();
+
+    app(BackupRunner::class)->alertIfStale();
+})->dailyAt('09:00')->name('system:backup-stale-check')->onOneServer();
 
 // Horizon metrics snapshot.
 Schedule::command('horizon:snapshot')->everyFiveMinutes();
