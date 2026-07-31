@@ -76,15 +76,21 @@ class CommandInterpreter
         $summary = trim((string) ($result['summary'] ?? ''));
         $proposed = $result['proposed'] ?? [];
 
+        // Work the agent already carried out (open_task acts immediately). It is
+        // named in every outcome below, so the operator — and the next turn,
+        // which is threaded with this result — can see it is done and must not
+        // be asked for again.
+        $done = $this->openedTasks($result['opened'] ?? []);
+
         // The agent explicitly asked for something → needs clarification (continue).
         if (filled($result['clarification'] ?? null)) {
-            return $this->finish($command, AgentCommandOutcome::Unclear, (string) $result['clarification']);
+            return $this->finish($command, AgentCommandOutcome::Unclear, $this->body($done, (string) $result['clarification']));
         }
 
         // Actions were filed for approval.
         if ($proposed !== []) {
             $count = count($proposed);
-            $body = trim(($summary !== '' ? $summary."\n\n" : '')."הוגשו {$count} פעולות לאישור במסך אישורי האוטומציה.");
+            $body = $this->body($done, $summary, "הוגשו {$count} פעולות לאישור במסך אישורי האוטומציה.");
 
             return $this->finish($command, AgentCommandOutcome::Proposed, $body);
         }
@@ -96,6 +102,19 @@ class CommandInterpreter
         }
 
         $reason = trim((string) ($result['error'] ?? ''));
+
+        // The closing AI turn produced nothing — but a task was already opened
+        // and its notification already sent. Calling that a failure invites the
+        // operator to repeat the instruction, and the repeat opens a second
+        // identical task. What happened is reported instead of what didn't.
+        if ($done !== '') {
+            return $this->finish($command, AgentCommandOutcome::Dispatched, $this->body(
+                $done,
+                '',
+                'תקציר הסוכן לא התקבל (תקלה בספק ה-AI), אבל הפעולה עצמה בוצעה — אין צורך לחזור על ההוראה.',
+            ));
+        }
+
         $message = 'לא התקבלה תשובה מהסוכן — בדקו את חיבור ה-AI ("סוכן AI ← בדיקת חיבור").';
 
         if ($reason !== '') {
@@ -103,6 +122,30 @@ class CommandInterpreter
         }
 
         return $this->finish($command, AgentCommandOutcome::Failed, $message);
+    }
+
+    /**
+     * One line naming the tasks this run actually opened, or '' if none.
+     *
+     * @param  list<array{id: int, title: string}>|mixed  $opened
+     */
+    private function openedTasks(mixed $opened): string
+    {
+        if (! is_array($opened) || $opened === []) {
+            return '';
+        }
+
+        $names = collect($opened)
+            ->map(fn (array $task): string => '#'.$task['id'].' '.Str::limit((string) $task['title'], 80))
+            ->implode(', ');
+
+        return 'נפתחו משימות: '.$names.'.';
+    }
+
+    /** Join the non-empty parts of a result body into one message. */
+    private function body(string ...$parts): string
+    {
+        return trim(implode("\n\n", array_filter($parts, fn (string $p): bool => trim($p) !== '')));
     }
 
     /**

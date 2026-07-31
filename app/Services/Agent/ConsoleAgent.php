@@ -47,6 +47,19 @@ class ConsoleAgent
     /** @var list<int> ids of actions proposed during this run */
     private array $proposed = [];
 
+    /**
+     * Tasks actually opened during this run (open_task acts immediately).
+     *
+     * Kept separately from $proposed because a proposal is reversible — it sits
+     * waiting for a human — while an opened task is done, notification and all.
+     * The run result has to carry it even when the closing AI turn fails, or the
+     * console reports "failed", the operator repeats the instruction, and the
+     * same task is opened and notified a second time.
+     *
+     * @var list<array{id: int, title: string}>
+     */
+    private array $opened = [];
+
     private ?int $customerId = null;
 
     private ?int $ticketId = null;
@@ -74,11 +87,12 @@ class ConsoleAgent
     /**
      * Run the agent on one instruction. Returns [summary, proposedIds, context].
      *
-     * @return array{summary: ?string, proposed: list<int>, clarification: ?string, customer_id: ?int, ticket_id: ?int, site_id: ?int}
+     * @return array{summary: ?string, proposed: list<int>, opened: list<array{id: int, title: string}>, clarification: ?string, customer_id: ?int, ticket_id: ?int, site_id: ?int}
      */
     public function run(string $instruction, ?int $userId = null, string $source = AgentCommand::SOURCE_PANEL): array
     {
         $this->proposed = [];
+        $this->opened = [];
         $this->clarification = null;
         $this->customerId = $this->ticketId = $this->siteId = null;
         $this->conversationUserId = $userId;
@@ -99,6 +113,10 @@ class ConsoleAgent
             // blank "no answer".
             'error' => $summary === null ? $this->ai->lastError() : null,
             'proposed' => $this->proposed,
+            // What was already carried out — reported even when $summary is
+            // null, so a provider failure on the closing turn cannot present
+            // finished work as something to try again.
+            'opened' => $this->opened,
             'clarification' => $this->clarification,
             'customer_id' => $this->customerId,
             'ticket_id' => $this->ticketId,
@@ -1055,6 +1073,8 @@ class ConsoleAgent
             'title' => $title,
             'customer_id' => $customerId,
         ]);
+
+        $this->opened[] = ['id' => $task->id, 'title' => $title];
 
         return ['content' => "נפתחה משימה #{$task->id}: {$title}. אל תפתח אותה שוב."];
     }

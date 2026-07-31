@@ -35,12 +35,13 @@ class CommandConsoleTest extends TestCase
      *
      * @param  list<array{0: string, 1: array}>  $toolCalls
      */
-    private function fakeAgent(array $toolCalls, string $summary = 'בוצע'): void
+    private function fakeAgent(array $toolCalls, ?string $summary = 'בוצע'): void
     {
         $claude = Mockery::mock(ClaudeClient::class);
         $claude->shouldReceive('isEnabled')->andReturn(true);
+        $claude->shouldReceive('lastError')->andReturn('HTTP 529 — overloaded');
         $claude->shouldReceive('converse')->andReturnUsing(
-            function (string $system, string $prompt, array $tools, callable $handler) use ($toolCalls, $summary): string {
+            function (string $system, string $prompt, array $tools, callable $handler) use ($toolCalls, $summary): ?string {
                 foreach ($toolCalls as [$name, $input]) {
                     $handler($name, $input);
                 }
@@ -121,6 +122,39 @@ class CommandConsoleTest extends TestCase
         app(CommandInterpreter::class)->run('תטפל בחידוש הדומיין');
 
         $this->assertSame('לחדש את הדומיין', Task::sole()->title);
+    }
+
+    public function test_a_task_already_opened_is_reported_even_when_the_closing_ai_turn_fails(): void
+    {
+        // The tool ran: the task exists and its notification is out. If the
+        // provider then dies before the closing summary, calling the whole
+        // command "failed" invites the operator to repeat it — and the repeat
+        // opens a second identical task and notifies again.
+        $this->fakeAgent([
+            ['open_task', ['title' => 'להתקשר לספק הדומיינים']],
+        ], summary: null);
+
+        $command = app(CommandInterpreter::class)->run('תדבר עם רשם הדומיינים');
+
+        $task = Task::sole();
+        $this->assertSame(AgentCommandOutcome::Dispatched, $command->outcome);
+        $this->assertStringContainsString('#'.$task->id, $command->result);
+        $this->assertStringContainsString('אין צורך לחזור', $command->result);
+    }
+
+    public function test_a_task_opened_alongside_a_proposal_is_named_in_the_result(): void
+    {
+        $customer = Customer::factory()->create(['name' => 'דנה']);
+        $this->fakeAgent([
+            ['open_task', ['title' => 'לבדוק מול הבנק']],
+            ['propose_payment_request', ['customer_id' => $customer->id, 'amount_ils' => 300, 'description' => 'אחסון']],
+        ], summary: 'טיפלתי.');
+
+        $command = app(CommandInterpreter::class)->run('תטפל בגבייה של דנה');
+
+        $this->assertSame(AgentCommandOutcome::Proposed, $command->outcome);
+        $this->assertStringContainsString('#'.Task::sole()->id, $command->result);
+        $this->assertStringContainsString('לאישור', $command->result);
     }
 
     public function test_it_fails_gracefully_when_the_ai_is_off(): void
