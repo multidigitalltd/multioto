@@ -44,6 +44,9 @@ class BackupRestorer
     /** When the row was last touched to say this restore is still alive. */
     private ?float $lastBeat = null;
 
+    /** The same, for the recovery command's on-disk marker. */
+    private ?float $lastMarker = null;
+
     /** Open handle on the journal of file writes, for undoing after a kill. */
     private mixed $journal = null;
 
@@ -227,11 +230,13 @@ class BackupRestorer
 
                     throw $e;
                 } finally {
-                    // Both in one place: the journal is only meaningful while
-                    // the copies it points at are still there — so anything
-                    // still waiting to be put back keeps both.
-                    $this->discard($staged, $this->stagedStillNeeded());
-                    $this->closeJournal();
+                    // The journal settles FIRST. Deleting the copies it names
+                    // and only then failing to update it would leave a map
+                    // pointing at files that no longer exist — entries nothing
+                    // can ever recover, blocking every later restore.
+                    $settled = $this->closeJournal();
+
+                    $this->discard($staged, $settled ? $this->stagedStillNeeded() : $staged);
                 }
 
                 // AFTER the commit, never inside it: setval() is not
@@ -1398,17 +1403,21 @@ class BackupRestorer
     private function write(array $record): void
     {
         $line = json_encode($record, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES).PHP_EOL;
-        $written = fwrite($this->journal, $line);
 
-        if ($written !== strlen($line) || ! fflush($this->journal)) {
+        // Silenced for the same reason: the checks below are the handling, and
+        // a warning promoted to an exception would say less about what to do.
+        $written = @fwrite($this->journal, $line);
+
+        if ($written !== strlen($line) || ! @fflush($this->journal)) {
             throw new RuntimeException('לא ניתן לכתוב את יומן השחזור (ייתכן שאין מקום בדיסק) — השחזור הופסק לפני שנגע בקבצים.');
         }
 
         // The flush hands it to the operating system; this hands it to the
         // disk. A machine that loses power mid-restore is exactly the case the
-        // journal exists for.
-        if (function_exists('fsync')) {
-            fsync($this->journal);
+        // journal exists for — so a refusal here is a reason to stop, not a
+        // detail to pass over.
+        if (function_exists('fsync') && ! @fsync($this->journal)) {
+            throw new RuntimeException('לא ניתן להבטיח את כתיבת יומן השחזור לדיסק — השחזור הופסק לפני שנגע בקבצים.');
         }
     }
 
@@ -1417,7 +1426,7 @@ class BackupRestorer
      * unless something could not be put back, in which case what is left is
      * the whole record of it and stays on disk to be retried.
      */
-    private function closeJournal(): void
+    private function closeJournal(): bool
     {
         if (is_resource($this->journal)) {
             fclose($this->journal);
@@ -1426,17 +1435,23 @@ class BackupRestorer
         $this->journal = null;
 
         if ($this->unrecovered === []) {
-            if (file_exists($this->journalPath())) {
-                @unlink($this->journalPath());
-            }
-
-            return;
+            return $this->deleteJournal();
         }
-
-        $this->rewriteJournal($this->unrecovered);
 
         SystemLog::record('error', 'backup', count($this->unrecovered)
             .' קבצים לא הוחזרו למצבם הקודם ונשמרו להחזרה חוזרת — הריצו php artisan backup:recover-files.');
+
+        return $this->rewriteJournal($this->unrecovered);
+    }
+
+    /** Returns false while the journal is still there — the caller must then keep every copy it names. */
+    private function deleteJournal(): bool
+    {
+        if (file_exists($this->journalPath())) {
+            @unlink($this->journalPath());
+        }
+
+        return ! file_exists($this->journalPath());
     }
 
     /**
@@ -1446,9 +1461,15 @@ class BackupRestorer
      * same question the first attempt did, and the run that wrote these is
      * over.
      *
+     * Returns false when the journal could not be replaced. The old one is
+     * then still on disk naming every original — including the ones already
+     * put back — so the caller must keep ALL the staged copies: entries whose
+     * copy has been deleted can never be recovered, and would block every
+     * later restore for ever.
+     *
      * @param  list<array{disk: string, path: string, from: string|null}>  $entries
      */
-    private function rewriteJournal(array $entries): void
+    private function rewriteJournal(array $entries): bool
     {
         $this->stagingDir();
 
@@ -1466,13 +1487,21 @@ class BackupRestorer
         $body = implode(PHP_EOL, $lines).PHP_EOL;
         $temp = $this->journalPath().'.tmp';
 
-        if (file_put_contents($temp, $body) !== strlen($body)
-            || ! rename($temp, $this->journalPath())) {
+        // Silenced deliberately: a failed write here is an outcome this code
+        // handles, and the framework turns PHP's warning into an exception
+        // that would escape instead.
+        if (@file_put_contents($temp, $body) !== strlen($body)
+            || ! @rename($temp, $this->journalPath())) {
             @unlink($temp);
 
-            SystemLog::record('error', 'backup',
-                'לא ניתן לעדכן את יומן השחזור — הרישום הקודם נשמר כפי שהוא.');
+            rescue(fn () => SystemLog::record('error', 'backup',
+                'לא ניתן לעדכן את יומן השחזור — הרישום הקודם נשמר כפי שהוא, וכל העותקים הזמניים נשמרו איתו.'),
+                report: false);
+
+            return false;
         }
+
+        return true;
     }
 
     /**
@@ -1569,25 +1598,23 @@ class BackupRestorer
 
         $failed = $this->putFilesBack($entries);
         $restored = count($entries) - count($failed);
-
-        $this->discard(
-            array_values(array_filter(array_column($entries, 'from'))),
-            array_values(array_filter(array_column($failed, 'from'))),
-        );
-
         $this->unrecovered = $failed;
 
-        if ($failed === []) {
-            @unlink($path);
-        } else {
-            $this->rewriteJournal($failed);
-        }
+        // Written down before anything is thrown away, for the same reason the
+        // restore does it in that order.
+        $settled = $failed === [] ? $this->deleteJournal() : $this->rewriteJournal($failed);
 
-        SystemLog::record($failed === [] ? 'warning' : 'error', 'backup',
+        $all = array_values(array_filter(array_column($entries, 'from')));
+
+        $this->discard($all, $settled ? $this->stagedStillNeeded() : $all);
+
+        $pending = $settled ? count($failed) : count($entries);
+
+        SystemLog::record($pending === 0 ? 'warning' : 'error', 'backup',
             "שחזור שנקטע השאיר קבצים מהגיבוי במקום הקיימים — {$restored} הוחזרו, "
-            .count($failed).' נותרו להחזרה חוזרת.');
+            ."{$pending} נותרו להחזרה חוזרת.");
 
-        return ['restored' => $restored, 'failed' => count($failed), 'pending' => count($failed)];
+        return ['restored' => $restored, 'failed' => count($failed), 'pending' => $pending];
     }
 
     /**
@@ -1609,6 +1636,27 @@ class BackupRestorer
         $this->stagingDir();
 
         touch(self::recoveryMarkerPath());
+    }
+
+    /**
+     * Say "still here", if somebody is listening.
+     *
+     * Only when the marker exists: inside a restore the backup row is already
+     * saying the same thing, and this must not invent an operation of its own.
+     * Throttled because it is called per chunk of every file.
+     */
+    private function touchRecoveryMarker(): void
+    {
+        if ($this->lastMarker !== null && $this->lastMarker > microtime(true) - 20) {
+            return;
+        }
+
+        $this->lastMarker = microtime(true);
+
+        if (file_exists(self::recoveryMarkerPath())) {
+            touch(self::recoveryMarkerPath());
+            clearstatcache(true, self::recoveryMarkerPath());
+        }
     }
 
     public function clearRecoveryMarker(): void
@@ -1677,12 +1725,7 @@ class BackupRestorer
         $failed = [];
 
         foreach (array_reverse($previous) as $file) {
-            // Only when somebody set it: inside a restore the backup row is
-            // already saying the same thing.
-            if (file_exists(self::recoveryMarkerPath())) {
-                touch(self::recoveryMarkerPath());
-                clearstatcache(true, self::recoveryMarkerPath());
-            }
+            $this->touchRecoveryMarker();
 
             try {
                 if ($file['from'] === null) {
@@ -1691,6 +1734,12 @@ class BackupRestorer
                     $undone = Storage::disk($file['disk'])->delete($file['path']);
                 } else {
                     $handle = fopen($file['from'], 'rb');
+
+                    // Writing one large file to a slow destination is a single
+                    // call, and nothing of ours runs inside it — except this:
+                    // the uploader reads the source through the filter, so
+                    // every chunk it pulls says the recovery is still alive.
+                    HeartbeatFilter::attach($handle, fn () => $this->touchRecoveryMarker());
 
                     try {
                         $undone = Storage::disk($file['disk'])->put($file['path'], $handle);

@@ -1901,6 +1901,55 @@ class BackupTest extends TestCase
         }
     }
 
+    public function test_a_recovery_whose_journal_cannot_be_updated_keeps_every_copy(): void
+    {
+        Storage::disk('local')->put('attachments/one.txt', 'מהגיבוי');
+        Storage::disk('local')->put('attachments/two.txt', 'מהגיבוי');
+
+        $first = storage_path('backups/staged/prev-one');
+        $second = storage_path('backups/staged/prev-two');
+        $journal = storage_path('backups/restore-journal.jsonl');
+
+        if (! is_dir(dirname($first))) {
+            mkdir(dirname($first), 0775, true);
+        }
+
+        file_put_contents($first, 'החי הראשון');
+        file_put_contents($second, 'החי השני');
+        file_put_contents($journal,
+            json_encode(['journal' => null, 'backup_id' => null]).PHP_EOL
+            .json_encode(['disk' => 'local', 'path' => 'attachments/one.txt', 'from' => $first]).PHP_EOL
+            .json_encode(['disk' => 'local', 'path' => 'attachments/two.txt', 'from' => $second]).PHP_EOL);
+
+        // One goes back, one refuses — and then the journal itself cannot be
+        // rewritten, because the directory it lives in is read-only.
+        $partial = \Mockery::mock(Storage::disk('local'))->makePartial();
+        $partial->shouldReceive('put')->once()->andReturn(true);
+        $partial->shouldReceive('put')->andReturn(false);
+        Storage::set('local', $partial);
+
+        // The journal is replaced by writing beside it and renaming; a
+        // directory sitting where that temporary file goes makes the write
+        // fail exactly as a full disk would.
+        mkdir($journal.'.tmp');
+
+        try {
+            $result = app(BackupRestorer::class)->recoverInterruptedFiles();
+
+            // The old journal still names both files, so BOTH copies have to
+            // survive: deleting the one that went back would leave an entry
+            // nothing can ever recover, blocking every later restore.
+            $this->assertSame(2, $result['pending']);
+            $this->assertFileExists($first);
+            $this->assertFileExists($second);
+        } finally {
+            @rmdir($journal.'.tmp');
+            @unlink($first);
+            @unlink($second);
+            @unlink($journal);
+        }
+    }
+
     public function test_a_recovery_that_cannot_read_the_commit_state_touches_nothing(): void
     {
         Storage::disk('local')->put('attachments/keep.txt', 'מהגיבוי');
