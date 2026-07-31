@@ -58,12 +58,12 @@ class RecoverRestoreFilesCommand extends Command
         // of files onto a slow disk can outlast it. The marker is what the
         // gate reads, and it is refreshed as the replay works, so a backup
         // that finds the lock free still finds this running.
-        $restorer->markRecoveryActive();
+        $restorer->markOperationActive();
 
         try {
             $result = $restorer->recoverInterruptedFiles();
         } finally {
-            $restorer->clearRecoveryMarker();
+            $restorer->clearOperationMarker();
             $lock->release();
         }
 

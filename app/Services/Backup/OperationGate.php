@@ -35,7 +35,7 @@ class OperationGate
         // own, so it says so on disk instead. Same age bound as everything
         // else here: a marker left by a killed process expires rather than
         // holding the business shut.
-        $marker = BackupRestorer::recoveryMarkerPath();
+        $marker = BackupRestorer::operationMarkerPath();
 
         if (file_exists($marker)) {
             clearstatcache(true, $marker);

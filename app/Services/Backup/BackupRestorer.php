@@ -118,6 +118,11 @@ class BackupRestorer
         $this->journalOwner = $backup->id;
         $this->unrecovered = [];
 
+        // Held for the whole run, transaction included. Inside it the row's own
+        // heartbeat is invisible to every other connection, so this file is the
+        // only thing that can say a restore is still under way.
+        $this->markOperationActive();
+
         $local = tempnam(sys_get_temp_dir(), 'multioto-restore-');
         $sequenceError = null;
         $previous = [];
@@ -318,6 +323,8 @@ class BackupRestorer
 
             throw $e;
         } finally {
+            $this->clearOperationMarker();
+
             if (is_string($local) && file_exists($local)) {
                 unlink($local);
             }
@@ -476,11 +483,13 @@ class BackupRestorer
      */
     private function beat(Backup $backup): void
     {
-        if ($this->lastBeat !== null && $this->lastBeat > microtime(true) - 60) {
+        if ($this->lastBeat !== null && $this->lastBeat > now()->getTimestamp() - 60) {
             return;
         }
 
-        $this->lastBeat = microtime(true);
+        $this->lastBeat = (float) now()->getTimestamp();
+
+        $this->touchOperationMarker();
 
         rescue(fn () => $backup->touch(), null, report: false);
     }
@@ -975,6 +984,10 @@ class BackupRestorer
      */
     private function loadTable(ZipArchive $zip, string $table, array $deferred, array &$pending): int
     {
+        // Inside the transaction the row's heartbeat is invisible to everyone
+        // else, so the on-disk marker is what says this is still running.
+        $this->touchOperationMarker();
+
         $stream = $zip->getStream("database/{$table}.ndjson");
 
         if ($stream === false) {
@@ -1006,6 +1019,7 @@ class BackupRestorer
 
                 if (count($buffer) >= self::CHUNK) {
                     DB::table($table)->insert($buffer);
+                    $this->touchOperationMarker();
                     $buffer = [];
                 }
             }
@@ -1274,6 +1288,12 @@ class BackupRestorer
             // files from the archive, with nothing recording which ones. The
             // journal is what another process reads to finish the undo.
             $this->journal($record);
+
+            // Per file, and per chunk of a file: writing one large attachment
+            // to a slow destination is a single call with nothing of ours
+            // inside it, and the transaction hides the row's own heartbeat.
+            $this->touchOperationMarker();
+            HeartbeatFilter::attach($stream, fn () => $this->touchOperationMarker());
 
             try {
                 if (Storage::disk($disk)->put($path, $stream) === false
@@ -1748,7 +1768,7 @@ class BackupRestorer
         $failed = [];
 
         foreach (array_reverse($previous) as $file) {
-            $this->touchRecoveryMarker();
+            $this->touchOperationMarker();
 
             try {
                 if ($file['at'] === null) {
@@ -1821,7 +1841,7 @@ class BackupRestorer
 
             // The same heartbeat the download uses: one large file on a slow
             // destination is a single call with nothing of ours inside it.
-            HeartbeatFilter::attach($slice, fn () => $this->touchRecoveryMarker());
+            HeartbeatFilter::attach($slice, fn () => $this->touchOperationMarker());
 
             return (bool) Storage::disk($file['disk'])->put($file['path'], $slice);
         } finally {
@@ -1902,30 +1922,39 @@ class BackupRestorer
     }
 
     /**
-     * The recovery command's "I am still here".
+     * "I am still here", on disk.
      *
-     * It replaces live files without a backup row of its own, so the gate that
-     * keeps backups and restores away from it has nothing to read unless this
-     * is on disk. Bounded by the same window as everything else: left behind by
-     * a killed process it stops meaning anything, rather than blocking the
-     * business for ever.
+     * Two things need this. The recovery command replaces live files without a
+     * backup row of its own, so the gate has nothing to read unless this is
+     * here. And a restore inside its transaction cannot say it is alive
+     * through the database at all: its own writes are invisible to everyone
+     * else until it commits, and loading tables or writing large files can
+     * outlast both the lock's lease and the window the gate believes a running
+     * operation in.
+     *
+     * Bounded by the same window as everything else: left behind by a killed
+     * process it stops meaning anything, rather than blocking the business for
+     * ever.
      */
-    public static function recoveryMarkerPath(): string
+    public static function operationMarkerPath(): string
     {
-        return storage_path('backups/recovery-active');
+        return storage_path('backups/operation-active');
     }
 
-    public function markRecoveryActive(): void
+    public function markOperationActive(): void
     {
         $this->directory();
 
-        touch(self::recoveryMarkerPath());
+        // Stamped from the application's clock, which is what the gate reads
+        // it against — two clocks would drift apart exactly where the answer
+        // matters.
+        touch(self::operationMarkerPath(), now()->getTimestamp());
     }
 
-    public function clearRecoveryMarker(): void
+    public function clearOperationMarker(): void
     {
-        if (file_exists(self::recoveryMarkerPath())) {
-            @unlink(self::recoveryMarkerPath());
+        if (file_exists(self::operationMarkerPath())) {
+            @unlink(self::operationMarkerPath());
         }
     }
 
@@ -1936,17 +1965,19 @@ class BackupRestorer
      * saying the same thing, and this must not invent an operation of its own.
      * Throttled because it is called per chunk of every file.
      */
-    private function touchRecoveryMarker(): void
+    private function touchOperationMarker(): void
     {
-        if ($this->lastMarker !== null && $this->lastMarker > microtime(true) - 20) {
+        // Throttled by the application's clock, the same one the gate reads
+        // the marker against.
+        if ($this->lastMarker !== null && $this->lastMarker > now()->getTimestamp() - 20) {
             return;
         }
 
-        $this->lastMarker = microtime(true);
+        $this->lastMarker = (float) now()->getTimestamp();
 
-        if (file_exists(self::recoveryMarkerPath())) {
-            touch(self::recoveryMarkerPath());
-            clearstatcache(true, self::recoveryMarkerPath());
+        if (file_exists(self::operationMarkerPath())) {
+            touch(self::operationMarkerPath(), now()->getTimestamp());
+            clearstatcache(true, self::operationMarkerPath());
         }
     }
 

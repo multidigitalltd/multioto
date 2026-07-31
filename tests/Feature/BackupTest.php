@@ -2044,6 +2044,44 @@ class BackupTest extends TestCase
         }
     }
 
+    public function test_a_restore_inside_its_transaction_still_looks_alive(): void
+    {
+        config(['backup.operation_window_minutes' => 60]);
+        Carbon::setTestNow('2026-08-01 01:00:00');
+
+        Storage::disk('local')->put('attachments/keep.txt', 'קובץ');
+        $backup = $this->runBackup();
+
+        // Loading tables and writing files can outlast both the lock's lease
+        // and the gate's window — and inside the transaction the row's own
+        // heartbeat is invisible to every other connection.
+        $seen = null;
+        $local = Storage::disk('local');
+        $watched = \Mockery::mock($local)->makePartial();
+        $watched->shouldReceive('put')->andReturnUsing(
+            function (string $path, $contents) use ($local, &$seen) {
+                // Three hours of uploading — and progress while it happens,
+                // which is what the destination pulling the source stream
+                // looks like from in here.
+                Carbon::setTestNow(now()->addHours(3));
+
+                $read = is_resource($contents) ? stream_get_contents($contents) : (string) $contents;
+
+                $seen ??= app(OperationGate::class)->isRunning();
+
+                return $local->put($path, $read);
+            });
+        Storage::set('local', $watched);
+
+        app(BackupRestorer::class)->restore($backup);
+        Storage::set('local', $local);
+
+        $this->assertTrue($seen, 'שחזור באמצע הטרנזקציה חדל להיראות כפעולה שרצה');
+
+        // And it stops saying so the moment it is over.
+        $this->assertFileDoesNotExist(BackupRestorer::operationMarkerPath());
+    }
+
     public function test_a_row_an_open_journal_depends_on_cannot_be_deleted(): void
     {
         $backup = $this->runBackup();
