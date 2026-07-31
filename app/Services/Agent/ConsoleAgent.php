@@ -957,6 +957,17 @@ class ConsoleAgent
 
         $this->siteId = $site->id;
         $this->background = true;
+
+        // Written down BEFORE the hand-off, because the run that is queuing this
+        // can still die afterwards — its own timeout is shorter than a single
+        // provider call — and its failure handler would otherwise give the task
+        // back while the investigation is still on its way to the answer.
+        if ($this->delegatedTaskId !== null) {
+            Task::whereKey($this->delegatedTaskId)
+                ->whereNull('held_by')
+                ->update(['held_by' => Task::HELD_BY_INVESTIGATION]);
+        }
+
         InvestigateSiteJob::dispatch(
             $site->id,
             trim((string) ($input['goal'] ?? '')) ?: 'בדיקת מצב האתר',

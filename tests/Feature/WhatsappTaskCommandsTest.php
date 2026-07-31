@@ -608,6 +608,62 @@ class WhatsappTaskCommandsTest extends TestCase
     }
 
     /**
+     * The run that queued the investigation can still time out afterwards — its
+     * own limit is shorter than a single provider call. Its failure handler
+     * must not take back a task the investigation is already working on.
+     */
+    public function test_a_timed_out_run_does_not_take_back_a_task_it_handed_to_an_investigation(): void
+    {
+        $task = Task::create([
+            'title' => 'לבדוק את האתר',
+            'status' => TaskStatus::InProgress,
+            'held_by' => Task::HELD_BY_INVESTIGATION,
+        ]);
+
+        (new RunAgentInstructionJob(self::MGMT, 'לבדוק את האתר', $task->id))
+            ->failed(new \RuntimeException('timed out'));
+
+        $this->assertSame(TaskStatus::InProgress, $task->fresh()->status);
+
+        // …and the investigation still gives it back when it is done.
+        $site = Site::factory()->create(['customer_id' => Customer::factory()->create()->id]);
+        $agent = $this->mock(SiteAgent::class);
+        $agent->shouldReceive('investigate')->andReturn('האתר תקין.');
+        $agent->shouldReceive('lastProposals')->andReturn([]);
+
+        (new InvestigateSiteJob($site->id, 'בדיקה', releasesTaskId: $task->id))
+            ->handle($agent, app(SiteMemoryStore::class));
+
+        $task->refresh();
+        $this->assertSame(TaskStatus::Open, $task->status);
+        $this->assertNull($task->held_by);
+    }
+
+    /** A fix waiting for approval is something to act on — the task stays claimed. */
+    public function test_an_investigation_that_proposed_a_fix_keeps_the_task_claimed(): void
+    {
+        $site = Site::factory()->create(['customer_id' => Customer::factory()->create()->id]);
+        $task = Task::create([
+            'title' => 'לבדוק את האתר',
+            'status' => TaskStatus::InProgress,
+            'held_by' => Task::HELD_BY_INVESTIGATION,
+        ]);
+
+        $agent = $this->mock(SiteAgent::class);
+        $agent->shouldReceive('investigate')->andReturn('מצאתי תוסף שבור והצעתי תיקון.');
+        $agent->shouldReceive('lastProposals')->andReturn([7]);
+
+        (new InvestigateSiteJob($site->id, 'בדיקה', releasesTaskId: $task->id))
+            ->handle($agent, app(SiteMemoryStore::class));
+
+        $task->refresh();
+        $this->assertSame(TaskStatus::InProgress, $task->status);
+        // No longer held by the investigation — the pending approval is what it
+        // is waiting on now.
+        $this->assertNull($task->held_by);
+    }
+
+    /**
      * The delegated instruction IS the task's own text, so an agent told to
      * "open a task when there is no tool" would open a copy of the task it was
      * just handed: a second notification, and the original still claimed.
@@ -663,6 +719,7 @@ class WhatsappTaskCommandsTest extends TestCase
 
         $agent = $this->mock(SiteAgent::class);
         $agent->shouldReceive('investigate')->once()->andReturn('האתר תקין, לא נמצאו תקלות.');
+        $agent->shouldReceive('lastProposals')->andReturn([]);
 
         (new InvestigateSiteJob($site->id, 'בדוק את האתר', 1, null, null, AgentCommand::SOURCE_WHATSAPP))
             ->handle($agent, app(SiteMemoryStore::class));

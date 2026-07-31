@@ -25,6 +25,9 @@ class SiteAgent
 
     private int $currentRound = 1;
 
+    /** @var list<int> ids of the actions the last investigate() filed for approval */
+    private array $proposed = [];
+
     public function __construct(
         private ClaudeClient $ai,
         private McpClient $mcp,
@@ -48,6 +51,7 @@ class SiteAgent
 
         $this->currentGoal = $goal;
         $this->currentRound = max(1, $round);
+        $this->proposed = [];
 
         $siteTools = collect((array) data_get($site->mcp_capabilities, 'tools', []));
 
@@ -192,7 +196,23 @@ class SiteAgent
             proposedBy: 'ai',
         );
 
+        $this->proposed[] = $action->id;
+
         return ['content' => "הפעולה הוצעה (#{$action->id}) ונשלחה לאישור מנהל. אל תציע אותה שוב."];
+    }
+
+    /**
+     * What the last investigate() filed for approval.
+     *
+     * A caller holding something open on the investigation's behalf — a task
+     * delegated from the WhatsApp group — needs to know whether the run ended
+     * with a decision waiting for a human or with nothing at all.
+     *
+     * @return list<int>
+     */
+    public function lastProposals(): array
+    {
+        return $this->proposed;
     }
 
     private function systemPrompt(Site $site, string $goal): string

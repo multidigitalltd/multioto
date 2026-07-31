@@ -96,29 +96,53 @@ class InvestigateSiteJob implements ShouldQueue
         try {
             $this->investigate($agent, $memory);
         } finally {
-            // Whatever the outcome, nobody is working on the task any more.
-            $this->releaseTask();
+            // A fix waiting for approval is something to act on, so the task
+            // stays claimed until a person decides — exactly as it would had
+            // the agent proposed it in the foreground. Otherwise the agent is
+            // finished and the work is a person's again.
+            $this->releaseTask(
+                // Only asked when something is actually waiting on this run.
+                filedProposal: $this->releasesTaskId !== null && $agent->lastProposals() !== [],
+            );
         }
     }
 
     /**
-     * Hand a waiting task back to the humans. Only from "in progress": a status
-     * a person set meanwhile is newer than ours and must stand.
+     * Stop holding a waiting task, and hand it back unless a decision is
+     * pending on it. Only from "in progress": a status a person set meanwhile
+     * is newer than ours and must stand.
      */
-    private function releaseTask(): void
+    private function releaseTask(bool $filedProposal = false): void
     {
         if ($this->releasesTaskId === null) {
             return;
         }
 
-        Task::whereKey($this->releasesTaskId)
-            ->where('status', TaskStatus::InProgress)
+        $task = Task::whereKey($this->releasesTaskId)->where('status', TaskStatus::InProgress);
+
+        if ($filedProposal) {
+            // Still claimed, but no longer held by this job: the proposal in
+            // the approvals inbox is what the task is now waiting on.
+            $task->update(['held_by' => null]);
+
+            return;
+        }
+
+        $task->update([
+            'status' => TaskStatus::Open,
+            'held_by' => null,
             // Cleared because a conditional update bypasses TaskObserver, and a
             // released task must be remindable again.
-            ->update(['status' => TaskStatus::Open, 'reminded_at' => null]);
+            'reminded_at' => null,
+        ]);
     }
 
-    /** The task is released even when the job never gets to run. */
+    /**
+     * The task is released even when the job never gets to run — the findings
+     * will not arrive, so nobody is working on it. A proposal filed before the
+     * failure is not knowable here; an open task with a proposal waiting is the
+     * safe direction, an invisible one is not.
+     */
     public function failed(\Throwable $e): void
     {
         $this->releaseTask();

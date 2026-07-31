@@ -24,8 +24,11 @@ class Task extends Model
     protected $fillable = [
         'title', 'description', 'subtasks', 'customer_id', 'ticket_id',
         'status', 'priority', 'due_at', 'completed_at', 'reminded_at',
-        'source_ref',
+        'source_ref', 'held_by',
     ];
+
+    /** held_by: a background site investigation owns this claimed task. */
+    public const HELD_BY_INVESTIGATION = 'investigation';
 
     protected function casts(): array
     {
