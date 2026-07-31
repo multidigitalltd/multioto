@@ -228,6 +228,25 @@ class CommandConsoleTest extends TestCase
         $this->assertStringContainsString('#'.Task::latest('id')->first()->id, $second->result);
     }
 
+    public function test_the_replacement_task_is_recognised_by_a_retry_of_its_own(): void
+    {
+        // The first task is closed, so asking again opens a replacement — and
+        // that replacement needs a reference of its own, or a retry moments
+        // later would open a third one.
+        $this->fakeAgent([['open_task', ['title' => 'להתקשר לספק']]]);
+        app(CommandInterpreter::class)->run('תדבר עם הספק');
+        Task::sole()->update(['status' => TaskStatus::Done]);
+
+        $this->fakeAgent([['open_task', ['title' => 'להתקשר לספק']]]);
+        app(CommandInterpreter::class)->run('תדבר עם הספק');
+
+        $this->fakeAgent([['open_task', ['title' => 'להתקשר לספק']]]);
+        $retry = app(CommandInterpreter::class)->run('תדבר עם הספק');
+
+        $this->assertSame(2, Task::count());
+        $this->assertStringContainsString('#'.Task::latest('id')->first()->id, $retry->result);
+    }
+
     public function test_two_different_instructions_each_open_their_own_task(): void
     {
         $this->fakeAgent([['open_task', ['title' => 'להתקשר לספק']]]);

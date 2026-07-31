@@ -26,6 +26,7 @@ use App\Services\Support\BroadcastAudience;
 use App\Services\Support\BroadcastComposer;
 use App\Services\Support\ServiceStatus;
 use App\Support\Money;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 
@@ -1227,12 +1228,14 @@ class ConsoleAgent
     }
 
     /**
-     * This run's reference, unless a task already holds it.
+     * A free reference for this run to file under.
      *
      * Reached only when no LIVE task answers the request, so a reference that
-     * is still taken belongs to one that is finished — and the same instruction
-     * given after its task was closed is new work, which needs a row and a
-     * notification of its own.
+     * is still taken belongs to a FINISHED one — the same instruction given
+     * after its task was closed is new work and needs a row of its own. It
+     * takes the next reference in the series rather than none at all: without a
+     * reference the replacement could not be recognised either, and an
+     * immediate retry would open a third task.
      *
      * @param  list<string>  $keys
      */
@@ -1240,18 +1243,30 @@ class ConsoleAgent
     {
         $key = $keys[0] ?? null;
 
-        if ($key === null || Task::where('source_ref', $key)->exists()) {
+        if ($key === null) {
             return null;
         }
 
-        return $key;
+        $taken = Task::where('source_ref', 'like', $key.'%')->count();
+
+        return $taken === 0 ? $key : $key.'-r'.($taken + 1);
     }
 
-    /** The task an earlier run of this same request already opened, if it is still live. */
+    /**
+     * The task an earlier run of this same request already opened, if it is
+     * still live. Matched by prefix so a replacement filed as "…-r2" — after an
+     * earlier task for the same request was closed — is found too.
+     *
+     * @param  list<string>  $keys
+     */
     private function openedForRequest(array $keys): ?Task
     {
         return Task::query()
-            ->whereIn('source_ref', $keys)
+            ->where(function (Builder $query) use ($keys): void {
+                foreach ($keys as $key) {
+                    $query->orWhere('source_ref', 'like', $key.'%');
+                }
+            })
             ->whereIn('status', [TaskStatus::Open, TaskStatus::InProgress])
             ->latest('id')
             ->first();
