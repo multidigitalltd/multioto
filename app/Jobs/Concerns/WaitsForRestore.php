@@ -2,8 +2,7 @@
 
 namespace App\Jobs\Concerns;
 
-use App\Enums\BackupStatus;
-use App\Models\Backup;
+use App\Services\Backup\OperationGate;
 
 /**
  * Holds a job that has an IRREVERSIBLE OUTSIDE EFFECT while a backup or restore
@@ -25,12 +24,7 @@ trait WaitsForRestore
     /** Re-queue this job for later and return true, when a restore is running. */
     protected function heldForBackupOperation(): bool
     {
-        $busy = Backup::query()
-            ->where(fn ($q) => $q->where('status', BackupStatus::Running)
-                ->orWhere('restore_status', BackupStatus::Running))
-            ->exists();
-
-        if (! $busy) {
+        if (! app(OperationGate::class)->isRunning()) {
             return false;
         }
 

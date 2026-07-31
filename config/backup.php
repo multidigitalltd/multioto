@@ -105,6 +105,15 @@ return [
      */
     'worker_hold_minutes' => (int) env('BACKUP_WORKER_HOLD_MINUTES', 5),
 
+    /**
+     * How long a run marked "running" is still believed to be running.
+     *
+     * A row left behind by a worker that vanished must not stop the business
+     * billing for ever. Past this window it counts as abandoned — comfortably
+     * beyond the 30-minute ceiling either job is allowed.
+     */
+    'operation_window_minutes' => (int) env('BACKUP_OPERATION_WINDOW_MINUTES', 60),
+
     /** A single file larger than this is skipped and noted in the manifest. */
     'max_file_bytes' => (int) env('BACKUP_MAX_FILE_BYTES', 64 * 1024 * 1024),
 

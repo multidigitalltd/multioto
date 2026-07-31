@@ -3,15 +3,18 @@
 namespace Tests\Feature;
 
 use App\Enums\BackupStatus;
+use App\Enums\ChargeStatus;
 use App\Enums\UserRole;
 use App\Filament\Pages\ManageBackups;
 use App\Jobs\ChargeSubscriptionJob;
 use App\Jobs\ImportBackupsJob;
 use App\Jobs\IssueInvoiceJob;
+use App\Jobs\ProcessManualChargeJob;
 use App\Jobs\RestoreBackupJob;
 use App\Jobs\RunBackupJob;
 use App\Mail\NotificationMail;
 use App\Models\Backup;
+use App\Models\Charge;
 use App\Models\Customer;
 use App\Models\PaymentToken;
 use App\Models\Site;
@@ -19,6 +22,7 @@ use App\Models\User;
 use App\Services\Backup\BackupArchive;
 use App\Services\Backup\BackupRestorer;
 use App\Services\Backup\BackupRunner;
+use App\Services\Backup\OperationGate;
 use App\Services\Billing\DunningMachine;
 use App\Services\Cardcom\CardcomClient;
 use App\Services\Linet\InvoiceIssuer;
@@ -882,6 +886,55 @@ class BackupTest extends TestCase
 
         Queue::assertPushed(ChargeSubscriptionJob::class);
         Queue::assertPushed(IssueInvoiceJob::class);
+    }
+
+    public function test_a_manual_charge_and_a_panel_invoice_wait_for_the_restore_too(): void
+    {
+        Queue::fake([ProcessManualChargeJob::class]);
+
+        $backup = $this->runBackup();
+        $backup->update(['restore_status' => BackupStatus::Running]);
+
+        (new ProcessManualChargeJob(1))->handle(app(CardcomClient::class));
+        Queue::assertPushed(ProcessManualChargeJob::class);
+
+        // The panel's "issue invoice" button calls the service directly, so the
+        // guard has to live there and not only in the job.
+        $customer = Customer::factory()->create();
+        $charge = Charge::create([
+            'customer_id' => $customer->id,
+            'status' => ChargeStatus::Succeeded,
+            'amount_agorot' => 10000,
+            'vat_agorot' => 1800,
+            'total_agorot' => 11800,
+            'attempt_number' => 1,
+            'period_start' => now()->startOfMonth(),
+            'period_end' => now()->endOfMonth(),
+            'description' => 'חיוב ידני',
+        ]);
+
+        $result = app(InvoiceIssuer::class)->issue($charge);
+
+        $this->assertFalse($result['ok']);
+        $this->assertStringContainsString('גיבוי או שחזור', (string) $result['error']);
+    }
+
+    public function test_a_forgotten_running_row_does_not_stop_billing_for_ever(): void
+    {
+        config(['backup.operation_window_minutes' => 60]);
+
+        // A worker that vanished mid-run, or a database that went away during
+        // its failure bookkeeping.
+        $abandoned = $this->runBackup();
+        Backup::whereKey($abandoned->id)->update([
+            'status' => BackupStatus::Running,
+            'created_at' => now()->subDay(),
+            'updated_at' => now()->subDay(),
+        ]);
+
+        // Holding every charge behind it would stop the business billing
+        // altogether — a far worse outcome than one unguarded charge.
+        $this->assertFalse(app(OperationGate::class)->isRunning());
     }
 
     public function test_a_superseded_payload_cannot_cancel_the_claim_that_replaced_it(): void
