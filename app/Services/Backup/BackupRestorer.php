@@ -481,12 +481,49 @@ class BackupRestorer
     private function assertComplete(ZipArchive $zip, array $tables): void
     {
         foreach ($tables as $table) {
-            $stream = $zip->getStream("database/{$table}.ndjson");
+            // Read to the end, not just opened. A bit flip inside a row can
+            // leave the line structure intact, so the row count would match and
+            // the restore would commit quietly altered business data — the
+            // checksum is the only thing that notices.
+            $this->assertMemberIntact(
+                $zip,
+                "database/{$table}.ndjson",
+                "חסרים נתוני הטבלה \"{$table}\"",
+                "נתוני הטבלה \"{$table}\" פגומים",
+            );
+        }
+    }
 
-            if ($stream === false) {
-                throw new RuntimeException("קובץ הגיבוי פגום: חסרים נתוני הטבלה \"{$table}\".");
+    /**
+     * One archive member, present and readable from beginning to end.
+     *
+     * The read is what verifies the checksum: a damaged payload still has a
+     * valid directory entry, so opening it proves nothing. And the check runs
+     * past the last byte on purpose — the checksum is verified on the read that
+     * follows the data, so stopping at feof() skips the one read that reports
+     * the damage.
+     */
+    private function assertMemberIntact(ZipArchive $zip, string $member, string $missing, string $damaged): void
+    {
+        $stream = $zip->getStream($member);
+
+        if ($stream === false) {
+            throw new RuntimeException("קובץ הגיבוי פגום: {$missing}.");
+        }
+
+        try {
+            while (true) {
+                $chunk = @fread($stream, self::READ_CHUNK);
+
+                if ($chunk === false) {
+                    throw new RuntimeException("קובץ הגיבוי פגום: {$damaged}.");
+                }
+
+                if ($chunk === '') {
+                    break;
+                }
             }
-
+        } finally {
             fclose($stream);
         }
     }
@@ -508,31 +545,12 @@ class BackupRestorer
     private function assertFilesReadable(ZipArchive $zip, array $manifest): void
     {
         foreach ($this->declaredFiles($zip, $manifest) as $entry) {
-            $stream = $zip->getStream('files/'.$entry);
-
-            if ($stream === false) {
-                throw new RuntimeException("קובץ הגיבוי פגום: לא ניתן לקרוא את \"{$entry}\".");
-            }
-
-            try {
-                // Read until the stream says it has nothing left — NOT until
-                // feof(). The checksum is verified on the read that follows the
-                // last byte, so stopping at feof() would skip the one read that
-                // reports a damaged payload.
-                while (true) {
-                    $chunk = @fread($stream, self::READ_CHUNK);
-
-                    if ($chunk === false) {
-                        throw new RuntimeException("קובץ הגיבוי פגום: תוכן פגום ב\"{$entry}\".");
-                    }
-
-                    if ($chunk === '') {
-                        break;
-                    }
-                }
-            } finally {
-                fclose($stream);
-            }
+            $this->assertMemberIntact(
+                $zip,
+                'files/'.$entry,
+                "לא ניתן לקרוא את \"{$entry}\"",
+                "תוכן פגום ב\"{$entry}\"",
+            );
         }
     }
 

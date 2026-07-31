@@ -837,6 +837,26 @@ class BackupTest extends TestCase
         $this->assertFalse($restorer->sequencesReset);
     }
 
+    public function test_a_corrupt_table_payload_is_caught_before_a_single_row_is_deleted(): void
+    {
+        Customer::factory()->create(['name' => 'לקוח חי']);
+        $backup = $this->runBackup();
+
+        // A bit flip inside a row leaves the line structure intact, so the row
+        // count still matches — the checksum is the only thing that notices.
+        $this->corruptPayload($backup, 'database/customers.ndjson');
+
+        try {
+            app(BackupRestorer::class)->restore($backup);
+            $this->fail('a damaged table member must not be restored');
+        } catch (\Throwable) {
+            // expected
+        }
+
+        // Caught before the transaction, so the live rows were never touched.
+        $this->assertSame('לקוח חי', Customer::sole()->name);
+    }
+
     public function test_a_corrupt_file_payload_is_caught_before_any_live_file_is_touched(): void
     {
         Storage::disk('local')->put('attachments/a.txt', 'מקורי א');
