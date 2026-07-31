@@ -433,6 +433,10 @@ class ManageBackups extends Page implements HasForms, HasTable
                             'busy' => Notification::make()
                                 ->title('לא ניתן למחוק — גיבוי או שחזור פועלים על הרשומה הזו כרגע.')
                                 ->warning()->send(),
+                            'journal' => Notification::make()
+                                ->title('לא ניתן למחוק — שחזור שנקטע תלוי ברשומה הזו.')
+                                ->body('הריצו php artisan backup:recover-files, ואחריו אפשר יהיה למחוק.')
+                                ->warning()->persistent()->send(),
                             default => Notification::make()
                                 ->title('לא ניתן היה למחוק את קובץ הגיבוי מהיעד — הרשומה נשמרה.')
                                 ->danger()->send(),

@@ -1858,6 +1858,26 @@ class BackupRestorer
     }
 
     /**
+     * The backup row an open journal is answered by, if there is one.
+     *
+     * That row carries the token which says whether the interrupted run
+     * committed. Delete it and the question becomes unanswerable — and an
+     * unanswerable question is read as "rolled back", which would put the
+     * pre-restore files back beside a database that is the archive. So the row
+     * cannot be deleted while its journal is open.
+     */
+    public function openJournalOwner(): ?int
+    {
+        [$header, $entries, , $closed] = $this->readJournal();
+
+        if ($closed || $entries === [] || ! isset($header['backup_id'])) {
+            return null;
+        }
+
+        return (int) $header['backup_id'];
+    }
+
+    /**
      * Is there an unfinished file rollback waiting, with nobody working on it?
      *
      * The journal exists throughout every normal restore, so its presence

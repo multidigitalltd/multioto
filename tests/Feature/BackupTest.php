@@ -2044,6 +2044,24 @@ class BackupTest extends TestCase
         }
     }
 
+    public function test_a_row_an_open_journal_depends_on_cannot_be_deleted(): void
+    {
+        $backup = $this->runBackup();
+        $this->leaveInterruptedRestore(
+            [['path' => 'attachments/keep.txt', 'was' => 'מלפני השחזור']], 'attempt-older', $backup->id);
+
+        try {
+            // Deleting it would take away the token that says whether that
+            // restore committed — and "cannot say" is read as "did not", which
+            // would replay old files over restored data.
+            $this->assertSame('journal', app(BackupRunner::class)->deleteRecord($backup->id));
+            $this->assertNotNull(Backup::find($backup->id));
+            Storage::disk('backups')->assertExists($backup->path);
+        } finally {
+            $this->clearInterruptedRestore();
+        }
+    }
+
     public function test_a_restore_refuses_an_archive_from_a_disk_this_install_does_not_have(): void
     {
         Storage::disk('local')->put('attachments/keep.txt', 'צרופה');

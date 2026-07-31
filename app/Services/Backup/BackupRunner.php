@@ -275,7 +275,7 @@ class BackupRunner
      * take the file out from under a restore that is about to replace
      * production data.
      *
-     * @return 'ok'|'gone'|'busy'|'archive'
+     * @return 'ok'|'gone'|'busy'|'archive'|'journal'
      */
     public function deleteRecord(int $backupId): string
     {
@@ -289,6 +289,14 @@ class BackupRunner
             if ($backup->status === BackupStatus::Running
                 || ($backup->restore_status === BackupStatus::Running && ! $backup->restoreClaimExpired())) {
                 return 'busy';
+            }
+
+            // A restore that was interrupted left a journal, and this row holds
+            // the token saying whether that restore's transaction committed.
+            // Without the row the answer defaults to "it did not", and the
+            // recovery would put pre-restore files back over restored data.
+            if (app(BackupRestorer::class)->openJournalOwner() === $backup->id) {
+                return 'journal';
             }
 
             // Only drop the row once the object is really gone — otherwise an
@@ -547,6 +555,13 @@ class BackupRunner
                 'busy' => SystemLog::record('info', 'backup', "הגיבוי {$backup->path} לא נוקה — פעולה פועלת עליו כרגע.", [
                     'backup_id' => $backup->id,
                 ]),
+                // Retention must not take away the row that answers whether an
+                // interrupted restore committed. It stays until the recovery
+                // command finishes, and the next pass will find it again.
+                'journal' => SystemLog::record('warning', 'backup',
+                    "הגיבוי {$backup->path} לא נוקה — שחזור שנקטע עדיין תלוי ברשומה הזו.", [
+                        'backup_id' => $backup->id,
+                    ]),
                 'archive' => SystemLog::record('warning', 'backup', "לא ניתן היה למחוק את קובץ הגיבוי {$backup->path} — הרשומה נשמרה.", [
                     'backup_id' => $backup->id,
                 ]),
