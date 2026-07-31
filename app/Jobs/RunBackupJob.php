@@ -35,6 +35,30 @@ class RunBackupJob implements ShouldQueue
 
     public function __construct(public ?int $userId = null) {}
 
+    /**
+     * The nightly entry point, from the scheduler.
+     *
+     * A queue that will not accept the job throws before anything downstream
+     * exists to notice, so the night would pass with no copy of the business,
+     * no row and no alert — the one failure mode this whole feature is built to
+     * make impossible.
+     */
+    public static function dispatchNightly(): void
+    {
+        if (! (bool) config('backup.enabled', true)) {
+            return;
+        }
+
+        try {
+            self::dispatch();
+        } catch (\Throwable $e) {
+            app(BackupRunner::class)->recordUnstarted(
+                null,
+                'הגיבוי הלילי לא הועבר לתור: '.mb_substr($e->getMessage(), 0, 300),
+            );
+        }
+    }
+
     public function handle(BackupRunner $runner): void
     {
         // The switch governs the NIGHTLY run — that is what it is labelled as.

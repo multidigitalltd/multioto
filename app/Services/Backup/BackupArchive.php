@@ -61,7 +61,7 @@ class BackupArchive
                 $this->migrations(),
             ]);
 
-            [$files, $skipped] = $this->addFiles($zip);
+            [$files, $skipped] = $this->addFiles($zip, $temp);
 
             // The file list lives in the ARCHIVE, not the manifest: the manifest
             // is also stored on the backups row, and a list of every attachment
@@ -227,9 +227,15 @@ class BackupArchive
      * Copy the uploaded files in, keeping disk and path so a restore can put
      * each one back where it came from.
      *
+     * Each object is streamed to a temporary file and added from there rather
+     * than read into a string: addFromString() holds every payload until the
+     * archive is sealed, so a normal collection of many ordinary attachments
+     * could exhaust the worker even with each one under the per-file limit.
+     *
+     * @param  list<string>  $temp  collects the staged files to delete after close()
      * @return array{0: list<string>, 1: list<string>} [added "disk/path", skipped]
      */
-    private function addFiles(ZipArchive $zip): array
+    private function addFiles(ZipArchive $zip, array &$temp): array
     {
         $max = (int) config('backup.max_file_bytes');
         $added = [];
@@ -248,15 +254,33 @@ class BackupArchive
                     continue;
                 }
 
-                $contents = $storage->get($path);
+                $source = rescue(fn () => $storage->readStream($path), null, report: false);
 
-                if ($contents === null) {
+                if (! is_resource($source)) {
                     $skipped[] = "{$disk}:{$path}";
 
                     continue;
                 }
 
-                $zip->addFromString("files/{$disk}/{$path}", $contents);
+                $staged = tempnam(sys_get_temp_dir(), 'multioto-file-');
+                $temp[] = $staged;
+
+                $out = fopen($staged, 'wb');
+
+                try {
+                    $copied = stream_copy_to_stream($source, $out);
+                } finally {
+                    fclose($out);
+                    fclose($source);
+                }
+
+                if ($copied === false) {
+                    $skipped[] = "{$disk}:{$path}";
+
+                    continue;
+                }
+
+                $zip->addFile($staged, "files/{$disk}/{$path}");
                 $added[] = "{$disk}/{$path}";
             }
         }

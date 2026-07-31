@@ -302,9 +302,7 @@ Schedule::call(function () {
 Schedule::call(function () {
     SettingsServiceProvider::refreshFromDatabase();
 
-    if ((bool) config('backup.enabled', true)) {
-        RunBackupJob::dispatch();
-    }
+    RunBackupJob::dispatchNightly();
 })->everyMinute()
     ->when(function (): bool {
         SettingsServiceProvider::refreshFromDatabase();

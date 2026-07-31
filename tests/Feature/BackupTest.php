@@ -861,6 +861,32 @@ class BackupTest extends TestCase
         $this->assertSame('שונה אחרי', Storage::disk('local')->get('attachments/b.txt'));
     }
 
+    public function test_a_nightly_backup_that_cannot_be_queued_is_recorded(): void
+    {
+        Mail::fake();
+        config([
+            'billing.notifications.team_email' => 'team@multi.test',
+            'queue.default' => 'broken',
+            'queue.connections.broken' => ['driver' => 'no-such-driver'],
+        ]);
+
+        RunBackupJob::dispatchNightly();
+
+        // A night that produced no copy of the business, with no row and no
+        // alert, is the one failure this whole feature exists to prevent.
+        $this->assertSame(BackupStatus::Failed, Backup::sole()->status);
+        Mail::assertSent(NotificationMail::class);
+    }
+
+    public function test_the_nightly_backup_does_not_run_while_it_is_switched_off(): void
+    {
+        config(['backup.enabled' => false]);
+
+        RunBackupJob::dispatchNightly();
+
+        $this->assertSame(0, Backup::count());
+    }
+
     public function test_the_button_still_backs_up_while_the_nightly_run_is_switched_off(): void
     {
         // The switch turns off the NIGHTLY run. A button press is explicit, and
