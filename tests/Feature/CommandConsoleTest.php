@@ -292,6 +292,29 @@ class CommandConsoleTest extends TestCase
         $this->assertSame(2, Task::count());
     }
 
+    public function test_a_turn_that_died_halfway_is_not_mistaken_for_a_question(): void
+    {
+        // Every turn is recorded as "unclear" until it finishes. A run whose
+        // worker was killed leaves such a row behind — and if that counted as a
+        // question, the retry would key differently and open a second task,
+        // which is precisely the case this key exists to survive.
+        $this->fakeAgent([['open_task', ['title' => 'להתקשר לספק']]]);
+        app(CommandInterpreter::class)->run('תדבר עם הספק');
+
+        AgentCommand::create([
+            'source' => AgentCommand::SOURCE_PANEL,
+            'role' => 'user',
+            'instruction' => 'תדבר עם הספק',
+            'outcome' => AgentCommandOutcome::Unclear,
+        ]);
+
+        $this->fakeAgent([['open_task', ['title' => 'להתקשר לספק']]]);
+        $retry = app(CommandInterpreter::class)->run('תדבר עם הספק');
+
+        $this->assertSame(1, Task::count());
+        $this->assertStringContainsString('#'.Task::sole()->id, $retry->result);
+    }
+
     public function test_two_different_instructions_each_open_their_own_task(): void
     {
         $this->fakeAgent([['open_task', ['title' => 'להתקשר לספק']]]);

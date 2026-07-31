@@ -194,6 +194,13 @@ class CommandInterpreter
     /**
      * The last question the agent asked in this thread and has not been asked
      * again since — what an answer given now belongs to.
+     *
+     * Only a turn that FINISHED as a question counts. Every turn is recorded
+     * with "unclear" as its provisional outcome, so a run still in flight — or
+     * one whose worker was killed halfway — would otherwise look like a fresh
+     * question and shift the key, which is exactly when a retry must find the
+     * task the interrupted run already opened. A finished question always has
+     * the question itself as its result; a provisional row has nothing.
      */
     private function openQuestionId(?int $userId, string $source): ?int
     {
@@ -204,7 +211,10 @@ class CommandInterpreter
                 fn ($query) => $query->where('user_id', $userId),
                 fn ($query) => $query->whereNull('user_id'),
             )
+            ->where('role', 'user')
             ->where('outcome', AgentCommandOutcome::Unclear)
+            ->whereNotNull('result')
+            ->where('result', '<>', '')
             ->latest('id')
             ->value('id');
     }
