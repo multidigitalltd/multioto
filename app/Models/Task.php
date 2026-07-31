@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Enums\ActionStatus;
 use App\Enums\TaskStatus;
 use App\Enums\TicketPriority;
 use Illuminate\Database\Eloquent\Builder;
@@ -37,6 +38,44 @@ class Task extends Model
             'completed_at' => 'datetime',
             'reminded_at' => 'datetime',
         ];
+    }
+
+    /**
+     * Hand a claimed task back to the humans, once nothing is working on it.
+     *
+     * A task delegated to the AI agent is marked "in progress" so nobody picks
+     * it up in parallel. Two things can outlive the run that claimed it: a site
+     * investigation still gathering findings (counted in background_holds), and
+     * a fix it proposed that is waiting for a decision. While either is true
+     * the task stays claimed; when neither is, it belongs to a person again —
+     * and a task left "in progress" with nobody on it is out of the open list
+     * and out of the reminders, which is how work quietly disappears.
+     *
+     * Only from "in progress": a status a person set meanwhile is newer than
+     * ours and must stand. Safe to call more than once.
+     */
+    public static function releaseIfIdle(?int $taskId): void
+    {
+        if ($taskId === null) {
+            return;
+        }
+
+        $working = static::whereKey($taskId)->where('background_holds', '>', 0)->exists();
+
+        $deciding = PendingAction::query()
+            ->where('task_id', $taskId)
+            ->where('status', ActionStatus::Pending)
+            ->exists();
+
+        if ($working || $deciding) {
+            return;
+        }
+
+        static::whereKey($taskId)
+            ->where('status', TaskStatus::InProgress)
+            // Cleared because this update bypasses TaskObserver, and a released
+            // task must be remindable again.
+            ->update(['status' => TaskStatus::Open, 'reminded_at' => null]);
     }
 
     /** Not-yet-done tasks. */

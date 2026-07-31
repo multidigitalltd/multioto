@@ -15,7 +15,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 class PendingAction extends Model
 {
     protected $fillable = [
-        'type', 'status', 'customer_id', 'ticket_id', 'summary', 'payload',
+        'type', 'status', 'customer_id', 'ticket_id', 'task_id', 'summary', 'payload',
         'proposed_by', 'standing_approval_id', 'decided_at', 'executed_at', 'error',
     ];
 
@@ -37,5 +37,11 @@ class PendingAction extends Model
     public function ticket(): BelongsTo
     {
         return $this->belongsTo(Ticket::class);
+    }
+
+    /** The team task that is waiting on this proposal, if one was delegated. */
+    public function task(): BelongsTo
+    {
+        return $this->belongsTo(Task::class);
     }
 }

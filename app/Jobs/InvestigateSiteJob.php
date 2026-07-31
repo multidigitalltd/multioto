@@ -3,7 +3,6 @@
 namespace App\Jobs;
 
 use App\Enums\AgentCommandOutcome;
-use App\Enums\TaskStatus;
 use App\Models\AgentCommand;
 use App\Models\Site;
 use App\Models\SystemLog;
@@ -76,6 +75,9 @@ class InvestigateSiteJob implements ShouldQueue
      */
     public ?int $releasesTaskId = null;
 
+    /** Runtime only: this job has already counted its hold off the task. */
+    private bool $holdGivenUp = false;
+
     public function __construct(
         public int $siteId,
         public string $goal,
@@ -96,60 +98,42 @@ class InvestigateSiteJob implements ShouldQueue
         try {
             $this->investigate($agent, $memory);
         } finally {
-            $this->releaseTask(
-                // Only asked when something is actually waiting on this run.
-                filedProposal: $this->releasesTaskId !== null && $agent->lastProposals() !== [],
-            );
+            $this->releaseTask();
         }
     }
 
     /**
-     * Stop holding a waiting task, and hand it back unless something is still
-     * running or a decision is pending on it. Only from "in progress": a status
-     * a person set meanwhile is newer than ours and must stand.
+     * Give up this job's hold on a waiting task, and hand the task back if it
+     * was the last thing keeping it claimed.
+     *
+     * Counted off exactly once per job: handle() releases in a finally, and a
+     * job that threw is then failed by the worker — a second decrement would
+     * eat a hold belonging to another investigation still running, and hand the
+     * task back underneath it.
      */
-    private function releaseTask(bool $filedProposal = false): void
+    private function releaseTask(): void
     {
-        if ($this->releasesTaskId === null) {
+        if ($this->releasesTaskId === null || $this->holdGivenUp) {
             return;
         }
 
-        // This job's own hold, dropped first so the count reflects reality
-        // whichever way the rest of this goes.
+        $this->holdGivenUp = true;
+
         Task::whereKey($this->releasesTaskId)
             ->where('background_holds', '>', 0)
             ->decrement('background_holds');
 
-        // One instruction can start two investigations. The task goes back to
-        // the humans when the LAST of them is done — otherwise the first to
-        // finish reopens it while the other is still working, and it could be
-        // delegated all over again.
-        $stillHeld = Task::whereKey($this->releasesTaskId)
-            ->where('background_holds', '>', 0)
-            ->exists();
-
-        // A fix waiting for approval is something to act on, so the task stays
-        // claimed until a person decides — exactly as it would had the agent
-        // proposed it in the foreground.
-        if ($stillHeld || $filedProposal) {
-            return;
-        }
-
-        Task::whereKey($this->releasesTaskId)
-            ->where('status', TaskStatus::InProgress)
-            ->update([
-                'status' => TaskStatus::Open,
-                // Cleared because a conditional update bypasses TaskObserver,
-                // and a released task must be remindable again.
-                'reminded_at' => null,
-            ]);
+        // One instruction can start two investigations, and one of them may
+        // have filed a fix that is waiting for approval — the task is handed
+        // back only when neither is true any more.
+        Task::releaseIfIdle($this->releasesTaskId);
     }
 
     /**
-     * The task is released even when the job never gets to run — the findings
-     * will not arrive, so nobody is working on it. A proposal filed before the
-     * failure is not knowable here; an open task with a proposal waiting is the
-     * safe direction, an invisible one is not.
+     * The hold is given up even when the job never gets to run — the findings
+     * will not arrive, so this investigation is not working on anything. A fix
+     * it managed to file before dying still holds the task through the approval
+     * gate, so releasing here cannot lose a pending decision.
      */
     public function failed(\Throwable $e): void
     {
@@ -164,7 +148,7 @@ class InvestigateSiteJob implements ShouldQueue
             return;
         }
 
-        $summary = $agent->investigate($site, $this->goal, $this->round);
+        $summary = $agent->investigate($site, $this->goal, $this->round, $this->releasesTaskId);
 
         if (blank($summary)) {
             $reason = $this->blankReason($site);

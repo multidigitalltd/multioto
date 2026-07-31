@@ -12,6 +12,7 @@ use App\Jobs\NotifyTaskCreatedJob;
 use App\Jobs\RunAgentInstructionJob;
 use App\Models\AgentCommand;
 use App\Models\Customer;
+use App\Models\PendingAction;
 use App\Models\Site;
 use App\Models\Task;
 use App\Models\Ticket;
@@ -20,6 +21,7 @@ use App\Services\Agent\CommandInterpreter;
 use App\Services\Agent\SiteAgent;
 use App\Services\Agent\SiteMemoryStore;
 use App\Services\Ai\ClaudeClient;
+use App\Services\Automation\ApprovalGate;
 use App\Services\Automation\ManagementCommands;
 use App\Services\Support\AttachmentStore;
 use App\Services\Support\TicketIntake;
@@ -629,7 +631,6 @@ class WhatsappTaskCommandsTest extends TestCase
         $site = Site::factory()->create(['customer_id' => Customer::factory()->create()->id]);
         $agent = $this->mock(SiteAgent::class);
         $agent->shouldReceive('investigate')->andReturn('האתר תקין.');
-        $agent->shouldReceive('lastProposals')->andReturn([]);
 
         (new InvestigateSiteJob($site->id, 'בדיקה', releasesTaskId: $task->id))
             ->handle($agent, app(SiteMemoryStore::class));
@@ -637,6 +638,41 @@ class WhatsappTaskCommandsTest extends TestCase
         $task->refresh();
         $this->assertSame(TaskStatus::Open, $task->status);
         $this->assertSame(0, (int) $task->background_holds);
+    }
+
+    /**
+     * A job that threw releases in its finally AND is then failed by the
+     * worker. Counting its hold off twice would eat a hold belonging to the
+     * other investigation and hand the task back underneath it.
+     */
+    public function test_a_failed_investigation_gives_up_its_own_hold_only(): void
+    {
+        $task = Task::create([
+            'title' => 'לבדוק את שני האתרים',
+            'status' => TaskStatus::InProgress,
+            'background_holds' => 2,
+        ]);
+
+        $agent = $this->mock(SiteAgent::class);
+        $agent->shouldReceive('investigate')->andThrow(new \RuntimeException('boom'));
+
+        $job = new InvestigateSiteJob(
+            Site::factory()->create(['customer_id' => Customer::factory()->create()->id])->id,
+            'בדיקה',
+            releasesTaskId: $task->id,
+        );
+
+        try {
+            $job->handle($agent, app(SiteMemoryStore::class));
+        } catch (\RuntimeException) {
+            // The worker gets the exception and then fails the job.
+        }
+
+        $job->failed(new \RuntimeException('boom'));
+
+        $task->refresh();
+        $this->assertSame(1, (int) $task->background_holds);
+        $this->assertSame(TaskStatus::InProgress, $task->status);
     }
 
     /**
@@ -654,7 +690,6 @@ class WhatsappTaskCommandsTest extends TestCase
 
         $agent = $this->mock(SiteAgent::class);
         $agent->shouldReceive('investigate')->andReturn('האתר תקין.');
-        $agent->shouldReceive('lastProposals')->andReturn([]);
 
         (new InvestigateSiteJob($site->id, 'בדיקה', releasesTaskId: $task->id))
             ->handle($agent, app(SiteMemoryStore::class));
@@ -706,8 +741,13 @@ class WhatsappTaskCommandsTest extends TestCase
         $this->assertSame(TaskStatus::Open, $task->status);
     }
 
-    /** A fix waiting for approval is something to act on — the task stays claimed. */
-    public function test_an_investigation_that_proposed_a_fix_keeps_the_task_claimed(): void
+    /**
+     * A fix waiting for approval is something to act on, so the task stays
+     * claimed — exactly as it would had the agent proposed it in the
+     * foreground. The link is on the proposal, so the decision can hand the
+     * task back; a claim nobody can end is how a task disappears.
+     */
+    public function test_a_task_waits_for_the_decision_on_the_fix_its_investigation_proposed(): void
     {
         $site = Site::factory()->create(['customer_id' => Customer::factory()->create()->id]);
         $task = Task::create([
@@ -717,17 +757,34 @@ class WhatsappTaskCommandsTest extends TestCase
         ]);
 
         $agent = $this->mock(SiteAgent::class);
-        $agent->shouldReceive('investigate')->andReturn('מצאתי תוסף שבור והצעתי תיקון.');
-        $agent->shouldReceive('lastProposals')->andReturn([7]);
+        $agent->shouldReceive('investigate')->andReturnUsing(
+            function (Site $site, string $goal, int $round, ?int $taskId) use ($task): string {
+                // The task travels into the investigation, so its proposal
+                // carries the link.
+                $this->assertSame($task->id, $taskId);
+
+                app(ApprovalGate::class)->propose(
+                    type: 'site_action',
+                    summary: 'להחליף תוסף שבור',
+                    payload: ['site_id' => $site->id, 'tool' => 'wp_plugin_update', 'arguments' => []],
+                    taskId: $taskId,
+                );
+
+                return 'מצאתי תוסף שבור והצעתי תיקון.';
+            }
+        );
 
         (new InvestigateSiteJob($site->id, 'בדיקה', releasesTaskId: $task->id))
             ->handle($agent, app(SiteMemoryStore::class));
 
         $task->refresh();
         $this->assertSame(TaskStatus::InProgress, $task->status);
-        // No longer held by the investigation — the pending approval is what it
-        // is waiting on now.
+        // Nothing is running any more — the pending decision is what it waits on.
         $this->assertSame(0, (int) $task->background_holds);
+
+        app(ApprovalGate::class)->reject(PendingAction::sole());
+
+        $this->assertSame(TaskStatus::Open, $task->fresh()->status);
     }
 
     /**
@@ -786,7 +843,6 @@ class WhatsappTaskCommandsTest extends TestCase
 
         $agent = $this->mock(SiteAgent::class);
         $agent->shouldReceive('investigate')->once()->andReturn('האתר תקין, לא נמצאו תקלות.');
-        $agent->shouldReceive('lastProposals')->andReturn([]);
 
         (new InvestigateSiteJob($site->id, 'בדוק את האתר', 1, null, null, AgentCommand::SOURCE_WHATSAPP))
             ->handle($agent, app(SiteMemoryStore::class));

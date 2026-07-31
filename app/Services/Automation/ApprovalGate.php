@@ -15,6 +15,7 @@ use App\Models\PendingAction;
 use App\Models\Site;
 use App\Models\StandingApproval;
 use App\Models\SystemLog;
+use App\Models\Task;
 use App\Services\Agent\ContentChangeRunner;
 use App\Services\Agent\IncidentMemory;
 use App\Services\Agent\MaintenanceRunner;
@@ -104,12 +105,16 @@ class ApprovalGate
         ?int $customerId = null,
         ?int $ticketId = null,
         string $proposedBy = 'ai',
+        ?int $taskId = null,
     ): PendingAction {
         $action = PendingAction::create([
             'type' => $type,
             'status' => ActionStatus::Pending,
             'customer_id' => $customerId,
             'ticket_id' => $ticketId,
+            // A delegated task waiting on this decision: it stays claimed until
+            // the decision is made, and is handed back here when it is.
+            'task_id' => $taskId,
             'summary' => $summary,
             'payload' => $payload,
             'proposed_by' => $proposedBy,
@@ -246,6 +251,20 @@ class ApprovalGate
      */
     protected function approveInternal(PendingAction $action): array
     {
+        try {
+            return $this->decide($action);
+        } finally {
+            // Every way out of decide() ends with this action no longer
+            // pending — expired, lost the race, executed or failed — and a task
+            // that was waiting on the decision must not stay claimed for one
+            // that has been made.
+            Task::releaseIfIdle($action->task_id);
+        }
+    }
+
+    /** @return array{claimed: bool, message: string} */
+    private function decide(PendingAction $action): array
+    {
         if ($action->created_at->lt(now()->subDays(self::MAX_AGE_DAYS))) {
             $action->update(['status' => ActionStatus::Rejected, 'decided_at' => now(), 'error' => 'פג תוקף — ההצעה ישנה מדי לביצוע.']);
 
@@ -283,6 +302,10 @@ class ApprovalGate
     public function reject(PendingAction $action): string
     {
         $action->update(['status' => ActionStatus::Rejected, 'decided_at' => now()]);
+
+        // Nothing is pending on the task any more — a rejected fix is still a
+        // decision, and the work goes back to a person.
+        Task::releaseIfIdle($action->task_id);
 
         return "פעולה #{$action->id} נדחתה. לא בוצע דבר.";
     }
