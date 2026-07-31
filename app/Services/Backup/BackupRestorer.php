@@ -6,6 +6,7 @@ use App\Enums\BackupStatus;
 use App\Models\Backup;
 use App\Models\SystemLog;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use RuntimeException;
@@ -167,10 +168,17 @@ class BackupRestorer
             // — not even writing this very row — makes the restore repeatable.
             // Production is already at the archived snapshot, and "failed" is
             // an invitation to run it again over everything accepted since.
+            //
+            // Not rethrown, either: a job that ends in an exception runs its
+            // failure handler, and that handler cannot tell this apart from a
+            // restore that never started — least of all when the write meant to
+            // record the difference is the thing that just failed. The fault is
+            // recorded and the job ends quietly rather than reopening a
+            // finished restore.
             if ($committed) {
                 $this->recordCommittedWithFault($backup, $e);
 
-                throw $e;
+                return;
             }
 
             $backup->update([
@@ -261,6 +269,13 @@ class BackupRestorer
             "שוחזר גיבוי #{$backup->id}, אך פעולה אחרי ההחלפה נכשלה: ".mb_substr($e->getMessage(), 0, 200),
             ['backup_id' => $backup->id],
         ), report: false);
+
+        // And to the file log too, which needs no database — the one place this
+        // can still be read when the database is what failed.
+        Log::error("שוחזר גיבוי #{$backup->id}, אך פעולה אחרי ההחלפה נכשלה.", [
+            'backup_id' => $backup->id,
+            'exception' => $e->getMessage(),
+        ]);
     }
 
     private function download(Backup $backup, string $to): void
@@ -862,7 +877,16 @@ class BackupRestorer
             );
         }
 
+        // Required, not optional: without it there is nothing to check the copy
+        // against, and an unchecked copy is exactly what the undo path would
+        // later write over the live file.
         $expected = rescue(fn (): ?int => $storage->size($path), null, report: false);
+
+        if ($expected === null) {
+            throw new RuntimeException(
+                "לא ניתן לקבוע את גודל הקובץ הקיים \"{$disk}:{$path}\" — השחזור הופסק כדי לא לדרוס אותו בלי עותק שלם."
+            );
+        }
 
         $out = fopen($copy, 'wb');
 
@@ -877,7 +901,7 @@ class BackupRestorer
         // not an error. Accepting a short copy here would mean undoing the
         // restore by overwriting the live file with a truncated version of
         // itself — corruption dressed up as a rollback.
-        if ($copied === false || ($expected !== null && $copied !== $expected)) {
+        if ($copied !== $expected) {
             throw new RuntimeException(
                 "העתקת הקובץ הקיים \"{$disk}:{$path}\" לשמירה זמנית נכשלה — השחזור הופסק."
             );

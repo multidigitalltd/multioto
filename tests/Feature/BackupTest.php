@@ -1079,6 +1079,10 @@ class BackupTest extends TestCase
             }
         };
 
+        // And it does not throw: an exception would run the job's failure
+        // handler, which cannot tell this apart from a restore that never
+        // started — least of all when the write meant to record the difference
+        // is the thing that failed.
         $restorer->restore($backup);
 
         // Whatever failed afterwards, the data is already replaced. "Failed"
