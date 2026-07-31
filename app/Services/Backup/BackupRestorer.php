@@ -109,7 +109,8 @@ class BackupRestorer
                 // transaction that then rolls back, the sequences would stay
                 // pointing at the archive's lower maxima while the live rows
                 // came back — and the next insert in production would collide
-                // with an existing primary key, over and over.
+                // with an existing primary key, over and over. It takes its
+                // own locks for the same reason the replacement did.
                 $this->resetSequences($order);
             } finally {
                 $zip->close();
@@ -568,6 +569,12 @@ class BackupRestorer
      * that was just restored. SQLite derives the next id from the data itself
      * and needs nothing.
      *
+     * The counter is only ever moved FORWARD. MAX(id) alone is not safe here:
+     * an insert that has already taken a sequence value but not yet committed
+     * is invisible to it, so a plain reset could hand that id out a second time
+     * once the row lands. The sequence's own last value does see it — taking
+     * the greater of the two can lose an id, never reuse one.
+     *
      * @param  list<string>  $tables
      */
     protected function resetSequences(array $tables): void
@@ -576,6 +583,24 @@ class BackupRestorer
             return;
         }
 
+        // Its own short transaction, purely to hold the table locks: without
+        // them a writer could take a sequence value between the read and the
+        // setval, and that reserved id would be handed out twice. setval itself
+        // is unaffected by the transaction — it does not roll back.
+        DB::transaction(function () use ($tables): void {
+            $this->lockTables($tables);
+
+            $this->rewindSequences($tables);
+        });
+    }
+
+    /**
+     * The setval half of the reset, run with the tables already locked.
+     *
+     * @param  list<string>  $tables
+     */
+    private function rewindSequences(array $tables): void
+    {
         foreach ($tables as $table) {
             if (! Schema::hasColumn($table, 'id')) {
                 continue;
@@ -595,9 +620,11 @@ class BackupRestorer
             // Bindings only — the table name comes from the schema listing, not
             // from anything a user typed.
             DB::statement(
-                'SELECT setval(?, COALESCE((SELECT MAX(id) FROM '
-                .DB::getQueryGrammar()->wrapTable($table).'), 1), true)',
-                [$sequence],
+                'SELECT setval(?, GREATEST('
+                .'COALESCE((SELECT MAX(id) FROM '.DB::getQueryGrammar()->wrapTable($table).'), 1), '
+                .'COALESCE(pg_sequence_last_value(?::regclass), 1)'
+                .'), true)',
+                [$sequence, $sequence],
             );
         }
     }
