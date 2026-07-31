@@ -89,7 +89,6 @@ class BackupRestorer
             // earlier one did — and the mark is what tells the failure handler
             // whether this attempt may be recorded as failed.
             'restored_at' => null,
-            'restore_journal' => null,
         ]);
 
         // A restore that was killed mid-write left the live files half
@@ -112,7 +111,10 @@ class BackupRestorer
             );
         }
 
-        $this->journalToken = (string) Str::uuid();
+        // The attempt id doubles as the commit token: one value per attempt,
+        // so a token found on the row says WHICH run committed, and an older
+        // one can be left standing as the proof its own journal needs.
+        $this->journalToken = $backup->restore_attempt ?: (string) Str::uuid();
         $this->journalOwner = $backup->id;
         $this->unrecovered = [];
 

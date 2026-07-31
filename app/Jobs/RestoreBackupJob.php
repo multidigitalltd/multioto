@@ -119,8 +119,11 @@ class RestoreBackupJob implements ShouldQueue
             // The completion mark is written after the commit, and a worker
             // killed in between would not have got that far. The journal token
             // is written INSIDE the transaction, so it is there for exactly
-            // the same reason the data is.
-            ->whereNull('restore_journal')
+            // the same reason the data is — and it is THIS attempt's id, so an
+            // older run's token is not mistaken for this one having landed.
+            ->where(fn ($q) => $this->attempt === null
+                ? $q->whereNull('restore_journal')
+                : $q->whereNull('restore_journal')->orWhere('restore_journal', '!=', $this->attempt))
             // And only over the claim THIS payload was made for. A superseded
             // one that throws on its way to the claim check — a database blip
             // in find(), say — would otherwise cancel whichever attempt is

@@ -2007,7 +2007,8 @@ class BackupTest extends TestCase
         $backup->update([
             'restore_status' => BackupStatus::Running,
             'restore_attempt' => 'attempt-1',
-            'restore_journal' => 'token-committed',
+            // The token IS the attempt id, so it says which run landed.
+            'restore_journal' => 'attempt-1',
             'restored_at' => null,
         ]);
 
@@ -2016,6 +2017,31 @@ class BackupTest extends TestCase
         // "Failed" reads as "nothing happened, try again" — and trying again
         // would delete everything accepted since this one landed.
         $this->assertSame(BackupStatus::Running, $backup->fresh()->restore_status);
+    }
+
+    public function test_a_new_claim_does_not_erase_the_proof_an_older_restore_committed(): void
+    {
+        $backup = $this->runBackup();
+        Storage::disk('local')->put('attachments/keep.txt', 'מהגיבוי');
+
+        // An earlier restore committed and was killed before it could close
+        // its journal. Its token is the only thing saying so.
+        $backup->update(['restore_journal' => 'attempt-older']);
+        $this->leaveInterruptedRestore(
+            [['path' => 'attachments/keep.txt', 'was' => 'מלפני השחזור']], 'attempt-older', $backup->id);
+
+        try {
+            // Somebody presses restore again. Claiming must not throw away the
+            // answer the leftover journal still needs.
+            $this->assertNotNull(app(RestoreClaim::class)->take($backup));
+
+            $result = app(BackupRestorer::class)->recoverInterruptedFiles();
+
+            $this->assertSame(0, $result['pending']);
+            $this->assertSame('מהגיבוי', Storage::disk('local')->get('attachments/keep.txt'));
+        } finally {
+            $this->clearInterruptedRestore();
+        }
     }
 
     public function test_a_restore_refuses_an_archive_from_a_disk_this_install_does_not_have(): void
