@@ -949,6 +949,35 @@ class BackupTest extends TestCase
         app(ManualChargeService::class)->createHostedPage($customer, 11800, 'דרישת תשלום');
     }
 
+    public function test_a_restore_names_the_payments_and_documents_it_discards(): void
+    {
+        Mail::fake();
+        config(['billing.notifications.team_email' => 'team@multi.test']);
+
+        $backup = $this->runBackup();
+
+        // Created after the archive: Cardcom can still take the money for this
+        // page, and the row that says whose payment it is goes away.
+        $customer = Customer::factory()->create();
+        Charge::create([
+            'customer_id' => $customer->id,
+            'status' => ChargeStatus::Pending,
+            'amount_agorot' => 10000,
+            'vat_agorot' => 1800,
+            'total_agorot' => 11800,
+            'attempt_number' => 1,
+            'period_start' => now()->startOfMonth(),
+            'period_end' => now()->endOfMonth(),
+            'cardcom_low_profile_id' => 'lp-still-payable',
+        ]);
+
+        app(BackupRestorer::class)->restore($backup);
+
+        // The restore cannot recall the page — but it must not let it vanish
+        // in silence either.
+        Mail::assertSent(NotificationMail::class);
+    }
+
     public function test_a_forgotten_running_row_does_not_stop_billing_for_ever(): void
     {
         config(['backup.operation_window_minutes' => 60]);

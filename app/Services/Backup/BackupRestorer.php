@@ -3,10 +3,13 @@
 namespace App\Services\Backup;
 
 use App\Enums\BackupStatus;
+use App\Mail\NotificationMail;
 use App\Models\Backup;
 use App\Models\SystemLog;
+use App\Support\EmailList;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use RuntimeException;
@@ -31,6 +34,9 @@ class BackupRestorer
     /** Bytes pulled per read when checking a member is intact. */
     private const READ_CHUNK = 262144;
 
+    /** How many discarded external references to name in the report. */
+    private const ARTIFACT_LIMIT = 200;
+
     public function __construct(private BackupArchive $archive) {}
 
     public function restore(Backup $backup): void
@@ -52,6 +58,7 @@ class BackupRestorer
         $previous = [];
         $staged = [];
         $committed = false;
+        $discarded = [];
 
         try {
             $this->download($backup, $local);
@@ -81,7 +88,7 @@ class BackupRestorer
                 // one thing that could put the files back must not have been
                 // thrown away by then.
                 try {
-                    DB::transaction(function () use ($zip, $order, $deferred, $declared, $manifest, &$previous, &$staged): void {
+                    DB::transaction(function () use ($zip, $order, $deferred, $declared, $manifest, &$previous, &$staged, &$discarded): void {
                         // Shut the writers out for the duration. The panel and the
                         // queue workers keep running during a restore, and a row
                         // committed after its table was emptied would survive
@@ -97,6 +104,13 @@ class BackupRestorer
                         // way past, quietly turning every manual backup in the
                         // list into an automatic one.
                         $attribution = $this->rememberAttribution($order);
+
+                        // What the outside world still knows about and this
+                        // snapshot does not: a Cardcom page a customer can
+                        // still pay into, a Linet document already emailed.
+                        // The restore cannot recall either — it can only make
+                        // sure somebody is told which ones lost their row.
+                        $orphaned = $this->externalArtifactsBeingDiscarded($order);
 
                         // Children first: a parent row cannot go while something
                         // still points at it.
@@ -124,6 +138,8 @@ class BackupRestorer
                         $this->applyDeferred($pending);
 
                         $this->reapplyAttribution($attribution);
+
+                        $discarded = $orphaned;
 
                         // Files INSIDE the transaction, which makes the restore
                         // all-or-nothing the useful way round: a file that cannot
@@ -173,6 +189,8 @@ class BackupRestorer
                     : 'השחזור הושלם, אך איפוס מוני המזהים נכשל: '.$sequenceError
                     .' — יש להריץ אותו שוב לפני שנוצרות רשומות חדשות, אחרת הן עלולות להתנגש במזהים משוחזרים. אין לשחזר שוב.',
             ]);
+
+            $this->reportDiscardedArtifacts($backup, $discarded);
 
             SystemLog::record(
                 $sequenceError === null ? 'warning' : 'error',
@@ -505,6 +523,83 @@ class BackupRestorer
                 "נתוני הטבלה \"{$table}\" פגומים",
             );
         }
+    }
+
+    /**
+     * Charges and documents the outside world still knows about, whose rows
+     * this restore is about to delete.
+     *
+     * A Cardcom page created after the snapshot stays payable; a Linet document
+     * issued after it has already reached the customer. Neither can be recalled
+     * from here, and quietly dropping the row that ties them to a customer is
+     * how money arrives with nothing to match it to. So they are counted and
+     * named, and somebody is told.
+     *
+     * @param  list<string>  $order
+     * @return list<string>
+     */
+    private function externalArtifactsBeingDiscarded(array $order): array
+    {
+        $found = [];
+
+        if (in_array('charges', $order, true)) {
+            $charges = DB::table('charges')
+                ->where(fn ($q) => $q->whereNotNull('cardcom_low_profile_id')
+                    ->orWhereNotNull('cardcom_transaction_id')
+                    ->orWhereNotNull('proforma_document_id'))
+                ->orderByDesc('id')
+                ->limit(self::ARTIFACT_LIMIT)
+                ->get(['id', 'cardcom_low_profile_id', 'cardcom_transaction_id', 'proforma_document_id']);
+
+            foreach ($charges as $charge) {
+                $found[] = "חיוב #{$charge->id}: "
+                    .collect([
+                        'עמוד תשלום' => $charge->cardcom_low_profile_id,
+                        'עסקה' => $charge->cardcom_transaction_id,
+                        'חשבונית עסקה' => $charge->proforma_document_id,
+                    ])->filter()->map(fn ($v, $k) => "{$k} {$v}")->join(', ');
+            }
+        }
+
+        if (in_array('invoices', $order, true)) {
+            foreach (DB::table('invoices')->orderByDesc('id')->limit(self::ARTIFACT_LIMIT)
+                ->get(['id', 'linet_document_id']) as $invoice) {
+                $found[] = "חשבונית #{$invoice->id}: מסמך לינט {$invoice->linet_document_id}";
+            }
+        }
+
+        return $found;
+    }
+
+    /**
+     * @param  list<string>  $discarded
+     */
+    private function reportDiscardedArtifacts(Backup $backup, array $discarded): void
+    {
+        if ($discarded === []) {
+            return;
+        }
+
+        $count = count($discarded);
+        $sample = implode("\n", array_slice($discarded, 0, 20));
+
+        SystemLog::record('warning', 'backup', "שחזור גיבוי #{$backup->id}: {$count} חיובים/מסמכים שהיו במערכת לפני השחזור אינם קיימים בגיבוי.", [
+            'backup_id' => $backup->id,
+            'artifacts' => array_slice($discarded, 0, 100),
+        ]);
+
+        $to = EmailList::parse(config('billing.notifications.team_email'));
+
+        if ($to === []) {
+            return;
+        }
+
+        rescue(fn () => Mail::to($to)->send(new NotificationMail(
+            'שוחזר גיבוי — יש לבדוק חיובים ומסמכים מול קארדקום ולינט',
+            'השחזור החזיר את המערכת לתמונת המצב של הגיבוי. הרשומות הבאות היו קיימות לפני השחזור ואינן בגיבוי, '
+            ."ולכן אין להן יותר שורה במערכת — אבל קארדקום ולינט עדיין מכירים אותן:\n\n{$sample}\n\n"
+            .'יש להשוות מול הדוחות בקארדקום ובלינט לפני שממשיכים לגבות.',
+        )), report: false);
     }
 
     /**
