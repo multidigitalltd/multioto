@@ -19,6 +19,7 @@ use App\Models\Ticket;
 use App\Services\Billing\SubscriptionCollectionService;
 use App\Services\Cloudflare\CloudflareClient;
 use App\Services\Hosting\HostingClient;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 /**
@@ -90,7 +91,18 @@ class SystemActionRunner
         ]);
 
         // No assignee → the managers are notified a task landed (same as the UI).
-        NotifyTaskCreatedJob::dispatch($task->id);
+        // Deliberately non-fatal, like the WhatsApp path: the task is already
+        // saved, so letting a queue hiccup throw would hide a task that exists
+        // and invite a retry that opens a second one. The task itself is what
+        // must not be lost; a missing notification is visible in the log.
+        try {
+            NotifyTaskCreatedJob::dispatch($task->id);
+        } catch (\Throwable $e) {
+            Log::warning('SystemActionRunner: task notification not queued', [
+                'task_id' => $task->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
 
         return $task;
     }

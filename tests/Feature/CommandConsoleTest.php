@@ -18,6 +18,7 @@ use App\Models\Ticket;
 use App\Models\User;
 use App\Services\Agent\CommandInterpreter;
 use App\Services\Ai\ClaudeClient;
+use Illuminate\Contracts\Bus\Dispatcher as BusDispatcher;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
 use Livewire\Livewire;
@@ -140,6 +141,42 @@ class CommandConsoleTest extends TestCase
         $this->assertSame(AgentCommandOutcome::Dispatched, $command->outcome);
         $this->assertStringContainsString('#'.$task->id, $command->result);
         $this->assertStringContainsString('אין צורך לחזור', $command->result);
+    }
+
+    public function test_the_opened_task_is_named_even_when_the_agents_summary_is_vague(): void
+    {
+        // "בוצע" tells nobody which task exists. The number has to come from us,
+        // not from the model's own wording — the result line is also what the
+        // next turn is threaded with.
+        $this->fakeAgent([
+            ['open_task', ['title' => 'לחדש את הדומיין']],
+        ], summary: 'בוצע');
+
+        $command = app(CommandInterpreter::class)->run('תטפל בחידוש');
+
+        $this->assertStringContainsString('#'.Task::sole()->id, $command->result);
+        $this->assertStringContainsString('לחדש את הדומיין', $command->result);
+    }
+
+    public function test_a_queue_failure_does_not_hide_a_task_that_was_already_created(): void
+    {
+        // The row is inserted before the notification is queued. If queueing
+        // throws, the task exists — reporting an error would invite a retry
+        // that opens a second one, and the first would sit there unmentioned.
+        $bus = Mockery::mock(BusDispatcher::class)->shouldIgnoreMissing();
+        $bus->shouldReceive('dispatch')->andThrow(new \RuntimeException('queue down'));
+        $bus->shouldReceive('dispatchToQueue')->andThrow(new \RuntimeException('queue down'));
+        $this->app->instance(BusDispatcher::class, $bus);
+
+        $this->fakeAgent([
+            ['open_task', ['title' => 'להתקשר לספק']],
+        ], summary: null);
+
+        $command = app(CommandInterpreter::class)->run('תדבר עם הספק');
+
+        $this->assertSame('להתקשר לספק', Task::sole()->title);
+        $this->assertSame(AgentCommandOutcome::Dispatched, $command->outcome);
+        $this->assertStringContainsString('#'.Task::sole()->id, $command->result);
     }
 
     public function test_a_task_opened_alongside_a_proposal_is_named_in_the_result(): void

@@ -97,8 +97,12 @@ class CommandInterpreter
 
         // No proposal and no question — the agent gave an answer / did a read-only
         // lookup. Terminal (not a clarification), so the next command starts fresh.
+        // The summary is the model's own words and may be as vague as "בוצע",
+        // so the opened tasks are named here too rather than trusted to it —
+        // this line is what the operator reads and what the next turn is
+        // threaded with, and without it the same task can be opened again.
         if ($summary !== '') {
-            return $this->finish($command, AgentCommandOutcome::Dispatched, $summary);
+            return $this->finish($command, AgentCommandOutcome::Dispatched, $this->body($done, $summary));
         }
 
         $reason = trim((string) ($result['error'] ?? ''));
