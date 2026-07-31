@@ -683,6 +683,34 @@ class BackupRestorer
         $previous = [];
         $temp = [];
 
+        try {
+            $this->writeFiles($zip, $manifest, $previous, $temp, $failed);
+
+            if ($failed !== []) {
+                throw new RuntimeException(
+                    'הנתונים שוחזרו אך '.count($failed).' קבצים לא הוחזרו (חסרים בגיבוי או בעיית הרשאות): '
+                    .implode(', ', array_slice($failed, 0, 5))
+                );
+            }
+        } catch (Throwable $e) {
+            $this->putFilesBack($previous);
+
+            throw $e;
+        } finally {
+            $this->discard($temp);
+        }
+    }
+
+    /**
+     * The write half, so the caller can undo it as one unit.
+     *
+     * @param  array<string, mixed>  $manifest
+     * @param  list<array{disk: string, path: string, from: string|null}>  $previous
+     * @param  list<string>  $temp
+     * @param  list<string>  $failed
+     */
+    private function writeFiles(ZipArchive $zip, array $manifest, array &$previous, array &$temp, array &$failed): void
+    {
         // Driven by the list the backup WROTE, not by whatever members happen
         // to still be in the archive. Walking the members can only ever see
         // what survived — a file that went missing is invisible that way, and
@@ -735,21 +763,9 @@ class BackupRestorer
             }
 
             if ($failed !== []) {
-                break;
+                return;
             }
         }
-
-        if ($failed !== []) {
-            $this->putFilesBack($previous);
-            $this->discard($temp);
-
-            throw new RuntimeException(
-                'הנתונים שוחזרו אך '.count($failed).' קבצים לא הוחזרו (חסרים בגיבוי או בעיית הרשאות): '
-                .implode(', ', array_slice($failed, 0, 5))
-            );
-        }
-
-        $this->discard($temp);
     }
 
     /**
@@ -772,21 +788,30 @@ class BackupRestorer
         $copy = tempnam(sys_get_temp_dir(), 'multioto-prev-');
         $temp[] = $copy;
 
-        $source = $storage->readStream($path);
+        $source = rescue(fn () => $storage->readStream($path), null, report: false);
 
+        // A file that is there but cannot be read must stop the restore, not be
+        // recorded as absent: recorded that way, undoing would DELETE it — the
+        // live file gone for good while the database rolls back to match it.
         if (! is_resource($source)) {
-            // Unreadable now means unrecoverable later; treat it as absent
-            // rather than pretend there is something to put back.
-            return ['disk' => $disk, 'path' => $path, 'from' => null];
+            throw new RuntimeException(
+                "לא ניתן לקרוא את הקובץ הקיים \"{$disk}:{$path}\" — השחזור הופסק כדי לא לדרוס אותו בלי אפשרות חזרה."
+            );
         }
 
         $out = fopen($copy, 'wb');
 
         try {
-            stream_copy_to_stream($source, $out);
+            $copied = stream_copy_to_stream($source, $out);
         } finally {
             fclose($out);
             fclose($source);
+        }
+
+        if ($copied === false) {
+            throw new RuntimeException(
+                "העתקת הקובץ הקיים \"{$disk}:{$path}\" לשמירה זמנית נכשלה — השחזור הופסק."
+            );
         }
 
         return ['disk' => $disk, 'path' => $path, 'from' => $copy];
@@ -807,17 +832,22 @@ class BackupRestorer
         foreach (array_reverse($previous) as $file) {
             try {
                 if ($file['from'] === null) {
-                    Storage::disk($file['disk'])->delete($file['path']);
+                    // These disks are configured not to throw, so the refusal
+                    // arrives as a return value or not at all.
+                    $undone = Storage::disk($file['disk'])->delete($file['path']);
+                } else {
+                    $handle = fopen($file['from'], 'rb');
 
-                    continue;
+                    try {
+                        $undone = Storage::disk($file['disk'])->put($file['path'], $handle);
+                    } finally {
+                        fclose($handle);
+                    }
                 }
 
-                $handle = fopen($file['from'], 'rb');
-
-                try {
-                    Storage::disk($file['disk'])->put($file['path'], $handle);
-                } finally {
-                    fclose($handle);
+                if (! $undone) {
+                    SystemLog::record('error', 'backup',
+                        "הקובץ {$file['disk']}:{$file['path']} לא הוחזר למצבו הקודם — הוא נשאר בגרסה מהגיבוי.");
                 }
             } catch (Throwable $e) {
                 SystemLog::record('error', 'backup', "החזרת הקובץ {$file['disk']}:{$file['path']} למצבו הקודם נכשלה: "

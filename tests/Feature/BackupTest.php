@@ -976,6 +976,32 @@ class BackupTest extends TestCase
         $this->assertSame('חי', Storage::disk('local')->get('attachments/b.txt'));
     }
 
+    public function test_a_live_file_that_cannot_be_read_stops_the_restore_instead_of_being_lost(): void
+    {
+        Storage::disk('local')->put('attachments/a.txt', 'מהגיבוי');
+        $backup = $this->runBackup();
+
+        Storage::disk('local')->put('attachments/a.txt', 'חי');
+
+        // Writes allowed, reads refused. Recorded as "there was nothing here",
+        // undoing would delete the live file for good.
+        $healthy = Storage::disk('local');
+        $unreadable = \Mockery::mock($healthy)->makePartial();
+        $unreadable->shouldReceive('readStream')->andReturn(false);
+        Storage::set('local', $unreadable);
+
+        try {
+            app(BackupRestorer::class)->restore($backup);
+            $this->fail('an unreadable live file must stop the restore');
+        } catch (\Throwable) {
+            // expected
+        }
+
+        Storage::set('local', $healthy);
+
+        $this->assertSame('חי', Storage::disk('local')->get('attachments/a.txt'));
+    }
+
     public function test_a_committed_restore_is_not_offered_again_when_only_the_sequences_failed(): void
     {
         Customer::factory()->create(['name' => 'לקוח מהגיבוי']);
