@@ -1079,6 +1079,35 @@ class BackupTest extends TestCase
         $this->assertStringContainsString("manual-{$charge->id}", implode(' ', $report['items']));
     }
 
+    public function test_a_charge_the_archive_puts_back_is_not_reported_as_lost(): void
+    {
+        Mail::fake();
+        config(['billing.notifications.team_email' => 'team@multi.test']);
+
+        // The same shape as the one above — pending, no reference — but this
+        // one is IN the archive, so the restore puts it straight back.
+        $customer = Customer::factory()->create();
+        Charge::create([
+            'customer_id' => $customer->id,
+            'status' => ChargeStatus::Pending,
+            'amount_agorot' => 10000,
+            'vat_agorot' => 1800,
+            'total_agorot' => 11800,
+            'attempt_number' => 1,
+            'period_start' => now()->startOfMonth(),
+            'period_end' => now()->endOfMonth(),
+        ]);
+
+        $backup = $this->runBackup();
+
+        app(BackupRestorer::class)->restore($backup);
+
+        // Naming it would send the team to audit a charge that never went
+        // anywhere — and bury the ones that did.
+        $this->assertNull($backup->fresh()->restore_report);
+        Mail::assertNothingSent();
+    }
+
     public function test_a_scan_that_examined_everything_is_not_called_truncated(): void
     {
         Mail::fake();

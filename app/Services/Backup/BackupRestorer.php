@@ -845,7 +845,14 @@ class BackupRestorer
 
             foreach ($group->chunk(self::CHUNK) as $chunk) {
                 $values = $chunk->pluck('value')->all();
-                $restored = DB::table($table)->whereIn($column, $values)->pluck($column)->all();
+
+                // Compared as strings on both sides. The collector stores every
+                // value as one, while a numeric column comes back as an int —
+                // and a strict comparison of "7" with 7 would report a charge as
+                // discarded that the archive put back perfectly well.
+                $restored = DB::table($table)->whereIn($column, $values)->pluck($column)
+                    ->map(fn ($value): string => (string) $value)
+                    ->all();
 
                 foreach ($chunk as $ref) {
                     if (! in_array($ref['value'], $restored, true)) {
