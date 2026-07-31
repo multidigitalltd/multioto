@@ -74,8 +74,14 @@ class RunAgentInstructionJob implements ShouldQueue
         // so the work is a person's again. Left "in progress" it would drop out
         // of the open list and out of the reminders — claimed forever by an
         // agent that has already finished.
+        //
+        // Unless something is still running: a site investigation outlives this
+        // run and reports back later, and THAT job releases the task when the
+        // findings are in. Releasing here would put the task back on the list
+        // mid-investigation, where it could be delegated a second time.
         $nothingFiled = $command->outcome === AgentCommandOutcome::Dispatched
-            && $command->pending_action_id === null;
+            && $command->pending_action_id === null
+            && ! $command->backgroundWork;
 
         if ($nothingFiled || in_array($command->outcome, [AgentCommandOutcome::Failed, AgentCommandOutcome::Unclear], true)) {
             $this->releaseTask();

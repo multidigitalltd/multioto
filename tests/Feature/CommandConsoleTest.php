@@ -197,6 +197,32 @@ class CommandConsoleTest extends TestCase
         $this->assertStringContainsString('#'.$task->id, $second->result);
     }
 
+    public function test_a_retry_is_recognised_even_when_the_model_words_the_task_differently(): void
+    {
+        // The retry is a fresh run of the model: it can phrase the title
+        // differently, or attach a customer it did not attach the first time.
+        // What identifies the repeat is the manager's own instruction.
+        $this->fakeAgent([['open_task', ['title' => 'להתקשר לספק הדומיינים']]]);
+        app(CommandInterpreter::class)->run('תדבר עם רשם הדומיינים');
+
+        $this->fakeAgent([['open_task', ['title' => 'לברר מול רשם הדומיינים לגבי החידוש']]]);
+        $second = app(CommandInterpreter::class)->run('תדבר עם רשם הדומיינים');
+
+        $this->assertSame(1, Task::count());
+        $this->assertStringContainsString('#'.Task::sole()->id, $second->result);
+    }
+
+    public function test_two_different_instructions_each_open_their_own_task(): void
+    {
+        $this->fakeAgent([['open_task', ['title' => 'להתקשר לספק']]]);
+        app(CommandInterpreter::class)->run('תדבר עם הספק');
+
+        $this->fakeAgent([['open_task', ['title' => 'להזמין ציוד']]]);
+        app(CommandInterpreter::class)->run('תזמין ציוד למשרד');
+
+        $this->assertSame(2, Task::count());
+    }
+
     public function test_the_same_title_opens_a_new_task_once_the_window_has_passed(): void
     {
         // Two hours later the same sentence is a new request, not a retry.

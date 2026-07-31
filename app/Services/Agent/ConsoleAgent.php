@@ -89,6 +89,17 @@ class ConsoleAgent
      */
     private ?int $delegatedTaskId = null;
 
+    /**
+     * A stable key for the instruction this run came from, used so a repeat of
+     * the SAME request recovers the task it already opened instead of opening a
+     * twin. Derived from the operator's own words rather than the model's, which
+     * vary between runs.
+     */
+    private ?string $requestKey = null;
+
+    /** Work left running after this run returns (a site investigation). */
+    private bool $background = false;
+
     public function __construct(
         private ClaudeClient $ai,
         private ApprovalGate $gate,
@@ -99,21 +110,26 @@ class ConsoleAgent
      *
      * @param  int|null  $taskId  the existing task this run was delegated from,
      *                            so the agent works ON it instead of opening it again
-     * @return array{summary: ?string, proposed: list<int>, opened: list<array{id: int, title: string}>, clarification: ?string, customer_id: ?int, ticket_id: ?int, site_id: ?int}
+     * @param  string|null  $requestKey  identifies the originating instruction, so a
+     *                                   repeat of it recovers what it already opened
+     * @return array{summary: ?string, proposed: list<int>, opened: list<array{id: int, title: string}>, background: bool, clarification: ?string, customer_id: ?int, ticket_id: ?int, site_id: ?int}
      */
     public function run(
         string $instruction,
         ?int $userId = null,
         string $source = AgentCommand::SOURCE_PANEL,
         ?int $taskId = null,
+        ?string $requestKey = null,
     ): array {
         $this->proposed = [];
         $this->opened = [];
         $this->clarification = null;
+        $this->background = false;
         $this->customerId = $this->ticketId = $this->siteId = null;
         $this->conversationUserId = $userId;
         $this->conversationSource = $source;
         $this->delegatedTaskId = $taskId;
+        $this->requestKey = $requestKey;
 
         $summary = $this->ai->converse(
             system: $this->systemPrompt(),
@@ -134,6 +150,9 @@ class ConsoleAgent
             // null, so a provider failure on the closing turn cannot present
             // finished work as something to try again.
             'opened' => $this->opened,
+            // Something is still running after this answer, so whoever is
+            // holding a task open on this run's behalf must keep holding it.
+            'background' => $this->background,
             'clarification' => $this->clarification,
             'customer_id' => $this->customerId,
             'ticket_id' => $this->ticketId,
@@ -937,12 +956,18 @@ class ConsoleAgent
         }
 
         $this->siteId = $site->id;
+        $this->background = true;
         InvestigateSiteJob::dispatch(
             $site->id,
             trim((string) ($input['goal'] ?? '')) ?: 'בדיקת מצב האתר',
             1,
             $this->conversationUserId,
             chatSource: $this->conversationSource,
+            // A delegated task is waiting on this investigation. This run ends
+            // long before the findings exist, so the job hands the task back —
+            // released here it would return to the open list while the check is
+            // still running, and could be delegated a second time.
+            releasesTaskId: $this->delegatedTaskId,
         );
 
         return ['content' => "סוכן האתר נשלח לבדוק את {$site->domain} — התוצאה תופיע כאן בצ׳אט בסיום, וכל תיקון יוצע לאישור."];
@@ -1101,11 +1126,20 @@ class ConsoleAgent
             ];
         }
 
+        // The model repeating itself inside one run: same words, same answer.
+        foreach ($this->opened as $already) {
+            if ($already['title'] === $title) {
+                return ['content' => "המשימה כבר נפתחה: #{$already['id']} {$title}. אל תפתח אותה שוב."];
+            }
+        }
+
         // A killed worker (the WhatsApp run has a hard timeout) can leave the
         // task created and the answer undelivered, and the manager is then told
-        // to try again — so the same request within the window is answered with
-        // the task that already exists instead of a twin of it.
-        if ($existing = $this->recentlyOpened($title, $customerId)) {
+        // to try again. The retry is recognised by the REQUEST, not by what the
+        // model happened to call the task the second time round.
+        $keys = $this->repeatKeys();
+
+        if ($keys !== [] && $existing = $this->openedForRequest($keys)) {
             $this->opened[] = ['id' => $existing->id, 'title' => (string) $existing->title];
 
             return ['content' => "המשימה כבר קיימת: #{$existing->id} {$existing->title}. אל תפתח אותה שוב."];
@@ -1114,6 +1148,7 @@ class ConsoleAgent
         $task = app(SystemActionRunner::class)->openTask([
             'title' => $title,
             'customer_id' => $customerId,
+            'source_ref' => $keys[0] ?? null,
         ]);
 
         $this->opened[] = ['id' => $task->id, 'title' => $title];
@@ -1122,26 +1157,46 @@ class ConsoleAgent
     }
 
     /**
-     * The same task, opened moments ago and still not done.
+     * The reference this run would file a task under, plus the one the window
+     * before it.
      *
-     * Deliberately a short window rather than a permanent key: two hours later
-     * "להתקשר לספק" is a new request and must open a new task. What is being
-     * caught here is a repeat of the SAME instruction — by the model within one
-     * run, or by a manager retrying after a run that died mid-way.
+     * Keyed on the operator's own instruction — the model's phrasing and even
+     * whether it attaches a customer can differ between two runs of the same
+     * request, so neither can identify it. The window is part of the key rather
+     * than a "created after" filter because the column is unique: two hours
+     * later "להתקשר לספק" is a NEW request that must open a new task, and its
+     * key has to be free again. The previous window is looked up as well so a
+     * retry that lands just over a boundary still finds its task.
+     *
+     * The position within the run is included: one instruction may legitimately
+     * open two different tasks, and both must survive the retry.
+     *
+     * @return list<string> [current, previous], or [] when there is no key
      */
-    private function recentlyOpened(string $title, ?int $customerId): ?Task
+    private function repeatKeys(): array
     {
         $minutes = (int) config('billing.ai.task_repeat_minutes', 15);
 
-        if ($minutes <= 0) {
-            return null;
+        if ($this->requestKey === null || $minutes <= 0) {
+            return [];
         }
 
+        $position = count($this->opened) + 1;
+        $window = $minutes * 60;
+        $now = now()->getTimestamp();
+
+        return [
+            'console-'.$this->requestKey."-{$position}-".intdiv($now, $window),
+            'console-'.$this->requestKey."-{$position}-".(intdiv($now, $window) - 1),
+        ];
+    }
+
+    /** The task an earlier run of this same request already opened, if it is still live. */
+    private function openedForRequest(array $keys): ?Task
+    {
         return Task::query()
-            ->where('title', $title)
-            ->where('customer_id', $customerId)
+            ->whereIn('source_ref', $keys)
             ->whereIn('status', [TaskStatus::Open, TaskStatus::InProgress])
-            ->where('created_at', '>=', now()->subMinutes($minutes))
             ->latest('id')
             ->first();
     }

@@ -83,12 +83,24 @@ class SystemActionRunner
      */
     public function openTask(array $p): Task
     {
-        $task = Task::create([
+        $attributes = [
             'title' => (string) ($p['title'] ?? 'משימה'),
             'customer_id' => $p['customer_id'] ?? null,
             'status' => TaskStatus::Open,
             'priority' => TicketPriority::Normal,
-        ]);
+        ];
+
+        // With a reference, creation is keyed on it: two runs of the same
+        // request race only to decide which one inserts, and the loser gets the
+        // row rather than a twin of it. The column is unique, so this holds
+        // even across workers.
+        $task = isset($p['source_ref'])
+            ? Task::firstOrCreate(['source_ref' => $p['source_ref']], $attributes)
+            : Task::create($attributes);
+
+        if (! $task->wasRecentlyCreated) {
+            return $task;
+        }
 
         // No assignee → the managers are notified a task landed (same as the UI).
         // Deliberately non-fatal, like the WhatsApp path: the task is already

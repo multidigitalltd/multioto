@@ -20,6 +20,14 @@ class AgentCommand extends Model
 
     public const SOURCE_WHATSAPP = 'whatsapp';
 
+    /**
+     * Transient, never persisted (a real property, so it is not an attribute):
+     * the run left work running in the background — a site investigation that
+     * reports its own result later. Whoever is holding something open on this
+     * command's behalf, such as a delegated task, must keep holding it.
+     */
+    public bool $backgroundWork = false;
+
     protected $fillable = [
         'user_id', 'source', 'role', 'instruction', 'outcome', 'result',
         'customer_id', 'ticket_id', 'site_id', 'pending_action_id',

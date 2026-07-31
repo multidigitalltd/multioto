@@ -3,9 +3,11 @@
 namespace App\Jobs;
 
 use App\Enums\AgentCommandOutcome;
+use App\Enums\TaskStatus;
 use App\Models\AgentCommand;
 use App\Models\Site;
 use App\Models\SystemLog;
+use App\Models\Task;
 use App\Services\Agent\IncidentMemory;
 use App\Services\Agent\SiteAgent;
 use App\Services\Agent\SiteMemoryStore;
@@ -64,6 +66,16 @@ class InvestigateSiteJob implements ShouldQueue
      */
     public string $chatSource = AgentCommand::SOURCE_PANEL;
 
+    /**
+     * A delegated task ("סוכן משימה 7") that is waiting on THIS investigation.
+     * The console run that queued this job has already finished, so the task
+     * cannot be handed back there — it would go back on the open list while the
+     * investigation is still running and could be delegated all over again.
+     * Released here instead, when the findings are in. Class-level default for
+     * queue-payload BC, for the same reason as $chatUserId above.
+     */
+    public ?int $releasesTaskId = null;
+
     public function __construct(
         public int $siteId,
         public string $goal,
@@ -71,13 +83,48 @@ class InvestigateSiteJob implements ShouldQueue
         ?int $chatUserId = null,
         ?int $verifiesResolutionId = null,
         string $chatSource = AgentCommand::SOURCE_PANEL,
+        ?int $releasesTaskId = null,
     ) {
         $this->chatUserId = $chatUserId;
         $this->verifiesResolutionId = $verifiesResolutionId;
         $this->chatSource = $chatSource;
+        $this->releasesTaskId = $releasesTaskId;
     }
 
     public function handle(SiteAgent $agent, SiteMemoryStore $memory): void
+    {
+        try {
+            $this->investigate($agent, $memory);
+        } finally {
+            // Whatever the outcome, nobody is working on the task any more.
+            $this->releaseTask();
+        }
+    }
+
+    /**
+     * Hand a waiting task back to the humans. Only from "in progress": a status
+     * a person set meanwhile is newer than ours and must stand.
+     */
+    private function releaseTask(): void
+    {
+        if ($this->releasesTaskId === null) {
+            return;
+        }
+
+        Task::whereKey($this->releasesTaskId)
+            ->where('status', TaskStatus::InProgress)
+            // Cleared because a conditional update bypasses TaskObserver, and a
+            // released task must be remindable again.
+            ->update(['status' => TaskStatus::Open, 'reminded_at' => null]);
+    }
+
+    /** The task is released even when the job never gets to run. */
+    public function failed(\Throwable $e): void
+    {
+        $this->releaseTask();
+    }
+
+    private function investigate(SiteAgent $agent, SiteMemoryStore $memory): void
     {
         $site = Site::find($this->siteId);
 

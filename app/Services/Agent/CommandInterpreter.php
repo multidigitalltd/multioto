@@ -70,10 +70,23 @@ class CommandInterpreter
             // Pass the operator's user id so any async work the agent kicks off
             // (e.g. a background site investigation) can post its result back
             // into THIS chat thread when it finishes, not only to the event log.
-            $result = $this->agent->run($effective, $userId, $source, $taskId);
+            $result = $this->agent->run(
+                $effective,
+                $userId,
+                $source,
+                $taskId,
+                // The RAW instruction, never $effective: the conversation
+                // context prepended to it changes with every turn, so a retry
+                // of the same words would not look like the same request.
+                requestKey: $this->requestKey($instruction, $userId, $source),
+            );
         } catch (\Throwable $e) {
             return $this->finish($command, AgentCommandOutcome::Failed, 'הפעולה נכשלה: '.Str::limit($e->getMessage(), 160));
         }
+
+        // Not persisted — read by whoever is holding something open on this
+        // run's behalf (a delegated task waiting on a site investigation).
+        $command->backgroundWork = (bool) ($result['background'] ?? false);
 
         $command->customer_id = $result['customer_id'] ?? null;
         $command->ticket_id = $result['ticket_id'] ?? null;
@@ -157,6 +170,19 @@ class CommandInterpreter
     private function body(string ...$parts): string
     {
         return trim(implode("\n\n", array_filter($parts, fn (string $p): bool => trim($p) !== '')));
+    }
+
+    /**
+     * A short, stable fingerprint of one request: the same words from the same
+     * console mean the same request, so a manager retyping an instruction after
+     * a run died is recognised as a repeat rather than as new work. Whitespace
+     * is normalised because a retype is rarely character-identical.
+     */
+    private function requestKey(string $instruction, ?int $userId, string $source): string
+    {
+        $normalised = trim((string) preg_replace('/\s+/u', ' ', $instruction));
+
+        return substr(hash('sha256', $source.'|'.((string) $userId).'|'.$normalised), 0, 32);
     }
 
     /**

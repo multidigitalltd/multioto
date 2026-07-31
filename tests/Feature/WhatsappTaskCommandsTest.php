@@ -560,6 +560,54 @@ class WhatsappTaskCommandsTest extends TestCase
     }
 
     /**
+     * A site investigation outlives the run that asked for it. Handing the task
+     * back the moment the agent answers would put it on the open list while the
+     * check is still running — where it can be delegated all over again.
+     */
+    public function test_a_delegated_task_stays_claimed_until_the_investigation_reports(): void
+    {
+        Queue::fake([RunAgentInstructionJob::class, NotifyTaskCreatedJob::class, InvestigateSiteJob::class]);
+
+        $site = Site::factory()->create([
+            'customer_id' => Customer::factory()->create()->id,
+            'mcp_enabled' => true,
+            'mcp_endpoint' => 'https://site.test/mcp',
+        ]);
+        $task = Task::create(['title' => 'לבדוק את האתר', 'status' => TaskStatus::InProgress]);
+
+        $claude = Mockery::mock(ClaudeClient::class);
+        $claude->shouldReceive('isEnabled')->andReturn(true);
+        $claude->shouldReceive('lastError')->andReturnNull();
+        $claude->shouldReceive('converse')->andReturnUsing(
+            function (string $system, string $prompt, array $tools, callable $handler) use ($site): string {
+                $handler('investigate_site', ['site_id' => $site->id, 'goal' => 'בדיקה']);
+
+                return 'הפעלתי בדיקה מלאה של האתר.';
+            }
+        );
+        $this->app->instance(ClaudeClient::class, $claude);
+
+        (new RunAgentInstructionJob(self::MGMT, 'לבדוק את האתר', $task->id))
+            ->handle(app(CommandInterpreter::class), app(WahaClient::class));
+
+        $this->assertSame(TaskStatus::InProgress, $task->fresh()->status);
+        Queue::assertPushed(
+            InvestigateSiteJob::class,
+            fn (InvestigateSiteJob $job): bool => $job->releasesTaskId === $task->id,
+        );
+    }
+
+    public function test_the_investigation_hands_the_task_back_when_it_ends(): void
+    {
+        $task = Task::create(['title' => 'לבדוק את האתר', 'status' => TaskStatus::InProgress]);
+
+        (new InvestigateSiteJob(1, 'בדיקה', releasesTaskId: $task->id))
+            ->failed(new \RuntimeException('boom'));
+
+        $this->assertSame(TaskStatus::Open, $task->fresh()->status);
+    }
+
+    /**
      * The delegated instruction IS the task's own text, so an agent told to
      * "open a task when there is no tool" would open a copy of the task it was
      * just handed: a second notification, and the original still claimed.
