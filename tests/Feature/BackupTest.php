@@ -785,6 +785,38 @@ class BackupTest extends TestCase
         $this->assertNull(app(BackupRestorer::class)->blockedReason($adopted));
     }
 
+    public function test_a_restore_does_not_turn_manual_backups_into_automatic_ones(): void
+    {
+        $user = User::factory()->create();
+        $backup = $this->runBackup($user->id);
+
+        // The history table is not restored, but its rows point at users that
+        // are — and deleting those users nulls the reference on the way past.
+        app(BackupRestorer::class)->restore($backup);
+
+        $this->assertFalse($backup->fresh()->isAutomatic());
+        $this->assertSame($user->id, $backup->fresh()->user_id);
+    }
+
+    public function test_a_stale_payload_cannot_start_after_the_claim_moved_on(): void
+    {
+        $backup = $this->runBackup();
+        Customer::factory()->create(['name' => 'לקוח שהתקבל אחרי']);
+
+        // The claim was taken over and the replacement restore already
+        // finished; the lost payload arrives now.
+        $backup->update([
+            'restore_status' => BackupStatus::Completed,
+            'restore_attempt' => 'the-new-one',
+            'restore_started_at' => now(),
+            'restored_at' => now(),
+        ]);
+
+        (new RestoreBackupJob($backup->id, 'the-lost-one'))->handle(app(BackupRestorer::class));
+
+        $this->assertSame(1, Customer::where('name', 'לקוח שהתקבל אחרי')->count());
+    }
+
     public function test_a_redelivered_restore_job_does_not_run_a_second_time(): void
     {
         $customer = Customer::factory()->create(['name' => 'לקוח מהגיבוי']);

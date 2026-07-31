@@ -87,6 +87,13 @@ class BackupRestorer
                         // wait fails loudly rather than half-applying.
                         $this->lockTables($order);
 
+                        // Who pressed which backup button. The history table is
+                        // not restored, but its rows point at users that ARE —
+                        // and deleting those users nulls the reference on the
+                        // way past, quietly turning every manual backup in the
+                        // list into an automatic one.
+                        $attribution = $this->rememberAttribution($order);
+
                         // Children first: a parent row cannot go while something
                         // still points at it.
                         foreach (array_reverse($order) as $table) {
@@ -111,6 +118,8 @@ class BackupRestorer
                         // The back-references held back to break a cycle, now that
                         // every row they point at exists.
                         $this->applyDeferred($pending);
+
+                        $this->reapplyAttribution($attribution);
 
                         // Files INSIDE the transaction, which makes the restore
                         // all-or-nothing the useful way round: a file that cannot
@@ -491,6 +500,49 @@ class BackupRestorer
                 "חסרים נתוני הטבלה \"{$table}\"",
                 "נתוני הטבלה \"{$table}\" פגומים",
             );
+        }
+    }
+
+    /**
+     * Who pressed the button, remembered across the restore.
+     *
+     * The backup history is deliberately not restored — putting it back would
+     * delete the list of archives while running from one of them — but its rows
+     * reference users, and those ARE restored. Deleting the live users nulls
+     * every reference on the way past, and re-inserting the archived users does
+     * not reconnect them: the manual backups in the list would all become
+     * "automatic" the moment somebody restored.
+     *
+     * @param  list<string>  $order  the tables being restored
+     * @return array<int, int> backup id => user id
+     */
+    private function rememberAttribution(array $order): array
+    {
+        if (! in_array('users', $order, true) || in_array('backups', $order, true)) {
+            return [];
+        }
+
+        return DB::table('backups')->whereNotNull('user_id')->pluck('user_id', 'id')->all();
+    }
+
+    /**
+     * @param  array<int, int>  $attribution  backup id => user id
+     */
+    private function reapplyAttribution(array $attribution): void
+    {
+        if ($attribution === []) {
+            return;
+        }
+
+        // Only for users the archive actually brought back — a backup taken by
+        // somebody who did not exist yet when the archive was made has nobody
+        // to point at, and inventing one would be worse than saying nothing.
+        $restored = DB::table('users')->whereIn('id', array_unique(array_values($attribution)))->pluck('id')->all();
+
+        foreach ($attribution as $backupId => $userId) {
+            if (in_array($userId, $restored)) {
+                DB::table('backups')->where('id', $backupId)->update(['user_id' => $userId]);
+            }
         }
     }
 

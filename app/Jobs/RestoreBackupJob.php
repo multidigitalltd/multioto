@@ -35,26 +35,21 @@ class RestoreBackupJob implements ShouldQueue
             return;
         }
 
-        // The claim the panel made before dispatching must still be open. The
-        // queue delivers at least once, so a worker that finished the restore
-        // and died before acknowledging its payload gets handed the same job
-        // again — and running it a second time would put the old snapshot back
-        // over everything accepted since the first one finished.
-        if ($backup->restore_status !== BackupStatus::Running) {
+        // One atomic step, not a check and then a write: between the two, a
+        // claim can expire, be taken over, and the replacement restore can even
+        // finish — and this job would still start on top of it, putting the same
+        // snapshot back over everything accepted since. The claim the panel made
+        // must still be open, must still be THIS attempt, and must not have been
+        // started already; taking it is what proves all three at once.
+        $started = Backup::whereKey($backup->id)
+            ->where('restore_status', BackupStatus::Running)
+            ->whereNull('restore_started_at')
+            ->when($this->attempt !== null, fn ($q) => $q->where('restore_attempt', $this->attempt))
+            ->update(['restore_started_at' => now()]);
+
+        if ($started !== 1) {
             return;
         }
-
-        // And it must be THIS attempt. A claim abandoned because the queue
-        // swallowed its payload can be taken over by a later one; if the
-        // original message then turns up after all, this is what stops it from
-        // restoring a second time on top of the newer attempt.
-        if ($this->attempt !== null && $backup->restore_attempt !== $this->attempt) {
-            return;
-        }
-
-        // Marks the difference between "queued and never picked up", which may
-        // be taken over, and "running", which may not.
-        $backup->update(['restore_started_at' => now()]);
 
         $lock = Cache::lock(RunBackupJob::LOCK, 3600);
 
