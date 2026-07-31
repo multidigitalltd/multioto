@@ -50,6 +50,13 @@ class CommandInterpreter
         // context is reconstructed from history rather than a single prior row.
         $effective = $this->withConversationContext($instruction, $userId, $source);
 
+        // Which question this turn is answering, if any. Two clarification
+        // flows can be answered with the same word ("מחר"), and the words alone
+        // would then look like the same request — so the reply is identified by
+        // the question it belongs to as well. Read BEFORE this turn is
+        // recorded, and unchanged by a retry of the same answer.
+        $answering = $this->openQuestionId($userId, $source);
+
         $command = AgentCommand::create([
             'user_id' => $userId,
             'source' => $source,
@@ -78,7 +85,7 @@ class CommandInterpreter
                 // The RAW instruction, never $effective: the conversation
                 // context prepended to it changes with every turn, so a retry
                 // of the same words would not look like the same request.
-                requestKey: $this->requestKey($instruction, $userId, $source),
+                requestKey: $this->requestKey($instruction, $userId, $source, $answering),
             );
         } catch (\Throwable $e) {
             return $this->finish($command, AgentCommandOutcome::Failed, 'הפעולה נכשלה: '.Str::limit($e->getMessage(), 160));
@@ -174,11 +181,32 @@ class CommandInterpreter
      * a run died is recognised as a repeat rather than as new work. Whitespace
      * is normalised because a retype is rarely character-identical.
      */
-    private function requestKey(string $instruction, ?int $userId, string $source): string
+    private function requestKey(string $instruction, ?int $userId, string $source, ?int $answering): string
     {
         $normalised = trim((string) preg_replace('/\s+/u', ' ', $instruction));
 
-        return substr(hash('sha256', $source.'|'.((string) $userId).'|'.$normalised), 0, 32);
+        return substr(hash(
+            'sha256',
+            $source.'|'.((string) $userId).'|'.((string) $answering).'|'.$normalised,
+        ), 0, 32);
+    }
+
+    /**
+     * The last question the agent asked in this thread and has not been asked
+     * again since — what an answer given now belongs to.
+     */
+    private function openQuestionId(?int $userId, string $source): ?int
+    {
+        return AgentCommand::query()
+            ->where('source', $source)
+            ->when(
+                $userId !== null,
+                fn ($query) => $query->where('user_id', $userId),
+                fn ($query) => $query->whereNull('user_id'),
+            )
+            ->where('outcome', AgentCommandOutcome::Unclear)
+            ->latest('id')
+            ->value('id');
     }
 
     /**

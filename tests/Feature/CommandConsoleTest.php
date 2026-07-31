@@ -271,6 +271,27 @@ class CommandConsoleTest extends TestCase
         $this->assertSame(TaskStatus::Open, Task::latest('id')->first()->status);
     }
 
+    public function test_the_same_answer_to_two_different_questions_opens_two_tasks(): void
+    {
+        // "מחר" means one thing as an answer to "when should I call the
+        // supplier?" and another as an answer to "when should I send the
+        // reminder?". The words alone cannot tell them apart — the question
+        // they answer can.
+        $this->fakeAgent([['need_clarification', ['question' => 'מתי להתקשר לספק?']]], summary: 'צריך מועד.');
+        app(CommandInterpreter::class)->run('תדבר עם הספק');
+
+        $this->fakeAgent([['open_task', ['title' => 'להתקשר לספק מחר']]]);
+        app(CommandInterpreter::class)->run('מחר');
+
+        $this->fakeAgent([['need_clarification', ['question' => 'מתי לשלוח את התזכורת?']]], summary: 'צריך מועד.');
+        app(CommandInterpreter::class)->run('תשלח תזכורת לדנה');
+
+        $this->fakeAgent([['open_task', ['title' => 'לשלוח תזכורת לדנה מחר']]]);
+        app(CommandInterpreter::class)->run('מחר');
+
+        $this->assertSame(2, Task::count());
+    }
+
     public function test_two_different_instructions_each_open_their_own_task(): void
     {
         $this->fakeAgent([['open_task', ['title' => 'להתקשר לספק']]]);
