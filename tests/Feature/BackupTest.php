@@ -1969,6 +1969,9 @@ class BackupTest extends TestCase
         // Starting would have emptied the staging file, taking with it the one
         // copy of a file nothing else has.
         $this->assertSame(BackupStatus::Failed, $backup->fresh()->restore_status);
+
+        // And it does not leave the whole system looking busy on the way out.
+        $this->assertFileDoesNotExist(BackupRestorer::operationMarkerPath());
     }
 
     public function test_a_recovery_that_cannot_write_keeps_what_it_needs_to_try_again(): void

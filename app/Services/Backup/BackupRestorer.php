@@ -91,10 +91,23 @@ class BackupRestorer
             'restored_at' => null,
         ]);
 
+        // Held from here to the very end — before the recovery pass, not after
+        // it. Putting a previous restore's files back is itself long work on
+        // live files, and without the marker its own heartbeats would have
+        // nothing to refresh: the row would age out mid-rollback and another
+        // operation could start alongside it.
+        $this->markOperationActive();
+
         // A restore that was killed mid-write left the live files half
         // replaced and nothing running to put them back. Doing it here as well
         // as on demand means the next attempt does not build on that mess.
-        $pending = $this->recoverInterruptedFiles()['pending'];
+        try {
+            $pending = $this->recoverInterruptedFiles()['pending'];
+        } catch (Throwable $e) {
+            $this->clearOperationMarker();
+
+            throw $e;
+        }
 
         // Not a warning to carry on past: the copies still waiting are the only
         // version of those live files, and the first write of this restore
@@ -105,6 +118,8 @@ class BackupRestorer
                 'restore_error' => "שחזור קודם שנקטע השאיר {$pending} קבצים שלא הוחזרו. "
                     .'יש להריץ php artisan backup:recover-files עד שיסתיים בהצלחה, ורק אז לשחזר.',
             ]);
+
+            $this->clearOperationMarker();
 
             throw new RuntimeException(
                 "שחזור קודם שנקטע השאיר {$pending} קבצים שלא הוחזרו — הריצו php artisan backup:recover-files תחילה."
@@ -117,11 +132,6 @@ class BackupRestorer
         $this->journalToken = $backup->restore_attempt ?: (string) Str::uuid();
         $this->journalOwner = $backup->id;
         $this->unrecovered = [];
-
-        // Held for the whole run, transaction included. Inside it the row's own
-        // heartbeat is invisible to every other connection, so this file is the
-        // only thing that can say a restore is still under way.
-        $this->markOperationActive();
 
         $local = tempnam(sys_get_temp_dir(), 'multioto-restore-');
         $sequenceError = null;
