@@ -92,8 +92,10 @@ class Backup extends Model
             && $this->restore_started_at !== null
             // Not "no token at all": a successful restore leaves its token
             // behind, and the next attempt keeps it as the proof for its own
-            // journal. What matters is whether THIS attempt committed.
-            && $this->restore_journal !== $this->restore_attempt
+            // journal. What matters is whether THIS attempt committed — and a
+            // payload from before attempts carried ids has neither, which is
+            // not a commit either.
+            && ! ($this->restore_journal !== null && $this->restore_journal === $this->restore_attempt)
             && $this->updated_at !== null
             && $this->updated_at->lt(now()->subMinutes($minutes));
     }

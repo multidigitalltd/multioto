@@ -2175,6 +2175,24 @@ class BackupTest extends TestCase
         $this->assertNotNull(app(RestoreClaim::class)->take($backup->fresh()));
     }
 
+    public function test_a_legacy_restore_that_died_is_not_stuck_for_ever(): void
+    {
+        $backup = $this->runBackup();
+
+        // A payload from before attempts carried ids: no attempt, and so no
+        // token either. Having neither is not the same as having committed.
+        $backup->update([
+            'restore_status' => BackupStatus::Running,
+            'restore_attempt' => null,
+            'restore_journal' => null,
+            'restore_started_at' => now()->subHours(4),
+        ]);
+        Backup::whereKey($backup->id)->update(['updated_at' => now()->subHours(4)]);
+
+        $this->assertNull(app(BackupRestorer::class)->blockedReason($backup->fresh()));
+        $this->assertNotNull(app(RestoreClaim::class)->take($backup->fresh()));
+    }
+
     public function test_a_restore_that_committed_is_still_never_repeated(): void
     {
         $backup = $this->runBackup();
