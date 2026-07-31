@@ -3,6 +3,7 @@
 namespace App\Services\Backup;
 
 use App\Enums\BackupStatus;
+use App\Enums\ChargeStatus;
 use App\Mail\NotificationMail;
 use App\Models\Backup;
 use App\Models\SystemLog;
@@ -755,7 +756,7 @@ class BackupRestorer
         // finished on the last allowed reference from one that had more to read.
         $limit = $this->artifactLimit() + 1;
 
-        $collect = function (string $table, array $columns, callable $label) use (&$refs, $order, $limit): void {
+        $collect = function (string $table, array $columns, callable $label, ?callable $only = null) use (&$refs, $order, $limit): void {
             if (! in_array($table, $order, true) || count($refs) >= $limit) {
                 return;
             }
@@ -766,6 +767,7 @@ class BackupRestorer
                         $q->orWhereNotNull($column);
                     }
                 })
+                ->when($only !== null, fn ($q) => $only($q))
                 ->orderBy('id')
                 ->select(array_merge(['id'], $columns))
                 ->chunkById(self::CHUNK, function ($rows) use (&$refs, $table, $columns, $label, $limit): bool {
@@ -806,6 +808,20 @@ class BackupRestorer
 
         $collect('invoices', ['linet_document_id'],
             fn ($row): string => "חשבונית #{$row->id}: מסמך לינט {$row->linet_document_id}");
+
+        // Charges with no reference at all, which Cardcom may still know by the
+        // id we sent it. A saved-card charge goes out as "manual-{id}", and a
+        // worker killed between the call and the write leaves the row pending
+        // and empty — while the money may well have moved. Restoring the row
+        // away takes the id that ChargeReconciler would have used to find out,
+        // so these belong in the report as much as the ones that name a
+        // transaction.
+        $collect('charges', ['id'],
+            fn ($row): string => "חיוב #{$row->id}: ייתכן שנשלח לקארדקום כ-manual-{$row->id} ותשובתו לא נרשמה",
+            fn ($q) => $q->where('status', ChargeStatus::Pending->value)
+                ->whereNull('subscription_id')
+                ->whereNull('cardcom_transaction_id')
+                ->whereNull('cardcom_low_profile_id'));
 
         return $refs;
     }

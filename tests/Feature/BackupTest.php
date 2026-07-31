@@ -1048,6 +1048,37 @@ class BackupTest extends TestCase
         Mail::assertSent(NotificationMail::class);
     }
 
+    public function test_a_restore_names_a_charge_that_may_have_reached_cardcom(): void
+    {
+        Mail::fake();
+        config(['billing.notifications.team_email' => 'team@multi.test']);
+
+        $backup = $this->runBackup();
+
+        // A saved-card charge whose worker was killed between the call to
+        // Cardcom and writing the answer: pending, with no reference at all —
+        // but Cardcom knows it as "manual-{id}", and the money may have moved.
+        $customer = Customer::factory()->create();
+        $charge = Charge::create([
+            'customer_id' => $customer->id,
+            'status' => ChargeStatus::Pending,
+            'amount_agorot' => 10000,
+            'vat_agorot' => 1800,
+            'total_agorot' => 11800,
+            'attempt_number' => 1,
+            'period_start' => now()->startOfMonth(),
+            'period_end' => now()->endOfMonth(),
+        ]);
+
+        app(BackupRestorer::class)->restore($backup);
+
+        // Restoring the row away takes the only id the reconciliation would
+        // have used to find out what happened.
+        $report = $backup->fresh()->restore_report;
+        $this->assertNotNull($report);
+        $this->assertStringContainsString("manual-{$charge->id}", implode(' ', $report['items']));
+    }
+
     public function test_a_scan_that_examined_everything_is_not_called_truncated(): void
     {
         Mail::fake();
