@@ -18,6 +18,7 @@ use App\Mail\NotificationMail;
 use App\Models\Backup;
 use App\Models\Charge;
 use App\Models\Customer;
+use App\Models\Invoice;
 use App\Models\PaymentToken;
 use App\Models\Site;
 use App\Models\User;
@@ -1142,6 +1143,47 @@ class BackupTest extends TestCase
         app(BackupRestorer::class)->restore($backup->fresh());
 
         $this->assertNull($backup->fresh()->restore_report);
+    }
+
+    public function test_a_document_issued_after_the_snapshot_is_named_by_the_restore(): void
+    {
+        Mail::fake();
+        config(['billing.notifications.team_email' => 'team@multi.test']);
+
+        $backup = $this->runBackup();
+
+        // An invoice Linet issued while, or after, the archive was taken: the
+        // document exists in the outside world and the archive knows nothing
+        // of it. A backup is a snapshot — that window cannot be closed, only
+        // reported.
+        $customer = Customer::factory()->create();
+        $charge = Charge::create([
+            'customer_id' => $customer->id,
+            'status' => ChargeStatus::Succeeded,
+            'amount_agorot' => 10000,
+            'vat_agorot' => 1800,
+            'total_agorot' => 11800,
+            'attempt_number' => 1,
+            'period_start' => now()->startOfMonth(),
+            'period_end' => now()->endOfMonth(),
+            'cardcom_transaction_id' => 'tx-after-the-snapshot',
+        ]);
+        Invoice::create([
+            'customer_id' => $customer->id,
+            'charge_id' => $charge->id,
+            'linet_document_id' => 'linet-doc-after-the-snapshot',
+            'amount_agorot' => 10000,
+            'vat_agorot' => 1800,
+            'total_agorot' => 11800,
+            'issued_at' => now(),
+        ]);
+
+        app(BackupRestorer::class)->restore($backup);
+
+        $report = $backup->fresh()->restore_report;
+        $this->assertNotNull($report);
+        $this->assertStringContainsString('linet-doc-after-the-snapshot', implode(' ', $report['items']));
+        Mail::assertSent(NotificationMail::class);
     }
 
     public function test_a_scan_that_examined_everything_is_not_called_truncated(): void
