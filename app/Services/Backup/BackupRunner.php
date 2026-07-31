@@ -439,8 +439,14 @@ class BackupRunner
             return 0;
         }
 
+        // By archive date, not by id. Rows adopted from the destination after a
+        // rebuild carry the date of the file they describe, and the ids follow
+        // whatever order the bucket happened to list them in — protecting the
+        // last few ids could keep the oldest recovery points and delete the
+        // newest.
         $protected = Backup::query()->restorable()
-            ->latest('id')
+            ->orderByDesc('created_at')
+            ->orderByDesc('id')
             ->limit($keep)
             ->pluck('id');
 
@@ -452,19 +458,22 @@ class BackupRunner
         $removed = 0;
 
         foreach ($stale as $backup) {
-            // Keep the row when the object survives, so the archive stays
-            // findable and retention keeps trying rather than losing track of
-            // a file full of customer data.
-            if (! $backup->deleteArchive()) {
-                SystemLog::record('warning', 'backup', "לא ניתן היה למחוק את קובץ הגיבוי {$backup->path} — הרשומה נשמרה.", [
+            // Through the same guarded delete as the manual action: an archive
+            // claimed for a restore whose job is still queued must not be taken
+            // away by a retention pass that happens to run first. Keeping the
+            // row when the object survives matters too — the archive stays
+            // findable and retention keeps trying, instead of losing track of a
+            // file full of customer data.
+            match ($this->deleteRecord($backup->id)) {
+                'ok' => $removed++,
+                'busy' => SystemLog::record('info', 'backup', "הגיבוי {$backup->path} לא נוקה — פעולה פועלת עליו כרגע.", [
                     'backup_id' => $backup->id,
-                ]);
-
-                continue;
-            }
-
-            $backup->delete();
-            $removed++;
+                ]),
+                'archive' => SystemLog::record('warning', 'backup', "לא ניתן היה למחוק את קובץ הגיבוי {$backup->path} — הרשומה נשמרה.", [
+                    'backup_id' => $backup->id,
+                ]),
+                default => null,
+            };
         }
 
         return $removed;

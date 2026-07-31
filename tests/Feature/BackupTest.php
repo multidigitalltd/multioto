@@ -175,6 +175,46 @@ class BackupTest extends TestCase
         $this->assertSame(2, Backup::count());
     }
 
+    public function test_retention_keeps_the_newest_archives_by_date_not_by_id(): void
+    {
+        config(['backup.retention_days' => 1, 'backup.keep_at_least' => 1]);
+
+        $first = $this->runBackup();
+        $second = $this->runBackup();
+
+        // Rows adopted from the destination after a rebuild are dated by the
+        // file they describe, and the ids follow whatever order the bucket
+        // listed them in — here the LOWER id is the newer archive.
+        Backup::whereKey($first->id)->update(['created_at' => now()->subDays(10)]);
+        Backup::whereKey($second->id)->update(['created_at' => now()->subDays(40)]);
+
+        app(BackupRunner::class)->prune();
+
+        $this->assertNotNull(Backup::find($first->id));
+        $this->assertNull(Backup::find($second->id));
+    }
+
+    public function test_retention_leaves_an_archive_claimed_for_restore_alone(): void
+    {
+        config(['backup.retention_days' => 1, 'backup.keep_at_least' => 1]);
+
+        $keep = $this->runBackup();
+        $claimed = $this->runBackup();
+        Backup::whereKey($claimed->id)->update([
+            'created_at' => now()->subDays(30),
+            'restore_status' => BackupStatus::Running,
+        ]);
+
+        // The restore job may still be queued behind the backup that triggered
+        // this pass; deleting the archive now would leave it with nothing to
+        // restore from and no explanation.
+        $this->assertSame(0, app(BackupRunner::class)->prune());
+
+        $this->assertNotNull(Backup::find($claimed->id));
+        $this->assertNotNull(Backup::find($keep->id));
+        Storage::disk('backups')->assertExists($claimed->path);
+    }
+
     /*
     | ----------------------------------------------------------------
     | Putting it back
