@@ -1178,7 +1178,12 @@ class ConsoleAgent
         $task = app(SystemActionRunner::class)->openTask([
             'title' => $title,
             'customer_id' => $customerId,
-            'source_ref' => $keys[0] ?? null,
+            // Filed under the reference only while it is free. A task opened
+            // for this same request and already DONE keeps its reference (the
+            // column is unique), and creating "under" it would hand back the
+            // finished row as though it had just been opened — no new task, no
+            // notification, and a request nobody is working on.
+            'source_ref' => $this->freeRepeatKey($keys),
         ]);
 
         $this->opened[] = ['id' => $task->id, 'title' => $title];
@@ -1219,6 +1224,27 @@ class ConsoleAgent
             'console-'.$this->requestKey."-{$position}-".intdiv($now, $window),
             'console-'.$this->requestKey."-{$position}-".(intdiv($now, $window) - 1),
         ];
+    }
+
+    /**
+     * This run's reference, unless a task already holds it.
+     *
+     * Reached only when no LIVE task answers the request, so a reference that
+     * is still taken belongs to one that is finished — and the same instruction
+     * given after its task was closed is new work, which needs a row and a
+     * notification of its own.
+     *
+     * @param  list<string>  $keys
+     */
+    private function freeRepeatKey(array $keys): ?string
+    {
+        $key = $keys[0] ?? null;
+
+        if ($key === null || Task::where('source_ref', $key)->exists()) {
+            return null;
+        }
+
+        return $key;
     }
 
     /** The task an earlier run of this same request already opened, if it is still live. */

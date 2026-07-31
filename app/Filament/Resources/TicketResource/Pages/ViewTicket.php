@@ -286,10 +286,7 @@ class ViewTicket extends ViewRecord
             // A manual reply supersedes any pending AI reply proposal for this
             // ticket — cancel it so a later WhatsApp/panel approval can't send the
             // original draft as a duplicate second reply.
-            PendingAction::where('ticket_id', $this->record->id)
-                ->where('type', 'ticket_reply')
-                ->where('status', ActionStatus::Pending)
-                ->update(['status' => ActionStatus::Rejected, 'decided_at' => now(), 'error' => 'בוטלה — נשלחה תשובה ידנית מהשיחה.']);
+            PendingAction::supersedeTicketReplies($this->record->id, 'בוטלה — נשלחה תשובה ידנית מהשיחה.');
 
             SendTicketReplyJob::dispatch($message->id);
         }

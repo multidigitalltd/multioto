@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Enums\ActionStatus;
 use App\Enums\AgentCommandOutcome;
+use App\Enums\TaskStatus;
 use App\Enums\TicketChannel;
 use App\Enums\TicketStatus;
 use App\Filament\Pages\AgentConsole;
@@ -210,6 +211,21 @@ class CommandConsoleTest extends TestCase
 
         $this->assertSame(1, Task::count());
         $this->assertStringContainsString('#'.Task::sole()->id, $second->result);
+    }
+
+    public function test_the_same_instruction_after_the_task_was_closed_opens_a_new_one(): void
+    {
+        // The first task is done. Asking again is not a retry of anything — it
+        // is the work coming round again, and it needs a task of its own.
+        $this->fakeAgent([['open_task', ['title' => 'להתקשר לספק']]]);
+        app(CommandInterpreter::class)->run('תדבר עם הספק');
+        Task::sole()->update(['status' => TaskStatus::Done]);
+
+        $this->fakeAgent([['open_task', ['title' => 'להתקשר לספק']]]);
+        $second = app(CommandInterpreter::class)->run('תדבר עם הספק');
+
+        $this->assertSame(2, Task::count());
+        $this->assertStringContainsString('#'.Task::latest('id')->first()->id, $second->result);
     }
 
     public function test_two_different_instructions_each_open_their_own_task(): void
