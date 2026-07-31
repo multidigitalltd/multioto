@@ -444,6 +444,13 @@ class BackupRunner
         $stale = Backup::query()
             ->where('created_at', '<', now()->subDays($days))
             ->whereNotIn('id', $protected)
+            // Never an archive a scan found but could not read. It carries the
+            // date of the file it describes, so after a rebuild it is old
+            // enough to prune on sight — and it may well be a perfectly good
+            // recovery point that one dropped connection made look corrupt.
+            // Only a later scan can tell, and the manual delete is still there
+            // for one that really is rubbish.
+            ->where(fn ($query) => $query->whereNull('error')->orWhereNot('error', self::IMPORT_UNREADABLE))
             ->get();
 
         $removed = 0;

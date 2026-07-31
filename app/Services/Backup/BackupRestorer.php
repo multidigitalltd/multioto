@@ -159,7 +159,17 @@ class BackupRestorer
             return 'שחזור מהגיבוי הזה כבר רץ.';
         }
 
-        if (! $backup->existsOnDisk()) {
+        // A destination that cannot answer is not the same as a missing file,
+        // and neither may take the screen down: this runs while the table is
+        // being drawn, and a broken destination is exactly what the operator
+        // came here to fix.
+        $present = rescue(fn (): ?bool => $backup->existsOnDisk(), null, report: false);
+
+        if ($present === null) {
+            return 'לא ניתן להגיע ליעד האחסון כרגע — נסו שוב, או בדקו את הגדרות היעד.';
+        }
+
+        if (! $present) {
             return 'קובץ הגיבוי אינו נמצא ביעד האחסון.';
         }
 

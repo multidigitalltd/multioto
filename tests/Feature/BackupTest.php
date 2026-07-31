@@ -213,6 +213,49 @@ class BackupTest extends TestCase
         Storage::disk('backups')->assertExists($real->path);
     }
 
+    public function test_retention_does_not_delete_an_archive_no_scan_has_read_yet(): void
+    {
+        config(['backup.retention_days' => 1, 'backup.keep_at_least' => 1]);
+
+        $this->runBackup();
+        Storage::disk('backups')->put('archives/from-the-old-server.zip', 'תוכן שלא נקרא');
+
+        $unread = Backup::create([
+            'status' => BackupStatus::Failed,
+            'disk' => 'backups',
+            'path' => 'archives/from-the-old-server.zip',
+            'error' => BackupRunner::IMPORT_UNREADABLE,
+        ]);
+        Backup::whereKey($unread->id)->update(['created_at' => now()->subDays(30)]);
+
+        app(BackupRunner::class)->prune();
+
+        // It is dated by the file it describes, so after a rebuild it is old
+        // enough to prune on sight — and it may be a perfectly good recovery
+        // point that one dropped connection made look corrupt.
+        $this->assertNotNull(Backup::find($unread->id));
+        Storage::disk('backups')->assertExists('archives/from-the-old-server.zip');
+    }
+
+    public function test_the_screen_survives_a_destination_that_cannot_answer(): void
+    {
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+        $backup = $this->runBackup();
+
+        $disk = \Mockery::mock(Storage::disk('backups'))->makePartial();
+        $disk->shouldReceive('exists')->andThrow(new \RuntimeException('S3 unreachable'));
+        Storage::set('backups', $disk);
+
+        // A broken destination is exactly what the operator came to this screen
+        // to fix; it must not be the thing that stops the screen from opening.
+        Livewire::test(ManageBackups::class)->assertOk();
+
+        $this->assertStringContainsString(
+            'לא ניתן להגיע ליעד האחסון',
+            (string) app(BackupRestorer::class)->blockedReason($backup),
+        );
+    }
+
     public function test_retention_leaves_an_archive_claimed_for_restore_alone(): void
     {
         config(['backup.retention_days' => 1, 'backup.keep_at_least' => 1]);

@@ -275,7 +275,12 @@ class ManageBackups extends Page implements HasForms, HasTable
             ->actions([
                 Tables\Actions\Action::make('download')
                     ->label('הורדה')->icon('heroicon-o-arrow-down-tray')->color('gray')
-                    ->visible(fn (Backup $r): bool => $r->status === BackupStatus::Completed && $r->existsOnDisk())
+                    // The check runs while the table is being drawn, so a
+                    // destination that cannot answer must not take the whole
+                    // screen down with it — the operator may have come here to
+                    // fix exactly that.
+                    ->visible(fn (Backup $r): bool => $r->status === BackupStatus::Completed
+                        && rescue(fn (): bool => $r->existsOnDisk(), false, report: false))
                     // Streamed through the panel behind admin auth — never a
                     // public link to a file full of customer details.
                     ->action(fn (Backup $r) => Storage::disk($r->disk)->download($r->path)),
