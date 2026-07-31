@@ -235,7 +235,7 @@ class ManageBackups extends Page implements HasForms, HasTable
                     ->disabled(fn (Backup $r): bool => app(BackupRestorer::class)->blockedReason($r) !== null)
                     ->tooltip(fn (Backup $r): ?string => app(BackupRestorer::class)->blockedReason($r))
                     ->modalHeading('שחזור מגיבוי — פעולה בלתי הפיכה')
-                    ->modalDescription('כל הנתונים הנוכחיים יימחקו ויוחלפו בנתוני הגיבוי: לקוחות, מנויים, חיובים, פניות והקבצים. מומלץ לבצע גיבוי עכשיו לפני השחזור.')
+                    ->modalDescription('כל הנתונים הנוכחיים יימחקו ויוחלפו בנתוני הגיבוי: לקוחות, מנויים, חיובים ופניות, וכן הקבצים שהיו בגיבוי. קבצים שהועלו אחרי הגיבוי יישארו על הדיסק (בלי רשומה שמצביעה עליהם). מומלץ לבצע גיבוי עכשיו לפני השחזור.')
                     ->form([
                         TextInput::make('confirm')
                             ->label('להמשך, הקלידו: '.config('backup.restore_confirmation'))

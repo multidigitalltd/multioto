@@ -93,16 +93,11 @@ class BackupRestorer
 
                     $this->resetSequences($order);
 
-                    // Files INSIDE the transaction, so the table locks are
-                    // still held. Let go after the rows and a writer that was
-                    // blocked on an insert resumes, commits, writes its
-                    // attachment — and the reconciliation below then deletes
-                    // that attachment as one the archive does not know about.
-                    //
-                    // It also makes the restore all-or-nothing the useful way
-                    // round: a file that cannot be written now rolls the
-                    // database back to what it was, instead of leaving it
-                    // replaced with its attachments missing.
+                    // Files INSIDE the transaction, which makes the restore
+                    // all-or-nothing the useful way round: a file that cannot
+                    // be written rolls the database back to what it was,
+                    // instead of leaving it replaced with its attachments
+                    // missing and nothing left to compare against.
                     $this->restoreFiles($zip, $manifest);
                 });
             } finally {
@@ -552,11 +547,20 @@ class BackupRestorer
      * returns false rather than raising. Ignoring that would report a completed
      * restore whose attachments and logo never came back — with the database
      * already replaced, so there is nothing to compare against and notice.
+     *
+     * Files uploaded AFTER the backup are deliberately left where they are.
+     * Deleting them would be tidier and was tried, but it cannot be made safe:
+     * SignupController writes its signature to disk BEFORE the insert that a
+     * restore blocks on, so no database lock can protect a file that exists
+     * before the database is ever touched — the cleanup would delete a
+     * signature whose customer row is committed moments later. Making it safe
+     * needs every upload path in the app to coordinate with the restore, which
+     * is a far larger change than the problem deserves. An orphaned file is
+     * unreachable (nothing links to it) and costs disk; a deleted one is gone.
      */
     private function restoreFiles(ZipArchive $zip, array $manifest): void
     {
         $failed = [];
-        $restored = [];
 
         // Driven by the list the backup WROTE, not by whatever members happen
         // to still be in the archive. Walking the members can only ever see
@@ -596,8 +600,6 @@ class BackupRestorer
             try {
                 if (Storage::disk($disk)->put($path, $stream) === false) {
                     $failed[] = "{$disk}:{$path}";
-                } else {
-                    $restored["{$disk}/{$path}"] = true;
                 }
             } finally {
                 if (is_resource($stream)) {
@@ -613,43 +615,6 @@ class BackupRestorer
             );
         }
 
-        $this->removeFilesNotInArchive($restored, $manifest);
-    }
-
-    /**
-     * Delete uploads the archive does not have.
-     *
-     * A restore replaces the database wholesale, so an attachment uploaded
-     * after the backup loses its row — leaving the file orphaned on disk while
-     * the screen promised that the current files are replaced. Restoring an
-     * older backup should leave the same files it left behind at the time.
-     *
-     * @param  array<string, true>  $restored  "disk/path" keys just written
-     * @param  array<string, mixed>  $manifest
-     */
-    private function removeFilesNotInArchive(array $restored, array $manifest): void
-    {
-        // A file the backup deliberately left out — too large to archive, or
-        // unreadable at the time — is not in the archive AND must not be
-        // deleted. Its row is restored and still points at it, so removing it
-        // would destroy customer data that no backup ever held a copy of.
-        foreach ((array) ($manifest['skipped_files'] ?? []) as $skipped) {
-            $restored[str_replace(':', '/', (string) $skipped)] = true;
-        }
-
-        foreach ((array) config('backup.files', []) as $disk => $prefixes) {
-            $storage = Storage::disk($disk);
-
-            $paths = $prefixes === []
-                ? $storage->allFiles()
-                : collect($prefixes)->flatMap(fn (string $p): array => $storage->allFiles($p))->all();
-
-            foreach ($paths as $path) {
-                if (! array_key_exists("{$disk}/{$path}", $restored)) {
-                    $storage->delete($path);
-                }
-            }
-        }
     }
 
     /**

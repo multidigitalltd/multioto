@@ -400,19 +400,25 @@ class BackupTest extends TestCase
         $this->assertSame(BackupStatus::Failed, $backup->fresh()->restore_status);
     }
 
-    public function test_restoring_removes_files_uploaded_after_the_backup(): void
+    /**
+     * Files uploaded after the backup are left alone — deliberately. Deleting
+     * them cannot be made safe: SignupController writes its signature to disk
+     * BEFORE the insert a restore blocks on, so a cleanup would delete a file
+     * whose row is committed moments later. An orphan costs disk; a wrongly
+     * deleted signature is gone.
+     */
+    public function test_restoring_overwrites_archived_files_and_leaves_newer_ones(): void
     {
         Storage::disk('local')->put('attachments/old.txt', 'היה בגיבוי');
         $backup = $this->runBackup();
 
+        Storage::disk('local')->put('attachments/old.txt', 'שונה אחרי');
         Storage::disk('local')->put('attachments/new.txt', 'הועלה אחרי');
 
         app(BackupRestorer::class)->restore($backup);
 
-        // Its row is gone with the rest of the database, so leaving the file
-        // behind would contradict what the restore modal promises.
-        Storage::disk('local')->assertExists('attachments/old.txt');
-        Storage::disk('local')->assertMissing('attachments/new.txt');
+        $this->assertSame('היה בגיבוי', Storage::disk('local')->get('attachments/old.txt'));
+        Storage::disk('local')->assertExists('attachments/new.txt');
     }
 
     public function test_a_backup_blocked_by_the_lock_leaves_a_failed_row(): void
