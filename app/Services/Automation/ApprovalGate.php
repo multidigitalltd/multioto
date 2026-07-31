@@ -301,7 +301,18 @@ class ApprovalGate
     /** Reject without executing. */
     public function reject(PendingAction $action): string
     {
-        $action->update(['status' => ActionStatus::Rejected, 'decided_at' => now()]);
+        // Claimed the same way an approval is: a rejection arriving while
+        // another request is already executing the action must not overwrite
+        // "approved" with "rejected" — the external call is under way, and the
+        // false status would then read as a settled decision and hand a waiting
+        // task back mid-execution.
+        $claimed = PendingAction::whereKey($action->id)
+            ->where('status', ActionStatus::Pending)
+            ->update(['status' => ActionStatus::Rejected, 'decided_at' => now()]);
+
+        if ($claimed === 0) {
+            return "פעולה #{$action->id} כבר טופלה.";
+        }
 
         // Nothing is pending on the task any more — a rejected fix is still a
         // decision, and the work goes back to a person.

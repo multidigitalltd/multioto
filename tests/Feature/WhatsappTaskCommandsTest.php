@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Enums\ActionStatus;
 use App\Enums\AgentCommandOutcome;
 use App\Enums\TaskStatus;
 use App\Enums\TicketChannel;
@@ -75,6 +76,19 @@ class WhatsappTaskCommandsTest extends TestCase
             'event' => 'message',
             'payload' => ['id' => $id, 'from' => self::MGMT, 'body' => $body],
         ])->assertOk();
+    }
+
+    /** A proposal from this run, waiting for a decision on that task. */
+    private function pendingActionFor(Task $task): PendingAction
+    {
+        return PendingAction::create([
+            'type' => 'system_action',
+            'status' => ActionStatus::Pending,
+            'task_id' => $task->id,
+            'summary' => 'פעולה שממתינה להחלטה',
+            'payload' => ['operation' => 'open_task'],
+            'proposed_by' => 'console',
+        ]);
     }
 
     /** The text we sent back to the group. */
@@ -448,6 +462,7 @@ class WhatsappTaskCommandsTest extends TestCase
     public function test_a_delivery_failure_does_not_undo_work_the_agent_completed(): void
     {
         $task = Task::create(['title' => 'משהו', 'status' => TaskStatus::InProgress]);
+        $this->pendingActionFor($task);
 
         $interpreter = $this->mock(CommandInterpreter::class);
         $interpreter->shouldReceive('run')->once()->andReturn(new AgentCommand([
@@ -545,12 +560,13 @@ class WhatsappTaskCommandsTest extends TestCase
     public function test_a_delegated_task_stays_claimed_while_a_proposal_waits(): void
     {
         $task = Task::create(['title' => 'משהו', 'status' => TaskStatus::InProgress]);
+        $action = $this->pendingActionFor($task);
 
         $command = new AgentCommand([
             'outcome' => AgentCommandOutcome::Dispatched,
             'result' => 'הוגשה פעולה.',
         ]);
-        $command->pending_action_id = 7;
+        $command->pending_action_id = $action->id;
 
         $interpreter = $this->mock(CommandInterpreter::class);
         $interpreter->shouldReceive('run')->once()->andReturn($command);
@@ -673,6 +689,40 @@ class WhatsappTaskCommandsTest extends TestCase
         $task->refresh();
         $this->assertSame(TaskStatus::Open, $task->status);
         $this->assertSame([], $task->background_holds);
+    }
+
+    /**
+     * The decision can land while the run is still going — a standing approval
+     * executes the action on the spot, or an operator answers during the
+     * closing AI turn. The gate's release then finds the run still holding the
+     * task, so the run has to ask again on its way out; judging by its own
+     * outcome ("proposed → stay claimed") would strand the task for good.
+     */
+    public function test_a_task_is_handed_back_when_its_proposal_was_decided_mid_run(): void
+    {
+        $task = Task::create(['title' => 'משהו', 'status' => TaskStatus::InProgress]);
+
+        $interpreter = $this->mock(CommandInterpreter::class);
+        $interpreter->shouldReceive('run')->once()->andReturnUsing(function () use ($task): AgentCommand {
+            $action = $this->pendingActionFor($task);
+
+            // Decided while the run is still in progress.
+            app(ApprovalGate::class)->reject($action);
+            $this->assertSame(TaskStatus::InProgress, $task->fresh()->status);
+
+            $command = new AgentCommand([
+                'outcome' => AgentCommandOutcome::Proposed,
+                'result' => 'הוגשה פעולה לאישור.',
+            ]);
+            $command->pending_action_id = $action->id;
+
+            return $command;
+        });
+
+        (new RunAgentInstructionJob(self::MGMT, 'משהו', $task->id))
+            ->handle($interpreter, app(WahaClient::class));
+
+        $this->assertSame(TaskStatus::Open, $task->fresh()->status);
     }
 
     /**

@@ -60,18 +60,23 @@ class RunAgentInstructionJob implements ShouldQueue
 
     public function handle(CommandInterpreter $interpreter, WahaClient $waha): void
     {
-        $release = false;
         $this->holdTask();
 
         try {
-            $release = $this->work($interpreter, $waha);
+            $this->work($interpreter, $waha);
         } finally {
-            $release ? $this->releaseTask() : $this->dropHold();
+            // Always asked, never decided here: releaseIfIdle() refuses while
+            // another holder or an undecided proposal is on the task, and says
+            // yes otherwise. Judging it by this run's outcome instead would
+            // strand a task whose proposal was already decided mid-run — by a
+            // standing approval, or by an operator answering while the closing
+            // AI turn was still running — because the gate's own release ran
+            // while this run still held the task.
+            $this->releaseTask();
         }
     }
 
-    /** @return bool whether the task should go back to the humans now */
-    private function work(CommandInterpreter $interpreter, WahaClient $waha): bool
+    private function work(CommandInterpreter $interpreter, WahaClient $waha): void
     {
         $command = $interpreter->run(
             $this->instruction,
@@ -82,33 +87,6 @@ class RunAgentInstructionJob implements ShouldQueue
             // there is no tool for it, open a task" opens a copy of it.
             taskId: $this->taskId,
         );
-
-        // "In progress" means an agent is working on it. Two outcomes end the
-        // run without that being true any more:
-        //
-        //   Failed  — the interpreter turns a disabled AI, a thrown agent and
-        //             an empty answer into a record rather than an exception,
-        //             so failed() never runs for exactly those.
-        //   Unclear — the agent stopped to ask a question. The next move is a
-        //             person's, and the answer arrives as a fresh instruction
-        //             that carries no task id, so holding the task here would
-        //             strand it: still claimed, never released, and the claim
-        //             requires "open" to delegate it again.
-        //
-        // An answer with nothing filed for approval is the same situation: the
-        // agent said its piece and there is no proposal for anyone to act on,
-        // so the work is a person's again. Left "in progress" it would drop out
-        // of the open list and out of the reminders — claimed forever by an
-        // agent that has already finished.
-        //
-        // Whether anything the run started is STILL running is not decided
-        // here: releaseIfIdle() refuses while a background hold or an undecided
-        // proposal is on the task, and that job hands it back when it is done.
-        $nothingFiled = $command->outcome === AgentCommandOutcome::Dispatched
-            && $command->pending_action_id === null;
-
-        $release = $nothingFiled
-            || in_array($command->outcome, [AgentCommandOutcome::Failed, AgentCommandOutcome::Unclear], true);
 
         try {
             $waha->sendMessage($this->chatId, $this->message($command));
@@ -123,8 +101,6 @@ class RunAgentInstructionJob implements ShouldQueue
                 'error' => $e->getMessage(),
             ]);
         }
-
-        return $release;
     }
 
     /** This run is working on the task for as long as it lasts. */

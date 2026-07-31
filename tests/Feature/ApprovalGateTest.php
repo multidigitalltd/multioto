@@ -126,6 +126,29 @@ class ApprovalGateTest extends TestCase
         Queue::assertNothingPushed();
     }
 
+    /**
+     * A rejection arriving while another request is already executing the
+     * action must not overwrite "approved" with "rejected": the external call
+     * is under way, and the false status reads as a settled decision — which is
+     * how a task waiting on it would be handed back mid-execution.
+     */
+    public function test_a_rejection_that_lost_the_race_leaves_the_decision_alone(): void
+    {
+        $ticket = $this->ticketWithCustomer();
+        $action = PendingAction::create([
+            'type' => 'ticket_reply', 'status' => ActionStatus::Pending,
+            'ticket_id' => $ticket->id, 'summary' => 'x', 'payload' => ['reply' => 'y'],
+        ]);
+
+        // Someone else already claimed it and is executing.
+        PendingAction::whereKey($action->id)->update(['status' => ActionStatus::Approved]);
+
+        $reply = app(ApprovalGate::class)->reject($action);
+
+        $this->assertStringContainsString('כבר טופלה', $reply);
+        $this->assertSame(ActionStatus::Approved, $action->fresh()->status);
+    }
+
     public function test_a_regular_customer_message_is_not_intercepted(): void
     {
         // Same text as a command but from a non-owner chat → normal intake.
