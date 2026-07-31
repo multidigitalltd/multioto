@@ -9,6 +9,7 @@ use App\Models\SystemLog;
 use App\Support\EmailList;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use Throwable;
 
 /**
@@ -75,21 +76,11 @@ class BackupRunner
 
             $this->prune();
         } catch (Throwable $e) {
-            $backup->update([
-                'status' => BackupStatus::Failed,
-                'error' => mb_substr($e->getMessage(), 0, 2000),
-                'finished_at' => now(),
-            ]);
-
             // A half-written object on the destination would look like a real
             // archive in the bucket listing.
             $backup->deleteArchive();
 
-            SystemLog::record('error', 'backup', 'גיבוי נכשל: '.mb_substr($e->getMessage(), 0, 300), [
-                'backup_id' => $backup->id,
-            ]);
-
-            $this->alert($e);
+            $this->fail($backup, $e->getMessage());
 
             throw $e;
         } finally {
@@ -99,6 +90,45 @@ class BackupRunner
         }
 
         return $backup->fresh();
+    }
+
+    /**
+     * Mark a run failed, log it and tell the team — the single place that does
+     * so, because a failure recorded without the email is a failure nobody
+     * hears about, which is the same as no backup at all.
+     */
+    public function fail(Backup $backup, string $reason): void
+    {
+        $backup->update([
+            'status' => BackupStatus::Failed,
+            'error' => mb_substr($reason, 0, 2000),
+            'finished_at' => now(),
+        ]);
+
+        SystemLog::record('error', 'backup', 'גיבוי נכשל: '.mb_substr($reason, 0, 300), [
+            'backup_id' => $backup->id,
+        ]);
+
+        $this->alert($reason);
+    }
+
+    /**
+     * Record a run that never started because another backup or restore held
+     * the lock. Silence would mean a night with no copy of the business and
+     * nobody the wiser.
+     */
+    public function recordBlocked(?int $userId): Backup
+    {
+        $backup = Backup::create([
+            'status' => BackupStatus::Running,
+            'disk' => (string) config('backup.disk'),
+            'path' => '',
+            'user_id' => $userId,
+        ]);
+
+        $this->fail($backup, 'פעולת גיבוי או שחזור אחרת רצה באותו רגע — הגיבוי לא בוצע.');
+
+        return $backup;
     }
 
     /**
@@ -162,7 +192,7 @@ class BackupRunner
      * is the same as no backup, and the only moment that becomes obvious is the
      * one where it is already too late.
      */
-    private function alert(Throwable $e): void
+    private function alert(string $reason): void
     {
         $to = EmailList::parse(config('billing.notifications.team_email'));
 
@@ -172,16 +202,22 @@ class BackupRunner
 
         rescue(fn () => Mail::to($to)->send(new NotificationMail(
             'הגיבוי האוטומטי נכשל',
-            "הגיבוי האוטומטי של המערכת לא הושלם.\n\nסיבה: ".mb_substr($e->getMessage(), 0, 500)
+            "הגיבוי האוטומטי של המערכת לא הושלם.\n\nסיבה: ".mb_substr($reason, 0, 500)
             ."\n\nכדאי לבדוק את הגדרות היעד במסך \"גיבוי ושחזור\".",
         )), report: false);
     }
 
-    /** Sortable, unambiguous, and readable in a bucket listing. */
+    /**
+     * Sortable, unambiguous, and readable in a bucket listing — with a random
+     * tail, because two runs finishing inside the same second would otherwise
+     * share a path: the second upload would overwrite the first, both history
+     * rows would download the same file, and pruning either would delete the
+     * object the other still points at.
+     */
     private function pathFor(): string
     {
         $folder = trim((string) config('backup.path'), '/');
-        $name = 'multioto-'.now()->format('Y-m-d-His').'.zip';
+        $name = 'multioto-'.now()->format('Y-m-d-His').'-'.Str::lower(Str::random(6)).'.zip';
 
         return $folder === '' ? $name : "{$folder}/{$name}";
     }

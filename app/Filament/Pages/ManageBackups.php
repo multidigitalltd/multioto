@@ -262,6 +262,12 @@ class ManageBackups extends Page implements HasForms, HasTable
 
                 Tables\Actions\Action::make('delete')
                     ->label('מחיקה')->icon('heroicon-o-trash')->color('gray')
+                    // Not while something is using it: deleting mid-backup
+                    // leaves an archive with no history row, and deleting
+                    // mid-restore removes the record of a restore that is
+                    // still replacing production data.
+                    ->hidden(fn (Backup $r): bool => $r->status === BackupStatus::Running
+                        || $r->restore_status === BackupStatus::Running)
                     ->requiresConfirmation()
                     ->modalHeading('למחוק את הגיבוי?')
                     ->modalDescription('הארכיון יימחק מיעד האחסון ולא ניתן יהיה לשחזר ממנו.')

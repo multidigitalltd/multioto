@@ -57,6 +57,15 @@ class BackupRestorer
                 $this->assertComplete($zip, $order);
 
                 DB::transaction(function () use ($zip, $order, $deferred, $declared): void {
+                    // Shut the writers out for the duration. The panel and the
+                    // queue workers keep running during a restore, and a row
+                    // committed after its table was emptied would survive
+                    // alongside the archived ones — a database that is neither
+                    // the backup nor what was there before, reported as a
+                    // success. Anything mid-write waits; anything that cannot
+                    // wait fails loudly rather than half-applying.
+                    $this->lockTables($order);
+
                     // Children first: a parent row cannot go while something
                     // still points at it.
                     foreach (array_reverse($order) as $table) {
@@ -460,6 +469,32 @@ class BackupRestorer
     }
 
     /**
+     * Take an exclusive lock on every table being replaced, so nothing can be
+     * written to them while the restore runs.
+     *
+     * PostgreSQL only: SQLite already serialises writers for the length of a
+     * write transaction. The bounded wait matters — without it a restore could
+     * hang for ever behind one long-running query, holding the operation lock
+     * and telling nobody.
+     *
+     * @param  list<string>  $tables
+     */
+    private function lockTables(array $tables): void
+    {
+        if (DB::getDriverName() !== 'pgsql' || $tables === []) {
+            return;
+        }
+
+        DB::statement("SET LOCAL lock_timeout = '30s'");
+
+        $names = collect($tables)
+            ->map(fn (string $table): string => DB::getQueryGrammar()->wrapTable($table))
+            ->implode(', ');
+
+        DB::statement("LOCK TABLE {$names} IN ACCESS EXCLUSIVE MODE");
+    }
+
+    /**
      * Hand the id sequences back after inserting explicit ids. PostgreSQL keeps
      * its own counter, so without this the next insert would collide with a row
      * that was just restored. SQLite derives the next id from the data itself
@@ -510,6 +545,8 @@ class BackupRestorer
     private function restoreFiles(ZipArchive $zip, array $manifest): void
     {
         $failed = [];
+        $restored = [];
+
         // Driven by the list the backup WROTE, not by whatever members happen
         // to still be in the archive. Walking the members can only ever see
         // what survived — a file that went missing is invisible that way, and
@@ -548,6 +585,8 @@ class BackupRestorer
             try {
                 if (Storage::disk($disk)->put($path, $stream) === false) {
                     $failed[] = "{$disk}:{$path}";
+                } else {
+                    $restored["{$disk}/{$path}"] = true;
                 }
             } finally {
                 if (is_resource($stream)) {
@@ -561,6 +600,35 @@ class BackupRestorer
                 'הנתונים שוחזרו אך '.count($failed).' קבצים לא הוחזרו (חסרים בגיבוי או בעיית הרשאות): '
                 .implode(', ', array_slice($failed, 0, 5))
             );
+        }
+
+        $this->removeFilesNotInArchive($restored);
+    }
+
+    /**
+     * Delete uploads the archive does not have.
+     *
+     * A restore replaces the database wholesale, so an attachment uploaded
+     * after the backup loses its row — leaving the file orphaned on disk while
+     * the screen promised that the current files are replaced. Restoring an
+     * older backup should leave the same files it left behind at the time.
+     *
+     * @param  array<string, true>  $restored  "disk/path" keys just written
+     */
+    private function removeFilesNotInArchive(array $restored): void
+    {
+        foreach ((array) config('backup.files', []) as $disk => $prefixes) {
+            $storage = Storage::disk($disk);
+
+            $paths = $prefixes === []
+                ? $storage->allFiles()
+                : collect($prefixes)->flatMap(fn (string $p): array => $storage->allFiles($p))->all();
+
+            foreach ($paths as $path) {
+                if (! array_key_exists("{$disk}/{$path}", $restored)) {
+                    $storage->delete($path);
+                }
+            }
         }
     }
 

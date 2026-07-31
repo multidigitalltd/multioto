@@ -16,6 +16,7 @@ use App\Models\User;
 use App\Services\Backup\BackupRestorer;
 use App\Services\Backup\BackupRunner;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Storage;
@@ -325,10 +326,12 @@ class BackupTest extends TestCase
         $this->assertTrue($lock->get());
 
         // Reading rows from one state and files from another would produce an
-        // archive that looks fine and is internally inconsistent.
+        // archive that looks fine and is internally inconsistent — so no
+        // archive is written at all.
         (new RunBackupJob)->handle(app(BackupRunner::class));
 
-        $this->assertSame(0, Backup::count());
+        $this->assertSame([], Storage::disk('backups')->allFiles());
+        $this->assertSame(BackupStatus::Failed, Backup::sole()->status);
 
         $lock->release();
     }
@@ -395,6 +398,78 @@ class BackupTest extends TestCase
         }
 
         $this->assertSame(BackupStatus::Failed, $backup->fresh()->restore_status);
+    }
+
+    public function test_restoring_removes_files_uploaded_after_the_backup(): void
+    {
+        Storage::disk('local')->put('attachments/old.txt', 'היה בגיבוי');
+        $backup = $this->runBackup();
+
+        Storage::disk('local')->put('attachments/new.txt', 'הועלה אחרי');
+
+        app(BackupRestorer::class)->restore($backup);
+
+        // Its row is gone with the rest of the database, so leaving the file
+        // behind would contradict what the restore modal promises.
+        Storage::disk('local')->assertExists('attachments/old.txt');
+        Storage::disk('local')->assertMissing('attachments/new.txt');
+    }
+
+    public function test_a_backup_blocked_by_the_lock_leaves_a_failed_row(): void
+    {
+        Mail::fake();
+        config(['billing.notifications.team_email' => 'team@multi.test']);
+
+        $lock = Cache::lock(RunBackupJob::LOCK, 60);
+        $this->assertTrue($lock->get());
+
+        (new RunBackupJob)->handle(app(BackupRunner::class));
+
+        // A night that produced no copy of the business must not be silent.
+        $this->assertSame(BackupStatus::Failed, Backup::sole()->status);
+        Mail::assertSent(NotificationMail::class);
+
+        $lock->release();
+    }
+
+    public function test_a_timeout_failure_also_emails_the_team(): void
+    {
+        Mail::fake();
+        config(['billing.notifications.team_email' => 'team@multi.test']);
+
+        Backup::create(['status' => BackupStatus::Running, 'disk' => 'backups', 'path' => 'archives/x.zip']);
+
+        (new RunBackupJob)->failed(new \RuntimeException('worker timed out'));
+
+        // A status quietly flipped in the database is not a notification.
+        $this->assertSame(BackupStatus::Failed, Backup::sole()->status);
+        Mail::assertSent(NotificationMail::class);
+    }
+
+    public function test_two_backups_in_the_same_second_do_not_share_a_path(): void
+    {
+        Carbon::setTestNow('2026-08-10 03:30:00');
+
+        $first = $this->runBackup();
+        $second = $this->runBackup();
+
+        // Sharing a path would have the second overwrite the first, and pruning
+        // either would delete the object the other still points at.
+        $this->assertNotSame($first->path, $second->path);
+        Storage::disk('backups')->assertExists($first->path);
+        Storage::disk('backups')->assertExists($second->path);
+    }
+
+    public function test_a_backup_in_flight_cannot_be_deleted(): void
+    {
+        $running = Backup::create(['status' => BackupStatus::Running, 'disk' => 'backups', 'path' => 'archives/x.zip']);
+        $done = $this->runBackup();
+
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+
+        Livewire::test(ManageBackups::class)
+            ->assertTableActionHidden('delete', $running)
+            ->assertTableActionVisible('delete', $done);
     }
 
     public function test_a_restore_into_a_changed_schema_is_refused(): void

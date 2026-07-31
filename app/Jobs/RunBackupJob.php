@@ -44,7 +44,12 @@ class RunBackupJob implements ShouldQueue
         $lock = Cache::lock(self::LOCK, 3600);
 
         if (! $lock->get()) {
-            return; // Already running.
+            // Not silence: a night that produced no copy of the business has
+            // to be visible, and a manual request was already announced in the
+            // panel as having started.
+            $runner->recordBlocked($this->userId);
+
+            return;
         }
 
         try {
@@ -67,10 +72,10 @@ class RunBackupJob implements ShouldQueue
             ->latest('id')
             ->first();
 
-        $backup?->update([
-            'status' => BackupStatus::Failed,
-            'error' => mb_substr($e->getMessage(), 0, 2000),
-            'finished_at' => now(),
-        ]);
+        // Through the runner, so the team gets the email too — a status quietly
+        // flipped in the database is not a notification.
+        if ($backup !== null) {
+            app(BackupRunner::class)->fail($backup, $e->getMessage());
+        }
     }
 }
