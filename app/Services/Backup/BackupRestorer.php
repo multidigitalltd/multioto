@@ -362,8 +362,18 @@ class BackupRestorer
             // window lets a charge through, which is the one thing this whole
             // arrangement exists to prevent.
             while (! feof($stream)) {
-                if (stream_copy_to_stream($stream, $out, self::READ_CHUNK) === false) {
+                $copied = stream_copy_to_stream($stream, $out, self::READ_CHUNK);
+
+                if ($copied === false) {
                     throw new RuntimeException('קריאת קובץ הגיבוי מהיעד נכשלה.');
+                }
+
+                // A read that returns nothing and still does not report the end
+                // would spin here for ever. Stopping is safe: an archive that
+                // came down short cannot pass the checks that follow — the zip
+                // directory and every checksum in it sit at the end of the file.
+                if ($copied === 0) {
+                    break;
                 }
 
                 $this->beat($backup);
@@ -590,6 +600,7 @@ class BackupRestorer
                 "database/{$table}.ndjson",
                 "חסרים נתוני הטבלה \"{$table}\"",
                 "נתוני הטבלה \"{$table}\" פגומים",
+                $backup,
             );
         }
     }
@@ -822,7 +833,7 @@ class BackupRestorer
      * follows the data, so stopping at feof() skips the one read that reports
      * the damage.
      */
-    private function assertMemberIntact(ZipArchive $zip, string $member, string $missing, string $damaged): void
+    private function assertMemberIntact(ZipArchive $zip, string $member, string $missing, string $damaged, Backup $backup): void
     {
         $stream = $zip->getStream($member);
 
@@ -841,6 +852,12 @@ class BackupRestorer
                 if ($chunk === '') {
                     break;
                 }
+
+                // Inside the loop, not once per member: a single table's data
+                // can be the biggest thing in the archive, and a scan that
+                // takes longer than the gate's window would let a charge
+                // through while it reads.
+                $this->beat($backup);
             }
         } finally {
             fclose($stream);
@@ -871,6 +888,7 @@ class BackupRestorer
                 'files/'.$entry,
                 "לא ניתן לקרוא את \"{$entry}\"",
                 "תוכן פגום ב\"{$entry}\"",
+                $backup,
             );
         }
     }

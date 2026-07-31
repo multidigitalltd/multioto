@@ -1803,6 +1803,22 @@ class BackupTest extends TestCase
         $this->assertNotNull($backup->fresh()->restored_at);
     }
 
+    public function test_the_console_asks_before_restoring_over_a_live_application(): void
+    {
+        Queue::fake();
+        $backup = $this->runBackup();
+
+        // Stopping the queue is only half of it: a request being served right
+        // now can be inside Cardcom or Linet, and its write would either be
+        // deleted by the restore or land on restored data. Maintenance mode is
+        // what stops new ones arriving, so being asked is the point.
+        $this->artisan('backup:restore', ['id' => $backup->id])
+            ->expectsConfirmation('האפליקציה אינה במצב תחזוקה — להמשיך בכל זאת?', 'no')
+            ->assertFailed();
+
+        $this->assertNull($backup->fresh()->restored_at);
+    }
+
     public function test_the_console_takes_over_a_restore_the_queue_never_ran(): void
     {
         Queue::fake();

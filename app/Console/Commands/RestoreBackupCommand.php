@@ -51,6 +51,23 @@ class RestoreBackupCommand extends Command
 
         $this->warn("שחזור מגיבוי #{$backup->id} ({$backup->path}) — כל הנתונים הנוכחיים יימחקו ויוחלפו.");
 
+        // The queue is not the only thing that spends money. A request being
+        // served right now can be inside Cardcom or Linet — it passed the gate
+        // a moment before this claim existed — and its write would either be
+        // deleted by the restore or land against restored data. Maintenance
+        // mode is what stops new ones arriving; the wait for the ones already
+        // in flight is the operator's, and the guide says so.
+        if (! $this->laravel->isDownForMaintenance()) {
+            $this->warn('האפליקציה אינה במצב תחזוקה. בקשה שנמצאת כרגע באמצע קריאה לקארדקום או ללינט תסתיים אחרי השחזור, והשורה שרושמת אותה תימחק או תיכתב על נתונים משוחזרים.');
+
+            if (! $this->option('force')
+                && ! $this->confirm('האפליקציה אינה במצב תחזוקה — להמשיך בכל זאת?', false)) {
+                $this->line('בוטל. הריצו php artisan down, המתינו לסיום הבקשות שרצות, ונסו שוב.');
+
+                return self::FAILURE;
+            }
+        }
+
         // "horizon:terminate" asks for a shutdown and returns; a job that is
         // already inside a call to Cardcom or Linet keeps going. Anything still
         // in the queue means a worker may still be alive, and the money it is
