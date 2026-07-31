@@ -1328,12 +1328,26 @@ class BackupRestorer
         }
 
         $out = fopen($copy, 'wb');
+        $durable = false;
 
         try {
             $copied = stream_copy_to_stream($source, $out);
+
+            // All the way to the disk, before the live file is touched. The
+            // journal being durable is no help if the copy it points at is
+            // still sitting in the operating system's cache when the power
+            // goes: recovery would then overwrite a live file with a truncated
+            // version of itself, on the strength of a record that survived.
+            $durable = @fflush($out) && (! function_exists('fsync') || @fsync($out));
         } finally {
             fclose($out);
             fclose($source);
+        }
+
+        if (! $durable) {
+            throw new RuntimeException(
+                "לא ניתן להבטיח שמירה של עותק הקובץ \"{$disk}:{$path}\" — השחזור הופסק לפני שדרס אותו."
+            );
         }
 
         // A dropped connection ends the read early and returns a byte count,
@@ -1490,8 +1504,7 @@ class BackupRestorer
         // Silenced deliberately: a failed write here is an outcome this code
         // handles, and the framework turns PHP's warning into an exception
         // that would escape instead.
-        if (@file_put_contents($temp, $body) !== strlen($body)
-            || ! @rename($temp, $this->journalPath())) {
+        if (! $this->writeDurably($temp, $body) || ! @rename($temp, $this->journalPath())) {
             @unlink($temp);
 
             rescue(fn () => SystemLog::record('error', 'backup',
@@ -1501,7 +1514,28 @@ class BackupRestorer
             return false;
         }
 
-        return true;
+        // Read back, because the caller is about to delete files on the
+        // strength of this. PHP cannot sync a directory entry, so the proof
+        // that the rename took is the content itself.
+        return @file_get_contents($this->journalPath()) === $body;
+    }
+
+    /** Write a whole file and make sure the disk has it, or return false. */
+    private function writeDurably(string $path, string $body): bool
+    {
+        $handle = @fopen($path, 'wb');
+
+        if (! is_resource($handle)) {
+            return false;
+        }
+
+        $written = @fwrite($handle, $body) === strlen($body)
+            && @fflush($handle)
+            && (! function_exists('fsync') || @fsync($handle));
+
+        fclose($handle);
+
+        return $written;
     }
 
     /**
@@ -1587,8 +1621,19 @@ class BackupRestorer
         if ($committed) {
             // The database IS the archive. The files from the archive are the
             // right ones; only the copies of what they replaced are stale.
+            //
+            // The journal goes FIRST. Left behind, a later restore appends to
+            // it, and a recovery of THAT run would read both sets — entries
+            // whose copies are gone, and older ones that would delete files
+            // the committed database needs.
+            if (! $this->deleteJournal()) {
+                SystemLog::record('error', 'backup',
+                    'שחזור שנקטע הושלם בבסיס הנתונים, אך לא ניתן היה למחוק את יומן השחזור — העותקים הזמניים נשמרו.');
+
+                return ['restored' => 0, 'failed' => 0, 'pending' => count($entries)];
+            }
+
             $this->discard(array_values(array_filter(array_column($entries, 'from'))));
-            @unlink($path);
 
             SystemLog::record('warning', 'backup',
                 'שחזור שנקטע הושלם בבסיס הנתונים — הקבצים מהגיבוי נשארו במקומם, והעותקים הזמניים נמחקו.');
