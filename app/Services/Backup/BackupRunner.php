@@ -9,6 +9,7 @@ use App\Models\SystemLog;
 use App\Support\EmailList;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -46,6 +47,7 @@ class BackupRunner
         ]);
 
         $local = tempnam(sys_get_temp_dir(), 'multioto-backup-');
+        $manifest = [];
 
         try {
             // Inside the recorded lifecycle on purpose. Thrown before the row
@@ -82,9 +84,6 @@ class BackupRunner
                 'files' => $manifest['files'] ?? 0,
             ]);
 
-            $this->warnAboutOmissions($backup, (array) ($manifest['skipped_files'] ?? []));
-
-            $this->prune();
         } catch (Throwable $e) {
             // A half-written object on the destination would look like a real
             // archive in the bucket listing.
@@ -99,7 +98,39 @@ class BackupRunner
             }
         }
 
+        // Housekeeping, and deliberately OUTSIDE the try: the archive is
+        // written and the row says so. An alert that will not send, or a
+        // retention pass that cannot delete an old object, must not reach back
+        // and destroy the fresh, restorable backup it was called after.
+        $this->afterSuccess($backup, (array) ($manifest['skipped_files'] ?? []));
+
         return $backup->fresh();
+    }
+
+    /**
+     * Tell the team what was left out, then drop what retention no longer
+     * keeps. Each failure is logged on its own and none of them changes the
+     * outcome of the run.
+     *
+     * @param  list<string>  $skipped
+     */
+    private function afterSuccess(Backup $backup, array $skipped): void
+    {
+        try {
+            $this->warnAboutOmissions($backup, $skipped);
+        } catch (Throwable $e) {
+            SystemLog::record('error', 'backup', 'התראה על קבצים שלא גובו לא נשלחה: '.mb_substr($e->getMessage(), 0, 300), [
+                'backup_id' => $backup->id,
+            ]);
+        }
+
+        try {
+            $this->prune();
+        } catch (Throwable $e) {
+            SystemLog::record('error', 'backup', 'ניקוי גיבויים ישנים נכשל: '.mb_substr($e->getMessage(), 0, 300), [
+                'backup_id' => $backup->id,
+            ]);
+        }
     }
 
     /**
@@ -153,6 +184,44 @@ class BackupRunner
         $this->fail($backup, $reason);
 
         return $backup;
+    }
+
+    /**
+     * Remove one archive and its row, but only while nothing is using it.
+     *
+     * The row is re-read under a row lock and released only once the object is
+     * really gone: a confirmation dialog can sit open on one screen while
+     * another claims the same archive for a restore, and deleting it then would
+     * take the file out from under a restore that is about to replace
+     * production data.
+     *
+     * @return 'ok'|'gone'|'busy'|'archive'
+     */
+    public function deleteRecord(int $backupId): string
+    {
+        return DB::transaction(function () use ($backupId): string {
+            $backup = Backup::whereKey($backupId)->lockForUpdate()->first();
+
+            if ($backup === null) {
+                return 'gone';
+            }
+
+            if ($backup->status === BackupStatus::Running
+                || $backup->restore_status === BackupStatus::Running) {
+                return 'busy';
+            }
+
+            // Only drop the row once the object is really gone — otherwise an
+            // archive full of customer data stays at the destination with
+            // nothing left to find it by.
+            if (! $backup->deleteArchive()) {
+                return 'archive';
+            }
+
+            $backup->delete();
+
+            return 'ok';
+        });
     }
 
     /**

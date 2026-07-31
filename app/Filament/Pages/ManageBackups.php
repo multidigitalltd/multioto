@@ -355,20 +355,19 @@ class ManageBackups extends Page implements HasForms, HasTable
                     ->modalHeading('למחוק את הגיבוי?')
                     ->modalDescription('הארכיון יימחק מיעד האחסון ולא ניתן יהיה לשחזר ממנו.')
                     ->action(function (Backup $record): void {
-                        // Only drop the row once the object is really gone —
-                        // otherwise an archive full of customer data stays at
-                        // the destination with nothing left to find it by.
-                        if (! $record->deleteArchive()) {
-                            Notification::make()
+                        // Hiding the button is not enough: the confirmation
+                        // dialog can sit open while somebody else starts a
+                        // restore from this very archive.
+                        match (app(BackupRunner::class)->deleteRecord($record->id)) {
+                            'ok' => Notification::make()->title('הגיבוי נמחק')->success()->send(),
+                            'gone' => Notification::make()->title('הגיבוי כבר נמחק.')->warning()->send(),
+                            'busy' => Notification::make()
+                                ->title('לא ניתן למחוק — גיבוי או שחזור פועלים על הרשומה הזו כרגע.')
+                                ->warning()->send(),
+                            default => Notification::make()
                                 ->title('לא ניתן היה למחוק את קובץ הגיבוי מהיעד — הרשומה נשמרה.')
-                                ->danger()->send();
-
-                            return;
-                        }
-
-                        $record->delete();
-
-                        Notification::make()->title('הגיבוי נמחק')->success()->send();
+                                ->danger()->send(),
+                        };
                     }),
             ])
             ->emptyStateHeading('עדיין אין גיבויים')

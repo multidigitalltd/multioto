@@ -793,6 +793,54 @@ class BackupTest extends TestCase
         Mail::assertSent(NotificationMail::class);
     }
 
+    public function test_the_queue_cannot_redeliver_a_backup_that_is_still_running(): void
+    {
+        $longest = max((new RunBackupJob)->timeout, (new RestoreBackupJob(1))->timeout);
+
+        // A reservation that expires while the job is still going gets handed
+        // to a second worker, whose failure handling would mark an operation
+        // failed while the first is still replacing production data.
+        foreach (['redis', 'database'] as $connection) {
+            $this->assertGreaterThan($longest, (int) config("queue.connections.{$connection}.retry_after"));
+        }
+    }
+
+    public function test_housekeeping_that_fails_does_not_undo_the_backup(): void
+    {
+        Mail::fake();
+        config([
+            'backup.max_file_bytes' => 1024,
+            'billing.notifications.team_email' => 'team@multi.test',
+        ]);
+        Storage::disk('local')->put('attachments/huge.bin', str_repeat('x', 2048));
+
+        // The alert about the skipped file cannot be sent.
+        Mail::shouldReceive('to')->andThrow(new \RuntimeException('mail server down'));
+
+        $backup = $this->runBackup();
+
+        // The archive is written and the row says so. A failure in what comes
+        // after must not reach back and destroy it.
+        $this->assertSame(BackupStatus::Completed, $backup->fresh()->status);
+        Storage::disk('backups')->assertExists($backup->path);
+    }
+
+    public function test_a_backup_claimed_for_restore_cannot_be_deleted_from_a_stale_screen(): void
+    {
+        $backup = $this->runBackup();
+
+        // Hiding the button only decides what is drawn. The confirmation dialog
+        // can already be open when somebody else claims this very archive.
+        $backup->update(['restore_status' => BackupStatus::Running]);
+
+        $this->assertSame('busy', app(BackupRunner::class)->deleteRecord($backup->id));
+
+        // Deleting now would take the archive out from under a restore that is
+        // about to replace production data.
+        $this->assertNotNull(Backup::find($backup->id));
+        Storage::disk('backups')->assertExists($backup->path);
+    }
+
     public function test_the_backup_row_stays_when_the_manual_delete_cannot_remove_the_archive(): void
     {
         $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
