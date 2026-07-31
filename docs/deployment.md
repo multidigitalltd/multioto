@@ -243,13 +243,18 @@ Postmark משמש לשני הכיוונים:
 
   ```bash
   php artisan down
-  php artisan horizon:terminate
-  until php artisan horizon:status 2>&1 | grep -q inactive; do sleep 5; done
+  # את שירות התור עוצרים, לא horizon:terminate: תחת systemd/supervisor הפקודה
+  # הזו רק גורמת ל-Horizon לצאת ולעלות מחדש, וההמתנה ל-inactive עלולה לתפוס
+  # בדיוק את רגע החילוף ולהמשיך בזמן שהעובדים כבר חזרו.
+  sudo systemctl stop multioto-horizon      # שם השירות שהגדרתם לתור
   sudo systemctl stop php8.3-fpm            # או שירות ה-web שלכם
-  until ! pgrep -f 'php-fpm|artisan serve' >/dev/null; do sleep 2; done
+  until ! pgrep -f 'artisan horizon|horizon:work|php-fpm|artisan serve' >/dev/null; do sleep 2; done
   php artisan backup:restore <מזהה הגיבוי>
-  sudo systemctl start php8.3-fpm && php artisan up
+  sudo systemctl start php8.3-fpm multioto-horizon && php artisan up
   ```
+
+  אחרי השחזור מפעילים חזרה את שני השירותים — בלי מנטר שיעשה זאת לבד, תהליך
+  שנעצר נשאר עצור.
 
   **שורות ההמתנה אינן קישוט.** `horizon:terminate` מבקש עצירה מסודרת ומחזיר
   שליטה מיד, בעוד המשימות שכבר רצות ממשיכות עד שיסתיימו — ו-`down` מונע בקשות
@@ -270,6 +275,11 @@ Postmark משמש לשני הכיוונים:
   כך שאם ההודעה שבתור תגיע בכל זאת — היא תיעצר). בסיום מפעילים את ה-worker חזרה.
 - כפתור השחזור במסך מתאים כשה-worker פעיל — למשל שחזור לסביבת בדיקות. ההודעה
   שמוצגת אחרי הלחיצה כוללת את הפקודה להרצה אם התור מושבת.
+- **אם שחזור נקטע באמצע** (העובד נהרג, המכונה נפלה): שורות בסיס הנתונים חוזרות
+  לעצמן, אבל קבצים שכבר נדרסו נשארים בגרסה מהגיבוי. השחזור רושם כל קובץ ביומן
+  לפני שהוא נוגע בו, ולכן אפשר להחזיר: `php artisan backup:recover-files`.
+  אותה בדיקה מוצגת גם כהתראה בראש מסך "גיבוי ושחזור", ושחזור חדש מתחיל בהחזרה
+  הזו בעצמו.
 - שחזור מוחק את כל הנתונים הקיימים ומחליף אותם. הוא דורש הקלדת מילת אישור,
   רץ בטרנזקציה אחת, ונחסם אם הגיבוי נלקח ממבנה בסיס נתונים אחר (גרסה שונה).
   לפני שחזור — קחו גיבוי טרי.

@@ -186,6 +186,18 @@ class ManageBackups extends Page implements HasForms, HasTable
         return app(BackupRunner::class)->staleWarning();
     }
 
+    /**
+     * Did a restore die while it was replacing uploaded files?
+     *
+     * The rows roll themselves back; the files are left as the archive wrote
+     * them, with the originals staged and a journal saying where. Nobody is
+     * running to finish that, so the screen is where it gets said.
+     */
+    public function interruptedFiles(): bool
+    {
+        return app(BackupRestorer::class)->hasInterruptedFiles();
+    }
+
     public function table(Table $table): Table
     {
         return $table

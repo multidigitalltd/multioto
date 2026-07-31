@@ -1803,6 +1803,68 @@ class BackupTest extends TestCase
         $this->assertNotNull($backup->fresh()->restored_at);
     }
 
+    public function test_a_restore_writes_down_every_file_before_it_overwrites_it(): void
+    {
+        Storage::disk('local')->put('attachments/keep.txt', 'היה בגיבוי');
+        $backup = $this->runBackup();
+        Storage::disk('local')->put('attachments/keep.txt', 'הועלה אחרי הגיבוי');
+
+        // Read at the moment of the write: a worker killed here never reaches
+        // the undo path, so whatever is on disk BY THEN is all another process
+        // will have to work from.
+        $journal = null;
+        $real = Storage::disk('local');
+        $watched = \Mockery::mock($real)->makePartial();
+        $watched->shouldReceive('put')->andReturnUsing(function () use (&$journal): bool {
+            $journal ??= @file_get_contents(storage_path('backups/restore-journal.jsonl'));
+
+            return true;
+        });
+        Storage::set('local', $watched);
+
+        app(BackupRestorer::class)->restore($backup);
+        Storage::set('local', $real);
+
+        $this->assertIsString($journal);
+        $this->assertStringContainsString('attachments/keep.txt', (string) $journal);
+
+        // And a restore that finished leaves nothing to replay.
+        $this->assertFalse(app(BackupRestorer::class)->hasInterruptedFiles());
+    }
+
+    public function test_the_files_a_killed_restore_left_behind_can_be_put_back(): void
+    {
+        Storage::disk('local')->put('attachments/keep.txt', 'מהגיבוי — נדרס');
+
+        // Exactly what a worker killed mid-write leaves: the archive's contents
+        // on the live path, the original staged, and a journal pointing at both.
+        $staged = storage_path('backups/staged/prev-test');
+        $journal = storage_path('backups/restore-journal.jsonl');
+
+        if (! is_dir(dirname($staged))) {
+            mkdir(dirname($staged), 0775, true);
+        }
+
+        file_put_contents($staged, 'הועלה אחרי הגיבוי');
+        file_put_contents($journal, json_encode([
+            'disk' => 'local', 'path' => 'attachments/keep.txt', 'from' => $staged,
+        ]).PHP_EOL);
+
+        try {
+            $this->assertTrue(app(BackupRestorer::class)->hasInterruptedFiles());
+
+            $this->artisan('backup:recover-files')->assertSuccessful();
+
+            // Without this the live file stays at archive-aged contents beside a
+            // database that rolled itself back — a pairing that was never true.
+            $this->assertSame('הועלה אחרי הגיבוי', Storage::disk('local')->get('attachments/keep.txt'));
+            $this->assertFalse(app(BackupRestorer::class)->hasInterruptedFiles());
+        } finally {
+            @unlink($staged);
+            @unlink($journal);
+        }
+    }
+
     public function test_a_backup_does_not_start_when_the_lock_expired_under_a_running_restore(): void
     {
         Mail::fake();

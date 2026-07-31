@@ -43,6 +43,9 @@ class BackupRestorer
     /** When the row was last touched to say this restore is still alive. */
     private ?float $lastBeat = null;
 
+    /** Open handle on the journal of file writes, for undoing after a kill. */
+    private mixed $journal = null;
+
     public function __construct(private BackupArchive $archive) {}
 
     public function restore(Backup $backup): void
@@ -58,6 +61,11 @@ class BackupRestorer
             // whether this attempt may be recorded as failed.
             'restored_at' => null,
         ]);
+
+        // A restore that was killed mid-write left the live files half
+        // replaced and nothing running to put them back. Doing it here as well
+        // as on demand means the next attempt does not build on that mess.
+        $this->recoverInterruptedFiles();
 
         $local = tempnam(sys_get_temp_dir(), 'multioto-restore-');
         $sequenceError = null;
@@ -172,7 +180,10 @@ class BackupRestorer
 
                     throw $e;
                 } finally {
+                    // Both in one place: the journal is only meaningful while
+                    // the copies it points at are still there.
                     $this->discard($staged);
+                    $this->closeJournal();
                 }
 
                 // AFTER the commit, never inside it: setval() is not
@@ -1181,7 +1192,15 @@ class BackupRestorer
             // through the list would otherwise leave the live database (rolled
             // back with the transaction) beside files from the archive — a
             // pairing that was never true at any point in time.
-            $previous[] = $this->setAside($disk, $path, $temp);
+            $record = $this->setAside($disk, $path, $temp);
+            $previous[] = $record;
+
+            // Written to disk BEFORE the file is overwritten. A worker killed
+            // on timeout or by the OOM killer never reaches the undo path, and
+            // the database rolls itself back — leaving the old rows beside
+            // files from the archive, with nothing recording which ones. The
+            // journal is what another process reads to finish the undo.
+            $this->journal($record);
 
             try {
                 if (Storage::disk($disk)->put($path, $stream) === false) {
@@ -1227,7 +1246,10 @@ class BackupRestorer
             return ['disk' => $disk, 'path' => $path, 'from' => null];
         }
 
-        $copy = tempnam(sys_get_temp_dir(), 'multioto-prev-');
+        // Staged under storage/, not in the system temp directory: these
+        // copies are the only way back if the worker is killed mid-write, and
+        // /tmp is exactly where a reboot or a tmp reaper would take them.
+        $copy = tempnam($this->stagingDir(), 'prev-');
         $temp[] = $copy;
 
         $source = rescue(fn () => $storage->readStream($path), null, report: false);
@@ -1272,6 +1294,104 @@ class BackupRestorer
         }
 
         return ['disk' => $disk, 'path' => $path, 'from' => $copy];
+    }
+
+    /** Where staged originals live: on the storage volume, not in /tmp. */
+    private function stagingDir(): string
+    {
+        $dir = storage_path('backups/staged');
+
+        if (! is_dir($dir)) {
+            mkdir($dir, 0775, true);
+        }
+
+        return $dir;
+    }
+
+    private function journalPath(): string
+    {
+        return storage_path('backups/restore-journal.jsonl');
+    }
+
+    /**
+     * Record one file write, durably, before it happens.
+     *
+     * @param  array{disk: string, path: string, from: string|null}  $record
+     */
+    private function journal(array $record): void
+    {
+        if (! is_resource($this->journal)) {
+            $this->stagingDir();
+            $this->journal = fopen($this->journalPath(), 'ab');
+        }
+
+        if (! is_resource($this->journal)) {
+            throw new RuntimeException('לא ניתן לכתוב את יומן השחזור — השחזור הופסק לפני שנגע בקבצים.');
+        }
+
+        fwrite($this->journal, json_encode($record, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES).PHP_EOL);
+        fflush($this->journal);
+    }
+
+    /** The journal has done its job once the writes are settled either way. */
+    private function closeJournal(): void
+    {
+        if (is_resource($this->journal)) {
+            fclose($this->journal);
+        }
+
+        $this->journal = null;
+
+        if (file_exists($this->journalPath())) {
+            @unlink($this->journalPath());
+        }
+    }
+
+    /**
+     * Finish the undo a killed restore could not.
+     *
+     * Returns how many files were put back. Safe to call at any time: with no
+     * journal there is nothing to do, and replaying one is the same work the
+     * restore itself would have done had it lived long enough.
+     */
+    public function recoverInterruptedFiles(): int
+    {
+        $path = $this->journalPath();
+
+        if (! file_exists($path)) {
+            return 0;
+        }
+
+        $entries = [];
+
+        foreach (file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $line) {
+            $record = json_decode($line, true);
+
+            if (is_array($record) && isset($record['disk'], $record['path'])
+                && array_key_exists('from', $record)) {
+                $entries[] = [
+                    'disk' => (string) $record['disk'],
+                    'path' => (string) $record['path'],
+                    'from' => $record['from'] === null ? null : (string) $record['from'],
+                ];
+            }
+        }
+
+        $this->putFilesBack($entries);
+        $this->discard(array_values(array_filter(array_column($entries, 'from'))));
+
+        @unlink($path);
+
+        SystemLog::record('warning', 'backup',
+            'שחזור שנקטע השאיר קבצים מהגיבוי במקום הקיימים — '.count($entries).' קבצים הוחזרו למצבם הקודם.');
+
+        return count($entries);
+    }
+
+    /** Is there an unfinished file rollback waiting to be replayed? */
+    public function hasInterruptedFiles(): bool
+    {
+        return file_exists($this->journalPath());
     }
 
     /**

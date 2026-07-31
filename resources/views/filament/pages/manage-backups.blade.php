@@ -8,6 +8,16 @@
         </div>
     @endif
 
+    @if ($this->interruptedFiles())
+        <div role="alert"
+             class="rounded-xl border border-danger-300 bg-danger-50 p-4 text-sm text-danger-700 dark:border-danger-700 dark:bg-danger-950 dark:text-danger-300">
+            <strong>שחזור קודם נקטע באמצע החלפת הקבצים.</strong>
+            שורות בסיס הנתונים חזרו לעצמן, אבל חלק מהקבצים שהועלו נדרסו בגרסה מהגיבוי ולא הוחזרו.
+            הריצו בשרת <code>php artisan backup:recover-files</code> כדי להחזיר אותם — או הריצו את השחזור שוב,
+            שמתחיל בהחזרתם.
+        </div>
+    @endif
+
     <form wire:submit.prevent>
         {{ $this->form }}
     </form>
