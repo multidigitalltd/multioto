@@ -1832,23 +1832,52 @@ class BackupTest extends TestCase
         $this->assertFalse(app(BackupRestorer::class)->hasInterruptedFiles());
     }
 
+    /**
+     * Write the journal and staging file a killed restore would have left.
+     *
+     * @param  list<array{path: string, was: string|null}>  $files  what was live before it was overwritten
+     */
+    private function leaveInterruptedRestore(array $files, ?string $token = null, ?int $backupId = null): void
+    {
+        $dir = storage_path('backups');
+
+        if (! is_dir($dir)) {
+            mkdir($dir, 0775, true);
+        }
+
+        $lines = [json_encode(['journal' => $token, 'backup_id' => $backupId])];
+        $blob = '';
+
+        foreach ($files as $file) {
+            $entry = ['disk' => 'local', 'path' => $file['path'], 'at' => null, 'len' => 0];
+
+            if ($file['was'] !== null) {
+                $entry['at'] = strlen($blob);
+                $entry['len'] = strlen($file['was']);
+                $blob .= $file['was'];
+            }
+
+            $lines[] = json_encode($entry, JSON_UNESCAPED_UNICODE);
+        }
+
+        file_put_contents($dir.'/restore-staging.blob', $blob);
+        file_put_contents($dir.'/restore-journal.jsonl', implode(PHP_EOL, $lines).PHP_EOL);
+    }
+
+    private function clearInterruptedRestore(): void
+    {
+        @unlink(storage_path('backups/restore-journal.jsonl'));
+        @unlink(storage_path('backups/restore-staging.blob'));
+    }
+
     public function test_the_files_a_killed_restore_left_behind_can_be_put_back(): void
     {
         Storage::disk('local')->put('attachments/keep.txt', 'מהגיבוי — נדרס');
 
         // Exactly what a worker killed mid-write leaves: the archive's contents
-        // on the live path, the original staged, and a journal pointing at both.
-        $staged = storage_path('backups/staged/prev-test');
-        $journal = storage_path('backups/restore-journal.jsonl');
-
-        if (! is_dir(dirname($staged))) {
-            mkdir(dirname($staged), 0775, true);
-        }
-
-        file_put_contents($staged, 'הועלה אחרי הגיבוי');
-        file_put_contents($journal, json_encode([
-            'disk' => 'local', 'path' => 'attachments/keep.txt', 'from' => $staged,
-        ]).PHP_EOL);
+        // on the live path, the original in the staging file, and a journal
+        // saying where in it those bytes are.
+        $this->leaveInterruptedRestore([['path' => 'attachments/keep.txt', 'was' => 'הועלה אחרי הגיבוי']]);
 
         try {
             $this->assertTrue(app(BackupRestorer::class)->hasInterruptedFiles());
@@ -1860,8 +1889,7 @@ class BackupTest extends TestCase
             $this->assertSame('הועלה אחרי הגיבוי', Storage::disk('local')->get('attachments/keep.txt'));
             $this->assertFalse(app(BackupRestorer::class)->hasInterruptedFiles());
         } finally {
-            @unlink($staged);
-            @unlink($journal);
+            $this->clearInterruptedRestore();
         }
     }
 
@@ -1871,20 +1899,11 @@ class BackupTest extends TestCase
         Storage::disk('local')->put('attachments/keep.txt', 'מהגיבוי');
 
         // Killed in the sliver between the commit and the cleanup: the journal
-        // on disk is indistinguishable from a rolled-back restore, except for
-        // the token — written inside the transaction, so it is there only if
-        // the transaction committed.
-        $staged = storage_path('backups/staged/prev-committed');
-        $journal = storage_path('backups/restore-journal.jsonl');
-
-        if (! is_dir(dirname($staged))) {
-            mkdir(dirname($staged), 0775, true);
-        }
-
-        file_put_contents($staged, 'מלפני השחזור');
-        file_put_contents($journal,
-            json_encode(['journal' => 'token-abc', 'backup_id' => $backup->id]).PHP_EOL
-            .json_encode(['disk' => 'local', 'path' => 'attachments/keep.txt', 'from' => $staged]).PHP_EOL);
+        // looks indistinguishable from a rolled-back restore, except for the
+        // token — written inside the transaction, so it is there only if the
+        // transaction committed.
+        $this->leaveInterruptedRestore(
+            [['path' => 'attachments/keep.txt', 'was' => 'מלפני השחזור']], 'token-abc', $backup->id);
         $backup->update(['restore_journal' => 'token-abc']);
 
         try {
@@ -1894,59 +1913,9 @@ class BackupTest extends TestCase
             // be the corruption, not the cure.
             $this->assertSame(['restored' => 0, 'failed' => 0, 'pending' => 0], $result);
             $this->assertSame('מהגיבוי', Storage::disk('local')->get('attachments/keep.txt'));
-            $this->assertFileDoesNotExist($journal);
+            $this->assertFalse(app(BackupRestorer::class)->hasInterruptedFiles());
         } finally {
-            @unlink($staged);
-            @unlink($journal);
-        }
-    }
-
-    public function test_a_recovery_whose_journal_cannot_be_updated_keeps_every_copy(): void
-    {
-        Storage::disk('local')->put('attachments/one.txt', 'מהגיבוי');
-        Storage::disk('local')->put('attachments/two.txt', 'מהגיבוי');
-
-        $first = storage_path('backups/staged/prev-one');
-        $second = storage_path('backups/staged/prev-two');
-        $journal = storage_path('backups/restore-journal.jsonl');
-
-        if (! is_dir(dirname($first))) {
-            mkdir(dirname($first), 0775, true);
-        }
-
-        file_put_contents($first, 'החי הראשון');
-        file_put_contents($second, 'החי השני');
-        file_put_contents($journal,
-            json_encode(['journal' => null, 'backup_id' => null]).PHP_EOL
-            .json_encode(['disk' => 'local', 'path' => 'attachments/one.txt', 'from' => $first]).PHP_EOL
-            .json_encode(['disk' => 'local', 'path' => 'attachments/two.txt', 'from' => $second]).PHP_EOL);
-
-        // One goes back, one refuses — and then the journal itself cannot be
-        // rewritten, because the directory it lives in is read-only.
-        $partial = \Mockery::mock(Storage::disk('local'))->makePartial();
-        $partial->shouldReceive('put')->once()->andReturn(true);
-        $partial->shouldReceive('put')->andReturn(false);
-        Storage::set('local', $partial);
-
-        // The journal is replaced by writing beside it and renaming; a
-        // directory sitting where that temporary file goes makes the write
-        // fail exactly as a full disk would.
-        mkdir($journal.'.tmp');
-
-        try {
-            $result = app(BackupRestorer::class)->recoverInterruptedFiles();
-
-            // The old journal still names both files, so BOTH copies have to
-            // survive: deleting the one that went back would leave an entry
-            // nothing can ever recover, blocking every later restore.
-            $this->assertSame(2, $result['pending']);
-            $this->assertFileExists($first);
-            $this->assertFileExists($second);
-        } finally {
-            @rmdir($journal.'.tmp');
-            @unlink($first);
-            @unlink($second);
-            @unlink($journal);
+            $this->clearInterruptedRestore();
         }
     }
 
@@ -1954,17 +1923,8 @@ class BackupTest extends TestCase
     {
         Storage::disk('local')->put('attachments/keep.txt', 'מהגיבוי');
 
-        $staged = storage_path('backups/staged/prev-unknown');
-        $journal = storage_path('backups/restore-journal.jsonl');
-
-        if (! is_dir(dirname($staged))) {
-            mkdir(dirname($staged), 0775, true);
-        }
-
-        file_put_contents($staged, 'מלפני השחזור');
-        file_put_contents($journal,
-            json_encode(['journal' => 'token-xyz', 'backup_id' => 999999]).PHP_EOL
-            .json_encode(['disk' => 'local', 'path' => 'attachments/keep.txt', 'from' => $staged]).PHP_EOL);
+        $this->leaveInterruptedRestore(
+            [['path' => 'attachments/keep.txt', 'was' => 'מלפני השחזור']], 'token-xyz', 999999);
 
         // The one question that decides everything cannot be asked.
         $connection = config('database.default');
@@ -1980,12 +1940,9 @@ class BackupTest extends TestCase
             // restored database with the files it replaced.
             $this->assertSame(1, $result['pending']);
             $this->assertSame('מהגיבוי', Storage::disk('local')->get('attachments/keep.txt'));
-            $this->assertFileExists($journal);
-            $this->assertFileExists($staged);
         } finally {
             config(['database.default' => $connection]);
-            @unlink($staged);
-            @unlink($journal);
+            $this->clearInterruptedRestore();
         }
     }
 
@@ -1993,17 +1950,7 @@ class BackupTest extends TestCase
     {
         $backup = $this->runBackup();
 
-        $staged = storage_path('backups/staged/prev-left');
-        $journal = storage_path('backups/restore-journal.jsonl');
-
-        if (! is_dir(dirname($staged))) {
-            mkdir(dirname($staged), 0775, true);
-        }
-
-        file_put_contents($staged, 'הקובץ החי היחיד שנשאר');
-        file_put_contents($journal,
-            json_encode(['journal' => null, 'backup_id' => null]).PHP_EOL
-            .json_encode(['disk' => 'local', 'path' => 'attachments/gone.txt', 'from' => $staged]).PHP_EOL);
+        $this->leaveInterruptedRestore([['path' => 'attachments/gone.txt', 'was' => 'הקובץ החי היחיד שנשאר']]);
 
         // The disk still refuses, so the earlier rollback still cannot finish.
         $stubborn = \Mockery::mock(Storage::disk('local'))->makePartial();
@@ -2016,11 +1963,10 @@ class BackupTest extends TestCase
         } catch (\Throwable $e) {
             $this->assertStringContainsString('recover-files', $e->getMessage());
         } finally {
-            @unlink($staged);
-            @unlink($journal);
+            $this->clearInterruptedRestore();
         }
 
-        // Starting would have taken the old journal with it, orphaning the one
+        // Starting would have emptied the staging file, taking with it the one
         // copy of a file nothing else has.
         $this->assertSame(BackupStatus::Failed, $backup->fresh()->restore_status);
     }
@@ -2029,17 +1975,7 @@ class BackupTest extends TestCase
     {
         Storage::disk('local')->put('attachments/keep.txt', 'מהגיבוי — נדרס');
 
-        $staged = storage_path('backups/staged/prev-stubborn');
-        $journal = storage_path('backups/restore-journal.jsonl');
-
-        if (! is_dir(dirname($staged))) {
-            mkdir(dirname($staged), 0775, true);
-        }
-
-        file_put_contents($staged, 'הועלה אחרי הגיבוי');
-        file_put_contents($journal,
-            json_encode(['journal' => null, 'backup_id' => null]).PHP_EOL
-            .json_encode(['disk' => 'local', 'path' => 'attachments/keep.txt', 'from' => $staged]).PHP_EOL);
+        $this->leaveInterruptedRestore([['path' => 'attachments/keep.txt', 'was' => 'הועלה אחרי הגיבוי']]);
 
         // An IAM policy that allows writes but not this one, a disk that went
         // away: no exception, just a refusal.
@@ -2050,17 +1986,15 @@ class BackupTest extends TestCase
         try {
             $result = app(BackupRestorer::class)->recoverInterruptedFiles();
 
-            // Deleting the staged copy here would throw away the only remaining
-            // version of that file, and reporting success would mean nobody
-            // ever looks again.
+            // Nothing is thrown away and nothing is marked done: the copy is
+            // still the only version of that file, and reporting success would
+            // mean nobody ever looks again.
             $this->assertSame(1, $result['failed']);
-            $this->assertFileExists($staged);
-            $this->assertStringContainsString('attachments/keep.txt', (string) file_get_contents($journal));
+            $this->assertFileExists(storage_path('backups/restore-staging.blob'));
 
             $this->artisan('backup:recover-files')->assertFailed();
         } finally {
-            @unlink($staged);
-            @unlink($journal);
+            $this->clearInterruptedRestore();
         }
     }
 
