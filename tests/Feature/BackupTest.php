@@ -2393,6 +2393,37 @@ class BackupTest extends TestCase
         $this->assertSame(BackupStatus::Failed, $backup->fresh()->restore_status);
     }
 
+    public function test_a_backup_that_cannot_add_a_member_does_not_report_success(): void
+    {
+        Mail::fake();
+        config(['billing.notifications.team_email' => 'team@multi.test']);
+
+        // libzip refusing a member, as the archive writer reports it. close()
+        // would still succeed afterwards, so without this the runner uploads an
+        // archive that is missing a table and records a completed backup.
+        app()->bind(BackupArchive::class, fn () => new class extends BackupArchive
+        {
+            public function write(string $to): array
+            {
+                throw new \RuntimeException(
+                    'לא ניתן היה להוסיף את "database/customers.ndjson" לקובץ הגיבוי — הגיבוי הופסק.'
+                );
+            }
+        });
+
+        $thrown = null;
+
+        try {
+            $this->runBackup();
+        } catch (\Throwable $e) {
+            $thrown = $e;
+        }
+
+        $this->assertNotNull($thrown);
+        $this->assertSame(BackupStatus::Failed, Backup::sole()->status);
+        Mail::assertSent(NotificationMail::class);
+    }
+
     public function test_a_backup_refuses_a_destination_on_this_server(): void
     {
         Mail::fake();

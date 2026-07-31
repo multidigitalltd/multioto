@@ -67,8 +67,9 @@ class BackupArchive
             // is also stored on the backups row, and a list of every attachment
             // does not belong in a database column. The restore needs it to
             // notice a member that went missing.
-            $zip->addFromString(self::FILE_LIST, (string) json_encode(
-                $files, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES,
+            $this->add($zip, self::FILE_LIST, fn (): bool => $zip->addFromString(
+                self::FILE_LIST,
+                (string) json_encode($files, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
             ));
 
             $manifest = [
@@ -83,9 +84,12 @@ class BackupArchive
                 'skipped_files' => $skipped,
             ];
 
-            $zip->addFromString(self::MANIFEST, (string) json_encode(
-                $manifest,
-                JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES,
+            $this->add($zip, self::MANIFEST, fn (): bool => $zip->addFromString(
+                self::MANIFEST,
+                (string) json_encode(
+                    $manifest,
+                    JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES,
+                ),
             ));
 
             $open = false;
@@ -208,7 +212,9 @@ class BackupArchive
                 fclose($handle);
             }
 
-            $zip->addFile($file, "database/{$table}.ndjson");
+            $this->add($zip, "database/{$table}.ndjson",
+                fn (): bool => $zip->addFile($file, "database/{$table}.ndjson"));
+
             $counts[$table] = $rows;
         }
 
@@ -301,12 +307,31 @@ class BackupArchive
                     continue;
                 }
 
-                $zip->addFile($staged, "files/{$disk}/{$path}");
+                $this->add($zip, "files/{$disk}/{$path}",
+                    fn (): bool => $zip->addFile($staged, "files/{$disk}/{$path}"));
+
                 $added[] = "{$disk}/{$path}";
             }
         }
 
         return [$added, $skipped];
+    }
+
+    /**
+     * Put one member into the archive, or stop the backup.
+     *
+     * libzip reports a refusal by returning false, and close() can still
+     * succeed afterwards — so an ignored refusal means an archive uploaded and
+     * recorded as a good backup, missing a table or a file, discovered on the
+     * day somebody needs it. The manifest would even name what is not there.
+     */
+    private function add(ZipArchive $zip, string $member, callable $put): void
+    {
+        if ($put() !== true) {
+            throw new RuntimeException(
+                "לא ניתן היה להוסיף את \"{$member}\" לקובץ הגיבוי — הגיבוי הופסק."
+            );
+        }
     }
 
     /**
