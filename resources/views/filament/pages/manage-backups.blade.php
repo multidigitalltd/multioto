@@ -1,4 +1,13 @@
 <x-filament-panels::page>
+    @if ($warning = $this->staleWarning())
+        <div role="alert"
+             class="rounded-xl border border-danger-300 bg-danger-50 p-4 text-sm text-danger-700 dark:border-danger-700 dark:bg-danger-950 dark:text-danger-300">
+            <strong>{{ $warning }}</strong>
+            ייתכן שה-worker של התור אינו פועל, או שהמתזמן (scheduler) נעצר. אפשר ללחוץ "גבה עכשיו" כדי לבדוק —
+            אם גם זה לא מסתיים, הבעיה בתשתית ולא בהגדרות.
+        </div>
+    @endif
+
     <form wire:submit.prevent>
         {{ $this->form }}
     </form>

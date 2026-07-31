@@ -320,9 +320,14 @@ Schedule::call(function () {
     ->name('system:daily-backup')->onOneServer();
 
 // And a look each morning at whether the backup actually happened. A queue that
-// accepted the job but has no worker to run it, or a scheduler nobody restarted
-// after a deploy, leaves no failed row at all — the silence looks exactly like a
-// healthy night, until the day somebody needs the archive.
+// accepted the job but has no worker to run it leaves no failed row at all —
+// the silence looks exactly like a healthy night, until the day somebody needs
+// the archive.
+//
+// It cannot report a scheduler that has stopped, because it IS the scheduler.
+// That case is covered from the other side: the backup screen asks the same
+// question on every page load, and an external uptime monitor is the only real
+// answer (see docs/deployment.md).
 Schedule::call(function () {
     SettingsServiceProvider::refreshFromDatabase();
 

@@ -907,6 +907,22 @@ class BackupTest extends TestCase
         Mail::assertSent(NotificationMail::class);
     }
 
+    public function test_the_screen_warns_about_a_missing_backup_without_any_background_process(): void
+    {
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+        config(['backup.stale_after_hours' => 36]);
+
+        $backup = $this->runBackup();
+        Backup::whereKey($backup->id)->update(['created_at' => now()->subDays(3)]);
+
+        // The nightly alert runs from the scheduler, and a scheduler that has
+        // stopped cannot report itself. Someone opening the page is the one
+        // path that depends on no background process at all.
+        Livewire::test(ManageBackups::class)
+            ->assertOk()
+            ->assertSee('לא הושלם אף גיבוי');
+    }
+
     public function test_a_recent_backup_raises_no_stale_alert(): void
     {
         Mail::fake();

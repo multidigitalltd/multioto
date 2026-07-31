@@ -198,26 +198,44 @@ class BackupRunner
      */
     public function alertIfStale(): void
     {
+        $warning = $this->staleWarning();
+
+        if ($warning === null) {
+            return;
+        }
+
+        SystemLog::record('error', 'backup', $warning);
+
+        $this->alert($warning.' ייתכן שה-worker של התור אינו פועל.');
+    }
+
+    /**
+     * The same question, asked without sending anything — so the screen can ask
+     * it on every page load.
+     *
+     * That matters: this check runs from the scheduler, and a scheduler that
+     * has stopped cannot report itself. A person opening the panel is the one
+     * path that does not depend on any background process at all.
+     */
+    public function staleWarning(): ?string
+    {
         $hours = (int) config('backup.stale_after_hours', 36);
 
         if (! (bool) config('backup.enabled', true) || $hours <= 0) {
-            return;
+            return null;
         }
 
         $latest = Backup::query()->restorable()->max('created_at');
 
         if ($latest !== null && Carbon::parse($latest)->gt(now()->subHours($hours))) {
-            return;
+            return null;
         }
 
         $since = $latest === null
             ? 'מעולם לא הושלם גיבוי'
             : 'הגיבוי האחרון שהושלם היה ב-'.Carbon::parse($latest)->format('d/m/Y H:i');
 
-        SystemLog::record('error', 'backup', "אין גיבוי תקין כבר {$hours} שעות — {$since}.");
-
-        $this->alert("לא הושלם אף גיבוי ב-{$hours} השעות האחרונות. {$since}. ".
-            'ייתכן שה-worker של התור אינו פועל, או שהמתזמן אינו רץ.');
+        return "לא הושלם אף גיבוי ב-{$hours} השעות האחרונות — {$since}.";
     }
 
     /**

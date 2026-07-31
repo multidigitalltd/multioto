@@ -172,6 +172,18 @@ class ManageBackups extends Page implements HasForms, HasTable
             ->action(fn () => $this->save());
     }
 
+    /**
+     * Shown at the top of the screen when no backup has completed for too long.
+     *
+     * The nightly alert comes from the scheduler, and a scheduler that has
+     * stopped cannot report itself — so the same question is asked here, where
+     * nothing but a person opening the page is required.
+     */
+    public function staleWarning(): ?string
+    {
+        return app(BackupRunner::class)->staleWarning();
+    }
+
     public function table(Table $table): Table
     {
         return $table
