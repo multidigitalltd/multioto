@@ -13,6 +13,7 @@ use App\Models\Backup;
 use App\Models\Setting;
 use App\Services\Backup\BackupRestorer;
 use App\Services\Backup\BackupRunner;
+use App\Services\Backup\RestoreClaim;
 use Filament\Forms\Components\Actions\Action;
 use Filament\Forms\Components\Section;
 use Filament\Forms\Components\TextInput;
@@ -28,7 +29,6 @@ use Filament\Tables\Concerns\InteractsWithTable;
 use Filament\Tables\Contracts\HasTable;
 use Filament\Tables\Table;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Str;
 
 /**
  * גיבוי ושחזור — עותק לילי של כל נתוני המערכת ליעד אחסון חיצוני, ואפשרות
@@ -325,52 +325,17 @@ class ManageBackups extends Page implements HasForms, HasTable
                             return;
                         }
 
-                        // Claimed atomically: two admins clicking at once, or
-                        // one clicking twice during queue latency, would
-                        // otherwise enqueue the same restore twice — and the
-                        // second would finish after the first and put the same
-                        // old snapshot back, wiping everything accepted in
-                        // between. Also marks the row busy before dispatch, so
-                        // it cannot be deleted while the job waits in the queue.
-                        // Spelled out rather than "anything but running": a
-                        // restore that landed and left something to repair is
-                        // also completed, and re-running it would delete
-                        // everything accepted since it landed. The model above
-                        // may be a stale copy from before that happened.
-                        $attempt = (string) Str::uuid();
+                        // Claimed atomically, and by the same rule the console
+                        // command uses: two admins clicking at once, or one
+                        // clicking twice during queue latency, would otherwise
+                        // enqueue the same restore twice — and the second would
+                        // finish after the first and put the same old snapshot
+                        // back, wiping everything accepted in between. Also
+                        // marks the row busy before dispatch, so it cannot be
+                        // deleted while the job waits in the queue.
+                        $attempt = app(RestoreClaim::class)->take($record);
 
-                        $claimed = Backup::whereKey($record->id)
-                            ->where(fn ($q) => $q->whereNull('restore_status')
-                                ->orWhere('restore_status', BackupStatus::Failed)
-                                ->orWhere(fn ($done) => $done->where('restore_status', BackupStatus::Completed)
-                                    ->whereNull('restore_error'))
-                                // A claim whose job never started can be taken
-                                // over after a while, or a queue that lost the
-                                // payload would leave the row refusing every
-                                // later attempt for ever. Safe only because the
-                                // attempt id changes with it: the lost payload,
-                                // if it ever arrives, finds itself superseded.
-                                ->orWhere(fn ($stale) => $stale->where('restore_status', BackupStatus::Running)
-                                    ->whereNull('restore_started_at')
-                                    ->where('restore_queued_at', '<', now()->subMinutes(
-                                        max(1, (int) config('backup.restore_claim_minutes', 30))
-                                    ))))
-                            ->update([
-                                'restore_status' => BackupStatus::Running,
-                                'restore_error' => null,
-                                'restore_attempt' => $attempt,
-                                'restore_queued_at' => now(),
-                                'restore_started_at' => null,
-                                // The previous attempt's completion mark, which
-                                // says "this row already replaced the data".
-                                // Left standing it would stop the failure
-                                // handler from recording THIS attempt going
-                                // wrong, and the claim would then sit on
-                                // "running" with nothing able to clear it.
-                                'restored_at' => null,
-                            ]);
-
-                        if ($claimed !== 1) {
+                        if ($attempt === null) {
                             Notification::make()->title('שחזור מהגיבוי הזה כבר רץ.')->warning()->send();
 
                             return;
@@ -399,7 +364,13 @@ class ManageBackups extends Page implements HasForms, HasTable
                         }
 
                         Notification::make()
-                            ->title('השחזור התחיל — ייתכן שתידרשו להתחבר מחדש בסיומו.')
+                            ->title('השחזור הועבר לתור — ייתכן שתידרשו להתחבר מחדש בסיומו.')
+                            // Said plainly, because the recommended procedure is
+                            // to stop the worker before restoring — and with it
+                            // stopped nothing here will run the job. The command
+                            // takes over this very claim and does the work in
+                            // the foreground.
+                            ->body("אם עובד התור מושבת (כפי שמומלץ לפני שחזור), הריצו בשרת: php artisan backup:restore {$record->id}")
                             ->warning()->persistent()->send();
                     }),
 

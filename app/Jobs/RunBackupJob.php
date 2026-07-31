@@ -8,6 +8,7 @@ use App\Services\Backup\BackupRunner;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Str;
 
 /**
  * Take one backup in the background — the nightly run, or the button.
@@ -33,7 +34,20 @@ class RunBackupJob implements ShouldQueue
 
     public int $timeout = 1800;
 
-    public function __construct(public ?int $userId = null) {}
+    /**
+     * Which run this payload is. Declared with a default rather than promoted:
+     * a payload serialized before the property existed is rebuilt without
+     * calling the constructor, and a promoted property would be left
+     * uninitialized — reading it in the failure handler would throw.
+     */
+    public ?string $attempt = null;
+
+    public function __construct(public ?int $userId = null)
+    {
+        // At dispatch, so it travels in the payload and the handler that runs
+        // after a killed worker is looking for the same id the run wrote.
+        $this->attempt = (string) Str::uuid();
+    }
 
     /**
      * The nightly entry point, from the scheduler.
@@ -81,7 +95,7 @@ class RunBackupJob implements ShouldQueue
         }
 
         try {
-            $runner->run($this->userId);
+            $runner->run($this->userId, $this->attempt);
         } finally {
             $lock->release();
         }
@@ -90,20 +104,39 @@ class RunBackupJob implements ShouldQueue
     /**
      * A worker killed on timeout dies outside the runner's own handling, so the
      * row it created would sit on "running" for ever and the team would never
-     * be told. The lock means at most one run is in flight, so the row still
-     * marked running is this one.
+     * be told.
+     *
+     * Found by this job's own attempt id, never by "the latest running row":
+     * a job that fails BEFORE the row exists — a cache error while taking the
+     * lock, say — would otherwise mark somebody else's live backup as failed,
+     * removing its protection from the money jobs and offering its delete
+     * button while its worker is still writing the archive.
      */
     public function failed(\Throwable $e): void
     {
         $backup = Backup::query()
-            ->where('status', BackupStatus::Running)
+            ->where(fn ($q) => $this->attempt === null
+                ? $q->whereNull('run_attempt')
+                : $q->where('run_attempt', $this->attempt))
             ->latest('id')
             ->first();
 
+        // No row at all: this run never got as far as creating one. It still
+        // has to be visible — a request that vanishes without a trace is
+        // indistinguishable from a night nobody looked at.
+        if ($backup === null) {
+            app(BackupRunner::class)->recordUnstarted($this->userId, 'הגיבוי נכשל לפני שהתחיל: '.$e->getMessage());
+
+            return;
+        }
+
+        // A run that finished is not reopened by whatever failed after it.
+        if ($backup->status !== BackupStatus::Running) {
+            return;
+        }
+
         // Through the runner, so the team gets the email too — a status quietly
         // flipped in the database is not a notification.
-        if ($backup !== null) {
-            app(BackupRunner::class)->fail($backup, $e->getMessage());
-        }
+        app(BackupRunner::class)->fail($backup, $e->getMessage());
     }
 }

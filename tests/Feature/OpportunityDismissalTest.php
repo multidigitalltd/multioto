@@ -103,7 +103,10 @@ class OpportunityDismissalTest extends TestCase
         $html = $page->set('filter', 'offered')->html();
 
         $this->assertStringContainsString('סומן על ידי', $html);
-        $this->assertStringContainsString(auth()->user()->name, $html);
+        // Escaped, because the page escapes it: a generated name with an
+        // apostrophe ("Freda D'Amore") is rendered as &#039; and the raw string
+        // is nowhere in the markup — a failure about the test, not the page.
+        $this->assertStringContainsString(e(auth()->user()->name), $html);
     }
 
     public function test_a_rescan_does_not_bring_a_dismissed_opportunity_back(): void

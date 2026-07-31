@@ -25,6 +25,7 @@ use App\Services\Backup\BackupArchive;
 use App\Services\Backup\BackupRestorer;
 use App\Services\Backup\BackupRunner;
 use App\Services\Backup\OperationGate;
+use App\Services\Backup\RestoreClaim;
 use App\Services\Billing\DunningMachine;
 use App\Services\Billing\ManualChargeService;
 use App\Services\Cardcom\CardcomClient;
@@ -497,9 +498,14 @@ class BackupTest extends TestCase
 
     public function test_a_killed_worker_does_not_leave_a_backup_stuck_on_running(): void
     {
-        Backup::create(['status' => BackupStatus::Running, 'disk' => 'backups', 'path' => 'archives/x.zip']);
+        $job = new RunBackupJob;
 
-        (new RunBackupJob)->failed(new \RuntimeException('worker timed out'));
+        // Stamped with the run it belongs to, exactly as the runner stamps it:
+        // the failure handler looks for ITS row, not for the latest one.
+        Backup::create(['status' => BackupStatus::Running, 'disk' => 'backups',
+            'path' => 'archives/x.zip', 'run_attempt' => $job->attempt]);
+
+        $job->failed(new \RuntimeException('worker timed out'));
 
         $this->assertSame(BackupStatus::Failed, Backup::sole()->status);
         $this->assertNotNull(Backup::sole()->error);
@@ -566,9 +572,12 @@ class BackupTest extends TestCase
         Mail::fake();
         config(['billing.notifications.team_email' => 'team@multi.test']);
 
-        Backup::create(['status' => BackupStatus::Running, 'disk' => 'backups', 'path' => 'archives/x.zip']);
+        $job = new RunBackupJob;
 
-        (new RunBackupJob)->failed(new \RuntimeException('worker timed out'));
+        Backup::create(['status' => BackupStatus::Running, 'disk' => 'backups',
+            'path' => 'archives/x.zip', 'run_attempt' => $job->attempt]);
+
+        $job->failed(new \RuntimeException('worker timed out'));
 
         // A status quietly flipped in the database is not a notification.
         $this->assertSame(BackupStatus::Failed, Backup::sole()->status);
@@ -988,14 +997,16 @@ class BackupTest extends TestCase
         Mail::fake();
         config([
             'billing.notifications.team_email' => 'team@multi.test',
-            // Two references fill the ceiling. On a real install the same thing
-            // happens with 5,000 older payments that are all safely archived.
+            // Three archived references fill a ceiling of two (the collector
+            // reads one past it to tell "finished" from "ran out"). On a real
+            // install the same thing happens with 5,000 older payments that are
+            // all safely in the archive.
             'backup.reconcile_limit' => 2,
         ]);
 
         $customer = Customer::factory()->create();
 
-        foreach (['tx-old-one', 'tx-old-two'] as $reference) {
+        foreach (['tx-old-one', 'tx-old-two', 'tx-old-three'] as $reference) {
             Charge::create([
                 'customer_id' => $customer->id,
                 'status' => ChargeStatus::Succeeded,
@@ -1035,6 +1046,41 @@ class BackupTest extends TestCase
         $this->assertTrue($report['truncated']);
         $this->assertSame(0, $report['count']);
         Mail::assertSent(NotificationMail::class);
+    }
+
+    public function test_a_scan_that_examined_everything_is_not_called_truncated(): void
+    {
+        Mail::fake();
+        config([
+            'billing.notifications.team_email' => 'team@multi.test',
+            'backup.reconcile_limit' => 2,
+        ]);
+
+        $customer = Customer::factory()->create();
+
+        foreach (['tx-one', 'tx-two'] as $reference) {
+            Charge::create([
+                'customer_id' => $customer->id,
+                'status' => ChargeStatus::Succeeded,
+                'amount_agorot' => 10000,
+                'vat_agorot' => 1800,
+                'total_agorot' => 11800,
+                'attempt_number' => 1,
+                'period_start' => now()->startOfMonth(),
+                'period_end' => now()->endOfMonth(),
+                'cardcom_transaction_id' => $reference,
+            ]);
+        }
+
+        $backup = $this->runBackup();
+
+        app(BackupRestorer::class)->restore($backup);
+
+        // Exactly at the ceiling means every reference WAS examined. Calling
+        // that "may be incomplete" would send the team to audit Cardcom and
+        // Linet by hand over a scan that finished.
+        $this->assertNull($backup->fresh()->restore_report);
+        Mail::assertNothingSent();
     }
 
     public function test_a_restore_does_not_report_the_payments_it_puts_back(): void
@@ -1642,6 +1688,77 @@ class BackupTest extends TestCase
         // after must not reach back and destroy it.
         $this->assertSame(BackupStatus::Completed, $backup->fresh()->status);
         Storage::disk('backups')->assertExists($backup->path);
+    }
+
+    public function test_a_backup_job_that_died_before_its_row_existed_leaves_a_live_backup_alone(): void
+    {
+        Mail::fake();
+
+        // Somebody else's backup, genuinely under way: its worker is still
+        // writing the archive right now.
+        $live = Backup::create([
+            'status' => BackupStatus::Running,
+            'disk' => 'backups',
+            'path' => 'archives/live.zip',
+            'run_attempt' => 'someone-elses-run',
+        ]);
+
+        // This job never got as far as creating a row — a cache error while
+        // taking the lock, say — and then the worker died.
+        (new RunBackupJob)->failed(new \RuntimeException('אין גישה למטמון'));
+
+        // Marking the live one failed would strip the protection the money jobs
+        // rely on and offer its delete button, mid-write.
+        $this->assertSame(BackupStatus::Running, $live->fresh()->status);
+
+        // But the run that vanished still has to be visible.
+        $recorded = Backup::query()->where('status', BackupStatus::Failed)->latest('id')->first();
+        $this->assertNotNull($recorded);
+        $this->assertStringContainsString('אין גישה למטמון', (string) $recorded->error);
+    }
+
+    public function test_a_restore_can_be_run_from_the_console_without_a_worker(): void
+    {
+        // The documented procedure: stop the queue worker, then restore. With
+        // it stopped the screen's button has nobody to hand the work to, so the
+        // command does it here — this is the path a real restore takes.
+        Queue::fake();
+        Customer::factory()->create(['name' => 'לפני השחזור']);
+        $backup = $this->runBackup();
+        Customer::query()->delete();
+
+        $this->artisan('backup:restore', ['id' => $backup->id, '--force' => true])
+            ->assertSuccessful();
+
+        $this->assertSame(1, Customer::query()->count());
+        $this->assertSame(BackupStatus::Completed, $backup->fresh()->restore_status);
+        $this->assertNotNull($backup->fresh()->restored_at);
+    }
+
+    public function test_the_console_takes_over_a_restore_the_queue_never_ran(): void
+    {
+        Queue::fake();
+        Customer::factory()->create();
+        $backup = $this->runBackup();
+
+        // Claimed from the screen — and then nothing, because the worker was
+        // stopped exactly as the guide says to do before restoring.
+        $stale = app(RestoreClaim::class)->take($backup);
+        $this->assertNotNull($stale);
+
+        $this->artisan('backup:restore', ['id' => $backup->id, '--force' => true])
+            ->assertSuccessful();
+
+        $this->assertSame(BackupStatus::Completed, $backup->fresh()->restore_status);
+
+        // And the payload that was left in the queue, if it ever arrives, finds
+        // itself superseded: it must not put the same snapshot back over
+        // everything accepted since.
+        $before = $backup->fresh()->restored_at;
+        app(RestoreBackupJob::class, ['backupId' => $backup->id, 'attempt' => $stale])
+            ->handle(app(BackupRestorer::class));
+
+        $this->assertEquals($before, $backup->fresh()->restored_at);
     }
 
     public function test_a_backup_claimed_for_restore_cannot_be_deleted_from_a_stale_screen(): void

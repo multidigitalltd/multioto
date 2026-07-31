@@ -147,7 +147,12 @@ class BackupRestorer
                         // backup puts back is not lost, and reporting it would
                         // bury the handful that genuinely are.
                         $discarded = $this->referencesNotRestored($orphaned);
-                        $truncated = count($orphaned) >= $this->artifactLimit();
+                        // Strictly more: the collector deliberately fetches one
+                        // reference beyond the ceiling, so "exactly the ceiling"
+                        // means every reference was examined. Calling that
+                        // truncated would send the team to audit Cardcom and
+                        // Linet by hand over a scan that finished.
+                        $truncated = count($orphaned) > $this->artifactLimit();
 
                         // Files INSIDE the transaction, which makes the restore
                         // all-or-nothing the useful way round: a file that cannot
@@ -247,14 +252,26 @@ class BackupRestorer
      * Why this archive cannot be restored right now, or null when it can. Used
      * by the screen to disable the button with a reason instead of letting the
      * operator find out halfway through.
+     *
+     * @param  bool  $adoptUnstarted  For the console command: a claim the queue
+     *                                took and never acted on is not something to
+     *                                wait for when the worker is stopped — which
+     *                                is precisely what the restore procedure
+     *                                asks the operator to do. A restore that is
+     *                                actually running still blocks.
      */
-    public function blockedReason(Backup $backup): ?string
+    public function blockedReason(Backup $backup, bool $adoptUnstarted = false): ?string
     {
         if ($backup->status !== BackupStatus::Completed) {
             return 'הגיבוי לא הושלם — אין ממה לשחזר.';
         }
 
-        if ($backup->restore_status === BackupStatus::Running && ! $backup->restoreClaimExpired()) {
+        $unstartedClaim = $backup->restore_status === BackupStatus::Running
+            && $backup->restore_started_at === null;
+
+        if ($backup->restore_status === BackupStatus::Running
+            && ! $backup->restoreClaimExpired()
+            && ! ($adoptUnstarted && $unstartedClaim)) {
             // A second run would finish AFTER the first and put the same old
             // snapshot back, wiping everything accepted in between. Unless the
             // claim was never taken up at all — see restoreClaimExpired().
@@ -547,7 +564,9 @@ class BackupRestorer
     private function externalReferences(array $order): array
     {
         $refs = [];
-        $limit = $this->artifactLimit();
+        // One past the ceiling, so "how many were found" can tell a scan that
+        // finished on the last allowed reference from one that had more to read.
+        $limit = $this->artifactLimit() + 1;
 
         $collect = function (string $table, array $columns, callable $label) use (&$refs, $order, $limit): void {
             if (! in_array($table, $order, true) || count($refs) >= $limit) {

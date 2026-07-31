@@ -36,8 +36,12 @@ class BackupRunner
 
     public function __construct(private BackupArchive $archive) {}
 
-    /** @param  int|null  $userId  who pressed the button; null for the nightly run */
-    public function run(?int $userId = null): Backup
+    /**
+     * @param  int|null  $userId  who pressed the button; null for the nightly run
+     * @param  string|null  $attempt  the job this row belongs to, so a worker
+     *                                killed on timeout can find its OWN row
+     */
+    public function run(?int $userId = null, ?string $attempt = null): Backup
     {
         $disk = (string) config('backup.disk');
         $path = $this->pathFor();
@@ -47,6 +51,7 @@ class BackupRunner
             'disk' => $disk,
             'path' => $path,
             'user_id' => $userId,
+            'run_attempt' => $attempt,
         ]);
 
         $local = tempnam(sys_get_temp_dir(), 'multioto-backup-');
