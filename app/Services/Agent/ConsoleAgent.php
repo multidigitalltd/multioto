@@ -86,6 +86,11 @@ class ConsoleAgent
      * The instruction is then the task's own text, so "if there is no tool for
      * it, open a task" would have the agent open a copy of the very task it was
      * handed — a duplicate notification, and the original left claimed.
+     *
+     * It is also stamped onto every proposal this run files, so the approval
+     * gate hands the task back once that decision is made — a task delegated in
+     * order to produce one proposal would otherwise stay claimed forever, long
+     * after somebody approved or rejected it.
      */
     private ?int $delegatedTaskId = null;
 
@@ -532,6 +537,7 @@ class ConsoleAgent
             customerId: $ticket->customer_id,
             ticketId: $ticket->id,
             proposedBy: 'console',
+            taskId: $this->delegatedTaskId,
         );
 
         return $this->proposedOk($action->id, "תשובה לפנייה #{$ticket->id}");
@@ -554,6 +560,7 @@ class ConsoleAgent
             customerId: $ticket->customer_id,
             ticketId: $ticket->id,
             proposedBy: 'console',
+            taskId: $this->delegatedTaskId,
         );
 
         return $this->proposedOk($action->id, "סגירת פנייה #{$ticket->id}");
@@ -579,6 +586,7 @@ class ConsoleAgent
             customerId: $ticket->customer_id,
             ticketId: $ticket->id,
             proposedBy: 'console',
+            taskId: $this->delegatedTaskId,
         );
 
         return $this->proposedOk($action->id, "פנייה #{$ticket->id} → {$label}");
@@ -603,6 +611,7 @@ class ConsoleAgent
             customerId: $ticket->customer_id,
             ticketId: $ticket->id,
             proposedBy: 'console',
+            taskId: $this->delegatedTaskId,
         );
 
         return $this->proposedOk($action->id, "עדיפות פנייה #{$ticket->id} → {$priority}");
@@ -626,6 +635,7 @@ class ConsoleAgent
             customerId: $ticket->customer_id,
             ticketId: $ticket->id,
             proposedBy: 'console',
+            taskId: $this->delegatedTaskId,
         );
 
         return $this->proposedOk($action->id, "שיוך פנייה #{$ticket->id} ל{$assignee}");
@@ -663,6 +673,7 @@ class ConsoleAgent
             payload: ['operation' => 'update_customer', 'customer_id' => $customer->id, 'changes' => $changes, 'source' => 'console_agent'],
             customerId: $customer->id,
             proposedBy: 'console',
+            taskId: $this->delegatedTaskId,
         );
 
         return $this->proposedOk($action->id, "עדכון פרטי {$customer->name}");
@@ -706,6 +717,7 @@ class ConsoleAgent
             payload: ['operation' => 'update_subscription', 'subscription_id' => $subscription->id, 'changes' => $changes, 'source' => 'console_agent'],
             customerId: $subscription->customer_id,
             proposedBy: 'console',
+            taskId: $this->delegatedTaskId,
         );
 
         return $this->proposedOk($action->id, "עדכון מנוי #{$subscription->id}");
@@ -728,6 +740,7 @@ class ConsoleAgent
             payload: ['operation' => 'create_site', 'customer_id' => $customer->id, 'domain' => $domain, 'source' => 'console_agent'],
             customerId: $customer->id,
             proposedBy: 'console',
+            taskId: $this->delegatedTaskId,
         );
 
         return $this->proposedOk($action->id, "הוספת אתר {$domain}");
@@ -746,6 +759,7 @@ class ConsoleAgent
             payload: ['operation' => 'complete_task', 'task_id' => $task->id, 'source' => 'console_agent'],
             customerId: $task->customer_id,
             proposedBy: 'console',
+            taskId: $this->delegatedTaskId,
         );
 
         return $this->proposedOk($action->id, "סימון משימה בוצעה: {$task->title}");
@@ -768,6 +782,7 @@ class ConsoleAgent
             payload: ['operation' => 'send_payment_request', 'customer_id' => $customer->id, 'amount_agorot' => $agorot, 'description' => $description, 'channel' => 'whatsapp', 'source' => 'console_agent'],
             customerId: $customer->id,
             proposedBy: 'console',
+            taskId: $this->delegatedTaskId,
         );
 
         return $this->proposedOk($action->id, 'דרישת תשלום ל'.$customer->name);
@@ -788,6 +803,7 @@ class ConsoleAgent
             payload: ['operation' => 'mark_collected', 'customer_id' => $customer->id, 'source' => 'console_agent'],
             customerId: $customer->id,
             proposedBy: 'console',
+            taskId: $this->delegatedTaskId,
         );
 
         return $this->proposedOk($action->id, "סימון תשלום בוצע ל{$customer->name}");
@@ -809,6 +825,7 @@ class ConsoleAgent
             payload: ['operation' => $operation, 'site_id' => $site->id, 'source' => 'console_agent'],
             customerId: $site->customer_id,
             proposedBy: 'console',
+            taskId: $this->delegatedTaskId,
         );
 
         return $this->proposedOk($action->id, "{$label}: {$site->domain}");
@@ -884,6 +901,7 @@ class ConsoleAgent
             payload: ['operation' => 'cloudflare_country_rule', 'countries' => $countries, 'mode' => $mode,
                 'list_operation' => $operation, 'source' => 'console_agent'],
             proposedBy: 'console',
+            taskId: $this->delegatedTaskId,
         );
 
         return $this->proposedOk($action->id, "כלל מדינות — {$verb}{$what} ({$mode})");
@@ -933,6 +951,7 @@ class ConsoleAgent
             payload: $payload,
             customerId: $this->customerId,
             proposedBy: 'console',
+            taskId: $this->delegatedTaskId,
         );
 
         return $this->proposedOk($action->id, $what);

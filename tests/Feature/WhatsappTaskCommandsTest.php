@@ -645,6 +645,75 @@ class WhatsappTaskCommandsTest extends TestCase
     }
 
     /**
+     * The run itself is work in progress. An investigation that finishes while
+     * the agent is still reasoning must not hand the task back underneath it —
+     * the same run may still queue another check or file a proposal.
+     */
+    public function test_the_running_agent_holds_the_task_for_as_long_as_it_runs(): void
+    {
+        $task = Task::create(['title' => 'לבדוק את האתר', 'status' => TaskStatus::InProgress]);
+
+        $claude = Mockery::mock(ClaudeClient::class);
+        $claude->shouldReceive('isEnabled')->andReturn(true);
+        $claude->shouldReceive('lastError')->andReturnNull();
+        $claude->shouldReceive('converse')->andReturnUsing(function () use ($task): string {
+            // Mid-run: a background check finishes and asks whether the task is
+            // free. It is not — this run is still going.
+            Task::releaseIfIdle($task->id);
+            $this->assertSame(TaskStatus::InProgress, $task->fresh()->status);
+
+            return 'בדקתי, הכול תקין.';
+        });
+        $this->app->instance(ClaudeClient::class, $claude);
+
+        (new RunAgentInstructionJob(self::MGMT, 'לבדוק את האתר', $task->id))
+            ->handle(app(CommandInterpreter::class), app(WahaClient::class));
+
+        // …and once the run is over, with nothing left running, it is.
+        $task->refresh();
+        $this->assertSame(TaskStatus::Open, $task->status);
+        $this->assertSame([], $task->background_holds);
+    }
+
+    /**
+     * A task delegated in order to produce one proposal — "send Dana a payment
+     * request" — stays claimed while that decision waits. The link has to be on
+     * the proposal, or the decision can never end the claim.
+     */
+    public function test_a_decision_on_a_delegated_runs_proposal_hands_the_task_back(): void
+    {
+        $customer = Customer::factory()->create(['name' => 'דנה']);
+        $task = Task::create(['title' => 'לשלוח לדנה דרישת תשלום', 'status' => TaskStatus::InProgress]);
+
+        $claude = Mockery::mock(ClaudeClient::class);
+        $claude->shouldReceive('isEnabled')->andReturn(true);
+        $claude->shouldReceive('lastError')->andReturnNull();
+        $claude->shouldReceive('converse')->andReturnUsing(
+            function (string $system, string $prompt, array $tools, callable $handler) use ($customer): string {
+                $handler('propose_payment_request', [
+                    'customer_id' => $customer->id,
+                    'amount_ils' => 300,
+                    'description' => 'אחסון',
+                ]);
+
+                return 'הגשתי דרישת תשלום לאישור.';
+            }
+        );
+        $this->app->instance(ClaudeClient::class, $claude);
+
+        (new RunAgentInstructionJob(self::MGMT, 'לשלוח לדנה דרישת תשלום', $task->id))
+            ->handle(app(CommandInterpreter::class), app(WahaClient::class));
+
+        $action = PendingAction::sole();
+        $this->assertSame($task->id, $action->task_id);
+        $this->assertSame(TaskStatus::InProgress, $task->fresh()->status);
+
+        app(ApprovalGate::class)->reject($action);
+
+        $this->assertSame(TaskStatus::Open, $task->fresh()->status);
+    }
+
+    /**
      * A job that threw releases in its finally AND is then failed by the
      * worker. Counting its hold off twice would eat a hold belonging to the
      * other investigation and hand the task back underneath it.

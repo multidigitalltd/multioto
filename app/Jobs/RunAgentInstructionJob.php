@@ -10,6 +10,7 @@ use App\Services\Waha\WahaClient;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 
 /**
  * Hand one instruction from the WhatsApp management group to the console agent
@@ -38,13 +39,39 @@ class RunAgentInstructionJob implements ShouldQueue
      */
     public int $timeout = 80;
 
+    /**
+     * This run's own name on the task's holder list, minted at dispatch so the
+     * fresh instance the worker builds for failed() gives back the SAME hold.
+     * A run in progress is work in progress: without a hold of its own, a site
+     * investigation that finishes mid-run would hand the task back while this
+     * agent is still reasoning — and it may still queue another check or file a
+     * proposal. Class-level default (not promoted) so a payload serialized
+     * before this field unserializes safely.
+     */
+    public ?string $runToken = null;
+
     public function __construct(
         public string $chatId,
         public string $instruction,
         public ?int $taskId = null,
-    ) {}
+    ) {
+        $this->runToken = (string) Str::uuid();
+    }
 
     public function handle(CommandInterpreter $interpreter, WahaClient $waha): void
+    {
+        $release = false;
+        $this->holdTask();
+
+        try {
+            $release = $this->work($interpreter, $waha);
+        } finally {
+            $release ? $this->releaseTask() : $this->dropHold();
+        }
+    }
+
+    /** @return bool whether the task should go back to the humans now */
+    private function work(CommandInterpreter $interpreter, WahaClient $waha): bool
     {
         $command = $interpreter->run(
             $this->instruction,
@@ -80,9 +107,8 @@ class RunAgentInstructionJob implements ShouldQueue
         $nothingFiled = $command->outcome === AgentCommandOutcome::Dispatched
             && $command->pending_action_id === null;
 
-        if ($nothingFiled || in_array($command->outcome, [AgentCommandOutcome::Failed, AgentCommandOutcome::Unclear], true)) {
-            $this->releaseTask();
-        }
+        $release = $nothingFiled
+            || in_array($command->outcome, [AgentCommandOutcome::Failed, AgentCommandOutcome::Unclear], true);
 
         try {
             $waha->sendMessage($this->chatId, $this->message($command));
@@ -97,6 +123,24 @@ class RunAgentInstructionJob implements ShouldQueue
                 'error' => $e->getMessage(),
             ]);
         }
+
+        return $release;
+    }
+
+    /** This run is working on the task for as long as it lasts. */
+    private function holdTask(): void
+    {
+        if ($this->taskId !== null && $this->runToken !== null) {
+            Task::hold($this->taskId, $this->runToken);
+        }
+    }
+
+    /** Stop holding, without deciding anything about the task's status. */
+    private function dropHold(): void
+    {
+        if ($this->taskId !== null && $this->runToken !== null) {
+            Task::dropHold($this->taskId, $this->runToken);
+        }
     }
 
     /**
@@ -110,11 +154,13 @@ class RunAgentInstructionJob implements ShouldQueue
             return;
         }
 
+        $this->dropHold();
+
         // Never takes back a task this run handed to background work: failed()
         // runs on a timeout too — including one that happens after a site
         // investigation was queued — and reopening it then would let the same
         // task be delegated a second time while the investigation is still
-        // running. The holders give it back.
+        // running. The other holders give it back when they are done.
         Task::releaseIfIdle($this->taskId);
     }
 
