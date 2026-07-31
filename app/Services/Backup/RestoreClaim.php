@@ -55,10 +55,13 @@ class RestoreClaim
                 ->orWhere(fn ($dead) => $dead->where('restore_status', BackupStatus::Running)
                     ->whereNotNull('restore_started_at')
                     // The token of an EARLIER successful restore stays on the
-                    // row on purpose. Only a token belonging to the attempt
-                    // that is stuck means that attempt landed.
+                    // row on purpose, and says nothing about this attempt. But
+                    // a run with no attempt id at all — a payload from before
+                    // they existed — owns whatever token is there, so that one
+                    // IS proof it committed.
                     ->where(fn ($q) => $q->whereNull('restore_journal')
-                        ->orWhereColumn('restore_journal', '!=', 'restore_attempt'))
+                        ->orWhere(fn ($older) => $older->whereNotNull('restore_attempt')
+                            ->whereColumn('restore_journal', '!=', 'restore_attempt')))
                     ->where('updated_at', '<', now()->subMinutes(
                         max(1, (int) config('backup.operation_window_minutes', 60))
                     ))))

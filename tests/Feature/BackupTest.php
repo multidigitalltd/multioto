@@ -2193,6 +2193,27 @@ class BackupTest extends TestCase
         $this->assertNotNull(app(RestoreClaim::class)->take($backup->fresh()));
     }
 
+    public function test_a_legacy_restore_that_committed_is_still_never_repeated(): void
+    {
+        $backup = $this->runBackup();
+
+        // No attempt id, but a token: a payload from before attempts existed
+        // generates its own, so whatever is there belongs to this run — and it
+        // is only written when the transaction lands.
+        $backup->update([
+            'restore_status' => BackupStatus::Running,
+            'restore_attempt' => null,
+            'restore_journal' => 'generated-for-a-legacy-run',
+            'restore_started_at' => now()->subHours(4),
+        ]);
+        Backup::whereKey($backup->id)->update(['updated_at' => now()->subHours(4)]);
+
+        // The screen must not offer what the claim would refuse — and neither
+        // may repeat a restore that already replaced production data.
+        $this->assertNotNull(app(BackupRestorer::class)->blockedReason($backup->fresh()));
+        $this->assertNull(app(RestoreClaim::class)->take($backup->fresh()));
+    }
+
     public function test_a_restore_that_committed_is_still_never_repeated(): void
     {
         $backup = $this->runBackup();

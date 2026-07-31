@@ -90,14 +90,25 @@ class Backup extends Model
 
         return $this->restore_status === BackupStatus::Running
             && $this->restore_started_at !== null
-            // Not "no token at all": a successful restore leaves its token
-            // behind, and the next attempt keeps it as the proof for its own
-            // journal. What matters is whether THIS attempt committed — and a
-            // payload from before attempts carried ids has neither, which is
-            // not a commit either.
-            && ! ($this->restore_journal !== null && $this->restore_journal === $this->restore_attempt)
+            && ! $this->restoreCommitted()
             && $this->updated_at !== null
             && $this->updated_at->lt(now()->subMinutes($minutes));
+    }
+
+    /**
+     * Did the attempt this row is on actually replace the data?
+     *
+     * The token is written inside the replacement transaction, so its presence
+     * is the commit. Two subtleties: an EARLIER successful restore leaves its
+     * token behind on purpose, so a token belonging to a different attempt says
+     * nothing about this one — and a payload from before attempts carried ids
+     * has no attempt to compare against, in which case any token on the row is
+     * its own, and is proof.
+     */
+    public function restoreCommitted(): bool
+    {
+        return $this->restore_journal !== null
+            && ($this->restore_attempt === null || $this->restore_journal === $this->restore_attempt);
     }
 
     public function isAutomatic(): bool
