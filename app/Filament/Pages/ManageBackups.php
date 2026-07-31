@@ -279,7 +279,21 @@ class ManageBackups extends Page implements HasForms, HasTable
                             return;
                         }
 
-                        RestoreBackupJob::dispatch($record->id);
+                        try {
+                            RestoreBackupJob::dispatch($record->id);
+                        } catch (\Throwable $e) {
+                            // No job exists to run a failure handler, so the
+                            // claim would sit there for ever: every later
+                            // attempt refused, and the row undeletable.
+                            $record->update([
+                                'restore_status' => BackupStatus::Failed,
+                                'restore_error' => 'לא ניתן היה להעביר את השחזור לתור: '.mb_substr($e->getMessage(), 0, 300),
+                            ]);
+
+                            Notification::make()->title('השחזור לא התחיל — התור אינו זמין.')->danger()->send();
+
+                            return;
+                        }
 
                         Notification::make()
                             ->title('השחזור התחיל — ייתכן שתידרשו להתחבר מחדש בסיומו.')
@@ -298,7 +312,17 @@ class ManageBackups extends Page implements HasForms, HasTable
                     ->modalHeading('למחוק את הגיבוי?')
                     ->modalDescription('הארכיון יימחק מיעד האחסון ולא ניתן יהיה לשחזר ממנו.')
                     ->action(function (Backup $record): void {
-                        $record->deleteArchive();
+                        // Only drop the row once the object is really gone —
+                        // otherwise an archive full of customer data stays at
+                        // the destination with nothing left to find it by.
+                        if (! $record->deleteArchive()) {
+                            Notification::make()
+                                ->title('לא ניתן היה למחוק את קובץ הגיבוי מהיעד — הרשומה נשמרה.')
+                                ->danger()->send();
+
+                            return;
+                        }
+
                         $record->delete();
 
                         Notification::make()->title('הגיבוי נמחק')->success()->send();

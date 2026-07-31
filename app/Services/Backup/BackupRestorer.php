@@ -27,6 +27,9 @@ class BackupRestorer
     /** Rows sent per insert — big enough to be quick, small enough for any driver. */
     private const CHUNK = 500;
 
+    /** Bytes pulled per read when checking a member is intact. */
+    private const READ_CHUNK = 262144;
+
     public function __construct(private BackupArchive $archive) {}
 
     public function restore(Backup $backup): void
@@ -373,8 +376,12 @@ class BackupRestorer
      * file is overwritten.
      *
      * File writes cannot be rolled back the way rows can, so this is where the
-     * damage is prevented rather than undone: once a member is known good, the
-     * only thing left that can fail mid-way is the storage itself.
+     * damage is prevented rather than undone: once every member is known good,
+     * the only thing left that can fail mid-way is the storage itself.
+     *
+     * Each member is READ to the end, not merely opened. A corrupt payload or a
+     * bad CRC still has a valid directory entry, so getStream() succeeds and the
+     * failure would surface later — with earlier live files already overwritten.
      *
      * @param  array<string, mixed>  $manifest
      */
@@ -387,7 +394,25 @@ class BackupRestorer
                 throw new RuntimeException("קובץ הגיבוי פגום: לא ניתן לקרוא את \"{$entry}\".");
             }
 
-            fclose($stream);
+            try {
+                // Read until the stream says it has nothing left — NOT until
+                // feof(). The checksum is verified on the read that follows the
+                // last byte, so stopping at feof() would skip the one read that
+                // reports a damaged payload.
+                while (true) {
+                    $chunk = @fread($stream, self::READ_CHUNK);
+
+                    if ($chunk === false) {
+                        throw new RuntimeException("קובץ הגיבוי פגום: תוכן פגום ב\"{$entry}\".");
+                    }
+
+                    if ($chunk === '') {
+                        break;
+                    }
+                }
+            } finally {
+                fclose($stream);
+            }
         }
     }
 

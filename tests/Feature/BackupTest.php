@@ -548,6 +548,71 @@ class BackupTest extends TestCase
         $this->assertSame('שונה אחרי', Storage::disk('local')->get('attachments/a.txt'));
     }
 
+    public function test_a_corrupt_file_payload_is_caught_before_any_live_file_is_touched(): void
+    {
+        Storage::disk('local')->put('attachments/a.txt', 'מקורי א');
+        Storage::disk('local')->put('attachments/b.txt', 'מקורי ב');
+        $backup = $this->runBackup();
+
+        Storage::disk('local')->put('attachments/a.txt', 'שונה אחרי');
+        Storage::disk('local')->put('attachments/b.txt', 'שונה אחרי');
+
+        // Unlike a missing member, a damaged payload still has a perfectly
+        // valid directory entry: opening it succeeds and only reading it fails.
+        $this->corruptPayload($backup, 'files/local/attachments/b.txt');
+
+        try {
+            app(BackupRestorer::class)->restore($backup);
+            $this->fail('a damaged payload must not be restored');
+        } catch (\Throwable) {
+            // expected
+        }
+
+        // Neither one — including the file listed BEFORE the damaged member,
+        // which is the one a mid-way failure would already have overwritten.
+        $this->assertSame('שונה אחרי', Storage::disk('local')->get('attachments/a.txt'));
+        $this->assertSame('שונה אחרי', Storage::disk('local')->get('attachments/b.txt'));
+    }
+
+    public function test_the_backup_row_stays_when_the_manual_delete_cannot_remove_the_archive(): void
+    {
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+        $backup = $this->runBackup();
+
+        // An IAM policy that allows writes but not deletes looks exactly like
+        // this: no exception, just a refusal.
+        $disk = \Mockery::mock(Storage::disk('backups'))->makePartial();
+        $disk->shouldReceive('delete')->andReturn(false);
+        Storage::set('backups', $disk);
+
+        Livewire::test(ManageBackups::class)->callTableAction('delete', $backup);
+
+        // Dropping the row would leave a file full of customer details at the
+        // destination with nothing left to find it by.
+        $this->assertNotNull(Backup::find($backup->id));
+    }
+
+    public function test_a_restore_that_cannot_be_queued_releases_its_claim(): void
+    {
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+        $backup = $this->runBackup();
+
+        // The job never reaches a queue, so nothing exists to run its failure
+        // handler and clear the claim.
+        config([
+            'queue.default' => 'broken',
+            'queue.connections.broken' => ['driver' => 'no-such-driver'],
+        ]);
+
+        Livewire::test(ManageBackups::class)
+            ->callTableAction('restore', $backup, ['confirm' => config('backup.restore_confirmation')]);
+
+        // Left on "running" the row would refuse every later attempt for ever,
+        // and the delete action would stay hidden.
+        $this->assertSame(BackupStatus::Failed, $backup->fresh()->restore_status);
+        $this->assertNotNull($backup->fresh()->restore_error);
+    }
+
     public function test_a_backup_row_survives_when_its_archive_cannot_be_deleted(): void
     {
         config(['backup.retention_days' => 1, 'backup.keep_at_least' => 1]);
@@ -650,6 +715,30 @@ class BackupTest extends TestCase
         $zip->close();
 
         Storage::disk($backup->disk)->put($backup->path, (string) file_get_contents($local));
+    }
+
+    /**
+     * Damage one member's compressed payload in place, leaving every header and
+     * the central directory intact — the archive still opens and the entry is
+     * still listed; only reading its contents fails.
+     */
+    private function corruptPayload(Backup $backup, string $entry): void
+    {
+        $raw = (string) Storage::disk($backup->disk)->get($backup->path);
+
+        // The name's first appearance is in its local file header; the payload
+        // starts right after the header, the name and the extra field.
+        $header = strpos($raw, $entry);
+        $this->assertNotFalse($header, "the archive has no member \"{$entry}\"");
+
+        $header -= 30;
+        $nameLength = unpack('v', substr($raw, $header + 26, 2))[1];
+        $extraLength = unpack('v', substr($raw, $header + 28, 2))[1];
+        $payload = $header + 30 + $nameLength + $extraLength;
+
+        $raw[$payload + 4] = chr(ord($raw[$payload + 4]) ^ 0xFF);
+
+        Storage::disk($backup->disk)->put($backup->path, $raw);
     }
 
     /** Copy the stored archive to a local file the test can open. */
