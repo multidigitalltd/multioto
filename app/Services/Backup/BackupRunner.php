@@ -195,8 +195,6 @@ class BackupRunner
 
             if ($manifest === null) {
                 $unreadable++;
-            } else {
-                $imported++;
             }
 
             $when = rescue(
@@ -205,34 +203,14 @@ class BackupRunner
                 report: false,
             );
 
-            $backup = $existing ?? new Backup(['disk' => $disk, 'path' => $path]);
+            $size = rescue(fn (): int => (int) Storage::disk($disk)->size($path), 0, report: false);
 
-            $backup->fill([
-                // An archive whose manifest cannot be read is listed too, but
-                // as a failure: it is not restorable, and leaving it invisible
-                // would just mean paying to store something nobody can see.
-                'status' => $manifest === null ? BackupStatus::Failed : BackupStatus::Completed,
-                'size_bytes' => rescue(fn (): int => (int) Storage::disk($disk)->size($path), 0, report: false),
-                'manifest' => $manifest,
-                'error' => $manifest === null ? self::IMPORT_UNREADABLE : null,
-                'finished_at' => $when !== null ? Carbon::createFromTimestamp($when) : null,
-            ]);
+            $adopted = $existing === null
+                ? $this->insertImport($disk, $path, $manifest, $size, $when)
+                : $this->upgradeImport($existing, $manifest, $size, $when);
 
-            // Dated by the file itself, so the list stays in the order the
-            // archives were actually taken and retention keeps working.
-            if ($when !== null && ! $backup->exists) {
-                $backup->created_at = Carbon::createFromTimestamp($when);
-                $backup->updated_at = $backup->created_at;
-            }
-
-            try {
-                $backup->save();
-            } catch (UniqueConstraintViolationException) {
-                // Another scan running at the same moment got there first. Two
-                // rows for one archive would mean deleting either takes the
-                // file out from under the other.
-                $imported -= $manifest === null ? 0 : 1;
-                $unreadable -= $manifest === null ? 1 : 0;
+            if ($adopted && $manifest !== null) {
+                $imported++;
             }
         }
 
@@ -241,6 +219,78 @@ class BackupRunner
         }
 
         return ['imported' => $imported, 'unreadable' => $unreadable];
+    }
+
+    /**
+     * List an archive that has no row yet.
+     *
+     * @param  array<string, mixed>|null  $manifest  null when the archive could not be read
+     */
+    private function insertImport(string $disk, string $path, ?array $manifest, int $size, ?int $when): bool
+    {
+        $backup = new Backup([
+            'disk' => $disk,
+            'path' => $path,
+            // An archive whose manifest cannot be read is listed too, but as a
+            // failure: it is not restorable, and leaving it invisible would
+            // just mean paying to store something nobody can see.
+            'status' => $manifest === null ? BackupStatus::Failed : BackupStatus::Completed,
+            'size_bytes' => $size,
+            'manifest' => $manifest,
+            'error' => $manifest === null ? self::IMPORT_UNREADABLE : null,
+            'finished_at' => $when !== null ? Carbon::createFromTimestamp($when) : null,
+        ]);
+
+        // Dated by the file itself, so the list stays in the order the archives
+        // were actually taken and retention keeps working.
+        if ($when !== null) {
+            $backup->created_at = Carbon::createFromTimestamp($when);
+            $backup->updated_at = $backup->created_at;
+        }
+
+        try {
+            $backup->save();
+
+            return true;
+        } catch (UniqueConstraintViolationException) {
+            // Another scan got there first. Two rows for one archive would mean
+            // deleting either takes the file out from under the other — but a
+            // read that worked must not be thrown away just because the other
+            // scan's read did not.
+            $winner = Backup::query()->where('disk', $disk)->where('path', $path)->first();
+
+            return $winner !== null && $this->upgradeImport($winner, $manifest, $size, $when);
+        }
+    }
+
+    /**
+     * Fill in a row a scan listed but could not read, now that it can be.
+     *
+     * Only ever in that direction. A failed read must never overwrite a row
+     * another scan already completed — that would take a restorable archive
+     * away again, on the strength of one dropped connection.
+     *
+     * @param  array<string, mixed>|null  $manifest
+     */
+    private function upgradeImport(Backup $backup, ?array $manifest, int $size, ?int $when): bool
+    {
+        if ($manifest === null) {
+            return false;
+        }
+
+        // Conditional, so a scan that read the archive at the same moment
+        // cannot be undone by this one arriving late.
+        return Backup::query()
+            ->whereKey($backup->id)
+            ->where('status', BackupStatus::Failed)
+            ->where('error', self::IMPORT_UNREADABLE)
+            ->update([
+                'status' => BackupStatus::Completed,
+                'size_bytes' => $size,
+                'manifest' => json_encode($manifest, JSON_UNESCAPED_UNICODE),
+                'error' => null,
+                'finished_at' => $when !== null ? Carbon::createFromTimestamp($when) : null,
+            ]) === 1;
     }
 
     /** A row a scan created for an archive it could not read — worth retrying. */

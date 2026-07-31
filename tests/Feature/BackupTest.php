@@ -20,6 +20,7 @@ use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Storage;
 use Livewire\Livewire;
@@ -643,6 +644,41 @@ class BackupTest extends TestCase
 
         $this->expectException(UniqueConstraintViolationException::class);
         $duplicate->save();
+    }
+
+    public function test_a_scan_that_read_the_archive_wins_over_one_that_could_not(): void
+    {
+        $backup = $this->runBackup();
+        $path = $backup->path;
+        Backup::query()->delete();
+
+        // As if another scan, whose read failed, saved its row in the moment
+        // between this one checking the list and saving its own.
+        $racer = function () use ($path): void {
+            DB::table('backups')->insert([
+                'status' => BackupStatus::Failed->value,
+                'disk' => 'backups',
+                'path' => $path,
+                'error' => BackupRunner::IMPORT_UNREADABLE,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        };
+
+        Backup::creating(function () use (&$racer): void {
+            if ($racer !== null) {
+                ($racer)();
+                $racer = null;
+            }
+        });
+
+        app(BackupRunner::class)->importFromDisk();
+
+        // One row, and it is the readable one — a working archive must not be
+        // lost because someone else's connection dropped.
+        $adopted = Backup::sole();
+        $this->assertSame(BackupStatus::Completed, $adopted->status);
+        $this->assertNull(app(BackupRestorer::class)->blockedReason($adopted));
     }
 
     public function test_a_redelivered_restore_job_does_not_run_a_second_time(): void
