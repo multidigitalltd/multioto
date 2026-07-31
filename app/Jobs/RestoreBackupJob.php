@@ -44,7 +44,13 @@ class RestoreBackupJob implements ShouldQueue
         $started = Backup::whereKey($backup->id)
             ->where('restore_status', BackupStatus::Running)
             ->whereNull('restore_started_at')
-            ->when($this->attempt !== null, fn ($q) => $q->where('restore_attempt', $this->attempt))
+            // Always matched, including when this payload has no attempt id of
+            // its own: skipping the comparison would let a payload from before
+            // the ids existed take a claim made with one, which is exactly the
+            // stale restore the ids are here to stop.
+            ->where(fn ($q) => $this->attempt === null
+                ? $q->whereNull('restore_attempt')
+                : $q->where('restore_attempt', $this->attempt))
             ->update(['restore_started_at' => now()]);
 
         if ($started !== 1) {

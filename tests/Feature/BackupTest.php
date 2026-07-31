@@ -817,6 +817,24 @@ class BackupTest extends TestCase
         $this->assertSame(1, Customer::where('name', 'לקוח שהתקבל אחרי')->count());
     }
 
+    public function test_a_payload_without_an_attempt_id_cannot_take_a_claim_that_has_one(): void
+    {
+        $backup = $this->runBackup();
+        Customer::factory()->create(['name' => 'לקוח שהתקבל אחרי']);
+
+        // A payload queued before the attempt ids existed, arriving after a
+        // fresh claim was made with one.
+        $backup->update([
+            'restore_status' => BackupStatus::Running,
+            'restore_attempt' => 'the-new-one',
+            'restore_started_at' => null,
+        ]);
+
+        (new RestoreBackupJob($backup->id))->handle(app(BackupRestorer::class));
+
+        $this->assertSame(1, Customer::where('name', 'לקוח שהתקבל אחרי')->count());
+    }
+
     public function test_a_redelivered_restore_job_does_not_run_a_second_time(): void
     {
         $customer = Customer::factory()->create(['name' => 'לקוח מהגיבוי']);
