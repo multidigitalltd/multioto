@@ -16,6 +16,7 @@ use App\Models\User;
 use App\Services\Backup\BackupArchive;
 use App\Services\Backup\BackupRestorer;
 use App\Services\Backup\BackupRunner;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
@@ -596,6 +597,52 @@ class BackupTest extends TestCase
         // has to be able to see it in order to delete it.
         $this->assertSame(1, $found['unreadable']);
         $this->assertSame(BackupStatus::Failed, Backup::sole()->status);
+    }
+
+    public function test_an_archive_that_could_not_be_read_once_is_tried_again(): void
+    {
+        Customer::factory()->create(['name' => 'לקוח מהגיבוי']);
+        $backup = $this->runBackup();
+        $path = $backup->path;
+        Backup::query()->delete();
+
+        // A dropped connection or a full temp disk makes a perfectly good
+        // archive look corrupt.
+        $healthy = Storage::disk('backups');
+        $broken = \Mockery::mock($healthy)->makePartial();
+        $broken->shouldReceive('readStream')->andReturn(false);
+        Storage::set('backups', $broken);
+
+        $this->assertSame(1, app(BackupRunner::class)->importFromDisk()['unreadable']);
+        $this->assertSame(BackupStatus::Failed, Backup::sole()->status);
+
+        // Second scan, storage healthy again: skipping it for ever would leave
+        // the business unable to restore from an archive sitting right there.
+        Storage::set('backups', $healthy);
+
+        $this->assertSame(1, app(BackupRunner::class)->importFromDisk()['imported']);
+
+        $repaired = Backup::sole();
+        $this->assertSame($path, $repaired->path);
+        $this->assertSame(BackupStatus::Completed, $repaired->status);
+        $this->assertNull(app(BackupRestorer::class)->blockedReason($repaired));
+    }
+
+    public function test_two_scans_at_once_cannot_both_adopt_the_same_archive(): void
+    {
+        $backup = $this->runBackup();
+        $path = $backup->path;
+        Backup::query()->delete();
+
+        app(BackupRunner::class)->importFromDisk();
+
+        // As if a second administrator's scan had read the (empty) list before
+        // the first one saved: deleting either row would take the file out
+        // from under the other.
+        $duplicate = new Backup(['status' => BackupStatus::Completed, 'disk' => 'backups', 'path' => $path]);
+
+        $this->expectException(UniqueConstraintViolationException::class);
+        $duplicate->save();
     }
 
     public function test_a_redelivered_restore_job_does_not_run_a_second_time(): void

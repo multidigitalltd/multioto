@@ -7,6 +7,7 @@ use App\Mail\NotificationMail;
 use App\Models\Backup;
 use App\Models\SystemLog;
 use App\Support\EmailList;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Storage;
@@ -23,6 +24,12 @@ use Throwable;
  */
 class BackupRunner
 {
+    /**
+     * Marks a row created by a scan that found the archive but could not read
+     * it. Kept exact, because it is what tells a later scan to try again.
+     */
+    public const IMPORT_UNREADABLE = 'הארכיון נמצא ביעד אך לא ניתן לקרוא את תוכנו.';
+
     public function __construct(private BackupArchive $archive) {}
 
     /** @param  int|null  $userId  who pressed the button; null for the nightly run */
@@ -164,13 +171,23 @@ class BackupRunner
     {
         $disk = (string) config('backup.disk');
         $prefix = trim((string) config('backup.path'), '/');
-        $known = Backup::query()->where('disk', $disk)->pluck('path')->all();
 
         $imported = 0;
         $unreadable = 0;
 
         foreach (Storage::disk($disk)->files($prefix) as $path) {
-            if (! str_ends_with(mb_strtolower($path), '.zip') || in_array($path, $known, true)) {
+            if (! str_ends_with(mb_strtolower($path), '.zip')) {
+                continue;
+            }
+
+            $existing = Backup::query()->where('disk', $disk)->where('path', $path)->first();
+
+            // Already listed, and the read worked. A row whose read did NOT
+            // work is tried again: a dropped connection or a full temp disk
+            // makes a perfectly good archive look corrupt, and skipping it for
+            // ever afterwards would leave the business unable to restore from
+            // a backup that is sitting right there.
+            if ($existing !== null && ! $this->isUnreadableImport($existing)) {
                 continue;
             }
 
@@ -188,27 +205,35 @@ class BackupRunner
                 report: false,
             );
 
-            $backup = new Backup([
+            $backup = $existing ?? new Backup(['disk' => $disk, 'path' => $path]);
+
+            $backup->fill([
                 // An archive whose manifest cannot be read is listed too, but
                 // as a failure: it is not restorable, and leaving it invisible
                 // would just mean paying to store something nobody can see.
                 'status' => $manifest === null ? BackupStatus::Failed : BackupStatus::Completed,
-                'disk' => $disk,
-                'path' => $path,
                 'size_bytes' => rescue(fn (): int => (int) Storage::disk($disk)->size($path), 0, report: false),
                 'manifest' => $manifest,
-                'error' => $manifest === null ? 'הארכיון נמצא ביעד אך לא ניתן לקרוא את תוכנו.' : null,
+                'error' => $manifest === null ? self::IMPORT_UNREADABLE : null,
                 'finished_at' => $when !== null ? Carbon::createFromTimestamp($when) : null,
             ]);
 
             // Dated by the file itself, so the list stays in the order the
             // archives were actually taken and retention keeps working.
-            if ($when !== null) {
+            if ($when !== null && ! $backup->exists) {
                 $backup->created_at = Carbon::createFromTimestamp($when);
                 $backup->updated_at = $backup->created_at;
             }
 
-            $backup->save();
+            try {
+                $backup->save();
+            } catch (UniqueConstraintViolationException) {
+                // Another scan running at the same moment got there first. Two
+                // rows for one archive would mean deleting either takes the
+                // file out from under the other.
+                $imported -= $manifest === null ? 0 : 1;
+                $unreadable -= $manifest === null ? 1 : 0;
+            }
         }
 
         if ($imported > 0 || $unreadable > 0) {
@@ -216,6 +241,14 @@ class BackupRunner
         }
 
         return ['imported' => $imported, 'unreadable' => $unreadable];
+    }
+
+    /** A row a scan created for an archive it could not read — worth retrying. */
+    private function isUnreadableImport(Backup $backup): bool
+    {
+        return $backup->status === BackupStatus::Failed
+            && $backup->manifest === null
+            && $backup->error === self::IMPORT_UNREADABLE;
     }
 
     /** Read one archive's manifest without keeping the whole file around. */
