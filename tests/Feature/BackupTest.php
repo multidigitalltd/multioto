@@ -472,6 +472,27 @@ class BackupTest extends TestCase
             ->assertTableActionVisible('delete', $done);
     }
 
+    /**
+     * A file too large to archive is recorded as skipped, not backed up — and
+     * its row IS restored, still pointing at it. Deleting it as "not in the
+     * archive" would destroy customer data no backup ever held.
+     */
+    public function test_restoring_keeps_a_file_the_backup_deliberately_skipped(): void
+    {
+        Storage::disk('local')->put('attachments/huge.bin', str_repeat('x', 2048));
+        Storage::disk('local')->put('attachments/small.txt', 'קטן');
+
+        config(['backup.max_file_bytes' => 1024]);
+
+        $backup = $this->runBackup();
+        $this->assertNotEmpty($backup->manifest['skipped_files']);
+
+        app(BackupRestorer::class)->restore($backup);
+
+        Storage::disk('local')->assertExists('attachments/huge.bin');
+        Storage::disk('local')->assertExists('attachments/small.txt');
+    }
+
     public function test_a_restore_into_a_changed_schema_is_refused(): void
     {
         $backup = $this->runBackup();

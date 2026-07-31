@@ -56,7 +56,7 @@ class BackupRestorer
                 // restore reported as a success.
                 $this->assertComplete($zip, $order);
 
-                DB::transaction(function () use ($zip, $order, $deferred, $declared): void {
+                DB::transaction(function () use ($zip, $order, $deferred, $declared, $manifest): void {
                     // Shut the writers out for the duration. The panel and the
                     // queue workers keep running during a restore, and a row
                     // committed after its table was emptied would survive
@@ -90,10 +90,21 @@ class BackupRestorer
                     // The back-references held back to break a cycle, now that
                     // every row they point at exists.
                     $this->applyDeferred($pending);
-                });
 
-                $this->resetSequences($order);
-                $this->restoreFiles($zip, $manifest);
+                    $this->resetSequences($order);
+
+                    // Files INSIDE the transaction, so the table locks are
+                    // still held. Let go after the rows and a writer that was
+                    // blocked on an insert resumes, commits, writes its
+                    // attachment — and the reconciliation below then deletes
+                    // that attachment as one the archive does not know about.
+                    //
+                    // It also makes the restore all-or-nothing the useful way
+                    // round: a file that cannot be written now rolls the
+                    // database back to what it was, instead of leaving it
+                    // replaced with its attachments missing.
+                    $this->restoreFiles($zip, $manifest);
+                });
             } finally {
                 $zip->close();
             }
@@ -602,7 +613,7 @@ class BackupRestorer
             );
         }
 
-        $this->removeFilesNotInArchive($restored);
+        $this->removeFilesNotInArchive($restored, $manifest);
     }
 
     /**
@@ -614,9 +625,18 @@ class BackupRestorer
      * older backup should leave the same files it left behind at the time.
      *
      * @param  array<string, true>  $restored  "disk/path" keys just written
+     * @param  array<string, mixed>  $manifest
      */
-    private function removeFilesNotInArchive(array $restored): void
+    private function removeFilesNotInArchive(array $restored, array $manifest): void
     {
+        // A file the backup deliberately left out — too large to archive, or
+        // unreadable at the time — is not in the archive AND must not be
+        // deleted. Its row is restored and still points at it, so removing it
+        // would destroy customer data that no backup ever held a copy of.
+        foreach ((array) ($manifest['skipped_files'] ?? []) as $skipped) {
+            $restored[str_replace(':', '/', (string) $skipped)] = true;
+        }
+
         foreach ((array) config('backup.files', []) as $disk => $prefixes) {
             $storage = Storage::disk($disk);
 

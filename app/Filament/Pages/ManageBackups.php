@@ -253,6 +253,12 @@ class ManageBackups extends Page implements HasForms, HasTable
                             return;
                         }
 
+                        // Marked BEFORE dispatch: between the click and a
+                        // worker picking the job up, the row would otherwise
+                        // still look idle and another admin could delete the
+                        // archive out from under a restore already promised.
+                        $record->update(['restore_status' => BackupStatus::Running, 'restore_error' => null]);
+
                         RestoreBackupJob::dispatch($record->id);
 
                         Notification::make()
