@@ -90,7 +90,10 @@ class Backup extends Model
 
         return $this->restore_status === BackupStatus::Running
             && $this->restore_started_at !== null
-            && $this->restore_journal === null
+            // Not "no token at all": a successful restore leaves its token
+            // behind, and the next attempt keeps it as the proof for its own
+            // journal. What matters is whether THIS attempt committed.
+            && $this->restore_journal !== $this->restore_attempt
             && $this->updated_at !== null
             && $this->updated_at->lt(now()->subMinutes($minutes));
     }

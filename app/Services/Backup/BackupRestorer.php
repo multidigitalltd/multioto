@@ -540,15 +540,29 @@ class BackupRestorer
         // missing one leaves that table's live rows standing beside a database
         // restored around them — and reports success. An archive declaring no
         // tables at all would replace nothing whatsoever.
-        $missing = array_values(array_diff(
-            $this->archive->tables(),
-            array_keys((array) ($manifest['tables'] ?? [])),
-        ));
+        $expected = $this->archive->tables();
+        $declared = array_keys((array) ($manifest['tables'] ?? []));
+
+        $missing = array_values(array_diff($expected, $declared));
 
         if ($missing !== []) {
             throw new RuntimeException(
                 'הגיבוי אינו כולל את כל הטבלאות ('.implode(', ', array_slice($missing, 0, 5))
                 .(count($missing) > 5 ? ', ...' : '').') — השחזור נעצר כדי לא להשאיר נתונים ישנים לצד משוחזרים.'
+            );
+        }
+
+        // And nothing beyond them. A manifest naming an excluded table — the
+        // backup history itself, the queue, the sessions — would have that
+        // table emptied and reloaded too: restoring "backups" would delete the
+        // row tracking this very restore before its commit token is written,
+        // and restoring "jobs" would bring back work that was already done.
+        $extra = array_values(array_diff($declared, $expected));
+
+        if ($extra !== []) {
+            throw new RuntimeException(
+                'הגיבוי כולל טבלאות שאינן אמורות להיות בו ('.implode(', ', array_slice($extra, 0, 5))
+                .(count($extra) > 5 ? ', ...' : '').') — השחזור נעצר.'
             );
         }
     }

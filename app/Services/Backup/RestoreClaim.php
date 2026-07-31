@@ -54,7 +54,11 @@ class RestoreClaim
                 // refuse every later restore for ever.
                 ->orWhere(fn ($dead) => $dead->where('restore_status', BackupStatus::Running)
                     ->whereNotNull('restore_started_at')
-                    ->whereNull('restore_journal')
+                    // The token of an EARLIER successful restore stays on the
+                    // row on purpose. Only a token belonging to the attempt
+                    // that is stuck means that attempt landed.
+                    ->where(fn ($q) => $q->whereNull('restore_journal')
+                        ->orWhereColumn('restore_journal', '!=', 'restore_attempt'))
                     ->where('updated_at', '<', now()->subMinutes(
                         max(1, (int) config('backup.operation_window_minutes', 60))
                     ))))

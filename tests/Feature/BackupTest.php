@@ -2154,6 +2154,27 @@ class BackupTest extends TestCase
         $this->assertNotNull(app(RestoreClaim::class)->take($backup->fresh()));
     }
 
+    public function test_a_second_attempt_that_died_is_not_held_by_the_first_ones_token(): void
+    {
+        $backup = $this->runBackup();
+
+        // This archive was restored successfully once — its token stays on the
+        // row as the proof for that run's journal. A later attempt then died
+        // before committing anything.
+        $backup->update([
+            'restore_status' => BackupStatus::Running,
+            'restore_attempt' => 'attempt-second',
+            'restore_journal' => 'attempt-first',
+            'restore_started_at' => now()->subHours(4),
+        ]);
+        Backup::whereKey($backup->id)->update(['updated_at' => now()->subHours(4)]);
+
+        // The old token says nothing about the attempt that is stuck. Reading
+        // it as "committed" would strand this recovery point for ever.
+        $this->assertNull(app(BackupRestorer::class)->blockedReason($backup->fresh()));
+        $this->assertNotNull(app(RestoreClaim::class)->take($backup->fresh()));
+    }
+
     public function test_a_restore_that_committed_is_still_never_repeated(): void
     {
         $backup = $this->runBackup();
@@ -2170,6 +2191,29 @@ class BackupTest extends TestCase
         // Repeating it would delete everything accepted since it landed.
         $this->assertNotNull(app(BackupRestorer::class)->blockedReason($backup->fresh()));
         $this->assertNull(app(RestoreClaim::class)->take($backup->fresh()));
+    }
+
+    public function test_a_restore_refuses_an_archive_that_declares_tables_it_should_not(): void
+    {
+        $backup = $this->runBackup();
+
+        // An archive naming an excluded table would have it emptied and
+        // reloaded like any other — "backups" would delete the row tracking
+        // this very restore, "jobs" would resurrect work already done.
+        $this->corruptArchive($backup, function (ZipArchive $zip) {
+            $manifest = json_decode((string) $zip->getFromName('manifest.json'), true);
+            $manifest['tables']['jobs'] = 0;
+            $zip->addFromString('manifest.json', json_encode($manifest));
+        });
+
+        try {
+            app(BackupRestorer::class)->restore($backup);
+            $this->fail('a restore must refuse an archive declaring excluded tables');
+        } catch (\Throwable $e) {
+            $this->assertStringContainsString('jobs', $e->getMessage());
+        }
+
+        $this->assertSame(BackupStatus::Failed, $backup->fresh()->restore_status);
     }
 
     public function test_a_restore_refuses_an_archive_from_a_disk_this_install_does_not_have(): void
