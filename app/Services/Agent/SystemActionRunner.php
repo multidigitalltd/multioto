@@ -69,8 +69,18 @@ class SystemActionRunner
         };
     }
 
-    /** @param array<string, mixed> $p */
-    private function openTask(array $p): void
+    /**
+     * Open a task and tell whoever needs to know.
+     *
+     * Public because the console agent opens tasks directly rather than through
+     * an approval: a task has no effect on a customer, on money or on a site,
+     * and one that waits for approval before it exists is a note that gets
+     * lost. The creation itself stays here so both routes make the same row and
+     * send the same notification.
+     *
+     * @param  array<string, mixed>  $p
+     */
+    public function openTask(array $p): Task
     {
         $task = Task::create([
             'title' => (string) ($p['title'] ?? 'משימה'),
@@ -81,6 +91,8 @@ class SystemActionRunner
 
         // No assignee → the managers are notified a task landed (same as the UI).
         NotifyTaskCreatedJob::dispatch($task->id);
+
+        return $task;
     }
 
     /** @param array<string, mixed> $p */

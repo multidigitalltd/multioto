@@ -13,6 +13,7 @@ use App\Models\AgentCommand;
 use App\Models\Customer;
 use App\Models\PendingAction;
 use App\Models\Site;
+use App\Models\Task;
 use App\Models\Ticket;
 use App\Models\User;
 use App\Services\Agent\CommandInterpreter;
@@ -94,16 +95,32 @@ class CommandConsoleTest extends TestCase
         $this->assertSame(30000, data_get($action->payload, 'amount_agorot'));
     }
 
-    public function test_an_unactionable_request_falls_back_to_a_task(): void
+    public function test_an_unactionable_request_opens_a_task_without_waiting_for_approval(): void
     {
         $this->fakeAgent([
-            ['propose_task', ['title' => 'להתקשר לספק הדומיינים ולברר החידוש']],
+            ['open_task', ['title' => 'להתקשר לספק הדומיינים ולברר החידוש']],
         ]);
 
         $command = app(CommandInterpreter::class)->run('תדבר עם רשם הדומיינים על החידוש');
 
-        $this->assertSame(AgentCommandOutcome::Proposed, $command->outcome);
-        $this->assertSame('open_task', data_get(PendingAction::find($command->pending_action_id)->payload, 'operation'));
+        // A task touches nobody — no customer, no money, no site — and one that
+        // waits for approval before it exists is a note that gets lost.
+        $this->assertSame('להתקשר לספק הדומיינים ולברר החידוש', Task::sole()->title);
+        $this->assertSame(0, PendingAction::count());
+        $this->assertSame(AgentCommandOutcome::Dispatched, $command->outcome);
+    }
+
+    public function test_the_old_tool_name_still_opens_a_task(): void
+    {
+        // A model working off a cached prompt still says "propose_task"; it
+        // means the same thing and must not silently do nothing.
+        $this->fakeAgent([
+            ['propose_task', ['title' => 'לחדש את הדומיין']],
+        ]);
+
+        app(CommandInterpreter::class)->run('תטפל בחידוש הדומיין');
+
+        $this->assertSame('לחדש את הדומיין', Task::sole()->title);
     }
 
     public function test_it_fails_gracefully_when_the_ai_is_off(): void
@@ -292,12 +309,15 @@ class CommandConsoleTest extends TestCase
     {
         $this->actingAs(User::factory()->create());
 
+        $first = Customer::factory()->create(['name' => 'יוסי']);
+        $second = Customer::factory()->create(['name' => 'דנה']);
+
         // One run files two proposals; only the first links to the turn.
         $this->fakeAgent([
-            ['propose_task', ['title' => 'להתקשר ליוסי']],
-            ['propose_task', ['title' => 'לבדוק את הדומיין של דנה']],
+            ['propose_payment_request', ['customer_id' => $first->id, 'amount_ils' => 100, 'description' => 'להתקשר ליוסי']],
+            ['propose_payment_request', ['customer_id' => $second->id, 'amount_ils' => 200, 'description' => 'לבדוק את הדומיין של דנה']],
         ]);
-        Livewire::test(AgentConsole::class)->set('data.instruction', 'תפתח שתי משימות')->call('run');
+        Livewire::test(AgentConsole::class)->set('data.instruction', 'תשלח שתי דרישות תשלום')->call('run');
 
         $this->assertSame(2, PendingAction::where('status', ActionStatus::Pending)->count());
 
