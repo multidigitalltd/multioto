@@ -113,13 +113,19 @@ class BackupRestorer
         // version of those live files, and the first write of this restore
         // would take their journal with it.
         if ($pending > 0) {
-            $backup->update([
+            // The marker comes down FIRST. The commonest reason a recovery
+            // reports pending is that the database could not be asked whether
+            // the interrupted run committed — and recording this refusal is a
+            // write to that same database. Left standing, the marker would
+            // stop billing for the length of the whole window over a restore
+            // that never started.
+            $this->clearOperationMarker();
+
+            rescue(fn () => $backup->update([
                 'restore_status' => BackupStatus::Failed,
                 'restore_error' => "שחזור קודם שנקטע השאיר {$pending} קבצים שלא הוחזרו. "
                     .'יש להריץ php artisan backup:recover-files עד שיסתיים בהצלחה, ורק אז לשחזר.',
-            ]);
-
-            $this->clearOperationMarker();
+            ]), report: false);
 
             throw new RuntimeException(
                 "שחזור קודם שנקטע השאיר {$pending} קבצים שלא הוחזרו — הריצו php artisan backup:recover-files תחילה."

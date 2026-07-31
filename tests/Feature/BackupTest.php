@@ -2103,6 +2103,38 @@ class BackupTest extends TestCase
         }
     }
 
+    public function test_a_refusal_against_an_unreachable_database_does_not_leave_billing_blocked(): void
+    {
+        $backup = $this->runBackup();
+
+        // A journal whose commit state cannot be read, because the database is
+        // what is down — and recording the refusal is a write to that same
+        // database.
+        $this->leaveInterruptedRestore(
+            [['path' => 'attachments/keep.txt', 'was' => 'מלפני השחזור']], 'token-unknown', 999999);
+
+        $connection = config('database.default');
+        config(['database.connections.broken' => [
+            'driver' => 'sqlite', 'database' => '/nonexistent/multioto.sqlite', 'prefix' => '',
+        ]]);
+        config(['database.default' => 'broken']);
+
+        try {
+            app(BackupRestorer::class)->restore($backup);
+            $this->fail('a restore must not run over an unfinished rollback');
+        } catch (\Throwable) {
+            // expected
+        } finally {
+            config(['database.default' => $connection]);
+            $this->clearInterruptedRestore();
+        }
+
+        // A restore that never started must not stop the business billing for
+        // the length of the whole window.
+        $this->assertFileDoesNotExist(BackupRestorer::operationMarkerPath());
+        $this->assertFalse(app(OperationGate::class)->isRunning());
+    }
+
     public function test_a_restore_refuses_an_archive_from_a_disk_this_install_does_not_have(): void
     {
         Storage::disk('local')->put('attachments/keep.txt', 'צרופה');
