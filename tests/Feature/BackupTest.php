@@ -1030,6 +1030,64 @@ class BackupTest extends TestCase
         $this->assertNotNull(app(BackupRestorer::class)->blockedReason($backup->fresh()));
     }
 
+    public function test_a_short_copy_of_a_live_file_stops_the_restore(): void
+    {
+        Storage::disk('local')->put('attachments/a.txt', 'מהגיבוי');
+        $backup = $this->runBackup();
+
+        Storage::disk('local')->put('attachments/a.txt', str_repeat('חי', 200));
+
+        // The read of the LIVE file ends early and reports no error. Kept as
+        // the original, undoing would overwrite the live file with a truncated
+        // version of itself — corruption dressed up as a rollback.
+        $healthy = Storage::disk('local');
+        $flaky = \Mockery::mock($healthy)->makePartial();
+        $flaky->shouldReceive('readStream')->andReturnUsing(function (): mixed {
+            $handle = fopen('php://temp', 'r+');
+            fwrite($handle, 'חי');
+            rewind($handle);
+
+            return $handle;
+        });
+        Storage::set('local', $flaky);
+
+        try {
+            app(BackupRestorer::class)->restore($backup);
+            $this->fail('a short copy of the live file must stop the restore');
+        } catch (\Throwable) {
+            // expected
+        }
+
+        Storage::set('local', $healthy);
+
+        $this->assertSame(str_repeat('חי', 200), Storage::disk('local')->get('attachments/a.txt'));
+    }
+
+    public function test_a_committed_restore_stays_committed_when_the_bookkeeping_fails(): void
+    {
+        Customer::factory()->create(['name' => 'לקוח מהגיבוי']);
+        $backup = $this->runBackup();
+        Customer::query()->delete();
+
+        $restorer = new class(app(BackupArchive::class)) extends BackupRestorer
+        {
+            protected function resetSequences(array $tables): void
+            {
+                // Stands in for anything after the commit — including the
+                // write that records the outcome.
+                throw new \RuntimeException('connection lost');
+            }
+        };
+
+        $restorer->restore($backup);
+
+        // Whatever failed afterwards, the data is already replaced. "Failed"
+        // would read as "nothing happened, try again".
+        $this->assertSame(BackupStatus::Completed, $backup->fresh()->restore_status);
+        $this->assertNotNull($backup->fresh()->restored_at);
+        $this->assertNotNull(app(BackupRestorer::class)->blockedReason($backup->fresh()));
+    }
+
     public function test_a_live_file_whose_existence_cannot_be_checked_stops_the_restore(): void
     {
         Storage::disk('local')->put('attachments/a.txt', 'מהגיבוי');

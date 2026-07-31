@@ -40,6 +40,7 @@ class BackupRestorer
         $sequenceError = null;
         $previous = [];
         $staged = [];
+        $committed = false;
 
         try {
             $this->download($backup, $local);
@@ -111,6 +112,8 @@ class BackupRestorer
                         // missing and nothing left to compare against.
                         $this->restoreFiles($zip, $manifest, $previous, $staged);
                     });
+
+                    $committed = true;
                 } catch (Throwable $e) {
                     // Rows roll back on their own; files do not.
                     $this->putFilesBack($previous);
@@ -160,6 +163,16 @@ class BackupRestorer
                 ['backup_id' => $backup->id],
             );
         } catch (Throwable $e) {
+            // Once the replacement has committed, nothing that fails afterwards
+            // — not even writing this very row — makes the restore repeatable.
+            // Production is already at the archived snapshot, and "failed" is
+            // an invitation to run it again over everything accepted since.
+            if ($committed) {
+                $this->recordCommittedWithFault($backup, $e);
+
+                throw $e;
+            }
+
             $backup->update([
                 'restore_status' => BackupStatus::Failed,
                 'restore_error' => mb_substr($e->getMessage(), 0, 2000),
@@ -224,6 +237,30 @@ class BackupRestorer
         }
 
         return null;
+    }
+
+    /**
+     * Record a restore that landed but whose tail end did not.
+     *
+     * Written through rescue(): the reason bookkeeping failed is often that the
+     * database is unreachable, and this is bookkeeping too. Failing to say
+     * "completed" leaves the row on "running", which still refuses another
+     * attempt — the safe direction when nothing can be written at all.
+     */
+    private function recordCommittedWithFault(Backup $backup, Throwable $e): void
+    {
+        rescue(fn () => $backup->update([
+            'restore_status' => BackupStatus::Completed,
+            'restored_at' => now(),
+            'restore_error' => 'השחזור הושלם והנתונים הוחלפו, אך פעולה שאחריו נכשלה: '
+                .mb_substr($e->getMessage(), 0, 1500)
+                .' — יש לבדוק את המונים ואת הקבצים ידנית. אין לשחזר שוב.',
+        ]), report: false);
+
+        rescue(fn () => SystemLog::record('error', 'backup',
+            "שוחזר גיבוי #{$backup->id}, אך פעולה אחרי ההחלפה נכשלה: ".mb_substr($e->getMessage(), 0, 200),
+            ['backup_id' => $backup->id],
+        ), report: false);
     }
 
     private function download(Backup $backup, string $to): void
@@ -825,6 +862,8 @@ class BackupRestorer
             );
         }
 
+        $expected = rescue(fn (): ?int => $storage->size($path), null, report: false);
+
         $out = fopen($copy, 'wb');
 
         try {
@@ -834,7 +873,11 @@ class BackupRestorer
             fclose($source);
         }
 
-        if ($copied === false) {
+        // A dropped connection ends the read early and returns a byte count,
+        // not an error. Accepting a short copy here would mean undoing the
+        // restore by overwriting the live file with a truncated version of
+        // itself — corruption dressed up as a rollback.
+        if ($copied === false || ($expected !== null && $copied !== $expected)) {
             throw new RuntimeException(
                 "העתקת הקובץ הקיים \"{$disk}:{$path}\" לשמירה זמנית נכשלה — השחזור הופסק."
             );

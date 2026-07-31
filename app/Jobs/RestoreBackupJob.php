@@ -70,6 +70,10 @@ class RestoreBackupJob implements ShouldQueue
     {
         Backup::whereKey($this->backupId)
             ->where('restore_status', BackupStatus::Running)
+            // Never over a restore that already replaced the data. "Failed"
+            // reads as "nothing happened, try again", and trying again would
+            // delete everything accepted since it landed.
+            ->whereNull('restored_at')
             ->update([
                 'restore_status' => BackupStatus::Failed,
                 'restore_error' => mb_substr($e->getMessage(), 0, 2000),

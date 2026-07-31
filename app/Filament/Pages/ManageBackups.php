@@ -328,9 +328,16 @@ class ManageBackups extends Page implements HasForms, HasTable
                         // old snapshot back, wiping everything accepted in
                         // between. Also marks the row busy before dispatch, so
                         // it cannot be deleted while the job waits in the queue.
+                        // Spelled out rather than "anything but running": a
+                        // restore that landed and left something to repair is
+                        // also completed, and re-running it would delete
+                        // everything accepted since it landed. The model above
+                        // may be a stale copy from before that happened.
                         $claimed = Backup::whereKey($record->id)
                             ->where(fn ($q) => $q->whereNull('restore_status')
-                                ->orWhereNot('restore_status', BackupStatus::Running))
+                                ->orWhere('restore_status', BackupStatus::Failed)
+                                ->orWhere(fn ($done) => $done->where('restore_status', BackupStatus::Completed)
+                                    ->whereNull('restore_error')))
                             ->update(['restore_status' => BackupStatus::Running, 'restore_error' => null]);
 
                         if ($claimed !== 1) {
