@@ -499,6 +499,73 @@ class BackupTest extends TestCase
         Storage::disk('local')->assertExists('attachments/small.txt');
     }
 
+    public function test_a_backup_that_left_files_out_says_so_and_tells_the_team(): void
+    {
+        Mail::fake();
+        config([
+            'backup.max_file_bytes' => 1024,
+            'billing.notifications.team_email' => 'team@multi.test',
+        ]);
+
+        Storage::disk('local')->put('attachments/huge.bin', str_repeat('x', 2048));
+
+        $backup = $this->runBackup();
+
+        // The archive is still worth keeping, so it is not a failure — but the
+        // rows pointing at that file ARE backed up, so a restore would recreate
+        // a reference to a file no archive ever held.
+        $this->assertSame(BackupStatus::Completed, $backup->status);
+        $this->assertCount(1, $backup->manifest['skipped_files']);
+        Mail::assertSent(NotificationMail::class);
+    }
+
+    public function test_a_second_restore_cannot_be_started_while_one_is_running(): void
+    {
+        $backup = $this->runBackup();
+        $backup->update(['restore_status' => BackupStatus::Running]);
+
+        // The second would finish AFTER the first and put the same old snapshot
+        // back, wiping everything accepted in between.
+        $this->assertNotNull(app(BackupRestorer::class)->blockedReason($backup->fresh()));
+    }
+
+    public function test_a_corrupt_file_member_is_caught_before_any_live_file_is_touched(): void
+    {
+        Storage::disk('local')->put('attachments/a.txt', 'מקורי');
+        $backup = $this->runBackup();
+
+        Storage::disk('local')->put('attachments/a.txt', 'שונה אחרי');
+        $this->corruptArchive($backup, fn (ZipArchive $zip) => $zip->deleteName('files/local/attachments/a.txt'));
+
+        try {
+            app(BackupRestorer::class)->restore($backup);
+            $this->fail('a corrupt archive must not be restored');
+        } catch (\Throwable) {
+            // expected
+        }
+
+        // File writes cannot be rolled back, so the check has to happen first.
+        $this->assertSame('שונה אחרי', Storage::disk('local')->get('attachments/a.txt'));
+    }
+
+    public function test_a_backup_row_survives_when_its_archive_cannot_be_deleted(): void
+    {
+        config(['backup.retention_days' => 1, 'backup.keep_at_least' => 1]);
+
+        $keep = $this->runBackup();
+        $old = $this->runBackup();
+        Backup::whereKey($old->id)->update(['created_at' => now()->subDays(30)]);
+
+        // Gone from the destination by other means: delete() reports false and
+        // the row must stay, or the archive becomes unfindable.
+        Storage::shouldReceive('disk')->andThrow(new \RuntimeException('storage down'));
+
+        app(BackupRunner::class)->prune();
+
+        $this->assertNotNull(Backup::find($old->id));
+        $this->assertNotNull(Backup::find($keep->id));
+    }
+
     public function test_a_restore_into_a_changed_schema_is_refused(): void
     {
         $backup = $this->runBackup();

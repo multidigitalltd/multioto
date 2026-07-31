@@ -59,10 +59,24 @@ class Backup extends Model
         return Storage::disk($this->disk)->exists($this->path);
     }
 
-    /** Delete the archive itself, best-effort — the row is deleted regardless. */
-    public function deleteArchive(): void
+    /**
+     * Delete the archive itself. Returns false when it is still there — the
+     * destination disks do not throw, so an IAM policy that allows writes but
+     * not deletes reports failure only through this value. Dropping the row
+     * anyway would leave a file full of customer data at the destination with
+     * nothing left to find it by.
+     */
+    public function deleteArchive(): bool
     {
-        rescue(fn () => Storage::disk($this->disk)->delete($this->path), report: false);
+        if ($this->path === '') {
+            return true; // Never got as far as writing one.
+        }
+
+        return (bool) rescue(
+            fn (): bool => Storage::disk($this->disk)->delete($this->path),
+            false,
+            report: false,
+        );
     }
 
     public function rowCount(): int

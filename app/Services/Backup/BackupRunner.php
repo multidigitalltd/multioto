@@ -74,6 +74,8 @@ class BackupRunner
                 'files' => $manifest['files'] ?? 0,
             ]);
 
+            $this->warnAboutOmissions($backup, (array) ($manifest['skipped_files'] ?? []));
+
             $this->prune();
         } catch (Throwable $e) {
             // A half-written object on the destination would look like a real
@@ -179,12 +181,64 @@ class BackupRunner
             ->whereNotIn('id', $protected)
             ->get();
 
+        $removed = 0;
+
         foreach ($stale as $backup) {
-            $backup->deleteArchive();
+            // Keep the row when the object survives, so the archive stays
+            // findable and retention keeps trying rather than losing track of
+            // a file full of customer data.
+            if (! $backup->deleteArchive()) {
+                SystemLog::record('warning', 'backup', "לא ניתן היה למחוק את קובץ הגיבוי {$backup->path} — הרשומה נשמרה.", [
+                    'backup_id' => $backup->id,
+                ]);
+
+                continue;
+            }
+
             $backup->delete();
+            $removed++;
         }
 
-        return $stale->count();
+        return $removed;
+    }
+
+    /**
+     * A backup that left files out is not a quiet success.
+     *
+     * A file too large to archive, or unreadable at the time, is not in the
+     * archive — but its row is, so after losing the storage volume a restore
+     * would bring back a row pointing at a file no backup ever held. The
+     * archive is still worth keeping, so the run is not called a failure; it is
+     * called out instead, in the log and to the team.
+     *
+     * @param  list<string>  $skipped
+     */
+    private function warnAboutOmissions(Backup $backup, array $skipped): void
+    {
+        if ($skipped === []) {
+            return;
+        }
+
+        $count = count($skipped);
+
+        SystemLog::record('warning', 'backup', "הגיבוי הושלם אך {$count} קבצים לא נכללו בו.", [
+            'backup_id' => $backup->id,
+            'skipped' => array_slice($skipped, 0, 20),
+        ]);
+
+        $to = EmailList::parse(config('billing.notifications.team_email'));
+
+        if ($to === []) {
+            return;
+        }
+
+        rescue(fn () => Mail::to($to)->send(new NotificationMail(
+            "הגיבוי הושלם — אך {$count} קבצים לא נכללו",
+            "הגיבוי האחרון הצליח, אך {$count} קבצים לא נכנסו אליו (גדולים מהמותר או שלא ניתן היה לקרוא אותם).\n\n"
+            ."הרשומות שמצביעות עליהם כן מגובות, כך שאחרי שחזור הן יצביעו לקבצים שאינם קיימים.\n\n"
+            .implode("\n", array_slice($skipped, 0, 20))
+            ."\n\nאפשר להגדיל את המגבלה דרך BACKUP_MAX_FILE_BYTES, או לטפל בקבצים האלה בנפרד.",
+        )), report: false);
     }
 
     /**

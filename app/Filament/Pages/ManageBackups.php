@@ -195,6 +195,14 @@ class ManageBackups extends Page implements HasForms, HasTable
                     ->state(fn (Backup $r): string => $r->status === BackupStatus::Completed
                         ? number_format($r->rowCount()).' שורות · '.number_format($r->fileCount()).' קבצים'
                         : '—'),
+                // A backup that left files out is not a plain success: the rows
+                // pointing at them ARE backed up, so a restore would recreate
+                // references to files no archive ever held.
+                Tables\Columns\TextColumn::make('skipped')
+                    ->label('קבצים שלא גובו')->badge()->color('warning')
+                    ->state(fn (Backup $r): ?string => ($n = count((array) ($r->manifest['skipped_files'] ?? []))) > 0
+                        ? $n.' קבצים' : null)
+                    ->placeholder('—'),
                 Tables\Columns\TextColumn::make('error')
                     ->label('שגיאה')->wrap()->placeholder('—')->toggleable(),
                 // The restore's own outcome. Without it a failed restore reads
@@ -253,11 +261,23 @@ class ManageBackups extends Page implements HasForms, HasTable
                             return;
                         }
 
-                        // Marked BEFORE dispatch: between the click and a
-                        // worker picking the job up, the row would otherwise
-                        // still look idle and another admin could delete the
-                        // archive out from under a restore already promised.
-                        $record->update(['restore_status' => BackupStatus::Running, 'restore_error' => null]);
+                        // Claimed atomically: two admins clicking at once, or
+                        // one clicking twice during queue latency, would
+                        // otherwise enqueue the same restore twice — and the
+                        // second would finish after the first and put the same
+                        // old snapshot back, wiping everything accepted in
+                        // between. Also marks the row busy before dispatch, so
+                        // it cannot be deleted while the job waits in the queue.
+                        $claimed = Backup::whereKey($record->id)
+                            ->where(fn ($q) => $q->whereNull('restore_status')
+                                ->orWhereNot('restore_status', BackupStatus::Running))
+                            ->update(['restore_status' => BackupStatus::Running, 'restore_error' => null]);
+
+                        if ($claimed !== 1) {
+                            Notification::make()->title('שחזור מהגיבוי הזה כבר רץ.')->warning()->send();
+
+                            return;
+                        }
 
                         RestoreBackupJob::dispatch($record->id);
 

@@ -51,10 +51,12 @@ class BackupRestorer
                 $declared = (array) ($manifest['tables'] ?? []);
                 [$order, $deferred] = $this->tableOrder(array_keys($declared));
 
-                // Checked BEFORE anything is deleted: a missing member found
-                // half way through would leave that table emptied and the
-                // restore reported as a success.
+                // Checked BEFORE anything is touched: a missing member found
+                // half way through would leave a table emptied, or live files
+                // half overwritten with older contents, and the failure would
+                // arrive too late to undo either.
                 $this->assertComplete($zip, $order);
+                $this->assertFilesReadable($zip, $manifest);
 
                 DB::transaction(function () use ($zip, $order, $deferred, $declared, $manifest): void {
                     // Shut the writers out for the duration. The panel and the
@@ -139,6 +141,12 @@ class BackupRestorer
     {
         if ($backup->status !== BackupStatus::Completed) {
             return 'הגיבוי לא הושלם — אין ממה לשחזר.';
+        }
+
+        if ($backup->restore_status === BackupStatus::Running) {
+            // A second run would finish AFTER the first and put the same old
+            // snapshot back, wiping everything accepted in between.
+            return 'שחזור מהגיבוי הזה כבר רץ.';
         }
 
         if (! $backup->existsOnDisk()) {
@@ -354,6 +362,29 @@ class BackupRestorer
 
             if ($stream === false) {
                 throw new RuntimeException("קובץ הגיבוי פגום: חסרים נתוני הטבלה \"{$table}\".");
+            }
+
+            fclose($stream);
+        }
+    }
+
+    /**
+     * Every declared file must be present and readable before the first live
+     * file is overwritten.
+     *
+     * File writes cannot be rolled back the way rows can, so this is where the
+     * damage is prevented rather than undone: once a member is known good, the
+     * only thing left that can fail mid-way is the storage itself.
+     *
+     * @param  array<string, mixed>  $manifest
+     */
+    private function assertFilesReadable(ZipArchive $zip, array $manifest): void
+    {
+        foreach ($this->declaredFiles($zip, $manifest) as $entry) {
+            $stream = $zip->getStream('files/'.$entry);
+
+            if ($stream === false) {
+                throw new RuntimeException("קובץ הגיבוי פגום: לא ניתן לקרוא את \"{$entry}\".");
             }
 
             fclose($stream);
