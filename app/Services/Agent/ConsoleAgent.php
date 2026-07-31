@@ -97,9 +97,6 @@ class ConsoleAgent
      */
     private ?string $requestKey = null;
 
-    /** Work left running after this run returns (a site investigation). */
-    private bool $background = false;
-
     public function __construct(
         private ClaudeClient $ai,
         private ApprovalGate $gate,
@@ -112,7 +109,7 @@ class ConsoleAgent
      *                            so the agent works ON it instead of opening it again
      * @param  string|null  $requestKey  identifies the originating instruction, so a
      *                                   repeat of it recovers what it already opened
-     * @return array{summary: ?string, proposed: list<int>, opened: list<array{id: int, title: string}>, background: bool, clarification: ?string, customer_id: ?int, ticket_id: ?int, site_id: ?int}
+     * @return array{summary: ?string, proposed: list<int>, opened: list<array{id: int, title: string}>, clarification: ?string, customer_id: ?int, ticket_id: ?int, site_id: ?int}
      */
     public function run(
         string $instruction,
@@ -124,7 +121,6 @@ class ConsoleAgent
         $this->proposed = [];
         $this->opened = [];
         $this->clarification = null;
-        $this->background = false;
         $this->customerId = $this->ticketId = $this->siteId = null;
         $this->conversationUserId = $userId;
         $this->conversationSource = $source;
@@ -150,9 +146,6 @@ class ConsoleAgent
             // null, so a provider failure on the closing turn cannot present
             // finished work as something to try again.
             'opened' => $this->opened,
-            // Something is still running after this answer, so whoever is
-            // holding a task open on this run's behalf must keep holding it.
-            'background' => $this->background,
             'clarification' => $this->clarification,
             'customer_id' => $this->customerId,
             'ticket_id' => $this->ticketId,
@@ -957,13 +950,14 @@ class ConsoleAgent
 
         $this->siteId = $site->id;
 
-        // Counted up BEFORE the hand-off, because the run that is queuing this
-        // can still die afterwards — its own timeout is shorter than a single
-        // provider call — and its failure handler would otherwise give the task
-        // back while the investigation is still on its way to the answer. A
-        // count, not a flag: one instruction may check two sites, and the task
-        // belongs to the humans again only when the last check is done.
-        $this->holdTask();
+        // Written down BEFORE the hand-off, because the run that is queuing
+        // this can still die afterwards — its own timeout is shorter than a
+        // single provider call — and its failure handler would otherwise give
+        // the task back while the investigation is still on its way to the
+        // answer. A named hold, because one instruction may check two sites and
+        // the task is the humans' again only when the last check is done.
+        $token = (string) Str::uuid();
+        Task::hold($this->delegatedTaskId, $token);
 
         try {
             InvestigateSiteJob::dispatch(
@@ -976,40 +970,18 @@ class ConsoleAgent
                 // ends long before the findings exist, so the job hands the
                 // task back when it has them.
                 releasesTaskId: $this->delegatedTaskId,
+                holdToken: $token,
             );
         } catch (\Throwable $e) {
-            // No job exists to count the hold back down, and nothing else may
-            // release a held task — so it would sit "in progress" with nobody
-            // working on it. Undone here before the failure surfaces.
-            $this->unholdTask();
+            // No job exists to give the hold back, and nothing else may release
+            // a held task — so it would sit "in progress" with nobody working
+            // on it. Undone here before the failure surfaces.
+            Task::dropHold($this->delegatedTaskId, $token);
 
             throw $e;
         }
 
-        // Only once something really is running: a dispatch that threw leaves
-        // nothing to wait for, and claiming otherwise would keep a delegated
-        // task claimed for an investigation that does not exist.
-        $this->background = true;
-
         return ['content' => "סוכן האתר נשלח לבדוק את {$site->domain} — התוצאה תופיע כאן בצ׳אט בסיום, וכל תיקון יוצע לאישור."];
-    }
-
-    /** One more background job is holding the delegated task, if there is one. */
-    private function holdTask(): void
-    {
-        if ($this->delegatedTaskId !== null) {
-            Task::whereKey($this->delegatedTaskId)->increment('background_holds');
-        }
-    }
-
-    /** Undo a hold that was counted for work which never started. */
-    private function unholdTask(): void
-    {
-        if ($this->delegatedTaskId !== null) {
-            Task::whereKey($this->delegatedTaskId)
-                ->where('background_holds', '>', 0)
-                ->decrement('background_holds');
-        }
     }
 
     /**

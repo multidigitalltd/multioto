@@ -75,8 +75,13 @@ class InvestigateSiteJob implements ShouldQueue
      */
     public ?int $releasesTaskId = null;
 
-    /** Runtime only: this job has already counted its hold off the task. */
-    private bool $holdGivenUp = false;
+    /**
+     * This job's name on that task's holder list. Serialized with the job, so
+     * the fresh instance the worker builds to run failed() gives back the SAME
+     * hold rather than one belonging to another investigation. Class-level
+     * default for queue-payload BC, as above.
+     */
+    public ?string $holdToken = null;
 
     public function __construct(
         public int $siteId,
@@ -86,11 +91,13 @@ class InvestigateSiteJob implements ShouldQueue
         ?int $verifiesResolutionId = null,
         string $chatSource = AgentCommand::SOURCE_PANEL,
         ?int $releasesTaskId = null,
+        ?string $holdToken = null,
     ) {
         $this->chatUserId = $chatUserId;
         $this->verifiesResolutionId = $verifiesResolutionId;
         $this->chatSource = $chatSource;
         $this->releasesTaskId = $releasesTaskId;
+        $this->holdToken = $holdToken;
     }
 
     public function handle(SiteAgent $agent, SiteMemoryStore $memory): void
@@ -106,22 +113,19 @@ class InvestigateSiteJob implements ShouldQueue
      * Give up this job's hold on a waiting task, and hand the task back if it
      * was the last thing keeping it claimed.
      *
-     * Counted off exactly once per job: handle() releases in a finally, and a
-     * job that threw is then failed by the worker — a second decrement would
-     * eat a hold belonging to another investigation still running, and hand the
-     * task back underneath it.
+     * Runs more than once by design — handle() releases in a finally, and a job
+     * that threw is then failed by the worker on a fresh instance of itself —
+     * which is why the hold is given back BY NAME. Removing a token that is
+     * already gone changes nothing; counting one off twice would take a hold
+     * belonging to another investigation still running.
      */
     private function releaseTask(): void
     {
-        if ($this->releasesTaskId === null || $this->holdGivenUp) {
+        if ($this->releasesTaskId === null || $this->holdToken === null) {
             return;
         }
 
-        $this->holdGivenUp = true;
-
-        Task::whereKey($this->releasesTaskId)
-            ->where('background_holds', '>', 0)
-            ->decrement('background_holds');
+        Task::dropHold($this->releasesTaskId, $this->holdToken);
 
         // One instruction can start two investigations, and one of them may
         // have filed a fix that is waiting for approval — the task is handed

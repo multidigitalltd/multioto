@@ -3,7 +3,6 @@
 namespace App\Jobs;
 
 use App\Enums\AgentCommandOutcome;
-use App\Enums\TaskStatus;
 use App\Models\AgentCommand;
 use App\Models\Task;
 use App\Services\Agent\CommandInterpreter;
@@ -75,13 +74,11 @@ class RunAgentInstructionJob implements ShouldQueue
         // of the open list and out of the reminders — claimed forever by an
         // agent that has already finished.
         //
-        // Unless something is still running: a site investigation outlives this
-        // run and reports back later, and THAT job releases the task when the
-        // findings are in. Releasing here would put the task back on the list
-        // mid-investigation, where it could be delegated a second time.
+        // Whether anything the run started is STILL running is not decided
+        // here: releaseIfIdle() refuses while a background hold or an undecided
+        // proposal is on the task, and that job hands it back when it is done.
         $nothingFiled = $command->outcome === AgentCommandOutcome::Dispatched
-            && $command->pending_action_id === null
-            && ! $command->backgroundWork;
+            && $command->pending_action_id === null;
 
         if ($nothingFiled || in_array($command->outcome, [AgentCommandOutcome::Failed, AgentCommandOutcome::Unclear], true)) {
             $this->releaseTask();
@@ -113,17 +110,12 @@ class RunAgentInstructionJob implements ShouldQueue
             return;
         }
 
-        Task::whereKey($this->taskId)
-            ->where('status', TaskStatus::InProgress)
-            // Never take back a task this run already handed to background
-            // work. failed() runs on a timeout too — including a timeout that
-            // happens after a site investigation was queued — and reopening it
-            // then would let the same task be delegated a second time while the
-            // investigation is still running. The holders give it back.
-            ->where('background_holds', 0)
-            // reminded_at cleared here because a conditional update bypasses
-            // TaskObserver, and a released task must be remindable again.
-            ->update(['status' => TaskStatus::Open, 'reminded_at' => null]);
+        // Never takes back a task this run handed to background work: failed()
+        // runs on a timeout too — including one that happens after a site
+        // investigation was queued — and reopening it then would let the same
+        // task be delegated a second time while the investigation is still
+        // running. The holders give it back.
+        Task::releaseIfIdle($this->taskId);
     }
 
     /** The group's answer: what the agent produced, plus how to continue. */

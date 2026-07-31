@@ -601,9 +601,13 @@ class WhatsappTaskCommandsTest extends TestCase
 
     public function test_the_investigation_hands_the_task_back_when_it_ends(): void
     {
-        $task = Task::create(['title' => 'לבדוק את האתר', 'status' => TaskStatus::InProgress]);
+        $task = Task::create([
+            'title' => 'לבדוק את האתר',
+            'status' => TaskStatus::InProgress,
+            'background_holds' => ['hold-1'],
+        ]);
 
-        (new InvestigateSiteJob(1, 'בדיקה', releasesTaskId: $task->id))
+        (new InvestigateSiteJob(1, 'בדיקה', releasesTaskId: $task->id, holdToken: 'hold-1'))
             ->failed(new \RuntimeException('boom'));
 
         $this->assertSame(TaskStatus::Open, $task->fresh()->status);
@@ -619,7 +623,7 @@ class WhatsappTaskCommandsTest extends TestCase
         $task = Task::create([
             'title' => 'לבדוק את האתר',
             'status' => TaskStatus::InProgress,
-            'background_holds' => 1,
+            'background_holds' => ['hold-1'],
         ]);
 
         (new RunAgentInstructionJob(self::MGMT, 'לבדוק את האתר', $task->id))
@@ -632,12 +636,12 @@ class WhatsappTaskCommandsTest extends TestCase
         $agent = $this->mock(SiteAgent::class);
         $agent->shouldReceive('investigate')->andReturn('האתר תקין.');
 
-        (new InvestigateSiteJob($site->id, 'בדיקה', releasesTaskId: $task->id))
+        (new InvestigateSiteJob($site->id, 'בדיקה', releasesTaskId: $task->id, holdToken: 'hold-1'))
             ->handle($agent, app(SiteMemoryStore::class));
 
         $task->refresh();
         $this->assertSame(TaskStatus::Open, $task->status);
-        $this->assertSame(0, (int) $task->background_holds);
+        $this->assertSame([], $task->background_holds);
     }
 
     /**
@@ -650,28 +654,32 @@ class WhatsappTaskCommandsTest extends TestCase
         $task = Task::create([
             'title' => 'לבדוק את שני האתרים',
             'status' => TaskStatus::InProgress,
-            'background_holds' => 2,
+            'background_holds' => ['hold-1', 'hold-2'],
         ]);
 
         $agent = $this->mock(SiteAgent::class);
         $agent->shouldReceive('investigate')->andThrow(new \RuntimeException('boom'));
 
-        $job = new InvestigateSiteJob(
-            Site::factory()->create(['customer_id' => Customer::factory()->create()->id])->id,
+        $siteId = Site::factory()->create(['customer_id' => Customer::factory()->create()->id])->id;
+        $make = fn (): InvestigateSiteJob => new InvestigateSiteJob(
+            $siteId,
             'בדיקה',
             releasesTaskId: $task->id,
+            holdToken: 'hold-1',
         );
 
         try {
-            $job->handle($agent, app(SiteMemoryStore::class));
+            $make()->handle($agent, app(SiteMemoryStore::class));
         } catch (\RuntimeException) {
-            // The worker gets the exception and then fails the job.
+            // The worker gets the exception and then fails the job — on a FRESH
+            // instance built from the payload, which is why the hold has to be
+            // given back by name rather than counted off.
         }
 
-        $job->failed(new \RuntimeException('boom'));
+        $make()->failed(new \RuntimeException('boom'));
 
         $task->refresh();
-        $this->assertSame(1, (int) $task->background_holds);
+        $this->assertSame(['hold-2'], $task->background_holds);
         $this->assertSame(TaskStatus::InProgress, $task->status);
     }
 
@@ -685,18 +693,18 @@ class WhatsappTaskCommandsTest extends TestCase
         $task = Task::create([
             'title' => 'לבדוק את שני האתרים',
             'status' => TaskStatus::InProgress,
-            'background_holds' => 2,
+            'background_holds' => ['hold-1', 'hold-2'],
         ]);
 
         $agent = $this->mock(SiteAgent::class);
         $agent->shouldReceive('investigate')->andReturn('האתר תקין.');
 
-        (new InvestigateSiteJob($site->id, 'בדיקה', releasesTaskId: $task->id))
+        (new InvestigateSiteJob($site->id, 'בדיקה', releasesTaskId: $task->id, holdToken: 'hold-1'))
             ->handle($agent, app(SiteMemoryStore::class));
 
         $this->assertSame(TaskStatus::InProgress, $task->fresh()->status);
 
-        (new InvestigateSiteJob($site->id, 'בדיקה', releasesTaskId: $task->id))
+        (new InvestigateSiteJob($site->id, 'בדיקה', releasesTaskId: $task->id, holdToken: 'hold-2'))
             ->handle($agent, app(SiteMemoryStore::class));
 
         $this->assertSame(TaskStatus::Open, $task->fresh()->status);
@@ -737,7 +745,7 @@ class WhatsappTaskCommandsTest extends TestCase
         // Nothing is running, so the task is a person's again — not stuck
         // "in progress" behind a hold nobody will ever count down.
         $task->refresh();
-        $this->assertSame(0, (int) $task->background_holds);
+        $this->assertSame([], $task->background_holds);
         $this->assertSame(TaskStatus::Open, $task->status);
     }
 
@@ -753,7 +761,7 @@ class WhatsappTaskCommandsTest extends TestCase
         $task = Task::create([
             'title' => 'לבדוק את האתר',
             'status' => TaskStatus::InProgress,
-            'background_holds' => 1,
+            'background_holds' => ['hold-1'],
         ]);
 
         $agent = $this->mock(SiteAgent::class);
@@ -774,13 +782,13 @@ class WhatsappTaskCommandsTest extends TestCase
             }
         );
 
-        (new InvestigateSiteJob($site->id, 'בדיקה', releasesTaskId: $task->id))
+        (new InvestigateSiteJob($site->id, 'בדיקה', releasesTaskId: $task->id, holdToken: 'hold-1'))
             ->handle($agent, app(SiteMemoryStore::class));
 
         $task->refresh();
         $this->assertSame(TaskStatus::InProgress, $task->status);
         // Nothing is running any more — the pending decision is what it waits on.
-        $this->assertSame(0, (int) $task->background_holds);
+        $this->assertSame([], $task->background_holds);
 
         app(ApprovalGate::class)->reject(PendingAction::sole());
 

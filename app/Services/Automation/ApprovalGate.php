@@ -386,6 +386,14 @@ class ApprovalGate
 
         $tool = (string) data_get($action->payload, 'tool');
 
+        // A delegated task waiting on this fix is not free the moment the fix
+        // runs: the verification round is the rest of the same work. It is held
+        // for that job BEFORE the dispatch, so the decision's own release —
+        // which happens as soon as this returns — cannot hand the task back
+        // mid-verification, where it could be delegated all over again.
+        $token = (string) Str::uuid();
+        Task::hold($action->task_id, $token);
+
         try {
             InvestigateSiteJob::dispatch(
                 (int) data_get($action->payload, 'site_id'),
@@ -395,8 +403,15 @@ class ApprovalGate
                 $round + 1,
                 null,
                 $resolutionId,
+                // The verification carries the task too, so a next-step proposal
+                // it files is linked the same way this one was.
+                releasesTaskId: $action->task_id,
+                holdToken: $token,
             );
         } catch (\Throwable $e) {
+            // Nothing will run, so nothing may keep holding the task.
+            Task::dropHold($action->task_id, $token);
+
             // The fix itself already ran and succeeded — a failure to enqueue
             // the FOLLOW-UP must not bubble up and mark the executed action as
             // failed (a false audit trail that invites re-running a

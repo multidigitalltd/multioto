@@ -84,10 +84,6 @@ class CommandInterpreter
             return $this->finish($command, AgentCommandOutcome::Failed, 'הפעולה נכשלה: '.Str::limit($e->getMessage(), 160));
         }
 
-        // Not persisted — read by whoever is holding something open on this
-        // run's behalf (a delegated task waiting on a site investigation).
-        $command->backgroundWork = (bool) ($result['background'] ?? false);
-
         $command->customer_id = $result['customer_id'] ?? null;
         $command->ticket_id = $result['ticket_id'] ?? null;
         $command->site_id = $result['site_id'] ?? null;
