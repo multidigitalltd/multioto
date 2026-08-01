@@ -9,6 +9,7 @@ use Filament\Tables;
 use Filament\Tables\Concerns\InteractsWithTable;
 use Filament\Tables\Contracts\HasTable;
 use Filament\Tables\Table;
+use Illuminate\Support\HtmlString;
 
 /**
  * יומן אירועים — אירועים תפעוליים אחרונים של המערכת (בעיקר כשלי סוכן ה-AI), כדי
@@ -28,6 +29,15 @@ class SystemEventLog extends Page implements HasTable
     protected static ?string $navigationLabel = 'יומן אירועים';
 
     protected static ?string $title = 'יומן אירועים — אירועים תפעוליים אחרונים';
+
+    /** The stored context as readable text — same shape in the column and the modal. */
+    private static function pretty(mixed $context): string
+    {
+        return (string) json_encode(
+            $context,
+            JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT,
+        );
+    }
 
     // Right after "יומן פעולות צוות" (90), so the two logs sit together.
     protected static ?int $navigationSort = 91;
@@ -75,8 +85,26 @@ class SystemEventLog extends Page implements HasTable
                     ->formatStateUsing(fn (string $state): string => self::SOURCES[$state] ?? $state),
                 Tables\Columns\TextColumn::make('message')->label('הודעה')->wrap()->limit(160),
                 Tables\Columns\TextColumn::make('context')->label('פרטים')
-                    ->formatStateUsing(fn ($state): string => filled($state) ? json_encode($state, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : '—')
+                    ->formatStateUsing(fn ($state): string => filled($state) ? self::pretty($state) : '—')
                     ->wrap()->limit(200)->toggleable(),
+            ])
+            ->actions([
+                // The column is truncated, and a report that lists which
+                // charges are missing an invoice is worthless at 200
+                // characters — the ids are exactly what is cut off. This opens
+                // the whole entry.
+                Tables\Actions\Action::make('context')
+                    ->label('פרטים מלאים')
+                    ->icon('heroicon-o-document-magnifying-glass')
+                    ->visible(fn (SystemLog $record): bool => filled($record->context))
+                    ->modalHeading(fn (SystemLog $record): string => $record->message)
+                    ->modalSubmitAction(false)
+                    ->modalCancelActionLabel('סגירה')
+                    ->modalContent(fn (SystemLog $record): HtmlString => new HtmlString(
+                        '<pre class="overflow-x-auto whitespace-pre-wrap break-words text-xs leading-relaxed text-gray-700 dark:text-gray-200">'
+                        .e(self::pretty($record->context))
+                        .'</pre>',
+                    )),
             ])
             ->filters([
                 Tables\Filters\SelectFilter::make('level')->label('רמה')->options(self::LEVELS),
