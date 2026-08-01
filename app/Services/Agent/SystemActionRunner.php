@@ -99,15 +99,21 @@ class SystemActionRunner
             ? Task::firstOrCreate(['source_ref' => $p['source_ref']], $attributes)
             : Task::create($attributes);
 
-        if (! $task->wasRecentlyCreated) {
-            return $task;
-        }
-
         // Attached BEFORE the announcement: the notification job reads the
         // assignees to decide who to tell, and a task announced a moment too
         // early reaches the managers as "unassigned" while the person it was
         // actually given to hears nothing.
-        $assignees = array_filter(array_map('intval', (array) ($p['assignee_ids'] ?? [])));
+        $assignees = array_values(array_filter(array_map('intval', (array) ($p['assignee_ids'] ?? []))));
+
+        if (! $task->wasRecentlyCreated) {
+            // Recovered rather than created — a repeat of a request whose first
+            // run died. It may have died in the gap between the insert and the
+            // owners being attached, and nothing else would ever repair that:
+            // every later retry recovers the same row and reports it as done.
+            $this->adoptAssignees($task, $assignees);
+
+            return $task;
+        }
 
         if ($assignees !== []) {
             $task->assignees()->sync($assignees);
@@ -130,6 +136,33 @@ class SystemActionRunner
         }
 
         return $task;
+    }
+
+    /**
+     * Give an ownerless task the owners its request asked for.
+     *
+     * Only when it has NONE: a task somebody has since handed to a colleague
+     * must not be pulled back by a retry of the instruction that opened it.
+     * Silent when there is nothing to fix, so an ordinary repeat says nothing.
+     *
+     * @param  list<int>  $assignees
+     */
+    public function adoptAssignees(Task $task, array $assignees): void
+    {
+        if ($assignees === [] || $task->assignees()->exists()) {
+            return;
+        }
+
+        $task->assignees()->sync($assignees);
+
+        try {
+            NotifyTaskCreatedJob::dispatch($task->id, $assignees);
+        } catch (\Throwable $e) {
+            Log::warning('SystemActionRunner: recovered task notification not queued', [
+                'task_id' => $task->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     /** @param array<string, mixed> $p */

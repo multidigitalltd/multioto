@@ -1206,6 +1206,16 @@ class ConsoleAgent
             }
         }
 
+        [$assignees, $problems] = $this->resolveAssignees((string) ($input['assignee'] ?? ''));
+        $due = $this->parseDue((string) ($input['due_at'] ?? ''));
+
+        // Said now, before anything is written: the model can correct the date
+        // and call again in the same run, and no task is opened carrying a
+        // deadline the manager asked for and never got.
+        if ($due === false) {
+            return $this->badDue((string) $input['due_at']);
+        }
+
         // A killed worker (the WhatsApp run has a hard timeout) can leave the
         // task created and the answer undelivered, and the manager is then told
         // to try again. The retry is recognised by the REQUEST, not by what the
@@ -1215,17 +1225,12 @@ class ConsoleAgent
         if ($keys !== [] && $existing = $this->openedForRequest($keys)) {
             $this->opened[] = ['id' => $existing->id, 'title' => (string) $existing->title];
 
+            // The first run may have died in the gap between creating the row
+            // and attaching its owners. Nothing else would ever notice: every
+            // later retry recovers this same row and calls it done.
+            app(SystemActionRunner::class)->adoptAssignees($existing, $assignees->pluck('id')->all());
+
             return ['content' => "המשימה כבר קיימת: #{$existing->id} {$existing->title}. אל תפתח אותה שוב."];
-        }
-
-        [$assignees, $problems] = $this->resolveAssignees((string) ($input['assignee'] ?? ''));
-        $due = $this->parseDue((string) ($input['due_at'] ?? ''));
-
-        // Said now, before anything is written: the model can correct the date
-        // and call again in the same run, and no task is opened carrying a
-        // deadline the manager asked for and never got.
-        if ($due === false) {
-            return $this->badDue((string) $input['due_at']);
         }
 
         $task = app(SystemActionRunner::class)->openTask([

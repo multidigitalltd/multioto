@@ -443,6 +443,31 @@ class CommandConsoleTest extends TestCase
         $this->assertSame([$dani->id], Task::sole()->assignees->pluck('id')->all());
     }
 
+    /**
+     * The first run inserted the task and died before its owner was attached.
+     * Every later retry recovers that same row, so if the retry does not repair
+     * it nothing ever will — the task sits on nobody's list looking handled.
+     */
+    public function test_a_retry_gives_the_recovered_task_the_owner_it_never_got(): void
+    {
+        Queue::fake();
+        $dan = User::factory()->create(['name' => 'דני כהן']);
+
+        $this->fakeAgent([['open_task', ['title' => 'לבדוק את השרת', 'assignee' => 'דני כהן']]]);
+        app(CommandInterpreter::class)->run('תפתח לדני כהן משימה לבדוק את השרת');
+
+        // Simulate the death: the row exists, the owners never landed.
+        $task = Task::sole();
+        $task->assignees()->detach();
+
+        $this->fakeAgent([['open_task', ['title' => 'לבדוק את השרת', 'assignee' => 'דני כהן']]]);
+        app(CommandInterpreter::class)->run('תפתח לדני כהן משימה לבדוק את השרת');
+
+        $this->assertSame(1, Task::count());
+        $this->assertSame([$dan->id], $task->fresh()->assignees->pluck('id')->all());
+        Queue::assertPushed(NotifyTaskCreatedJob::class, 2);
+    }
+
     public function test_assigning_a_task_that_does_not_exist_changes_nothing(): void
     {
         $toolResult = null;
