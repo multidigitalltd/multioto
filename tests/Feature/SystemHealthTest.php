@@ -1,0 +1,301 @@
+<?php
+
+namespace Tests\Feature;
+
+use App\Enums\ChargeStatus;
+use App\Enums\SubscriptionStatus;
+use App\Jobs\CheckMoneyIntegrityJob;
+use App\Jobs\HeartbeatJob;
+use App\Mail\NotificationMail;
+use App\Models\Charge;
+use App\Models\Customer;
+use App\Models\HealthHeartbeat;
+use App\Models\Invoice;
+use App\Models\PaymentToken;
+use App\Models\Plan;
+use App\Models\Subscription;
+use App\Models\SystemLog;
+use App\Services\System\HealthReport;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Mail;
+use Tests\TestCase;
+
+/**
+ * The machinery that watches the machinery.
+ *
+ * Everything the business does runs in a queued job dispatched by the
+ * scheduler. When one of those stops, nothing fails — so these tests defend
+ * the only two things that can tell the difference between a quiet night and a
+ * dead one: a heartbeat that stopped, and money that no longer adds up.
+ */
+class SystemHealthTest extends TestCase
+{
+    use RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        // The backup check has its own tests; here it would report "no backup
+        // has ever run" on every case and hide what is being asked.
+        config(['backup.enabled' => false]);
+    }
+
+    private function alive(): void
+    {
+        HealthHeartbeat::beat(HealthHeartbeat::SCHEDULER);
+        HealthHeartbeat::beat(HealthHeartbeat::QUEUE);
+    }
+
+    public function test_a_system_with_both_heartbeats_is_healthy(): void
+    {
+        $this->alive();
+
+        $this->assertSame(HealthReport::OK, app(HealthReport::class)->status());
+    }
+
+    public function test_a_scheduler_that_stopped_reporting_is_down(): void
+    {
+        $this->alive();
+        HealthHeartbeat::query()->whereKey(HealthHeartbeat::SCHEDULER)
+            ->update(['beat_at' => now()->subHour()]);
+
+        $report = app(HealthReport::class)->collect();
+
+        $this->assertSame(HealthReport::DOWN, $report['status']);
+        $this->assertSame(
+            HealthReport::DOWN,
+            collect($report['checks'])->firstWhere('key', 'scheduler')['status'],
+        );
+    }
+
+    /**
+     * The case a "can we reach the queue" check would miss entirely: jobs are
+     * accepted, nothing throws, and nobody runs them.
+     */
+    public function test_a_queue_nobody_is_working_is_down(): void
+    {
+        $this->alive();
+        HealthHeartbeat::query()->whereKey(HealthHeartbeat::QUEUE)
+            ->update(['beat_at' => now()->subHours(2)]);
+
+        $this->assertSame(HealthReport::DOWN, app(HealthReport::class)->status());
+    }
+
+    public function test_a_part_that_never_reported_is_not_treated_as_healthy(): void
+    {
+        // Nothing has ever beaten — a fresh install, or a worker that never
+        // started. Silence is not proof of life either way.
+        $this->assertSame(HealthReport::DOWN, app(HealthReport::class)->status());
+    }
+
+    /**
+     * A backup that has not run is not "the system is down" — everything is
+     * still working — but it is exactly the kind of thing that stays invisible
+     * until the day it matters.
+     */
+    public function test_a_missing_backup_is_reported_as_needing_attention(): void
+    {
+        config(['backup.enabled' => true]);
+        $this->alive();
+
+        $report = app(HealthReport::class)->collect();
+
+        $this->assertSame(HealthReport::DEGRADED, $report['status']);
+        $this->assertSame(
+            HealthReport::DEGRADED,
+            collect($report['checks'])->firstWhere('key', 'backup')['status'],
+        );
+    }
+
+    public function test_the_queue_heartbeat_is_stamped_by_the_job_itself(): void
+    {
+        (new HeartbeatJob)->handle();
+
+        $this->assertNotNull(HealthHeartbeat::lastBeat(HealthHeartbeat::QUEUE));
+    }
+
+    /*
+    | ----------------------------------------------------------------
+    | The endpoint an external monitor asks
+    | ----------------------------------------------------------------
+    */
+
+    public function test_the_health_endpoint_answers_without_details_by_default(): void
+    {
+        $this->alive();
+
+        $this->getJson('/health')
+            ->assertOk()
+            ->assertExactJson(['status' => 'ok']);
+    }
+
+    public function test_the_health_endpoint_fails_the_check_when_a_part_stopped(): void
+    {
+        // 503 is the whole point: an uptime monitor needs no configuration to
+        // alarm on it.
+        $this->getJson('/health')->assertStatus(503);
+    }
+
+    public function test_details_are_only_given_to_the_holder_of_the_token(): void
+    {
+        config(['health.token' => 'secret-token']);
+        $this->alive();
+
+        $this->getJson('/health')->assertOk()->assertJsonMissingPath('checks');
+        $this->getJson('/health?token=wrong')->assertOk()->assertJsonMissingPath('checks');
+        $this->getJson('/health?token=secret-token')->assertOk()->assertJsonPath('checks.0.key', 'database');
+    }
+
+    /*
+    | ----------------------------------------------------------------
+    | Does the money still add up
+    | ----------------------------------------------------------------
+    */
+
+    private function customer(): Customer
+    {
+        return Customer::factory()->create();
+    }
+
+    private function charge(ChargeStatus $status, int $total = 11800, array $extra = []): Charge
+    {
+        return Charge::create(array_merge([
+            'customer_id' => $this->customer()->id,
+            'amount_agorot' => 10000,
+            'vat_agorot' => 1800,
+            'total_agorot' => $total,
+            'currency' => 'ILS',
+            'status' => $status,
+            'attempt_number' => 1,
+            'period_start' => now()->startOfMonth(),
+            'period_end' => now()->endOfMonth(),
+        ], $extra));
+    }
+
+    public function test_a_clean_month_says_nothing_at_all(): void
+    {
+        Mail::fake();
+        config(['billing.notifications.team_email' => 'team@example.com']);
+
+        $charge = $this->charge(ChargeStatus::Succeeded);
+        Invoice::create([
+            'charge_id' => $charge->id,
+            'customer_id' => $charge->customer_id,
+            'linet_document_id' => 'D-1',
+            'amount_agorot' => 10000,
+            'vat_agorot' => 1800,
+            'total_agorot' => 11800,
+            'issued_at' => now(),
+        ]);
+
+        (new CheckMoneyIntegrityJob)->handle();
+
+        Mail::assertNothingSent();
+        $this->assertSame(0, SystemLog::where('source', 'billing')->count());
+    }
+
+    public function test_money_taken_without_an_invoice_is_reported(): void
+    {
+        Mail::fake();
+        config(['billing.notifications.team_email' => 'team@example.com']);
+
+        $charge = $this->charge(ChargeStatus::Succeeded);
+        // Older than the grace the async invoice job is given.
+        $charge->timestamps = false;
+        $charge->forceFill(['created_at' => now()->subHours(6)])->save();
+
+        (new CheckMoneyIntegrityJob)->handle();
+
+        Mail::assertSent(fn (NotificationMail $mail): bool => str_contains($mail->bodyText, 'ללא חשבונית')
+            && str_contains($mail->bodyText, "חיוב #{$charge->id}"));
+        $this->assertSame(1, SystemLog::where('source', 'billing')->where('level', 'error')->count());
+    }
+
+    public function test_an_invoice_on_a_charge_that_failed_is_reported(): void
+    {
+        Mail::fake();
+        config(['billing.notifications.team_email' => 'team@example.com']);
+
+        $charge = $this->charge(ChargeStatus::Failed);
+        Invoice::create([
+            'charge_id' => $charge->id,
+            'customer_id' => $charge->customer_id,
+            'linet_document_id' => 'D-2',
+            'amount_agorot' => 10000,
+            'vat_agorot' => 1800,
+            'total_agorot' => 11800,
+            'issued_at' => now(),
+        ]);
+
+        (new CheckMoneyIntegrityJob)->handle();
+
+        Mail::assertSent(fn (NotificationMail $mail): bool => str_contains($mail->bodyText, 'חיוב שלא הצליח'));
+    }
+
+    public function test_a_document_that_disagrees_with_its_charge_is_reported(): void
+    {
+        Mail::fake();
+        config(['billing.notifications.team_email' => 'team@example.com']);
+
+        $charge = $this->charge(ChargeStatus::Succeeded, total: 11800);
+        Invoice::create([
+            'charge_id' => $charge->id,
+            'customer_id' => $charge->customer_id,
+            'linet_document_id' => 'D-3',
+            'amount_agorot' => 10000,
+            'vat_agorot' => 1800,
+            'total_agorot' => 23600, // billed twice what was taken
+            'issued_at' => now(),
+        ]);
+
+        (new CheckMoneyIntegrityJob)->handle();
+
+        Mail::assertSent(fn (NotificationMail $mail): bool => str_contains($mail->bodyText, 'פערי סכום'));
+    }
+
+    public function test_a_subscription_whose_charge_date_passed_is_reported(): void
+    {
+        Mail::fake();
+        config(['billing.notifications.team_email' => 'team@example.com']);
+        Carbon::setTestNow('2026-08-01 10:00:00');
+
+        $customer = $this->customer();
+        $plan = Plan::factory()->create();
+        $token = PaymentToken::create([
+            'customer_id' => $customer->id,
+            'cardcom_token' => 'tok-1',
+            'last_four' => '1234',
+            'is_default' => true,
+        ]);
+
+        Subscription::create([
+            'customer_id' => $customer->id,
+            'plan_id' => $plan->id,
+            'token_id' => $token->id,
+            'status' => SubscriptionStatus::Active,
+            'next_charge_at' => now()->subDay(),
+        ]);
+
+        (new CheckMoneyIntegrityJob)->handle();
+
+        // The dispatcher runs every fifteen minutes — a day later means the
+        // pipeline is stuck, not that the date has not arrived.
+        Mail::assertSent(fn (NotificationMail $mail): bool => str_contains($mail->bodyText, 'עבר מועד החיוב'));
+    }
+
+    public function test_nothing_is_repaired_by_the_check(): void
+    {
+        Mail::fake();
+        $charge = $this->charge(ChargeStatus::Succeeded);
+        $charge->timestamps = false;
+        $charge->forceFill(['created_at' => now()->subHours(6)])->save();
+
+        (new CheckMoneyIntegrityJob)->handle();
+
+        // Reporting only: money is never corrected by a background job.
+        $this->assertSame(ChargeStatus::Succeeded, $charge->fresh()->status);
+        $this->assertSame(0, Invoice::count());
+    }
+}

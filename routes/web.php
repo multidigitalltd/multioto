@@ -6,6 +6,7 @@ use App\Http\Controllers\BillingController;
 use App\Http\Controllers\BrandingController;
 use App\Http\Controllers\CsatController;
 use App\Http\Controllers\CustomerCardPdfController;
+use App\Http\Controllers\HealthController;
 use App\Http\Controllers\IntegrationKeysFallbackController;
 use App\Http\Controllers\MarketingPreferencesController;
 use App\Http\Controllers\Portal\PortalAuthController;
@@ -25,6 +26,14 @@ use Illuminate\Support\Facades\Route;
 
 // Team-only app: the root just sends visitors to the admin panel.
 Route::redirect('/', '/admin');
+
+/*
+ | Is the machinery running? Asked from OUTSIDE, because the scheduler cannot
+ | report that the scheduler has stopped and a queue with no worker raises
+ | nothing at all. 200 = running, 503 = a moving part has stopped; details only
+ | with the health token. Point an uptime monitor here (docs/deployment.md).
+ */
+Route::get('/health', HealthController::class)->middleware('throttle:60,1')->name('health');
 
 // Public business logo — a stable hosted URL for emails (which can't use
 // data: URIs) and other public surfaces. Cached; 404 when no logo is set.

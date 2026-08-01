@@ -5,6 +5,7 @@ use App\Enums\ChargeStatus;
 use App\Jobs\AlertExpiringCardsBeforeChargeJob;
 use App\Jobs\ChargeSubscriptionJob;
 use App\Jobs\CheckDomainExpiryJob;
+use App\Jobs\CheckMoneyIntegrityJob;
 use App\Jobs\CheckSiteContentJob;
 use App\Jobs\CheckSiteDnsJob;
 use App\Jobs\CheckSiteLayoutJob;
@@ -14,6 +15,7 @@ use App\Jobs\CheckSlaBreachesJob;
 use App\Jobs\CheckSslExpiryJob;
 use App\Jobs\CheckStoreSalesJob;
 use App\Jobs\FollowUpPendingTicketsJob;
+use App\Jobs\HeartbeatJob;
 use App\Jobs\MonitorSiteJob;
 use App\Jobs\ReconcileChargeJob;
 use App\Jobs\RunBackupJob;
@@ -28,6 +30,7 @@ use App\Jobs\WeeklyMaintenanceJob;
 use App\Models\AuditLog;
 use App\Models\Broadcast;
 use App\Models\Charge;
+use App\Models\HealthHeartbeat;
 use App\Models\MonitorCheck;
 use App\Models\Site;
 use App\Models\Subscription;
@@ -60,6 +63,25 @@ Schedule::useCache('database');
 // piling up redundant deferred jobs each tick. Monitoring and internal safety
 // jobs keep running.
 $awake = fn (): bool => ! app(ShabbatClock::class)->isBlocked();
+
+/*
+ | Proof of life. Both stamps are read by /health, which an EXTERNAL monitor
+ | asks — the scheduler cannot report that the scheduler has stopped, and a
+ | queue with no worker accepts jobs happily and runs none of them. The first
+ | stamp says the scheduler ticked; the second is written by a job, so it says
+ | a worker actually ran something. Neither is gated on Shabbat: a system that
+ | stops reporting for a day is a system nobody trusts on Sunday.
+ */
+Schedule::call(fn () => HealthHeartbeat::beat(HealthHeartbeat::SCHEDULER))
+    ->everyMinute()->name('system:heartbeat')->onOneServer();
+
+Schedule::job(new HeartbeatJob)->everyFiveMinutes()->name('system:queue-heartbeat')->onOneServer();
+
+// Does the money still add up? Reads only — every finding is reported for a
+// person to decide on, because automatic repair of money is how one wrong
+// assumption becomes a second charge on somebody's card. Silent when clean.
+Schedule::job(new CheckMoneyIntegrityJob)->dailyAt('08:15')
+    ->name('billing:money-integrity')->onOneServer();
 
 // Billing: enqueue a charge for every subscription that is due. The job holds
 // a per-subscription lock and re-checks the due date, so double dispatch is safe.
