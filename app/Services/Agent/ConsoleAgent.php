@@ -8,6 +8,7 @@ use App\Enums\CustomerStatus;
 use App\Enums\TaskStatus;
 use App\Enums\TicketStatus;
 use App\Jobs\InvestigateSiteJob;
+use App\Jobs\NotifyTaskCreatedJob;
 use App\Models\AgentCommand;
 use App\Models\Broadcast;
 use App\Models\Customer;
@@ -30,6 +31,7 @@ use App\Support\Money;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 /**
@@ -184,6 +186,7 @@ class ConsoleAgent
             '- אפשר לשרשר: קודם קריאה כדי לזהות את היעד (מזהה לקוח/פנייה/אתר), ואז הצעה.',
             '- כשמבקשים לדוור/להודיע/לעדכן את כל הלקוחות (או קבוצה מהם) — השתמש ב-draft_broadcast. יש לך את הכלי הזה: אל תפתח על כך משימה ואל תאמר שאין לך כלי. הכלי רק מכין טיוטה, שום דבר לא נשלח, והמנהל עורך ושולח בעצמו ממסך הדיוורים.',
             '- אם משהו אין לו כלי ישיר — פתח עליו משימה לאדם עם open_task. הכלי פותח את המשימה מיד, בלי אישור, כדי שאף בקשה לא תיפול בין הכיסאות. אל תשאל אם לפתוח משימה — פתח.',
+            '- אם לא הצלחת לשייך משימה כי השם לא מוכר או מתאים לכמה אנשים — המשימה כבר נפתחה. אמור זאת למנהל, שאל למי לשייך, וכשיענה השתמש ב-assign_task עם מספר המשימה. אל תפתח משימה נוספת.',
             '- כשפותחים משימה: אם המנהל אמר למי ("לדני", "לי") — העבר assignee, ואם אמר למתי ("מחר", "עד חמישי", "ב-15/9") — חשב את התאריך מהתאריך של היום שמופיע למעלה והעבר due_at בפורמט YYYY-MM-DD (או עם שעה: YYYY-MM-DD HH:MM). משימה בלי בעלים ובלי תאריך נראית מטופלת ואף אחד לא עושה אותה.',
             '- כל שאלה למנהל — בין אם חסר מידע (סכום, איזה לקוח מבין כמה) ובין אם אתה צריך אישור על כיוון לפני שתפעל — חייבת לעבור דרך הכלי need_clarification, אף פעם לא כטקסט חופשי בסוף. שאלה בטקסט בלבד לא נרשמת כשאלה, המנהל לא יכול לענות עליה, והשיחה נתקעת. אחרי need_clarification המנהל עונה והשיחה ממשיכה מאותה נקודה.',
             '- סכומים בשקלים. היה תמציתי ומדויק. בסיום כתוב בעברית מה עשית ומה הוצע לאישור.',
@@ -382,6 +385,14 @@ class ConsoleAgent
                     'assignee' => $str,
                     'due_at' => $str,
                 ], ['title'])],
+            ['name' => 'assign_task', 'description' => 'שייך משימה קיימת לאיש צוות ו/או קבע לה תאריך יעד — מיד, בלי אישור. '
+                .'לשימוש כשפתחת משימה ולא הצלחת לשייך אותה (שם כפול או לא מוכר) והמנהל ענה למי — אל תפתח משימה חדשה, שייך את הקיימת. '
+                .'task_id (מספר המשימה), assignee ו/או due_at.',
+                'input_schema' => $obj([
+                    'task_id' => $int,
+                    'assignee' => $str,
+                    'due_at' => $str,
+                ], ['task_id'])],
             ['name' => 'need_clarification', 'description' => 'כשחסר מידע קריטי שאי אפשר לגלות לבד — שאל את המנהל שאלה אחת קצרה וסיים. question.',
                 'input_schema' => $obj(['question' => $str], ['question'])],
         ];
@@ -422,6 +433,7 @@ class ConsoleAgent
                 // The old name still arrives from a model working off an
                 // earlier prompt; it means the same thing and now does it.
                 'open_task', 'propose_task' => $this->openTask($input),
+                'assign_task' => $this->assignTask($input),
                 'need_clarification' => $this->needClarification($input),
                 default => ['content' => "כלי לא מוכר: {$name}", 'is_error' => true],
             };
@@ -1223,6 +1235,73 @@ class ConsoleAgent
         }
 
         return ['content' => $said.'. אל תפתח אותה שוב.'];
+    }
+
+    /**
+     * Put an owner and/or a deadline on a task that already exists.
+     *
+     * The repair path for a task opened without them: the name was ambiguous
+     * or unknown, the task was captured anyway rather than lost, and the
+     * manager has now said who it belongs to. Without this the only way to act
+     * on that answer would be to open a SECOND task — which is how one request
+     * becomes two rows and two notifications.
+     *
+     * @param  array<string, mixed>  $input
+     * @return array{content: string, is_error?: bool}
+     */
+    private function assignTask(array $input): array
+    {
+        $task = Task::find((int) ($input['task_id'] ?? 0));
+
+        if (! $task) {
+            return ['content' => 'המשימה לא נמצאה.', 'is_error' => true];
+        }
+
+        [$assignees, $problems] = $this->resolveAssignees((string) ($input['assignee'] ?? ''));
+        $due = $this->parseDue((string) ($input['due_at'] ?? ''));
+
+        // Nothing resolved and nothing to set: say what is wrong rather than
+        // reporting a change that did not happen.
+        if ($assignees->isEmpty() && $due === null) {
+            return [
+                'content' => $problems === []
+                    ? 'לא צוין למי לשייך או תאריך יעד.'
+                    : implode('; ', $problems).'. שאל את המנהל למי לשייך.',
+                'is_error' => true,
+            ];
+        }
+
+        if ($due !== null) {
+            $task->update(['due_at' => $due]);
+        }
+
+        if ($assignees->isNotEmpty()) {
+            $task->assignees()->sync($assignees->pluck('id')->all());
+
+            // The point of assigning is that the person hears about it. Kept
+            // non-fatal, like every other notification here: the assignment is
+            // already saved and a queue hiccup must not undo it.
+            try {
+                NotifyTaskCreatedJob::dispatch($task->id);
+            } catch (\Throwable $e) {
+                Log::warning('ConsoleAgent: task assignment notification not queued', [
+                    'task_id' => $task->id,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        $said = "משימה #{$task->id} עודכנה";
+
+        if ($assignees->isNotEmpty()) {
+            $said .= ' · שויכה ל'.$assignees->pluck('name')->implode(', ');
+        }
+
+        if ($due !== null) {
+            $said .= ' · עד '.$due->format('d/m/Y H:i');
+        }
+
+        return ['content' => $said.($problems === [] ? '.' : '. '.implode('; ', $problems).'.')];
     }
 
     /**

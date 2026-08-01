@@ -212,6 +212,51 @@ class CommandConsoleTest extends TestCase
         $this->assertSame([$dan->id], Task::sole()->assignees->pluck('id')->all());
     }
 
+    /**
+     * The repair path: the name was ambiguous, the task was captured anyway,
+     * and the manager's answer must land on THAT task — not on a second one.
+     */
+    public function test_the_answer_to_which_dani_lands_on_the_task_already_opened(): void
+    {
+        $kohen = User::factory()->create(['name' => 'דני כהן']);
+        User::factory()->create(['name' => 'דני לוי']);
+
+        $this->fakeAgent([['open_task', ['title' => 'לבדוק את השרת', 'assignee' => 'דני']]]);
+        app(CommandInterpreter::class)->run('תפתח לדני משימה לבדוק את השרת');
+
+        $task = Task::sole();
+        $this->assertSame([], $task->assignees->pluck('id')->all());
+
+        // "דני כהן" — the next turn assigns the task that already exists.
+        $this->fakeAgent([['assign_task', ['task_id' => $task->id, 'assignee' => 'דני כהן']]]);
+        app(CommandInterpreter::class)->run('דני כהן');
+
+        $this->assertSame(1, Task::count());
+        $this->assertSame([$kohen->id], $task->fresh()->assignees->pluck('id')->all());
+    }
+
+    public function test_assigning_a_task_that_does_not_exist_changes_nothing(): void
+    {
+        $toolResult = null;
+
+        $claude = Mockery::mock(ClaudeClient::class);
+        $claude->shouldReceive('isEnabled')->andReturn(true);
+        $claude->shouldReceive('lastError')->andReturnNull();
+        $claude->shouldReceive('converse')->andReturnUsing(
+            function (string $system, string $prompt, array $tools, callable $handler) use (&$toolResult): string {
+                $toolResult = $handler('assign_task', ['task_id' => 999, 'assignee' => 'דני']);
+
+                return 'לא נמצאה משימה.';
+            }
+        );
+        $this->app->instance(ClaudeClient::class, $claude);
+
+        app(CommandInterpreter::class)->run('שייך את משימה 999 לדני');
+
+        $this->assertTrue($toolResult['is_error'] ?? false);
+        $this->assertSame(0, Task::count());
+    }
+
     public function test_the_old_tool_name_still_opens_a_task(): void
     {
         // A model working off a cached prompt still says "propose_task"; it
