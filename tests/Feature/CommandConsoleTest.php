@@ -114,6 +114,65 @@ class CommandConsoleTest extends TestCase
         $this->assertSame(AgentCommandOutcome::Dispatched, $command->outcome);
     }
 
+    public function test_a_task_is_opened_with_the_person_and_the_date_that_were_asked_for(): void
+    {
+        Carbon::setTestNow('2026-08-01 09:00:00');
+        $dani = User::factory()->create(['name' => 'דני']);
+
+        $this->fakeAgent([
+            ['open_task', [
+                'title' => 'לבדוק את השרת',
+                'assignee' => 'דני',
+                'due_at' => '2026-08-02',
+            ]],
+        ]);
+
+        $command = app(CommandInterpreter::class)->run('תפתח לדני משימה למחר לבדוק את השרת');
+
+        $task = Task::sole();
+        $this->assertSame([$dani->id], $task->assignees->pluck('id')->all());
+        // A date on its own is a deadline, not a midnight cut-off.
+        $this->assertSame('2026-08-02 23:59:59', $task->due_at->format('Y-m-d H:i:s'));
+        $this->assertStringContainsString('#'.$task->id, $command->result);
+    }
+
+    public function test_a_task_can_be_opened_for_the_operator_themselves(): void
+    {
+        $me = User::factory()->create(['name' => 'המנהל']);
+
+        $this->fakeAgent([['open_task', ['title' => 'להתקשר לספק', 'assignee' => 'me']]]);
+
+        app(CommandInterpreter::class)->run('תפתח לי משימה להתקשר לספק', userId: $me->id);
+
+        $this->assertSame([$me->id], Task::sole()->assignees->pluck('id')->all());
+    }
+
+    public function test_a_name_nobody_answers_to_is_said_out_loud_and_not_guessed(): void
+    {
+        // A task on the wrong person's list is worse than one on nobody's: it
+        // looks handled.
+        User::factory()->create(['name' => 'דניאל']);
+        $toolResult = null;
+
+        $claude = Mockery::mock(ClaudeClient::class);
+        $claude->shouldReceive('isEnabled')->andReturn(true);
+        $claude->shouldReceive('lastError')->andReturnNull();
+        $claude->shouldReceive('converse')->andReturnUsing(
+            function (string $system, string $prompt, array $tools, callable $handler) use (&$toolResult): string {
+                $toolResult = $handler('open_task', ['title' => 'לבדוק את השרת', 'assignee' => 'רותם']);
+
+                return 'נפתחה משימה.';
+            }
+        );
+        $this->app->instance(ClaudeClient::class, $claude);
+
+        app(CommandInterpreter::class)->run('תפתח לרותם משימה לבדוק את השרת');
+
+        $task = Task::sole();
+        $this->assertSame([], $task->assignees->pluck('id')->all());
+        $this->assertStringContainsString('לא נמצא איש צוות בשם רותם', $toolResult['content']);
+    }
+
     public function test_the_old_tool_name_still_opens_a_task(): void
     {
         // A model working off a cached prompt still says "propose_task"; it

@@ -59,8 +59,9 @@ class CheckMoneyIntegrityJob implements ShouldQueue
             return;
         }
 
+        // The mail carries a readable sample; the log below carries everything.
         $report = collect($findings)->map(
-            fn (array $finding): string => "• {$finding['title']}\n  {$finding['detail']}"
+            fn (array $finding): string => "• {$finding['title']}\n  {$finding['preview']}"
         )->implode("\n\n");
 
         // The rows themselves, not just the headings: the mail is best-effort
@@ -225,9 +226,18 @@ class CheckMoneyIntegrityJob implements ShouldQueue
     /**
      * One finding, or null when there is nothing to say.
      *
+     * Two renderings of the same rows: a short PREVIEW for the mail, which
+     * nobody reads past a screenful, and the full DETAIL for the log — the
+     * copy that survives when there is no team address or the delivery fails,
+     * and the one the mail sends the reader to. A list capped at ten is a list
+     * whose eleventh row nobody can ever find.
+     *
+     * The stored copy is bounded too, generously, and says so when it cuts:
+     * silence about truncation reads as "that was all of them".
+     *
      * @param  Collection<int, covariant \Illuminate\Database\Eloquent\Model>  $rows
      * @param  callable(mixed): string  $describe
-     * @return array{title: string, detail: string}|null
+     * @return array{title: string, detail: string, preview: string}|null
      */
     private function finding($rows, string $title, callable $describe): ?array
     {
@@ -235,14 +245,27 @@ class CheckMoneyIntegrityJob implements ShouldQueue
             return null;
         }
 
-        $max = (int) config('health.money.max_examples', 10);
-        $shown = $rows->take($max)->map($describe)->implode("\n  ");
-        $extra = $rows->count() > $max ? "\n  ועוד ".($rows->count() - $max).'…' : '';
+        $described = $rows->map($describe);
 
         return [
-            'title' => $title.' ('.$rows->count().')',
-            'detail' => $shown.$extra,
+            'title' => $title.' ('.$described->count().')',
+            'detail' => $this->lines($described, (int) config('health.money.log_max_rows', 500), ' שורות נוספות לא נשמרו'),
+            'preview' => $this->lines($described, (int) config('health.money.max_examples', 10), '…'),
         ];
+    }
+
+    /**
+     * The rows as text, cut at $max and saying so.
+     *
+     * @param  Collection<int, string>  $described
+     */
+    private function lines($described, int $max, string $suffix): string
+    {
+        $shown = $described->take($max)->implode("\n  ");
+
+        return $described->count() > $max
+            ? $shown."\n  ועוד ".($described->count() - $max).$suffix
+            : $shown;
     }
 
     /** Best-effort: a mail failure must not hide the log entry that is already recorded. */

@@ -65,8 +65,11 @@ return [
         // to ignore the report.
         'window_days' => (int) env('HEALTH_MONEY_WINDOW_DAYS', 14),
 
-        // Most rows named in one report; the rest are counted.
+        // Most rows named in the EMAIL; the rest are counted. The log keeps
+        // the full list — that is the copy the mail points at, and the one
+        // that survives when there is nobody to mail.
         'max_examples' => 10,
+        'log_max_rows' => 500,
     ],
 
 ];

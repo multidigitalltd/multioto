@@ -88,6 +88,7 @@ class SystemActionRunner
             'customer_id' => $p['customer_id'] ?? null,
             'status' => TaskStatus::Open,
             'priority' => TicketPriority::Normal,
+            'due_at' => $p['due_at'] ?? null,
         ];
 
         // With a reference, creation is keyed on it: two runs of the same
@@ -100,6 +101,16 @@ class SystemActionRunner
 
         if (! $task->wasRecentlyCreated) {
             return $task;
+        }
+
+        // Attached BEFORE the announcement: the notification job reads the
+        // assignees to decide who to tell, and a task announced a moment too
+        // early reaches the managers as "unassigned" while the person it was
+        // actually given to hears nothing.
+        $assignees = array_filter(array_map('intval', (array) ($p['assignee_ids'] ?? [])));
+
+        if ($assignees !== []) {
+            $task->assignees()->sync($assignees);
         }
 
         // No assignee → the managers are notified a task landed (same as the UI).

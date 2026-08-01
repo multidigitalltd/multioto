@@ -400,18 +400,33 @@ class SystemHealthTest extends TestCase
      * failed. The log entry is then the only surviving copy, and "3 charges
      * without an invoice" without saying which three is a hunt with no needle.
      */
-    public function test_the_log_entry_names_the_rows_and_not_only_the_counts(): void
+    public function test_the_log_entry_names_every_row_even_past_the_email_cap(): void
     {
         Mail::fake();
-        config(['billing.notifications.team_email' => null]);
+        config(['billing.notifications.team_email' => 'team@example.com']);
 
-        $charge = $this->charge(ChargeStatus::Succeeded, extra: ['charged_at' => now()->subHours(6)]);
+        // More findings than the mail lists: the mail shows a sample, the log
+        // keeps them all — it is the copy the mail points at, and the only one
+        // when there is nobody to mail.
+        $charges = collect(range(1, 13))->map(function (): Charge {
+            $charge = $this->charge(ChargeStatus::Succeeded, extra: ['charged_at' => now()->subHours(6)]);
+
+            return $charge;
+        });
 
         (new CheckMoneyIntegrityJob)->handle();
 
-        $log = SystemLog::where('source', 'billing')->latest('id')->first();
-        $this->assertNotNull($log);
-        $this->assertStringContainsString("חיוב #{$charge->id}", json_encode($log->context, JSON_UNESCAPED_UNICODE));
+        $context = json_encode(
+            SystemLog::where('source', 'billing')->latest('id')->first()?->context,
+            JSON_UNESCAPED_UNICODE,
+        );
+
+        foreach ($charges as $charge) {
+            $this->assertStringContainsString("חיוב #{$charge->id}", (string) $context);
+        }
+
+        // …and the mail is still a readable sample rather than a wall.
+        Mail::assertSent(fn (NotificationMail $mail): bool => str_contains($mail->bodyText, 'ועוד 3…'));
     }
 
     public function test_nothing_is_repaired_by_the_check(): void
