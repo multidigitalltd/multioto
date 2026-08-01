@@ -40,6 +40,17 @@ return [
     'queue_stale_minutes' => (int) env('HEALTH_QUEUE_STALE_MINUTES', 30),
 
     /*
+    | The ordinary queue — charges, invoices, notifications — beats separately,
+    | because the window above belongs to a private queue that a second worker
+    | process can keep answering long after the one doing the real work died.
+    |
+    | Much longer, and never reported as "down": a three-hour backup on that
+    | queue delays this beat exactly as a stopped worker would, and an endpoint
+    | that calls a busy system dead is one nobody trusts the next time.
+    */
+    'workload_stale_minutes' => (int) env('HEALTH_WORKLOAD_STALE_MINUTES', 60),
+
+    /*
     | A backlog this deep, or this many jobs that gave up in the last day,
     | means work is not getting through even if both heartbeats are fine.
     | Reported as "degraded": worth looking at, not worth a 3am phone call.

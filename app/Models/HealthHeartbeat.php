@@ -18,6 +18,15 @@ class HealthHeartbeat extends Model
     /** A queue worker — stamped by a job, so it proves work is being RUN. */
     public const QUEUE = 'queue';
 
+    /**
+     * The worker serving the ORDINARY queue, where charges, invoices and
+     * notifications live. Stamped separately because the beat above rides a
+     * queue of its own: with two worker processes, that one can go on
+     * reporting cheerfully while the process that does the actual work is
+     * dead — and nothing else would notice until a customer did.
+     */
+    public const WORKLOAD = 'queue-workload';
+
     public $timestamps = false;
 
     protected $primaryKey = 'name';

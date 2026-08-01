@@ -54,6 +54,7 @@ class SystemHealthTest extends TestCase
     {
         HealthHeartbeat::beat(HealthHeartbeat::SCHEDULER);
         HealthHeartbeat::beat(HealthHeartbeat::QUEUE);
+        HealthHeartbeat::beat(HealthHeartbeat::WORKLOAD);
     }
 
     public function test_a_system_with_both_heartbeats_is_healthy(): void
@@ -89,6 +90,39 @@ class SystemHealthTest extends TestCase
             ->update(['beat_at' => now()->subHours(2)]);
 
         $this->assertSame(HealthReport::DOWN, app(HealthReport::class)->status());
+    }
+
+    /**
+     * The two workers are separate processes: the private heartbeat queue can
+     * go on answering long after the one running charges and invoices died.
+     * That is a system reporting "ok" while nothing gets done.
+     */
+    public function test_a_workload_queue_that_stopped_moving_is_reported(): void
+    {
+        $this->alive();
+        HealthHeartbeat::query()->whereKey(HealthHeartbeat::WORKLOAD)
+            ->update(['beat_at' => now()->subHours(3)]);
+
+        $report = app(HealthReport::class)->collect();
+
+        // Degraded, not down: a long backup on that queue delays the beat in
+        // exactly the same way, and an endpoint that calls a busy system dead
+        // is one nobody trusts the next time it complains.
+        $this->assertSame(HealthReport::DEGRADED, $report['status']);
+        $this->assertSame(
+            HealthReport::DEGRADED,
+            collect($report['checks'])->firstWhere('key', 'workload')['status'],
+        );
+    }
+
+    public function test_the_workload_heartbeat_queues_where_the_real_work_does(): void
+    {
+        // Same job, the ordinary queue — the isolated one cannot answer for it.
+        $this->assertNotSame(HeartbeatJob::QUEUE, (new HeartbeatJob(HealthHeartbeat::WORKLOAD))->queue);
+
+        (new HeartbeatJob(HealthHeartbeat::WORKLOAD))->handle();
+
+        $this->assertNotNull(HealthHeartbeat::lastBeat(HealthHeartbeat::WORKLOAD));
     }
 
     public function test_a_part_that_never_reported_is_not_treated_as_healthy(): void

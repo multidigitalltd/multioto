@@ -66,6 +66,19 @@ class HealthReport
                 (int) config('health.queue_stale_minutes', 30),
                 'אף עובד תור לא ביצע עבודה — ייתכן ש-Horizon אינו רץ. עבודות נכנסות לתור ולא מתבצעות.',
             ),
+            // Not "down", on purpose: a three-hour backup on the ordinary queue
+            // delays this beat exactly as a dead worker would, and the endpoint
+            // must not call a busy system dead. It is the answer to the
+            // question the private heartbeat above cannot answer — whether the
+            // worker doing the REAL work is still getting through it.
+            $this->heartbeat(
+                HealthHeartbeat::WORKLOAD,
+                'workload',
+                'תור העבודה',
+                (int) config('health.workload_stale_minutes', 60),
+                'העבודה הרגילה (חיובים, חשבוניות, הודעות) לא התקדמה — worker שנעצר, או עבודה ארוכה שתקועה.',
+                self::DEGRADED,
+            ),
             $this->backlog(),
             $this->failedJobs(),
             $this->backup(),
@@ -121,21 +134,27 @@ class HealthReport
         }
     }
 
-    private function heartbeat(string $name, string $key, string $label, int $staleMinutes, string $problem): array
-    {
+    private function heartbeat(
+        string $name,
+        string $key,
+        string $label,
+        int $staleMinutes,
+        string $problem,
+        string $severity = self::DOWN,
+    ): array {
         $last = HealthHeartbeat::lastBeat($name);
 
         if ($last === null) {
             // Never reported at all: a fresh install that has not run yet, or a
             // part that has never started. Either way it is not proof of life.
-            return $this->check($key, $label, self::DOWN, 'לא דיווח מעולם. '.$problem);
+            return $this->check($key, $label, $severity, 'לא דיווח מעולם. '.$problem);
         }
 
         if ($staleMinutes > 0 && $last->lt(now()->subMinutes($staleMinutes))) {
             return $this->check(
                 $key,
                 $label,
-                self::DOWN,
+                $severity,
                 'הדיווח האחרון: '.$last->diffForHumans().'. '.$problem,
             );
         }

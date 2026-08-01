@@ -77,6 +77,13 @@ Schedule::call(fn () => HealthHeartbeat::beat(HealthHeartbeat::SCHEDULER))
 
 Schedule::job(new HeartbeatJob)->everyFiveMinutes()->name('system:queue-heartbeat')->onOneServer();
 
+// And a second one on the ORDINARY queue. The beat above rides a queue of its
+// own so a busy worker is never mistaken for a dead one — which means it can
+// keep answering cheerfully while the process that runs charges and invoices is
+// gone. Only a job that queued where the real work queues can say otherwise.
+Schedule::job(new HeartbeatJob(HealthHeartbeat::WORKLOAD))->everyFiveMinutes()
+    ->name('system:workload-heartbeat')->onOneServer();
+
 // Does the money still add up? Reads only — every finding is reported for a
 // person to decide on, because automatic repair of money is how one wrong
 // assumption becomes a second charge on somebody's card. Silent when clean.
