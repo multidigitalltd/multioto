@@ -3,6 +3,8 @@
 namespace App\Http\Middleware;
 
 use Closure;
+use Illuminate\Contracts\Cache\LockProvider;
+use Illuminate\Contracts\Cache\Repository;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Symfony\Component\HttpFoundation\Response;
@@ -28,18 +30,40 @@ class ThrottleHealthProbe
     {
         $key = 'health-probe:'.sha1((string) $request->ip());
 
-        $hits = rescue(function () use ($key): int {
-            $store = Cache::store(config('health.throttle_store'));
-            $hits = (int) $store->get($key, 0) + 1;
-            $store->put($key, $hits, now()->addMinute());
-
-            return $hits;
-        }, 0, report: false);
+        $hits = rescue(fn (): int => $this->count($key), 0, report: false);
 
         if ($perMinute > 0 && $hits > $perMinute) {
             return response()->json(['status' => 'throttled'], Response::HTTP_TOO_MANY_REQUESTS);
         }
 
         return $next($request);
+    }
+
+    /**
+     * One hit, counted so that concurrent requests cannot overwrite each other.
+     *
+     * Read-then-write is not enough: a burst from one address would have every
+     * request read the same old value and write back the same new one, so the
+     * counter would crawl while the requests all went through — precisely the
+     * case a limiter exists for. The update is therefore serialised under the
+     * store's own lock where it offers one (the file store does).
+     */
+    private function count(string $key): int
+    {
+        $cache = Cache::store(config('health.throttle_store'));
+
+        if ($cache->getStore() instanceof LockProvider) {
+            return $cache->lock($key.':lock', 5)->block(1, fn (): int => $this->bump($cache, $key));
+        }
+
+        return $this->bump($cache, $key);
+    }
+
+    /** The counter itself, always with a fresh one-minute window on first use. */
+    private function bump(Repository $cache, string $key): int
+    {
+        $cache->add($key, 0, now()->addMinute());
+
+        return (int) $cache->increment($key);
     }
 }

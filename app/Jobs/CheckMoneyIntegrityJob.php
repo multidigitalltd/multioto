@@ -184,16 +184,19 @@ class CheckMoneyIntegrityJob implements ShouldQueue
      * Neither confirmed nor failed. Reconciliation asks Cardcom about these
      * within its own window; one that is still pending a day later was missed.
      *
-     * A payment demand is deliberately left "pending" while the customer takes
-     * their time — that is what the due date is for, and unpaid demands are
-     * chased by the reminders and shown in the aging report. Including them
-     * here would list every ordinary open demand as a fault every morning, so
-     * only charges nobody is waiting on a customer for are considered.
+     * What counts is whether WE are still processing, or whether a customer is
+     * simply taking their time. A hosted payment page means the latter: the
+     * charge waits, by design, until somebody enters a card — whether the link
+     * went out as a payment demand or the operator copied it into a message
+     * himself, which sets no demand date at all. Listing those would report
+     * every ordinary open payment link as a fault every morning, and a report
+     * that cries wolf daily is one nobody opens on the morning it matters.
      *
-     * Every other kind counts, with or without a hosted page: a saved-card
-     * charge is sent to Cardcom as "manual-{id}" and carries no low-profile id
-     * at all, and it is precisely the one that stays pending when the worker
-     * dies between asking for the money and writing down the answer.
+     * A saved-card charge has no hosted page — it goes to Cardcom as
+     * "manual-{id}" — so a pending one is a request that was sent and whose
+     * answer was never written down: the worker died between asking for the
+     * money and recording what happened. Nobody is waiting on the customer
+     * there, and nothing else will notice.
      */
     private function stuckPendingCharges(): ?array
     {
@@ -201,6 +204,7 @@ class CheckMoneyIntegrityJob implements ShouldQueue
 
         $rows = $this->recent(Charge::query())
             ->where('status', ChargeStatus::Pending)
+            ->whereNull('cardcom_low_profile_id')
             ->whereNull('demand_sent_at')
             ->where('created_at', '<=', now()->subHours($hours))
             ->orderBy('id')

@@ -19,6 +19,8 @@ use App\Models\SystemLog;
 use App\Services\System\HealthReport;
 use Illuminate\Foundation\Http\Middleware\ValidateCsrfToken;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Request;
+use Illuminate\Http\Response;
 use Illuminate\Routing\Router;
 use Illuminate\Session\Middleware\StartSession;
 use Illuminate\Support\Carbon;
@@ -385,20 +387,23 @@ class SystemHealthTest extends TestCase
         Mail::assertNothingSent();
     }
 
-    public function test_a_charge_whose_outcome_was_never_learned_is_reported(): void
+    /**
+     * A payment link the operator opened and sent by hand carries no demand
+     * date at all — and it is still a customer taking their time, not a stalled
+     * process. Nothing about it is a fault.
+     */
+    public function test_a_hosted_payment_page_sent_by_hand_is_not_called_stuck(): void
     {
         Mail::fake();
         config(['billing.notifications.team_email' => 'team@example.com']);
 
-        // A hosted page opened for a walk-in charge, no demand behind it: we
-        // asked Cardcom for money and never found out what happened.
         $charge = $this->charge(ChargeStatus::Pending, extra: ['cardcom_low_profile_id' => 'lp-2']);
         $charge->timestamps = false;
         $charge->forceFill(['created_at' => now()->subDays(2)])->save();
 
         (new CheckMoneyIntegrityJob)->handle();
 
-        Mail::assertSent(fn (NotificationMail $mail): bool => str_contains($mail->bodyText, 'נתקעו'));
+        Mail::assertNothingSent();
     }
 
     /**
@@ -511,6 +516,33 @@ class SystemHealthTest extends TestCase
         // one (which is the database in production).
         $this->assertContains(ThrottleHealthProbe::class.':60', $middleware);
         $this->assertNotSame(config('cache.default'), config('health.throttle_store'));
+    }
+
+    /**
+     * The counter has to survive a burst: read-then-write would let concurrent
+     * requests overwrite each other's hit and crawl while everything got
+     * through — the exact case a limiter is for.
+     */
+    public function test_the_probe_limiter_counts_every_hit(): void
+    {
+        config(['health.throttle_store' => 'array']);
+
+        $middleware = new ThrottleHealthProbe;
+        $request = Request::create('/health');
+        $answer = fn () => $middleware->handle($request, fn (): Response => new Response('ok'), 2);
+
+        $this->assertSame(200, $answer()->getStatusCode());
+        $this->assertSame(200, $answer()->getStatusCode());
+        $this->assertSame(429, $answer()->getStatusCode());
+    }
+
+    /** An unreachable counter must not silence the answer to "is the system alive". */
+    public function test_the_probe_answers_even_when_its_counter_is_unreachable(): void
+    {
+        config(['health.throttle_store' => 'no-such-store']);
+        $this->alive();
+
+        $this->getJson('/health')->assertOk();
     }
 
     public function test_nothing_is_repaired_by_the_check(): void
