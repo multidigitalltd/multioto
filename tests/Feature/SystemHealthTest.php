@@ -285,6 +285,58 @@ class SystemHealthTest extends TestCase
         Mail::assertSent(fn (NotificationMail $mail): bool => str_contains($mail->bodyText, 'עבר מועד החיוב'));
     }
 
+    /**
+     * A demand can sit unpaid for a fortnight. The invoice job starts when it
+     * is PAID, so judging it by the day the demand was opened would report
+     * every payment that came in this morning.
+     */
+    public function test_a_demand_paid_moments_ago_is_given_its_grace(): void
+    {
+        Mail::fake();
+        config(['billing.notifications.team_email' => 'team@example.com']);
+
+        $charge = $this->charge(ChargeStatus::Succeeded, extra: ['charged_at' => now()->subMinutes(5)]);
+        $charge->timestamps = false;
+        $charge->forceFill(['created_at' => now()->subDays(9)])->save();
+
+        (new CheckMoneyIntegrityJob)->handle();
+
+        Mail::assertNothingSent();
+    }
+
+    /**
+     * Charging pauses for Shabbat and Yom Tov by design, so a renewal due at
+     * midnight is "late" every rest day. A report that cries wolf every
+     * Saturday is a report nobody opens on Monday.
+     */
+    public function test_the_shabbat_pause_is_not_reported_as_money_going_missing(): void
+    {
+        Mail::fake();
+        config(['billing.notifications.team_email' => 'team@example.com']);
+        // Shabbat morning, with the pause switched on.
+        config(['billing.shabbat.block_automations' => true]);
+        Carbon::setTestNow(Carbon::parse('2026-08-08 08:15', 'Asia/Jerusalem'));
+
+        $customer = $this->customer();
+        $token = PaymentToken::create([
+            'customer_id' => $customer->id,
+            'cardcom_token' => 'tok-2',
+            'last_four' => '4321',
+            'is_default' => true,
+        ]);
+        Subscription::create([
+            'customer_id' => $customer->id,
+            'plan_id' => Plan::factory()->create()->id,
+            'token_id' => $token->id,
+            'status' => SubscriptionStatus::Active,
+            'next_charge_at' => now()->subHours(8),
+        ]);
+
+        (new CheckMoneyIntegrityJob)->handle();
+
+        Mail::assertNothingSent();
+    }
+
     public function test_nothing_is_repaired_by_the_check(): void
     {
         Mail::fake();

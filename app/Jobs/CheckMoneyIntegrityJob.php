@@ -8,6 +8,7 @@ use App\Models\Charge;
 use App\Models\Invoice;
 use App\Models\Subscription;
 use App\Models\SystemLog;
+use App\Services\Calendar\ShabbatClock;
 use App\Support\EmailList;
 use App\Support\Money;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -75,11 +76,19 @@ class CheckMoneyIntegrityJob implements ShouldQueue
      */
     private function chargedWithoutInvoice(): ?array
     {
-        $grace = (int) config('health.money.invoice_grace_minutes', 120);
+        $grace = now()->subMinutes((int) config('health.money.invoice_grace_minutes', 120));
 
         $rows = $this->recent(Charge::query())
             ->where('status', ChargeStatus::Succeeded)
-            ->where('created_at', '<=', now()->subMinutes($grace))
+            // Measured from when the money actually came in, not from when the
+            // row was opened. A payment demand can sit unpaid for a fortnight;
+            // the invoice job starts when it is PAID, and judging it by the
+            // opening date would report every demand paid this morning.
+            ->where(fn (Builder $query) => $query
+                ->where('charged_at', '<=', $grace)
+                ->orWhere(fn (Builder $legacy) => $legacy
+                    ->whereNull('charged_at')
+                    ->where('created_at', '<=', $grace)))
             ->whereDoesntHave('invoice')
             ->orderBy('id')
             ->get(['id', 'customer_id', 'total_agorot', 'created_at']);
@@ -135,6 +144,15 @@ class CheckMoneyIntegrityJob implements ShouldQueue
      */
     private function overdueSubscriptions(): ?array
     {
+        // Outward automations pause for Shabbat and Yom Tov, and the charge
+        // dispatcher is one of them. A renewal due at midnight is then hours
+        // "late" by design, every rest day — and a report that cries wolf every
+        // Saturday is a report nobody opens on Monday. The question is asked
+        // again once the automations are awake.
+        if (app(ShabbatClock::class)->isBlocked()) {
+            return null;
+        }
+
         $hours = (int) config('health.money.overdue_charge_hours', 6);
 
         $rows = Subscription::query()

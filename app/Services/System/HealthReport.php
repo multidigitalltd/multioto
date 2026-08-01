@@ -205,10 +205,20 @@ class HealthReport
     /**
      * The same question the backup screen asks on every page load — repeated
      * here so one place answers "is everything fine" completely.
+     *
+     * Rows only: verifying that the archive is really in the bucket means a
+     * request to S3, and this endpoint is probed every few minutes and answers
+     * "the application is down" if it blocks. A slow bucket would then be
+     * reported as a dead system. The screen and the nightly check still do the
+     * full verification, where waiting is free.
      */
     private function backup(): array
     {
-        $warning = rescue(fn (): ?string => app(BackupRunner::class)->staleWarning(), null, report: false);
+        $warning = rescue(
+            fn (): ?string => app(BackupRunner::class)->staleWarning(verifyOnDisk: false),
+            null,
+            report: false,
+        );
 
         return $this->check(
             'backup',
