@@ -373,7 +373,8 @@ class ConsoleAgent
                     'customer_ids' => ['type' => 'array', 'items' => $int],
                 ], ['is_marketing'])],
             ['name' => 'open_task', 'description' => 'פתח משימה לאדם — מיד, בלי אישור. לכל דבר שאין לו כלי ישיר. '
-                .'title, ובנוסף (כשהמנהל ציין אותם): assignee — למי לשייך, שם או מייל של איש צוות ("me" למנהל שמדבר איתך, פסיקים לכמה אנשים); '
+                .'title, ובנוסף (כשהמנהל ציין אותם): assignee — למי לשייך, שם מלא או מייל של איש צוות'
+                .($this->conversationUserId !== null ? ' ("me" למנהל שמדבר איתך)' : '').' (פסיקים לכמה אנשים); '
                 .'due_at — עד מתי, בפורמט YYYY-MM-DD או YYYY-MM-DD HH:MM (חשב בעצמך מהתאריך של היום שמופיע למעלה); customer_id — לקוח קשור.',
                 'input_schema' => $obj([
                     'title' => $str,
@@ -1186,7 +1187,7 @@ class ConsoleAgent
             return ['content' => "המשימה כבר קיימת: #{$existing->id} {$existing->title}. אל תפתח אותה שוב."];
         }
 
-        [$assignees, $unknown] = $this->resolveAssignees((string) ($input['assignee'] ?? ''));
+        [$assignees, $problems] = $this->resolveAssignees((string) ($input['assignee'] ?? ''));
         $due = $this->parseDue((string) ($input['due_at'] ?? ''));
 
         $task = app(SystemActionRunner::class)->openTask([
@@ -1216,8 +1217,8 @@ class ConsoleAgent
             $said .= ' · עד '.$due->format('d/m/Y H:i');
         }
 
-        if ($unknown !== []) {
-            $said .= '. לא נמצא איש צוות בשם '.implode(', ', $unknown)
+        if ($problems !== []) {
+            $said .= '. '.implode('; ', $problems)
                 .' — המשימה נפתחה בלי השיוך הזה; ציין זאת למנהל ושאל למי לשייך.';
         }
 
@@ -1227,10 +1228,14 @@ class ConsoleAgent
     /**
      * Turn "דני, רותם" into team members.
      *
-     * Whoever is not found is REPORTED rather than guessed at: a task on the
-     * wrong person's list is worse than one on nobody's, because it looks
-     * handled. "me" is the operator running the console — "תפתח לי משימה" is
-     * how most of these are actually phrased.
+     * A name that matches nobody — or matches SEVERAL people — is reported
+     * rather than resolved: a task sitting on the wrong person's list is worse
+     * than one sitting on nobody's, because it looks handled. Picking the
+     * lowest id out of two Danis would do exactly that, silently, and notify
+     * the wrong one.
+     *
+     * "me" is the operator running the console ("תפתח לי משימה"), which only
+     * exists where the console knows who is speaking.
      *
      * @return array{0: Collection<int, User>, 1: list<string>}
      */
@@ -1241,34 +1246,54 @@ class ConsoleAgent
             ->values();
 
         $found = collect();
-        $unknown = [];
+        $problems = [];
 
         foreach ($names as $name) {
             if (in_array(mb_strtolower($name), ['me', 'אני', 'עצמי'], true)) {
                 $self = $this->conversationUserId !== null ? User::find($this->conversationUserId) : null;
 
-                $self ? $found->push($self) : $unknown[] = $name;
+                if ($self !== null) {
+                    $found->push($self);
+                } else {
+                    $problems[] = 'אי אפשר לשייך "'.$name.'" — בערוץ הזה אין זהות של מנהל מסוים';
+                }
 
                 continue;
             }
 
+            // Wide enough that an exact match cannot fall outside the limit and
+            // be mistaken for absent.
             $matches = User::query()
                 ->where(fn (Builder $query) => $query
                     ->where('name', 'like', "%{$name}%")
                     ->orWhere('email', $name))
                 ->orderBy('id')
-                ->limit(5)
+                ->limit(25)
                 ->get();
 
-            // An exact name wins over a partial one, so "דן" does not land on
-            // "דניאל" when there is a "דן".
-            $exact = $matches->first(fn (User $user): bool => mb_strtolower($user->name) === mb_strtolower($name))
-                ?? $matches->first();
+            $exact = $matches->filter(fn (User $user): bool => mb_strtolower($user->name) === mb_strtolower($name)
+                || mb_strtolower((string) $user->email) === mb_strtolower($name));
 
-            $exact ? $found->push($exact) : $unknown[] = $name;
+            // Exactly one candidate is an answer; anything else is a question.
+            $only = $exact->count() === 1 ? $exact->first() : ($exact->isEmpty() && $matches->count() === 1 ? $matches->first() : null);
+
+            if ($only !== null) {
+                $found->push($only);
+
+                continue;
+            }
+
+            if ($matches->isEmpty()) {
+                $problems[] = 'לא נמצא איש צוות בשם '.$name;
+
+                continue;
+            }
+
+            $candidates = ($exact->count() > 1 ? $exact : $matches)->pluck('name')->implode(', ');
+            $problems[] = 'יש כמה אנשי צוות שמתאימים ל"'.$name.'": '.$candidates;
         }
 
-        return [$found->unique('id')->values(), $unknown];
+        return [$found->unique('id')->values(), $problems];
     }
 
     /**

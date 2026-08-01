@@ -173,6 +173,45 @@ class CommandConsoleTest extends TestCase
         $this->assertStringContainsString('לא נמצא איש צוות בשם רותם', $toolResult['content']);
     }
 
+    public function test_two_people_with_the_same_first_name_are_asked_about_not_picked(): void
+    {
+        // Choosing the lower id would hand the task — and the notification — to
+        // one of them at random, and it would look handled.
+        User::factory()->create(['name' => 'דני כהן']);
+        User::factory()->create(['name' => 'דני לוי']);
+        $toolResult = null;
+
+        $claude = Mockery::mock(ClaudeClient::class);
+        $claude->shouldReceive('isEnabled')->andReturn(true);
+        $claude->shouldReceive('lastError')->andReturnNull();
+        $claude->shouldReceive('converse')->andReturnUsing(
+            function (string $system, string $prompt, array $tools, callable $handler) use (&$toolResult): string {
+                $toolResult = $handler('open_task', ['title' => 'לבדוק את השרת', 'assignee' => 'דני']);
+
+                return 'נפתחה משימה.';
+            }
+        );
+        $this->app->instance(ClaudeClient::class, $claude);
+
+        app(CommandInterpreter::class)->run('תפתח לדני משימה לבדוק את השרת');
+
+        $this->assertSame([], Task::sole()->assignees->pluck('id')->all());
+        $this->assertStringContainsString('יש כמה אנשי צוות', $toolResult['content']);
+        $this->assertStringContainsString('דני כהן, דני לוי', $toolResult['content']);
+    }
+
+    public function test_an_exact_name_still_wins_when_others_contain_it(): void
+    {
+        $dan = User::factory()->create(['name' => 'דן']);
+        User::factory()->create(['name' => 'דניאל']);
+
+        $this->fakeAgent([['open_task', ['title' => 'לבדוק את השרת', 'assignee' => 'דן']]]);
+
+        app(CommandInterpreter::class)->run('תפתח לדן משימה');
+
+        $this->assertSame([$dan->id], Task::sole()->assignees->pluck('id')->all());
+    }
+
     public function test_the_old_tool_name_still_opens_a_task(): void
     {
         // A model working off a cached prompt still says "propose_task"; it
