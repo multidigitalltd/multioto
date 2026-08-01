@@ -63,8 +63,13 @@ class CheckMoneyIntegrityJob implements ShouldQueue
             fn (array $finding): string => "• {$finding['title']}\n  {$finding['detail']}"
         )->implode("\n\n");
 
+        // The rows themselves, not just the headings: the mail is best-effort
+        // (no team address configured, or a delivery that failed silently), so
+        // this entry is often the only surviving copy — and a report that says
+        // "3 charges without an invoice" without saying WHICH three sends the
+        // reader looking for a needle it never handed them.
         SystemLog::record('error', 'billing', 'בדיקת שלמות כספית מצאה חריגות', [
-            'findings' => collect($findings)->pluck('title')->all(),
+            'findings' => $findings,
         ]);
 
         $this->email($report);

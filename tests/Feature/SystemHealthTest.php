@@ -395,6 +395,25 @@ class SystemHealthTest extends TestCase
         Mail::assertSent(fn (NotificationMail $mail): bool => str_contains($mail->bodyText, 'נתקעו'));
     }
 
+    /**
+     * The mail is best-effort — no team address configured, or a delivery that
+     * failed. The log entry is then the only surviving copy, and "3 charges
+     * without an invoice" without saying which three is a hunt with no needle.
+     */
+    public function test_the_log_entry_names_the_rows_and_not_only_the_counts(): void
+    {
+        Mail::fake();
+        config(['billing.notifications.team_email' => null]);
+
+        $charge = $this->charge(ChargeStatus::Succeeded, extra: ['charged_at' => now()->subHours(6)]);
+
+        (new CheckMoneyIntegrityJob)->handle();
+
+        $log = SystemLog::where('source', 'billing')->latest('id')->first();
+        $this->assertNotNull($log);
+        $this->assertStringContainsString("חיוב #{$charge->id}", json_encode($log->context, JSON_UNESCAPED_UNICODE));
+    }
+
     public function test_nothing_is_repaired_by_the_check(): void
     {
         Mail::fake();
