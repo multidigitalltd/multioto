@@ -89,7 +89,17 @@ class SystemHealthTest extends TestCase
         HealthHeartbeat::query()->whereKey(HealthHeartbeat::QUEUE)
             ->update(['beat_at' => now()->subHours(2)]);
 
-        $this->assertSame(HealthReport::DOWN, app(HealthReport::class)->status());
+        $report = app(HealthReport::class)->collect();
+
+        $this->assertSame(HealthReport::DOWN, $report['status']);
+
+        // And the backlog is not counted: measuring it means talking to the
+        // queue host, which may be exactly what stopped answering — every
+        // probe would then wait out a socket timeout to learn nothing.
+        $this->assertStringContainsString(
+            'לא נמדד',
+            collect($report['checks'])->firstWhere('key', 'backlog')['detail'],
+        );
     }
 
     /**

@@ -50,6 +50,14 @@ class HealthReport
             return ['status' => self::DOWN, 'checks' => [$database]];
         }
 
+        $queue = $this->heartbeat(
+            HealthHeartbeat::QUEUE,
+            'queue',
+            'עובד התור',
+            (int) config('health.queue_stale_minutes', 30),
+            'אף עובד תור לא ביצע עבודה — ייתכן ש-Horizon אינו רץ. עבודות נכנסות לתור ולא מתבצעות.',
+        );
+
         $checks = [
             $database,
             $this->heartbeat(
@@ -59,13 +67,7 @@ class HealthReport
                 (int) config('health.scheduler_stale_minutes', 15),
                 'המתזמן לא דיווח על עצמו — ייתכן ש-schedule:work אינו רץ. שום עבודה מתוזמנת לא מתבצעת.',
             ),
-            $this->heartbeat(
-                HealthHeartbeat::QUEUE,
-                'queue',
-                'עובד התור',
-                (int) config('health.queue_stale_minutes', 30),
-                'אף עובד תור לא ביצע עבודה — ייתכן ש-Horizon אינו רץ. עבודות נכנסות לתור ולא מתבצעות.',
-            ),
+            $queue,
             // Not "down", on purpose: a three-hour backup on the ordinary queue
             // delays this beat exactly as a dead worker would, and the endpoint
             // must not call a busy system dead. It is the answer to the
@@ -79,7 +81,15 @@ class HealthReport
                 'העבודה הרגילה (חיובים, חשבוניות, הודעות) לא התקדמה — worker שנעצר, או עבודה ארוכה שתקועה.',
                 self::DEGRADED,
             ),
-            $this->backlog(),
+            // Counting the backlog means talking to the queue itself, and one
+            // reason nothing has been run is that the queue host stopped
+            // answering — a dropped Redis connection waits out the socket
+            // timeout before rescue() ever sees it, on every probe. The
+            // verdict is already "down" and the depth of a queue nobody is
+            // draining changes nothing, so the question is not asked.
+            $queue['status'] === self::DOWN
+                ? $this->check('backlog', 'עומס בתור', self::OK, 'לא נמדד — עובד התור אינו מגיב.')
+                : $this->backlog(),
             $this->failedJobs(),
             $this->backup(),
         ];
