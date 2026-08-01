@@ -135,6 +135,28 @@ class SystemHealthTest extends TestCase
         $this->assertNotNull(HealthHeartbeat::lastBeat(HealthHeartbeat::WORKLOAD));
     }
 
+    /**
+     * A heartbeat that has not yet gone stale says nothing about the queue host
+     * right now: it can drop a minute after a good beat, and the backlog count
+     * is then the only part of the report still talking to it. It must be asked
+     * with a stopwatch, or the probe waits out the socket timeout on every try.
+     */
+    public function test_the_backlog_is_measured_with_a_bounded_wait(): void
+    {
+        config([
+            'queue.default' => 'redis',
+            'queue.connections.redis' => ['driver' => 'redis', 'connection' => 'default', 'queue' => 'default'],
+        ]);
+        $this->alive();
+
+        app(HealthReport::class)->collect();
+
+        $probe = (array) config('queue.connections.health-probe');
+        $this->assertSame('health', $probe['connection'] ?? null);
+        $this->assertGreaterThan(0, (float) config('database.redis.health.timeout'));
+        $this->assertGreaterThan(0, (float) config('database.redis.health.read_write_timeout'));
+    }
+
     public function test_a_part_that_never_reported_is_not_treated_as_healthy(): void
     {
         // Nothing has ever beaten — a fresh install, or a worker that never

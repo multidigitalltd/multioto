@@ -175,14 +175,20 @@ class HealthReport
     /**
      * How much work is waiting. Counted per queue, because one blocked queue
      * behind a healthy one is exactly the case a single number hides.
+     *
+     * Asked with a stopwatch — see probe(). A heartbeat that has not yet gone
+     * stale says nothing about the queue host RIGHT NOW: it can drop a minute
+     * after a perfectly good beat, and for the next half hour this is the only
+     * part of the report that would still try to talk to it.
      */
     private function backlog(): array
     {
         $limit = (int) config('health.queue_backlog', 250);
         $sizes = [];
+        $probe = $this->probe();
 
         foreach ($this->queues() as $queue) {
-            $size = rescue(fn (): int => Queue::size($queue), null, report: false);
+            $size = rescue(fn (): int => $probe->size($queue), null, report: false);
 
             if ($size !== null) {
                 $sizes[$queue] = $size;
@@ -202,6 +208,35 @@ class HealthReport
             $limit > 0 && $total >= $limit ? self::DEGRADED : self::OK,
             $detail,
         );
+    }
+
+    /**
+     * The queue connection this endpoint is allowed to ask, with a bounded wait.
+     *
+     * A Redis host that stops answering — rather than refusing — holds the
+     * socket open for the client's default timeout, and rescue() only sees the
+     * failure once that wait is over. On the one request whose purpose is to
+     * report quickly that something stopped, that is the difference between a
+     * 503 naming the queue and a gateway timeout naming nothing.
+     *
+     * So the measurement (and only the measurement) runs over a copy of the
+     * connection pointed at the short-timeout Redis profile. Workers keep the
+     * ordinary one, where a blocking pop must be allowed to wait. Any other
+     * driver is left exactly as configured: the database queue is already
+     * covered by the database check above.
+     */
+    private function probe(): \Illuminate\Contracts\Queue\Queue
+    {
+        $name = (string) config('queue.default');
+        $connection = (array) config("queue.connections.{$name}", []);
+
+        if (($connection['driver'] ?? null) !== 'redis' || ! is_array(config('database.redis.health'))) {
+            return Queue::connection($name);
+        }
+
+        config(['queue.connections.health-probe' => ['connection' => 'health'] + $connection]);
+
+        return Queue::connection('health-probe');
     }
 
     /** @return list<string> */
