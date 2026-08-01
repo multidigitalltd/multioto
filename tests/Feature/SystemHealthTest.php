@@ -14,6 +14,7 @@ use App\Models\HealthHeartbeat;
 use App\Models\Invoice;
 use App\Models\PaymentToken;
 use App\Models\Plan;
+use App\Models\Setting;
 use App\Models\Subscription;
 use App\Models\SystemLog;
 use App\Services\System\HealthReport;
@@ -185,6 +186,24 @@ class SystemHealthTest extends TestCase
             HealthReport::DOWN,
             collect($report['checks'])->firstWhere('key', 'backlog')['status'],
         );
+    }
+
+    /**
+     * The settings overlay is skipped while a health probe boots — it reads the
+     * settings table, and a database that times out would consume its timeout
+     * there, before any route or controller runs. The report re-applies it
+     * itself once the database has proved it answers, so a threshold changed in
+     * the panel still counts.
+     */
+    public function test_the_report_reads_the_settings_the_panel_changed(): void
+    {
+        config(['backup.enabled' => false]);
+        Setting::put('backup.enabled', '1');
+        $this->alive();
+
+        app(HealthReport::class)->collect();
+
+        $this->assertTrue((bool) config('backup.enabled'));
     }
 
     public function test_a_part_that_never_reported_is_not_treated_as_healthy(): void

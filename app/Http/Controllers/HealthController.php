@@ -20,6 +20,17 @@ use Illuminate\Http\Request;
  */
 class HealthController extends Controller
 {
+    /**
+     * The path this endpoint lives at.
+     *
+     * Named here because more than the route needs to recognise it: work that
+     * every other request does during boot — reading the settings table, for
+     * one — has to be skipped for this one, or the request that exists to
+     * report a stopped database would wait on the database before it ever
+     * reached this class.
+     */
+    public const PATH = 'health';
+
     public function __invoke(Request $request, HealthReport $health): JsonResponse
     {
         $report = $health->collect();

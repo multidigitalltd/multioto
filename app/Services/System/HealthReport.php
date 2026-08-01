@@ -3,6 +3,7 @@
 namespace App\Services\System;
 
 use App\Models\HealthHeartbeat;
+use App\Providers\SettingsServiceProvider;
 use App\Services\Backup\BackupRunner;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
@@ -49,6 +50,13 @@ class HealthReport
         if ($database['status'] === self::DOWN) {
             return ['status' => self::DOWN, 'checks' => [$database]];
         }
+
+        // Only now: the settings overlay (backup window, thresholds a person
+        // changed in the panel) is skipped while booting a health probe, so
+        // that a dead database is answered above instead of waited on. The
+        // database has just proved it answers, so reading them is safe — and
+        // the checks below must use what the panel says, not only .env.
+        rescue(fn () => SettingsServiceProvider::refreshFromDatabase(), report: false);
 
         $queue = $this->heartbeat(
             HealthHeartbeat::QUEUE,

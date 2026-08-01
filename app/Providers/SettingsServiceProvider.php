@@ -2,6 +2,7 @@
 
 namespace App\Providers;
 
+use App\Http\Controllers\HealthController;
 use App\Models\Setting;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Schema;
@@ -170,6 +171,17 @@ class SettingsServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        // Every request pays for the overlay — two queries against the settings
+        // table — except the one whose whole purpose is to report that the
+        // database has stopped answering. A host that times out rather than
+        // refuses would consume its connect timeout HERE, before any route or
+        // controller runs, and the monitor would get a gateway timeout instead
+        // of the 503 naming the broken part. The report re-applies the overlay
+        // itself, once the database has proved it can answer.
+        if ($this->handlingHealthProbe()) {
+            return;
+        }
+
         $this->applyOverlay();
 
         // Horizon queue workers are long-lived: boot() runs once at startup, so
@@ -178,6 +190,14 @@ class SettingsServiceProvider extends ServiceProvider
         // e.g. an empty doctype → Linet "invalid document type"). Re-apply the
         // overlay before every job so workers always use the current settings.
         Queue::before(fn () => $this->applyOverlay());
+    }
+
+    /** Is this HTTP request the external health probe? Console never is. */
+    private function handlingHealthProbe(): bool
+    {
+        return ! $this->app->runningInConsole()
+            && $this->app->bound('request')
+            && $this->app->make('request')->path() === HealthController::PATH;
     }
 
     /**
