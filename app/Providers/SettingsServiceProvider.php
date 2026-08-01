@@ -178,7 +178,7 @@ class SettingsServiceProvider extends ServiceProvider
         // controller runs, and the monitor would get a gateway timeout instead
         // of the 503 naming the broken part. The report re-applies the overlay
         // itself, once the database has proved it can answer.
-        if ($this->handlingHealthProbe()) {
+        if (HealthController::isProbe()) {
             return;
         }
 
@@ -190,14 +190,6 @@ class SettingsServiceProvider extends ServiceProvider
         // e.g. an empty doctype → Linet "invalid document type"). Re-apply the
         // overlay before every job so workers always use the current settings.
         Queue::before(fn () => $this->applyOverlay());
-    }
-
-    /** Is this HTTP request the external health probe? Console never is. */
-    private function handlingHealthProbe(): bool
-    {
-        return ! $this->app->runningInConsole()
-            && $this->app->bound('request')
-            && $this->app->make('request')->path() === HealthController::PATH;
     }
 
     /**

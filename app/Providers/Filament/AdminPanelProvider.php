@@ -4,6 +4,7 @@ namespace App\Providers\Filament;
 
 use App\Filament\Pages\Auth\EditProfile;
 use App\Filament\Widgets\StatsOverview;
+use App\Http\Controllers\HealthController;
 use App\Http\Middleware\EnsureTwoFactorConfirmed;
 use App\Support\Branding;
 use Filament\Http\Middleware\Authenticate;
@@ -32,6 +33,14 @@ class AdminPanelProvider extends PanelProvider
      */
     protected function notificationsTableReady(): bool
     {
+        // The panel is built while EVERY request boots, including the health
+        // probe — which must not touch the database before it has decided
+        // whether the database is answering at all. Nothing about /health
+        // renders a panel, so the question is simply not asked there.
+        if (HealthController::isProbe()) {
+            return false;
+        }
+
         try {
             return Schema::hasTable('notifications');
         } catch (\Throwable) {

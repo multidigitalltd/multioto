@@ -198,7 +198,44 @@ class CommandConsoleTest extends TestCase
 
         $this->assertSame([], Task::sole()->assignees->pluck('id')->all());
         $this->assertStringContainsString('יש כמה אנשי צוות', $toolResult['content']);
-        $this->assertStringContainsString('דני כהן, דני לוי', $toolResult['content']);
+        $this->assertStringContainsString('דני כהן', $toolResult['content']);
+        $this->assertStringContainsString('דני לוי', $toolResult['content']);
+    }
+
+    /**
+     * Two people really called the same thing: a list that says "דני, דני"
+     * sends the manager back with the same word and gets the same answer, for
+     * ever. Each candidate is named with something that resolves on its own.
+     */
+    public function test_identical_names_are_offered_with_something_that_tells_them_apart(): void
+    {
+        $first = User::factory()->create(['name' => 'דני', 'email' => 'dani1@example.com']);
+        User::factory()->create(['name' => 'דני', 'email' => 'dani2@example.com']);
+
+        $toolResult = null;
+        $claude = Mockery::mock(ClaudeClient::class);
+        $claude->shouldReceive('isEnabled')->andReturn(true);
+        $claude->shouldReceive('lastError')->andReturnNull();
+        $claude->shouldReceive('converse')->andReturnUsing(
+            function (string $system, string $prompt, array $tools, callable $handler) use (&$toolResult): string {
+                $toolResult = $handler('open_task', ['title' => 'לבדוק את השרת', 'assignee' => 'דני']);
+
+                return 'שאלתי למי לשייך.';
+            }
+        );
+        $this->app->instance(ClaudeClient::class, $claude);
+
+        app(CommandInterpreter::class)->run('תפתח לדני משימה');
+
+        $this->assertStringContainsString('dani1@example.com', $toolResult['content']);
+        $this->assertStringContainsString('dani2@example.com', $toolResult['content']);
+
+        // And the answer resolves: the address names exactly one of them.
+        $task = Task::sole();
+        $this->fakeAgent([['assign_task', ['task_id' => $task->id, 'assignee' => 'dani1@example.com']]]);
+        app(CommandInterpreter::class)->run('dani1@example.com');
+
+        $this->assertSame([$first->id], $task->fresh()->assignees->pluck('id')->all());
     }
 
     public function test_an_exact_name_still_wins_when_others_contain_it(): void

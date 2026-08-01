@@ -31,6 +31,23 @@ class HealthController extends Controller
      */
     public const PATH = 'health';
 
+    /**
+     * Is the request being handled right now the probe?
+     *
+     * Asked by the providers that do database work while EVERY request boots —
+     * the settings overlay, the panel's notifications-table guard. On this one
+     * path they skip it: a database that times out rather than refuses would
+     * otherwise burn its connect timeout there, before routing, and the monitor
+     * would get a gateway timeout instead of the 503 naming the broken part.
+     * Console runs (workers, scheduler) are never the probe.
+     */
+    public static function isProbe(): bool
+    {
+        return ! app()->runningInConsole()
+            && app()->bound('request')
+            && app('request')->path() === self::PATH;
+    }
+
     public function __invoke(Request $request, HealthReport $health): JsonResponse
     {
         $report = $health->collect();

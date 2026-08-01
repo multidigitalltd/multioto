@@ -1428,8 +1428,12 @@ class ConsoleAgent
             }
 
             if ($exact->count() > 1) {
-                // Two people really are called that. Only a person can say which.
-                $problems[] = 'יש כמה אנשי צוות שמתאימים ל"'.$name.'": '.$exact->pluck('name')->implode(', ');
+                // Two people really are called that, and their names cannot tell
+                // them apart — listing "דני, דני" would send the manager back
+                // with the same word and the same result, for ever. Each is
+                // named with their address, which resolves on its own.
+                $problems[] = 'יש כמה אנשי צוות בשם "'.$name.'": '.$this->describe($exact)
+                    .' — ענה עם המייל';
 
                 continue;
             }
@@ -1453,12 +1457,26 @@ class ConsoleAgent
                 continue;
             }
 
-            $candidates = $partial->pluck('name')->implode(', ')
+            $candidates = $this->describe($partial)
                 .($partial->count() >= self::ASSIGNEE_SUGGESTIONS ? ' ועוד' : '');
             $problems[] = 'יש כמה אנשי צוות שמתאימים ל"'.$name.'": '.$candidates;
         }
 
         return [$found->unique('id')->values(), $problems];
+    }
+
+    /**
+     * Candidates the manager can answer with. The address is included because
+     * two people can share a name, and a list that repeats the same word twice
+     * asks a question that cannot be answered.
+     *
+     * @param  Collection<int, User>  $users
+     */
+    private function describe($users): string
+    {
+        return $users->map(fn (User $user): string => filled($user->email)
+            ? $user->name.' ('.$user->email.')'
+            : $user->name)->implode(', ');
     }
 
     /**
