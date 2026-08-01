@@ -184,7 +184,13 @@ return [
             'password' => env('REDIS_PASSWORD'),
             'port' => env('REDIS_PORT', '6379'),
             'database' => env('REDIS_DB', '0'),
+            // Connecting AND waiting for an answer are both bounded, and the
+            // two clients spell the second one differently: phpredis (the
+            // default here) reads 'read_timeout', predis 'read_write_timeout'.
+            // With only the connect timeout set, a host that accepts the
+            // socket and then goes quiet would still hold the probe forever.
             'timeout' => (float) env('HEALTH_QUEUE_PROBE_TIMEOUT', 1.5),
+            'read_timeout' => (float) env('HEALTH_QUEUE_PROBE_TIMEOUT', 1.5),
             'read_write_timeout' => (float) env('HEALTH_QUEUE_PROBE_TIMEOUT', 1.5),
         ],
 

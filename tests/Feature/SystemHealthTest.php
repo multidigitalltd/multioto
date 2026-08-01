@@ -153,8 +153,38 @@ class SystemHealthTest extends TestCase
 
         $probe = (array) config('queue.connections.health-probe');
         $this->assertSame('health', $probe['connection'] ?? null);
-        $this->assertGreaterThan(0, (float) config('database.redis.health.timeout'));
-        $this->assertGreaterThan(0, (float) config('database.redis.health.read_write_timeout'));
+
+        // Connecting and waiting for an answer are bounded for BOTH clients:
+        // phpredis reads 'read_timeout', predis 'read_write_timeout', and with
+        // only the connect timeout a host that goes quiet mid-answer would
+        // still hold the probe.
+        foreach (['timeout', 'read_timeout', 'read_write_timeout'] as $bound) {
+            $this->assertGreaterThan(0, (float) config("database.redis.health.{$bound}"), $bound);
+        }
+    }
+
+    /**
+     * A queue host that will not answer is not "no information": nothing can be
+     * dispatched or run at all. The heartbeats only say how things were up to
+     * half an hour ago; this is a live answer and it outranks them.
+     */
+    public function test_a_queue_host_that_will_not_answer_is_down(): void
+    {
+        config([
+            'queue.default' => 'redis',
+            // A port nothing listens on: refused at once, no waiting.
+            'database.redis.health' => ['host' => '127.0.0.1', 'port' => 1, 'database' => 0, 'timeout' => 0.2],
+            'queue.connections.redis' => ['driver' => 'redis', 'connection' => 'health', 'queue' => 'default'],
+        ]);
+        $this->alive();
+
+        $report = app(HealthReport::class)->collect();
+
+        $this->assertSame(HealthReport::DOWN, $report['status']);
+        $this->assertSame(
+            HealthReport::DOWN,
+            collect($report['checks'])->firstWhere('key', 'backlog')['status'],
+        );
     }
 
     public function test_a_part_that_never_reported_is_not_treated_as_healthy(): void

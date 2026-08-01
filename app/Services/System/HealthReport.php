@@ -195,8 +195,17 @@ class HealthReport
             }
         }
 
+        // Not one queue answered. That is not "no information" — it is the
+        // queue host refusing to talk, which means nothing can be dispatched or
+        // run at all, whatever the heartbeats still say: they only report how
+        // things were up to half an hour ago, and this is a live answer.
         if ($sizes === []) {
-            return $this->check('backlog', 'עומס בתור', self::OK, 'לא ניתן למדוד — מדלג.');
+            return $this->check(
+                'backlog',
+                'עומס בתור',
+                self::DOWN,
+                'שרת התור לא ענה — לא ניתן למדוד. עבודות אינן נכנסות לתור ואינן מתבצעות.',
+            );
         }
 
         $total = array_sum($sizes);
