@@ -189,6 +189,11 @@ class CheckMoneyIntegrityJob implements ShouldQueue
      * chased by the reminders and shown in the aging report. Including them
      * here would list every ordinary open demand as a fault every morning, so
      * only charges nobody is waiting on a customer for are considered.
+     *
+     * Every other kind counts, with or without a hosted page: a saved-card
+     * charge is sent to Cardcom as "manual-{id}" and carries no low-profile id
+     * at all, and it is precisely the one that stays pending when the worker
+     * dies between asking for the money and writing down the answer.
      */
     private function stuckPendingCharges(): ?array
     {
@@ -197,7 +202,6 @@ class CheckMoneyIntegrityJob implements ShouldQueue
         $rows = $this->recent(Charge::query())
             ->where('status', ChargeStatus::Pending)
             ->whereNull('demand_sent_at')
-            ->whereNotNull('cardcom_low_profile_id')
             ->where('created_at', '<=', now()->subHours($hours))
             ->orderBy('id')
             ->get(['id', 'customer_id', 'total_agorot', 'created_at']);

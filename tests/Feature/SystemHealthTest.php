@@ -429,6 +429,26 @@ class SystemHealthTest extends TestCase
         Mail::assertSent(fn (NotificationMail $mail): bool => str_contains($mail->bodyText, 'ועוד 3…'));
     }
 
+    /**
+     * A saved-card charge goes to Cardcom as "manual-{id}" and never has a
+     * hosted page — and it is exactly the one that stays pending when the
+     * worker dies between asking for the money and writing down the answer.
+     */
+    public function test_a_saved_card_charge_left_pending_is_reported_too(): void
+    {
+        Mail::fake();
+        config(['billing.notifications.team_email' => 'team@example.com']);
+
+        $charge = $this->charge(ChargeStatus::Pending);
+        $charge->timestamps = false;
+        $charge->forceFill(['created_at' => now()->subDays(2)])->save();
+
+        (new CheckMoneyIntegrityJob)->handle();
+
+        Mail::assertSent(fn (NotificationMail $mail): bool => str_contains($mail->bodyText, 'נתקעו')
+            && str_contains($mail->bodyText, "חיוב #{$charge->id}"));
+    }
+
     public function test_nothing_is_repaired_by_the_check(): void
     {
         Mail::fake();
