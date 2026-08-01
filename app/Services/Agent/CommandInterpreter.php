@@ -99,11 +99,14 @@ class CommandInterpreter
         $summary = trim((string) ($result['summary'] ?? ''));
         $proposed = $result['proposed'] ?? [];
 
-        // Work the agent already carried out (open_task acts immediately). It is
-        // named in every outcome below, so the operator — and the next turn,
-        // which is threaded with this result — can see it is done and must not
-        // be asked for again.
-        $done = $this->openedTasks($result['opened'] ?? []);
+        // Work the agent already carried out (open_task and assign_task both act
+        // immediately). It is named in every outcome below, so the operator —
+        // and the next turn, which is threaded with this result — can see it is
+        // done and must not be asked for again.
+        $done = $this->body(
+            $this->namedTasks($result['opened'] ?? [], 'נפתחו משימות'),
+            $this->namedTasks($result['updated'] ?? [], 'עודכנו משימות'),
+        );
 
         // The agent explicitly asked for something → needs clarification (continue).
         if (filled($result['clarification'] ?? null)) {
@@ -131,9 +134,9 @@ class CommandInterpreter
         $reason = trim((string) ($result['error'] ?? ''));
 
         // The closing AI turn produced nothing — but a task was already opened
-        // and its notification already sent. Calling that a failure invites the
-        // operator to repeat the instruction, and the repeat opens a second
-        // identical task. What happened is reported instead of what didn't.
+        // or assigned, and its notification already sent. Calling that a failure
+        // invites the operator to repeat the instruction, and the repeat opens a
+        // second identical task. What happened is reported instead of what didn't.
         if ($done !== '') {
             return $this->finish($command, AgentCommandOutcome::Dispatched, $this->body(
                 $done,
@@ -152,21 +155,21 @@ class CommandInterpreter
     }
 
     /**
-     * One line naming the tasks this run actually opened, or '' if none.
+     * One line naming tasks this run acted on, or '' if none.
      *
-     * @param  list<array{id: int, title: string}>|mixed  $opened
+     * @param  list<array{id: int, title: string}>|mixed  $tasks
      */
-    private function openedTasks(mixed $opened): string
+    private function namedTasks(mixed $tasks, string $lead): string
     {
-        if (! is_array($opened) || $opened === []) {
+        if (! is_array($tasks) || $tasks === []) {
             return '';
         }
 
-        $names = collect($opened)
+        $names = collect($tasks)
             ->map(fn (array $task): string => '#'.$task['id'].' '.Str::limit((string) $task['title'], 80))
             ->implode(', ');
 
-        return 'נפתחו משימות: '.$names.'.';
+        return $lead.': '.$names.'.';
     }
 
     /** Join the non-empty parts of a result body into one message. */

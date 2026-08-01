@@ -10,6 +10,7 @@ use App\Enums\TicketStatus;
 use App\Filament\Pages\AgentConsole;
 use App\Filament\Widgets\AgentCommandWidget;
 use App\Jobs\InvestigateSiteJob;
+use App\Jobs\NotifyTaskCreatedJob;
 use App\Models\AgentCommand;
 use App\Models\Customer;
 use App\Models\PendingAction;
@@ -233,6 +234,46 @@ class CommandConsoleTest extends TestCase
 
         $this->assertSame(1, Task::count());
         $this->assertSame([$kohen->id], $task->fresh()->assignees->pluck('id')->all());
+    }
+
+    /**
+     * The assignment is real work, already notified. A provider failure on the
+     * closing turn must not report it as something to try again — that is how a
+     * repeat produces a second "משימה שויכה אליך" for the same task.
+     */
+    public function test_an_assignment_is_reported_even_when_the_closing_turn_fails(): void
+    {
+        $dan = User::factory()->create(['name' => 'דני כהן']);
+        $task = Task::create(['title' => 'לבדוק את השרת', 'status' => TaskStatus::Open]);
+
+        $this->fakeAgent([['assign_task', ['task_id' => $task->id, 'assignee' => 'דני כהן']]], summary: null);
+        $command = app(CommandInterpreter::class)->run('דני כהן');
+
+        $this->assertSame([$dan->id], $task->fresh()->assignees->pluck('id')->all());
+        $this->assertSame(AgentCommandOutcome::Dispatched, $command->outcome);
+        $this->assertStringContainsString('עודכנו משימות: #'.$task->id, $command->result);
+        $this->assertStringContainsString('אין צורך לחזור על ההוראה', $command->result);
+    }
+
+    public function test_repeating_an_assignment_does_not_notify_the_assignee_twice(): void
+    {
+        Queue::fake();
+
+        $dan = User::factory()->create(['name' => 'דני כהן']);
+        $task = Task::create(['title' => 'לבדוק את השרת', 'status' => TaskStatus::Open]);
+
+        $this->fakeAgent([['assign_task', ['task_id' => $task->id, 'assignee' => 'דני כהן']]]);
+        app(CommandInterpreter::class)->run('דני כהן');
+
+        Queue::assertPushed(NotifyTaskCreatedJob::class, 1);
+
+        // The same instruction again (the manager saw a failure and retyped it):
+        // the owner is unchanged, so nobody is told about it a second time.
+        $this->fakeAgent([['assign_task', ['task_id' => $task->id, 'assignee' => 'דני כהן']]]);
+        app(CommandInterpreter::class)->run('דני כהן');
+
+        Queue::assertPushed(NotifyTaskCreatedJob::class, 1);
+        $this->assertSame([$dan->id], $task->fresh()->assignees->pluck('id')->all());
     }
 
     public function test_assigning_a_task_that_does_not_exist_changes_nothing(): void

@@ -66,6 +66,17 @@ class ConsoleAgent
      */
     private array $opened = [];
 
+    /**
+     * Tasks this run put an owner or a deadline on (assign_task acts immediately).
+     *
+     * Carried for the same reason as $opened: the assignment is saved and the
+     * assignee already notified, so a provider failure on the closing turn must
+     * not present finished work as something to repeat.
+     *
+     * @var list<array{id: int, title: string}>
+     */
+    private array $updated = [];
+
     private ?int $customerId = null;
 
     private ?int $ticketId = null;
@@ -119,7 +130,7 @@ class ConsoleAgent
      *                            so the agent works ON it instead of opening it again
      * @param  string|null  $requestKey  identifies the originating instruction, so a
      *                                   repeat of it recovers what it already opened
-     * @return array{summary: ?string, proposed: list<int>, opened: list<array{id: int, title: string}>, clarification: ?string, customer_id: ?int, ticket_id: ?int, site_id: ?int}
+     * @return array{summary: ?string, proposed: list<int>, opened: list<array{id: int, title: string}>, updated: list<array{id: int, title: string}>, clarification: ?string, customer_id: ?int, ticket_id: ?int, site_id: ?int}
      */
     public function run(
         string $instruction,
@@ -130,6 +141,7 @@ class ConsoleAgent
     ): array {
         $this->proposed = [];
         $this->opened = [];
+        $this->updated = [];
         $this->clarification = null;
         $this->customerId = $this->ticketId = $this->siteId = null;
         $this->conversationUserId = $userId;
@@ -156,6 +168,7 @@ class ConsoleAgent
             // null, so a provider failure on the closing turn cannot present
             // finished work as something to try again.
             'opened' => $this->opened,
+            'updated' => $this->updated,
             'clarification' => $this->clarification,
             'customer_id' => $this->customerId,
             'ticket_id' => $this->ticketId,
@@ -1276,20 +1289,35 @@ class ConsoleAgent
         }
 
         if ($assignees->isNotEmpty()) {
+            $before = $task->assignees()->pluck('users.id')->sort()->values()->all();
+            $after = $assignees->pluck('id')->sort()->values()->all();
+
             $task->assignees()->sync($assignees->pluck('id')->all());
 
-            // The point of assigning is that the person hears about it. Kept
-            // non-fatal, like every other notification here: the assignment is
-            // already saved and a queue hiccup must not undo it.
-            try {
-                NotifyTaskCreatedJob::dispatch($task->id);
-            } catch (\Throwable $e) {
-                Log::warning('ConsoleAgent: task assignment notification not queued', [
-                    'task_id' => $task->id,
-                    'error' => $e->getMessage(),
-                ]);
+            // The point of assigning is that the person hears about it — but
+            // only when the owner actually CHANGED. The closing AI turn can die
+            // after the assignment is already saved, and the operator repeating
+            // the instruction then syncs the same people back onto the task: a
+            // second "משימה שויכה אליך" for work they were told about an hour
+            // ago reads as a second task, and the real one gets less attention.
+            //
+            // Kept non-fatal, like every other notification here: the
+            // assignment is already saved and a queue hiccup must not undo it.
+            if ($after !== $before) {
+                try {
+                    NotifyTaskCreatedJob::dispatch($task->id);
+                } catch (\Throwable $e) {
+                    Log::warning('ConsoleAgent: task assignment notification not queued', [
+                        'task_id' => $task->id,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
             }
         }
+
+        // Done, and recorded as done: what the console reports even if the
+        // model never gets to summarise it.
+        $this->updated[] = ['id' => $task->id, 'title' => (string) $task->title];
 
         $said = "משימה #{$task->id} עודכנה";
 
