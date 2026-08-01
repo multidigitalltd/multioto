@@ -357,6 +357,55 @@ class CommandConsoleTest extends TestCase
         $this->assertSame([$dan->id], Task::sole()->assignees->pluck('id')->all());
     }
 
+    /**
+     * A deadline that cannot be read is said, not dropped. The manager asked
+     * for "עד חמישי", and a task reported as done without any date is the one
+     * nobody comes back to.
+     */
+    public function test_an_unreadable_deadline_is_reported_instead_of_ignored(): void
+    {
+        $result = null;
+
+        $claude = Mockery::mock(ClaudeClient::class);
+        $claude->shouldReceive('isEnabled')->andReturn(true);
+        $claude->shouldReceive('lastError')->andReturnNull();
+        $claude->shouldReceive('converse')->andReturnUsing(
+            function (string $system, string $prompt, array $tools, callable $handler) use (&$result): string {
+                $result = $handler('open_task', ['title' => 'לבדוק את השרת', 'due_at' => '2026-02-30']);
+
+                return 'התאריך לא תקין.';
+            }
+        );
+        $this->app->instance(ClaudeClient::class, $claude);
+
+        app(CommandInterpreter::class)->run('תפתח משימה ל-30 בפברואר');
+
+        $this->assertTrue($result['is_error'] ?? false);
+        $this->assertStringContainsString('לא תקין', $result['content']);
+        // And nothing was opened under a date nobody meant (Carbon would have
+        // turned that one into the 2nd of March).
+        $this->assertSame(0, Task::count());
+    }
+
+    /**
+     * The exact person must be findable even behind a crowd of near-matches:
+     * a capped search shared with the partial one could cut the exact row off,
+     * and then repeating the full name — what the manager is asked to do —
+     * would never resolve it either.
+     */
+    public function test_an_exact_name_is_found_behind_a_crowd_of_near_matches(): void
+    {
+        foreach (range(1, 30) as $i) {
+            User::factory()->create(['name' => "דני {$i}"]);
+        }
+        $dani = User::factory()->create(['name' => 'דני']);
+
+        $this->fakeAgent([['open_task', ['title' => 'לבדוק את השרת', 'assignee' => 'דני']]]);
+        app(CommandInterpreter::class)->run('תפתח לדני משימה');
+
+        $this->assertSame([$dani->id], Task::sole()->assignees->pluck('id')->all());
+    }
+
     public function test_assigning_a_task_that_does_not_exist_changes_nothing(): void
     {
         $toolResult = null;

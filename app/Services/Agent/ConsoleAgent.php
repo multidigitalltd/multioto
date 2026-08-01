@@ -77,6 +77,9 @@ class ConsoleAgent
      */
     private array $updated = [];
 
+    /** How many near-matches are offered when a name matches nobody exactly. */
+    private const ASSIGNEE_SUGGESTIONS = 25;
+
     private ?int $customerId = null;
 
     private ?int $ticketId = null;
@@ -1218,6 +1221,13 @@ class ConsoleAgent
         [$assignees, $problems] = $this->resolveAssignees((string) ($input['assignee'] ?? ''));
         $due = $this->parseDue((string) ($input['due_at'] ?? ''));
 
+        // Said now, before anything is written: the model can correct the date
+        // and call again in the same run, and no task is opened carrying a
+        // deadline the manager asked for and never got.
+        if ($due === false) {
+            return $this->badDue((string) $input['due_at']);
+        }
+
         $task = app(SystemActionRunner::class)->openTask([
             'title' => $title,
             'customer_id' => $customerId,
@@ -1275,6 +1285,10 @@ class ConsoleAgent
 
         [$assignees, $problems] = $this->resolveAssignees((string) ($input['assignee'] ?? ''));
         $due = $this->parseDue((string) ($input['due_at'] ?? ''));
+
+        if ($due === false) {
+            return $this->badDue((string) $input['due_at']);
+        }
 
         // Nothing resolved and nothing to set: say what is wrong rather than
         // reporting a change that did not happen.
@@ -1396,35 +1410,51 @@ class ConsoleAgent
             // interpolation.
             $needle = mb_strtolower($name);
 
-            // Wide enough that an exact match cannot fall outside the limit and
-            // be mistaken for absent.
-            $matches = User::query()
+            // Asked FIRST and without a limit. Sharing one capped query with the
+            // partial search meant the exact row could be cut off by a crowd of
+            // near-matches — and then repeating the full name, which is what the
+            // manager is asked to do, could never resolve it either.
+            $exact = User::query()
                 ->where(fn (Builder $query) => $query
-                    ->whereRaw('lower(name) like ?', ['%'.$needle.'%'])
+                    ->whereRaw('lower(name) = ?', [$needle])
                     ->orWhereRaw('lower(email) = ?', [$needle]))
                 ->orderBy('id')
-                ->limit(25)
                 ->get();
 
-            $exact = $matches->filter(fn (User $user): bool => mb_strtolower($user->name) === mb_strtolower($name)
-                || mb_strtolower((string) $user->email) === mb_strtolower($name));
-
-            // Exactly one candidate is an answer; anything else is a question.
-            $only = $exact->count() === 1 ? $exact->first() : ($exact->isEmpty() && $matches->count() === 1 ? $matches->first() : null);
-
-            if ($only !== null) {
-                $found->push($only);
+            if ($exact->count() === 1) {
+                $found->push($exact->first());
 
                 continue;
             }
 
-            if ($matches->isEmpty()) {
+            if ($exact->count() > 1) {
+                // Two people really are called that. Only a person can say which.
+                $problems[] = 'יש כמה אנשי צוות שמתאימים ל"'.$name.'": '.$exact->pluck('name')->implode(', ');
+
+                continue;
+            }
+
+            // Nobody is called exactly that — offer who might have been meant.
+            $partial = User::query()
+                ->whereRaw('lower(name) like ?', ['%'.$needle.'%'])
+                ->orderBy('id')
+                ->limit(self::ASSIGNEE_SUGGESTIONS)
+                ->get();
+
+            if ($partial->isEmpty()) {
                 $problems[] = 'לא נמצא איש צוות בשם '.$name;
 
                 continue;
             }
 
-            $candidates = ($exact->count() > 1 ? $exact : $matches)->pluck('name')->implode(', ');
+            if ($partial->count() === 1) {
+                $found->push($partial->first());
+
+                continue;
+            }
+
+            $candidates = $partial->pluck('name')->implode(', ')
+                .($partial->count() >= self::ASSIGNEE_SUGGESTIONS ? ' ועוד' : '');
             $problems[] = 'יש כמה אנשי צוות שמתאימים ל"'.$name.'": '.$candidates;
         }
 
@@ -1435,8 +1465,17 @@ class ConsoleAgent
      * The deadline the model worked out from today's date, which the prompt
      * gives it. A date on its own means the end of that day — "עד יום חמישי"
      * is not "by midnight going into Thursday".
+     *
+     * Three answers, not two: a date, null when none was asked for, and FALSE
+     * when one was asked for and cannot be read. Quietly dropping an unreadable
+     * date and reporting the task as done is the worst of the three — the
+     * manager said "עד חמישי", was told it was handled, and the task carries no
+     * deadline at all.
+     *
+     * Strict formats, round-tripped: Carbon happily turns "2026-02-30" into the
+     * 2nd of March, which is a date nobody asked for on a day nobody meant.
      */
-    private function parseDue(string $raw): ?Carbon
+    private function parseDue(string $raw): Carbon|false|null
     {
         $raw = trim($raw);
 
@@ -1444,11 +1483,25 @@ class ConsoleAgent
             return null;
         }
 
-        return rescue(function () use ($raw): ?Carbon {
-            $due = Carbon::parse($raw);
+        foreach (['Y-m-d H:i:s' => false, 'Y-m-d H:i' => false, 'Y-m-d' => true] as $format => $wholeDay) {
+            $due = rescue(fn () => Carbon::createFromFormat('!'.$format, $raw), null, report: false);
 
-            return preg_match('/\d{1,2}:\d{2}/', $raw) === 1 ? $due : $due->endOfDay();
-        }, null, report: false);
+            if ($due instanceof Carbon && $due->format($format) === $raw) {
+                return $wholeDay ? $due->endOfDay() : $due;
+            }
+        }
+
+        return false;
+    }
+
+    /** What to say when a deadline cannot be read. */
+    private function badDue(string $raw): array
+    {
+        return [
+            'content' => 'תאריך היעד "'.$raw.'" לא תקין. השתמש ב-YYYY-MM-DD או YYYY-MM-DD HH:MM,'
+                .' וחשב את התאריך מהתאריך של היום שמופיע למעלה.',
+            'is_error' => true,
+        ];
     }
 
     /**
