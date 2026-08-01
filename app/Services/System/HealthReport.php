@@ -38,8 +38,20 @@ class HealthReport
      */
     public function collect(): array
     {
+        $database = $this->database();
+
+        // Everything below reads from the database. When it is refusing
+        // connections the rest merely repeat the same failure, but when it is
+        // silently TIMING OUT each of them waits out its own connect timeout in
+        // turn — and the endpoint that exists to say "down" quickly instead
+        // holds the request open until the web server gives up on it, while the
+        // monitor probes again every few minutes. The cause is answered alone.
+        if ($database['status'] === self::DOWN) {
+            return ['status' => self::DOWN, 'checks' => [$database]];
+        }
+
         $checks = [
-            $this->database(),
+            $database,
             $this->heartbeat(
                 HealthHeartbeat::SCHEDULER,
                 'scheduler',

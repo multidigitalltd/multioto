@@ -449,6 +449,44 @@ class SystemHealthTest extends TestCase
             && str_contains($mail->bodyText, "חיוב #{$charge->id}"));
     }
 
+    /**
+     * The probe must never wait behind the work it is measuring: a heartbeat
+     * queued behind a long backup would go stale and report a busy, healthy
+     * system as a dead one.
+     */
+    public function test_the_heartbeat_rides_its_own_queue(): void
+    {
+        $this->assertSame(HeartbeatJob::QUEUE, (new HeartbeatJob)->queue);
+        $this->assertContains(
+            HeartbeatJob::QUEUE,
+            (array) config('horizon.defaults.supervisor-1.queue'),
+            'The heartbeat queue must be served by the worker, or /health reports a permanent false alarm.',
+        );
+    }
+
+    /**
+     * A database that TIMES OUT rather than refusing: every check below it
+     * would wait out its own connect timeout in turn, and the endpoint whose
+     * job is to say "down" quickly would instead hold the request open.
+     */
+    public function test_a_dead_database_is_answered_alone(): void
+    {
+        $original = config('database.default');
+
+        try {
+            config(['database.default' => 'no-such-connection']);
+            $report = app(HealthReport::class)->collect();
+        } finally {
+            // Restored before the test ends: the rollback that follows needs
+            // the real connection back.
+            config(['database.default' => $original]);
+        }
+
+        $this->assertSame(HealthReport::DOWN, $report['status']);
+        $this->assertCount(1, $report['checks']);
+        $this->assertSame('database', $report['checks'][0]['key']);
+    }
+
     public function test_nothing_is_repaired_by_the_check(): void
     {
         Mail::fake();

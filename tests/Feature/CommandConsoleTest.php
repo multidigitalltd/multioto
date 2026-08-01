@@ -276,6 +276,35 @@ class CommandConsoleTest extends TestCase
         $this->assertSame([$dan->id], $task->fresh()->assignees->pluck('id')->all());
     }
 
+    /**
+     * Reassigned before the queue drained: each announcement must reach the
+     * person it was actually about, not whoever happens to hold the task when
+     * the worker gets round to it.
+     */
+    public function test_each_assignment_notifies_the_person_it_was_made_for(): void
+    {
+        Queue::fake();
+
+        $alice = User::factory()->create(['name' => 'אליס']);
+        $bob = User::factory()->create(['name' => 'בוב']);
+        $task = Task::create(['title' => 'לבדוק את השרת', 'status' => TaskStatus::Open]);
+
+        $this->fakeAgent([['assign_task', ['task_id' => $task->id, 'assignee' => 'אליס']]]);
+        app(CommandInterpreter::class)->run('שייך לאליס');
+
+        $this->fakeAgent([['assign_task', ['task_id' => $task->id, 'assignee' => 'בוב']]]);
+        app(CommandInterpreter::class)->run('לא, שייך לבוב');
+
+        Queue::assertPushed(
+            NotifyTaskCreatedJob::class,
+            fn (NotifyTaskCreatedJob $job): bool => $job->recipientIds === [$alice->id],
+        );
+        Queue::assertPushed(
+            NotifyTaskCreatedJob::class,
+            fn (NotifyTaskCreatedJob $job): bool => $job->recipientIds === [$bob->id],
+        );
+    }
+
     public function test_assigning_a_task_that_does_not_exist_changes_nothing(): void
     {
         $toolResult = null;

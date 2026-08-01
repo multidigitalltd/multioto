@@ -119,7 +119,9 @@ class SystemActionRunner
         // and invite a retry that opens a second one. The task itself is what
         // must not be lost; a missing notification is visible in the log.
         try {
-            NotifyTaskCreatedJob::dispatch($task->id);
+            // Named here rather than looked up later, so a task reassigned
+            // before the queue drains still tells the person it was opened for.
+            NotifyTaskCreatedJob::dispatch($task->id, $assignees === [] ? null : array_values($assignees));
         } catch (\Throwable $e) {
             Log::warning('SystemActionRunner: task notification not queued', [
                 'task_id' => $task->id,

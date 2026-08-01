@@ -1305,7 +1305,12 @@ class ConsoleAgent
             // assignment is already saved and a queue hiccup must not undo it.
             if ($after !== $before) {
                 try {
-                    NotifyTaskCreatedJob::dispatch($task->id);
+                    // The people assigned NOW, named in the job itself: read
+                    // off the task when the queue eventually drains, a
+                    // reassignment in between would send this announcement to
+                    // whoever holds it by then and leave the person it was
+                    // about hearing nothing.
+                    NotifyTaskCreatedJob::dispatch($task->id, $after);
                 } catch (\Throwable $e) {
                     Log::warning('ConsoleAgent: task assignment notification not queued', [
                         'task_id' => $task->id,
