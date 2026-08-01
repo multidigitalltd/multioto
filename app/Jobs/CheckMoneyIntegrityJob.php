@@ -77,18 +77,23 @@ class CheckMoneyIntegrityJob implements ShouldQueue
     private function chargedWithoutInvoice(): ?array
     {
         $grace = now()->subMinutes((int) config('health.money.invoice_grace_minutes', 120));
+        $since = now()->subDays(max(1, (int) config('health.money.window_days', 14)));
 
-        $rows = $this->recent(Charge::query())
+        // BOTH bounds run off the moment the money actually came in, not off
+        // the day the row was opened. A payment demand can sit unpaid for a
+        // fortnight: the invoice job starts when it is PAID, so the opening
+        // date would report every demand paid this morning — and would then
+        // hide the one paid today whose invoice failed, because the row itself
+        // is older than the lookback window.
+        $rows = Charge::query()
             ->where('status', ChargeStatus::Succeeded)
-            // Measured from when the money actually came in, not from when the
-            // row was opened. A payment demand can sit unpaid for a fortnight;
-            // the invoice job starts when it is PAID, and judging it by the
-            // opening date would report every demand paid this morning.
             ->where(fn (Builder $query) => $query
-                ->where('charged_at', '<=', $grace)
+                ->where(fn (Builder $paid) => $paid
+                    ->whereNotNull('charged_at')
+                    ->whereBetween('charged_at', [$since, $grace]))
                 ->orWhere(fn (Builder $legacy) => $legacy
                     ->whereNull('charged_at')
-                    ->where('created_at', '<=', $grace)))
+                    ->whereBetween('created_at', [$since, $grace])))
             ->whereDoesntHave('invoice')
             ->orderBy('id')
             ->get(['id', 'customer_id', 'total_agorot', 'created_at']);
@@ -172,6 +177,12 @@ class CheckMoneyIntegrityJob implements ShouldQueue
     /**
      * Neither confirmed nor failed. Reconciliation asks Cardcom about these
      * within its own window; one that is still pending a day later was missed.
+     *
+     * A payment demand is deliberately left "pending" while the customer takes
+     * their time — that is what the due date is for, and unpaid demands are
+     * chased by the reminders and shown in the aging report. Including them
+     * here would list every ordinary open demand as a fault every morning, so
+     * only charges nobody is waiting on a customer for are considered.
      */
     private function stuckPendingCharges(): ?array
     {
@@ -179,6 +190,7 @@ class CheckMoneyIntegrityJob implements ShouldQueue
 
         $rows = $this->recent(Charge::query())
             ->where('status', ChargeStatus::Pending)
+            ->whereNull('demand_sent_at')
             ->whereNotNull('cardcom_low_profile_id')
             ->where('created_at', '<=', now()->subHours($hours))
             ->orderBy('id')

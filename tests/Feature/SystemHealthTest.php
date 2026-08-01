@@ -337,6 +337,64 @@ class SystemHealthTest extends TestCase
         Mail::assertNothingSent();
     }
 
+    /**
+     * The invoice failed on a demand that was open for weeks before it was
+     * paid. Judging the lookback window by the day the demand was opened would
+     * file the finding away as ancient history the moment it happened.
+     */
+    public function test_a_long_open_demand_paid_today_is_still_checked(): void
+    {
+        Mail::fake();
+        config(['billing.notifications.team_email' => 'team@example.com']);
+
+        $charge = $this->charge(ChargeStatus::Succeeded, extra: ['charged_at' => now()->subHours(6)]);
+        $charge->timestamps = false;
+        $charge->forceFill(['created_at' => now()->subDays(40)])->save();
+
+        (new CheckMoneyIntegrityJob)->handle();
+
+        Mail::assertSent(fn (NotificationMail $mail): bool => str_contains($mail->bodyText, 'ללא חשבונית'));
+    }
+
+    /**
+     * A demand waiting for the customer is not a fault — that is what the due
+     * date is for, and the reminders chase it. Listing every open demand each
+     * morning is how the report stops being read.
+     */
+    public function test_an_ordinary_open_demand_is_not_called_stuck(): void
+    {
+        Mail::fake();
+        config(['billing.notifications.team_email' => 'team@example.com']);
+
+        $charge = $this->charge(ChargeStatus::Pending, extra: [
+            'cardcom_low_profile_id' => 'lp-1',
+            'demand_sent_at' => now()->subDays(3),
+            'due_at' => now()->addDays(11),
+        ]);
+        $charge->timestamps = false;
+        $charge->forceFill(['created_at' => now()->subDays(3)])->save();
+
+        (new CheckMoneyIntegrityJob)->handle();
+
+        Mail::assertNothingSent();
+    }
+
+    public function test_a_charge_whose_outcome_was_never_learned_is_reported(): void
+    {
+        Mail::fake();
+        config(['billing.notifications.team_email' => 'team@example.com']);
+
+        // A hosted page opened for a walk-in charge, no demand behind it: we
+        // asked Cardcom for money and never found out what happened.
+        $charge = $this->charge(ChargeStatus::Pending, extra: ['cardcom_low_profile_id' => 'lp-2']);
+        $charge->timestamps = false;
+        $charge->forceFill(['created_at' => now()->subDays(2)])->save();
+
+        (new CheckMoneyIntegrityJob)->handle();
+
+        Mail::assertSent(fn (NotificationMail $mail): bool => str_contains($mail->bodyText, 'נתקעו'));
+    }
+
     public function test_nothing_is_repaired_by_the_check(): void
     {
         Mail::fake();
