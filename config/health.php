@@ -18,6 +18,14 @@ return [
     'token' => env('HEALTH_TOKEN'),
 
     /*
+    | Where the probe's rate-limit counter lives. Deliberately NOT the default
+    | cache store: that one is the database here, and an endpoint that reports
+    | a broken database must not have to reach the database to answer. A store
+    | that cannot be reached simply lets the request through.
+    */
+    'throttle_store' => env('HEALTH_THROTTLE_STORE', 'file'),
+
+    /*
     | ----------------------------------------------------------------
     | When a moving part counts as stopped
     | ----------------------------------------------------------------

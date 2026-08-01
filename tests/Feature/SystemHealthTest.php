@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Enums\ChargeStatus;
 use App\Enums\SubscriptionStatus;
+use App\Http\Middleware\ThrottleHealthProbe;
 use App\Jobs\CheckMoneyIntegrityJob;
 use App\Jobs\HeartbeatJob;
 use App\Mail\NotificationMail;
@@ -16,9 +17,14 @@ use App\Models\Plan;
 use App\Models\Subscription;
 use App\Models\SystemLog;
 use App\Services\System\HealthReport;
+use Illuminate\Foundation\Http\Middleware\ValidateCsrfToken;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Routing\Router;
+use Illuminate\Session\Middleware\StartSession;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Route;
+use Illuminate\View\Middleware\ShareErrorsFromSession;
 use Tests\TestCase;
 
 /**
@@ -485,6 +491,26 @@ class SystemHealthTest extends TestCase
         $this->assertSame(HealthReport::DOWN, $report['status']);
         $this->assertCount(1, $report['checks']);
         $this->assertSame('database', $report['checks'][0]['key']);
+    }
+
+    /**
+     * The endpoint must not need the database in order to report that the
+     * database is gone. The session driver IS the database by default, and the
+     * session opens in middleware — before the controller ever runs.
+     */
+    public function test_the_probe_reaches_the_controller_without_touching_the_database(): void
+    {
+        $route = Route::getRoutes()->getByName('health');
+        $middleware = app(Router::class)->gatherRouteMiddleware($route);
+
+        foreach ([StartSession::class, ValidateCsrfToken::class, ShareErrorsFromSession::class] as $stateful) {
+            $this->assertNotContains($stateful, $middleware);
+        }
+
+        // Rate limiting stays, on a store of its own rather than the default
+        // one (which is the database in production).
+        $this->assertContains(ThrottleHealthProbe::class.':60', $middleware);
+        $this->assertNotSame(config('cache.default'), config('health.throttle_store'));
     }
 
     public function test_nothing_is_repaired_by_the_check(): void

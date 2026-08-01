@@ -157,11 +157,16 @@ php artisan horizon
 
 יש **שני תורים**: `default` לכל העבודה, ו-`heartbeat` שנושא רק את פעימת החיים
 שמסך `/health` קורא. ההפרדה נועדה למנוע אזעקת שווא — פעימה שממתינה מאחורי גיבוי
-ארוך תתיישן ותדווח על מערכת בריאה כמתה. Horizon מקבל את שניהם מ-`config/horizon.php`;
-מי שמריץ worker רגיל במקומו חייב לציין את שניהם:
+ארוך תתיישן ותדווח על מערכת בריאה כמתה. Horizon מטפל בזה לבד
+(`config/horizon.php` מגדיר supervisor שמריץ תהליך לכל תור).
+
+מי שמריץ `queue:work` רגיל במקום Horizon צריך **שני תהליכים נפרדים** — רשימה
+מופרדת בפסיקים היא סדר עדיפויות ולא הפרדה, ותהליך יחיד שעסוק בעבודה ארוכה לא
+יגיע לפעימה בכלל:
 
 ```bash
-php artisan queue:work --queue=default,heartbeat
+php artisan queue:work --queue=default     # העבודה
+php artisan queue:work --queue=heartbeat   # רק פעימת החיים, תהליך משלו
 ```
 
 ---
