@@ -305,6 +305,58 @@ class CommandConsoleTest extends TestCase
         );
     }
 
+    /**
+     * "לאליס ולדני" resolves Alice and asks which Dani. The answer names Dani
+     * alone — and must not quietly take the task off Alice, who was understood
+     * correctly the first time.
+     */
+    public function test_answering_which_dani_keeps_the_person_already_assigned(): void
+    {
+        $alice = User::factory()->create(['name' => 'אליס']);
+        $kohen = User::factory()->create(['name' => 'דני כהן']);
+        User::factory()->create(['name' => 'דני לוי']);
+
+        $this->fakeAgent([['open_task', ['title' => 'לבדוק את השרת', 'assignee' => 'אליס, דני']]]);
+        app(CommandInterpreter::class)->run('תפתח לאליס ולדני משימה');
+
+        $task = Task::sole();
+        $this->assertSame([$alice->id], $task->assignees->pluck('id')->all());
+
+        $this->fakeAgent([['assign_task', ['task_id' => $task->id, 'assignee' => 'דני כהן']]]);
+        app(CommandInterpreter::class)->run('דני כהן');
+
+        $this->assertSame([$alice->id, $kohen->id], $task->fresh()->assignees->pluck('id')->sort()->values()->all());
+    }
+
+    /** Moving a task from one person to another is a replacement, and says so. */
+    public function test_an_explicit_replacement_moves_the_task(): void
+    {
+        $alice = User::factory()->create(['name' => 'אליס']);
+        $bob = User::factory()->create(['name' => 'בוב']);
+        $task = Task::create(['title' => 'לבדוק את השרת', 'status' => TaskStatus::Open]);
+        $task->assignees()->sync([$alice->id]);
+
+        $this->fakeAgent([['assign_task', ['task_id' => $task->id, 'assignee' => 'בוב', 'mode' => 'replace']]]);
+        app(CommandInterpreter::class)->run('תעביר את המשימה מאליס לבוב');
+
+        $this->assertSame([$bob->id], $task->fresh()->assignees->pluck('id')->all());
+    }
+
+    /**
+     * Postgres compares text case-sensitively, so an address typed in lower
+     * case must still find the account stored with a capital letter — otherwise
+     * the task is opened unassigned as though nobody matched.
+     */
+    public function test_an_email_matches_whatever_its_case(): void
+    {
+        $dan = User::factory()->create(['name' => 'דני כהן', 'email' => 'Dani@example.com']);
+
+        $this->fakeAgent([['open_task', ['title' => 'לבדוק את השרת', 'assignee' => 'dani@example.com']]]);
+        app(CommandInterpreter::class)->run('תפתח משימה');
+
+        $this->assertSame([$dan->id], Task::sole()->assignees->pluck('id')->all());
+    }
+
     public function test_assigning_a_task_that_does_not_exist_changes_nothing(): void
     {
         $toolResult = null;

@@ -199,7 +199,7 @@ class ConsoleAgent
             '- אפשר לשרשר: קודם קריאה כדי לזהות את היעד (מזהה לקוח/פנייה/אתר), ואז הצעה.',
             '- כשמבקשים לדוור/להודיע/לעדכן את כל הלקוחות (או קבוצה מהם) — השתמש ב-draft_broadcast. יש לך את הכלי הזה: אל תפתח על כך משימה ואל תאמר שאין לך כלי. הכלי רק מכין טיוטה, שום דבר לא נשלח, והמנהל עורך ושולח בעצמו ממסך הדיוורים.',
             '- אם משהו אין לו כלי ישיר — פתח עליו משימה לאדם עם open_task. הכלי פותח את המשימה מיד, בלי אישור, כדי שאף בקשה לא תיפול בין הכיסאות. אל תשאל אם לפתוח משימה — פתח.',
-            '- אם לא הצלחת לשייך משימה כי השם לא מוכר או מתאים לכמה אנשים — המשימה כבר נפתחה. אמור זאת למנהל, שאל למי לשייך, וכשיענה השתמש ב-assign_task עם מספר המשימה. אל תפתח משימה נוספת.',
+            '- אם לא הצלחת לשייך משימה כי השם לא מוכר או מתאים לכמה אנשים — המשימה כבר נפתחה. אמור זאת למנהל, שאל למי לשייך, וכשיענה השתמש ב-assign_task עם מספר המשימה ועם השם שהמנהל ענה בלבד — assign_task מוסיף לשיוך הקיים, ולכן מי שכן זוהה קודם נשאר. אל תפתח משימה נוספת.',
             '- כשפותחים משימה: אם המנהל אמר למי ("לדני", "לי") — העבר assignee, ואם אמר למתי ("מחר", "עד חמישי", "ב-15/9") — חשב את התאריך מהתאריך של היום שמופיע למעלה והעבר due_at בפורמט YYYY-MM-DD (או עם שעה: YYYY-MM-DD HH:MM). משימה בלי בעלים ובלי תאריך נראית מטופלת ואף אחד לא עושה אותה.',
             '- כל שאלה למנהל — בין אם חסר מידע (סכום, איזה לקוח מבין כמה) ובין אם אתה צריך אישור על כיוון לפני שתפעל — חייבת לעבור דרך הכלי need_clarification, אף פעם לא כטקסט חופשי בסוף. שאלה בטקסט בלבד לא נרשמת כשאלה, המנהל לא יכול לענות עליה, והשיחה נתקעת. אחרי need_clarification המנהל עונה והשיחה ממשיכה מאותה נקודה.',
             '- סכומים בשקלים. היה תמציתי ומדויק. בסיום כתוב בעברית מה עשית ומה הוצע לאישור.',
@@ -400,11 +400,14 @@ class ConsoleAgent
                 ], ['title'])],
             ['name' => 'assign_task', 'description' => 'שייך משימה קיימת לאיש צוות ו/או קבע לה תאריך יעד — מיד, בלי אישור. '
                 .'לשימוש כשפתחת משימה ולא הצלחת לשייך אותה (שם כפול או לא מוכר) והמנהל ענה למי — אל תפתח משימה חדשה, שייך את הקיימת. '
-                .'task_id (מספר המשימה), assignee ו/או due_at.',
+                .'task_id (מספר המשימה), assignee ו/או due_at. '
+                .'ברירת המחדל היא הוספה לשיוך הקיים — כך שתשובה על "איזה דני" לא מוחקת אנשים ששויכו כבר. '
+                .'רק כשהמנהל אמר במפורש להעביר/להחליף (למשל "תעביר מדני לרותם") הוסף mode="replace".',
                 'input_schema' => $obj([
                     'task_id' => $int,
                     'assignee' => $str,
                     'due_at' => $str,
+                    'mode' => $str,
                 ], ['task_id'])],
             ['name' => 'need_clarification', 'description' => 'כשחסר מידע קריטי שאי אפשר לגלות לבד — שאל את המנהל שאלה אחת קצרה וסיים. question.',
                 'input_schema' => $obj(['question' => $str], ['question'])],
@@ -1290,27 +1293,39 @@ class ConsoleAgent
 
         if ($assignees->isNotEmpty()) {
             $before = $task->assignees()->pluck('users.id')->sort()->values()->all();
-            $after = $assignees->pluck('id')->sort()->values()->all();
+            $ids = $assignees->pluck('id')->all();
 
-            $task->assignees()->sync($assignees->pluck('id')->all());
+            // ADDING is the default, because this is mostly the repair path for
+            // an assignment that only half worked: "לאליס ולדני" opens the task
+            // for Alice and asks which Dani, and the answer names Dani alone —
+            // replacing would quietly take the task off Alice, who was resolved
+            // correctly the first time. Replacing happens only when the manager
+            // says so ("תעביר מדני לרותם"): an owner too many is visible to
+            // everyone, an owner silently removed is visible to nobody.
+            if (mb_strtolower(trim((string) ($input['mode'] ?? ''))) === 'replace') {
+                $task->assignees()->sync($ids);
+            } else {
+                $task->assignees()->syncWithoutDetaching($ids);
+            }
 
-            // The point of assigning is that the person hears about it — but
-            // only when the owner actually CHANGED. The closing AI turn can die
-            // after the assignment is already saved, and the operator repeating
-            // the instruction then syncs the same people back onto the task: a
-            // second "משימה שויכה אליך" for work they were told about an hour
-            // ago reads as a second task, and the real one gets less attention.
+            $after = $task->assignees()->pluck('users.id')->sort()->values()->all();
+            $added = array_values(array_diff($after, $before));
+
+            // Only the people who were NOT on it a moment ago. The closing AI
+            // turn can die after the assignment is saved, and the operator
+            // repeating the instruction puts the same people back: a second
+            // "משימה שויכה אליך" for work they were told about an hour ago
+            // reads as a second task, and the real one gets less attention.
             //
             // Kept non-fatal, like every other notification here: the
             // assignment is already saved and a queue hiccup must not undo it.
-            if ($after !== $before) {
+            if ($added !== []) {
                 try {
-                    // The people assigned NOW, named in the job itself: read
-                    // off the task when the queue eventually drains, a
-                    // reassignment in between would send this announcement to
-                    // whoever holds it by then and leave the person it was
-                    // about hearing nothing.
-                    NotifyTaskCreatedJob::dispatch($task->id, $after);
+                    // Named in the job itself: read off the task when the queue
+                    // eventually drains, a reassignment in between would send
+                    // this announcement to whoever holds it by then and leave
+                    // the person it was about hearing nothing.
+                    NotifyTaskCreatedJob::dispatch($task->id, $added);
                 } catch (\Throwable $e) {
                     Log::warning('ConsoleAgent: task assignment notification not queued', [
                         'task_id' => $task->id,
@@ -1373,12 +1388,20 @@ class ConsoleAgent
                 continue;
             }
 
+            // Case-folded on both sides. Postgres compares text case-sensitively
+            // (SQLite, where the tests run, does not) — so on the real database
+            // "dani@example.com" would not find the account stored as
+            // "Dani@example.com", and the task would be opened unassigned as
+            // though the address matched nobody. Bound parameters, never
+            // interpolation.
+            $needle = mb_strtolower($name);
+
             // Wide enough that an exact match cannot fall outside the limit and
             // be mistaken for absent.
             $matches = User::query()
                 ->where(fn (Builder $query) => $query
-                    ->where('name', 'like', "%{$name}%")
-                    ->orWhere('email', $name))
+                    ->whereRaw('lower(name) like ?', ['%'.$needle.'%'])
+                    ->orWhereRaw('lower(email) = ?', [$needle]))
                 ->orderBy('id')
                 ->limit(25)
                 ->get();
