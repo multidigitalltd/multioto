@@ -101,6 +101,28 @@ class TaskAndIncidentNotificationsTest extends TestCase
         $this->assertSame(0, $keeps->fresh()->notifications()->count());
     }
 
+    /**
+     * "A task landed with nobody on it" is a fact about the moment it was said.
+     * If a clarification has since given the task to somebody, that assignment
+     * announced itself — resolving the audience now would tell them twice.
+     */
+    public function test_an_unassigned_announcement_does_not_chase_whoever_got_the_task_later(): void
+    {
+        Mail::fake();
+        $admin = User::factory()->create(['role' => UserRole::Admin]);
+        $alice = User::factory()->create(['role' => UserRole::Agent]);
+
+        $task = Task::create(['title' => 'לבדוק גיבוי', 'status' => TaskStatus::Open]);
+
+        // The clarification landed before the queue drained.
+        $task->assignees()->sync([$alice->id]);
+
+        NotifyTaskCreatedJob::dispatchSync($task->id, null, unassigned: true);
+
+        $this->assertSame(0, $alice->fresh()->notifications()->count());
+        $this->assertSame(0, $admin->fresh()->notifications()->count());
+    }
+
     public function test_a_site_going_down_raises_the_in_panel_bell_for_managers(): void
     {
         config(['billing.monitoring.failures_to_incident' => 1]);

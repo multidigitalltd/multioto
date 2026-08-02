@@ -33,14 +33,37 @@ class NotifyTaskCreatedJob implements ShouldQueue
 {
     use Queueable;
 
-    /** @param  list<int>|null  $recipientIds */
-    public function __construct(public int $taskId, public ?array $recipientIds = null) {}
+    /**
+     * @param  list<int>|null  $recipientIds
+     * @param  bool  $unassigned  this announcement is "a task landed with nobody
+     *                            on it" — a fact about the moment it was made,
+     *                            not a question to answer when the queue drains
+     */
+    public function __construct(
+        public int $taskId,
+        public ?array $recipientIds = null,
+        public bool $unassigned = false,
+    ) {}
 
     public function handle(): void
     {
         $task = Task::with('assignees', 'customer')->find($this->taskId);
 
         if (! $task) {
+            return;
+        }
+
+        // An announcement made BECAUSE the task had no owner. If it has one by
+        // now, the assignment that gave it one was announced by whoever made
+        // it — and resolving the audience at this moment instead would send
+        // that person a second, identical "assigned to you".
+        if ($this->unassigned) {
+            if ($task->assignees->isNotEmpty()) {
+                return;
+            }
+
+            $this->notify($task, unassigned: true, recipients: User::where('role', UserRole::Admin)->get());
+
             return;
         }
 
@@ -71,6 +94,12 @@ class NotifyTaskCreatedJob implements ShouldQueue
             ? User::where('role', UserRole::Admin)->get()
             : $assignees;
 
+        $this->notify($task, $unassigned, $recipients);
+    }
+
+    /** @param  Collection<int, User>  $recipients */
+    private function notify(Task $task, bool $unassigned, Collection $recipients): void
+    {
         if ($recipients->isEmpty()) {
             return;
         }

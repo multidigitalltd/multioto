@@ -139,7 +139,11 @@ class SystemActionRunner
         try {
             // Named here rather than looked up later, so a task reassigned
             // before the queue drains still tells the person it was opened for.
-            NotifyTaskCreatedJob::dispatch($task->id, $added === [] ? null : $added);
+            // Nobody was asked for: the announcement is "a task landed with no
+            // owner", said as a fact about now rather than as a lookup the
+            // queue makes later — by then a clarification may have given it to
+            // somebody, who would be told twice.
+            NotifyTaskCreatedJob::dispatch($task->id, $added === [] ? null : $added, unassigned: $added === []);
         } catch (\Throwable $e) {
             Log::warning('SystemActionRunner: task notification not queued', [
                 'task_id' => $task->id,
