@@ -79,19 +79,7 @@ class HealthReport
                 'המתזמן לא דיווח על עצמו — ייתכן ש-schedule:work אינו רץ. שום עבודה מתוזמנת לא מתבצעת.',
             ),
             $queue,
-            // Not "down", on purpose: a three-hour backup on the ordinary queue
-            // delays this beat exactly as a dead worker would, and the endpoint
-            // must not call a busy system dead. It is the answer to the
-            // question the private heartbeat above cannot answer — whether the
-            // worker doing the REAL work is still getting through it.
-            $this->heartbeat(
-                HealthHeartbeat::WORKLOAD,
-                'workload',
-                'תור העבודה',
-                (int) config('health.workload_stale_minutes', 60),
-                'העבודה הרגילה (חיובים, חשבוניות, הודעות) לא התקדמה — worker שנעצר, או עבודה ארוכה שתקועה.',
-                self::DEGRADED,
-            ),
+            $this->workload(),
             // Counting the backlog means talking to the queue itself, and one
             // reason nothing has been run is that the queue host stopped
             // answering — a dropped Redis connection waits out the socket
@@ -156,6 +144,52 @@ class HealthReport
     }
 
     /**
+     * Is the queue that carries the real work — charges, invoices, notifications
+     * — actually moving? The private heartbeat above cannot answer that: with
+     * two worker processes it goes on reporting long after the one doing the
+     * work has died.
+     *
+     * Two windows, because the same silence means two different things:
+     *
+     *   quiet a while   a long job may simply be running. Worth a look, not a
+     *                   phone call — an endpoint that calls a busy system dead
+     *                   is one nobody trusts the next time it complains.
+     *
+     *   quiet far too long  NO job in this system may run that long: the
+     *                   longest timeout anywhere is half an hour, after which
+     *                   the worker is killed and the next beat lands. Silence
+     *                   past the second window has no innocent explanation, so
+     *                   it is reported as what it is — work has stopped — and
+     *                   the monitor gets its 503.
+     */
+    private function workload(): array
+    {
+        $stopped = 'העבודה הרגילה (חיובים, חשבוניות, הודעות) לא מתבצעת — ה-worker של תור העבודה נעצר.';
+        $slow = 'העבודה הרגילה לא התקדמה — ייתכן worker שנעצר, וייתכן עבודה ארוכה שרצה כרגע.';
+
+        $check = $this->heartbeat(
+            HealthHeartbeat::WORKLOAD,
+            'workload',
+            'תור העבודה',
+            (int) config('health.workload_down_minutes', 60),
+            $stopped,
+        );
+
+        if ($check['status'] === self::DOWN) {
+            return $check;
+        }
+
+        return $this->heartbeat(
+            HealthHeartbeat::WORKLOAD,
+            'workload',
+            'תור העבודה',
+            (int) config('health.workload_stale_minutes', 30),
+            $slow,
+            self::DEGRADED,
+        );
+    }
+
+    /**
      * The one query, asked with a stopwatch.
      *
      * A Postgres host that DROPS connection attempts rather than refusing them
@@ -194,6 +228,15 @@ class HealthReport
             'PGCONNECT_TIMEOUT' => (string) $seconds,
             'PGOPTIONS' => '-c statement_timeout='.($seconds * 1000),
             'PGTCPUSERTIMEOUT' => (string) ($seconds * 1000),
+            // And the case none of the above can see: the server takes the
+            // query, acknowledges it, and then goes silent. Nothing is left
+            // unacknowledged for the TCP timeout to notice and the client is
+            // simply waiting, so the socket is told to ask — twice, quickly —
+            // and to give up when nothing comes back.
+            'PGKEEPALIVES' => '1',
+            'PGKEEPALIVESIDLE' => (string) $seconds,
+            'PGKEEPALIVESINTERVAL' => (string) $seconds,
+            'PGKEEPALIVESCOUNT' => '2',
         ];
 
         $was = [];

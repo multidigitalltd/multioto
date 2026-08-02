@@ -51,11 +51,20 @@ return [
     | because the window above belongs to a private queue that a second worker
     | process can keep answering long after the one doing the real work died.
     |
-    | Much longer, and never reported as "down": a three-hour backup on that
-    | queue delays this beat exactly as a stopped worker would, and an endpoint
-    | that calls a busy system dead is one nobody trusts the next time.
+    | The first window only says "worth a look": a long job delays this beat
+    | exactly as a stopped worker would, and an endpoint that calls a busy
+    | system dead is one nobody trusts the next time.
     */
-    'workload_stale_minutes' => (int) env('HEALTH_WORKLOAD_STALE_MINUTES', 60),
+    'workload_stale_minutes' => (int) env('HEALTH_WORKLOAD_STALE_MINUTES', 30),
+
+    /*
+    | And the window past which silence has no innocent explanation: reported
+    | as "down", with the 503 that wakes somebody. Keep it comfortably above
+    | the longest job timeout in the system (half an hour, the backup) — past
+    | that the worker is killed and the next beat lands, so nothing legitimate
+    | can still be running.
+    */
+    'workload_down_minutes' => (int) env('HEALTH_WORKLOAD_DOWN_MINUTES', 60),
 
     /*
     | A backlog this deep, or this many jobs that gave up in the last day,

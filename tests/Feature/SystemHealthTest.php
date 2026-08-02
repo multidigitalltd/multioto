@@ -107,8 +107,32 @@ class SystemHealthTest extends TestCase
      * The two workers are separate processes: the private heartbeat queue can
      * go on answering long after the one running charges and invoices died.
      * That is a system reporting "ok" while nothing gets done.
+     *
+     * Quiet for a while is only "worth a look" — a long job delays the beat in
+     * exactly the same way, and an endpoint that calls a busy system dead is
+     * one nobody trusts the next time it complains.
      */
-    public function test_a_workload_queue_that_stopped_moving_is_reported(): void
+    public function test_a_workload_queue_that_went_quiet_is_worth_a_look(): void
+    {
+        $this->alive();
+        HealthHeartbeat::query()->whereKey(HealthHeartbeat::WORKLOAD)
+            ->update(['beat_at' => now()->subMinutes(40)]);
+
+        $report = app(HealthReport::class)->collect();
+
+        $this->assertSame(HealthReport::DEGRADED, $report['status']);
+        $this->assertSame(
+            HealthReport::DEGRADED,
+            collect($report['checks'])->firstWhere('key', 'workload')['status'],
+        );
+    }
+
+    /**
+     * Past the second window there is no innocent explanation: the longest job
+     * in the system is killed after half an hour, and the next beat lands. Work
+     * has stopped, and the monitor must hear about it.
+     */
+    public function test_a_workload_queue_silent_far_too_long_is_down(): void
     {
         $this->alive();
         HealthHeartbeat::query()->whereKey(HealthHeartbeat::WORKLOAD)
@@ -116,12 +140,9 @@ class SystemHealthTest extends TestCase
 
         $report = app(HealthReport::class)->collect();
 
-        // Degraded, not down: a long backup on that queue delays the beat in
-        // exactly the same way, and an endpoint that calls a busy system dead
-        // is one nobody trusts the next time it complains.
-        $this->assertSame(HealthReport::DEGRADED, $report['status']);
+        $this->assertSame(HealthReport::DOWN, $report['status']);
         $this->assertSame(
-            HealthReport::DEGRADED,
+            HealthReport::DOWN,
             collect($report['checks'])->firstWhere('key', 'workload')['status'],
         );
     }
