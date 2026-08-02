@@ -459,7 +459,7 @@ class BackupDrill
      * The unique keys, the foreign keys and the numeric columns travel with
      * them: everything the insert would refuse, asked before it is attempted.
      *
-     * @return array{columns: list<string>, required: list<string>, notNull: list<string>, unique: list<list<string>>, defaults: array<string, string>, integer: array<string, bool>, numeric: array<string, bool>, json: array<string, bool>, foreign: list<array{columns: list<string>, table: string, references: list<string>}>}
+     * @return array{columns: list<string>, required: list<string>, notNull: list<string>, unique: list<list<string>>, defaults: array<string, string>, integer: array<string, bool>, numeric: array<string, bool>, temporal: array<string, bool>, json: array<string, bool>, foreign: list<array{columns: list<string>, table: string, references: list<string>}>}
      */
     private function columnsOf(string $table): array
     {
@@ -469,6 +469,7 @@ class BackupDrill
         $defaults = [];
         $integer = [];
         $numeric = [];
+        $temporal = [];
         $json = [];
 
         foreach (Schema::getColumns($table) as $column) {
@@ -489,6 +490,8 @@ class BackupDrill
                 $integer[$name] = true;
             } elseif (preg_match('/numeric|decimal|real|double|float|money/i', $type)) {
                 $numeric[$name] = true;
+            } elseif (preg_match('/date|time/i', $type)) {
+                $temporal[$name] = true;
             } elseif (preg_match('/json/i', $type)) {
                 // PostgreSQL refuses anything that is not a JSON document here.
                 // SQLite stores the same column as text and reports it as text,
@@ -534,6 +537,7 @@ class BackupDrill
             'defaults' => $defaults,
             'integer' => $integer,
             'numeric' => $numeric,
+            'temporal' => $temporal,
             'json' => $json,
             'foreign' => $foreign,
         ];
@@ -644,6 +648,31 @@ class BackupDrill
         }
 
         return (string) $value;
+    }
+
+    /**
+     * Whether a date or timestamp column would take this value.
+     *
+     * Deliberately generous: what a backup writes is the database's own
+     * rendering, and the question here is only whether the text is a moment in
+     * time at all. Insisting on one format would fail archives written by a
+     * different driver — while "not-a-date", the thing that actually stops a
+     * restore, fails either way. PostgreSQL's own special literals are spelled
+     * out because they are valid there and meaningless to strtotime().
+     */
+    private function readsAsTime(string $value): bool
+    {
+        $text = trim($value);
+
+        if ($text === '') {
+            return false;
+        }
+
+        if (in_array(strtolower($text), ['infinity', '-infinity', 'epoch', 'allballs'], true)) {
+            return true;
+        }
+
+        return strtotime($text) !== false;
     }
 
     /** Whether an integer column would take this value. */
@@ -874,6 +903,12 @@ class BackupDrill
                 }
 
                 if (isset($schema['numeric'][$column]) && is_string($value) && ! is_numeric($value)) {
+                    $mistyped[(string) $column] = true;
+
+                    continue;
+                }
+
+                if (isset($schema['temporal'][$column]) && is_string($value) && ! $this->readsAsTime($value)) {
                     $mistyped[(string) $column] = true;
 
                     continue;
