@@ -987,6 +987,23 @@ class BackupDrillTest extends TestCase
         $this->assertStringContainsString('כפולים', implode(' ', $report['problems']));
     }
 
+    /**
+     * Rounding at the end of a day lands on the next one.
+     *
+     * 23:59:59.9 to a whole second is midnight — of the FOLLOWING date, which
+     * is where the column stores it.
+     */
+    public function test_a_rounding_that_crosses_midnight_moves_the_date(): void
+    {
+        DB::statement('CREATE TABLE midnight_probe (seen_at timestamp(0) primary key)');
+
+        $report = $this->drillWith('midnight_probe', 2,
+            '{"seen_at":"2026-01-01 23:59:59.9"}'."\n"
+            .'{"seen_at":"2026-01-02 00:00:00"}'."\n");
+
+        $this->assertStringContainsString('כפולים', implode(' ', $report['problems']));
+    }
+
     /** A clock is not a date. date_parse reports no fault for "12:34:56". */
     public function test_a_clock_value_in_a_date_column_is_reported(): void
     {

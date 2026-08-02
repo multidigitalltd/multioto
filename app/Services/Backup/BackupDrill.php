@@ -861,33 +861,31 @@ class BackupDrill
         // Fractional seconds are part of the value, not decoration: a column
         // with that precision stores .1 and .2 apart, and folding them together
         // would report a duplicate that is not one.
-        $clock = null;
+        $clock = is_int($parsed['hour']) && is_int($parsed['minute']) && is_int($parsed['second'])
+            ? sprintf(
+                '%02d:%02d:%02d.%06d',
+                $parsed['hour'],
+                $parsed['minute'],
+                $parsed['second'],
+                (int) round((float) ($parsed['fraction'] ?: 0) * 1000000),
+            )
+            : null;
 
-        if (is_int($parsed['hour']) && is_int($parsed['minute']) && is_int($parsed['second'])) {
-            // Built as a moment rather than printed field by field, because
-            // rounding to the column's precision can carry into the next
-            // second — and from there into the next minute, hour and day.
-            $moment = \DateTimeImmutable::createFromFormat(
-                'Y-m-d H:i:s.u',
-                sprintf(
-                    '2000-01-01 %02d:%02d:%02d.%06d',
-                    $parsed['hour'],
-                    $parsed['minute'],
-                    $parsed['second'],
-                    (int) round((float) ($parsed['fraction'] ?: 0) * 1000000),
-                ),
-                new \DateTimeZone('UTC'),
-            );
-
-            if ($moment === false) {
+        if ($kind === 'time') {
+            if ($clock === null) {
                 return null;
             }
 
-            $clock = $this->toPrecision($moment, $precision)->format('H:i:s.u');
-        }
+            // Any date will do for a column that keeps none; rounding at the
+            // very end of the last second wraps, as the column's own range
+            // leaves nowhere else to go.
+            $moment = \DateTimeImmutable::createFromFormat(
+                'Y-m-d H:i:s.u',
+                "2000-01-01 {$clock}",
+                new \DateTimeZone('UTC'),
+            );
 
-        if ($kind === 'time') {
-            return $clock;
+            return $moment === false ? null : $this->toPrecision($moment, $precision)->format('H:i:s.u');
         }
 
         if (! is_int($parsed['year']) || ! is_int($parsed['month']) || ! is_int($parsed['day'])) {
@@ -903,9 +901,20 @@ class BackupDrill
             return $date;
         }
 
+        // Built on the REAL date, not a placeholder one: rounding 23:59:59.9 to
+        // a whole second lands on the next DAY, and a carry that moved only the
+        // clock would put it back on the old one — reading the stored value as
+        // midnight of the wrong day.
+        //
         // A timestamp with no clock is midnight, exactly as the column stores
-        // it — so the two spellings of midnight come out as one key.
-        return $date.' '.($clock ?? '00:00:00.000000');
+        // it, so the two spellings of midnight come out as one key.
+        $moment = \DateTimeImmutable::createFromFormat(
+            'Y-m-d H:i:s.u',
+            $date.' '.($clock ?? '00:00:00.000000'),
+            new \DateTimeZone('UTC'),
+        );
+
+        return $moment === false ? null : $this->toPrecision($moment, $precision)->format('Y-m-d H:i:s.u');
     }
 
     /**
