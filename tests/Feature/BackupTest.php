@@ -2852,6 +2852,32 @@ class BackupTest extends TestCase
         $this->assertStringStartsWith($folder.'/', $written);
     }
 
+    /**
+     * There has to be a way to say "no explicit credentials".
+     *
+     * A blank field means "unchanged", so without this the stored key can never
+     * leave — and an instance role, which is a perfectly ordinary destination,
+     * would go on losing to a key nobody can see.
+     */
+    public function test_the_stored_credentials_can_be_cleared(): void
+    {
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+
+        Setting::put('backup.s3.key', 'OLDKEY');
+        Setting::put('backup.s3.secret', 'OLDSECRET');
+        SettingsServiceProvider::refreshFromDatabase();
+
+        $this->assertSame('OLDKEY', config('filesystems.disks.backups.key'));
+
+        Livewire::test(ManageBackups::class)
+            ->call('forgetCredentials')
+            ->assertNotified();
+
+        $this->assertArrayNotHasKey('backup.s3.key', Setting::map());
+        $this->assertArrayNotHasKey('backup.s3.secret', Setting::map());
+        $this->assertNotSame('OLDKEY', config('filesystems.disks.backups.key'));
+    }
+
     public function test_the_connection_test_reports_a_destination_that_refuses_writes(): void
     {
         $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));

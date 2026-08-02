@@ -229,9 +229,48 @@ class ManageBackups extends Page implements HasForms, HasTable
                             ->label('כתובות בסגנון נתיב (path-style)')
                             ->helperText('נדרש ברוב השירותים תואמי S3, ובכללם R2. ל-AWS עצמה כבו.'),
                     ])->columns(2)
-                    ->footerActions([$this->saveAction(), $this->testAction()]),
+                    ->footerActions([$this->saveAction(), $this->testAction(), $this->forgetCredentialsAction()]),
             ])
             ->statePath('data');
+    }
+
+    /**
+     * Delete the stored access key and secret.
+     *
+     * A blank field means "unchanged" — it has to, since these fields are blank
+     * on every load — which leaves no way at all to say "no explicit
+     * credentials". That is a real destination: an instance role, or anything
+     * else in the provider chain, where a key left behind in the database wins
+     * silently and the nightly run fails on a permission nobody can account
+     * for. Shown only when there is something stored to remove.
+     */
+    protected function forgetCredentialsAction(): Action
+    {
+        return Action::make('forgetCredentials')
+            ->label('נקה מפתחות שמורים')
+            ->color('danger')
+            ->requiresConfirmation()
+            ->modalHeading('למחוק את מפתחות הגישה השמורים?')
+            ->modalDescription('מפתח הגישה והסוד יימחקו מההגדרות, והיעד ישתמש בהרשאות של השרת עצמו או במה שמוגדר בקובץ הסביבה. אם אין כאלה — הגיבוי הלילי ייכשל.')
+            ->modalSubmitActionLabel('מחק')
+            ->visible(fn (): bool => array_intersect_key(Setting::map(), array_flip(self::SECRETS)) !== [])
+            ->action(fn () => $this->forgetCredentials());
+    }
+
+    public function forgetCredentials(): void
+    {
+        foreach (self::SECRETS as $key) {
+            Setting::forget($key);
+        }
+
+        $this->refreshConfig();
+
+        // The adapter this request already built still holds the old key.
+        Storage::forgetDisk('backups');
+
+        $this->form->fill($this->currentState());
+
+        Notification::make()->title('המפתחות השמורים נמחקו')->success()->send();
     }
 
     public function save(): void

@@ -165,9 +165,16 @@ class SettingsServiceProvider extends ServiceProvider
         // Same reasoning for the destination itself: an endpoint cleared in the
         // panel — moving from R2 back to AWS — must not stay in a running
         // worker, still writing archives to the bucket nobody is watching any
-        // more. The key and the secret are NOT here: they are write-only fields
-        // that are never submitted blank, and reverting them on a blank would
-        // mean an empty form wiped the credentials.
+        // more.
+        //
+        // The key and the secret belong here too, even though they are
+        // write-only. A blank field never removes their row — save() leaves
+        // them alone, which is what keeps an empty form from wiping the
+        // credentials — so a row that is ABSENT means one of two things, and
+        // both want the config-file value: it was never set, or somebody asked
+        // for it to be forgotten in order to use the server's own permissions.
+        'backup.s3.key' => 'filesystems.disks.backups.key',
+        'backup.s3.secret' => 'filesystems.disks.backups.secret',
         'backup.s3.region' => 'filesystems.disks.backups.region',
         'backup.s3.bucket' => 'filesystems.disks.backups.bucket',
         'backup.s3.endpoint' => 'filesystems.disks.backups.endpoint',
