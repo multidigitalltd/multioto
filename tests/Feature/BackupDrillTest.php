@@ -1267,6 +1267,22 @@ class BackupDrillTest extends TestCase
         $this->assertStringContainsString('בית אפס', implode(' ', $report['problems']));
     }
 
+    /**
+     * And a binary column keeps it.
+     *
+     * "A\0B" is valid UTF-8, so the archive writes it as an ordinary JSON
+     * string rather than a base64 marker — and bytea holds it perfectly well.
+     * The schema decides this, not the shape the value arrived in.
+     */
+    public function test_a_zero_byte_in_a_binary_column_is_not_reported(): void
+    {
+        DB::statement('CREATE TABLE blob_probe (id integer primary key, payload blob)');
+
+        $report = $this->drillWith('blob_probe', 1, '{"id":1,"payload":"A\\u0000B"}'."\n");
+
+        $this->assertStringNotContainsString('בית אפס', implode(' ', $report['problems']));
+    }
+
     /** A clock is not a date. date_parse reports no fault for "12:34:56". */
     public function test_a_clock_value_in_a_date_column_is_reported(): void
     {

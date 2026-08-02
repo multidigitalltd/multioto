@@ -465,7 +465,7 @@ class BackupDrill
      * The unique keys, the foreign keys and the numeric columns travel with
      * them: everything the insert would refuse, asked before it is attempted.
      *
-     * @return array{columns: list<string>, required: list<string>, notNull: list<string>, unique: list<list<string>>, defaults: array<string, string>, limits: array<string, int>, uuid: array<string, bool>, boolean: array<string, bool>, integer: array<string, int>, numeric: array<string, bool>, temporal: array<string, string>, precision: array<string, int>, json: array<string, bool>, foreign: list<array{columns: list<string>, table: string, references: list<string>}>}
+     * @return array{columns: list<string>, required: list<string>, notNull: list<string>, unique: list<list<string>>, defaults: array<string, string>, limits: array<string, int>, uuid: array<string, bool>, boolean: array<string, bool>, integer: array<string, int>, numeric: array<string, bool>, textual: array<string, bool>, temporal: array<string, string>, precision: array<string, int>, json: array<string, bool>, foreign: list<array{columns: list<string>, table: string, references: list<string>}>}
      */
     private function columnsOf(string $table): array
     {
@@ -481,6 +481,7 @@ class BackupDrill
         $numeric = [];
         $temporal = [];
         $json = [];
+        $textual = [];
 
         foreach (Schema::getColumns($table) as $column) {
             $name = (string) $column['name'];
@@ -503,6 +504,13 @@ class BackupDrill
             if (preg_match('/char/i', $type)
                 && preg_match('/\((\d+)\)/', (string) ($column['type'] ?? ''), $width) === 1) {
                 $limits[$name] = (int) $width[1];
+            }
+
+            // Which columns hold TEXT. Asked positively, and of the schema
+            // rather than of the archive: a type this does not recognise gets
+            // no check at all, which can miss a fault but cannot invent one.
+            if (preg_match('/^(var)?char|^bpchar|^citext|^string|^clob|text/i', $type)) {
+                $textual[$name] = true;
             }
 
             if (preg_match('/^uuid/i', $type)) {
@@ -585,6 +593,7 @@ class BackupDrill
             'boolean' => $boolean,
             'integer' => $integer,
             'numeric' => $numeric,
+            'textual' => $textual,
             'temporal' => $temporal,
             'precision' => $precision,
             'json' => $json,
@@ -1479,7 +1488,6 @@ class BackupDrill
                 // The DECODED value, not the marker around it: a b64 marker is
                 // an array to every reading of the JSON and reaches the column
                 // as the bytes inside it.
-                $binary = is_array($value);
                 $value = $this->decoded($value);
 
                 // An empty value is not a badly typed one. Whether the column
@@ -1489,17 +1497,18 @@ class BackupDrill
                     continue;
                 }
 
-                // A zero byte, which PostgreSQL stores in no text value at all.
+                // A zero byte, which PostgreSQL stores in no TEXT value at all.
                 // It reads as a perfectly ordinary short string through every
                 // check below this one, and the insert fails on it — the shape
                 // of fault this drill exists to catch.
                 //
-                // Text written as text, only: a b64 marker carries the bytes of
-                // a binary column, where a zero byte is an ordinary part of the
-                // content. Everything else came out of JSON, which cannot hold
-                // a broken encoding in the first place, so the byte is the whole
-                // question.
-                if (! $binary && is_string($value) && str_contains($value, "\0")) {
+                // Asked of columns the schema says hold text, not of every
+                // string that arrives: a bytea column holds a zero byte quite
+                // happily, and its bytes travel as an ordinary JSON string
+                // whenever they happen to be valid UTF-8.
+                if (isset($schema['textual'][$column])
+                    && is_string($value)
+                    && str_contains($value, "\0")) {
                     $unstorable[(string) $column] = true;
 
                     continue;
