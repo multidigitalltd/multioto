@@ -773,6 +773,82 @@ class BackupDrillTest extends TestCase
         $this->assertSame(1, substr_count($problems, 'סוג העמודה'));
     }
 
+    /**
+     * Wider than the column can hold.
+     *
+     * Declared smallint, because that is the one width every driver names the
+     * same: SQLite reports a Laravel integer column as plain "integer" whatever
+     * it was declared as, so the ceiling there is deliberately the widest one.
+     */
+    public function test_a_number_too_large_for_the_column_is_reported(): void
+    {
+        DB::statement('CREATE TABLE range_probe (id integer primary key, small smallint)');
+
+        $backup = $this->backup();
+
+        $path = Storage::disk('backups')->path($backup->path);
+        $zip = new ZipArchive;
+        $zip->open($path);
+
+        $manifest = json_decode((string) $zip->getFromName('manifest.json'), true);
+        $manifest['tables']['range_probe'] = 2;
+        $zip->addFromString('manifest.json', (string) json_encode($manifest));
+        $zip->addFromString('database/range_probe.ndjson',
+            '{"id":1,"small":-32768}'."\n".'{"id":2,"small":40000}'."\n");
+        $zip->close();
+
+        $report = app(BackupDrill::class)->run($backup);
+        $problems = implode(' ', $report['problems']);
+
+        $this->assertStringContainsString('small', $problems);
+        // The value at the very bottom of the range beside it is legal.
+        $this->assertSame(1, substr_count($problems, 'סוג העמודה'));
+    }
+
+    /** The same uuid in two spellings is one key to the database. */
+    public function test_a_uuid_key_repeated_in_another_spelling_is_reported(): void
+    {
+        DB::statement('CREATE TABLE key_probe (ref uuid primary key)');
+
+        $backup = $this->backup();
+
+        $path = Storage::disk('backups')->path($backup->path);
+        $zip = new ZipArchive;
+        $zip->open($path);
+
+        $manifest = json_decode((string) $zip->getFromName('manifest.json'), true);
+        $manifest['tables']['key_probe'] = 2;
+        $zip->addFromString('manifest.json', (string) json_encode($manifest));
+        $zip->addFromString('database/key_probe.ndjson',
+            '{"ref":"0198f1a2-3b4c-4d5e-8f90-1a2b3c4d5e6f"}'."\n"
+            .'{"ref":"{0198F1A23B4C4D5E8F901A2B3C4D5E6F}"}'."\n");
+        $zip->close();
+
+        $report = app(BackupDrill::class)->run($backup);
+
+        $this->assertStringContainsString('כפולים', implode(' ', $report['problems']));
+    }
+
+    /** A number is not a moment in time, whatever it would mean elsewhere. */
+    public function test_a_number_in_a_date_column_is_reported(): void
+    {
+        $backup = $this->backup();
+
+        $path = Storage::disk('backups')->path($backup->path);
+        $zip = new ZipArchive;
+        $zip->open($path);
+        $zip->addFromString(
+            'database/charges.ndjson',
+            '{"id":1,"subscription_id":5,"amount_agorot":100,"total_agorot":100,'
+                .'"period_start":123,"period_end":"2026-01-31"}'."\n",
+        );
+        $zip->close();
+
+        $report = app(BackupDrill::class)->run($backup);
+
+        $this->assertStringContainsString('period_start', implode(' ', $report['problems']));
+    }
+
     /** The marker is not the value: this one decodes to the word "oops". */
     public function test_a_base64_marker_holding_the_wrong_type_is_reported(): void
     {

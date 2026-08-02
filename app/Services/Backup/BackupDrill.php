@@ -3,6 +3,7 @@
 namespace App\Services\Backup;
 
 use App\Models\Backup;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use RuntimeException;
@@ -459,7 +460,7 @@ class BackupDrill
      * The unique keys, the foreign keys and the numeric columns travel with
      * them: everything the insert would refuse, asked before it is attempted.
      *
-     * @return array{columns: list<string>, required: list<string>, notNull: list<string>, unique: list<list<string>>, defaults: array<string, string>, limits: array<string, int>, uuid: array<string, bool>, boolean: array<string, bool>, integer: array<string, bool>, numeric: array<string, bool>, temporal: array<string, bool>, json: array<string, bool>, foreign: list<array{columns: list<string>, table: string, references: list<string>}>}
+     * @return array{columns: list<string>, required: list<string>, notNull: list<string>, unique: list<list<string>>, defaults: array<string, string>, limits: array<string, int>, uuid: array<string, bool>, boolean: array<string, bool>, integer: array<string, int>, numeric: array<string, bool>, temporal: array<string, bool>, json: array<string, bool>, foreign: list<array{columns: list<string>, table: string, references: list<string>}>}
      */
     private function columnsOf(string $table): array
     {
@@ -503,7 +504,7 @@ class BackupDrill
             } elseif (preg_match('/^bool/i', $type)) {
                 $boolean[$name] = true;
             } elseif (preg_match('/^(big|small|medium|tiny)?(int|integer|serial)/i', $type)) {
-                $integer[$name] = true;
+                $integer[$name] = $this->integerCeiling($type);
             } elseif (preg_match('/numeric|decimal|real|double|float|money/i', $type)) {
                 $numeric[$name] = true;
             } elseif (preg_match('/date|time/i', $type)) {
@@ -658,7 +659,11 @@ class BackupDrill
             return (string) json_encode($value);
         }
 
-        if (isset($schema['integer'][$column]) && ($whole = $this->integerText($value)) !== null) {
+        if (isset($schema['uuid'][$column]) && ($uuid = $this->uuidText($value)) !== null) {
+            return $uuid;
+        }
+
+        if (isset($schema['integer'][$column]) && ($whole = $this->integerText($value, PHP_INT_MAX)) !== null) {
             return $whole;
         }
 
@@ -708,8 +713,22 @@ class BackupDrill
      */
     private function readsAsUuid(mixed $value): bool
     {
+        return $this->uuidText($value) !== null;
+    }
+
+    /**
+     * The one value a uuid column would store, or null when it would refuse it.
+     *
+     * The database reads {A1B2...}, a1b2... and the unhyphenated form as ONE
+     * uuid, so a key written twice in two of those spellings is a duplicate the
+     * restore will meet — and would be two different strings to anything that
+     * compared the text. Validating and canonicalising are the same question,
+     * and answering it in one place is what keeps them from disagreeing.
+     */
+    private function uuidText(mixed $value): ?string
+    {
         if (! is_string($value)) {
-            return false;
+            return null;
         }
 
         $text = trim($value);
@@ -721,10 +740,11 @@ class BackupDrill
             $text = substr($text, 1, -1);
         }
 
-        return preg_match(
-            '/^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/i',
-            $text,
-        ) === 1;
+        if (preg_match('/^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/i', $text) !== 1) {
+            return null;
+        }
+
+        return strtolower(str_replace('-', '', $text));
     }
 
     /**
@@ -752,9 +772,34 @@ class BackupDrill
     }
 
     /** Whether an integer column would take this value. */
-    private function fitsInteger(mixed $value): bool
+    private function fitsInteger(mixed $value, int $ceiling): bool
     {
-        return $this->integerText($value) !== null;
+        return $this->integerText($value, $ceiling) !== null;
+    }
+
+    /**
+     * The largest number this integer column can hold.
+     *
+     * The width is only decidable together with the driver: PostgreSQL names
+     * int2, int4 and int8 apart, while SQLite reports every integer column as
+     * "integer" whatever it was declared as. Guessing 32 bits there would fail
+     * legitimate values on the driver the tests run on, so an ambiguous name is
+     * read as the widest — a missed overflow rather than a false alarm.
+     */
+    private function integerCeiling(string $type): int
+    {
+        if (preg_match('/int2|smallint/i', $type) === 1) {
+            return 32767;
+        }
+
+        if (preg_match('/int8|bigint/i', $type) === 1) {
+            return PHP_INT_MAX;
+        }
+
+        return preg_match('/int4|mediumint|^int(eger)?$/i', $type) === 1
+            && DB::getDriverName() !== 'sqlite'
+                ? 2147483647
+                : PHP_INT_MAX;
     }
 
     /**
@@ -772,18 +817,27 @@ class BackupDrill
      * as, so a smallint check would fail legitimate values on the driver the
      * tests themselves run on. A wrong alarm costs more here than a missed one.
      */
-    private function integerText(mixed $value): ?string
+    private function integerText(mixed $value, int $ceiling = PHP_INT_MAX): ?string
     {
         if (is_bool($value)) {
             return $value ? '1' : '0';
         }
 
-        if (is_int($value)) {
-            return (string) $value;
+        // Everything becomes decimal text and then takes the SAME path: the
+        // range is checked once, at the end, for every kind of input. Checked
+        // per branch it was checked for some of them — an integer straight out
+        // of the JSON skipped it entirely, which is exactly the value a
+        // too-wide number arrives as.
+        if (is_float($value)) {
+            if ($value !== floor($value) || abs($value) > PHP_INT_MAX) {
+                return null;
+            }
+
+            $value = (string) (int) $value;
         }
 
-        if (is_float($value)) {
-            return $value === floor($value) && abs($value) <= PHP_INT_MAX ? (string) (int) $value : null;
+        if (is_int($value)) {
+            $value = (string) $value;
         }
 
         if (! is_string($value) || preg_match('/^\s*[+-]?\d+\s*$/', $value) !== 1) {
@@ -796,11 +850,17 @@ class BackupDrill
         $digits = $digits === '' ? '0' : $digits;
 
         // Compared as text, because the number may not fit in an int to begin
-        // with — which is itself the answer.
-        $ceiling = $sign === '-' ? '9223372036854775808' : '9223372036854775807';
+        // with — which is itself the answer. One more is allowed on the
+        // negative side, as every two's-complement range has; spelled out at
+        // the top of the range because PHP_INT_MAX + 1 is no longer an integer.
+        $limit = match (true) {
+            $sign !== '-' => (string) $ceiling,
+            $ceiling === PHP_INT_MAX => '9223372036854775808',
+            default => (string) ($ceiling + 1),
+        };
 
-        if (strlen($digits) > strlen($ceiling)
-            || (strlen($digits) === strlen($ceiling) && strcmp($digits, $ceiling) > 0)) {
+        if (strlen($digits) > strlen($limit)
+            || (strlen($digits) === strlen($limit) && strcmp($digits, $limit) > 0)) {
             return null;
         }
 
@@ -997,7 +1057,7 @@ class BackupDrill
                 }
 
                 if (isset($schema['integer'][$column])) {
-                    if (! $this->fitsInteger($value)) {
+                    if (! $this->fitsInteger($value, $schema['integer'][$column])) {
                         $mistyped[(string) $column] = true;
                     }
 
@@ -1010,7 +1070,11 @@ class BackupDrill
                     continue;
                 }
 
-                if (isset($schema['temporal'][$column]) && is_string($value) && ! $this->readsAsTime($value)) {
+                // A number is not a moment in time to a date column, whatever
+                // it would mean elsewhere — the restore is handed the value as
+                // it stands and the column refuses it.
+                if (isset($schema['temporal'][$column])
+                    && (! is_string($value) || ! $this->readsAsTime($value))) {
                     $mistyped[(string) $column] = true;
 
                     continue;
