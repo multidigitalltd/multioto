@@ -34,6 +34,9 @@ class HealthReport
     /** A moving part has stopped. Work is not getting done at all. */
     public const DOWN = 'down';
 
+    /** Throwaway connection name for the time-boxed database probe. */
+    private const PROBE = 'health-db-probe';
+
     /**
      * @return array{status: string, checks: list<array{key: string, label: string, status: string, detail: string}>}
      */
@@ -144,11 +147,48 @@ class HealthReport
     private function database(): array
     {
         try {
-            DB::connection()->select('select 1');
+            $this->askTheDatabase();
 
             return $this->check('database', 'מסד הנתונים', self::OK, 'מגיב.');
         } catch (\Throwable $e) {
             return $this->check('database', 'מסד הנתונים', self::DOWN, 'אין חיבור למסד הנתונים.');
+        }
+    }
+
+    /**
+     * The one query, asked with a stopwatch.
+     *
+     * A Postgres host that DROPS connection attempts rather than refusing them
+     * holds the connect until the operating system gives up — minutes, on a
+     * default install — and the endpoint whose entire job is to say "the
+     * database has stopped" would be the request that hangs on it. libpq reads
+     * its own timeout from the environment (PDO's timeout attribute does
+     * nothing for this driver), so the probe sets it for the length of the
+     * question and puts it back afterwards, leaving ordinary connections — a
+     * worker in the middle of a charge — exactly as they were.
+     */
+    private function askTheDatabase(): void
+    {
+        $name = (string) config('database.default');
+        $connection = (array) config("database.connections.{$name}", []);
+
+        if (($connection['driver'] ?? null) !== 'pgsql') {
+            DB::connection($name)->select('select 1');
+
+            return;
+        }
+
+        $was = getenv('PGCONNECT_TIMEOUT');
+        putenv('PGCONNECT_TIMEOUT='.max(1, (int) config('health.database_probe_timeout', 2)));
+
+        config(['database.connections.'.self::PROBE => $connection]);
+        DB::purge(self::PROBE);
+
+        try {
+            DB::connection(self::PROBE)->select('select 1');
+        } finally {
+            DB::purge(self::PROBE);
+            $was === false ? putenv('PGCONNECT_TIMEOUT') : putenv("PGCONNECT_TIMEOUT={$was}");
         }
     }
 

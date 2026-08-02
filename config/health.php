@@ -26,6 +26,13 @@ return [
     'throttle_store' => env('HEALTH_THROTTLE_STORE', 'file'),
 
     /*
+    | How long the probe waits for the database to answer at all. A host that
+    | drops connection attempts instead of refusing them would otherwise hold
+    | this request for as long as the operating system allows.
+    */
+    'database_probe_timeout' => (int) env('HEALTH_DB_PROBE_TIMEOUT', 2),
+
+    /*
     | ----------------------------------------------------------------
     | When a moving part counts as stopped
     | ----------------------------------------------------------------
