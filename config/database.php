@@ -168,6 +168,32 @@ return [
             'database' => env('REDIS_CACHE_DB', '1'),
         ],
 
+        /*
+         | The same server, asked with a stopwatch. /health measures the queue
+         | backlog on every probe, and a Redis host that stops answering — as
+         | opposed to refusing — would otherwise hold that request open for the
+         | default socket timeout, on the one endpoint whose purpose is to say
+         | quickly that something has stopped. Used ONLY for that measurement;
+         | workers keep the default connection, where a blocking pop must be
+         | allowed to wait.
+         */
+        'health' => [
+            'url' => env('REDIS_URL'),
+            'host' => env('REDIS_HOST', '127.0.0.1'),
+            'username' => env('REDIS_USERNAME'),
+            'password' => env('REDIS_PASSWORD'),
+            'port' => env('REDIS_PORT', '6379'),
+            'database' => env('REDIS_DB', '0'),
+            // Connecting AND waiting for an answer are both bounded, and the
+            // two clients spell the second one differently: phpredis (the
+            // default here) reads 'read_timeout', predis 'read_write_timeout'.
+            // With only the connect timeout set, a host that accepts the
+            // socket and then goes quiet would still hold the probe forever.
+            'timeout' => (float) env('HEALTH_QUEUE_PROBE_TIMEOUT', 1.5),
+            'read_timeout' => (float) env('HEALTH_QUEUE_PROBE_TIMEOUT', 1.5),
+            'read_write_timeout' => (float) env('HEALTH_QUEUE_PROBE_TIMEOUT', 1.5),
+        ],
+
     ],
 
 ];

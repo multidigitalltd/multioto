@@ -9,6 +9,7 @@ use App\Enums\TicketStatus;
 use App\Filament\Resources\TaskResource\Pages\EditTask;
 use App\Filament\Resources\TaskResource\Pages\ListTasks;
 use App\Filament\Resources\TicketResource\Pages\ViewTicket;
+use App\Jobs\NotifyTaskCreatedJob;
 use App\Jobs\SendTaskRemindersJob;
 use App\Mail\NotificationMail;
 use App\Models\Customer;
@@ -17,6 +18,7 @@ use App\Models\Ticket;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Queue;
 use Livewire\Livewire;
 use Tests\TestCase;
 
@@ -34,6 +36,36 @@ class TaskTest extends TestCase
 
         $task->update(['status' => TaskStatus::Open]);
         $this->assertNull($task->fresh()->completed_at);
+    }
+
+    /**
+     * Handing a task to somebody from the form used to be the one route that
+     * changed its owner in silence — the person found out only if they happened
+     * to open the tasks list.
+     */
+    public function test_assigning_a_task_from_the_panel_tells_the_person(): void
+    {
+        Queue::fake();
+        $this->actingAs(User::factory()->create());
+
+        $alice = User::factory()->create();
+        $task = Task::factory()->create(['status' => TaskStatus::Open]);
+
+        Livewire::test(EditTask::class, ['record' => $task->id])
+            ->fillForm(['assignees' => [$alice->id]])
+            ->call('save');
+
+        Queue::assertPushed(
+            NotifyTaskCreatedJob::class,
+            fn (NotifyTaskCreatedJob $job): bool => $job->recipientIds === [$alice->id],
+        );
+
+        // An ordinary edit that changes no owner tells nobody.
+        Livewire::test(EditTask::class, ['record' => $task->id])
+            ->fillForm(['title' => 'כותרת חדשה'])
+            ->call('save');
+
+        Queue::assertPushed(NotifyTaskCreatedJob::class, 1);
     }
 
     public function test_status_buttons_inside_a_task_move_it_through_its_lifecycle(): void

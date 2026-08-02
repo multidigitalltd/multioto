@@ -1,0 +1,117 @@
+<?php
+
+return [
+
+    /*
+    | ----------------------------------------------------------------
+    | The health endpoint
+    | ----------------------------------------------------------------
+    |
+    | GET /health answers in two levels. Without a token it says only "ok" or
+    | "down" (HTTP 200 / 503) — enough for any external uptime monitor to
+    | alarm, and it gives away nothing. With ?token=<HEALTH_TOKEN> it also
+    | lists which check failed, for a person looking into it.
+    |
+    | Point an external monitor at it. That is the whole point: the scheduler
+    | cannot report that the scheduler has stopped.
+    */
+    'token' => env('HEALTH_TOKEN'),
+
+    /*
+    | Where the probe's rate-limit counter lives. Deliberately NOT the default
+    | cache store: that one is the database here, and an endpoint that reports
+    | a broken database must not have to reach the database to answer. A store
+    | that cannot be reached simply lets the request through.
+    */
+    'throttle_store' => env('HEALTH_THROTTLE_STORE', 'file'),
+
+    /*
+    | How long the probe waits for the database to answer at all. A host that
+    | drops connection attempts instead of refusing them would otherwise hold
+    | this request for as long as the operating system allows.
+    */
+    'database_probe_timeout' => (int) env('HEALTH_DB_PROBE_TIMEOUT', 2),
+
+    /*
+    | ----------------------------------------------------------------
+    | When a moving part counts as stopped
+    | ----------------------------------------------------------------
+    |
+    | The scheduler stamps its heartbeat every minute, and every five minutes
+    | it queues a job that stamps a second one when a WORKER runs it — so a
+    | queue that accepts jobs but has nobody running them is caught too. The
+    | windows are deliberately several times the interval, so an ordinary
+    | restart or a slow minute is not an alarm.
+    */
+    'scheduler_stale_minutes' => (int) env('HEALTH_SCHEDULER_STALE_MINUTES', 15),
+    'queue_stale_minutes' => (int) env('HEALTH_QUEUE_STALE_MINUTES', 30),
+
+    /*
+    | The ordinary queue — charges, invoices, notifications — beats separately,
+    | because the window above belongs to a private queue that a second worker
+    | process can keep answering long after the one doing the real work died.
+    |
+    | The first window only says "worth a look": a long job delays this beat
+    | exactly as a stopped worker would, and an endpoint that calls a busy
+    | system dead is one nobody trusts the next time.
+    */
+    'workload_stale_minutes' => (int) env('HEALTH_WORKLOAD_STALE_MINUTES', 30),
+
+    /*
+    | And the window past which silence has no innocent explanation: reported
+    | as "down", with the 503 that wakes somebody.
+    |
+    | It must stay comfortably above the LONGEST a single job may legitimately
+    | hold a worker — today that is SendBroadcastJob at 3,600 seconds, and a
+    | worker inside one has neither finished a job (no progress mark) nor
+    | reached the beat queued behind it. Past this window the job has been
+    | killed by its own timeout and the next beat has had time to land, so
+    | nothing legitimate can still be running.
+    |
+    | Raise it if a longer job is ever added, or the check will call a working
+    | system dead — which is how a monitor earns being ignored.
+    */
+    'workload_down_minutes' => (int) env('HEALTH_WORKLOAD_DOWN_MINUTES', 90),
+
+    /*
+    | A backlog this deep, or this many jobs that gave up in the last day,
+    | means work is not getting through even if both heartbeats are fine.
+    | Reported as "degraded": worth looking at, not worth a 3am phone call.
+    */
+    'queue_backlog' => (int) env('HEALTH_QUEUE_BACKLOG', 250),
+    'failed_jobs' => (int) env('HEALTH_FAILED_JOBS', 5),
+
+    /*
+    | ----------------------------------------------------------------
+    | The daily money-integrity check
+    | ----------------------------------------------------------------
+    |
+    | Every rule here is one of the invariants the business depends on: a
+    | charge that took money must have an invoice, an invoice must belong to a
+    | charge that actually succeeded, the two must agree on the amount, and a
+    | subscription whose date has passed must have been charged. Nothing is
+    | fixed automatically — the report says what looks wrong, a person decides.
+    */
+    'money' => [
+        // Grace for the async invoice job before "no invoice yet" is a finding.
+        'invoice_grace_minutes' => (int) env('HEALTH_INVOICE_GRACE_MINUTES', 120),
+
+        // A charge left "pending" this long was neither confirmed nor failed.
+        'pending_charge_hours' => (int) env('HEALTH_PENDING_CHARGE_HOURS', 24),
+
+        // The dispatcher runs every fifteen minutes; past this, it is stuck.
+        'overdue_charge_hours' => (int) env('HEALTH_OVERDUE_CHARGE_HOURS', 6),
+
+        // How far back to look. Older anomalies were already reported (and
+        // either handled or accepted) — repeating them forever trains people
+        // to ignore the report.
+        'window_days' => (int) env('HEALTH_MONEY_WINDOW_DAYS', 14),
+
+        // Most rows named in the EMAIL; the rest are counted. The log keeps
+        // the full list — that is the copy the mail points at, and the one
+        // that survives when there is nobody to mail.
+        'max_examples' => 10,
+        'log_max_rows' => 500,
+    ],
+
+];

@@ -6,6 +6,7 @@ use App\Http\Controllers\BillingController;
 use App\Http\Controllers\BrandingController;
 use App\Http\Controllers\CsatController;
 use App\Http\Controllers\CustomerCardPdfController;
+use App\Http\Controllers\HealthController;
 use App\Http\Controllers\IntegrationKeysFallbackController;
 use App\Http\Controllers\MarketingPreferencesController;
 use App\Http\Controllers\Portal\PortalAuthController;
@@ -21,10 +22,41 @@ use App\Http\Controllers\Webhooks\EmailDeliveryWebhookController;
 use App\Http\Controllers\Webhooks\EmailWebhookController;
 use App\Http\Controllers\Webhooks\WahaWebhookController;
 use App\Http\Middleware\EnsureTwoFactorConfirmed;
+use App\Http\Middleware\ThrottleHealthProbe;
+use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
+use Illuminate\Cookie\Middleware\EncryptCookies;
+use Illuminate\Foundation\Http\Middleware\ValidateCsrfToken;
+use Illuminate\Session\Middleware\StartSession;
 use Illuminate\Support\Facades\Route;
+use Illuminate\View\Middleware\ShareErrorsFromSession;
 
 // Team-only app: the root just sends visitors to the admin panel.
 Route::redirect('/', '/admin');
+
+/*
+ | Is the machinery running? Asked from OUTSIDE, because the scheduler cannot
+ | report that the scheduler has stopped and a queue with no worker raises
+ | nothing at all. 200 = running, 503 = a moving part has stopped; details only
+ | with the health token. Point an uptime monitor here (docs/deployment.md).
+ */
+Route::get('/health', HealthController::class)
+    // Rate limited without the database: the ordinary throttle counts hits in
+    // the default cache store, which here IS the database (see the middleware).
+    ->middleware(ThrottleHealthProbe::class.':60')
+    // Stateless on purpose. The default session driver is the database, and
+    // the session is opened by middleware BEFORE the controller runs — so the
+    // one request whose whole job is to report a broken database would be the
+    // request that hangs on it, and the monitor would get a gateway timeout
+    // instead of the 503 that says which part stopped. Nothing here reads a
+    // session, a cookie or a form.
+    ->withoutMiddleware([
+        AddQueuedCookiesToResponse::class,
+        EncryptCookies::class,
+        ValidateCsrfToken::class,
+        StartSession::class,
+        ShareErrorsFromSession::class,
+    ])
+    ->name('health');
 
 // Public business logo — a stable hosted URL for emails (which can't use
 // data: URIs) and other public surfaces. Cached; 404 when no logo is set.

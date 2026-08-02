@@ -4,13 +4,67 @@ namespace App\Filament\Resources\TaskResource\Pages;
 
 use App\Enums\TaskStatus;
 use App\Filament\Resources\TaskResource;
+use App\Jobs\NotifyTaskCreatedJob;
 use Filament\Actions;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\EditRecord;
+use Illuminate\Support\Facades\Log;
 
 class EditTask extends EditRecord
 {
     protected static string $resource = TaskResource::class;
+
+    /** @var list<int> who owned this task before this save */
+    private array $ownersBefore = [];
+
+    protected function beforeSave(): void
+    {
+        $this->ownersBefore = $this->record->assignees()->pluck('users.id')
+            ->map(fn ($id): int => (int) $id)->all();
+    }
+
+    /**
+     * Somebody handed the task to somebody else — tell them.
+     *
+     * Assigning from this form used to be the one route that changed a task's
+     * owner in silence: the agent announces its assignments, creation announces
+     * itself, and a person picked here found out only if they happened to open
+     * the tasks list. Only the newly added owners are told, so an ordinary save
+     * (a title, a due date) notifies nobody.
+     */
+    protected function afterSave(): void
+    {
+        $added = array_values(array_diff(
+            $this->record->assignees()->pluck('users.id')->map(fn ($id): int => (int) $id)->all(),
+            $this->ownersBefore,
+        ));
+
+        if ($added === []) {
+            return;
+        }
+
+        // Non-fatal, like every other announcement here: the assignment is
+        // already saved by now, and letting a queue hiccup throw would tell the
+        // operator the save FAILED. They would then save again — and the second
+        // save sees the owner already attached, so nothing is new and the
+        // notification is never sent at all, even once the queue is back. The
+        // person in front of the screen is told instead, and can say a word.
+        try {
+            NotifyTaskCreatedJob::dispatch($this->record->id, $added);
+        } catch (\Throwable $e) {
+            Log::warning('EditTask: assignment notification not queued', [
+                'task_id' => $this->record->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            Notification::make()
+                ->title('השיוך נשמר, אך לא נשלחה התראה')
+                ->body('תור העבודות לא זמין כרגע — עדכנו את מי ששויך ידנית.')
+                ->warning()
+                ->persistent()
+                ->send();
+        }
+    }
 
     /**
      * Status buttons right inside the task — the same one-click lifecycle a

@@ -19,6 +19,8 @@ use App\Models\Ticket;
 use App\Services\Billing\SubscriptionCollectionService;
 use App\Services\Cloudflare\CloudflareClient;
 use App\Services\Hosting\HostingClient;
+use Illuminate\Database\UniqueConstraintViolationException;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
@@ -88,6 +90,7 @@ class SystemActionRunner
             'customer_id' => $p['customer_id'] ?? null,
             'status' => TaskStatus::Open,
             'priority' => TicketPriority::Normal,
+            'due_at' => $p['due_at'] ?? null,
         ];
 
         // With a reference, creation is keyed on it: two runs of the same
@@ -98,7 +101,33 @@ class SystemActionRunner
             ? Task::firstOrCreate(['source_ref' => $p['source_ref']], $attributes)
             : Task::create($attributes);
 
+        // Attached BEFORE the announcement: the notification job reads the
+        // assignees to decide who to tell, and a task announced a moment too
+        // early reaches the managers as "unassigned" while the person it was
+        // actually given to hears nothing.
+        $assignees = array_values(array_filter(array_map('intval', (array) ($p['assignee_ids'] ?? []))));
+
         if (! $task->wasRecentlyCreated) {
+            // Recovered rather than created — a repeat of a request whose first
+            // run died. It may have died in the gap between the insert and the
+            // owners being attached, and nothing else would ever repair that:
+            // every later retry recovers the same row and reports it as done.
+            $this->adoptAssignees($task, $assignees);
+
+            return $task;
+        }
+
+        // Through the same serialized claim the repair path uses: the worker
+        // that LOST the insert can reach the row between this insert and this
+        // attach, and without one lock covering both, the two of them would
+        // write over each other and announce the task twice.
+        $added = $this->claimAssignees($task, $assignees);
+
+        // Owners were asked for and none of them are new: the other worker got
+        // there first and has already told them. Saying it again is the second
+        // notification this whole path exists to prevent — and reporting the
+        // task as unassigned to the managers would be plainly false.
+        if ($assignees !== [] && $added === []) {
             return $task;
         }
 
@@ -108,7 +137,13 @@ class SystemActionRunner
         // and invite a retry that opens a second one. The task itself is what
         // must not be lost; a missing notification is visible in the log.
         try {
-            NotifyTaskCreatedJob::dispatch($task->id);
+            // Named here rather than looked up later, so a task reassigned
+            // before the queue drains still tells the person it was opened for.
+            // Nobody was asked for: the announcement is "a task landed with no
+            // owner", said as a fact about now rather than as a lookup the
+            // queue makes later — by then a clarification may have given it to
+            // somebody, who would be told twice.
+            NotifyTaskCreatedJob::dispatch($task->id, $added === [] ? null : $added, unassigned: $added === []);
         } catch (\Throwable $e) {
             Log::warning('SystemActionRunner: task notification not queued', [
                 'task_id' => $task->id,
@@ -117,6 +152,152 @@ class SystemActionRunner
         }
 
         return $task;
+    }
+
+    /**
+     * Give an ownerless task the owners its request asked for.
+     *
+     * Only when it has NONE: a task somebody has since handed to a colleague
+     * must not be pulled back by a retry of the instruction that opened it.
+     * Silent when there is nothing to fix, so an ordinary repeat says nothing.
+     *
+     * @param  list<int>  $assignees
+     */
+    public function adoptAssignees(Task $task, array $assignees): void
+    {
+        if ($assignees === []) {
+            return;
+        }
+
+        $added = $this->claimAssignees($task, $assignees, onlyIfOwnerless: true);
+
+        // Only the worker that actually claimed it announces anything, and only
+        // once the write is committed.
+        if ($added === []) {
+            return;
+        }
+
+        try {
+            NotifyTaskCreatedJob::dispatch($task->id, $added);
+        } catch (\Throwable $e) {
+            Log::warning('SystemActionRunner: recovered task notification not queued', [
+                'task_id' => $task->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Attach owners to a task and say which of them are NEW.
+     *
+     * The single place any of this happens, because it is the only way the
+     * answer can be trusted: two workers running the same request — a repeat, a
+     * duplicated clarification — otherwise both read the owner list, both write
+     * their own, and both tell somebody they were handed the task. The list is
+     * read and written inside one transaction holding the task's row lock, so
+     * the second worker sees the first one's work and reports nothing new.
+     *
+     * $onlyIfOwnerless is the repair case: fill in owners that never landed,
+     * but never pull a task back off the colleague it has since been given to.
+     * $replace is an explicit move ("תעביר מדני לרותם"); by default owners are
+     * added, so answering "which Dani" cannot remove whoever was already there.
+     *
+     * The lock covers this code, not the task form: a manager saving the same
+     * task in the panel at that instant writes the pivot without waiting for
+     * it. That leaves one narrow outcome — an owner too many, never one
+     * removed, and never a duplicate notification, because who is "new" is
+     * decided by re-reading the pivot after the write rather than by the list
+     * this call happened to see before it. An extra name on a task is visible
+     * to everyone and a person can take it off in the same form.
+     *
+     * @param  list<int>  $assignees
+     * @return list<int> those attached by THIS call
+     */
+    /** How many times a pivot collision is worth re-trying before giving up. */
+    private const ATTACH_ATTEMPTS = 5;
+
+    public function claimAssignees(
+        Task $task,
+        array $assignees,
+        bool $replace = false,
+        bool $onlyIfOwnerless = false,
+    ): array {
+        $assignees = array_values(array_unique(array_filter(array_map('intval', $assignees))));
+
+        if ($assignees === []) {
+            return [];
+        }
+
+        return DB::transaction(function () use ($task, $assignees, $replace, $onlyIfOwnerless): array {
+            $locked = Task::query()->whereKey($task->getKey())->lockForUpdate()->first();
+
+            if (! $locked) {
+                return [];
+            }
+
+            $before = $locked->assignees()->pluck('users.id')->map(fn ($id): int => (int) $id)->all();
+
+            if ($onlyIfOwnerless && $before !== []) {
+                return [];
+            }
+
+            // A move takes off the people we actually SAW and are not keeping —
+            // never a plain sync(), which would also sweep away somebody the
+            // panel added a moment ago, silently removing the very owner a
+            // manager had just chosen.
+            if ($replace && ($stale = array_values(array_diff($before, $assignees))) !== []) {
+                $locked->assignees()->detach($stale);
+            }
+
+            // The change set the write itself reports — the only answer that can
+            // say who WE attached. Subtracting two snapshots cannot: a name that
+            // appeared in between is somebody else's doing, and announcing it
+            // tells a person they were assigned by an instruction that never
+            // mentioned them.
+            //
+            // Each attempt is all-or-nothing, so a collision leaves nothing
+            // behind and the retry re-reads: whoever collided is committed by
+            // then and is simply skipped. Two people attached from elsewhere at
+            // once can collide twice, which is why this is a loop and not a
+            // second chance — stopping early would leave people the manager
+            // asked for off a task reported as assigned.
+            for ($attempt = 1; $attempt <= self::ATTACH_ATTEMPTS; $attempt++) {
+                if (($changes = $this->attach($locked, $assignees)) !== null) {
+                    return array_values(array_map('intval', $changes['attached'] ?? []));
+                }
+            }
+
+            // Still colliding after all that. Said out loud rather than reported
+            // as "nobody was new": a move may already have taken the previous
+            // owners off, and a task nobody owns must not look assigned.
+            throw new \RuntimeException('לא הצלחנו לשייך את המשימה — נסו שוב.');
+        });
+    }
+
+    /**
+     * One attempt at the pivot write, in its own savepoint.
+     *
+     * Null when another writer attached the same person first: the pivot's key
+     * rejects it, and without the savepoint that rejection would take the whole
+     * claim — and on Postgres the transaction around it — down with it. The
+     * caller simply tries again, by which time the other write is committed and
+     * this one attaches whatever is genuinely left.
+     *
+     * Only that collision is swallowed. Anything else — a user deleted between
+     * being resolved and being attached, for instance — is a real failure and
+     * must be seen: reporting an empty claim would leave the task ownerless
+     * while the console says it was assigned.
+     *
+     * @param  list<int>  $assignees
+     * @return array<string, list<int|string>>|null
+     */
+    private function attach(Task $task, array $assignees): ?array
+    {
+        try {
+            return DB::transaction(fn (): array => $task->assignees()->syncWithoutDetaching($assignees));
+        } catch (UniqueConstraintViolationException) {
+            return null;
+        }
     }
 
     /** @param array<string, mixed> $p */

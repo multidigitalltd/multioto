@@ -21,12 +21,29 @@ use Illuminate\Support\Facades\Mail;
  *
  * Dispatched after the assignees are attached (Filament afterCreate / the
  * ticket→task action), so the recipient list is already correct.
+ *
+ * $recipientIds names WHO this particular announcement is for. Without it the
+ * job reads the task's owners when it finally runs, which is a different set
+ * from the one that was just assigned if the task changed hands in the
+ * meantime: reassigned from one person to another before the queue drained,
+ * both announcements would go to the second person and the first would hear
+ * nothing about the task they briefly held.
  */
 class NotifyTaskCreatedJob implements ShouldQueue
 {
     use Queueable;
 
-    public function __construct(public int $taskId) {}
+    /**
+     * @param  list<int>|null  $recipientIds
+     * @param  bool  $unassigned  this announcement is "a task landed with nobody
+     *                            on it" — a fact about the moment it was made,
+     *                            not a question to answer when the queue drains
+     */
+    public function __construct(
+        public int $taskId,
+        public ?array $recipientIds = null,
+        public bool $unassigned = false,
+    ) {}
 
     public function handle(): void
     {
@@ -36,7 +53,39 @@ class NotifyTaskCreatedJob implements ShouldQueue
             return;
         }
 
-        $assignees = $task->assignees;
+        // An announcement made BECAUSE the task had no owner. If it has one by
+        // now, the assignment that gave it one was announced by whoever made
+        // it — and resolving the audience at this moment instead would send
+        // that person a second, identical "assigned to you".
+        if ($this->unassigned) {
+            if ($task->assignees->isNotEmpty()) {
+                return;
+            }
+
+            $this->notify($task, unassigned: true, recipients: User::where('role', UserRole::Admin)->get());
+
+            return;
+        }
+
+        $named = $this->recipientIds === null
+            ? null
+            : User::whereIn('id', $this->recipientIds)->get();
+
+        // Named recipients who no longer exist. If the task still has owners,
+        // this announcement had an audience and it is gone — saying it went to
+        // nobody would report a task as UNASSIGNED when it is not. But when
+        // deleting them took the LAST assignment with it (the pivot cascades),
+        // the task is genuinely ownerless now, and silence would leave a task
+        // nobody owns and nobody was ever told about.
+        if ($named !== null && $named->isEmpty()) {
+            if ($task->assignees->isNotEmpty()) {
+                return;
+            }
+
+            $named = null;
+        }
+
+        $assignees = $named ?? $task->assignees;
         $unassigned = $assignees->isEmpty();
 
         // Assigned → the assignees. Unassigned → the managers, so a stray task
@@ -45,6 +94,12 @@ class NotifyTaskCreatedJob implements ShouldQueue
             ? User::where('role', UserRole::Admin)->get()
             : $assignees;
 
+        $this->notify($task, $unassigned, $recipients);
+    }
+
+    /** @param  Collection<int, User>  $recipients */
+    private function notify(Task $task, bool $unassigned, Collection $recipients): void
+    {
         if ($recipients->isEmpty()) {
             return;
         }

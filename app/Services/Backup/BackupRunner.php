@@ -224,8 +224,16 @@ class BackupRunner
      * That matters: this check runs from the scheduler, and a scheduler that
      * has stopped cannot report itself. A person opening the panel is the one
      * path that does not depend on any background process at all.
+     *
+     * @param  bool  $verifyOnDisk  also ask the destination whether the archive
+     *                              is really there. Off for callers that must
+     *                              not wait on a remote bucket — /health is
+     *                              probed every few minutes and answers "the
+     *                              application is down" if it blocks, which
+     *                              would turn a slow S3 into a false alarm
+     *                              about the whole system.
      */
-    public function staleWarning(): ?string
+    public function staleWarning(bool $verifyOnDisk = true): ?string
     {
         $hours = (int) config('backup.stale_after_hours', 36);
 
@@ -244,6 +252,10 @@ class BackupRunner
             ->limit(self::FRESHNESS_CANDIDATES)
             ->get();
 
+        if (! $verifyOnDisk) {
+            return $recent->isEmpty() ? $this->noRecentBackupWarning($hours) : null;
+        }
+
         foreach ($recent as $candidate) {
             // A destination that cannot answer counts as present: this decides
             // whether to shout, and shouting on every network hiccup teaches
@@ -257,6 +269,12 @@ class BackupRunner
             return "נלקחו גיבויים ב-{$hours} השעות האחרונות, אך אף אחד מהם אינו נמצא ביעד האחסון.";
         }
 
+        return $this->noRecentBackupWarning($hours);
+    }
+
+    /** No backup row at all in the window — said the same way to every caller. */
+    private function noRecentBackupWarning(int $hours): string
+    {
         $latest = Backup::query()->restorable()->max('created_at');
 
         $since = $latest === null

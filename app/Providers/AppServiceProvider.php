@@ -3,6 +3,7 @@
 namespace App\Providers;
 
 use App\Listeners\RecordProviderMessageId;
+use App\Listeners\StampWorkloadProgress;
 use App\Models\AuditLog;
 use App\Models\Charge;
 use App\Models\Customer;
@@ -24,6 +25,7 @@ use Filament\Forms\Components\DateTimePicker;
 use Illuminate\Auth\Events\Login;
 use Illuminate\Auth\Events\Logout;
 use Illuminate\Mail\Events\MessageSent;
+use Illuminate\Queue\Events\JobProcessed;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\URL;
 use Illuminate\Support\ServiceProvider;
@@ -104,5 +106,11 @@ class AppServiceProvider extends ServiceProvider
         // Pair our notification-log row with the provider's message id, so the
         // delivery/open/bounce webhook can find the row it belongs to.
         Event::listen(MessageSent::class, RecordProviderMessageId::class);
+
+        // Proof that the worker doing the REAL work is still finishing jobs.
+        // Its own heartbeat rides that same queue, so a long batch leaves the
+        // beat waiting behind it — this mark is made by the worker itself,
+        // after each job, and is what stops a busy system being called dead.
+        Event::listen(JobProcessed::class, StampWorkloadProgress::class);
     }
 }

@@ -10,6 +10,7 @@ use App\Enums\TicketStatus;
 use App\Filament\Pages\AgentConsole;
 use App\Filament\Widgets\AgentCommandWidget;
 use App\Jobs\InvestigateSiteJob;
+use App\Jobs\NotifyTaskCreatedJob;
 use App\Models\AgentCommand;
 use App\Models\Customer;
 use App\Models\PendingAction;
@@ -112,6 +113,418 @@ class CommandConsoleTest extends TestCase
         $this->assertSame('להתקשר לספק הדומיינים ולברר החידוש', Task::sole()->title);
         $this->assertSame(0, PendingAction::count());
         $this->assertSame(AgentCommandOutcome::Dispatched, $command->outcome);
+    }
+
+    public function test_a_task_is_opened_with_the_person_and_the_date_that_were_asked_for(): void
+    {
+        Carbon::setTestNow('2026-08-01 09:00:00');
+        $dani = User::factory()->create(['name' => 'דני']);
+
+        $this->fakeAgent([
+            ['open_task', [
+                'title' => 'לבדוק את השרת',
+                'assignee' => 'דני',
+                'due_at' => '2026-08-02',
+            ]],
+        ]);
+
+        $command = app(CommandInterpreter::class)->run('תפתח לדני משימה למחר לבדוק את השרת');
+
+        $task = Task::sole();
+        $this->assertSame([$dani->id], $task->assignees->pluck('id')->all());
+        // A date on its own is a deadline, not a midnight cut-off.
+        $this->assertSame('2026-08-02 23:59:59', $task->due_at->format('Y-m-d H:i:s'));
+        $this->assertStringContainsString('#'.$task->id, $command->result);
+    }
+
+    public function test_a_task_can_be_opened_for_the_operator_themselves(): void
+    {
+        $me = User::factory()->create(['name' => 'המנהל']);
+
+        $this->fakeAgent([['open_task', ['title' => 'להתקשר לספק', 'assignee' => 'me']]]);
+
+        app(CommandInterpreter::class)->run('תפתח לי משימה להתקשר לספק', userId: $me->id);
+
+        $this->assertSame([$me->id], Task::sole()->assignees->pluck('id')->all());
+    }
+
+    public function test_a_name_nobody_answers_to_is_said_out_loud_and_not_guessed(): void
+    {
+        // A task on the wrong person's list is worse than one on nobody's: it
+        // looks handled.
+        User::factory()->create(['name' => 'דניאל']);
+        $toolResult = null;
+
+        $claude = Mockery::mock(ClaudeClient::class);
+        $claude->shouldReceive('isEnabled')->andReturn(true);
+        $claude->shouldReceive('lastError')->andReturnNull();
+        $claude->shouldReceive('converse')->andReturnUsing(
+            function (string $system, string $prompt, array $tools, callable $handler) use (&$toolResult): string {
+                $toolResult = $handler('open_task', ['title' => 'לבדוק את השרת', 'assignee' => 'רותם']);
+
+                return 'נפתחה משימה.';
+            }
+        );
+        $this->app->instance(ClaudeClient::class, $claude);
+
+        app(CommandInterpreter::class)->run('תפתח לרותם משימה לבדוק את השרת');
+
+        $task = Task::sole();
+        $this->assertSame([], $task->assignees->pluck('id')->all());
+        $this->assertStringContainsString('לא נמצא איש צוות בשם רותם', $toolResult['content']);
+    }
+
+    public function test_two_people_with_the_same_first_name_are_asked_about_not_picked(): void
+    {
+        // Choosing the lower id would hand the task — and the notification — to
+        // one of them at random, and it would look handled.
+        User::factory()->create(['name' => 'דני כהן']);
+        User::factory()->create(['name' => 'דני לוי']);
+        $toolResult = null;
+
+        $claude = Mockery::mock(ClaudeClient::class);
+        $claude->shouldReceive('isEnabled')->andReturn(true);
+        $claude->shouldReceive('lastError')->andReturnNull();
+        $claude->shouldReceive('converse')->andReturnUsing(
+            function (string $system, string $prompt, array $tools, callable $handler) use (&$toolResult): string {
+                $toolResult = $handler('open_task', ['title' => 'לבדוק את השרת', 'assignee' => 'דני']);
+
+                return 'נפתחה משימה.';
+            }
+        );
+        $this->app->instance(ClaudeClient::class, $claude);
+
+        app(CommandInterpreter::class)->run('תפתח לדני משימה לבדוק את השרת');
+
+        $this->assertSame([], Task::sole()->assignees->pluck('id')->all());
+        $this->assertStringContainsString('יש כמה אנשי צוות', $toolResult['content']);
+        $this->assertStringContainsString('דני כהן', $toolResult['content']);
+        $this->assertStringContainsString('דני לוי', $toolResult['content']);
+    }
+
+    /**
+     * Two people really called the same thing: a list that says "דני, דני"
+     * sends the manager back with the same word and gets the same answer, for
+     * ever. Each candidate is named with something that resolves on its own.
+     */
+    public function test_identical_names_are_offered_with_something_that_tells_them_apart(): void
+    {
+        $first = User::factory()->create(['name' => 'דני', 'email' => 'dani1@example.com']);
+        User::factory()->create(['name' => 'דני', 'email' => 'dani2@example.com']);
+
+        $toolResult = null;
+        $claude = Mockery::mock(ClaudeClient::class);
+        $claude->shouldReceive('isEnabled')->andReturn(true);
+        $claude->shouldReceive('lastError')->andReturnNull();
+        $claude->shouldReceive('converse')->andReturnUsing(
+            function (string $system, string $prompt, array $tools, callable $handler) use (&$toolResult): string {
+                $toolResult = $handler('open_task', ['title' => 'לבדוק את השרת', 'assignee' => 'דני']);
+
+                return 'שאלתי למי לשייך.';
+            }
+        );
+        $this->app->instance(ClaudeClient::class, $claude);
+
+        app(CommandInterpreter::class)->run('תפתח לדני משימה');
+
+        $this->assertStringContainsString('dani1@example.com', $toolResult['content']);
+        $this->assertStringContainsString('dani2@example.com', $toolResult['content']);
+
+        // And the answer resolves: the address names exactly one of them.
+        $task = Task::sole();
+        $this->fakeAgent([['assign_task', ['task_id' => $task->id, 'assignee' => 'dani1@example.com']]]);
+        app(CommandInterpreter::class)->run('dani1@example.com');
+
+        $this->assertSame([$first->id], $task->fresh()->assignees->pluck('id')->all());
+    }
+
+    public function test_an_exact_name_still_wins_when_others_contain_it(): void
+    {
+        $dan = User::factory()->create(['name' => 'דן']);
+        User::factory()->create(['name' => 'דניאל']);
+
+        $this->fakeAgent([['open_task', ['title' => 'לבדוק את השרת', 'assignee' => 'דן']]]);
+
+        app(CommandInterpreter::class)->run('תפתח לדן משימה');
+
+        $this->assertSame([$dan->id], Task::sole()->assignees->pluck('id')->all());
+    }
+
+    /**
+     * The repair path: the name was ambiguous, the task was captured anyway,
+     * and the manager's answer must land on THAT task — not on a second one.
+     */
+    public function test_the_answer_to_which_dani_lands_on_the_task_already_opened(): void
+    {
+        $kohen = User::factory()->create(['name' => 'דני כהן']);
+        User::factory()->create(['name' => 'דני לוי']);
+
+        $this->fakeAgent([['open_task', ['title' => 'לבדוק את השרת', 'assignee' => 'דני']]]);
+        app(CommandInterpreter::class)->run('תפתח לדני משימה לבדוק את השרת');
+
+        $task = Task::sole();
+        $this->assertSame([], $task->assignees->pluck('id')->all());
+
+        // "דני כהן" — the next turn assigns the task that already exists.
+        $this->fakeAgent([['assign_task', ['task_id' => $task->id, 'assignee' => 'דני כהן']]]);
+        app(CommandInterpreter::class)->run('דני כהן');
+
+        $this->assertSame(1, Task::count());
+        $this->assertSame([$kohen->id], $task->fresh()->assignees->pluck('id')->all());
+    }
+
+    /**
+     * The assignment is real work, already notified. A provider failure on the
+     * closing turn must not report it as something to try again — that is how a
+     * repeat produces a second "משימה שויכה אליך" for the same task.
+     */
+    public function test_an_assignment_is_reported_even_when_the_closing_turn_fails(): void
+    {
+        $dan = User::factory()->create(['name' => 'דני כהן']);
+        $task = Task::create(['title' => 'לבדוק את השרת', 'status' => TaskStatus::Open]);
+
+        $this->fakeAgent([['assign_task', ['task_id' => $task->id, 'assignee' => 'דני כהן']]], summary: null);
+        $command = app(CommandInterpreter::class)->run('דני כהן');
+
+        $this->assertSame([$dan->id], $task->fresh()->assignees->pluck('id')->all());
+        $this->assertSame(AgentCommandOutcome::Dispatched, $command->outcome);
+        $this->assertStringContainsString('עודכנו משימות: #'.$task->id, $command->result);
+        $this->assertStringContainsString('אין צורך לחזור על ההוראה', $command->result);
+    }
+
+    public function test_repeating_an_assignment_does_not_notify_the_assignee_twice(): void
+    {
+        Queue::fake();
+
+        $dan = User::factory()->create(['name' => 'דני כהן']);
+        $task = Task::create(['title' => 'לבדוק את השרת', 'status' => TaskStatus::Open]);
+
+        $this->fakeAgent([['assign_task', ['task_id' => $task->id, 'assignee' => 'דני כהן']]]);
+        app(CommandInterpreter::class)->run('דני כהן');
+
+        Queue::assertPushed(NotifyTaskCreatedJob::class, 1);
+
+        // The same instruction again (the manager saw a failure and retyped it):
+        // the owner is unchanged, so nobody is told about it a second time.
+        $this->fakeAgent([['assign_task', ['task_id' => $task->id, 'assignee' => 'דני כהן']]]);
+        app(CommandInterpreter::class)->run('דני כהן');
+
+        Queue::assertPushed(NotifyTaskCreatedJob::class, 1);
+        $this->assertSame([$dan->id], $task->fresh()->assignees->pluck('id')->all());
+    }
+
+    /**
+     * Reassigned before the queue drained: each announcement must reach the
+     * person it was actually about, not whoever happens to hold the task when
+     * the worker gets round to it.
+     */
+    public function test_each_assignment_notifies_the_person_it_was_made_for(): void
+    {
+        Queue::fake();
+
+        $alice = User::factory()->create(['name' => 'אליס']);
+        $bob = User::factory()->create(['name' => 'בוב']);
+        $task = Task::create(['title' => 'לבדוק את השרת', 'status' => TaskStatus::Open]);
+
+        $this->fakeAgent([['assign_task', ['task_id' => $task->id, 'assignee' => 'אליס']]]);
+        app(CommandInterpreter::class)->run('שייך לאליס');
+
+        $this->fakeAgent([['assign_task', ['task_id' => $task->id, 'assignee' => 'בוב']]]);
+        app(CommandInterpreter::class)->run('לא, שייך לבוב');
+
+        Queue::assertPushed(
+            NotifyTaskCreatedJob::class,
+            fn (NotifyTaskCreatedJob $job): bool => $job->recipientIds === [$alice->id],
+        );
+        Queue::assertPushed(
+            NotifyTaskCreatedJob::class,
+            fn (NotifyTaskCreatedJob $job): bool => $job->recipientIds === [$bob->id],
+        );
+    }
+
+    /**
+     * "לאליס ולדני" resolves Alice and asks which Dani. The answer names Dani
+     * alone — and must not quietly take the task off Alice, who was understood
+     * correctly the first time.
+     */
+    public function test_answering_which_dani_keeps_the_person_already_assigned(): void
+    {
+        $alice = User::factory()->create(['name' => 'אליס']);
+        $kohen = User::factory()->create(['name' => 'דני כהן']);
+        User::factory()->create(['name' => 'דני לוי']);
+
+        $this->fakeAgent([['open_task', ['title' => 'לבדוק את השרת', 'assignee' => 'אליס, דני']]]);
+        app(CommandInterpreter::class)->run('תפתח לאליס ולדני משימה');
+
+        $task = Task::sole();
+        $this->assertSame([$alice->id], $task->assignees->pluck('id')->all());
+
+        $this->fakeAgent([['assign_task', ['task_id' => $task->id, 'assignee' => 'דני כהן']]]);
+        app(CommandInterpreter::class)->run('דני כהן');
+
+        $this->assertSame([$alice->id, $kohen->id], $task->fresh()->assignees->pluck('id')->sort()->values()->all());
+    }
+
+    /** Moving a task from one person to another is a replacement, and says so. */
+    public function test_an_explicit_replacement_moves_the_task(): void
+    {
+        $alice = User::factory()->create(['name' => 'אליס']);
+        $bob = User::factory()->create(['name' => 'בוב']);
+        $task = Task::create(['title' => 'לבדוק את השרת', 'status' => TaskStatus::Open]);
+        $task->assignees()->sync([$alice->id]);
+
+        $this->fakeAgent([['assign_task', ['task_id' => $task->id, 'assignee' => 'בוב', 'mode' => 'replace']]]);
+        app(CommandInterpreter::class)->run('תעביר את המשימה מאליס לבוב');
+
+        $this->assertSame([$bob->id], $task->fresh()->assignees->pluck('id')->all());
+    }
+
+    /**
+     * Postgres compares text case-sensitively, so an address typed in lower
+     * case must still find the account stored with a capital letter — otherwise
+     * the task is opened unassigned as though nobody matched.
+     */
+    public function test_an_email_matches_whatever_its_case(): void
+    {
+        $dan = User::factory()->create(['name' => 'דני כהן', 'email' => 'Dani@example.com']);
+
+        $this->fakeAgent([['open_task', ['title' => 'לבדוק את השרת', 'assignee' => 'dani@example.com']]]);
+        app(CommandInterpreter::class)->run('תפתח משימה');
+
+        $this->assertSame([$dan->id], Task::sole()->assignees->pluck('id')->all());
+    }
+
+    /**
+     * A deadline that cannot be read is said, not dropped. The manager asked
+     * for "עד חמישי", and a task reported as done without any date is the one
+     * nobody comes back to.
+     */
+    public function test_an_unreadable_deadline_is_reported_instead_of_ignored(): void
+    {
+        $result = null;
+
+        $claude = Mockery::mock(ClaudeClient::class);
+        $claude->shouldReceive('isEnabled')->andReturn(true);
+        $claude->shouldReceive('lastError')->andReturnNull();
+        $claude->shouldReceive('converse')->andReturnUsing(
+            function (string $system, string $prompt, array $tools, callable $handler) use (&$result): string {
+                $result = $handler('open_task', ['title' => 'לבדוק את השרת', 'due_at' => '2026-02-30']);
+
+                return 'התאריך לא תקין.';
+            }
+        );
+        $this->app->instance(ClaudeClient::class, $claude);
+
+        app(CommandInterpreter::class)->run('תפתח משימה ל-30 בפברואר');
+
+        $this->assertTrue($result['is_error'] ?? false);
+        $this->assertStringContainsString('לא תקין', $result['content']);
+        // And nothing was opened under a date nobody meant (Carbon would have
+        // turned that one into the 2nd of March).
+        $this->assertSame(0, Task::count());
+    }
+
+    /**
+     * The exact person must be findable even behind a crowd of near-matches:
+     * a capped search shared with the partial one could cut the exact row off,
+     * and then repeating the full name — what the manager is asked to do —
+     * would never resolve it either.
+     */
+    public function test_an_exact_name_is_found_behind_a_crowd_of_near_matches(): void
+    {
+        foreach (range(1, 30) as $i) {
+            User::factory()->create(['name' => "דני {$i}"]);
+        }
+        $dani = User::factory()->create(['name' => 'דני']);
+
+        $this->fakeAgent([['open_task', ['title' => 'לבדוק את השרת', 'assignee' => 'דני']]]);
+        app(CommandInterpreter::class)->run('תפתח לדני משימה');
+
+        $this->assertSame([$dani->id], Task::sole()->assignees->pluck('id')->all());
+    }
+
+    /**
+     * The first run inserted the task and died before its owner was attached.
+     * Every later retry recovers that same row, so if the retry does not repair
+     * it nothing ever will — the task sits on nobody's list looking handled.
+     */
+    public function test_a_retry_gives_the_recovered_task_the_owner_it_never_got(): void
+    {
+        Queue::fake();
+        $dan = User::factory()->create(['name' => 'דני כהן']);
+
+        $this->fakeAgent([['open_task', ['title' => 'לבדוק את השרת', 'assignee' => 'דני כהן']]]);
+        app(CommandInterpreter::class)->run('תפתח לדני כהן משימה לבדוק את השרת');
+
+        // Simulate the death: the row exists, the owners never landed.
+        $task = Task::sole();
+        $task->assignees()->detach();
+
+        $this->fakeAgent([['open_task', ['title' => 'לבדוק את השרת', 'assignee' => 'דני כהן']]]);
+        app(CommandInterpreter::class)->run('תפתח לדני כהן משימה לבדוק את השרת');
+
+        $this->assertSame(1, Task::count());
+        $this->assertSame([$dan->id], $task->fresh()->assignees->pluck('id')->all());
+        Queue::assertPushed(NotifyTaskCreatedJob::class, 2);
+    }
+
+    /**
+     * A recovered task nobody owns, whose intended owner no longer resolves:
+     * the run that opened it died before announcing anything, so silence here
+     * leaves it on nobody's list looking handled.
+     */
+    public function test_a_recovered_task_with_no_owner_asks_who_it_belongs_to(): void
+    {
+        $dan = User::factory()->create(['name' => 'דני כהן']);
+
+        $this->fakeAgent([['open_task', ['title' => 'לבדוק את השרת', 'assignee' => 'דני כהן']]]);
+        app(CommandInterpreter::class)->run('תפתח לדני כהן משימה לבדוק את השרת');
+
+        $task = Task::sole();
+        $task->assignees()->detach();
+        $dan->delete();
+
+        $result = null;
+        $claude = Mockery::mock(ClaudeClient::class);
+        $claude->shouldReceive('isEnabled')->andReturn(true);
+        $claude->shouldReceive('lastError')->andReturnNull();
+        $claude->shouldReceive('converse')->andReturnUsing(
+            function (string $system, string $prompt, array $tools, callable $handler) use (&$result): string {
+                $result = $handler('open_task', ['title' => 'לבדוק את השרת', 'assignee' => 'דני כהן']);
+
+                return 'המשימה קיימת.';
+            }
+        );
+        $this->app->instance(ClaudeClient::class, $claude);
+
+        app(CommandInterpreter::class)->run('תפתח לדני כהן משימה לבדוק את השרת');
+
+        $this->assertSame(1, Task::count());
+        $this->assertStringContainsString('כבר קיימת', $result['content']);
+        $this->assertStringContainsString('שאל את המנהל למי לשייך', $result['content']);
+        $this->assertStringContainsString('לא נמצא איש צוות', $result['content']);
+    }
+
+    public function test_assigning_a_task_that_does_not_exist_changes_nothing(): void
+    {
+        $toolResult = null;
+
+        $claude = Mockery::mock(ClaudeClient::class);
+        $claude->shouldReceive('isEnabled')->andReturn(true);
+        $claude->shouldReceive('lastError')->andReturnNull();
+        $claude->shouldReceive('converse')->andReturnUsing(
+            function (string $system, string $prompt, array $tools, callable $handler) use (&$toolResult): string {
+                $toolResult = $handler('assign_task', ['task_id' => 999, 'assignee' => 'דני']);
+
+                return 'לא נמצאה משימה.';
+            }
+        );
+        $this->app->instance(ClaudeClient::class, $claude);
+
+        app(CommandInterpreter::class)->run('שייך את משימה 999 לדני');
+
+        $this->assertTrue($toolResult['is_error'] ?? false);
+        $this->assertSame(0, Task::count());
     }
 
     public function test_the_old_tool_name_still_opens_a_task(): void

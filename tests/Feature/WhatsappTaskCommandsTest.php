@@ -915,6 +915,39 @@ class WhatsappTaskCommandsTest extends TestCase
     }
 
     /**
+     * The group has no operator of its own — a message comes from the group,
+     * not from a panel user. Offering "me" there would open the task for
+     * nobody and look assigned, so the tool does not offer it and says why if
+     * it arrives anyway.
+     */
+    public function test_the_group_is_not_offered_an_assignee_it_cannot_resolve(): void
+    {
+        $tools = null;
+        $toolResult = null;
+
+        $claude = Mockery::mock(ClaudeClient::class);
+        $claude->shouldReceive('isEnabled')->andReturn(true);
+        $claude->shouldReceive('lastError')->andReturnNull();
+        $claude->shouldReceive('converse')->andReturnUsing(
+            function (string $system, string $prompt, array $offered, callable $handler) use (&$tools, &$toolResult): string {
+                $tools = $offered;
+                $toolResult = $handler('open_task', ['title' => 'להתקשר לספק', 'assignee' => 'me']);
+
+                return 'נפתחה משימה.';
+            }
+        );
+        $this->app->instance(ClaudeClient::class, $claude);
+
+        (new RunAgentInstructionJob(self::MGMT, 'תפתח לי משימה להתקשר לספק'))
+            ->handle(app(CommandInterpreter::class), app(WahaClient::class));
+
+        $openTask = collect($tools)->firstWhere('name', 'open_task');
+        $this->assertStringNotContainsString('"me"', (string) $openTask['description']);
+        $this->assertStringContainsString('אין זהות של מנהל מסוים', $toolResult['content']);
+        $this->assertSame([], Task::sole()->assignees->pluck('id')->all());
+    }
+
+    /**
      * The delegated instruction IS the task's own text, so an agent told to
      * "open a task when there is no tool" would open a copy of the task it was
      * just handed: a second notification, and the original still claimed.
