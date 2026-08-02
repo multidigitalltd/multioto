@@ -7,6 +7,7 @@ use App\Enums\SubscriptionStatus;
 use App\Http\Middleware\ThrottleHealthProbe;
 use App\Jobs\CheckMoneyIntegrityJob;
 use App\Jobs\HeartbeatJob;
+use App\Listeners\StampWorkloadProgress;
 use App\Mail\NotificationMail;
 use App\Models\Charge;
 use App\Models\Customer;
@@ -18,16 +19,19 @@ use App\Models\Setting;
 use App\Models\Subscription;
 use App\Models\SystemLog;
 use App\Services\System\HealthReport;
+use Illuminate\Contracts\Queue\Job;
 use Illuminate\Foundation\Http\Middleware\ValidateCsrfToken;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
+use Illuminate\Queue\Events\JobProcessed;
 use Illuminate\Routing\Router;
 use Illuminate\Session\Middleware\StartSession;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Route;
 use Illuminate\View\Middleware\ShareErrorsFromSession;
+use Mockery;
 use Tests\TestCase;
 
 /**
@@ -145,6 +149,43 @@ class SystemHealthTest extends TestCase
             HealthReport::DOWN,
             collect($report['checks'])->firstWhere('key', 'workload')['status'],
         );
+    }
+
+    /**
+     * A worker grinding through a long batch is not a dead worker: the beat
+     * behind those jobs waits its turn, but every job it finishes says so.
+     */
+    public function test_a_worker_still_finishing_jobs_is_not_called_dead(): void
+    {
+        $this->alive();
+        HealthHeartbeat::query()->whereKey(HealthHeartbeat::WORKLOAD)
+            ->update(['beat_at' => now()->subHours(3)]);
+        HealthHeartbeat::beat(HealthHeartbeat::PROGRESS);
+
+        $report = app(HealthReport::class)->collect();
+
+        $this->assertSame(HealthReport::DEGRADED, $report['status']);
+    }
+
+    public function test_a_finished_job_marks_the_workload_queue_as_moving(): void
+    {
+        $job = Mockery::mock(Job::class);
+        $job->shouldReceive('getQueue')->andReturn('default');
+
+        (new StampWorkloadProgress)->handle(new JobProcessed('redis', $job));
+
+        $this->assertNotNull(HealthHeartbeat::lastBeat(HealthHeartbeat::PROGRESS));
+    }
+
+    /** The private heartbeat queue has a beat of its own and cannot answer for the work. */
+    public function test_the_heartbeat_queue_does_not_mark_the_workload_as_moving(): void
+    {
+        $job = Mockery::mock(Job::class);
+        $job->shouldReceive('getQueue')->andReturn(HeartbeatJob::QUEUE);
+
+        (new StampWorkloadProgress)->handle(new JobProcessed('redis', $job));
+
+        $this->assertNull(HealthHeartbeat::lastBeat(HealthHeartbeat::PROGRESS));
     }
 
     public function test_the_workload_heartbeat_queues_where_the_real_work_does(): void

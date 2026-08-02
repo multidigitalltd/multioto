@@ -5,6 +5,7 @@ namespace App\Services\System;
 use App\Models\HealthHeartbeat;
 use App\Providers\SettingsServiceProvider;
 use App\Services\Backup\BackupRunner;
+use Illuminate\Support\ConfigurationUrlParser;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
 
@@ -141,41 +142,6 @@ class HealthReport
     }
 
     /**
-     * Watch the ordinary queue from OUTSIDE it.
-     *
-     * Called from the scheduler once a minute, never as a queued job: a job
-     * asking whether the line is moving would be standing in that line. It
-     * records the queue's depth, and stamps the moment only when the depth
-     * FELL (or is zero) — so the stamp means "work visibly got done", which is
-     * the difference between a worker busy with a long batch and no worker at
-     * all.
-     */
-    public function sampleQueueProgress(): void
-    {
-        $size = rescue(fn (): ?int => $this->probe()->size($this->workloadQueue()), null, report: false);
-
-        if ($size === null) {
-            return;
-        }
-
-        $before = HealthHeartbeat::lastValue(HealthHeartbeat::PROGRESS);
-
-        HealthHeartbeat::beat(
-            HealthHeartbeat::PROGRESS,
-            $size,
-            touch: $size === 0 || $before === null || $size < $before,
-        );
-    }
-
-    /** The queue the real work rides on. */
-    private function workloadQueue(): string
-    {
-        $connection = (string) config('queue.default');
-
-        return (string) config("queue.connections.{$connection}.queue", 'default');
-    }
-
-    /**
      * Is the queue that carries the real work — charges, invoices, notifications
      * — actually moving? The private heartbeat above cannot answer that: with
      * two worker processes it goes on reporting long after the one doing the
@@ -209,12 +175,13 @@ class HealthReport
             $stopped,
         );
 
-        // Before calling it dead, ask the one question the beat cannot answer.
-        // A single worker chewing through a long batch — one monitor job per
-        // site, say — leaves this beat waiting its turn behind them for as long
-        // as the batch takes, and it is working the whole time. The scheduler
-        // watches the queue get shorter, from outside the queue, so "the line
-        // is moving" is knowable without standing in it.
+        // Before calling it dead, ask the one question this beat cannot answer.
+        // A single worker grinding through a long batch — one monitor job per
+        // site, say — leaves the beat waiting its turn behind them for as long
+        // as the batch takes, and it is working the whole time. Every job it
+        // FINISHES stamps a mark of its own, which is a count of work done
+        // rather than a queue depth: work arriving as fast as it is finished
+        // keeps the depth flat while jobs complete one after another.
         if ($check['status'] === self::DOWN) {
             $moved = HealthHeartbeat::lastBeat(HealthHeartbeat::PROGRESS);
 
@@ -239,23 +206,21 @@ class HealthReport
      * The one query, asked with a stopwatch.
      *
      * Every way a database can keep this request waiting has to be named, and
-     * they are named where libpq actually reads them — in the connection
-     * string. Only PGCONNECT_TIMEOUT has an environment variable; keepalives
-     * and the startup options do not, so the probe opens its own PDO handle
-     * rather than pretending the framework's connection can carry them:
+     * named where libpq reads it — in the connection string, since only the
+     * connect timeout has an environment variable:
      *
      *   connect_timeout      getting connected at all.
      *   options              the server's own statement_timeout, sent in the
      *                        startup packet — the connection can be established
      *                        perfectly and the QUERY never come back.
      *   keepalives*          the peer that acknowledges the query and then goes
-     *                        silent. Nothing is left outstanding for a TCP
-     *                        timeout to notice and the client is simply
-     *                        waiting, so the socket is told to ask — twice,
-     *                        quickly — and to give up when nothing answers.
+     *                        silent, leaving nothing outstanding for a TCP
+     *                        timeout to notice.
      *
-     * A handle of its own also means the application's pooled connection is
-     * never reconfigured behind a worker's back.
+     * And one case none of those covers: a backend that is reachable, answers
+     * at the network level, and simply never produces a result. Only a deadline
+     * held by US can end that, so where the pgsql extension is available the
+     * query is sent without blocking and abandoned when the clock runs out.
      */
     private function askTheDatabase(): void
     {
@@ -268,12 +233,19 @@ class HealthReport
             return;
         }
 
+        // Through the same parser the framework uses, because DB_URL is a
+        // supported way to configure all of this — read raw, the split fields
+        // would still hold their defaults and the probe would cheerfully
+        // report 127.0.0.1 as down while the real database is fine.
+        $connection = (new ConfigurationUrlParser)->parseConfiguration($connection);
         $seconds = max(1, (int) config('health.database_probe_timeout', 2));
 
-        $dsn = 'pgsql:'.collect([
+        $parameters = [
             'host' => $connection['host'] ?? '127.0.0.1',
             'port' => $connection['port'] ?? 5432,
             'dbname' => $connection['database'] ?? '',
+            'user' => (string) ($connection['username'] ?? ''),
+            'password' => (string) ($connection['password'] ?? ''),
             'sslmode' => $connection['sslmode'] ?? 'prefer',
             'connect_timeout' => $seconds,
             'keepalives' => 1,
@@ -282,9 +254,68 @@ class HealthReport
             'keepalives_count' => 2,
             'options' => '-c statement_timeout='.($seconds * 1000),
             'application_name' => 'multioto-health',
-        ])->map(fn ($value, string $key): string => "{$key}={$value}")->implode(';');
+        ];
 
-        $pdo = new \PDO($dsn, (string) ($connection['username'] ?? ''), (string) ($connection['password'] ?? ''), [
+        function_exists('pg_connect')
+            ? $this->askWithDeadline($parameters, $seconds)
+            : $this->askWithPdo($parameters, $seconds);
+    }
+
+    /**
+     * The question with a deadline WE hold.
+     *
+     * Sent without blocking, then waited on by the clock rather than by the
+     * server's goodwill: a backend that never answers is abandoned after the
+     * timeout instead of holding the request until the web server gives up.
+     *
+     * @param  array<string, mixed>  $parameters
+     */
+    private function askWithDeadline(array $parameters, int $seconds): void
+    {
+        $handle = @pg_connect($this->conninfo($parameters, ' '), PGSQL_CONNECT_FORCE_NEW);
+
+        if ($handle === false) {
+            throw new \RuntimeException('אין חיבור למסד הנתונים.');
+        }
+
+        try {
+            if (@pg_send_query($handle, 'select 1') === false) {
+                throw new \RuntimeException('אין חיבור למסד הנתונים.');
+            }
+
+            $deadline = microtime(true) + $seconds;
+
+            while (pg_connection_busy($handle)) {
+                if (microtime(true) >= $deadline) {
+                    @pg_cancel_query($handle);
+
+                    throw new \RuntimeException('מסד הנתונים לא ענה בזמן.');
+                }
+
+                usleep(20_000);
+            }
+
+            if (@pg_get_result($handle) === false) {
+                throw new \RuntimeException('מסד הנתונים לא החזיר תשובה.');
+            }
+        } finally {
+            @pg_close($handle);
+        }
+    }
+
+    /**
+     * Without the pgsql extension there is no way to hold a deadline from here,
+     * so the bounds in the connection string are all there is — everything
+     * short of a wedged backend that answers the network and nothing else.
+     *
+     * @param  array<string, mixed>  $parameters
+     */
+    private function askWithPdo(array $parameters, int $seconds): void
+    {
+        $credentials = ['user' => '', 'password' => ''];
+        $dsn = array_diff_key($parameters, $credentials);
+
+        $pdo = new \PDO('pgsql:'.$this->conninfo($dsn, ';'), (string) $parameters['user'], (string) $parameters['password'], [
             \PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION,
             \PDO::ATTR_TIMEOUT => $seconds,
         ]);
@@ -294,6 +325,20 @@ class HealthReport
         } finally {
             $pdo = null;
         }
+    }
+
+    /**
+     * A libpq connection string. Values are quoted, so a password with a space
+     * in it stays one value.
+     *
+     * @param  array<string, mixed>  $parameters
+     */
+    private function conninfo(array $parameters, string $separator): string
+    {
+        return collect($parameters)
+            ->reject(fn ($value): bool => $value === null || $value === '')
+            ->map(fn ($value, string $key): string => $key."='".str_replace(['\\', "'"], ['\\\\', "\\'"], (string) $value)."'")
+            ->implode($separator);
     }
 
     private function heartbeat(

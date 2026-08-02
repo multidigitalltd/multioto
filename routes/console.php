@@ -39,7 +39,6 @@ use App\Models\WebhookEvent;
 use App\Providers\SettingsServiceProvider;
 use App\Services\Backup\BackupRunner;
 use App\Services\Calendar\ShabbatClock;
-use App\Services\System\HealthReport;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schedule;
 
@@ -84,13 +83,6 @@ Schedule::job(new HeartbeatJob)->everyFiveMinutes()->name('system:queue-heartbea
 // gone. Only a job that queued where the real work queues can say otherwise.
 Schedule::job(new HeartbeatJob(HealthHeartbeat::WORKLOAD))->everyFiveMinutes()
     ->name('system:workload-heartbeat')->onOneServer();
-
-// And the queue watched from OUTSIDE the queue. That beat rides the ordinary
-// line, so a worker grinding through a long batch leaves it waiting — for as
-// long as the batch takes, while working the whole time. This notes when the
-// line was last seen to get SHORTER, which no job standing in it could.
-Schedule::call(fn () => app(HealthReport::class)->sampleQueueProgress())
-    ->everyMinute()->name('system:queue-progress')->onOneServer();
 
 // Does the money still add up? Reads only — every finding is reported for a
 // person to decide on, because automatic repair of money is how one wrong
