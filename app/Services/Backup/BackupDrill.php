@@ -934,7 +934,14 @@ class BackupDrill
             return null;
         }
 
-        $date = sprintf('%04d-%02d-%02d', $parsed['year'], $parsed['month'], $parsed['day']);
+        // The year from the TEXT: the parser hands back 1977 for 294277, and
+        // canonicalising to that would collide with a real 1977.
+        $date = sprintf(
+            '%04d-%02d-%02d',
+            $this->literalYear($text) ?? $parsed['year'],
+            $parsed['month'],
+            $parsed['day'],
+        );
 
         // A DATE column keeps no clock at all: the same day written with a time
         // beside it and without one is one value there, and would be two keys
@@ -990,6 +997,22 @@ class BackupDrill
         }
 
         return (int) $year[1] !== 0 && (int) $year[1] >= -4713 && (int) $year[1] <= $ceiling;
+    }
+
+    /**
+     * The year as the archive spells it, or null when the value does not open
+     * with one.
+     *
+     * The parser cannot be asked: it reports 1977 for 294277 without
+     * complaining, which is a real date the column can hold — so trusting it
+     * would have two genuinely different years share one key.
+     */
+    private function literalYear(string $text): ?int
+    {
+        return preg_match('/^\s*(-?\d+)-\d{1,2}-\d{1,2}/', trim($text), $year) === 1
+            && strlen(ltrim($year[1], '-0')) <= 7
+                ? (int) $year[1]
+                : null;
     }
 
     /**

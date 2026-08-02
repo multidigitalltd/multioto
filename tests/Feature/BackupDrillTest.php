@@ -1161,6 +1161,26 @@ class BackupDrillTest extends TestCase
         $this->assertStringNotContainsString('period_start', implode(' ', $report['problems']));
     }
 
+    /** 294277 and 1977 are two different years, whatever the parser says. */
+    public function test_a_wide_year_is_not_read_as_the_year_the_parser_returns(): void
+    {
+        $backup = $this->backup();
+
+        $row = '"subscription_id":5,"amount_agorot":100,"total_agorot":100,"period_end":"2026-01-31"';
+
+        $path = Storage::disk('backups')->path($backup->path);
+        $zip = new ZipArchive;
+        $zip->open($path);
+        $zip->addFromString('database/charges.ndjson',
+            '{"id":1,'.$row.',"period_start":"294277-01-01"}'."\n"
+            .'{"id":2,'.$row.',"period_start":"1977-01-01"}'."\n");
+        $zip->close();
+
+        $report = app(BackupDrill::class)->run($backup);
+
+        $this->assertStringNotContainsString('כפולים', implode(' ', $report['problems']));
+    }
+
     /** A clock is not a date. date_parse reports no fault for "12:34:56". */
     public function test_a_clock_value_in_a_date_column_is_reported(): void
     {
