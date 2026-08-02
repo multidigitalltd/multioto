@@ -835,6 +835,14 @@ class BackupDrill
     private function temporalText(string $value, string $kind, int $precision = 6): ?string
     {
         $text = trim($value);
+
+        // The literals the database understands and the parser does not. Left
+        // as themselves they would be a second key for a value the column
+        // already holds: "epoch" and "1970-01-01" are one date there.
+        if (($literal = $this->literalMoment($text, $kind)) !== null) {
+            return $literal;
+        }
+
         $parsed = date_parse($text);
 
         if ($parsed['error_count'] > 0 || $parsed['warning_count'] > 0) {
@@ -933,6 +941,35 @@ class BackupDrill
         }
 
         return $this->toPrecision($moment->modify("+{$carry} seconds"), $precision)->format('Y-m-d H:i:s.u');
+    }
+
+    /**
+     * A special literal as the value the column stores for it, or null when the
+     * text is not one this kind of column accepts.
+     *
+     * "now" is deliberately absent: it is not a constant — it resolves when the
+     * insert runs — so nothing here can say which stored value it equals.
+     * Infinity keeps its own name, lowercased, because it has no calendar form
+     * and must still compare equal to itself written another way.
+     */
+    private function literalMoment(string $text, string $kind): ?string
+    {
+        return match (strtolower($text)) {
+            'epoch' => match ($kind) {
+                'date' => '1970-01-01',
+                'timestamp' => '1970-01-01 00:00:00.000000',
+                'timestamptz' => '1970-01-01 00:00:00.000000Z',
+                default => null,
+            },
+            'allballs' => match ($kind) {
+                'time' => '00:00:00.000000',
+                'timetz' => '00:00:00.000000Z',
+                default => null,
+            },
+            'infinity' => str_contains($kind, 'time') || $kind === 'date' ? 'infinity' : null,
+            '-infinity' => str_contains($kind, 'time') || $kind === 'date' ? '-infinity' : null,
+            default => null,
+        };
     }
 
     /**
