@@ -757,9 +757,19 @@ class BackupDrill
         // And the parts the column actually needs. "12:34:56" parses without a
         // complaint and is not a date; "2026-01-01" is not a time. A parser
         // that reports no fault has not said the value belongs here.
-        return str_starts_with($kind, 'time') && ! str_contains($kind, 'stamp')
-            ? is_int($parsed['hour']) && is_int($parsed['minute']) && is_int($parsed['second'])
-            : is_int($parsed['year']) && is_int($parsed['month']) && is_int($parsed['day']);
+        if (str_starts_with($kind, 'time') && ! str_contains($kind, 'stamp')) {
+            return is_int($parsed['hour']) && is_int($parsed['minute']) && is_int($parsed['second']);
+        }
+
+        if (! is_int($parsed['year']) || ! is_int($parsed['month']) || ! is_int($parsed['day'])) {
+            return false;
+        }
+
+        // And inside the calendar the database keeps. There is no year zero —
+        // 1 BC is followed by 1 AD — and PHP is content to count one anyway.
+        return $parsed['year'] !== 0
+            && $parsed['year'] >= -4713
+            && $parsed['year'] <= 294276;
     }
 
     /**

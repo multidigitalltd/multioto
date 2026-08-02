@@ -1123,6 +1123,16 @@ class BackupDrillTest extends TestCase
         $this->assertStringContainsString('seen_at', implode(' ', $report['problems']));
     }
 
+    /** There is no year zero: 1 BC is followed by 1 AD. */
+    public function test_a_year_the_calendar_does_not_have_is_reported(): void
+    {
+        DB::statement('CREATE TABLE year_probe (seen_at timestamp primary key)');
+
+        $report = $this->drillWith('year_probe', 1, '{"seen_at":"0000-01-01 24:00:00"}'."\n");
+
+        $this->assertStringContainsString('seen_at', implode(' ', $report['problems']));
+    }
+
     /** A clock is not a date. date_parse reports no fault for "12:34:56". */
     public function test_a_clock_value_in_a_date_column_is_reported(): void
     {
