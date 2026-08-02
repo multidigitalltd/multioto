@@ -197,6 +197,14 @@ class SystemActionRunner
      * $replace is an explicit move ("תעביר מדני לרותם"); by default owners are
      * added, so answering "which Dani" cannot remove whoever was already there.
      *
+     * The lock covers this code, not the task form: a manager saving the same
+     * task in the panel at that instant writes the pivot without waiting for
+     * it. That leaves one narrow outcome — an owner too many, never one
+     * removed, and never a duplicate notification, because who is "new" is
+     * decided by re-reading the pivot after the write rather than by the list
+     * this call happened to see before it. An extra name on a task is visible
+     * to everyone and a person can take it off in the same form.
+     *
      * @param  list<int>  $assignees
      * @return list<int> those attached by THIS call
      */
@@ -225,11 +233,20 @@ class SystemActionRunner
                 return [];
             }
 
-            $replace
+            // Inside its own savepoint: the panel can attach the same person a
+            // moment earlier, and the pivot's key would then reject this write
+            // and take the whole claim down with it. The write is simply lost
+            // in that case — the person is already on the task.
+            rescue(fn () => DB::transaction(fn () => $replace
                 ? $locked->assignees()->sync($assignees)
-                : $locked->assignees()->syncWithoutDetaching($assignees);
+                : $locked->assignees()->syncWithoutDetaching($assignees)), report: false);
 
-            return array_values(array_diff($assignees, $before));
+            // Who is new is read back from the pivot rather than assumed, so a
+            // name that arrived from somewhere else in the meantime is not
+            // announced by us as though we had just assigned it.
+            $after = $locked->assignees()->pluck('users.id')->map(fn ($id): int => (int) $id)->all();
+
+            return array_values(array_intersect($assignees, array_diff($after, $before)));
         });
     }
 
