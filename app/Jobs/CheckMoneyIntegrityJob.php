@@ -101,11 +101,11 @@ class CheckMoneyIntegrityJob implements ShouldQueue
                     ->whereNull('charged_at')
                     ->whereBetween('created_at', [$since, $grace])))
             ->whereDoesntHave('invoice')
-            ->orderBy('id')
-            ->get(['id', 'customer_id', 'total_agorot', 'created_at']);
+            ->orderBy('id');
 
         return $this->finding(
             $rows,
+            ['id', 'customer_id', 'total_agorot', 'created_at'],
             'חיובים שהצליחו ללא חשבונית',
             fn (Charge $charge): string => "חיוב #{$charge->id} · ".Money::ils($charge->total_agorot)
                 .' · '.$charge->created_at->format('d/m/Y'),
@@ -121,11 +121,11 @@ class CheckMoneyIntegrityJob implements ShouldQueue
     {
         $rows = $this->recent(Invoice::query())
             ->whereHas('charge', fn (Builder $query) => $query->whereNot('status', ChargeStatus::Succeeded))
-            ->orderBy('id')
-            ->get(['id', 'charge_id', 'linet_document_id', 'created_at']);
+            ->orderBy('id');
 
         return $this->finding(
             $rows,
+            ['id', 'charge_id', 'linet_document_id', 'created_at'],
             'חשבוניות שהונפקו על חיוב שלא הצליח',
             fn (Invoice $invoice): string => "חשבונית #{$invoice->id} (מסמך {$invoice->linet_document_id}) · חיוב #{$invoice->charge_id}",
         );
@@ -137,11 +137,11 @@ class CheckMoneyIntegrityJob implements ShouldQueue
         $rows = $this->recent(Invoice::query())
             ->join('charges', 'charges.id', '=', 'invoices.charge_id')
             ->whereColumn('invoices.total_agorot', '!=', 'charges.total_agorot')
-            ->orderBy('invoices.id')
-            ->get(['invoices.id', 'invoices.charge_id', 'invoices.total_agorot', 'charges.total_agorot as charge_total']);
+            ->orderBy('invoices.id');
 
         return $this->finding(
             $rows,
+            ['invoices.id', 'invoices.charge_id', 'invoices.total_agorot', 'charges.total_agorot as charge_total'],
             'פערי סכום בין חיוב לחשבונית',
             fn (Invoice $invoice): string => "חשבונית #{$invoice->id}: ".Money::ils((int) $invoice->total_agorot)
                 ." · חיוב #{$invoice->charge_id}: ".Money::ils((int) $invoice->charge_total),
@@ -169,11 +169,11 @@ class CheckMoneyIntegrityJob implements ShouldQueue
         $rows = Subscription::query()
             ->dueForCharge()
             ->where('next_charge_at', '<=', now()->subHours($hours))
-            ->orderBy('next_charge_at')
-            ->get(['id', 'customer_id', 'next_charge_at']);
+            ->orderBy('next_charge_at');
 
         return $this->finding(
             $rows,
+            ['id', 'customer_id', 'next_charge_at'],
             'מנויים שעבר מועד החיוב שלהם ולא חויבו',
             fn (Subscription $subscription): string => "מנוי #{$subscription->id} · מועד: "
                 .$subscription->next_charge_at->format('d/m/Y H:i'),
@@ -207,11 +207,11 @@ class CheckMoneyIntegrityJob implements ShouldQueue
             ->whereNull('cardcom_low_profile_id')
             ->whereNull('demand_sent_at')
             ->where('created_at', '<=', now()->subHours($hours))
-            ->orderBy('id')
-            ->get(['id', 'customer_id', 'total_agorot', 'created_at']);
+            ->orderBy('id');
 
         return $this->finding(
             $rows,
+            ['id', 'customer_id', 'total_agorot', 'created_at'],
             'חיובים שנתקעו במצב "ממתין"',
             fn (Charge $charge): string => "חיוב #{$charge->id} · ".Money::ils($charge->total_agorot)
                 .' · נפתח '.$charge->created_at->format('d/m/Y H:i'),
@@ -243,36 +243,46 @@ class CheckMoneyIntegrityJob implements ShouldQueue
      * The stored copy is bounded too, generously, and says so when it cuts:
      * silence about truncation reads as "that was all of them".
      *
-     * @param  Collection<int, covariant \Illuminate\Database\Eloquent\Model>  $rows
+     * COUNTED first, then read up to that bound. The morning after a real
+     * outage is exactly when a finding has tens of thousands of rows, and a
+     * check that loads all of them to print five hundred would run out of
+     * memory — or out of its own timeout — on the one day it matters, and say
+     * nothing at all.
+     *
+     * @param  Builder<covariant \Illuminate\Database\Eloquent\Model>  $query
+     * @param  list<string>  $columns
      * @param  callable(mixed): string  $describe
      * @return array{title: string, detail: string, preview: string}|null
      */
-    private function finding($rows, string $title, callable $describe): ?array
+    private function finding($query, array $columns, string $title, callable $describe): ?array
     {
-        if ($rows->isEmpty()) {
+        $total = (clone $query)->count();
+
+        if ($total === 0) {
             return null;
         }
 
-        $described = $rows->map($describe);
+        $max = (int) config('health.money.log_max_rows', 500);
+        $described = $query->limit($max)->get($columns)->map($describe);
 
         return [
-            'title' => $title.' ('.$described->count().')',
-            'detail' => $this->lines($described, (int) config('health.money.log_max_rows', 500), ' שורות נוספות לא נשמרו'),
-            'preview' => $this->lines($described, (int) config('health.money.max_examples', 10), '…'),
+            'title' => $title." ({$total})",
+            'detail' => $this->lines($described, $total, $max, ' שורות נוספות לא נשמרו'),
+            'preview' => $this->lines($described, $total, (int) config('health.money.max_examples', 10), '…'),
         ];
     }
 
     /**
-     * The rows as text, cut at $max and saying so.
+     * The rows as text, cut at $max and saying how many there really are.
      *
      * @param  Collection<int, string>  $described
      */
-    private function lines($described, int $max, string $suffix): string
+    private function lines($described, int $total, int $max, string $suffix): string
     {
         $shown = $described->take($max)->implode("\n  ");
 
-        return $described->count() > $max
-            ? $shown."\n  ועוד ".($described->count() - $max).$suffix
+        return $total > $max
+            ? $shown."\n  ועוד ".($total - $max).$suffix
             : $shown;
     }
 
