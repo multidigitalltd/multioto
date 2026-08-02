@@ -1264,7 +1264,7 @@ class BackupDrillTest extends TestCase
 
         $report = app(BackupDrill::class)->run($backup);
 
-        $this->assertStringContainsString('בית אפס', implode(' ', $report['problems']));
+        $this->assertStringContainsString('בית אפס או קידוד שבור', implode(' ', $report['problems']));
     }
 
     /**
@@ -1280,7 +1280,33 @@ class BackupDrillTest extends TestCase
 
         $report = $this->drillWith('blob_probe', 1, '{"id":1,"payload":"A\\u0000B"}'."\n");
 
-        $this->assertStringNotContainsString('בית אפס', implode(' ', $report['problems']));
+        $this->assertStringNotContainsString('בית אפס או קידוד שבור', implode(' ', $report['problems']));
+    }
+
+    /**
+     * Bytes the connection's encoding cannot read.
+     *
+     * A base64 marker in a TEXT column carries exactly that — the archive marks
+     * a value only when it is not valid UTF-8 — and a UTF-8 connection refuses
+     * it on the way in.
+     */
+    public function test_a_broken_encoding_in_a_text_column_is_reported(): void
+    {
+        $backup = $this->backup();
+
+        $path = Storage::disk('backups')->path($backup->path);
+        $zip = new ZipArchive;
+        $zip->open($path);
+        $zip->addFromString(
+            'database/customers.ndjson',
+            '{"id":1,"name":{"__b64":"/w=="}}'."\n".'{"id":2,"name":"רגיל"}'."\n",
+        );
+        $zip->close();
+
+        $report = app(BackupDrill::class)->run($backup);
+
+        $this->assertStringContainsString('קידוד שבור', implode(' ', $report['problems']));
+        $this->assertStringContainsString('name', implode(' ', $report['problems']));
     }
 
     /** A clock is not a date. date_parse reports no fault for "12:34:56". */

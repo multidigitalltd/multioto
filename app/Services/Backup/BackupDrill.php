@@ -335,7 +335,7 @@ class BackupDrill
             }
 
             if ($read['unstorable'] !== []) {
-                $found[] = "הטבלה {$table}: טקסט שהמסד אינו יכול לאחסן — בית אפס בתוך הערך ("
+                $found[] = "הטבלה {$table}: טקסט שהמסד אינו יכול לאחסן — בית אפס או קידוד שבור ("
                     .$this->few($read['unstorable']).') — השחזור ייעצר.';
             }
 
@@ -1497,18 +1497,19 @@ class BackupDrill
                     continue;
                 }
 
-                // A zero byte, which PostgreSQL stores in no TEXT value at all.
-                // It reads as a perfectly ordinary short string through every
-                // check below this one, and the insert fails on it — the shape
-                // of fault this drill exists to catch.
+                // Bytes no TEXT column can hold: a zero byte, which PostgreSQL
+                // stores in no text value at all, and anything the connection's
+                // encoding cannot read. Both pass every check below this one as
+                // perfectly ordinary short strings, and the insert is where
+                // they stop — the shape of fault this drill exists to catch.
                 //
                 // Asked of columns the schema says hold text, not of every
-                // string that arrives: a bytea column holds a zero byte quite
+                // string that arrives: a bytea column holds either quite
                 // happily, and its bytes travel as an ordinary JSON string
                 // whenever they happen to be valid UTF-8.
                 if (isset($schema['textual'][$column])
                     && is_string($value)
-                    && str_contains($value, "\0")) {
+                    && (str_contains($value, "\0") || ! mb_check_encoding($value, 'UTF-8'))) {
                     $unstorable[(string) $column] = true;
 
                     continue;
