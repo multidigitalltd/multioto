@@ -1133,6 +1133,16 @@ class BackupDrillTest extends TestCase
         $this->assertStringContainsString('seen_at', implode(' ', $report['problems']));
     }
 
+    /** PHP reports year 1977 for 294277 and no complaint; the column refuses it. */
+    public function test_a_year_beyond_the_databases_range_is_reported(): void
+    {
+        DB::statement('CREATE TABLE range_year_probe (seen_at timestamp primary key)');
+
+        $report = $this->drillWith('range_year_probe', 1, '{"seen_at":"294277-01-01 00:00:00"}'."\n");
+
+        $this->assertStringContainsString('seen_at', implode(' ', $report['problems']));
+    }
+
     /** A clock is not a date. date_parse reports no fault for "12:34:56". */
     public function test_a_clock_value_in_a_date_column_is_reported(): void
     {

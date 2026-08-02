@@ -765,11 +765,8 @@ class BackupDrill
             return false;
         }
 
-        // And inside the calendar the database keeps. There is no year zero —
-        // 1 BC is followed by 1 AD — and PHP is content to count one anyway.
-        return $parsed['year'] !== 0
-            && $parsed['year'] >= -4713
-            && $parsed['year'] <= 294276;
+        // And inside the calendar the database keeps.
+        return $this->yearInRange($text) && $parsed['year'] !== 0;
     }
 
     /**
@@ -868,7 +865,7 @@ class BackupDrill
 
         $parsed = date_parse($text);
 
-        if ($parsed['error_count'] > 0 || $parsed['warning_count'] > 0) {
+        if ($parsed['error_count'] > 0 || $parsed['warning_count'] > 0 || ! $this->yearInRange($text)) {
             return null;
         }
 
@@ -964,6 +961,30 @@ class BackupDrill
         }
 
         return $this->toPrecision($moment->modify("+{$carry} seconds"), $precision)->format('Y-m-d H:i:s.u');
+    }
+
+    /**
+     * Whether the year this value names is one the database can hold.
+     *
+     * Read from the TEXT, because the parser does not keep an oversized one:
+     * date_parse('294277-01-01') reports the year 1977 and no complaint at all,
+     * so the number that arrives has already stopped being the number written.
+     * There is no year zero either — 1 BC is followed by 1 AD — and PHP is
+     * content to count one anyway.
+     */
+    private function yearInRange(string $text): bool
+    {
+        if (preg_match('/^\s*(-?\d+)-\d{1,2}-\d{1,2}/', $text, $year) !== 1) {
+            return true;
+        }
+
+        // Compared as text first: a year of forty digits is not an integer this
+        // machine can hold, and casting it would quietly make it one.
+        if (strlen(ltrim($year[1], '-0')) > 6) {
+            return false;
+        }
+
+        return (int) $year[1] !== 0 && (int) $year[1] >= -4713 && (int) $year[1] <= 294276;
     }
 
     /**
