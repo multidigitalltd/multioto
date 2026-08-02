@@ -6,6 +6,7 @@ use App\Jobs\DrillBackupJob;
 use App\Mail\NotificationMail;
 use App\Models\Backup;
 use App\Models\Customer;
+use App\Models\Site;
 use App\Models\SystemLog;
 use App\Services\Backup\BackupDrill;
 use App\Services\Backup\BackupRunner;
@@ -427,6 +428,68 @@ class BackupDrillTest extends TestCase
         $report = app(BackupDrill::class)->run($backup);
 
         $this->assertStringContainsString('כפולים', implode(' ', $report['problems']));
+    }
+
+    /**
+     * A row whose parent is not in the archive.
+     *
+     * The insert meets the constraint and stops there — with every table
+     * already emptied, which is the moment a restore is least recoverable.
+     */
+    public function test_a_reference_to_a_row_the_archive_does_not_contain_is_reported(): void
+    {
+        Site::factory()->for(Customer::factory())->create();
+
+        $backup = $this->backup();
+
+        $path = Storage::disk('backups')->path($backup->path);
+        $zip = new ZipArchive;
+        $zip->open($path);
+        $zip->addFromString(
+            'database/sites.ndjson',
+            json_encode([
+                'id' => 1,
+                'customer_id' => 999,
+                'domain' => 'example.com',
+                'status' => 'active',
+            ], JSON_UNESCAPED_UNICODE)."\n",
+        );
+        $zip->close();
+
+        $report = app(BackupDrill::class)->run($backup);
+
+        $this->assertStringContainsString('customer_id', implode(' ', $report['problems']));
+        $this->assertStringContainsString('999', implode(' ', $report['problems']));
+    }
+
+    /** A real archive full of real relations must come back silent. */
+    public function test_an_archive_with_relations_passes_the_drill(): void
+    {
+        Site::factory()->count(3)->for(Customer::factory())->create();
+
+        $report = app(BackupDrill::class)->run($this->backup());
+
+        $this->assertSame([], $report['problems']);
+    }
+
+    /** A word in a column that holds numbers is refused by the database, not by the JSON. */
+    public function test_a_value_of_the_wrong_type_is_reported(): void
+    {
+        $backup = $this->backup();
+
+        $path = Storage::disk('backups')->path($backup->path);
+        $zip = new ZipArchive;
+        $zip->open($path);
+        $zip->addFromString(
+            'database/charges.ndjson',
+            '{"id":1,"subscription_id":5,"amount_agorot":"oops","total_agorot":100,'
+                .'"period_start":"2026-01-01","period_end":"2026-01-31"}'."\n",
+        );
+        $zip->close();
+
+        $report = app(BackupDrill::class)->run($backup);
+
+        $this->assertStringContainsString('amount_agorot', implode(' ', $report['problems']));
     }
 
     /** A column that may be left out is not a problem, and must not be reported as one. */

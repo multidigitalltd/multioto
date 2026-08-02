@@ -40,6 +40,14 @@ class BackupDrill
      */
     private const MAX_KEYS = 500000;
 
+    /**
+     * What is left of the key budget for this archive.
+     *
+     * Shared across every table, because the memory it protects is: a ceiling
+     * applied per table would be no ceiling at all with fifty of them.
+     */
+    private int $keyBudget = self::MAX_KEYS;
+
     public function __construct(private BackupArchive $archive) {}
 
     /**
@@ -139,6 +147,7 @@ class BackupDrill
         try {
             $manifest = $this->manifest($zip);
             $problems = [];
+            $this->keyBudget = self::MAX_KEYS;
 
             if ((int) ($manifest['format'] ?? 0) !== BackupArchive::FORMAT) {
                 $problems[] = 'פורמט הגיבוי אינו נתמך בגרסה הזו — הארכיון הזה לא ישוחזר.';
@@ -240,6 +249,28 @@ class BackupDrill
     private function rowProblems(ZipArchive $zip, array $declared): array
     {
         $problems = [];
+        $schemas = [];
+        $collected = [];
+        $faulty = [];
+
+        foreach (array_keys($declared) as $table) {
+            if (Schema::hasTable($table)) {
+                $schemas[$table] = $this->columnsOf($table);
+            }
+        }
+
+        // Which columns some OTHER table points at, so their values are
+        // remembered while that table is read and the references can be
+        // resolved once every member has been seen.
+        $referenced = [];
+
+        foreach ($schemas as $schema) {
+            foreach ($schema['foreign'] as $key) {
+                if (array_key_exists($key['table'], $schemas)) {
+                    $referenced[$key['table']][implode(',', $key['references'])] = $key['references'];
+                }
+            }
+        }
 
         foreach ($declared as $table => $expected) {
             $member = "database/{$table}.ndjson";
@@ -247,6 +278,7 @@ class BackupDrill
 
             if ($stream === false) {
                 $problems[] = "חסר בארכיון: {$member}";
+                $faulty[$table] = true;
 
                 continue;
             }
@@ -254,9 +286,11 @@ class BackupDrill
             // The columns this installation actually has. A table the archive
             // names and the database does not is already reported by
             // tableProblems(); there is nothing here to compare against.
-            $schema = Schema::hasTable($table) ? $this->columnsOf($table) : null;
+            $schema = $schemas[$table] ?? null;
 
-            $read = $this->readRows($stream, $schema);
+            $read = $this->readRows($stream, $schema, $this->watched($table, $schema, $referenced, $schemas));
+            $collected[$table] = $read['values'];
+            $found = [];
 
             if ($read['corrupt']) {
                 // The checksum, and nothing else, notices this one: a bit flip
@@ -266,45 +300,139 @@ class BackupDrill
                 // refuses the same member, and a drill that certifies what the
                 // restore will refuse is worse than no drill.
                 $problems[] = "הטבלה {$table}: תוכן פגום בארכיון (סכום ביקורת שגוי) — הארכיון הזה לא ישוחזר.";
+                $faulty[$table] = true;
 
                 continue;
             }
 
             if ($read['rows'] !== (int) $expected) {
-                $problems[] = "הטבלה {$table}: הארכיון מכיל {$read['rows']} שורות במקום ".(int) $expected.'.';
+                $found[] = "הטבלה {$table}: הארכיון מכיל {$read['rows']} שורות במקום ".(int) $expected.'.';
             }
 
             if ($read['damaged'] > 0) {
-                $problems[] = "הטבלה {$table}: {$read['damaged']} שורות אינן קריאות.";
+                $found[] = "הטבלה {$table}: {$read['damaged']} שורות אינן קריאות.";
             }
 
             if ($read['unknown'] !== []) {
-                $problems[] = "הטבלה {$table}: הארכיון מכיל עמודות שאינן קיימות בטבלה ("
+                $found[] = "הטבלה {$table}: הארכיון מכיל עמודות שאינן קיימות בטבלה ("
                     .$this->few($read['unknown']).') — השחזור ייעצר.';
             }
 
             if ($read['absent'] !== []) {
-                $problems[] = "הטבלה {$table}: חסרות בארכיון עמודות חובה ("
+                $found[] = "הטבלה {$table}: חסרות בארכיון עמודות חובה ("
                     .$this->few($read['absent']).') — השחזור ייעצר.';
             }
 
             if ($read['nulls'] !== []) {
-                $problems[] = "הטבלה {$table}: עמודות שאינן יכולות להיות ריקות מכילות ערך ריק בארכיון ("
+                $found[] = "הטבלה {$table}: עמודות שאינן יכולות להיות ריקות מכילות ערך ריק בארכיון ("
                     .$this->few($read['nulls']).') — השחזור ייעצר.';
             }
 
+            if ($read['mistyped'] !== []) {
+                $found[] = "הטבלה {$table}: ערכים שאינם מתאימים לסוג העמודה ("
+                    .$this->few($read['mistyped']).') — השחזור ייעצר.';
+            }
+
             if ($read['repeated'] !== []) {
-                $problems[] = "הטבלה {$table}: ערכים כפולים במפתח ייחודי ("
+                $found[] = "הטבלה {$table}: ערכים כפולים במפתח ייחודי ("
                     .$this->few($read['repeated']).') — השחזור ייעצר.';
             }
 
             if ($read['unchecked']) {
-                $problems[] = "הטבלה {$table}: בדיקת הכפילויות נעצרה בתקרה של "
-                    .number_format(self::MAX_KEYS).' ערכים ולא כיסתה את כל הטבלה.';
+                $found[] = "הטבלה {$table}: בדיקת הכפילויות וההפניות נעצרה בתקרה של "
+                    .number_format(self::MAX_KEYS).' ערכים ולא כיסתה את כל הגיבוי.';
             }
 
             if ($read['mixed']) {
-                $problems[] = "הטבלה {$table}: לשורות בארכיון מבנה שונה זו מזו — השחזור ייעצר.";
+                $found[] = "הטבלה {$table}: לשורות בארכיון מבנה שונה זו מזו — השחזור ייעצר.";
+            }
+
+            if ($found !== []) {
+                $faulty[$table] = true;
+                $problems = array_merge($problems, $found);
+            }
+        }
+
+        return array_merge($problems, $this->referenceProblems($schemas, $collected, $faulty));
+    }
+
+    /**
+     * The value sets worth remembering while one table is read: what other
+     * tables point at, and what this one points at.
+     *
+     * @param  array<string, mixed>|null  $schema
+     * @param  array<string, array<string, list<string>>>  $referenced
+     * @param  array<string, array<string, mixed>>  $schemas
+     * @return array<string, list<string>>
+     */
+    private function watched(string $table, ?array $schema, array $referenced, array $schemas): array
+    {
+        if ($schema === null) {
+            return [];
+        }
+
+        $watch = [];
+
+        foreach ($referenced[$table] ?? [] as $signature => $columns) {
+            $watch['p:'.$signature] = $columns;
+        }
+
+        foreach ($schema['foreign'] as $index => $key) {
+            if (array_key_exists($key['table'], $schemas)) {
+                $watch['c:'.$index] = $key['columns'];
+            }
+        }
+
+        return $watch;
+    }
+
+    /**
+     * References whose row is not in the archive.
+     *
+     * A child row pointing at a parent the backup does not contain restores no
+     * further than its insert — the constraint refuses it, with every table
+     * already emptied. Resolved here rather than while reading, because a child
+     * member can be read long before the parent it points at.
+     *
+     * A table that already has a problem of its own is not asked: its missing
+     * rows would make every child that points at them look broken too, and one
+     * fault should not fill the report with its consequences.
+     *
+     * @param  array<string, array<string, mixed>>  $schemas
+     * @param  array<string, array<string, array<string, bool>>>  $collected
+     * @param  array<string, bool>  $faulty
+     * @return list<string>
+     */
+    private function referenceProblems(array $schemas, array $collected, array $faulty): array
+    {
+        $problems = [];
+
+        foreach ($schemas as $table => $schema) {
+            if (isset($faulty[$table])) {
+                continue;
+            }
+
+            foreach ($schema['foreign'] as $index => $key) {
+                $parent = $key['table'];
+
+                if (! array_key_exists($parent, $schemas) || isset($faulty[$parent])) {
+                    continue;
+                }
+
+                $held = $collected[$table]['c:'.$index] ?? [];
+                $exists = $collected[$parent]['p:'.implode(',', $key['references'])] ?? [];
+                $missing = array_diff_key($held, $exists);
+
+                if ($missing === []) {
+                    continue;
+                }
+
+                $problems[] = "הטבלה {$table}: ".count($missing).' הפניות בעמודה '
+                    .implode(', ', $key['columns'])." אינן קיימות בטבלה {$parent} ("
+                    .$this->few(array_map(
+                        fn (string $value): string => str_replace("\0", '+', $value),
+                        array_keys($missing),
+                    )).') — השחזור ייעצר.';
             }
         }
 
@@ -328,7 +456,10 @@ class BackupDrill
      * The unique keys travel with them: a member holding the same primary key
      * twice restores no further than the first insert.
      *
-     * @return array{columns: list<string>, required: list<string>, notNull: list<string>, unique: list<list<string>>, defaults: array<string, string>}
+     * The unique keys, the foreign keys and the numeric columns travel with
+     * them: everything the insert would refuse, asked before it is attempted.
+     *
+     * @return array{columns: list<string>, required: list<string>, notNull: list<string>, unique: list<list<string>>, defaults: array<string, string>, numeric: array<string, bool>, foreign: list<array{columns: list<string>, table: string, references: list<string>}>}
      */
     private function columnsOf(string $table): array
     {
@@ -336,6 +467,7 @@ class BackupDrill
         $required = [];
         $notNull = [];
         $defaults = [];
+        $numeric = [];
 
         foreach (Schema::getColumns($table) as $column) {
             $name = (string) $column['name'];
@@ -343,6 +475,12 @@ class BackupDrill
 
             if (($column['default'] ?? null) !== null) {
                 $defaults[$name] = (string) $column['default'];
+            }
+
+            // Only the one category a value can be checked against without
+            // guessing: a column that holds numbers refuses a word.
+            if (preg_match('/int|serial|numeric|decimal|real|double|float|money/i', (string) ($column['type_name'] ?? ''))) {
+                $numeric[$name] = true;
             }
 
             if ($column['nullable'] ?? false) {
@@ -354,6 +492,16 @@ class BackupDrill
             if (($column['default'] ?? null) === null && ! ($column['auto_increment'] ?? false)) {
                 $required[] = $name;
             }
+        }
+
+        $foreign = [];
+
+        foreach (Schema::getForeignKeys($table) as $key) {
+            $foreign[] = [
+                'columns' => array_values(array_map('strval', (array) $key['columns'])),
+                'table' => (string) $key['foreign_table'],
+                'references' => array_values(array_map('strval', (array) $key['foreign_columns'])),
+            ];
         }
 
         $unique = [];
@@ -370,6 +518,8 @@ class BackupDrill
             'notNull' => $notNull,
             'unique' => $unique,
             'defaults' => $defaults,
+            'numeric' => $numeric,
+            'foreign' => $foreign,
         ];
     }
 
@@ -467,17 +617,20 @@ class BackupDrill
      * BackupRestorer::assertMemberIntact() does, is what surfaces it.
      *
      * @param  resource  $stream
-     * @param  array{columns: list<string>, required: list<string>, notNull: list<string>, unique: list<list<string>>, defaults: array<string, string>}|null  $schema
-     * @return array{rows: int, damaged: int, unknown: list<string>, absent: list<string>, nulls: list<string>, repeated: list<string>, unchecked: bool, mixed: bool, corrupt: bool}
+     * @param  array<string, mixed>|null  $schema
+     * @param  array<string, list<string>>  $watch  value sets to remember, by name
+     * @return array{rows: int, damaged: int, unknown: list<string>, absent: list<string>, nulls: list<string>, mistyped: list<string>, repeated: list<string>, values: array<string, array<string, bool>>, unchecked: bool, mixed: bool, corrupt: bool}
      */
-    private function readRows($stream, ?array $schema): array
+    private function readRows($stream, ?array $schema, array $watch = []): array
     {
         $rows = 0;
         $damaged = 0;
         $unknown = [];
         $absent = [];
         $nulls = [];
+        $mistyped = [];
         $repeated = [];
+        $values = [];
         $mixed = false;
         $buffer = '';
 
@@ -487,7 +640,6 @@ class BackupDrill
         // the ceiling says so in the report instead of passing as if it had
         // been examined.
         $seen = [];
-        $tracked = 0;
         $unchecked = false;
 
         // Rows in one member all carry the same key set, so the SHAPE is
@@ -500,7 +652,7 @@ class BackupDrill
         // these few columns, not all of them.
         $noNulls = [];
 
-        $count = function (string $line) use (&$rows, &$damaged, &$unknown, &$absent, &$nulls, &$repeated, &$unchecked, &$seen, &$tracked, &$mixed, &$accepted, &$noNulls, $schema): void {
+        $count = function (string $line) use (&$rows, &$damaged, &$unknown, &$absent, &$nulls, &$mistyped, &$repeated, &$values, &$unchecked, &$seen, &$mixed, &$accepted, &$noNulls, $schema, $watch): void {
             if (trim($line) === '') {
                 return;
             }
@@ -575,8 +727,24 @@ class BackupDrill
                 }
             }
 
+            // A value of the wrong kind altogether. An array that is not a
+            // b64 marker reaches insert() as an array and no driver takes one;
+            // a word in a column that holds numbers is refused by every
+            // database that has types. Both read as perfectly good JSON.
+            foreach ($row as $column => $value) {
+                if (is_array($value) && ! array_key_exists('__b64', $value)) {
+                    $mistyped[(string) $column] = true;
+
+                    continue;
+                }
+
+                if (isset($schema['numeric'][$column]) && is_string($value) && ! is_numeric($value)) {
+                    $mistyped[(string) $column] = true;
+                }
+            }
+
             foreach ($schema['unique'] as $key) {
-                if ($tracked >= self::MAX_KEYS) {
+                if ($this->keyBudget <= 0) {
                     $unchecked = true;
 
                     break;
@@ -599,7 +767,26 @@ class BackupDrill
                 }
 
                 $seen[$name][$value] = true;
-                $tracked++;
+                $this->keyBudget--;
+            }
+
+            // Distinct values only: a thousand children pointing at the same
+            // parent are one value to remember, not a thousand.
+            foreach ($watch as $name => $columns) {
+                if ($this->keyBudget <= 0) {
+                    $unchecked = true;
+
+                    break;
+                }
+
+                $value = $this->keyValue($row, $columns, $schema['defaults']);
+
+                if ($value === null || isset($values[$name][$value])) {
+                    continue;
+                }
+
+                $values[$name][$value] = true;
+                $this->keyBudget--;
             }
         };
 
@@ -614,7 +801,9 @@ class BackupDrill
                         'unknown' => [],
                         'absent' => [],
                         'nulls' => [],
+                        'mistyped' => [],
                         'repeated' => [],
+                        'values' => [],
                         'unchecked' => false,
                         'mixed' => false,
                         'corrupt' => true,
@@ -650,7 +839,9 @@ class BackupDrill
             'unknown' => array_keys($unknown),
             'absent' => array_keys($absent),
             'nulls' => array_keys($nulls),
+            'mistyped' => array_keys($mistyped),
             'repeated' => array_keys($repeated),
+            'values' => $values,
             'unchecked' => $unchecked,
             'mixed' => $mixed,
             'corrupt' => false,
