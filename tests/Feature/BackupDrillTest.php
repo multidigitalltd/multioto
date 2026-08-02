@@ -1754,6 +1754,26 @@ class BackupDrillTest extends TestCase
         $this->assertStringNotContainsString('כפולים', implode(' ', $report['problems']));
     }
 
+    /** A numeric that names a width has nowhere to put an infinity. */
+    public function test_an_infinity_in_a_constrained_numeric_is_reported(): void
+    {
+        DB::statement('CREATE TABLE infinity_probe (id integer primary key, amount numeric(8,2))');
+
+        $report = $this->drillWith('infinity_probe', 1, '{"id":1,"amount":"Infinity"}'."\n");
+
+        $this->assertStringContainsString('amount', implode(' ', $report['problems']));
+    }
+
+    /** NaN it takes at any width, though. */
+    public function test_a_nan_in_a_constrained_numeric_is_not_reported(): void
+    {
+        DB::statement('CREATE TABLE nan_width_probe (id integer primary key, amount numeric(8,2))');
+
+        $report = $this->drillWith('nan_width_probe', 1, '{"id":1,"amount":"NaN"}'."\n");
+
+        $this->assertStringNotContainsString('amount', implode(' ', $report['problems']));
+    }
+
     /** And an ordinary number, and digits inside a string, are left alone. */
     public function test_ordinary_numbers_in_a_jsonb_column_are_not_reported(): void
     {

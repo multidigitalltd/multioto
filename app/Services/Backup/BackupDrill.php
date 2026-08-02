@@ -1993,8 +1993,17 @@ class BackupDrill
                 if (array_key_exists((string) $column, $schema['numeric'])) {
                     // NaN and the infinities are values these columns hold, and
                     // the database writes them back as words that is_numeric()
-                    // reads as text. They have no width to overflow either.
-                    if ($this->nonFinite($value) !== null) {
+                    // reads as text.
+                    if (($special = $this->nonFinite($value)) !== null) {
+                        // With one exception, and it is the declared width that
+                        // draws the line: an infinity is not a quantity that can
+                        // be rounded into one, so a numeric that names a width
+                        // refuses it. NaN it takes at any width, and a float
+                        // column takes all three.
+                        if ($special !== 'NaN' && isset($schema['numeric'][(string) $column]['precision'])) {
+                            $mistyped[(string) $column] = true;
+                        }
+
                         continue;
                     }
 
