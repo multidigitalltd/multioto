@@ -12,6 +12,7 @@ use App\Jobs\RestoreBackupJob;
 use App\Jobs\RunBackupJob;
 use App\Models\Backup;
 use App\Models\Setting;
+use App\Providers\SettingsServiceProvider;
 use App\Services\Backup\BackupDrill;
 use App\Services\Backup\BackupRestorer;
 use App\Services\Backup\BackupRunner;
@@ -416,7 +417,11 @@ class ManageBackups extends Page implements HasForms, HasTable
     {
         $disk = (string) data_get($values, 'backup.disk');
 
-        if ($disk !== 'backups') {
+        // The fields below describe an S3 destination. A "backups" disk pointed
+        // at something else entirely — a mounted volume, a local folder — is
+        // not what they describe, and standing in an S3 client for it would
+        // test a destination that does not exist.
+        if ($disk !== 'backups' || (string) config('filesystems.disks.backups.driver') !== 's3') {
             return Storage::disk($disk);
         }
 
@@ -452,12 +457,17 @@ class ManageBackups extends Page implements HasForms, HasTable
         $stored = Setting::map();
 
         // Blank means "unchanged" for a write-only field and "fall back to the
-        // configured default" for the rest — the same reading save() gives
-        // them, so the test cannot describe a destination that saving would
-        // not produce.
-        $value = fn (string $key): ?string => filled(data_get($values, $key))
-            ? (string) data_get($values, $key)
-            : ($stored[$key] ?? config(self::KEYS[$key]));
+        // config-file default" for the rest — the same reading save() gives
+        // them, so the test cannot describe a destination that saving would not
+        // produce. config() is the wrong source for that second case: it is
+        // holding the stored value that clearing the field is about to forget,
+        // so a cleared bucket would be tested against the very destination the
+        // operator is moving away from.
+        $value = fn (string $key): ?string => match (true) {
+            filled(data_get($values, $key)) => (string) data_get($values, $key),
+            in_array($key, self::SECRETS, true) => $stored[$key] ?? config(self::KEYS[$key]),
+            default => SettingsServiceProvider::pristine(self::KEYS[$key]),
+        };
 
         return [
             'driver' => 's3',

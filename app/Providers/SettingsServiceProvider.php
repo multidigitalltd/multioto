@@ -194,6 +194,21 @@ class SettingsServiceProvider extends ServiceProvider
     private const OVERLAID_DISKS = ['backups'];
 
     /**
+     * What a cleared override falls back to: the config-file default, captured
+     * before any overlay touched it.
+     *
+     * config() cannot answer this — by the time anyone asks, it is holding the
+     * stored value that is about to be forgotten. Anything not overridable this
+     * way has no pristine copy and is simply itself.
+     */
+    public static function pristine(string $configPath): mixed
+    {
+        return array_key_exists($configPath, self::$pristine)
+            ? self::$pristine[$configPath]
+            : config($configPath);
+    }
+
+    /**
      * Re-apply stored settings onto config from the database, WITHOUT
      * re-registering the queue hook. Safe to call repeatedly from a long-lived
      * process (the scheduler) — unlike boot(), which would stack a Queue::before

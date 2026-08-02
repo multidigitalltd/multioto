@@ -2887,6 +2887,41 @@ class BackupTest extends TestCase
         $this->assertNotSame([], Storage::disk('backups')->files('archives'));
     }
 
+    /**
+     * A cleared field falls back to the config file, not to what is stored.
+     *
+     * config() cannot answer that question: by the time anyone asks, it is
+     * holding the very value the clearing is about to forget. The connection
+     * test would otherwise probe the destination the operator is moving away
+     * from and call it a success.
+     */
+    public function test_a_cleared_setting_falls_back_to_the_config_file_default(): void
+    {
+        // The snapshot is taken once per process and kept for its lifetime —
+        // correct for a worker, and something a test has to start clean. Put
+        // back afterwards: emptied, the NEXT overlay would record an already
+        // overridden value as the pristine one, for every test after this.
+        $property = new \ReflectionProperty(SettingsServiceProvider::class, 'pristine');
+        $original = $property->getValue();
+        $property->setValue(null, []);
+
+        try {
+            config(['filesystems.disks.backups.bucket' => 'from-env']);
+            SettingsServiceProvider::refreshFromDatabase();
+
+            Setting::put('backup.s3.bucket', 'stored-bucket');
+            SettingsServiceProvider::refreshFromDatabase();
+
+            $this->assertSame('stored-bucket', config('filesystems.disks.backups.bucket'));
+            $this->assertSame(
+                'from-env',
+                SettingsServiceProvider::pristine('filesystems.disks.backups.bucket'),
+            );
+        } finally {
+            $property->setValue(null, $original);
+        }
+    }
+
     /** Copy the stored archive to a local file the test can open. */
     private function pullArchive(Backup $backup): string
     {
