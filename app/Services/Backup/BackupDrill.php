@@ -721,10 +721,16 @@ class BackupDrill
      */
     private function readsAsTime(string $value, string $kind = 'date'): bool
     {
-        $text = trim($value);
+        $text = $this->endOfDay(trim($value), $kind);
 
         if ($text === '') {
             return false;
+        }
+
+        // The top of a time column's own range, which the parser also refuses.
+        if (str_starts_with($kind, 'time') && ! str_contains($kind, 'stamp')
+            && preg_match('/^24:00(:00(\.0+)?)?$/', $text) === 1) {
+            return true;
         }
 
         // Everything PostgreSQL takes here. A date column accepts "now" and
@@ -836,7 +842,12 @@ class BackupDrill
      */
     private function temporalText(string $value, string $kind, int $precision = 6): ?string
     {
-        $text = trim($value);
+        $text = $this->endOfDay(trim($value), $kind);
+
+        if (str_starts_with($kind, 'time') && ! str_contains($kind, 'stamp')
+            && preg_match('/^24:00(:00(\.0+)?)?$/', $text) === 1) {
+            return '24:00:00.000000'.($kind === 'timetz' ? 'Z' : '');
+        }
 
         // The literals the database understands and the parser does not. Left
         // as themselves they would be a second key for a value the column
@@ -943,6 +954,32 @@ class BackupDrill
         }
 
         return $this->toPrecision($moment->modify("+{$carry} seconds"), $precision)->format('Y-m-d H:i:s.u');
+    }
+
+    /**
+     * The end-of-day spelling as the moment it names.
+     *
+     * PostgreSQL takes 24:00:00 and stores the following midnight; PHP's parser
+     * calls it an invalid time. Rewritten before anything else looks at it, so
+     * a value the restore accepts is not reported as a broken one.
+     *
+     * A time column is left alone: 24:00:00 is the top of its own range there
+     * and stays exactly that.
+     */
+    private function endOfDay(string $text, string $kind): string
+    {
+        if ($kind === 'time' || $kind === 'timetz'
+            || preg_match('/^(\d{4}-\d{1,2}-\d{1,2})[ T]24:00(:00(\.0+)?)?(.*)$/', $text, $parts) !== 1) {
+            return $text;
+        }
+
+        $day = rescue(
+            fn (): string => (new \DateTimeImmutable($parts[1]))->modify('+1 day')->format('Y-m-d'),
+            null,
+            report: false,
+        );
+
+        return $day === null ? $text : $day.' 00:00:00'.$parts[4];
     }
 
     /**

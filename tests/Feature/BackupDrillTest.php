@@ -1095,6 +1095,24 @@ class BackupDrillTest extends TestCase
         $this->assertStringNotContainsString('period_start', implode(' ', $report['problems']));
     }
 
+    /**
+     * 24:00:00 is the following midnight to PostgreSQL and an invalid time to
+     * PHP. It must be neither faulted nor treated as a different moment.
+     */
+    public function test_the_end_of_day_spelling_is_the_following_midnight(): void
+    {
+        DB::statement('CREATE TABLE endofday_probe (seen_at timestamp primary key)');
+
+        $report = $this->drillWith('endofday_probe', 2,
+            '{"seen_at":"2026-01-01 24:00:00"}'."\n"
+            .'{"seen_at":"2026-01-02 00:00:00"}'."\n");
+
+        $problems = implode(' ', $report['problems']);
+
+        $this->assertStringNotContainsString('סוג העמודה', $problems);
+        $this->assertStringContainsString('כפולים', $problems);
+    }
+
     /** A clock is not a date. date_parse reports no fault for "12:34:56". */
     public function test_a_clock_value_in_a_date_column_is_reported(): void
     {
