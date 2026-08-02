@@ -746,7 +746,7 @@ class BackupDrill
      */
     private function readsAsTime(string $value, string $kind = 'date'): bool
     {
-        $text = $this->endOfDay(trim($value), $kind);
+        $text = $this->endOfDay($this->beforeEra(trim($value)), $kind);
 
         if ($text === '') {
             return false;
@@ -874,7 +874,7 @@ class BackupDrill
      */
     private function temporalText(string $value, string $kind, int $precision = 6): ?string
     {
-        $text = $this->endOfDay(trim($value), $kind);
+        $text = $this->endOfDay($this->beforeEra(trim($value)), $kind);
 
         if (str_starts_with($kind, 'time') && ! str_contains($kind, 'stamp')
             && preg_match('/^24:00(:00(\.0+)?)?$/', $text) === 1) {
@@ -1217,6 +1217,25 @@ class BackupDrill
             $text,
             1,
         ) ?? $text;
+    }
+
+    /**
+     * A year before the era in the one spelling everything here understands.
+     *
+     * PostgreSQL writes 1 BC as "0001-01-01 BC" and reads that back without
+     * complaint; PHP's parser sees BC as an unknown timezone and calls the
+     * whole value invalid — so an archive holding one was reported as
+     * unrestorable when it restores perfectly.
+     *
+     * The suffix becomes a leading minus, which is the form the year checks
+     * here already speak, so the two spellings of the same date also come out
+     * as one key rather than two.
+     */
+    private function beforeEra(string $text): string
+    {
+        return preg_match('/^(\d.*?)\s+BC\s*$/i', $text, $parts) === 1
+            ? '-'.$parts[1]
+            : $text;
     }
 
     /**

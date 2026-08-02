@@ -1426,6 +1426,33 @@ class BackupDrillTest extends TestCase
         $this->assertStringNotContainsString('payload', implode(' ', $report['problems']));
     }
 
+    /**
+     * The spelling PostgreSQL itself emits for a year before the era.
+     *
+     * "0001-01-01 BC" goes out of the database and comes back into it without
+     * complaint; PHP's parser reads BC as an unknown timezone and calls the
+     * value invalid.
+     */
+    public function test_a_year_before_the_era_is_not_reported(): void
+    {
+        DB::statement('CREATE TABLE bc_probe (seen_on date primary key)');
+
+        $report = $this->drillWith('bc_probe', 1, '{"seen_on":"0001-01-01 BC"}'."\n");
+
+        $this->assertStringNotContainsString('seen_on', implode(' ', $report['problems']));
+    }
+
+    /** And it is the same date as the same year written with a minus. */
+    public function test_the_two_spellings_of_a_year_before_the_era_are_one_key(): void
+    {
+        DB::statement('CREATE TABLE bc_key_probe (seen_on date primary key)');
+
+        $report = $this->drillWith('bc_key_probe', 2,
+            '{"seen_on":"0001-01-01 BC"}'."\n".'{"seen_on":"-0001-01-01"}'."\n");
+
+        $this->assertStringContainsString('כפולים', implode(' ', $report['problems']));
+    }
+
     /** And an ordinary number, and digits inside a string, are left alone. */
     public function test_ordinary_numbers_in_a_jsonb_column_are_not_reported(): void
     {
