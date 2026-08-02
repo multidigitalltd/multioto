@@ -1372,6 +1372,34 @@ class BackupDrillTest extends TestCase
         $this->assertStringContainsString('אינו יכול לאחסן', implode(' ', $report['problems']));
     }
 
+    /**
+     * The magnitude is measured from the first significant digit.
+     *
+     * 0.0001e131075 is 1e131071 — exactly 131072 integer digits, which the
+     * column holds. Counting the zeros in front of that 1 as magnitude would
+     * fail an archive that restores.
+     */
+    public function test_a_number_the_exponent_brings_into_range_is_not_reported(): void
+    {
+        DB::statement('CREATE TABLE edge_number_probe (id integer primary key, payload jsonb)');
+
+        $report = $this->drillWith('edge_number_probe', 1,
+            '{"id":1,"payload":"{\\"size\\":0.0001e131075}"}'."\n");
+
+        $this->assertStringNotContainsString('payload', implode(' ', $report['problems']));
+    }
+
+    /** One digit further and it is out again. */
+    public function test_a_number_one_digit_past_the_range_is_reported(): void
+    {
+        DB::statement('CREATE TABLE over_edge_probe (id integer primary key, payload jsonb)');
+
+        $report = $this->drillWith('over_edge_probe', 1,
+            '{"id":1,"payload":"{\\"size\\":0.0001e131076}"}'."\n");
+
+        $this->assertStringContainsString('אינו יכול לאחסן', implode(' ', $report['problems']));
+    }
+
     /** And an ordinary number, and digits inside a string, are left alone. */
     public function test_ordinary_numbers_in_a_jsonb_column_are_not_reported(): void
     {

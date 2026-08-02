@@ -1134,18 +1134,28 @@ class BackupDrill
             return true;
         }
 
-        // Leading zeros are not digits the database keeps; TRAILING ones are.
-        // A numeric holds the scale it was given, so 1.0000… is as long as the
-        // zeros written after the point — dropping them would accept a number
-        // past the limit because it happens to be a round one.
-        $whole = strlen(ltrim($parts[1], '0'));
         $fraction = strlen($parts[2] ?? '');
+
+        // Measured from the first SIGNIFICANT digit of the whole significand,
+        // wherever the point happens to fall in it: 0.0001e131075 is 1e131071
+        // and fits, and counting the zeros in front of that 1 as magnitude
+        // would fail an archive the column restores.
+        //
+        // Only the leading zeros go. A numeric holds the scale it was given, so
+        // the zeros written AFTER the point are digits it stores — dropping
+        // those would accept a number past the limit for being a round one.
+        $significant = ltrim($parts[1].($parts[2] ?? ''), '0');
 
         // Beyond what an int holds the sign is all that matters, and it is
         // already far past either limit.
         $exponent = (float) ($parts[3] ?? 0);
 
-        return $whole + $exponent <= self::NUMERIC_WHOLE_DIGITS
+        // A zero is a zero at any exponent, with nothing to overflow.
+        if ($significant === '') {
+            return true;
+        }
+
+        return strlen($significant) + $exponent - $fraction <= self::NUMERIC_WHOLE_DIGITS
             && $fraction - $exponent <= self::NUMERIC_FRACTION_DIGITS;
     }
 
