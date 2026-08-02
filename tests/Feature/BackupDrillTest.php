@@ -330,6 +330,31 @@ class BackupDrillTest extends TestCase
     }
 
     /**
+     * A marker that arrives as nothing.
+     *
+     * A value the backup could not write as UTF-8 travels as a {"__b64": …}
+     * marker, and the restore turns an unreadable one into NULL on the way in.
+     * The line reads perfectly; the column refuses what it becomes.
+     */
+    public function test_an_unreadable_base64_marker_in_a_required_column_is_reported(): void
+    {
+        $backup = $this->backup();
+
+        $path = Storage::disk('backups')->path($backup->path);
+        $zip = new ZipArchive;
+        $zip->open($path);
+        $zip->addFromString(
+            'database/customers.ndjson',
+            "{\"id\":1,\"name\":{\"__b64\":\"\"}}\n{\"id\":2,\"name\":{\"__b64\":\"\"}}\n",
+        );
+        $zip->close();
+
+        $report = app(BackupDrill::class)->run($backup);
+
+        $this->assertStringContainsString('ערך ריק', implode(' ', $report['problems']));
+    }
+
+    /**
      * Two shapes in one member, each fine on its own.
      *
      * The restore batches rows into a single insert whose column list comes from
@@ -426,6 +451,27 @@ class BackupDrillTest extends TestCase
 
         $drill = collect(app(HealthReport::class)->collect()['checks'])->firstWhere('key', 'drill');
         $this->assertSame(HealthReport::OK, $drill['status']);
+    }
+
+    /**
+     * A drill that ran and failed still stamps the date.
+     *
+     * Reading only the date would answer "was one opened recently" with a yes —
+     * for the next 45 days, right after the check established that the archive
+     * is unusable. The backup check beside it deliberately never touches the
+     * destination, so nothing else on the screen would notice.
+     */
+    public function test_health_stays_degraded_after_a_failed_drill(): void
+    {
+        $backup = $this->backup();
+        Storage::disk('backups')->delete($backup->path);
+
+        (new DrillBackupJob)->handle(app(BackupDrill::class));
+
+        $drill = collect(app(HealthReport::class)->collect()['checks'])->firstWhere('key', 'drill');
+
+        $this->assertSame(HealthReport::DEGRADED, $drill['status']);
+        $this->assertStringContainsString('בעיות', $drill['detail']);
     }
 
     public function test_a_drill_older_than_the_window_is_reported(): void

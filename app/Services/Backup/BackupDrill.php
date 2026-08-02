@@ -320,6 +320,26 @@ class BackupDrill
     }
 
     /**
+     * Whether this value reaches the table as NULL.
+     *
+     * Not the same question as "is it null in the archive". A value the backup
+     * could not write as UTF-8 is stored as a {"__b64": …} marker, and the
+     * restore turns an unreadable or empty one into NULL on the way in — so a
+     * NOT NULL column holding such a marker passes every reading of the JSON
+     * and still fails the insert. What matters is the value the restore would
+     * produce, not the one the line shows.
+     */
+    private function arrivesEmpty(mixed $value): bool
+    {
+        if (is_array($value) && array_key_exists('__b64', $value)) {
+            // Deliberately the same expression BackupRestorer::decodeRow() uses.
+            return (base64_decode((string) $value['__b64'], true) ?: null) === null;
+        }
+
+        return $value === null;
+    }
+
+    /**
      * Read one table member to the end and count what is in it.
      *
      * Read in CHUNKS rather than with fgets(), because the two answer different
@@ -423,7 +443,7 @@ class BackupDrill
             // this is the wider set — and it has to be looked at per row, since
             // the shape says nothing about the values.
             foreach ($noNulls as $name) {
-                if ($row[$name] === null) {
+                if ($this->arrivesEmpty($row[$name])) {
                     $nulls[$name] = true;
                 }
             }

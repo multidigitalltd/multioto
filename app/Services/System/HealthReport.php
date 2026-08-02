@@ -536,13 +536,23 @@ class HealthReport
 
         $days = max(1, (int) config('backup.drill_stale_days', 45));
 
-        $drilled = rescue(
-            fn () => Backup::query()->whereNotNull('drilled_at')->max('drilled_at'),
+        // The report as well as the date. A drill that ran and FAILED still
+        // stamps the date, and reading only that would answer "was one opened
+        // recently" with a yes — for the next 45 days, right after the check
+        // established that the archive is unusable. The backup check above
+        // deliberately does not touch the destination, so nothing else would
+        // notice.
+        $latest = rescue(
+            fn () => Backup::query()
+                ->whereNotNull('drilled_at')
+                ->orderByDesc('drilled_at')
+                ->select(['drilled_at', 'drill_report'])
+                ->first(),
             null,
             report: false,
         );
 
-        if ($drilled === null) {
+        if ($latest === null) {
             return $this->check(
                 'drill',
                 'בדיקת שחזור',
@@ -551,7 +561,18 @@ class HealthReport
             );
         }
 
-        $last = Carbon::parse($drilled);
+        $last = Carbon::parse($latest->drilled_at);
+        $problems = (array) ($latest->drill_report['problems'] ?? []);
+
+        if ($problems !== []) {
+            return $this->check(
+                'drill',
+                'בדיקת שחזור',
+                self::DEGRADED,
+                'הבדיקה האחרונה ('.$last->diffForHumans().') מצאה '.count($problems)
+                    .' בעיות בגיבוי — הוא לא ישוחזר במצבו הנוכחי.',
+            );
+        }
 
         return $this->check(
             'drill',
