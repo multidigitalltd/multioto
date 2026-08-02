@@ -1217,6 +1217,31 @@ class BackupDrillTest extends TestCase
         $this->assertStringContainsString('seen_at', implode(' ', $report['problems']));
     }
 
+    /**
+     * The leap question answered for the year that was written.
+     *
+     * date_parse reads 294300 as 2000 and accepts a February the 29th that
+     * 294300 does not have — 294300 is divisible by 100 and not by 400.
+     */
+    public function test_a_wide_year_that_is_not_a_leap_year_is_reported(): void
+    {
+        DB::statement('CREATE TABLE leap_probe (seen_on date primary key)');
+
+        $report = $this->drillWith('leap_probe', 1, '{"seen_on":"294300-02-29"}'."\n");
+
+        $this->assertStringContainsString('seen_on', implode(' ', $report['problems']));
+    }
+
+    /** And the other way: 10012 IS a leap year, though the parser reads it as 2002. */
+    public function test_a_wide_leap_year_is_not_faulted_for_its_extra_day(): void
+    {
+        DB::statement('CREATE TABLE leap_ok_probe (seen_on date primary key)');
+
+        $report = $this->drillWith('leap_ok_probe', 1, '{"seen_on":"10012-02-29"}'."\n");
+
+        $this->assertStringNotContainsString('seen_on', implode(' ', $report['problems']));
+    }
+
     /** A clock is not a date. date_parse reports no fault for "12:34:56". */
     public function test_a_clock_value_in_a_date_column_is_reported(): void
     {

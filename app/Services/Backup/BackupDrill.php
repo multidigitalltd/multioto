@@ -748,7 +748,7 @@ class BackupDrill
         // date_parse rather than strtotime, which quietly rolls 2026-02-31
         // forward to the third of March and calls it a date. The database does
         // not: it refuses the row, which is the whole question being asked.
-        $parsed = date_parse($text);
+        $parsed = date_parse($this->narrowYear($text));
 
         if ($parsed['error_count'] > 0 || $parsed['warning_count'] > 0) {
             return false;
@@ -863,7 +863,8 @@ class BackupDrill
             return $literal;
         }
 
-        $parsed = date_parse($text);
+        $probe = $this->narrowYear($text);
+        $parsed = date_parse($probe);
 
         if ($parsed['error_count'] > 0 || $parsed['warning_count'] > 0 || ! $this->yearInRange($text, $kind)) {
             return null;
@@ -875,6 +876,14 @@ class BackupDrill
         // altogether, so keeping it would invent a difference the database
         // does not see.
         if (str_contains($kind, 'tz')) {
+            // A year the parser cannot hold cannot be converted either: the
+            // instant would be built on the year it kept instead, and two
+            // values centuries apart would come back as one key. Left as its
+            // own text, which risks missing a duplicate and never invents one.
+            if ($probe !== $text) {
+                return null;
+            }
+
             $moment = rescue(fn (): \DateTimeImmutable => new \DateTimeImmutable($text), null, report: false);
 
             if (! $moment instanceof \DateTimeImmutable) {
@@ -1013,6 +1022,36 @@ class BackupDrill
             && strlen(ltrim($year[1], '-0')) <= 7
                 ? (int) $year[1]
                 : null;
+    }
+
+    /**
+     * The same value with a year the parser can hold, for the parser's benefit
+     * alone.
+     *
+     * date_parse does not keep a year outside four digits, and — the part that
+     * matters here — it validates the calendar against whatever it kept
+     * instead. It reads 294300 as 2000 and accepts a February the 29th that
+     * year does not have; it reads 10012 as 2002 and refuses one it does. Both
+     * are wrong answers to a question about a real column.
+     *
+     * Standing a leap year in for a leap year and a common one for a common one
+     * asks about the calendar the value is actually written in. The year itself
+     * is read from the original text everywhere it is needed.
+     */
+    private function narrowYear(string $text): string
+    {
+        $year = $this->literalYear($text);
+
+        if ($year === null || ($year >= 1 && $year <= 9999)) {
+            return $text;
+        }
+
+        return preg_replace(
+            '/^(\s*)-?\d+/',
+            '${1}'.($this->daysInMonth($year, 2) === 29 ? '2000' : '2001'),
+            $text,
+            1,
+        ) ?? $text;
     }
 
     /**
