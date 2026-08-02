@@ -1774,6 +1774,51 @@ class BackupDrillTest extends TestCase
         $this->assertStringNotContainsString('amount', implode(' ', $report['problems']));
     }
 
+    /** A numeric that declares nothing still has the range every numeric has. */
+    public function test_a_number_past_the_range_of_a_plain_numeric_is_reported(): void
+    {
+        DB::statement('CREATE TABLE plain_numeric_probe (id integer primary key, amount numeric)');
+
+        $report = $this->drillWith('plain_numeric_probe', 1, '{"id":1,"amount":"1e200000"}'."\n");
+
+        $this->assertStringContainsString('amount', implode(' ', $report['problems']));
+    }
+
+    /** And a double stops long before that. */
+    public function test_a_number_past_the_range_of_a_double_is_reported(): void
+    {
+        DB::statement('CREATE TABLE double_range_probe (id integer primary key, amount double precision)');
+
+        $report = $this->drillWith('double_range_probe', 1, '{"id":1,"amount":"1e10000"}'."\n");
+
+        $this->assertStringContainsString('amount', implode(' ', $report['problems']));
+    }
+
+    /** A real stops sooner still, and a double holds what it cannot. */
+    public function test_a_number_past_the_range_of_a_real_is_reported(): void
+    {
+        DB::statement('CREATE TABLE real_range_probe (id integer primary key, amount real)');
+
+        $report = $this->drillWith('real_range_probe', 1, '{"id":1,"amount":"1e300"}'."\n");
+
+        $this->assertStringContainsString('amount', implode(' ', $report['problems']));
+    }
+
+    /** And ordinary amounts in all three are left alone. */
+    public function test_ordinary_amounts_are_not_reported_for_range(): void
+    {
+        DB::statement('CREATE TABLE range_ok_probe (id integer primary key, plain numeric, wide double precision, narrow real)');
+
+        $report = $this->drillWith('range_ok_probe', 1,
+            '{"id":1,"plain":"12345.6789","wide":"1e300","narrow":"1.5"}'."\n");
+
+        $problems = implode(' ', $report['problems']);
+
+        $this->assertStringNotContainsString('plain', $problems);
+        $this->assertStringNotContainsString('wide', $problems);
+        $this->assertStringNotContainsString('narrow', $problems);
+    }
+
     /** And an ordinary number, and digits inside a string, are left alone. */
     public function test_ordinary_numbers_in_a_jsonb_column_are_not_reported(): void
     {

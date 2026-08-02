@@ -799,6 +799,35 @@ class BackupDrill
     }
 
     /**
+     * Whether a float column could hold this value.
+     *
+     * These types have ends — a double stops around 1.8e308 and a real around
+     * 3.4e38 — and PostgreSQL refuses a literal past either rather than
+     * quietly storing an infinity: an infinity has to be written as one. A
+     * number too small to represent is refused the same way, and that is a
+     * value which reaches zero without being zero.
+     *
+     * A real is answered by the round trip through single precision, which is
+     * where both of its ends already are.
+     */
+    private function fitsFloat(string $kind, mixed $value): bool
+    {
+        $stored = (float) $value;
+
+        if (is_infinite($stored) || ($stored === 0.0 && $this->decimalText($value) !== '0')) {
+            return false;
+        }
+
+        if ($kind !== 'real') {
+            return true;
+        }
+
+        $narrow = (float) unpack('g', pack('g', $stored))[1];
+
+        return ! is_infinite($narrow) && ($narrow !== 0.0 || $stored === 0.0);
+    }
+
+    /**
      * Whether a value fits a numeric column's declared precision and scale.
      *
      * PostgreSQL rounds the fraction to the declared scale and then refuses
@@ -2013,14 +2042,22 @@ class BackupDrill
                         continue;
                     }
 
-                    // And inside the width the column declares. An unquoted
-                    // 1000000 in a numeric(8,2) is a perfectly good number and
-                    // still overflows the field — which the restore meets as an
-                    // error, and every check before this one reads as fine.
+                    // And inside what the column can hold. Every one of these
+                    // types has an end, declared or not: an unquoted 1000000 in
+                    // a numeric(8,2), a 1e200000 in a numeric that declares
+                    // nothing, a 1e10000 in a double — all perfectly good
+                    // numbers that the field has no room for, which the restore
+                    // meets as an error and every check before this reads as
+                    // fine.
                     $width = $schema['numeric'][(string) $column];
 
-                    if (isset($width['precision'])
-                        && ! $this->fitsPrecision($value, $width['precision'], $width['scale'] ?? 0)) {
+                    $fits = match (true) {
+                        $width['kind'] !== 'exact' => $this->fitsFloat($width['kind'], $value),
+                        isset($width['precision']) => $this->fitsPrecision($value, $width['precision'], $width['scale'] ?? 0),
+                        default => $this->fitsNumeric((string) $value),
+                    };
+
+                    if (! $fits) {
                         $mistyped[(string) $column] = true;
                     }
 
