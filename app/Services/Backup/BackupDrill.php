@@ -205,8 +205,8 @@ class BackupDrill
     }
 
     /**
-     * Every table member is present and holds exactly the rows the manifest
-     * promises, and every one of those rows is readable.
+     * Every table member is present, intact, and holds exactly the rows the
+     * manifest promises — every one of them readable.
      *
      * Counted by reading, not by trusting: a truncated upload leaves a member
      * that opens and ends early, and its manifest still claims the full number.
@@ -228,39 +228,98 @@ class BackupDrill
                 continue;
             }
 
-            $rows = 0;
-            $damaged = 0;
+            $read = $this->readRows($stream);
 
-            try {
-                while (($line = fgets($stream)) !== false) {
-                    if (trim($line) === '') {
-                        continue;
-                    }
+            if ($read['corrupt']) {
+                // The checksum, and nothing else, notices this one: a bit flip
+                // inside a row can leave both the line structure and the row
+                // count intact, so counting and parsing would pass an archive
+                // whose business data has been quietly altered. The restore
+                // refuses the same member, and a drill that certifies what the
+                // restore will refuse is worse than no drill.
+                $problems[] = "הטבלה {$table}: תוכן פגום בארכיון (סכום ביקורת שגוי) — הארכיון הזה לא ישוחזר.";
 
-                    $rows++;
-
-                    // An ARRAY, not merely valid JSON: a line reading "false"
-                    // or "0" parses perfectly and is not a row. The restore
-                    // rejects exactly those, and a drill that certifies what
-                    // the restore will refuse is worse than no drill.
-                    if (! is_array(json_decode($line, true))) {
-                        $damaged++;
-                    }
-                }
-            } finally {
-                fclose($stream);
+                continue;
             }
 
-            if ($rows !== (int) $expected) {
-                $problems[] = "הטבלה {$table}: הארכיון מכיל {$rows} שורות במקום ".(int) $expected.'.';
+            if ($read['rows'] !== (int) $expected) {
+                $problems[] = "הטבלה {$table}: הארכיון מכיל {$read['rows']} שורות במקום ".(int) $expected.'.';
             }
 
-            if ($damaged > 0) {
-                $problems[] = "הטבלה {$table}: {$damaged} שורות אינן קריאות.";
+            if ($read['damaged'] > 0) {
+                $problems[] = "הטבלה {$table}: {$read['damaged']} שורות אינן קריאות.";
             }
         }
 
         return $problems;
+    }
+
+    /**
+     * Read one table member to the end and count what is in it.
+     *
+     * Read in CHUNKS rather than with fgets(), because the two answer different
+     * questions. fgets() stops at the last line and reports the end of the data;
+     * the archive's checksum is verified by the read that comes AFTER it, which
+     * fgets() never makes — so damage that happens to leave the declared number
+     * of parseable rows behind would pass unseen. Reading through, exactly as
+     * BackupRestorer::assertMemberIntact() does, is what surfaces it.
+     *
+     * @param  resource  $stream
+     * @return array{rows: int, damaged: int, corrupt: bool}
+     */
+    private function readRows($stream): array
+    {
+        $rows = 0;
+        $damaged = 0;
+        $buffer = '';
+
+        $count = function (string $line) use (&$rows, &$damaged): void {
+            if (trim($line) === '') {
+                return;
+            }
+
+            $rows++;
+
+            // An ARRAY, not merely valid JSON: a line reading "false" or "0"
+            // parses perfectly and is not a row. The restore rejects exactly
+            // those.
+            if (! is_array(json_decode($line, true))) {
+                $damaged++;
+            }
+        };
+
+        try {
+            while (true) {
+                $chunk = @fread($stream, self::READ_CHUNK);
+
+                if ($chunk === false) {
+                    return ['rows' => $rows, 'damaged' => $damaged, 'corrupt' => true];
+                }
+
+                if ($chunk === '') {
+                    break;
+                }
+
+                $buffer .= $chunk;
+                $lines = explode("\n", $buffer);
+
+                // The last piece may be half a line, split across this chunk
+                // and the next — it waits for the rest rather than being
+                // counted as a row of its own.
+                $buffer = (string) array_pop($lines);
+
+                foreach ($lines as $line) {
+                    $count($line);
+                }
+            }
+        } finally {
+            fclose($stream);
+        }
+
+        // A final line with no newline after it is still a row.
+        $count($buffer);
+
+        return ['rows' => $rows, 'damaged' => $damaged, 'corrupt' => false];
     }
 
     /**

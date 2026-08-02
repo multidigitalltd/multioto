@@ -217,6 +217,39 @@ class BackupDrillTest extends TestCase
     }
 
     /**
+     * The damage nothing else can see.
+     *
+     * Altered bytes that happen to leave the declared number of parseable rows
+     * behind pass every count and every parse — the archive's checksum is the
+     * only thing that knows the data is not what was written. The restore reads
+     * each member past its last line for exactly that reason, and refuses this
+     * archive; a drill that certified it would be the reassurance somebody acts
+     * on the day it matters.
+     */
+    public function test_a_table_whose_checksum_does_not_match_is_caught(): void
+    {
+        $backup = $this->backup();
+        $this->assertSame(2, $backup->manifest['tables']['customers']);
+
+        $path = Storage::disk('backups')->path($backup->path);
+        $zip = new ZipArchive;
+        $zip->open($path);
+        // Stored, not deflated, so the bytes below can be edited in place while
+        // the checksum written beside them keeps describing the originals.
+        $zip->addFromString('database/customers.ndjson', "{\"id\":1,\"name\":\"AAAAAAAA\"}\n{\"id\":2,\"name\":\"AAAAAAAA\"}\n");
+        $zip->setCompressionName('database/customers.ndjson', ZipArchive::CM_STORE);
+        $zip->close();
+
+        // Same length, same line count, still perfectly valid JSON — and no
+        // longer the bytes the archive recorded.
+        file_put_contents($path, str_replace('AAAAAAAA', 'BBBBBBBB', file_get_contents($path)));
+
+        $report = app(BackupDrill::class)->run($backup);
+
+        $this->assertStringContainsString('סכום ביקורת', implode(' ', $report['problems']));
+    }
+
+    /**
      * A backup nobody has opened is a hope, and the health screen says so —
      * as something for a person to act on, not as a system that has stopped.
      */
