@@ -349,7 +349,16 @@ class ManageBackups extends Page implements HasForms, HasTable
     public function testDestination(): void
     {
         $values = $this->form->getState();
-        $folder = trim((string) data_get($values, 'backup.path'), '/');
+
+        // A cleared folder falls back to the config-file default, the same
+        // reading save() gives it — not to the bucket root. Permissions on
+        // these buckets are usually scoped to the prefix, so probing the root
+        // would fail on a destination that works, or pass on one that does not
+        // cover the prefix the nightly run actually writes to.
+        $folder = trim((string) (filled(data_get($values, 'backup.path'))
+            ? data_get($values, 'backup.path')
+            : SettingsServiceProvider::pristine('backup.path')), '/');
+
         $probe = ($folder === '' ? '' : $folder.'/').'.multioto-connection-test-'.Str::random(12);
         $content = 'multioto';
 

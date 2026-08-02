@@ -2818,6 +2818,40 @@ class BackupTest extends TestCase
         $this->assertSame([], Storage::disk('backups')->files('archives'));
     }
 
+    /**
+     * A cleared folder is tested where the nightly run would actually write.
+     *
+     * Permissions on these buckets are usually scoped to the prefix, so a probe
+     * at the root would fail on a destination that works — or pass under
+     * permissions that do not reach the prefix the archives go to.
+     */
+    public function test_the_connection_test_probes_the_folder_a_cleared_setting_falls_back_to(): void
+    {
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+        config(['backup.disk' => 'backups', 'backup.path' => 'archives']);
+
+        $written = null;
+        $disk = \Mockery::mock(Storage::disk('backups'))->makePartial();
+        $disk->shouldReceive('put')->andReturnUsing(function (string $path) use (&$written): bool {
+            $written = $path;
+
+            return true;
+        });
+        $disk->shouldReceive('get')->andReturn('multioto');
+        $disk->shouldReceive('delete')->andReturn(true);
+        Storage::set('backups', $disk);
+
+        Livewire::test(ManageBackups::class)
+            ->fillForm(['backup' => ['path' => '']])
+            ->call('testDestination');
+
+        $folder = trim((string) SettingsServiceProvider::pristine('backup.path'), '/');
+
+        $this->assertNotSame('', $folder);
+        $this->assertIsString($written);
+        $this->assertStringStartsWith($folder.'/', $written);
+    }
+
     public function test_the_connection_test_reports_a_destination_that_refuses_writes(): void
     {
         $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
