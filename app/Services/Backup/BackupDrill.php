@@ -557,7 +557,7 @@ class BackupDrill
                         preg_match('/float4|^real/i', $type) === 1 => 'real',
                         default => 'double',
                     },
-                    ...($exact && preg_match('/\((\d+)(?:,\s*(\d+))?\)/', (string) ($column['type'] ?? ''), $width) === 1
+                    ...($exact && preg_match('/\((\d+)(?:,\s*(-?\d+))?\)/', (string) ($column['type'] ?? ''), $width) === 1
                         ? ['precision' => (int) $width[1], 'scale' => (int) ($width[2] ?? 0)]
                         : []),
                 ];
@@ -744,6 +744,28 @@ class BackupDrill
      * Digits and an exponent instead: 1.50, 1.5 and 15e-1 come out alike
      * because the column holds them as one number, and nothing else does.
      */
+    /**
+     * The non-finite value this text names, or null when it names none.
+     *
+     * PostgreSQL holds NaN and both infinities in these columns and writes them
+     * back as words, which is_numeric() reads as ordinary text — so a backup of
+     * a perfectly good column was being reported as badly typed. One key each,
+     * because the database compares two NaNs as equal.
+     */
+    private function nonFinite(mixed $value): ?string
+    {
+        if (! is_scalar($value) || is_bool($value)) {
+            return null;
+        }
+
+        return match (strtolower(trim((string) $value))) {
+            'nan' => 'NaN',
+            'inf', '+inf', 'infinity', '+infinity' => 'Infinity',
+            '-inf', '-infinity' => '-Infinity',
+            default => null,
+        };
+    }
+
     private function decimalText(mixed $value, ?int $scale = null): ?string
     {
         if (! is_scalar($value) || is_bool($value)
@@ -870,15 +892,23 @@ class BackupDrill
         if (array_key_exists($column, $schema['numeric'])) {
             $number = $schema['numeric'][$column];
 
+            // The values that are not quantities. The database compares two
+            // NaNs as equal, so they are one key here as well.
+            if (($special = $this->nonFinite($value)) !== null) {
+                return $special;
+            }
+
             // A binary float column stores what a float holds, and two texts
             // that land on the same one are the same value there — so this is
             // the one place where going through a float is the RIGHT answer.
             if ($number['kind'] !== 'exact' && is_numeric($value)) {
-                $stored = (float) $value;
+                $stored = $number['kind'] === 'real'
+                    ? (float) unpack('g', pack('g', (float) $value))[1]
+                    : (float) $value;
 
-                return (string) ($number['kind'] === 'real'
-                    ? (float) unpack('g', pack('g', $stored))[1]
-                    : $stored);
+                // Both zeros are one value to the database, and two strings to
+                // PHP — which prints the negative one as "-0".
+                return $stored === 0.0 ? '0' : (string) $stored;
             }
 
             // And an exact one stores the value rounded to the scale it
@@ -1951,6 +1981,13 @@ class BackupDrill
                 }
 
                 if (array_key_exists((string) $column, $schema['numeric'])) {
+                    // NaN and the infinities are values these columns hold, and
+                    // the database writes them back as words that is_numeric()
+                    // reads as text. They have no width to overflow either.
+                    if ($this->nonFinite($value) !== null) {
+                        continue;
+                    }
+
                     if (is_string($value) && ! is_numeric($value)) {
                         $mistyped[(string) $column] = true;
 

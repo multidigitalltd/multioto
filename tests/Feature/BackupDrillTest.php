@@ -1685,6 +1685,58 @@ class BackupDrillTest extends TestCase
         $this->assertStringContainsString('כפולים', implode(' ', $report['problems']));
     }
 
+    /** Both zeros are one value to the database, and two strings to PHP. */
+    public function test_the_two_signs_of_zero_are_one_key(): void
+    {
+        DB::statement('CREATE TABLE zero_sign_probe (amount double precision primary key)');
+
+        $report = $this->drillWith('zero_sign_probe', 2,
+            '{"amount":"0"}'."\n".'{"amount":"-0"}'."\n");
+
+        $this->assertStringContainsString('כפולים', implode(' ', $report['problems']));
+    }
+
+    /**
+     * The values that are not quantities.
+     *
+     * PostgreSQL holds NaN and both infinities and writes them back as words,
+     * which is_numeric() reads as text — so a backup of a perfectly good column
+     * was reported as badly typed.
+     */
+    public function test_a_non_finite_number_is_not_reported(): void
+    {
+        DB::statement('CREATE TABLE nan_probe (id integer primary key, amount double precision)');
+
+        $report = $this->drillWith('nan_probe', 3,
+            '{"id":1,"amount":"NaN"}'."\n"
+            .'{"id":2,"amount":"Infinity"}'."\n"
+            .'{"id":3,"amount":"-Infinity"}'."\n");
+
+        $this->assertStringNotContainsString('amount', implode(' ', $report['problems']));
+    }
+
+    /** And two NaNs are one value there, as they are one key here. */
+    public function test_two_nans_are_one_key(): void
+    {
+        DB::statement('CREATE TABLE nan_key_probe (amount double precision primary key)');
+
+        $report = $this->drillWith('nan_key_probe', 2,
+            '{"amount":"NaN"}'."\n".'{"amount":"nan"}'."\n");
+
+        $this->assertStringContainsString('כפולים', implode(' ', $report['problems']));
+    }
+
+    /** A scale may be negative: numeric(2,-3) rounds to thousands. */
+    public function test_a_negative_scale_rounds_two_values_together(): void
+    {
+        DB::statement('CREATE TABLE negative_scale_probe (amount numeric(2,-3) primary key)');
+
+        $report = $this->drillWith('negative_scale_probe', 2,
+            '{"amount":"1499"}'."\n".'{"amount":"1000"}'."\n");
+
+        $this->assertStringContainsString('כפולים', implode(' ', $report['problems']));
+    }
+
     /** And an ordinary number, and digits inside a string, are left alone. */
     public function test_ordinary_numbers_in_a_jsonb_column_are_not_reported(): void
     {
