@@ -4,6 +4,7 @@ namespace App\Filament\Resources\TaskResource\Pages;
 
 use App\Enums\TaskStatus;
 use App\Filament\Resources\TaskResource;
+use App\Jobs\NotifyTaskCreatedJob;
 use Filament\Actions;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\EditRecord;
@@ -11,6 +12,36 @@ use Filament\Resources\Pages\EditRecord;
 class EditTask extends EditRecord
 {
     protected static string $resource = TaskResource::class;
+
+    /** @var list<int> who owned this task before this save */
+    private array $ownersBefore = [];
+
+    protected function beforeSave(): void
+    {
+        $this->ownersBefore = $this->record->assignees()->pluck('users.id')
+            ->map(fn ($id): int => (int) $id)->all();
+    }
+
+    /**
+     * Somebody handed the task to somebody else — tell them.
+     *
+     * Assigning from this form used to be the one route that changed a task's
+     * owner in silence: the agent announces its assignments, creation announces
+     * itself, and a person picked here found out only if they happened to open
+     * the tasks list. Only the newly added owners are told, so an ordinary save
+     * (a title, a due date) notifies nobody.
+     */
+    protected function afterSave(): void
+    {
+        $added = array_values(array_diff(
+            $this->record->assignees()->pluck('users.id')->map(fn ($id): int => (int) $id)->all(),
+            $this->ownersBefore,
+        ));
+
+        if ($added !== []) {
+            NotifyTaskCreatedJob::dispatch($this->record->id, $added);
+        }
+    }
 
     /**
      * Status buttons right inside the task — the same one-click lifecycle a
