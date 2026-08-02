@@ -209,6 +209,9 @@ class SystemActionRunner
      * @param  list<int>  $assignees
      * @return list<int> those attached by THIS call
      */
+    /** How many times a pivot collision is worth re-trying before giving up. */
+    private const ATTACH_ATTEMPTS = 5;
+
     public function claimAssignees(
         Task $task,
         array $assignees,
@@ -247,9 +250,23 @@ class SystemActionRunner
             // appeared in between is somebody else's doing, and announcing it
             // tells a person they were assigned by an instruction that never
             // mentioned them.
-            $attached = $this->attach($locked, $assignees) ?? $this->attach($locked, $assignees);
+            //
+            // Each attempt is all-or-nothing, so a collision leaves nothing
+            // behind and the retry re-reads: whoever collided is committed by
+            // then and is simply skipped. Two people attached from elsewhere at
+            // once can collide twice, which is why this is a loop and not a
+            // second chance — stopping early would leave people the manager
+            // asked for off a task reported as assigned.
+            for ($attempt = 1; $attempt <= self::ATTACH_ATTEMPTS; $attempt++) {
+                if (($changes = $this->attach($locked, $assignees)) !== null) {
+                    return array_values(array_map('intval', $changes['attached'] ?? []));
+                }
+            }
 
-            return array_values(array_map('intval', $attached['attached'] ?? []));
+            // Still colliding after all that. Said out loud rather than reported
+            // as "nobody was new": a move may already have taken the previous
+            // owners off, and a task nobody owns must not look assigned.
+            throw new \RuntimeException('לא הצלחנו לשייך את המשימה — נסו שוב.');
         });
     }
 

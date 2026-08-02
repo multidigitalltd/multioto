@@ -1230,7 +1230,19 @@ class ConsoleAgent
             // later retry recovers this same row and calls it done.
             app(SystemActionRunner::class)->adoptAssignees($existing, $assignees->pluck('id')->all());
 
-            return ['content' => "המשימה כבר קיימת: #{$existing->id} {$existing->title}. אל תפתח אותה שוב."];
+            $said = "המשימה כבר קיימת: #{$existing->id} {$existing->title}. אל תפתח אותה שוב.";
+
+            // A recovered task with nobody on it is the one case this must not
+            // pass over in silence: the run that opened it died before it could
+            // announce anything, and the name it was meant for may no longer
+            // resolve at all. Saying so to the manager is the only thing that
+            // gets it owned — the answer comes back as assign_task.
+            if ($existing->assignees()->doesntExist()) {
+                $said .= ' '.($problems === [] ? 'אין לה בעלים.' : implode('; ', $problems).'.')
+                    .' שאל את המנהל למי לשייך אותה.';
+            }
+
+            return ['content' => $said];
         }
 
         $task = app(SystemActionRunner::class)->openTask([

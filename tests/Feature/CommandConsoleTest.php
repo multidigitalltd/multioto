@@ -468,6 +468,43 @@ class CommandConsoleTest extends TestCase
         Queue::assertPushed(NotifyTaskCreatedJob::class, 2);
     }
 
+    /**
+     * A recovered task nobody owns, whose intended owner no longer resolves:
+     * the run that opened it died before announcing anything, so silence here
+     * leaves it on nobody's list looking handled.
+     */
+    public function test_a_recovered_task_with_no_owner_asks_who_it_belongs_to(): void
+    {
+        $dan = User::factory()->create(['name' => 'דני כהן']);
+
+        $this->fakeAgent([['open_task', ['title' => 'לבדוק את השרת', 'assignee' => 'דני כהן']]]);
+        app(CommandInterpreter::class)->run('תפתח לדני כהן משימה לבדוק את השרת');
+
+        $task = Task::sole();
+        $task->assignees()->detach();
+        $dan->delete();
+
+        $result = null;
+        $claude = Mockery::mock(ClaudeClient::class);
+        $claude->shouldReceive('isEnabled')->andReturn(true);
+        $claude->shouldReceive('lastError')->andReturnNull();
+        $claude->shouldReceive('converse')->andReturnUsing(
+            function (string $system, string $prompt, array $tools, callable $handler) use (&$result): string {
+                $result = $handler('open_task', ['title' => 'לבדוק את השרת', 'assignee' => 'דני כהן']);
+
+                return 'המשימה קיימת.';
+            }
+        );
+        $this->app->instance(ClaudeClient::class, $claude);
+
+        app(CommandInterpreter::class)->run('תפתח לדני כהן משימה לבדוק את השרת');
+
+        $this->assertSame(1, Task::count());
+        $this->assertStringContainsString('כבר קיימת', $result['content']);
+        $this->assertStringContainsString('שאל את המנהל למי לשייך', $result['content']);
+        $this->assertStringContainsString('לא נמצא איש צוות', $result['content']);
+    }
+
     public function test_assigning_a_task_that_does_not_exist_changes_nothing(): void
     {
         $toolResult = null;
