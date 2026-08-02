@@ -1150,12 +1150,14 @@ class BackupDrill
         // already far past either limit.
         $exponent = (float) ($parts[3] ?? 0);
 
-        // A zero is a zero at any exponent, with nothing to overflow.
-        if ($significant === '') {
-            return true;
-        }
+        // A zero is a zero at any exponent and has no magnitude to overflow.
+        // Its SCALE is another matter: the column keeps the places it was
+        // written with, so 0. followed by too many zeros is still too long.
+        $magnitude = $significant === ''
+            ? 0.0
+            : strlen($significant) + $exponent - $fraction;
 
-        return strlen($significant) + $exponent - $fraction <= self::NUMERIC_WHOLE_DIGITS
+        return $magnitude <= self::NUMERIC_WHOLE_DIGITS
             && $fraction - $exponent <= self::NUMERIC_FRACTION_DIGITS;
     }
 

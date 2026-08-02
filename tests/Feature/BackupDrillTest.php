@@ -1400,6 +1400,32 @@ class BackupDrillTest extends TestCase
         $this->assertStringContainsString('אינו יכול לאחסן', implode(' ', $report['problems']));
     }
 
+    /**
+     * Zero has no magnitude to overflow, and still has a scale.
+     *
+     * 0e-16384 asks the column for 16384 decimal places, one past what it
+     * keeps — being zero does not shorten it.
+     */
+    public function test_a_zero_written_with_too_many_places_is_reported(): void
+    {
+        DB::statement('CREATE TABLE zero_scale_probe (id integer primary key, payload jsonb)');
+
+        $report = $this->drillWith('zero_scale_probe', 1,
+            '{"id":1,"payload":"{\\"size\\":0e-16384}"}'."\n");
+
+        $this->assertStringContainsString('אינו יכול לאחסן', implode(' ', $report['problems']));
+    }
+
+    /** An ordinary zero at a large exponent has nothing to overflow. */
+    public function test_a_zero_at_a_large_exponent_is_not_reported(): void
+    {
+        DB::statement('CREATE TABLE zero_probe (id integer primary key, payload jsonb)');
+
+        $report = $this->drillWith('zero_probe', 1, '{"id":1,"payload":"{\\"size\\":0e999999}"}'."\n");
+
+        $this->assertStringNotContainsString('payload', implode(' ', $report['problems']));
+    }
+
     /** And an ordinary number, and digits inside a string, are left alone. */
     public function test_ordinary_numbers_in_a_jsonb_column_are_not_reported(): void
     {
