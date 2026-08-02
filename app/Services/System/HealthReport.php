@@ -295,8 +295,14 @@ class HealthReport
                 usleep(20_000);
             }
 
-            if (@pg_get_result($handle) === false) {
-                throw new \RuntimeException('מסד הנתונים לא החזיר תשובה.');
+            $result = @pg_get_result($handle);
+
+            // A result object comes back for FAILURES too — a statement_timeout
+            // that fired just before our own deadline arrives here as a result,
+            // not as false. Taking that for an answer would report a database
+            // that cannot run a query as perfectly healthy.
+            if ($result === false || ! in_array(pg_result_status($result), [PGSQL_TUPLES_OK, PGSQL_COMMAND_OK], true)) {
+                throw new \RuntimeException('מסד הנתונים לא החזיר תשובה תקינה.');
             }
         } finally {
             @pg_close($handle);
