@@ -8,6 +8,7 @@ use App\Jobs\NotifyTaskCreatedJob;
 use Filament\Actions;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\EditRecord;
+use Illuminate\Support\Facades\Log;
 
 class EditTask extends EditRecord
 {
@@ -38,8 +39,30 @@ class EditTask extends EditRecord
             $this->ownersBefore,
         ));
 
-        if ($added !== []) {
+        if ($added === []) {
+            return;
+        }
+
+        // Non-fatal, like every other announcement here: the assignment is
+        // already saved by now, and letting a queue hiccup throw would tell the
+        // operator the save FAILED. They would then save again — and the second
+        // save sees the owner already attached, so nothing is new and the
+        // notification is never sent at all, even once the queue is back. The
+        // person in front of the screen is told instead, and can say a word.
+        try {
             NotifyTaskCreatedJob::dispatch($this->record->id, $added);
+        } catch (\Throwable $e) {
+            Log::warning('EditTask: assignment notification not queued', [
+                'task_id' => $this->record->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            Notification::make()
+                ->title('השיוך נשמר, אך לא נשלחה התראה')
+                ->body('תור העבודות לא זמין כרגע — עדכנו את מי ששויך ידנית.')
+                ->warning()
+                ->persistent()
+                ->send();
         }
     }
 
