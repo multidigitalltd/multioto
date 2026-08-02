@@ -379,6 +379,31 @@ class BackupDrillTest extends TestCase
         $this->assertStringContainsString('מבנה שונה', implode(' ', $report['problems']));
     }
 
+    /**
+     * The same primary key twice.
+     *
+     * Every row is valid on its own; the restore gets as far as the insert and
+     * the key refuses the second one — half way through, with the tables
+     * already emptied.
+     */
+    public function test_a_repeated_primary_key_is_reported(): void
+    {
+        $backup = $this->backup();
+
+        $path = Storage::disk('backups')->path($backup->path);
+        $zip = new ZipArchive;
+        $zip->open($path);
+        $zip->addFromString(
+            'database/customers.ndjson',
+            "{\"id\":1,\"name\":\"א\"}\n{\"id\":1,\"name\":\"ב\"}\n",
+        );
+        $zip->close();
+
+        $report = app(BackupDrill::class)->run($backup);
+
+        $this->assertStringContainsString('כפולים', implode(' ', $report['problems']));
+    }
+
     /** A column that may be left out is not a problem, and must not be reported as one. */
     public function test_a_good_archive_is_not_faulted_for_columns_a_row_may_omit(): void
     {

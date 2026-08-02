@@ -31,6 +31,15 @@ class BackupDrill
     /** Copied in pieces so a large archive does not have to fit in memory. */
     private const READ_CHUNK = 8 * 1024 * 1024;
 
+    /**
+     * How many key values to remember per table while looking for duplicates.
+     *
+     * The set is the only part of this job that grows with the size of a table,
+     * and a drill that runs the worker out of memory is worse than one that
+     * says it stopped looking.
+     */
+    private const MAX_KEYS = 500000;
+
     public function __construct(private BackupArchive $archive) {}
 
     /**
@@ -284,6 +293,16 @@ class BackupDrill
                     .$this->few($read['nulls']).') — השחזור ייעצר.';
             }
 
+            if ($read['repeated'] !== []) {
+                $problems[] = "הטבלה {$table}: ערכים כפולים במפתח ייחודי ("
+                    .$this->few($read['repeated']).') — השחזור ייעצר.';
+            }
+
+            if ($read['unchecked']) {
+                $problems[] = "הטבלה {$table}: בדיקת הכפילויות נעצרה בתקרה של "
+                    .number_format(self::MAX_KEYS).' ערכים ולא כיסתה את כל הטבלה.';
+            }
+
             if ($read['mixed']) {
                 $problems[] = "הטבלה {$table}: לשורות בארכיון מבנה שונה זו מזו — השחזור ייעצר.";
             }
@@ -306,7 +325,10 @@ class BackupDrill
      * "Cannot hold NULL" is the wider set: a default saves a column that is
      * absent, and does nothing for one that is present and null.
      *
-     * @return array{columns: list<string>, required: list<string>, notNull: list<string>}
+     * The unique keys travel with them: a member holding the same primary key
+     * twice restores no further than the first insert.
+     *
+     * @return array{columns: list<string>, required: list<string>, notNull: list<string>, unique: list<list<string>>}
      */
     private function columnsOf(string $table): array
     {
@@ -329,7 +351,20 @@ class BackupDrill
             }
         }
 
-        return ['columns' => $columns, 'required' => $required, 'notNull' => $notNull];
+        $unique = [];
+
+        foreach (Schema::getIndexes($table) as $index) {
+            if (($index['primary'] ?? false) || ($index['unique'] ?? false)) {
+                $unique[] = array_values(array_map('strval', (array) $index['columns']));
+            }
+        }
+
+        return [
+            'columns' => $columns,
+            'required' => $required,
+            'notNull' => $notNull,
+            'unique' => $unique,
+        ];
     }
 
     /**
@@ -353,6 +388,29 @@ class BackupDrill
     }
 
     /**
+     * One row's value for a unique key, or null when it has no complete one.
+     *
+     * @param  array<string, mixed>  $row
+     * @param  list<string>  $key
+     */
+    private function keyValue(array $row, array $key): ?string
+    {
+        $parts = [];
+
+        foreach ($key as $column) {
+            if (! array_key_exists($column, $row) || $this->arrivesEmpty($row[$column])) {
+                return null;
+            }
+
+            $value = $row[$column];
+
+            $parts[] = is_scalar($value) ? (string) $value : (string) json_encode($value);
+        }
+
+        return implode("\0", $parts);
+    }
+
+    /**
      * Read one table member to the end and count what is in it.
      *
      * Read in CHUNKS rather than with fgets(), because the two answer different
@@ -363,8 +421,8 @@ class BackupDrill
      * BackupRestorer::assertMemberIntact() does, is what surfaces it.
      *
      * @param  resource  $stream
-     * @param  array{columns: list<string>, required: list<string>, notNull: list<string>}|null  $schema
-     * @return array{rows: int, damaged: int, unknown: list<string>, absent: list<string>, nulls: list<string>, mixed: bool, corrupt: bool}
+     * @param  array{columns: list<string>, required: list<string>, notNull: list<string>, unique: list<list<string>>}|null  $schema
+     * @return array{rows: int, damaged: int, unknown: list<string>, absent: list<string>, nulls: list<string>, repeated: list<string>, unchecked: bool, mixed: bool, corrupt: bool}
      */
     private function readRows($stream, ?array $schema): array
     {
@@ -373,8 +431,18 @@ class BackupDrill
         $unknown = [];
         $absent = [];
         $nulls = [];
+        $repeated = [];
         $mixed = false;
         $buffer = '';
+
+        // Values already seen for each unique key, so a member holding the same
+        // primary key twice is found here rather than by the insert that stops
+        // half way through a restore. Bounded, and never silently: a table past
+        // the ceiling says so in the report instead of passing as if it had
+        // been examined.
+        $seen = [];
+        $tracked = 0;
+        $unchecked = false;
 
         // Rows in one member all carry the same key set, so the SHAPE is
         // examined once per distinct set rather than once per row — a table
@@ -386,7 +454,7 @@ class BackupDrill
         // these few columns, not all of them.
         $noNulls = [];
 
-        $count = function (string $line) use (&$rows, &$damaged, &$unknown, &$absent, &$nulls, &$mixed, &$accepted, &$noNulls, $schema): void {
+        $count = function (string $line) use (&$rows, &$damaged, &$unknown, &$absent, &$nulls, &$repeated, &$unchecked, &$seen, &$tracked, &$mixed, &$accepted, &$noNulls, $schema): void {
             if (trim($line) === '') {
                 return;
             }
@@ -460,6 +528,33 @@ class BackupDrill
                     $nulls[$name] = true;
                 }
             }
+
+            foreach ($schema['unique'] as $key) {
+                if ($tracked >= self::MAX_KEYS) {
+                    $unchecked = true;
+
+                    break;
+                }
+
+                $value = $this->keyValue($row, $key);
+
+                // A key the row does not carry in full is not a duplicate of
+                // anything, and NULL never collides with NULL in SQL.
+                if ($value === null) {
+                    continue;
+                }
+
+                $name = implode(', ', $key);
+
+                if (isset($seen[$name][$value])) {
+                    $repeated[$name] = true;
+
+                    continue;
+                }
+
+                $seen[$name][$value] = true;
+                $tracked++;
+            }
         };
 
         try {
@@ -473,6 +568,8 @@ class BackupDrill
                         'unknown' => [],
                         'absent' => [],
                         'nulls' => [],
+                        'repeated' => [],
+                        'unchecked' => false,
                         'mixed' => false,
                         'corrupt' => true,
                     ];
@@ -507,6 +604,8 @@ class BackupDrill
             'unknown' => array_keys($unknown),
             'absent' => array_keys($absent),
             'nulls' => array_keys($nulls),
+            'repeated' => array_keys($repeated),
+            'unchecked' => $unchecked,
             'mixed' => $mixed,
             'corrupt' => false,
         ];
