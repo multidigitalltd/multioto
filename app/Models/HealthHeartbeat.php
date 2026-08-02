@@ -27,6 +27,16 @@ class HealthHeartbeat extends Model
      */
     public const WORKLOAD = 'queue-workload';
 
+    /**
+     * The last time the ordinary queue was seen to get SHORTER (or be empty).
+     *
+     * Sampled by the scheduler, never by a queued job — a job asking this
+     * question would be stuck in the very line it is asking about. It is what
+     * separates a worker chewing through a long batch, where the beat behind it
+     * waits its turn, from a worker that is simply gone.
+     */
+    public const PROGRESS = 'queue-progress';
+
     public $timestamps = false;
 
     protected $primaryKey = 'name';
@@ -35,7 +45,7 @@ class HealthHeartbeat extends Model
 
     public $incrementing = false;
 
-    protected $fillable = ['name', 'beat_at'];
+    protected $fillable = ['name', 'beat_at', 'value'];
 
     protected function casts(): array
     {
@@ -49,10 +59,23 @@ class HealthHeartbeat extends Model
      * it is only meant to observe — a scheduler tick, or a job that has real
      * work to do.
      */
-    public static function beat(string $name): void
+    public static function beat(string $name, ?int $value = null, bool $touch = true): void
     {
         rescue(
-            fn () => static::query()->updateOrInsert(['name' => $name], ['beat_at' => now()]),
+            fn () => static::query()->updateOrInsert(
+                ['name' => $name],
+                $touch ? ['beat_at' => now(), 'value' => $value] : ['value' => $value],
+            ),
+            report: false,
+        );
+    }
+
+    /** The stored reading for this beat, or null when it has none. */
+    public static function lastValue(string $name): ?int
+    {
+        return rescue(
+            fn (): ?int => static::query()->whereKey($name)->value('value'),
+            null,
             report: false,
         );
     }

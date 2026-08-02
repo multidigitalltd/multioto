@@ -28,6 +28,10 @@ return new class extends Migration
         Schema::create('health_heartbeats', function (Blueprint $table): void {
             $table->string('name')->primary();
             $table->timestamp('beat_at');
+            // Some beats carry a reading as well as a moment — the queue depth
+            // when it was last seen to fall, which is how "the worker is busy"
+            // is told apart from "the worker is gone".
+            $table->unsignedBigInteger('value')->nullable();
         });
     }
 

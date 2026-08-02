@@ -34,9 +34,6 @@ class HealthReport
     /** A moving part has stopped. Work is not getting done at all. */
     public const DOWN = 'down';
 
-    /** Throwaway connection name for the time-boxed database probe. */
-    private const PROBE = 'health-db-probe';
-
     /**
      * @return array{status: string, checks: list<array{key: string, label: string, status: string, detail: string}>}
      */
@@ -144,6 +141,41 @@ class HealthReport
     }
 
     /**
+     * Watch the ordinary queue from OUTSIDE it.
+     *
+     * Called from the scheduler once a minute, never as a queued job: a job
+     * asking whether the line is moving would be standing in that line. It
+     * records the queue's depth, and stamps the moment only when the depth
+     * FELL (or is zero) — so the stamp means "work visibly got done", which is
+     * the difference between a worker busy with a long batch and no worker at
+     * all.
+     */
+    public function sampleQueueProgress(): void
+    {
+        $size = rescue(fn (): ?int => $this->probe()->size($this->workloadQueue()), null, report: false);
+
+        if ($size === null) {
+            return;
+        }
+
+        $before = HealthHeartbeat::lastValue(HealthHeartbeat::PROGRESS);
+
+        HealthHeartbeat::beat(
+            HealthHeartbeat::PROGRESS,
+            $size,
+            touch: $size === 0 || $before === null || $size < $before,
+        );
+    }
+
+    /** The queue the real work rides on. */
+    private function workloadQueue(): string
+    {
+        $connection = (string) config('queue.default');
+
+        return (string) config("queue.connections.{$connection}.queue", 'default');
+    }
+
+    /**
      * Is the queue that carries the real work — charges, invoices, notifications
      * — actually moving? The private heartbeat above cannot answer that: with
      * two worker processes it goes on reporting long after the one doing the
@@ -167,15 +199,29 @@ class HealthReport
         $stopped = 'העבודה הרגילה (חיובים, חשבוניות, הודעות) לא מתבצעת — ה-worker של תור העבודה נעצר.';
         $slow = 'העבודה הרגילה לא התקדמה — ייתכן worker שנעצר, וייתכן עבודה ארוכה שרצה כרגע.';
 
+        $down = (int) config('health.workload_down_minutes', 60);
+
         $check = $this->heartbeat(
             HealthHeartbeat::WORKLOAD,
             'workload',
             'תור העבודה',
-            (int) config('health.workload_down_minutes', 60),
+            $down,
             $stopped,
         );
 
+        // Before calling it dead, ask the one question the beat cannot answer.
+        // A single worker chewing through a long batch — one monitor job per
+        // site, say — leaves this beat waiting its turn behind them for as long
+        // as the batch takes, and it is working the whole time. The scheduler
+        // watches the queue get shorter, from outside the queue, so "the line
+        // is moving" is knowable without standing in it.
         if ($check['status'] === self::DOWN) {
+            $moved = HealthHeartbeat::lastBeat(HealthHeartbeat::PROGRESS);
+
+            if ($moved !== null && $moved->gt(now()->subMinutes($down))) {
+                return $this->check('workload', 'תור העבודה', self::DEGRADED, $slow);
+            }
+
             return $check;
         }
 
@@ -192,25 +238,24 @@ class HealthReport
     /**
      * The one query, asked with a stopwatch.
      *
-     * A Postgres host that DROPS connection attempts rather than refusing them
-     * holds the connect until the operating system gives up — minutes, on a
-     * default install — and the endpoint whose entire job is to say "the
-     * database has stopped" would be the request that hangs on it.
+     * Every way a database can keep this request waiting has to be named, and
+     * they are named where libpq actually reads them — in the connection
+     * string. Only PGCONNECT_TIMEOUT has an environment variable; keepalives
+     * and the startup options do not, so the probe opens its own PDO handle
+     * rather than pretending the framework's connection can carry them:
      *
-     * Three separate ways to wait, so all three are bounded, and each has to be
-     * asked for by name:
+     *   connect_timeout      getting connected at all.
+     *   options              the server's own statement_timeout, sent in the
+     *                        startup packet — the connection can be established
+     *                        perfectly and the QUERY never come back.
+     *   keepalives*          the peer that acknowledges the query and then goes
+     *                        silent. Nothing is left outstanding for a TCP
+     *                        timeout to notice and the client is simply
+     *                        waiting, so the socket is told to ask — twice,
+     *                        quickly — and to give up when nothing answers.
      *
-     *   PGCONNECT_TIMEOUT  getting connected at all.
-     *   PGOPTIONS          the server's own statement_timeout, sent in the
-     *                      startup packet — the connection can be established
-     *                      perfectly and the QUERY never come back.
-     *   PGTCPUSERTIMEOUT   the socket going quiet mid-answer, which neither of
-     *                      the other two can see.
-     *
-     * libpq reads all three from the environment (PDO's timeout attribute does
-     * nothing for this driver), so they are set for the length of this one
-     * question and put back afterwards — ordinary connections, a worker in the
-     * middle of a charge, are left exactly as they were.
+     * A handle of its own also means the application's pooled connection is
+     * never reconfigured behind a worker's back.
      */
     private function askTheDatabase(): void
     {
@@ -224,39 +269,30 @@ class HealthReport
         }
 
         $seconds = max(1, (int) config('health.database_probe_timeout', 2));
-        $bounds = [
-            'PGCONNECT_TIMEOUT' => (string) $seconds,
-            'PGOPTIONS' => '-c statement_timeout='.($seconds * 1000),
-            'PGTCPUSERTIMEOUT' => (string) ($seconds * 1000),
-            // And the case none of the above can see: the server takes the
-            // query, acknowledges it, and then goes silent. Nothing is left
-            // unacknowledged for the TCP timeout to notice and the client is
-            // simply waiting, so the socket is told to ask — twice, quickly —
-            // and to give up when nothing comes back.
-            'PGKEEPALIVES' => '1',
-            'PGKEEPALIVESIDLE' => (string) $seconds,
-            'PGKEEPALIVESINTERVAL' => (string) $seconds,
-            'PGKEEPALIVESCOUNT' => '2',
-        ];
 
-        $was = [];
+        $dsn = 'pgsql:'.collect([
+            'host' => $connection['host'] ?? '127.0.0.1',
+            'port' => $connection['port'] ?? 5432,
+            'dbname' => $connection['database'] ?? '',
+            'sslmode' => $connection['sslmode'] ?? 'prefer',
+            'connect_timeout' => $seconds,
+            'keepalives' => 1,
+            'keepalives_idle' => $seconds,
+            'keepalives_interval' => $seconds,
+            'keepalives_count' => 2,
+            'options' => '-c statement_timeout='.($seconds * 1000),
+            'application_name' => 'multioto-health',
+        ])->map(fn ($value, string $key): string => "{$key}={$value}")->implode(';');
 
-        foreach ($bounds as $variable => $value) {
-            $was[$variable] = getenv($variable);
-            putenv("{$variable}={$value}");
-        }
-
-        config(['database.connections.'.self::PROBE => $connection]);
-        DB::purge(self::PROBE);
+        $pdo = new \PDO($dsn, (string) ($connection['username'] ?? ''), (string) ($connection['password'] ?? ''), [
+            \PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION,
+            \PDO::ATTR_TIMEOUT => $seconds,
+        ]);
 
         try {
-            DB::connection(self::PROBE)->select('select 1');
+            $pdo->query('select 1');
         } finally {
-            DB::purge(self::PROBE);
-
-            foreach ($was as $variable => $value) {
-                $value === false ? putenv($variable) : putenv("{$variable}={$value}");
-            }
+            $pdo = null;
         }
     }
 
