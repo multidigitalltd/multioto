@@ -48,11 +48,18 @@ class NotifyTaskCreatedJob implements ShouldQueue
             ? null
             : User::whereIn('id', $this->recipientIds)->get();
 
-        // Named recipients who no longer exist: this announcement had an
-        // audience and it is gone. Falling back to the managers here would
-        // report a task as UNASSIGNED to everyone, which it is not.
+        // Named recipients who no longer exist. If the task still has owners,
+        // this announcement had an audience and it is gone — saying it went to
+        // nobody would report a task as UNASSIGNED when it is not. But when
+        // deleting them took the LAST assignment with it (the pivot cascades),
+        // the task is genuinely ownerless now, and silence would leave a task
+        // nobody owns and nobody was ever told about.
         if ($named !== null && $named->isEmpty()) {
-            return;
+            if ($task->assignees->isNotEmpty()) {
+                return;
+            }
+
+            $named = null;
         }
 
         $assignees = $named ?? $task->assignees;
