@@ -1072,6 +1072,29 @@ class BackupDrillTest extends TestCase
         $this->assertStringContainsString('כפולים', implode(' ', $report['problems']));
     }
 
+    /**
+     * "now" is valid input for a date column, and reporting it would fail an
+     * archive that restores perfectly well.
+     */
+    public function test_a_date_column_is_not_faulted_for_the_literals_it_accepts(): void
+    {
+        $backup = $this->backup();
+
+        $row = '"subscription_id":5,"amount_agorot":100,"total_agorot":100,"period_end":"2026-01-31"';
+
+        $path = Storage::disk('backups')->path($backup->path);
+        $zip = new ZipArchive;
+        $zip->open($path);
+        $zip->addFromString('database/charges.ndjson',
+            '{"id":1,'.$row.',"period_start":"now"}'."\n"
+            .'{"id":2,'.$row.',"period_start":"today"}'."\n");
+        $zip->close();
+
+        $report = app(BackupDrill::class)->run($backup);
+
+        $this->assertStringNotContainsString('period_start', implode(' ', $report['problems']));
+    }
+
     /** A clock is not a date. date_parse reports no fault for "12:34:56". */
     public function test_a_clock_value_in_a_date_column_is_reported(): void
     {

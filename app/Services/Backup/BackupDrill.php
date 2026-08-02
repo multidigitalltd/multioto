@@ -727,11 +727,13 @@ class BackupDrill
             return false;
         }
 
-        $literals = match (true) {
-            str_starts_with($kind, 'time') && ! str_contains($kind, 'stamp') => ['allballs', 'now'],
-            str_contains($kind, 'stamp') => ['infinity', '-infinity', 'epoch', 'now'],
-            default => ['infinity', '-infinity', 'epoch'],
-        };
+        // Everything PostgreSQL takes here. A date column accepts "now" and
+        // "today" as readily as a timestamp does, and reporting one of them as
+        // a bad value would fail an archive that restores perfectly well —
+        // which is the costlier way to be wrong.
+        $literals = str_starts_with($kind, 'time') && ! str_contains($kind, 'stamp')
+            ? ['allballs', 'now']
+            : ['infinity', '-infinity', 'epoch', 'now', 'today', 'tomorrow', 'yesterday'];
 
         if (in_array(strtolower($text), $literals, true)) {
             return true;
