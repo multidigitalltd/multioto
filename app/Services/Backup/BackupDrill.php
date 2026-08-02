@@ -481,7 +481,7 @@ class BackupDrill
      * The unique keys, the foreign keys and the numeric columns travel with
      * them: everything the insert would refuse, asked before it is attempted.
      *
-     * @return array{columns: list<string>, required: list<string>, notNull: list<string>, unique: list<list<string>>, defaults: array<string, string>, limits: array<string, int>, uuid: array<string, bool>, boolean: array<string, bool>, integer: array<string, int>, numeric: array<string, bool>, textual: array<string, bool>, temporal: array<string, string>, precision: array<string, int>, json: array<string, string>, foreign: list<array{columns: list<string>, table: string, references: list<string>}>}
+     * @return array{columns: list<string>, required: list<string>, notNull: list<string>, unique: list<list<string>>, defaults: array<string, string>, limits: array<string, int>, uuid: array<string, bool>, boolean: array<string, bool>, integer: array<string, int>, numeric: array<string, ?array{precision: int, scale: int}>, textual: array<string, bool>, temporal: array<string, string>, precision: array<string, int>, json: array<string, string>, foreign: list<array{columns: list<string>, table: string, references: list<string>}>}
      */
     private function columnsOf(string $table): array
     {
@@ -536,7 +536,14 @@ class BackupDrill
             } elseif (preg_match('/^(big|small|medium|tiny)?(int|integer|serial)/i', $type)) {
                 $integer[$name] = $this->integerCeiling($type);
             } elseif (preg_match('/numeric|decimal|real|double|float|money/i', $type)) {
-                $numeric[$name] = true;
+                // With the declared width where there is one. numeric(8,2) holds
+                // six digits in front of the point and refuses a seventh, and a
+                // restore meets that as an overflow rather than as a type error.
+                // A float column declares no such thing and gets none.
+                $numeric[$name] = preg_match('/\((\d+)(?:,\s*(\d+))?\)/', (string) ($column['type'] ?? ''), $width) === 1
+                    && preg_match('/numeric|decimal/i', $type) === 1
+                        ? ['precision' => (int) $width[1], 'scale' => (int) ($width[2] ?? 0)]
+                        : null;
             } elseif (preg_match('/date|time/i', $type)) {
                 // Which KIND of moment, and all three are different: a date
                 // column keeps no clock, a time column keeps no calendar, and
@@ -710,6 +717,92 @@ class BackupDrill
      *
      * @param  array<string, mixed>  $schema
      */
+    /**
+     * A decimal in the one form the database would compare it by, or null when
+     * it is not a decimal at all.
+     *
+     * Never through a float. 9007199254740992 and 9007199254740993 are two
+     * values a numeric column keeps apart and ONE binary float, so converting
+     * would report a duplicate that is not one — the costlier way to be wrong.
+     * Digits and an exponent instead: 1.50, 1.5 and 15e-1 come out alike
+     * because the column holds them as one number, and nothing else does.
+     */
+    private function decimalText(mixed $value): ?string
+    {
+        if (! is_scalar($value) || is_bool($value)
+            || preg_match('/^([+-]?)(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/', trim((string) $value), $parts) !== 1) {
+            return null;
+        }
+
+        $digits = ltrim($parts[2].($parts[3] ?? ''), '0');
+        $exponent = (int) ($parts[4] ?? 0) - strlen($parts[3] ?? '');
+
+        // Zero is zero at any exponent, and has no sign worth keeping.
+        if ($digits === '') {
+            return '0';
+        }
+
+        // Trailing zeros are not part of the VALUE — the column reads 1.50 and
+        // 1.5 as one number — so they move into the exponent instead.
+        $trimmed = rtrim($digits, '0');
+        $exponent += strlen($digits) - strlen($trimmed);
+
+        return ($parts[1] === '-' ? '-' : '').$trimmed.'E'.$exponent;
+    }
+
+    /**
+     * Whether a value fits a numeric column's declared precision and scale.
+     *
+     * PostgreSQL rounds the fraction to the declared scale and then refuses
+     * whatever no longer fits in the digits it has — and the rounding itself
+     * can push a value over, so the digits are rounded here before they are
+     * counted, and by hand: a float would answer for a different number.
+     */
+    private function fitsPrecision(mixed $value, int $precision, int $scale): bool
+    {
+        if (! is_scalar($value) || is_bool($value)
+            || preg_match('/^[+-]?(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/', trim((string) $value), $parts) !== 1) {
+            return true;
+        }
+
+        $digits = ltrim($parts[1].($parts[2] ?? ''), '0');
+        $exponent = (int) ($parts[3] ?? 0) - strlen($parts[2] ?? '');
+
+        // How many digits have to come off the right to leave exactly the
+        // declared scale. Negative means zeros go on instead.
+        $drop = -$scale - $exponent;
+
+        if ($drop < -$precision) {
+            return false;
+        }
+
+        if ($drop < 0) {
+            $digits .= str_repeat('0', (int) -$drop);
+        } elseif ($drop > 0) {
+            $keep = $drop >= strlen($digits) ? '' : substr($digits, 0, -((int) $drop));
+            $next = $drop <= strlen($digits) ? $digits[strlen($digits) - (int) $drop] : '0';
+            $digits = $next >= '5' ? $this->carried($keep) : $keep;
+        }
+
+        return strlen(ltrim($digits, '0')) <= $precision;
+    }
+
+    /** One added to a string of digits, carrying as far as it has to. */
+    private function carried(string $digits): string
+    {
+        for ($i = strlen($digits) - 1; $i >= 0; $i--) {
+            if ($digits[$i] !== '9') {
+                $digits[$i] = (string) ((int) $digits[$i] + 1);
+
+                return $digits;
+            }
+
+            $digits[$i] = '0';
+        }
+
+        return '1'.$digits;
+    }
+
     private function normalised(string $column, mixed $value, array $schema): string
     {
         if (! is_scalar($value)) {
@@ -733,8 +826,8 @@ class BackupDrill
             return $whole;
         }
 
-        if (isset($schema['numeric'][$column]) && is_numeric($value)) {
-            return (string) (float) $value;
+        if (array_key_exists($column, $schema['numeric']) && ($decimal = $this->decimalText($value)) !== null) {
+            return $decimal;
         }
 
         return (string) $value;
@@ -1799,8 +1892,22 @@ class BackupDrill
                     continue;
                 }
 
-                if (isset($schema['numeric'][$column]) && is_string($value) && ! is_numeric($value)) {
-                    $mistyped[(string) $column] = true;
+                if (array_key_exists((string) $column, $schema['numeric'])) {
+                    if (is_string($value) && ! is_numeric($value)) {
+                        $mistyped[(string) $column] = true;
+
+                        continue;
+                    }
+
+                    // And inside the width the column declares. An unquoted
+                    // 1000000 in a numeric(8,2) is a perfectly good number and
+                    // still overflows the field — which the restore meets as an
+                    // error, and every check before this one reads as fine.
+                    $width = $schema['numeric'][(string) $column];
+
+                    if ($width !== null && ! $this->fitsPrecision($value, $width['precision'], $width['scale'])) {
+                        $mistyped[(string) $column] = true;
+                    }
 
                     continue;
                 }

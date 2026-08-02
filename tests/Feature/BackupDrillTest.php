@@ -1589,6 +1589,64 @@ class BackupDrillTest extends TestCase
         $this->assertStringNotContainsString('seen_at', implode(' ', $report['problems']));
     }
 
+    /**
+     * Two values a numeric column keeps apart and a float cannot.
+     *
+     * 9007199254740992 and 9007199254740993 are one binary float, so comparing
+     * keys through one reports a duplicate that is not there — and fails an
+     * archive that restores.
+     */
+    public function test_two_decimals_a_float_cannot_tell_apart_are_not_a_duplicate(): void
+    {
+        DB::statement('CREATE TABLE decimal_probe (amount numeric primary key)');
+
+        $report = $this->drillWith('decimal_probe', 2,
+            '{"amount":"9007199254740992"}'."\n".'{"amount":"9007199254740993"}'."\n");
+
+        $this->assertStringNotContainsString('כפולים', implode(' ', $report['problems']));
+    }
+
+    /** And the same number written two ways is still one value there. */
+    public function test_one_decimal_written_two_ways_is_one_key(): void
+    {
+        DB::statement('CREATE TABLE decimal_key_probe (amount numeric primary key)');
+
+        $report = $this->drillWith('decimal_key_probe', 2,
+            '{"amount":"1.50"}'."\n".'{"amount":"15e-1"}'."\n");
+
+        $this->assertStringContainsString('כפולים', implode(' ', $report['problems']));
+    }
+
+    /** A number the column's declared width cannot hold. */
+    public function test_a_value_past_the_declared_numeric_width_is_reported(): void
+    {
+        DB::statement('CREATE TABLE width_numeric_probe (id integer primary key, amount numeric(8,2))');
+
+        $report = $this->drillWith('width_numeric_probe', 1, '{"id":1,"amount":1000000}'."\n");
+
+        $this->assertStringContainsString('amount', implode(' ', $report['problems']));
+    }
+
+    /** Including one the rounding to that scale pushes over. */
+    public function test_a_rounding_past_the_declared_numeric_width_is_reported(): void
+    {
+        DB::statement('CREATE TABLE round_numeric_probe (id integer primary key, amount numeric(5,2))');
+
+        $report = $this->drillWith('round_numeric_probe', 1, '{"id":1,"amount":"999.999"}'."\n");
+
+        $this->assertStringContainsString('amount', implode(' ', $report['problems']));
+    }
+
+    /** And an ordinary amount in that column is left alone. */
+    public function test_an_amount_inside_the_declared_numeric_width_is_not_reported(): void
+    {
+        DB::statement('CREATE TABLE fine_numeric_probe (id integer primary key, amount numeric(8,2))');
+
+        $report = $this->drillWith('fine_numeric_probe', 1, '{"id":1,"amount":"123456.789"}'."\n");
+
+        $this->assertStringNotContainsString('amount', implode(' ', $report['problems']));
+    }
+
     /** And an ordinary number, and digits inside a string, are left alone. */
     public function test_ordinary_numbers_in_a_jsonb_column_are_not_reported(): void
     {
