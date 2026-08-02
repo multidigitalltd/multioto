@@ -1134,8 +1134,12 @@ class BackupDrill
             return true;
         }
 
+        // Leading zeros are not digits the database keeps; TRAILING ones are.
+        // A numeric holds the scale it was given, so 1.0000… is as long as the
+        // zeros written after the point — dropping them would accept a number
+        // past the limit because it happens to be a round one.
         $whole = strlen(ltrim($parts[1], '0'));
-        $fraction = strlen(rtrim($parts[2] ?? '', '0'));
+        $fraction = strlen($parts[2] ?? '');
 
         // Beyond what an int holds the sign is all that matters, and it is
         // already far past either limit.

@@ -1355,6 +1355,23 @@ class BackupDrillTest extends TestCase
         $this->assertStringContainsString('payload', implode(' ', $report['problems']));
     }
 
+    /**
+     * A numeric keeps the scale it was given, zeros and all.
+     *
+     * 1.0000… with more than 16383 places is a round number and still too long
+     * for the column — the digits after the point are stored, not simplified
+     * away.
+     */
+    public function test_a_scale_of_trailing_zeros_in_a_jsonb_column_is_reported(): void
+    {
+        DB::statement('CREATE TABLE scale_probe (id integer primary key, payload jsonb)');
+
+        $report = $this->drillWith('scale_probe', 1,
+            '{"id":1,"payload":"{\\"size\\":1.'.str_repeat('0', 16384).'}"}'."\n");
+
+        $this->assertStringContainsString('אינו יכול לאחסן', implode(' ', $report['problems']));
+    }
+
     /** And an ordinary number, and digits inside a string, are left alone. */
     public function test_ordinary_numbers_in_a_jsonb_column_are_not_reported(): void
     {
