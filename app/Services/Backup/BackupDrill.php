@@ -30,9 +30,6 @@ class BackupDrill
     /** Copied in pieces so a large archive does not have to fit in memory. */
     private const READ_CHUNK = 8 * 1024 * 1024;
 
-    /** Attachments checked by name inside the archive; a sample, not the lot. */
-    private const FILE_SAMPLE = 50;
-
     public function __construct(private BackupArchive $archive) {}
 
     /**
@@ -128,7 +125,7 @@ class BackupDrill
             $problems = array_merge($problems, $this->tableProblems(array_keys($declared)));
             $problems = array_merge($problems, $this->schemaProblems((array) ($manifest['migrations'] ?? [])));
             $problems = array_merge($problems, $this->rowProblems($zip, $declared));
-            $problems = array_merge($problems, $this->fileProblems($zip));
+            $problems = array_merge($problems, $this->fileProblems($zip, $manifest));
 
             return [
                 'checked_at' => now()->toIso8601String(),
@@ -242,7 +239,11 @@ class BackupDrill
 
                     $rows++;
 
-                    if (json_decode($line, true) === null) {
+                    // An ARRAY, not merely valid JSON: a line reading "false"
+                    // or "0" parses perfectly and is not a row. The restore
+                    // rejects exactly those, and a drill that certifies what
+                    // the restore will refuse is worse than no drill.
+                    if (! is_array(json_decode($line, true))) {
                         $damaged++;
                     }
                 }
@@ -263,16 +264,19 @@ class BackupDrill
     }
 
     /**
-     * A sample of the attachments the archive says it carries really are in it.
+     * Every attachment the archive declares is present AND readable.
      *
-     * A sample rather than all of them: an archive can hold tens of thousands
-     * of files, and a member list that is right for fifty consecutive entries
-     * and wrong afterwards is not the failure mode — a broken upload loses the
-     * end of the file, which the row counts above already catch.
+     * Read to the end, not merely located: a corrupt payload or a bad checksum
+     * still has a perfectly valid directory entry, so opening it succeeds and
+     * only reading it through finds the damage. The restore does exactly this
+     * before it overwrites the first live file — and a drill that passed an
+     * archive the restore will refuse would be worse than no drill at all,
+     * because it is the reassurance somebody acts on.
      *
+     * @param  array<string, mixed>  $manifest
      * @return list<string>
      */
-    private function fileProblems(ZipArchive $zip): array
+    private function fileProblems(ZipArchive $zip, array $manifest): array
     {
         $raw = $zip->getFromName(BackupArchive::FILE_LIST);
 
@@ -280,25 +284,59 @@ class BackupDrill
             return ['לא נמצאה רשימת הקבצים בארכיון.'];
         }
 
-        $files = json_decode($raw, true);
+        $list = json_decode($raw, true);
 
-        if (! is_array($files)) {
+        if (! is_array($list)) {
             return ['רשימת הקבצים בארכיון אינה קריאה.'];
         }
 
-        $missing = [];
+        $files = array_values(array_filter($list, 'is_string'));
+        $expected = (int) ($manifest['files'] ?? count($files));
 
-        foreach (array_slice(array_values($files), 0, self::FILE_SAMPLE) as $file) {
-            if (! is_string($file)) {
+        $problems = count($files) === $expected ? [] : [
+            'רשימת הקבצים בארכיון חלקית ('.count($files)." מתוך {$expected}).",
+        ];
+
+        $missing = [];
+        $damaged = [];
+
+        foreach ($files as $file) {
+            $stream = $zip->getStream('files/'.$file);
+
+            if ($stream === false) {
+                $missing[] = $file;
+
                 continue;
             }
 
-            if ($zip->locateName('files/'.$file) === false) {
-                $missing[] = $file;
+            try {
+                while (true) {
+                    $chunk = @fread($stream, self::READ_CHUNK);
+
+                    if ($chunk === false) {
+                        $damaged[] = $file;
+
+                        break;
+                    }
+
+                    if ($chunk === '') {
+                        break;
+                    }
+                }
+            } finally {
+                fclose($stream);
             }
         }
 
-        return $missing === [] ? [] : ['קבצים שרשומים בארכיון וחסרים בו: '.$this->few($missing)];
+        if ($missing !== []) {
+            $problems[] = 'קבצים שרשומים בארכיון וחסרים בו: '.$this->few($missing);
+        }
+
+        if ($damaged !== []) {
+            $problems[] = 'קבצים בארכיון שלא ניתן לקרוא עד הסוף: '.$this->few($damaged);
+        }
+
+        return $problems;
     }
 
     /**

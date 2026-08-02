@@ -309,7 +309,7 @@ class ManageBackups extends Page implements HasForms, HasTable
                     ->modalDescription('הגיבוי האחרון יורד מהיעד ונקרא במלואו — שום דבר לא משוחזר ושום דבר לא נמחק. התוצאה תופיע בעמודה "נבדק".')
                     ->action(function (): void {
                         try {
-                            DrillBackupJob::dispatch();
+                            DrillBackupJob::dispatch(manual: true);
                         } catch (\Throwable $e) {
                             Notification::make()->title('הבדיקה לא התחילה — התור אינו זמין.')->danger()->send();
 

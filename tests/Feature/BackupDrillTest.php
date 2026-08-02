@@ -151,6 +151,72 @@ class BackupDrillTest extends TestCase
     }
 
     /**
+     * A file whose contents are damaged still has a perfectly valid entry in
+     * the archive's directory — only reading it through finds that out, and the
+     * restore does exactly that before it overwrites the first live file.
+     */
+    public function test_an_attachment_missing_from_the_archive_is_caught(): void
+    {
+        Storage::disk('public')->put('logo.png', str_repeat('x', 2048));
+
+        $backup = $this->backup();
+        $this->assertGreaterThan(0, $backup->manifest['files']);
+
+        // The list still names it; the member itself is gone — which is what a
+        // truncated upload leaves behind, and what a name-only check misses.
+        $path = Storage::disk('backups')->path($backup->path);
+        $zip = new ZipArchive;
+        $zip->open($path);
+        $zip->deleteName('files/public/logo.png');
+        $zip->close();
+
+        $report = app(BackupDrill::class)->run($backup);
+
+        $this->assertStringContainsString('logo.png', implode(' ', $report['problems']));
+    }
+
+    /**
+     * The nightly switch turns off the automation. It does not mean the
+     * archives already in the bucket stopped mattering, and a button that
+     * reports the check started must not quietly do nothing.
+     */
+    public function test_a_person_can_ask_for_a_drill_with_nightly_backups_off(): void
+    {
+        $backup = $this->backup();
+        config(['backup.enabled' => false]);
+
+        (new DrillBackupJob(manual: true))->handle(app(BackupDrill::class));
+
+        $this->assertNotNull($backup->fresh()->drilled_at);
+    }
+
+    public function test_the_scheduled_drill_stays_quiet_when_backups_are_off(): void
+    {
+        $backup = $this->backup();
+        config(['backup.enabled' => false]);
+
+        (new DrillBackupJob)->handle(app(BackupDrill::class));
+
+        $this->assertNull($backup->fresh()->drilled_at);
+    }
+
+    /** Valid JSON is not a row: the restore rejects a line that reads "false". */
+    public function test_rows_that_are_not_objects_are_reported(): void
+    {
+        $backup = $this->backup();
+
+        $path = Storage::disk('backups')->path($backup->path);
+        $zip = new ZipArchive;
+        $zip->open($path);
+        $zip->addFromString('database/customers.ndjson', "false\n0\n");
+        $zip->close();
+
+        $report = app(BackupDrill::class)->run($backup);
+
+        $this->assertStringContainsString('אינן קריאות', implode(' ', $report['problems']));
+    }
+
+    /**
      * A backup nobody has opened is a hope, and the health screen says so —
      * as something for a person to act on, not as a system that has stopped.
      */

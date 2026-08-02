@@ -32,9 +32,19 @@ class DrillBackupJob implements ShouldQueue
 
     public int $timeout = 1800;
 
+    /**
+     * Whether a person asked for this one.
+     *
+     * The nightly automation switch turns off the automation — it does not mean
+     * the archives already in the bucket stopped mattering, and somebody who
+     * presses "בדוק שחזור" is asking about those. A button that reports the
+     * check started and then quietly does nothing is worse than no button.
+     */
+    public function __construct(public bool $manual = false) {}
+
     public function handle(BackupDrill $drill): void
     {
-        if (! config('backup.enabled')) {
+        if (! $this->manual && ! config('backup.enabled')) {
             return;
         }
 
