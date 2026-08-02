@@ -1489,6 +1489,49 @@ class BackupDrillTest extends TestCase
         $this->assertStringNotContainsString('כפולים', implode(' ', $report['problems']));
     }
 
+    /**
+     * A zoned value with no offset written on it names no instant we can know.
+     *
+     * PostgreSQL reads it in the database session's zone; this process has its
+     * own, and building the instant on that would report two spellings as one
+     * moment when the session says otherwise. Left as its own text.
+     */
+    public function test_a_zoned_value_without_an_offset_is_not_read_as_an_instant(): void
+    {
+        DB::statement('CREATE TABLE loose_zone_probe (seen_at timestamptz primary key)');
+
+        $report = $this->drillWith('loose_zone_probe', 2,
+            '{"seen_at":"2026-01-01 00:00:00"}'."\n"
+            .'{"seen_at":"2026-01-01 00:00:00+00"}'."\n");
+
+        $this->assertStringNotContainsString('כפולים', implode(' ', $report['problems']));
+    }
+
+    /**
+     * The literal is in range and the stored value is not.
+     *
+     * A timestamp(0) rounds 294276-12-31 23:59:59.9 to the first instant of
+     * 294277, which the column does not reach.
+     */
+    public function test_a_rounding_past_the_last_year_is_reported(): void
+    {
+        DB::statement('CREATE TABLE carry_probe (seen_at timestamp(0) primary key)');
+
+        $report = $this->drillWith('carry_probe', 1, '{"seen_at":"294276-12-31 23:59:59.9"}'."\n");
+
+        $this->assertStringContainsString('seen_at', implode(' ', $report['problems']));
+    }
+
+    /** And the same year without the carry is left alone. */
+    public function test_the_last_year_itself_is_not_reported(): void
+    {
+        DB::statement('CREATE TABLE last_year_probe (seen_at timestamp(0) primary key)');
+
+        $report = $this->drillWith('last_year_probe', 1, '{"seen_at":"294276-12-31 23:59:59"}'."\n");
+
+        $this->assertStringNotContainsString('seen_at', implode(' ', $report['problems']));
+    }
+
     /** And an ordinary number, and digits inside a string, are left alone. */
     public function test_ordinary_numbers_in_a_jsonb_column_are_not_reported(): void
     {

@@ -744,7 +744,7 @@ class BackupDrill
      * with the kind of column it belongs to, since "allballs" is midnight to a
      * time column and nonsense to a date one.
      */
-    private function readsAsTime(string $value, string $kind = 'date'): bool
+    private function readsAsTime(string $value, string $kind = 'date', int $precision = 6): bool
     {
         $text = $this->endOfDay($this->beforeEra(trim($value)), $kind);
 
@@ -791,7 +791,22 @@ class BackupDrill
         }
 
         // And inside the calendar the database keeps.
-        return $this->yearInRange($text, $kind) && $parsed['year'] !== 0;
+        if (! $this->yearInRange($text, $kind) || $parsed['year'] === 0) {
+            return false;
+        }
+
+        // And still inside it once the value is STORED. A timestamp(0) given
+        // 294276-12-31 23:59:59.9 rounds to the first instant of the next year,
+        // and an offset can carry the last day over too: the literal is in
+        // range and the value the column would hold is not. Asked only at the
+        // very edge, where it is the only thing that can happen.
+        if ($this->literalYear($text) !== $this->yearCeiling($kind)) {
+            return true;
+        }
+
+        $stored = $this->temporalText($value, $kind, $precision);
+
+        return $stored === null || $this->yearInRange($stored, $kind);
     }
 
     /**
@@ -895,11 +910,6 @@ class BackupDrill
             return null;
         }
 
-        // A column that carries a zone is answered as the INSTANT it names:
-        // the same moment written in two zones is one value there, and two
-        // different moments are two. A column without one ignores the offset
-        // altogether, so keeping it would invent a difference the database
-        // does not see.
         // The year as the archive spells it, and the one the date library will
         // actually be asked about. They differ only where the real one is out
         // of its reach, and then the stand-in shares its leap rule — so the
@@ -907,12 +917,20 @@ class BackupDrill
         $year = $this->literalYear($text) ?? (is_int($parsed['year']) ? $parsed['year'] : null);
         $stand = $this->literalYear($probe) ?? (is_int($parsed['year']) ? $parsed['year'] : null);
 
+        // A column that carries a zone is answered as the INSTANT it names:
+        // the same moment written in two zones is one value there, and two
+        // different moments are two. A column without one ignores the offset
+        // altogether, so keeping it would invent a difference the database
+        // does not see.
         if (str_contains($kind, 'tz')) {
-            // Only where the value carries a NUMERIC offset, though: a named
-            // zone would be read with the rules it has today, which are not the
-            // rules a year the library cannot hold ever had — and a canonical
-            // form built on the wrong offset would invent a duplicate.
-            if ($probe !== $text && preg_match('/(Z|[+-]\d{1,2}(:?\d{2})?)\s*$/i', $text) !== 1) {
+            // Only where the value SAYS which offset it means. Without one,
+            // PostgreSQL reads it in the database session's zone — which this
+            // process does not share and cannot ask for, so any instant built
+            // here would be a guess, and a guess is how a canonical form comes
+            // to invent duplicates. A named zone is out for the same reason
+            // once the year is beyond what the library holds: it would be read
+            // with the rules that zone has today.
+            if (preg_match('/\d:\d{2}(:\d{2})?(\.\d+)?\s*(Z|[+-]\d{1,2}(:?\d{2})?)$/i', $text) !== 1) {
                 return null;
             }
 
@@ -1031,16 +1049,25 @@ class BackupDrill
      * There is no year zero either — 1 BC is followed by 1 AD — and PHP is
      * content to count one anyway.
      */
+    /**
+     * The last year this kind of column reaches.
+     *
+     * A date reaches far further than a timestamp does — 5874897 against
+     * 294276 — and holding both to the narrower one would fault a date the
+     * column stores perfectly well.
+     */
+    private function yearCeiling(string $kind): int
+    {
+        return $kind === 'date' ? 5874897 : 294276;
+    }
+
     private function yearInRange(string $text, string $kind): bool
     {
         if (preg_match('/^\s*(-?\d+)-\d{1,2}-\d{1,2}/', $text, $year) !== 1) {
             return true;
         }
 
-        // A date reaches far further than a timestamp does — 5874897 against
-        // 294276 — and holding both to the narrower one would fault a date the
-        // column stores perfectly well.
-        $ceiling = $kind === 'date' ? 5874897 : 294276;
+        $ceiling = $this->yearCeiling($kind);
 
         // Compared as text first: a year of forty digits is not an integer this
         // machine can hold, and casting it would quietly make it one.
@@ -1763,7 +1790,11 @@ class BackupDrill
                 // it would mean elsewhere — the restore is handed the value as
                 // it stands and the column refuses it.
                 if (isset($schema['temporal'][$column])
-                    && (! is_string($value) || ! $this->readsAsTime($value, $schema['temporal'][$column]))) {
+                    && (! is_string($value) || ! $this->readsAsTime(
+                        $value,
+                        $schema['temporal'][$column],
+                        $schema['precision'][$column] ?? 6,
+                    ))) {
                     $mistyped[(string) $column] = true;
 
                     continue;
