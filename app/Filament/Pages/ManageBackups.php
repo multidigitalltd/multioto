@@ -96,7 +96,22 @@ class ManageBackups extends Page implements HasForms, HasTable
 
     public function mount(): void
     {
-        $this->form->fill([
+        $this->form->fill($this->currentState());
+    }
+
+    /**
+     * The settings as they are in force right now.
+     *
+     * Read back from config rather than from what was typed, so that clearing
+     * a field and saving shows what the blank fell back to — the destination
+     * the nightly job will actually use — instead of leaving the screen
+     * describing a configuration that exists nowhere.
+     *
+     * @return array<string, mixed>
+     */
+    private function currentState(): array
+    {
+        return [
             'backup' => [
                 'enabled' => (bool) config('backup.enabled'),
                 'disk' => (string) config('backup.disk'),
@@ -113,7 +128,7 @@ class ManageBackups extends Page implements HasForms, HasTable
                     'path_style' => (bool) config('filesystems.disks.backups.use_path_style_endpoint'),
                 ],
             ],
-        ]);
+        ];
     }
 
     public function form(Form $form): Form
@@ -249,15 +264,12 @@ class ManageBackups extends Page implements HasForms, HasTable
         // this one, which would otherwise report on the settings just replaced.
         Storage::forgetDisk('backups');
 
-        // Blanked again after saving, so the screen never echoes a stored
-        // secret back and a filled field always means "this is a new value".
-        $state = $this->form->getState();
-
-        foreach (self::SECRETS as $secret) {
-            data_set($state, $secret, '');
-        }
-
-        $this->form->fill($state);
+        // Refilled from the refreshed config, which does two things at once:
+        // the secrets go blank again — the screen never echoes a stored one
+        // back, so a filled field always means "this is a new value" — and a
+        // field the operator cleared now shows what it fell back to rather
+        // than an emptiness that describes no destination at all.
+        $this->form->fill($this->currentState());
 
         Notification::make()->title('ההגדרות נשמרו')->success()->send();
     }
@@ -439,20 +451,22 @@ class ManageBackups extends Page implements HasForms, HasTable
     {
         $stored = Setting::map();
 
-        $secret = fn (string $key): ?string => filled(data_get($values, $key))
+        // Blank means "unchanged" for a write-only field and "fall back to the
+        // configured default" for the rest — the same reading save() gives
+        // them, so the test cannot describe a destination that saving would
+        // not produce.
+        $value = fn (string $key): ?string => filled(data_get($values, $key))
             ? (string) data_get($values, $key)
             : ($stored[$key] ?? config(self::KEYS[$key]));
 
         return [
             'driver' => 's3',
-            'key' => $secret('backup.s3.key'),
-            'secret' => $secret('backup.s3.secret'),
-            'region' => (string) data_get($values, 'backup.s3.region'),
-            'bucket' => (string) data_get($values, 'backup.s3.bucket'),
+            'key' => $value('backup.s3.key'),
+            'secret' => $value('backup.s3.secret'),
+            'region' => (string) $value('backup.s3.region'),
+            'bucket' => (string) $value('backup.s3.bucket'),
             // Empty means AWS itself; an empty STRING is a broken endpoint.
-            'endpoint' => filled(data_get($values, 'backup.s3.endpoint'))
-                ? (string) data_get($values, 'backup.s3.endpoint')
-                : null,
+            'endpoint' => $value('backup.s3.endpoint') ?: null,
             'use_path_style_endpoint' => (bool) data_get($values, 'backup.s3.path_style'),
             'throw' => false,
             'report' => false,

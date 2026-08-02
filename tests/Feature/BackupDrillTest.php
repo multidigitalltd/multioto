@@ -12,6 +12,7 @@ use App\Services\Backup\BackupDrill;
 use App\Services\Backup\BackupRunner;
 use App\Services\System\HealthReport;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
@@ -548,6 +549,35 @@ class BackupDrillTest extends TestCase
         $report = app(BackupDrill::class)->run($backup);
 
         $this->assertStringContainsString('כפולים', implode(' ', $report['problems']));
+    }
+
+    /**
+     * A JSON column refuses anything that is not a document.
+     *
+     * PostgreSQL stores these as json and rejects a bare word; SQLite stores
+     * the same column as text and reports it as text, so the classification
+     * finds nothing there. The table below is therefore declared with a raw
+     * json type — otherwise this check would ship without ever having run.
+     */
+    public function test_a_value_that_is_not_json_in_a_json_column_is_reported(): void
+    {
+        DB::statement('CREATE TABLE json_probe (id integer primary key, payload json)');
+
+        $backup = $this->backup();
+
+        $path = Storage::disk('backups')->path($backup->path);
+        $zip = new ZipArchive;
+        $zip->open($path);
+
+        $manifest = json_decode((string) $zip->getFromName('manifest.json'), true);
+        $manifest['tables']['json_probe'] = 1;
+        $zip->addFromString('manifest.json', (string) json_encode($manifest));
+        $zip->addFromString('database/json_probe.ndjson', '{"id":1,"payload":"not-json"}'."\n");
+        $zip->close();
+
+        $report = app(BackupDrill::class)->run($backup);
+
+        $this->assertStringContainsString('payload', implode(' ', $report['problems']));
     }
 
     /** The marker is not the value: this one decodes to the word "oops". */

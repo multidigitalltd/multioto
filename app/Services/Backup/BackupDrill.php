@@ -459,7 +459,7 @@ class BackupDrill
      * The unique keys, the foreign keys and the numeric columns travel with
      * them: everything the insert would refuse, asked before it is attempted.
      *
-     * @return array{columns: list<string>, required: list<string>, notNull: list<string>, unique: list<list<string>>, defaults: array<string, string>, integer: array<string, bool>, numeric: array<string, bool>, foreign: list<array{columns: list<string>, table: string, references: list<string>}>}
+     * @return array{columns: list<string>, required: list<string>, notNull: list<string>, unique: list<list<string>>, defaults: array<string, string>, integer: array<string, bool>, numeric: array<string, bool>, json: array<string, bool>, foreign: list<array{columns: list<string>, table: string, references: list<string>}>}
      */
     private function columnsOf(string $table): array
     {
@@ -469,6 +469,7 @@ class BackupDrill
         $defaults = [];
         $integer = [];
         $numeric = [];
+        $json = [];
 
         foreach (Schema::getColumns($table) as $column) {
             $name = (string) $column['name'];
@@ -488,6 +489,12 @@ class BackupDrill
                 $integer[$name] = true;
             } elseif (preg_match('/numeric|decimal|real|double|float|money/i', $type)) {
                 $numeric[$name] = true;
+            } elseif (preg_match('/json/i', $type)) {
+                // PostgreSQL refuses anything that is not a JSON document here.
+                // SQLite stores the same column as text and reports it as text,
+                // so this classification simply finds nothing there — the check
+                // is real in production and inert in the test suite.
+                $json[$name] = true;
             }
 
             if ($column['nullable'] ?? false) {
@@ -527,6 +534,7 @@ class BackupDrill
             'defaults' => $defaults,
             'integer' => $integer,
             'numeric' => $numeric,
+            'json' => $json,
             'foreign' => $foreign,
         ];
     }
@@ -866,6 +874,12 @@ class BackupDrill
                 }
 
                 if (isset($schema['numeric'][$column]) && is_string($value) && ! is_numeric($value)) {
+                    $mistyped[(string) $column] = true;
+
+                    continue;
+                }
+
+                if (isset($schema['json'][$column]) && is_string($value) && ! json_validate($value)) {
                     $mistyped[(string) $column] = true;
                 }
             }
