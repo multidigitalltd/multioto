@@ -59,12 +59,19 @@ return [
 
     /*
     | And the window past which silence has no innocent explanation: reported
-    | as "down", with the 503 that wakes somebody. Keep it comfortably above
-    | the longest job timeout in the system (half an hour, the backup) — past
-    | that the worker is killed and the next beat lands, so nothing legitimate
-    | can still be running.
+    | as "down", with the 503 that wakes somebody.
+    |
+    | It must stay comfortably above the LONGEST a single job may legitimately
+    | hold a worker — today that is SendBroadcastJob at 3,600 seconds, and a
+    | worker inside one has neither finished a job (no progress mark) nor
+    | reached the beat queued behind it. Past this window the job has been
+    | killed by its own timeout and the next beat has had time to land, so
+    | nothing legitimate can still be running.
+    |
+    | Raise it if a longer job is ever added, or the check will call a working
+    | system dead — which is how a monitor earns being ignored.
     */
-    'workload_down_minutes' => (int) env('HEALTH_WORKLOAD_DOWN_MINUTES', 60),
+    'workload_down_minutes' => (int) env('HEALTH_WORKLOAD_DOWN_MINUTES', 90),
 
     /*
     | A backlog this deep, or this many jobs that gave up in the last day,

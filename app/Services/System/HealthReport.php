@@ -153,12 +153,12 @@ class HealthReport
      *                   phone call — an endpoint that calls a busy system dead
      *                   is one nobody trusts the next time it complains.
      *
-     *   quiet far too long  NO job in this system may run that long: the
-     *                   longest timeout anywhere is half an hour, after which
-     *                   the worker is killed and the next beat lands. Silence
-     *                   past the second window has no innocent explanation, so
-     *                   it is reported as what it is — work has stopped — and
-     *                   the monitor gets its 503.
+     *   quiet far too long  no job may hold a worker that long — the longest
+     *                   runs an hour and is then killed by its own timeout, at
+     *                   which point the next beat lands. Silence past the
+     *                   second window has no innocent explanation, so it is
+     *                   reported as what it is — work has stopped — and the
+     *                   monitor gets its 503.
      */
     private function workload(): array
     {
