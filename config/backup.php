@@ -60,6 +60,13 @@ return [
      * the attempt id changes with it — a payload that turns up late finds
      * itself superseded and stops.
      */
+    /*
+    | How long a backup may go without anyone opening it before the health
+    | screen says so. The drill runs monthly; this is the window in which a
+    | missed run stops being a coincidence.
+    */
+    'drill_stale_days' => (int) env('BACKUP_DRILL_STALE_DAYS', 45),
+
     'restore_claim_minutes' => (int) env('BACKUP_RESTORE_CLAIM_MINUTES', 30),
 
     /** Archives older than this are pruned after each successful run. */

@@ -2,9 +2,11 @@
 
 namespace App\Services\System;
 
+use App\Models\Backup;
 use App\Models\HealthHeartbeat;
 use App\Providers\SettingsServiceProvider;
 use App\Services\Backup\BackupRunner;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\ConfigurationUrlParser;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
@@ -89,6 +91,7 @@ class HealthReport
                 : $this->backlog(),
             $this->failedJobs(),
             $this->backup(),
+            $this->drill(),
         ];
 
         return [
@@ -513,6 +516,48 @@ class HealthReport
             'גיבוי',
             $warning === null ? self::OK : self::DEGRADED,
             $warning ?? 'עדכני.',
+        );
+    }
+
+    /**
+     * When somebody last OPENED a backup, not merely wrote one.
+     *
+     * The check above says an archive exists and is recent. This one says it
+     * was read through — the only evidence that the thing in the bucket is a
+     * backup rather than a file of the right size. Degraded, never down: the
+     * business is running fine either way, and this is a fact for a person to
+     * act on rather than a reason to call the system dead.
+     */
+    private function drill(): array
+    {
+        if (! config('backup.enabled')) {
+            return $this->check('drill', 'בדיקת שחזור', self::OK, 'גיבוי אוטומטי כבוי — מדלג.');
+        }
+
+        $days = max(1, (int) config('backup.drill_stale_days', 45));
+
+        $drilled = rescue(
+            fn () => Backup::query()->whereNotNull('drilled_at')->max('drilled_at'),
+            null,
+            report: false,
+        );
+
+        if ($drilled === null) {
+            return $this->check(
+                'drill',
+                'בדיקת שחזור',
+                self::DEGRADED,
+                'אף גיבוי לא נבדק עדיין. גיבוי שאיש לא פתח הוא תקווה, לא גיבוי.',
+            );
+        }
+
+        $last = Carbon::parse($drilled);
+
+        return $this->check(
+            'drill',
+            'בדיקת שחזור',
+            $last->lt(now()->subDays($days)) ? self::DEGRADED : self::OK,
+            'נבדק לאחרונה '.$last->diffForHumans().'.',
         );
     }
 

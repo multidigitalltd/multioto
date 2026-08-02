@@ -24,6 +24,7 @@ class Backup extends Model
         'status', 'disk', 'path', 'size_bytes', 'manifest', 'error',
         'user_id', 'run_attempt', 'finished_at', 'restore_status', 'restore_error', 'restored_at',
         'restore_attempt', 'restore_queued_at', 'restore_started_at', 'restore_report', 'restore_journal',
+        'drilled_at', 'drill_report',
     ];
 
     protected function casts(): array
@@ -33,10 +34,12 @@ class Backup extends Model
             'restore_status' => BackupStatus::class,
             'manifest' => 'array',
             'restore_report' => 'array',
+            'drill_report' => 'array',
             'finished_at' => 'datetime',
             'restored_at' => 'datetime',
             'restore_queued_at' => 'datetime',
             'restore_started_at' => 'datetime',
+            'drilled_at' => 'datetime',
         ];
     }
 

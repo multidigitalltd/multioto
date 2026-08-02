@@ -6,6 +6,7 @@ use App\Enums\BackupStatus;
 use App\Filament\Clusters\Settings;
 use App\Filament\Concerns\AdminOnly;
 use App\Filament\Concerns\PersistsSettings;
+use App\Jobs\DrillBackupJob;
 use App\Jobs\ImportBackupsJob;
 use App\Jobs\RestoreBackupJob;
 use App\Jobs\RunBackupJob;
@@ -253,6 +254,22 @@ class ManageBackups extends Page implements HasForms, HasTable
                     ->visible(fn (): bool => Backup::query()->whereNotNull('restore_error')->exists()),
                 Tables\Columns\TextColumn::make('restored_at')
                     ->label('שוחזר')->dateTime('d/m/Y H:i')->placeholder('—')->toggleable(),
+
+                // A backup nobody has opened is a hope. This says when somebody
+                // last read this one through, and what they found.
+                Tables\Columns\TextColumn::make('drilled_at')
+                    ->label('נבדק')->dateTime('d/m/Y H:i')->placeholder('—')
+                    ->description(fn (Backup $record): ?string => match (true) {
+                        $record->drilled_at === null => null,
+                        ($record->drill_report['problems'] ?? []) === [] => 'עבר',
+                        default => 'נמצאו '.count($record->drill_report['problems']).' בעיות',
+                    })
+                    ->color(fn (Backup $record): ?string => match (true) {
+                        $record->drilled_at === null => null,
+                        ($record->drill_report['problems'] ?? []) === [] => 'success',
+                        default => 'danger',
+                    })
+                    ->toggleable(),
             ])
             ->headerActions([
                 Tables\Actions\Action::make('runNow')
@@ -279,6 +296,27 @@ class ManageBackups extends Page implements HasForms, HasTable
                         }
 
                         Notification::make()->title('הגיבוי התחיל — יופיע ברשימה בסיום.')->success()->send();
+                    }),
+
+                // Reading an archive is the only thing that proves it IS one.
+                // Everything else on this screen reports on the write.
+                Tables\Actions\Action::make('drill')
+                    ->label('בדוק שחזור')
+                    ->icon('heroicon-o-shield-check')
+                    ->color('gray')
+                    ->requiresConfirmation()
+                    ->modalHeading('לבדוק את הגיבוי האחרון?')
+                    ->modalDescription('הגיבוי האחרון יורד מהיעד ונקרא במלואו — שום דבר לא משוחזר ושום דבר לא נמחק. התוצאה תופיע בעמודה "נבדק".')
+                    ->action(function (): void {
+                        try {
+                            DrillBackupJob::dispatch();
+                        } catch (\Throwable $e) {
+                            Notification::make()->title('הבדיקה לא התחילה — התור אינו זמין.')->danger()->send();
+
+                            return;
+                        }
+
+                        Notification::make()->title('הבדיקה התחילה — התוצאה תופיע ברשימה.')->success()->send();
                     }),
 
                 // The list lives in the database, and the database is exactly
