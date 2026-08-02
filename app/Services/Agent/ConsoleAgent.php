@@ -1311,9 +1311,6 @@ class ConsoleAgent
         }
 
         if ($assignees->isNotEmpty()) {
-            $before = $task->assignees()->pluck('users.id')->sort()->values()->all();
-            $ids = $assignees->pluck('id')->all();
-
             // ADDING is the default, because this is mostly the repair path for
             // an assignment that only half worked: "לאליס ולדני" opens the task
             // for Alice and asks which Dani, and the answer names Dani alone —
@@ -1321,14 +1318,16 @@ class ConsoleAgent
             // correctly the first time. Replacing happens only when the manager
             // says so ("תעביר מדני לרותם"): an owner too many is visible to
             // everyone, an owner silently removed is visible to nobody.
-            if (mb_strtolower(trim((string) ($input['mode'] ?? ''))) === 'replace') {
-                $task->assignees()->sync($ids);
-            } else {
-                $task->assignees()->syncWithoutDetaching($ids);
-            }
-
-            $after = $task->assignees()->pluck('users.id')->sort()->values()->all();
-            $added = array_values(array_diff($after, $before));
+            //
+            // Who is NEW comes back from the claim itself, decided under the
+            // task's row lock: two copies of the same answer running at once
+            // would otherwise both read the old owner list and both announce
+            // the one assignment between them.
+            $added = app(SystemActionRunner::class)->claimAssignees(
+                $task,
+                $assignees->pluck('id')->all(),
+                replace: mb_strtolower(trim((string) ($input['mode'] ?? ''))) === 'replace',
+            );
 
             // Only the people who were NOT on it a moment ago. The closing AI
             // turn can die after the assignment is saved, and the operator

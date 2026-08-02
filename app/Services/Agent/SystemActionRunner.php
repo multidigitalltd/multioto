@@ -116,8 +116,18 @@ class SystemActionRunner
             return $task;
         }
 
-        if ($assignees !== []) {
-            $task->assignees()->sync($assignees);
+        // Through the same serialized claim the repair path uses: the worker
+        // that LOST the insert can reach the row between this insert and this
+        // attach, and without one lock covering both, the two of them would
+        // write over each other and announce the task twice.
+        $added = $this->claimAssignees($task, $assignees);
+
+        // Owners were asked for and none of them are new: the other worker got
+        // there first and has already told them. Saying it again is the second
+        // notification this whole path exists to prevent — and reporting the
+        // task as unassigned to the managers would be plainly false.
+        if ($assignees !== [] && $added === []) {
+            return $task;
         }
 
         // No assignee → the managers are notified a task landed (same as the UI).
@@ -128,7 +138,7 @@ class SystemActionRunner
         try {
             // Named here rather than looked up later, so a task reassigned
             // before the queue drains still tells the person it was opened for.
-            NotifyTaskCreatedJob::dispatch($task->id, $assignees === [] ? null : array_values($assignees));
+            NotifyTaskCreatedJob::dispatch($task->id, $added === [] ? null : $added);
         } catch (\Throwable $e) {
             Log::warning('SystemActionRunner: task notification not queued', [
                 'task_id' => $task->id,
@@ -154,38 +164,73 @@ class SystemActionRunner
             return;
         }
 
-        // One claim, taken under the task's own row lock. Two workers can be
-        // running the same repeated request at once — the one that lost the
-        // insert arrives here while the winner is still attaching owners, and
-        // without the lock both would see an ownerless task, both would write,
-        // and the person would be told twice about one assignment (or told the
-        // wrong thing, if the two runs resolved different people).
-        $claimed = DB::transaction(function () use ($task, $assignees): bool {
-            $locked = Task::query()->whereKey($task->getKey())->lockForUpdate()->first();
-
-            if (! $locked || $locked->assignees()->exists()) {
-                return false;
-            }
-
-            $locked->assignees()->sync($assignees);
-
-            return true;
-        });
+        $added = $this->claimAssignees($task, $assignees, onlyIfOwnerless: true);
 
         // Only the worker that actually claimed it announces anything, and only
         // once the write is committed.
-        if (! $claimed) {
+        if ($added === []) {
             return;
         }
 
         try {
-            NotifyTaskCreatedJob::dispatch($task->id, $assignees);
+            NotifyTaskCreatedJob::dispatch($task->id, $added);
         } catch (\Throwable $e) {
             Log::warning('SystemActionRunner: recovered task notification not queued', [
                 'task_id' => $task->id,
                 'error' => $e->getMessage(),
             ]);
         }
+    }
+
+    /**
+     * Attach owners to a task and say which of them are NEW.
+     *
+     * The single place any of this happens, because it is the only way the
+     * answer can be trusted: two workers running the same request — a repeat, a
+     * duplicated clarification — otherwise both read the owner list, both write
+     * their own, and both tell somebody they were handed the task. The list is
+     * read and written inside one transaction holding the task's row lock, so
+     * the second worker sees the first one's work and reports nothing new.
+     *
+     * $onlyIfOwnerless is the repair case: fill in owners that never landed,
+     * but never pull a task back off the colleague it has since been given to.
+     * $replace is an explicit move ("תעביר מדני לרותם"); by default owners are
+     * added, so answering "which Dani" cannot remove whoever was already there.
+     *
+     * @param  list<int>  $assignees
+     * @return list<int> those attached by THIS call
+     */
+    public function claimAssignees(
+        Task $task,
+        array $assignees,
+        bool $replace = false,
+        bool $onlyIfOwnerless = false,
+    ): array {
+        $assignees = array_values(array_unique(array_filter(array_map('intval', $assignees))));
+
+        if ($assignees === []) {
+            return [];
+        }
+
+        return DB::transaction(function () use ($task, $assignees, $replace, $onlyIfOwnerless): array {
+            $locked = Task::query()->whereKey($task->getKey())->lockForUpdate()->first();
+
+            if (! $locked) {
+                return [];
+            }
+
+            $before = $locked->assignees()->pluck('users.id')->map(fn ($id): int => (int) $id)->all();
+
+            if ($onlyIfOwnerless && $before !== []) {
+                return [];
+            }
+
+            $replace
+                ? $locked->assignees()->sync($assignees)
+                : $locked->assignees()->syncWithoutDetaching($assignees);
+
+            return array_values(array_diff($assignees, $before));
+        });
     }
 
     /** @param array<string, mixed> $p */
