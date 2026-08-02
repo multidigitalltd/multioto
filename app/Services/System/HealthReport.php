@@ -530,10 +530,6 @@ class HealthReport
      */
     private function drill(): array
     {
-        if (! config('backup.enabled')) {
-            return $this->check('drill', 'בדיקת שחזור', self::OK, 'גיבוי אוטומטי כבוי — מדלג.');
-        }
-
         $days = max(1, (int) config('backup.drill_stale_days', 45));
 
         // The report as well as the date. A drill that ran and FAILED still
@@ -552,18 +548,14 @@ class HealthReport
             report: false,
         );
 
-        if ($latest === null) {
-            return $this->check(
-                'drill',
-                'בדיקת שחזור',
-                self::DEGRADED,
-                'אף גיבוי לא נבדק עדיין. גיבוי שאיש לא פתח הוא תקווה, לא גיבוי.',
-            );
-        }
+        $last = $latest === null ? null : Carbon::parse($latest->drilled_at);
+        $problems = (array) ($latest?->drill_report['problems'] ?? []);
 
-        $last = Carbon::parse($latest->drilled_at);
-        $problems = (array) ($latest->drill_report['problems'] ?? []);
-
+        // Before the automation switch is consulted, not after. Turning the
+        // nightly run off does not unfind what a drill found, and somebody
+        // running manual backups is precisely who presses the button — a
+        // recorded failure hidden behind that switch would be the same
+        // false green, in the one installation that had to ask for the check.
         if ($problems !== []) {
             return $this->check(
                 'drill',
@@ -571,6 +563,21 @@ class HealthReport
                 self::DEGRADED,
                 'הבדיקה האחרונה ('.$last->diffForHumans().') מצאה '.count($problems)
                     .' בעיות בגיבוי — הוא לא ישוחזר במצבו הנוכחי.',
+            );
+        }
+
+        // Nothing found, and nothing scheduled to find it: "never drilled" is
+        // a fact about automation that is switched off on purpose.
+        if (! config('backup.enabled')) {
+            return $this->check('drill', 'בדיקת שחזור', self::OK, 'גיבוי אוטומטי כבוי — מדלג.');
+        }
+
+        if ($last === null) {
+            return $this->check(
+                'drill',
+                'בדיקת שחזור',
+                self::DEGRADED,
+                'אף גיבוי לא נבדק עדיין. גיבוי שאיש לא פתח הוא תקווה, לא גיבוי.',
             );
         }
 

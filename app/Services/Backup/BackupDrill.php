@@ -35,10 +35,23 @@ class BackupDrill
 
     /**
      * The newest completed archive, or null when there is nothing to open yet.
+     *
+     * Undated rows go LAST, not first. An archive found in the bucket by the
+     * import is saved with no finished_at when the destination cannot say when
+     * it was written, and PostgreSQL sorts NULLs first in a descending order —
+     * so one such row would win this query for ever, and the drill would spend
+     * every month re-reading the same arbitrary archive while the newest
+     * recovery point went unopened. SQLite sorts them last of its own accord,
+     * which is exactly why this cannot be left to the driver.
      */
     public function latest(): ?Backup
     {
-        return Backup::query()->restorable()->latest('finished_at')->latest('id')->first();
+        return Backup::query()
+            ->restorable()
+            ->orderByRaw('finished_at IS NULL')
+            ->orderByDesc('finished_at')
+            ->orderByDesc('id')
+            ->first();
     }
 
     /**

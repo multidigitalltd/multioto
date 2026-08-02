@@ -474,6 +474,44 @@ class BackupDrillTest extends TestCase
         $this->assertStringContainsString('בעיות', $drill['detail']);
     }
 
+    /**
+     * Turning the nightly run off does not unfind what a drill found — and
+     * somebody running manual backups is precisely who presses the button.
+     */
+    public function test_health_reports_a_failed_manual_drill_with_automation_off(): void
+    {
+        $backup = $this->backup();
+        Storage::disk('backups')->delete($backup->path);
+
+        (new DrillBackupJob(manual: true))->handle(app(BackupDrill::class));
+        config(['backup.enabled' => false]);
+
+        $drill = collect(app(HealthReport::class)->collect()['checks'])->firstWhere('key', 'drill');
+
+        $this->assertSame(HealthReport::DEGRADED, $drill['status']);
+    }
+
+    /**
+     * An archive found in the bucket by the import has no finished_at when the
+     * destination cannot say when it was written. PostgreSQL sorts NULLs first
+     * in a descending order, so one such row would win for ever and the drill
+     * would re-read it every month while the newest archive went unopened.
+     */
+    public function test_an_undated_archive_does_not_displace_the_newest_one(): void
+    {
+        $newest = $this->backup();
+
+        Backup::query()->create([
+            'status' => $newest->status,
+            'disk' => $newest->disk,
+            'path' => 'archives/imported.zip',
+            'size_bytes' => $newest->size_bytes,
+            'finished_at' => null,
+        ]);
+
+        $this->assertSame($newest->id, app(BackupDrill::class)->latest()?->id);
+    }
+
     public function test_a_drill_older_than_the_window_is_reported(): void
     {
         $backup = $this->backup();
