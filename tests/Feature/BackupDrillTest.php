@@ -1264,7 +1264,7 @@ class BackupDrillTest extends TestCase
 
         $report = app(BackupDrill::class)->run($backup);
 
-        $this->assertStringContainsString('בית אפס או קידוד שבור', implode(' ', $report['problems']));
+        $this->assertStringContainsString('אינו יכול לאחסן', implode(' ', $report['problems']));
     }
 
     /**
@@ -1280,7 +1280,7 @@ class BackupDrillTest extends TestCase
 
         $report = $this->drillWith('blob_probe', 1, '{"id":1,"payload":"A\\u0000B"}'."\n");
 
-        $this->assertStringNotContainsString('בית אפס או קידוד שבור', implode(' ', $report['problems']));
+        $this->assertStringNotContainsString('אינו יכול לאחסן', implode(' ', $report['problems']));
     }
 
     /**
@@ -1322,7 +1322,7 @@ class BackupDrillTest extends TestCase
         $report = $this->drillWith('jsonb_probe', 1,
             '{"id":1,"payload":"{\\"note\\":\\"\\\\u0000\\"}"}'."\n");
 
-        $this->assertStringContainsString('בית אפס או קידוד שבור', implode(' ', $report['problems']));
+        $this->assertStringContainsString('אינו יכול לאחסן', implode(' ', $report['problems']));
         $this->assertStringContainsString('payload', implode(' ', $report['problems']));
     }
 
@@ -1333,6 +1333,35 @@ class BackupDrillTest extends TestCase
 
         $report = $this->drillWith('plain_json_probe', 1,
             '{"id":1,"payload":"{\\"note\\":\\"\\\\u0000\\"}"}'."\n");
+
+        $this->assertStringNotContainsString('payload', implode(' ', $report['problems']));
+    }
+
+    /**
+     * jsonb keeps every number as a numeric, and that type has a ceiling.
+     *
+     * 1e200000 is valid JSON, is stored as its source text by a plain json
+     * column, and overflows the numeric a jsonb column converts it to. PHP
+     * decodes it to INF, which is why the check reads the text.
+     */
+    public function test_a_number_beyond_the_numeric_range_in_a_jsonb_column_is_reported(): void
+    {
+        DB::statement('CREATE TABLE big_number_probe (id integer primary key, payload jsonb)');
+
+        $report = $this->drillWith('big_number_probe', 1,
+            '{"id":1,"payload":"{\\"size\\":1e200000}"}'."\n");
+
+        $this->assertStringContainsString('אינו יכול לאחסן', implode(' ', $report['problems']));
+        $this->assertStringContainsString('payload', implode(' ', $report['problems']));
+    }
+
+    /** And an ordinary number, and digits inside a string, are left alone. */
+    public function test_ordinary_numbers_in_a_jsonb_column_are_not_reported(): void
+    {
+        DB::statement('CREATE TABLE ok_number_probe (id integer primary key, payload jsonb)');
+
+        $report = $this->drillWith('ok_number_probe', 1,
+            '{"id":1,"payload":"{\\"size\\":-12.5e3,\\"phone\\":\\"1e200000\\"}"}'."\n");
 
         $this->assertStringNotContainsString('payload', implode(' ', $report['problems']));
     }

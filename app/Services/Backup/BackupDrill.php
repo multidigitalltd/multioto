@@ -49,6 +49,14 @@ class BackupDrill
      */
     private int $keyBudget = self::MAX_KEYS;
 
+    /**
+     * How far PostgreSQL's numeric type reaches, which is how far jsonb does:
+     * every number in a jsonb document is stored as one.
+     */
+    private const NUMERIC_WHOLE_DIGITS = 131072;
+
+    private const NUMERIC_FRACTION_DIGITS = 16383;
+
     public function __construct(private BackupArchive $archive) {}
 
     /**
@@ -335,7 +343,7 @@ class BackupDrill
             }
 
             if ($read['unstorable'] !== []) {
-                $found[] = "הטבלה {$table}: טקסט שהמסד אינו יכול לאחסן — בית אפס או קידוד שבור ("
+                $found[] = "הטבלה {$table}: ערכים שהמסד אינו יכול לאחסן — בית אפס, קידוד שבור או מספר מחוץ לטווח ("
                     .$this->few($read['unstorable']).') — השחזור ייעצר.';
             }
 
@@ -1042,6 +1050,102 @@ class BackupDrill
     }
 
     /**
+     * Whether a jsonb document holds a number the column could not store.
+     *
+     * Every number in a jsonb document is kept as a numeric, which reaches
+     * 131072 digits before the point and 16383 after; a plain json column keeps
+     * the source text and takes anything that parses at all.
+     *
+     * Read from the TEXT, because decoding is where the answer is lost: PHP
+     * hands back INF for 1e200000 and 0.0 for 1e-200000, and neither of those
+     * is distinguishable afterwards from a number the column stores.
+     */
+    private function holdsUnstorableNumber(string $json): bool
+    {
+        foreach ($this->numberLiterals($json) as $literal) {
+            if (! $this->fitsNumeric($literal)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * The number literals in a JSON document, as they were written.
+     *
+     * Scanned rather than matched, so that digits inside a STRING are not read
+     * as numbers: a phone number in a text field is not something the column
+     * has to store as one. The document has already been through
+     * json_validate(), so the token boundaries here can be trusted.
+     *
+     * @return list<string>
+     */
+    private function numberLiterals(string $json): array
+    {
+        $numbers = [];
+        $length = strlen($json);
+        $inString = false;
+
+        for ($i = 0; $i < $length; $i++) {
+            $char = $json[$i];
+
+            if ($inString) {
+                if ($char === chr(92)) {
+                    $i++;
+                } elseif ($char === '"') {
+                    $inString = false;
+                }
+
+                continue;
+            }
+
+            if ($char === '"') {
+                $inString = true;
+
+                continue;
+            }
+
+            if ($char !== '-' && ($char < '0' || $char > '9')) {
+                continue;
+            }
+
+            $start = $i;
+
+            while ($i + 1 < $length && str_contains('0123456789+-.eE', $json[$i + 1])) {
+                $i++;
+            }
+
+            $numbers[] = substr($json, $start, $i - $start + 1);
+        }
+
+        return $numbers;
+    }
+
+    /**
+     * Whether one number literal is inside PostgreSQL's numeric range.
+     *
+     * Counted in digits, never converted: the exponent itself may be larger
+     * than this machine can hold, and casting it would quietly make it small.
+     */
+    private function fitsNumeric(string $literal): bool
+    {
+        if (preg_match('/^-?(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/', $literal, $parts) !== 1) {
+            return true;
+        }
+
+        $whole = strlen(ltrim($parts[1], '0'));
+        $fraction = strlen(rtrim($parts[2] ?? '', '0'));
+
+        // Beyond what an int holds the sign is all that matters, and it is
+        // already far past either limit.
+        $exponent = (float) ($parts[3] ?? 0);
+
+        return $whole + $exponent <= self::NUMERIC_WHOLE_DIGITS
+            && $fraction - $exponent <= self::NUMERIC_FRACTION_DIGITS;
+    }
+
+    /**
      * Whether a decoded JSON document carries a zero byte anywhere inside it —
      * in a value or in a key.
      *
@@ -1609,7 +1713,8 @@ class BackupDrill
                     // inside the archive the escape is six characters, not a
                     // byte — and a plain json column takes it quite happily.
                     if ($schema['json'][$column] === 'jsonb'
-                        && $this->holdsZeroByte(json_decode($value, true))) {
+                        && ($this->holdsZeroByte(json_decode($value, true))
+                            || $this->holdsUnstorableNumber($value))) {
                         $unstorable[(string) $column] = true;
                     }
                 }
