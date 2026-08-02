@@ -6,6 +6,7 @@ use App\Http\Controllers\HealthController;
 use App\Models\Setting;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\ServiceProvider;
 use Throwable;
 
@@ -51,6 +52,15 @@ class SettingsServiceProvider extends ServiceProvider
         'backup.path' => 'backup.path',
         'backup.daily_at' => 'backup.daily_at',
         'backup.retention_days' => 'backup.retention_days',
+        // The destination's own credentials, so a bucket can be connected from
+        // the panel rather than from a deploy. They configure the "backups"
+        // disk and nothing else — see config/filesystems.php.
+        'backup.s3.key' => 'filesystems.disks.backups.key',
+        'backup.s3.secret' => 'filesystems.disks.backups.secret',
+        'backup.s3.region' => 'filesystems.disks.backups.region',
+        'backup.s3.bucket' => 'filesystems.disks.backups.bucket',
+        'backup.s3.endpoint' => 'filesystems.disks.backups.endpoint',
+        'backup.s3.path_style' => 'filesystems.disks.backups.use_path_style_endpoint',
         'security.wpscan_token' => 'security.vulnerabilities.wpscan_token',
         'security.urlhaus_auth_key' => 'security.reputation.urlhaus_auth_key',
         'security.wordfence_api_key' => 'security.vulnerabilities.wordfence_api_key',
@@ -152,10 +162,58 @@ class SettingsServiceProvider extends ServiceProvider
         'backup.path' => 'backup.path',
         'backup.daily_at' => 'backup.daily_at',
         'backup.retention_days' => 'backup.retention_days',
+        // Same reasoning for the destination itself: an endpoint cleared in the
+        // panel — moving from R2 back to AWS — must not stay in a running
+        // worker, still writing archives to the bucket nobody is watching any
+        // more.
+        //
+        // The key and the secret belong here too, even though they are
+        // write-only. A blank field never removes their row — save() leaves
+        // them alone, which is what keeps an empty form from wiping the
+        // credentials — so a row that is ABSENT means one of two things, and
+        // both want the config-file value: it was never set, or somebody asked
+        // for it to be forgotten in order to use the server's own permissions.
+        'backup.s3.key' => 'filesystems.disks.backups.key',
+        'backup.s3.secret' => 'filesystems.disks.backups.secret',
+        'backup.s3.region' => 'filesystems.disks.backups.region',
+        'backup.s3.bucket' => 'filesystems.disks.backups.bucket',
+        'backup.s3.endpoint' => 'filesystems.disks.backups.endpoint',
+        'backup.s3.path_style' => 'filesystems.disks.backups.use_path_style_endpoint',
     ];
 
     /** Pristine config-file defaults for RESET_ON_CLEAR keys, memoized once. */
     private static array $pristine = [];
+
+    /**
+     * Disks whose settings this overlay can change, and what their config
+     * looked like the last time it did.
+     *
+     * Applying the config is only half the job in a long-lived process: a
+     * worker that has already resolved a disk keeps the adapter it built for
+     * the lifetime of the process, so a backup job would go on writing to the
+     * OLD bucket — and record a successful row for it — after an operator
+     * moved the destination. The adapter has to be thrown away too.
+     *
+     * @var array<string, string>
+     */
+    private static array $diskSignatures = [];
+
+    private const OVERLAID_DISKS = ['backups'];
+
+    /**
+     * What a cleared override falls back to: the config-file default, captured
+     * before any overlay touched it.
+     *
+     * config() cannot answer this — by the time anyone asks, it is holding the
+     * stored value that is about to be forgotten. Anything not overridable this
+     * way has no pristine copy and is simply itself.
+     */
+    public static function pristine(string $configPath): mixed
+    {
+        return array_key_exists($configPath, self::$pristine)
+            ? self::$pristine[$configPath]
+            : config($configPath);
+    }
 
     /**
      * Re-apply stored settings onto config from the database, WITHOUT
@@ -231,6 +289,28 @@ class SettingsServiceProvider extends ServiceProvider
             if (blank($stored[$settingKey] ?? null)) {
                 config([$configPath => self::$pristine[$configPath]]);
             }
+        }
+
+        $this->purgeChangedDisks();
+    }
+
+    /**
+     * Throw away the resolved adapter of any disk whose configuration just
+     * changed under it.
+     *
+     * Cheap enough to run before every job: a hash of one config array, and a
+     * purge only when it actually moved.
+     */
+    private function purgeChangedDisks(): void
+    {
+        foreach (self::OVERLAID_DISKS as $disk) {
+            $signature = md5(serialize(config("filesystems.disks.{$disk}")));
+
+            if ((self::$diskSignatures[$disk] ?? $signature) !== $signature) {
+                Storage::forgetDisk($disk);
+            }
+
+            self::$diskSignatures[$disk] = $signature;
         }
     }
 }

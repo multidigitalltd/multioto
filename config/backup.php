@@ -24,6 +24,12 @@ return [
     | The filesystem disk backups are written to. Must be off-box (S3 or any
     | S3-compatible provider) and PRIVATE: an archive holds customer names,
     | phone numbers, addresses and invoice history.
+    |
+    | New installations are pointed at "backups" (see .env.example), the disk
+    | that exists only for this and is configured from the panel. The fallback
+    | stays "s3" so an installation already writing there — one that never set
+    | BACKUP_DISK because the default was enough — does not have its
+    | destination moved out from under it by an update.
     */
     'disk' => env('BACKUP_DISK', 's3'),
 
@@ -60,6 +66,13 @@ return [
      * the attempt id changes with it — a payload that turns up late finds
      * itself superseded and stops.
      */
+    /*
+    | How long a backup may go without anyone opening it before the health
+    | screen says so. The drill runs monthly; this is the window in which a
+    | missed run stops being a coincidence.
+    */
+    'drill_stale_days' => (int) env('BACKUP_DRILL_STALE_DAYS', 45),
+
     'restore_claim_minutes' => (int) env('BACKUP_RESTORE_CLAIM_MINUTES', 30),
 
     /** Archives older than this are pruned after each successful run. */

@@ -14,6 +14,7 @@ use App\Jobs\CheckSiteReputationJob;
 use App\Jobs\CheckSlaBreachesJob;
 use App\Jobs\CheckSslExpiryJob;
 use App\Jobs\CheckStoreSalesJob;
+use App\Jobs\DrillBackupJob;
 use App\Jobs\FollowUpPendingTicketsJob;
 use App\Jobs\HeartbeatJob;
 use App\Jobs\MonitorSiteJob;
@@ -89,6 +90,13 @@ Schedule::job(new HeartbeatJob(HealthHeartbeat::WORKLOAD))->everyFiveMinutes()
 // assumption becomes a second charge on somebody's card. Silent when clean.
 Schedule::job(new CheckMoneyIntegrityJob)->dailyAt('08:15')
     ->name('billing:money-integrity')->onOneServer();
+
+// Once a month, the newest archive is fetched and read through. Everything else
+// about backups reports on the WRITE — the run finished, the upload succeeded —
+// and none of that is the question anybody has on the day it matters. Nothing is
+// restored; see BackupDrill.
+Schedule::job(new DrillBackupJob)->monthlyOn(1, '04:30')
+    ->name('backup:drill')->onOneServer();
 
 // Billing: enqueue a charge for every subscription that is due. The job holds
 // a per-subscription lock and re-checks the due date, so double dispatch is safe.

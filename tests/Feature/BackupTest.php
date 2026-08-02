@@ -20,8 +20,10 @@ use App\Models\Charge;
 use App\Models\Customer;
 use App\Models\Invoice;
 use App\Models\PaymentToken;
+use App\Models\Setting;
 use App\Models\Site;
 use App\Models\User;
+use App\Providers\SettingsServiceProvider;
 use App\Services\Backup\BackupArchive;
 use App\Services\Backup\BackupRestorer;
 use App\Services\Backup\BackupRunner;
@@ -2718,6 +2720,266 @@ class BackupTest extends TestCase
         $raw[$payload + 4] = chr(ord($raw[$payload + 4]) ^ 0xFF);
 
         Storage::disk($backup->disk)->put($backup->path, $raw);
+    }
+
+    /**
+     * The destination is connected from the panel, not from a deploy.
+     *
+     * An operator who has to edit .env and redeploy to point the backup at a
+     * bucket is an operator who does it once, badly, at 2am.
+     */
+    public function test_the_destination_credentials_are_saved_and_take_effect(): void
+    {
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+
+        Livewire::test(ManageBackups::class)
+            ->fillForm([
+                'backup' => [
+                    'enabled' => true,
+                    'disk' => 'backups',
+                    'path' => 'multioto-backups',
+                    'daily_at' => '03:30',
+                    'retention_days' => 30,
+                    's3' => [
+                        'key' => 'R2KEY',
+                        'secret' => 'R2SECRET',
+                        'bucket' => 'multioto',
+                        'endpoint' => 'https://account.r2.cloudflarestorage.com',
+                        'region' => 'auto',
+                        'path_style' => true,
+                    ],
+                ],
+            ])
+            ->call('save')
+            ->assertHasNoFormErrors();
+
+        $this->assertSame('R2SECRET', config('filesystems.disks.backups.secret'));
+        $this->assertSame('https://account.r2.cloudflarestorage.com', config('filesystems.disks.backups.endpoint'));
+        $this->assertSame('backups', config('backup.disk'));
+
+        // Encrypted at rest, like every other credential in the settings table.
+        $this->assertNotSame(
+            'R2SECRET',
+            DB::table('settings')->where('key', 'backup.s3.secret')->value('value'),
+        );
+    }
+
+    /**
+     * The secret field is blank every time this screen loads. Saving the
+     * retention window must not therefore delete the credentials — a loss
+     * nobody would notice until the next nightly run.
+     */
+    public function test_saving_with_a_blank_secret_keeps_the_stored_one(): void
+    {
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+
+        Setting::put('backup.s3.key', 'R2KEY');
+        Setting::put('backup.s3.secret', 'R2SECRET');
+
+        Livewire::test(ManageBackups::class)
+            ->fillForm([
+                'backup' => [
+                    'enabled' => true,
+                    'disk' => 'backups',
+                    'path' => 'multioto-backups',
+                    'daily_at' => '04:00',
+                    'retention_days' => 14,
+                    's3' => [
+                        'key' => '',
+                        'secret' => '',
+                        'bucket' => 'multioto',
+                        'endpoint' => 'https://account.r2.cloudflarestorage.com',
+                        'region' => 'auto',
+                        'path_style' => true,
+                    ],
+                ],
+            ])
+            ->call('save');
+
+        $this->assertSame('R2SECRET', Setting::map()['backup.s3.secret'] ?? null);
+        $this->assertSame(14, (int) config('backup.retention_days'));
+    }
+
+    /**
+     * Reaching the bucket is not the question — writing to it is. A read-only
+     * token looks fine until the first nightly run reports its failure to a log
+     * nobody reads at 03:30.
+     */
+    public function test_the_connection_test_writes_reads_and_cleans_up(): void
+    {
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+        config(['backup.disk' => 'backups', 'backup.path' => 'archives']);
+
+        Livewire::test(ManageBackups::class)
+            ->call('testDestination')
+            ->assertNotified();
+
+        // Nothing of the probe is left behind on the destination.
+        $this->assertSame([], Storage::disk('backups')->files('archives'));
+    }
+
+    /**
+     * A cleared folder is tested where the nightly run would actually write.
+     *
+     * Permissions on these buckets are usually scoped to the prefix, so a probe
+     * at the root would fail on a destination that works — or pass under
+     * permissions that do not reach the prefix the archives go to.
+     */
+    public function test_the_connection_test_probes_the_folder_a_cleared_setting_falls_back_to(): void
+    {
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+        config(['backup.disk' => 'backups', 'backup.path' => 'archives']);
+
+        $written = null;
+        $disk = \Mockery::mock(Storage::disk('backups'))->makePartial();
+        $disk->shouldReceive('put')->andReturnUsing(function (string $path) use (&$written): bool {
+            $written = $path;
+
+            return true;
+        });
+        $disk->shouldReceive('get')->andReturn('multioto');
+        $disk->shouldReceive('delete')->andReturn(true);
+        Storage::set('backups', $disk);
+
+        Livewire::test(ManageBackups::class)
+            ->fillForm(['backup' => ['path' => '']])
+            ->call('testDestination');
+
+        $folder = trim((string) SettingsServiceProvider::pristine('backup.path'), '/');
+
+        $this->assertNotSame('', $folder);
+        $this->assertIsString($written);
+        $this->assertStringStartsWith($folder.'/', $written);
+    }
+
+    /**
+     * There has to be a way to say "no explicit credentials".
+     *
+     * A blank field means "unchanged", so without this the stored key can never
+     * leave — and an instance role, which is a perfectly ordinary destination,
+     * would go on losing to a key nobody can see.
+     */
+    public function test_the_stored_credentials_can_be_cleared(): void
+    {
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+
+        Setting::put('backup.s3.key', 'OLDKEY');
+        Setting::put('backup.s3.secret', 'OLDSECRET');
+        SettingsServiceProvider::refreshFromDatabase();
+
+        $this->assertSame('OLDKEY', config('filesystems.disks.backups.key'));
+
+        Livewire::test(ManageBackups::class)
+            ->call('forgetCredentials')
+            ->assertNotified();
+
+        $this->assertArrayNotHasKey('backup.s3.key', Setting::map());
+        $this->assertArrayNotHasKey('backup.s3.secret', Setting::map());
+        $this->assertNotSame('OLDKEY', config('filesystems.disks.backups.key'));
+    }
+
+    public function test_the_connection_test_reports_a_destination_that_refuses_writes(): void
+    {
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+        config(['backup.disk' => 'backups', 'backup.path' => 'archives']);
+
+        $disk = \Mockery::mock(Storage::disk('backups'))->makePartial();
+        $disk->shouldReceive('put')->andReturn(false);
+        Storage::set('backups', $disk);
+
+        Livewire::test(ManageBackups::class)
+            ->call('testDestination')
+            ->assertNotified();
+    }
+
+    /**
+     * A worker that already resolved the destination keeps the adapter it built
+     * for the life of the process. Applying the new config is only half the
+     * job: without dropping the adapter, a backup job goes on writing to the
+     * OLD bucket and records a successful row for it.
+     */
+    public function test_a_changed_destination_reaches_a_running_worker(): void
+    {
+        // The overlay remembers what it applied last, so the worker's baseline
+        // is established here — exactly as it would be at worker startup.
+        SettingsServiceProvider::refreshFromDatabase();
+
+        $before = Storage::disk('backups');
+
+        Setting::put('backup.s3.bucket', 'somewhere-else');
+        SettingsServiceProvider::refreshFromDatabase();
+
+        $this->assertSame('somewhere-else', config('filesystems.disks.backups.bucket'));
+        $this->assertNotSame($before, Storage::disk('backups'));
+    }
+
+    /** Nothing changed: the adapter must be left alone, not rebuilt per job. */
+    public function test_an_unchanged_destination_keeps_its_adapter(): void
+    {
+        SettingsServiceProvider::refreshFromDatabase();
+
+        $before = Storage::disk('backups');
+        SettingsServiceProvider::refreshFromDatabase();
+
+        $this->assertSame($before, Storage::disk('backups'));
+    }
+
+    /**
+     * A token without delete permission passes the write and the read. It also
+     * means retention will never prune an old archive — so this is a failed
+     * test, not a successful one with a leftover file.
+     */
+    public function test_the_connection_test_reports_a_destination_that_refuses_deletes(): void
+    {
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+        config(['backup.disk' => 'backups', 'backup.path' => 'archives']);
+
+        $disk = \Mockery::mock(Storage::disk('backups'))->makePartial();
+        // throw => false, so a refused delete comes back as false rather than
+        // as an exception — and would otherwise be read as success.
+        $disk->shouldReceive('delete')->andReturn(false);
+        Storage::set('backups', $disk);
+
+        Livewire::test(ManageBackups::class)
+            ->call('testDestination')
+            ->assertNotified();
+
+        $this->assertNotSame([], Storage::disk('backups')->files('archives'));
+    }
+
+    /**
+     * A cleared field falls back to the config file, not to what is stored.
+     *
+     * config() cannot answer that question: by the time anyone asks, it is
+     * holding the very value the clearing is about to forget. The connection
+     * test would otherwise probe the destination the operator is moving away
+     * from and call it a success.
+     */
+    public function test_a_cleared_setting_falls_back_to_the_config_file_default(): void
+    {
+        // The snapshot is taken once per process and kept for its lifetime —
+        // correct for a worker, and something a test has to start clean. Put
+        // back afterwards: emptied, the NEXT overlay would record an already
+        // overridden value as the pristine one, for every test after this.
+        $property = new \ReflectionProperty(SettingsServiceProvider::class, 'pristine');
+        $original = $property->getValue();
+        $property->setValue(null, []);
+
+        try {
+            config(['filesystems.disks.backups.bucket' => 'from-env']);
+            SettingsServiceProvider::refreshFromDatabase();
+
+            Setting::put('backup.s3.bucket', 'stored-bucket');
+            SettingsServiceProvider::refreshFromDatabase();
+
+            $this->assertSame('stored-bucket', config('filesystems.disks.backups.bucket'));
+            $this->assertSame(
+                'from-env',
+                SettingsServiceProvider::pristine('filesystems.disks.backups.bucket'),
+            );
+        } finally {
+            $property->setValue(null, $original);
+        }
     }
 
     /** Copy the stored archive to a local file the test can open. */

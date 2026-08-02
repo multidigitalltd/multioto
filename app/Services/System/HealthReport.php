@@ -2,9 +2,11 @@
 
 namespace App\Services\System;
 
+use App\Models\Backup;
 use App\Models\HealthHeartbeat;
 use App\Providers\SettingsServiceProvider;
 use App\Services\Backup\BackupRunner;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\ConfigurationUrlParser;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
@@ -89,6 +91,7 @@ class HealthReport
                 : $this->backlog(),
             $this->failedJobs(),
             $this->backup(),
+            $this->drill(),
         ];
 
         return [
@@ -513,6 +516,76 @@ class HealthReport
             'גיבוי',
             $warning === null ? self::OK : self::DEGRADED,
             $warning ?? 'עדכני.',
+        );
+    }
+
+    /**
+     * When somebody last OPENED a backup, not merely wrote one.
+     *
+     * The check above says an archive exists and is recent. This one says it
+     * was read through — the only evidence that the thing in the bucket is a
+     * backup rather than a file of the right size. Degraded, never down: the
+     * business is running fine either way, and this is a fact for a person to
+     * act on rather than a reason to call the system dead.
+     */
+    private function drill(): array
+    {
+        $days = max(1, (int) config('backup.drill_stale_days', 45));
+
+        // The report as well as the date. A drill that ran and FAILED still
+        // stamps the date, and reading only that would answer "was one opened
+        // recently" with a yes — for the next 45 days, right after the check
+        // established that the archive is unusable. The backup check above
+        // deliberately does not touch the destination, so nothing else would
+        // notice.
+        $latest = rescue(
+            fn () => Backup::query()
+                ->whereNotNull('drilled_at')
+                ->orderByDesc('drilled_at')
+                ->select(['drilled_at', 'drill_report'])
+                ->first(),
+            null,
+            report: false,
+        );
+
+        $last = $latest === null ? null : Carbon::parse($latest->drilled_at);
+        $problems = (array) ($latest?->drill_report['problems'] ?? []);
+
+        // Before the automation switch is consulted, not after. Turning the
+        // nightly run off does not unfind what a drill found, and somebody
+        // running manual backups is precisely who presses the button — a
+        // recorded failure hidden behind that switch would be the same
+        // false green, in the one installation that had to ask for the check.
+        if ($problems !== []) {
+            return $this->check(
+                'drill',
+                'בדיקת שחזור',
+                self::DEGRADED,
+                'הבדיקה האחרונה ('.$last->diffForHumans().') מצאה '.count($problems)
+                    .' בעיות בגיבוי — הוא לא ישוחזר במצבו הנוכחי.',
+            );
+        }
+
+        // Nothing found, and nothing scheduled to find it: "never drilled" is
+        // a fact about automation that is switched off on purpose.
+        if (! config('backup.enabled')) {
+            return $this->check('drill', 'בדיקת שחזור', self::OK, 'גיבוי אוטומטי כבוי — מדלג.');
+        }
+
+        if ($last === null) {
+            return $this->check(
+                'drill',
+                'בדיקת שחזור',
+                self::DEGRADED,
+                'אף גיבוי לא נבדק עדיין. גיבוי שאיש לא פתח הוא תקווה, לא גיבוי.',
+            );
+        }
+
+        return $this->check(
+            'drill',
+            'בדיקת שחזור',
+            $last->lt(now()->subDays($days)) ? self::DEGRADED : self::OK,
+            'נבדק לאחרונה '.$last->diffForHumans().'.',
         );
     }
 
