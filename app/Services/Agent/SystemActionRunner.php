@@ -19,6 +19,7 @@ use App\Models\Ticket;
 use App\Services\Billing\SubscriptionCollectionService;
 use App\Services\Cloudflare\CloudflareClient;
 use App\Services\Hosting\HostingClient;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -233,21 +234,49 @@ class SystemActionRunner
                 return [];
             }
 
-            // Inside its own savepoint: the panel can attach the same person a
-            // moment earlier, and the pivot's key would then reject this write
-            // and take the whole claim down with it. The write is simply lost
-            // in that case — the person is already on the task.
-            rescue(fn () => DB::transaction(fn () => $replace
-                ? $locked->assignees()->sync($assignees)
-                : $locked->assignees()->syncWithoutDetaching($assignees)), report: false);
+            // A move takes off the people we actually SAW and are not keeping —
+            // never a plain sync(), which would also sweep away somebody the
+            // panel added a moment ago, silently removing the very owner a
+            // manager had just chosen.
+            if ($replace && ($stale = array_values(array_diff($before, $assignees))) !== []) {
+                $locked->assignees()->detach($stale);
+            }
 
-            // Who is new is read back from the pivot rather than assumed, so a
-            // name that arrived from somewhere else in the meantime is not
-            // announced by us as though we had just assigned it.
-            $after = $locked->assignees()->pluck('users.id')->map(fn ($id): int => (int) $id)->all();
+            // The change set the write itself reports — the only answer that can
+            // say who WE attached. Subtracting two snapshots cannot: a name that
+            // appeared in between is somebody else's doing, and announcing it
+            // tells a person they were assigned by an instruction that never
+            // mentioned them.
+            $attached = $this->attach($locked, $assignees) ?? $this->attach($locked, $assignees);
 
-            return array_values(array_intersect($assignees, array_diff($after, $before)));
+            return array_values(array_map('intval', $attached['attached'] ?? []));
         });
+    }
+
+    /**
+     * One attempt at the pivot write, in its own savepoint.
+     *
+     * Null when another writer attached the same person first: the pivot's key
+     * rejects it, and without the savepoint that rejection would take the whole
+     * claim — and on Postgres the transaction around it — down with it. The
+     * caller simply tries again, by which time the other write is committed and
+     * this one attaches whatever is genuinely left.
+     *
+     * Only that collision is swallowed. Anything else — a user deleted between
+     * being resolved and being attached, for instance — is a real failure and
+     * must be seen: reporting an empty claim would leave the task ownerless
+     * while the console says it was assigned.
+     *
+     * @param  list<int>  $assignees
+     * @return array<string, list<int|string>>|null
+     */
+    private function attach(Task $task, array $assignees): ?array
+    {
+        try {
+            return DB::transaction(fn (): array => $task->assignees()->syncWithoutDetaching($assignees));
+        } catch (UniqueConstraintViolationException) {
+            return null;
+        }
     }
 
     /** @param array<string, mixed> $p */
