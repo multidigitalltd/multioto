@@ -854,10 +854,11 @@ class BackupDrill
             }
 
             // DateTimeImmutable truncates past six digits exactly as
-            // date_parse does, so the same carry applies here.
-            $carry = intdiv($this->microseconds($text), 1000000);
+            // date_parse does, so the rounded fraction — not just the whole
+            // second it may carry — has to be put back.
             $utc = $this->toPrecision(
-                $moment->modify("+{$carry} seconds")->setTimezone(new \DateTimeZone('UTC')),
+                $this->withMicroseconds($moment, $this->microseconds($text))
+                    ->setTimezone(new \DateTimeZone('UTC')),
                 $precision,
             );
 
@@ -977,17 +978,23 @@ class BackupDrill
         }
 
         $scale = 10 ** (6 - $precision);
-        $micro = (int) round((int) $moment->format('u') / $scale) * $scale;
 
-        // Rounding up at the very top of a second carries into the next one.
-        $carried = $micro >= 1000000 ? $moment->modify('+1 second') : $moment;
-        $micro = $micro >= 1000000 ? 0 : $micro;
+        return $this->withMicroseconds($moment, (int) round((int) $moment->format('u') / $scale) * $scale);
+    }
+
+    /**
+     * The same moment with this many microseconds, carrying a whole second (and
+     * with it a minute, an hour, a day) when the count has rounded past one.
+     */
+    private function withMicroseconds(\DateTimeImmutable $moment, int $micro): \DateTimeImmutable
+    {
+        $carried = $moment->modify('+'.intdiv($micro, 1000000).' seconds');
 
         return $carried->setTime(
             (int) $carried->format('H'),
             (int) $carried->format('i'),
             (int) $carried->format('s'),
-            $micro,
+            $micro % 1000000,
         );
     }
 

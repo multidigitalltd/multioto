@@ -1040,6 +1040,18 @@ class BackupDrillTest extends TestCase
         $this->assertStringContainsString('כפולים', implode(' ', $report['problems']));
     }
 
+    /** The same boundary, on a column that carries a zone. */
+    public function test_a_rounding_boundary_in_a_zoned_column_matches_the_database(): void
+    {
+        DB::statement('CREATE TABLE zoned_boundary_probe (seen_at timestamptz primary key)');
+
+        $report = $this->drillWith('zoned_boundary_probe', 2,
+            '{"seen_at":"2026-01-01 00:00:00.5168455+00"}'."\n"
+            .'{"seen_at":"2026-01-01 00:00:00.516846+00"}'."\n");
+
+        $this->assertStringContainsString('כפולים', implode(' ', $report['problems']));
+    }
+
     /** A clock is not a date. date_parse reports no fault for "12:34:56". */
     public function test_a_clock_value_in_a_date_column_is_reported(): void
     {
