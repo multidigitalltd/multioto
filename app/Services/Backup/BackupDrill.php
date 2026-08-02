@@ -334,6 +334,11 @@ class BackupDrill
                     .$this->few($read['mistyped']).') — השחזור ייעצר.';
             }
 
+            if ($read['unstorable'] !== []) {
+                $found[] = "הטבלה {$table}: טקסט שהמסד אינו יכול לאחסן — בית אפס בתוך הערך ("
+                    .$this->few($read['unstorable']).') — השחזור ייעצר.';
+            }
+
             if ($read['repeated'] !== []) {
                 $found[] = "הטבלה {$table}: ערכים כפולים במפתח ייחודי ("
                     .$this->few($read['repeated']).') — השחזור ייעצר.';
@@ -1351,7 +1356,7 @@ class BackupDrill
      * @param  resource  $stream
      * @param  array<string, mixed>|null  $schema
      * @param  array<string, list<string>>  $watch  value sets to remember, by name
-     * @return array{rows: int, damaged: int, unknown: list<string>, absent: list<string>, nulls: list<string>, mistyped: list<string>, repeated: list<string>, values: array<string, array<string, bool>>, unchecked: bool, mixed: bool, corrupt: bool}
+     * @return array{rows: int, damaged: int, unknown: list<string>, absent: list<string>, nulls: list<string>, mistyped: list<string>, unstorable: list<string>, repeated: list<string>, values: array<string, array<string, bool>>, unchecked: bool, mixed: bool, corrupt: bool}
      */
     private function readRows($stream, ?array $schema, array $watch = []): array
     {
@@ -1361,6 +1366,7 @@ class BackupDrill
         $absent = [];
         $nulls = [];
         $mistyped = [];
+        $unstorable = [];
         $repeated = [];
         $values = [];
         $mixed = false;
@@ -1384,7 +1390,7 @@ class BackupDrill
         // these few columns, not all of them.
         $noNulls = [];
 
-        $count = function (string $line) use (&$rows, &$damaged, &$unknown, &$absent, &$nulls, &$mistyped, &$repeated, &$values, &$unchecked, &$seen, &$mixed, &$accepted, &$noNulls, $schema, $watch): void {
+        $count = function (string $line) use (&$rows, &$damaged, &$unknown, &$absent, &$nulls, &$mistyped, &$unstorable, &$repeated, &$values, &$unchecked, &$seen, &$mixed, &$accepted, &$noNulls, $schema, $watch): void {
             if (trim($line) === '') {
                 return;
             }
@@ -1473,12 +1479,29 @@ class BackupDrill
                 // The DECODED value, not the marker around it: a b64 marker is
                 // an array to every reading of the JSON and reaches the column
                 // as the bytes inside it.
+                $binary = is_array($value);
                 $value = $this->decoded($value);
 
                 // An empty value is not a badly typed one. Whether the column
                 // may hold it is the NULL check's question, and answering it
                 // here as well would put one fault in the report twice.
                 if ($value === null) {
+                    continue;
+                }
+
+                // A zero byte, which PostgreSQL stores in no text value at all.
+                // It reads as a perfectly ordinary short string through every
+                // check below this one, and the insert fails on it — the shape
+                // of fault this drill exists to catch.
+                //
+                // Text written as text, only: a b64 marker carries the bytes of
+                // a binary column, where a zero byte is an ordinary part of the
+                // content. Everything else came out of JSON, which cannot hold
+                // a broken encoding in the first place, so the byte is the whole
+                // question.
+                if (! $binary && is_string($value) && str_contains($value, "\0")) {
+                    $unstorable[(string) $column] = true;
+
                     continue;
                 }
 
@@ -1596,6 +1619,7 @@ class BackupDrill
                         'absent' => [],
                         'nulls' => [],
                         'mistyped' => [],
+                        'unstorable' => [],
                         'repeated' => [],
                         'values' => [],
                         'unchecked' => false,
@@ -1634,6 +1658,7 @@ class BackupDrill
             'absent' => array_keys($absent),
             'nulls' => array_keys($nulls),
             'mistyped' => array_keys($mistyped),
+            'unstorable' => array_keys($unstorable),
             'repeated' => array_keys($repeated),
             'values' => $values,
             'unchecked' => $unchecked,

@@ -1242,6 +1242,31 @@ class BackupDrillTest extends TestCase
         $this->assertStringNotContainsString('seen_on', implode(' ', $report['problems']));
     }
 
+    /**
+     * A zero byte inside a text value.
+     *
+     * Valid JSON, an ordinary short string, and a value PostgreSQL stores in no
+     * text column at all — so every other check reads it as fine and the insert
+     * is where it stops.
+     */
+    public function test_a_zero_byte_in_a_text_value_is_reported(): void
+    {
+        $backup = $this->backup();
+
+        $path = Storage::disk('backups')->path($backup->path);
+        $zip = new ZipArchive;
+        $zip->open($path);
+        $zip->addFromString(
+            'database/customers.ndjson',
+            '{"id":1,"name":"\\u0000"}'."\n".'{"id":2,"name":"רגיל"}'."\n",
+        );
+        $zip->close();
+
+        $report = app(BackupDrill::class)->run($backup);
+
+        $this->assertStringContainsString('בית אפס', implode(' ', $report['problems']));
+    }
+
     /** A clock is not a date. date_parse reports no fault for "12:34:56". */
     public function test_a_clock_value_in_a_date_column_is_reported(): void
     {
