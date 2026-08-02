@@ -459,7 +459,7 @@ class BackupDrill
      * The unique keys, the foreign keys and the numeric columns travel with
      * them: everything the insert would refuse, asked before it is attempted.
      *
-     * @return array{columns: list<string>, required: list<string>, notNull: list<string>, unique: list<list<string>>, defaults: array<string, string>, integer: array<string, bool>, numeric: array<string, bool>, temporal: array<string, bool>, json: array<string, bool>, foreign: list<array{columns: list<string>, table: string, references: list<string>}>}
+     * @return array{columns: list<string>, required: list<string>, notNull: list<string>, unique: list<list<string>>, defaults: array<string, string>, boolean: array<string, bool>, integer: array<string, bool>, numeric: array<string, bool>, temporal: array<string, bool>, json: array<string, bool>, foreign: list<array{columns: list<string>, table: string, references: list<string>}>}
      */
     private function columnsOf(string $table): array
     {
@@ -467,6 +467,7 @@ class BackupDrill
         $required = [];
         $notNull = [];
         $defaults = [];
+        $boolean = [];
         $integer = [];
         $numeric = [];
         $temporal = [];
@@ -486,7 +487,9 @@ class BackupDrill
             // and two different strings to everything else.
             $type = (string) ($column['type_name'] ?? '');
 
-            if (preg_match('/^(big|small|medium|tiny)?(int|integer|serial)/i', $type)) {
+            if (preg_match('/^bool/i', $type)) {
+                $boolean[$name] = true;
+            } elseif (preg_match('/^(big|small|medium|tiny)?(int|integer|serial)/i', $type)) {
                 $integer[$name] = true;
             } elseif (preg_match('/numeric|decimal|real|double|float|money/i', $type)) {
                 $numeric[$name] = true;
@@ -535,6 +538,7 @@ class BackupDrill
             'notNull' => $notNull,
             'unique' => $unique,
             'defaults' => $defaults,
+            'boolean' => $boolean,
             'integer' => $integer,
             'numeric' => $numeric,
             'temporal' => $temporal,
@@ -672,7 +676,36 @@ class BackupDrill
             return true;
         }
 
-        return strtotime($text) !== false;
+        // date_parse rather than strtotime, which quietly rolls 2026-02-31
+        // forward to the third of March and calls it a date. The database does
+        // not: it refuses the row, which is the whole question being asked.
+        $parsed = date_parse($text);
+
+        return $parsed['error_count'] === 0 && $parsed['warning_count'] === 0;
+    }
+
+    /**
+     * Whether a boolean column would take this value.
+     *
+     * The spellings are the database's own — it accepts t/f, yes/no and on/off
+     * as readily as true/false — so anything a dump could plausibly have
+     * written passes, and a word that is not one of them does not.
+     */
+    private function readsAsBoolean(mixed $value): bool
+    {
+        if (is_bool($value)) {
+            return true;
+        }
+
+        if (is_int($value)) {
+            return $value === 0 || $value === 1;
+        }
+
+        return is_string($value) && in_array(
+            strtolower(trim($value)),
+            ['0', '1', 't', 'f', 'true', 'false', 'yes', 'no', 'on', 'off'],
+            true,
+        );
     }
 
     /** Whether an integer column would take this value. */
@@ -891,6 +924,14 @@ class BackupDrill
                 // may hold it is the NULL check's question, and answering it
                 // here as well would put one fault in the report twice.
                 if ($value === null) {
+                    continue;
+                }
+
+                if (isset($schema['boolean'][$column])) {
+                    if (! $this->readsAsBoolean($value)) {
+                        $mistyped[(string) $column] = true;
+                    }
+
                     continue;
                 }
 

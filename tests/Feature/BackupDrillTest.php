@@ -600,6 +600,84 @@ class BackupDrillTest extends TestCase
         $this->assertStringContainsString('period_start', implode(' ', $report['problems']));
     }
 
+    /**
+     * The thirty-first of February.
+     *
+     * PHP rolls it forward to the third of March and calls it a date; the
+     * database refuses the row. The drill has to answer the database's
+     * question, not PHP's.
+     */
+    public function test_a_calendar_date_that_does_not_exist_is_reported(): void
+    {
+        $backup = $this->backup();
+
+        $path = Storage::disk('backups')->path($backup->path);
+        $zip = new ZipArchive;
+        $zip->open($path);
+        $zip->addFromString(
+            'database/charges.ndjson',
+            '{"id":1,"subscription_id":5,"amount_agorot":100,"total_agorot":100,'
+                .'"period_start":"2026-02-31","period_end":"2026-01-31"}'."\n",
+        );
+        $zip->close();
+
+        $report = app(BackupDrill::class)->run($backup);
+
+        $this->assertStringContainsString('period_start', implode(' ', $report['problems']));
+    }
+
+    /**
+     * A boolean column takes true/false, 0/1, t/f — and not a word.
+     *
+     * Declared here with a raw boolean type for the same reason as the JSON
+     * table: SQLite stores booleans as tinyint, so on this driver they are
+     * checked as integers and the boolean branch would never run.
+     */
+    public function test_a_value_that_is_not_a_boolean_in_a_boolean_column_is_reported(): void
+    {
+        DB::statement('CREATE TABLE bool_probe (id integer primary key, flag boolean)');
+
+        $backup = $this->backup();
+
+        $path = Storage::disk('backups')->path($backup->path);
+        $zip = new ZipArchive;
+        $zip->open($path);
+
+        $manifest = json_decode((string) $zip->getFromName('manifest.json'), true);
+        $manifest['tables']['bool_probe'] = 1;
+        $zip->addFromString('manifest.json', (string) json_encode($manifest));
+        $zip->addFromString('database/bool_probe.ndjson', '{"id":1,"flag":"oops"}'."\n");
+        $zip->close();
+
+        $report = app(BackupDrill::class)->run($backup);
+
+        $this->assertStringContainsString('flag', implode(' ', $report['problems']));
+    }
+
+    /** Every spelling the database itself accepts must pass. */
+    public function test_the_spellings_a_boolean_column_accepts_are_not_faulted(): void
+    {
+        DB::statement('CREATE TABLE bool_probe (id integer primary key, flag boolean)');
+
+        $backup = $this->backup();
+
+        $path = Storage::disk('backups')->path($backup->path);
+        $zip = new ZipArchive;
+        $zip->open($path);
+
+        $manifest = json_decode((string) $zip->getFromName('manifest.json'), true);
+        $manifest['tables']['bool_probe'] = 4;
+        $zip->addFromString('manifest.json', (string) json_encode($manifest));
+        $zip->addFromString('database/bool_probe.ndjson',
+            '{"id":1,"flag":true}'."\n".'{"id":2,"flag":0}'."\n"
+            .'{"id":3,"flag":"t"}'."\n".'{"id":4,"flag":"false"}'."\n");
+        $zip->close();
+
+        $report = app(BackupDrill::class)->run($backup);
+
+        $this->assertStringNotContainsString('flag', implode(' ', $report['problems']));
+    }
+
     /** The marker is not the value: this one decodes to the word "oops". */
     public function test_a_base64_marker_holding_the_wrong_type_is_reported(): void
     {
