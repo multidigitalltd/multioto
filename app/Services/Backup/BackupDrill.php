@@ -766,7 +766,7 @@ class BackupDrill
         }
 
         // And inside the calendar the database keeps.
-        return $this->yearInRange($text) && $parsed['year'] !== 0;
+        return $this->yearInRange($text, $kind) && $parsed['year'] !== 0;
     }
 
     /**
@@ -865,7 +865,7 @@ class BackupDrill
 
         $parsed = date_parse($text);
 
-        if ($parsed['error_count'] > 0 || $parsed['warning_count'] > 0 || ! $this->yearInRange($text)) {
+        if ($parsed['error_count'] > 0 || $parsed['warning_count'] > 0 || ! $this->yearInRange($text, $kind)) {
             return null;
         }
 
@@ -972,19 +972,24 @@ class BackupDrill
      * There is no year zero either — 1 BC is followed by 1 AD — and PHP is
      * content to count one anyway.
      */
-    private function yearInRange(string $text): bool
+    private function yearInRange(string $text, string $kind): bool
     {
         if (preg_match('/^\s*(-?\d+)-\d{1,2}-\d{1,2}/', $text, $year) !== 1) {
             return true;
         }
 
+        // A date reaches far further than a timestamp does — 5874897 against
+        // 294276 — and holding both to the narrower one would fault a date the
+        // column stores perfectly well.
+        $ceiling = $kind === 'date' ? 5874897 : 294276;
+
         // Compared as text first: a year of forty digits is not an integer this
         // machine can hold, and casting it would quietly make it one.
-        if (strlen(ltrim($year[1], '-0')) > 6) {
+        if (strlen(ltrim($year[1], '-0')) > strlen((string) $ceiling)) {
             return false;
         }
 
-        return (int) $year[1] !== 0 && (int) $year[1] >= -4713 && (int) $year[1] <= 294276;
+        return (int) $year[1] !== 0 && (int) $year[1] >= -4713 && (int) $year[1] <= $ceiling;
     }
 
     /**

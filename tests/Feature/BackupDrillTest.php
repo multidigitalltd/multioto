@@ -1143,6 +1143,24 @@ class BackupDrillTest extends TestCase
         $this->assertStringContainsString('seen_at', implode(' ', $report['problems']));
     }
 
+    /** A date column reaches far further than a timestamp does, and must not be faulted for it. */
+    public function test_a_date_column_is_not_faulted_for_a_year_a_timestamp_could_not_hold(): void
+    {
+        $backup = $this->backup();
+
+        $path = Storage::disk('backups')->path($backup->path);
+        $zip = new ZipArchive;
+        $zip->open($path);
+        $zip->addFromString('database/charges.ndjson',
+            '{"id":1,"subscription_id":5,"amount_agorot":100,"total_agorot":100,'
+                .'"period_start":"294277-01-01","period_end":"2026-01-31"}'."\n");
+        $zip->close();
+
+        $report = app(BackupDrill::class)->run($backup);
+
+        $this->assertStringNotContainsString('period_start', implode(' ', $report['problems']));
+    }
+
     /** A clock is not a date. date_parse reports no fault for "12:34:56". */
     public function test_a_clock_value_in_a_date_column_is_reported(): void
     {
