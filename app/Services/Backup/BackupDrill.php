@@ -508,12 +508,16 @@ class BackupDrill
             } elseif (preg_match('/numeric|decimal|real|double|float|money/i', $type)) {
                 $numeric[$name] = true;
             } elseif (preg_match('/date|time/i', $type)) {
-                // Which KIND of moment: a time-only column takes literals a
-                // date column refuses, and the reverse.
-                $temporal[$name] = preg_match('/^time(tz|stamp)?/i', $type) === 1
-                    && preg_match('/stamp/i', $type) !== 1
-                        ? 'time'
-                        : 'date';
+                // Which KIND of moment, and all three are different: a date
+                // column keeps no clock, a time column keeps no calendar, and
+                // only a timestamp keeps both. Collapsing any two of them makes
+                // one value look like another that the column stores apart —
+                // or the reverse.
+                $temporal[$name] = match (true) {
+                    preg_match('/stamp|datetime/i', $type) === 1 => 'timestamp',
+                    preg_match('/^time/i', $type) === 1 => 'time',
+                    default => 'date',
+                };
             } elseif (preg_match('/json/i', $type)) {
                 // PostgreSQL refuses anything that is not a JSON document here.
                 // SQLite stores the same column as text and reports it as text,
@@ -704,7 +708,11 @@ class BackupDrill
             return false;
         }
 
-        $literals = $kind === 'time' ? ['allballs', 'now'] : ['infinity', '-infinity', 'epoch'];
+        $literals = match ($kind) {
+            'time' => ['allballs', 'now'],
+            'timestamp' => ['infinity', '-infinity', 'epoch', 'now'],
+            default => ['infinity', '-infinity', 'epoch'],
+        };
 
         if (in_array(strtolower($text), $literals, true)) {
             return true;
@@ -715,7 +723,16 @@ class BackupDrill
         // not: it refuses the row, which is the whole question being asked.
         $parsed = date_parse($text);
 
-        return $parsed['error_count'] === 0 && $parsed['warning_count'] === 0;
+        if ($parsed['error_count'] > 0 || $parsed['warning_count'] > 0) {
+            return false;
+        }
+
+        // And the parts the column actually needs. "12:34:56" parses without a
+        // complaint and is not a date; "2026-01-01" is not a time. A parser
+        // that reports no fault has not said the value belongs here.
+        return $kind === 'time'
+            ? is_int($parsed['hour']) && is_int($parsed['minute']) && is_int($parsed['second'])
+            : is_int($parsed['year']) && is_int($parsed['month']) && is_int($parsed['day']);
     }
 
     /**
@@ -800,28 +817,38 @@ class BackupDrill
     {
         $parsed = date_parse(trim($value));
 
-        if ($parsed['error_count'] > 0 || $parsed['warning_count'] > 0
-            || ! is_int($parsed['year']) || ! is_int($parsed['month']) || ! is_int($parsed['day'])) {
+        if ($parsed['error_count'] > 0 || $parsed['warning_count'] > 0) {
+            return null;
+        }
+
+        $clock = is_int($parsed['hour']) && is_int($parsed['minute']) && is_int($parsed['second'])
+            ? sprintf('%02d:%02d:%02d', $parsed['hour'], $parsed['minute'], $parsed['second'])
+            : null;
+
+        // Two instants written in different zones are NOT the same moment, so
+        // the offset travels with the value that carries one.
+        $offset = is_int($parsed['zone'] ?? null) ? sprintf('%+05d', $parsed['zone'] / 36) : '';
+
+        if ($kind === 'time') {
+            return $clock === null ? null : $clock.$offset;
+        }
+
+        if (! is_int($parsed['year']) || ! is_int($parsed['month']) || ! is_int($parsed['day'])) {
             return null;
         }
 
         $date = sprintf('%04d-%02d-%02d', $parsed['year'], $parsed['month'], $parsed['day']);
 
-        if ($kind !== 'time' && ! is_int($parsed['hour'])) {
+        // A DATE column keeps no clock at all: the same day written with a time
+        // beside it and without one is one value there, and would be two keys
+        // to anything that kept what it was given.
+        if ($kind === 'date') {
             return $date;
         }
 
-        if (! is_int($parsed['hour']) || ! is_int($parsed['minute']) || ! is_int($parsed['second'])) {
-            return null;
-        }
-
-        $offset = is_int($parsed['zone'] ?? null) ? sprintf('%+05d', $parsed['zone'] / 36) : '';
-
-        return $date.sprintf(' %02d:%02d:%02d', $parsed['hour'], $parsed['minute'], $parsed['second'])
-            .(is_float($parsed['fraction'] ?? null) && $parsed['fraction'] > 0
-                ? rtrim(rtrim(number_format($parsed['fraction'], 6, '.', ''), '0'), '.')
-                : '')
-            .$offset;
+        // A timestamp with no clock is midnight, exactly as the column stores
+        // it — so the two spellings of midnight come out as one key.
+        return $date.' '.($clock ?? '00:00:00').$offset;
     }
 
     /** Whether an integer column would take this value. */

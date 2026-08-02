@@ -916,6 +916,70 @@ class BackupDrillTest extends TestCase
         $this->assertStringNotContainsString('כפולים', implode(' ', $report['problems']));
     }
 
+    /** A clock is not a date. date_parse reports no fault for "12:34:56". */
+    public function test_a_clock_value_in_a_date_column_is_reported(): void
+    {
+        $backup = $this->backup();
+
+        $path = Storage::disk('backups')->path($backup->path);
+        $zip = new ZipArchive;
+        $zip->open($path);
+        $zip->addFromString(
+            'database/charges.ndjson',
+            '{"id":1,"subscription_id":5,"amount_agorot":100,"total_agorot":100,'
+                .'"period_start":"12:34:56","period_end":"2026-01-31"}'."\n",
+        );
+        $zip->close();
+
+        $report = app(BackupDrill::class)->run($backup);
+
+        $this->assertStringContainsString('period_start', implode(' ', $report['problems']));
+    }
+
+    /** A date column keeps no clock: the same day twice is the same key. */
+    public function test_a_date_key_repeated_with_a_time_beside_it_is_reported(): void
+    {
+        $backup = $this->backup();
+
+        $row = '"subscription_id":5,"amount_agorot":100,"total_agorot":100,"period_end":"2026-01-31"';
+
+        $path = Storage::disk('backups')->path($backup->path);
+        $zip = new ZipArchive;
+        $zip->open($path);
+        $zip->addFromString('database/charges.ndjson',
+            '{"id":1,'.$row.',"period_start":"2026-01-01"}'."\n"
+            .'{"id":2,'.$row.',"period_start":"2026-01-01 12:00:00"}'."\n");
+        $zip->close();
+
+        $report = app(BackupDrill::class)->run($backup);
+
+        $this->assertStringContainsString('כפולים', implode(' ', $report['problems']));
+    }
+
+    /** A timestamp column DOES keep its clock — two times are two moments. */
+    public function test_two_times_in_a_timestamp_column_are_not_a_duplicate(): void
+    {
+        DB::statement('CREATE TABLE stamp_probe (seen_at timestamp primary key)');
+
+        $backup = $this->backup();
+
+        $path = Storage::disk('backups')->path($backup->path);
+        $zip = new ZipArchive;
+        $zip->open($path);
+
+        $manifest = json_decode((string) $zip->getFromName('manifest.json'), true);
+        $manifest['tables']['stamp_probe'] = 2;
+        $zip->addFromString('manifest.json', (string) json_encode($manifest));
+        $zip->addFromString('database/stamp_probe.ndjson',
+            '{"seen_at":"2026-01-01 00:00:00"}'."\n"
+            .'{"seen_at":"2026-01-01 12:00:00"}'."\n");
+        $zip->close();
+
+        $report = app(BackupDrill::class)->run($backup);
+
+        $this->assertStringNotContainsString('כפולים', implode(' ', $report['problems']));
+    }
+
     /** The marker is not the value: this one decodes to the word "oops". */
     public function test_a_base64_marker_holding_the_wrong_type_is_reported(): void
     {
