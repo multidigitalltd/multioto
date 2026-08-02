@@ -481,7 +481,7 @@ class BackupDrill
      * The unique keys, the foreign keys and the numeric columns travel with
      * them: everything the insert would refuse, asked before it is attempted.
      *
-     * @return array{columns: list<string>, required: list<string>, notNull: list<string>, unique: list<list<string>>, defaults: array<string, string>, limits: array<string, int>, uuid: array<string, bool>, boolean: array<string, bool>, integer: array<string, int>, numeric: array<string, ?array{precision: int, scale: int}>, textual: array<string, bool>, temporal: array<string, string>, precision: array<string, int>, json: array<string, string>, foreign: list<array{columns: list<string>, table: string, references: list<string>}>}
+     * @return array{columns: list<string>, required: list<string>, notNull: list<string>, unique: list<list<string>>, defaults: array<string, string>, limits: array<string, int>, uuid: array<string, bool>, boolean: array<string, bool>, integer: array<string, int>, numeric: array<string, array{kind: string, precision?: int, scale?: int}>, textual: array<string, bool>, temporal: array<string, string>, precision: array<string, int>, json: array<string, string>, foreign: list<array{columns: list<string>, table: string, references: list<string>}>}
      */
     private function columnsOf(string $table): array
     {
@@ -536,14 +536,31 @@ class BackupDrill
             } elseif (preg_match('/^(big|small|medium|tiny)?(int|integer|serial)/i', $type)) {
                 $integer[$name] = $this->integerCeiling($type);
             } elseif (preg_match('/numeric|decimal|real|double|float|money/i', $type)) {
-                // With the declared width where there is one. numeric(8,2) holds
-                // six digits in front of the point and refuses a seventh, and a
-                // restore meets that as an overflow rather than as a type error.
-                // A float column declares no such thing and gets none.
-                $numeric[$name] = preg_match('/\((\d+)(?:,\s*(\d+))?\)/', (string) ($column['type'] ?? ''), $width) === 1
-                    && preg_match('/numeric|decimal/i', $type) === 1
+                // WHICH kind of number, because the two compare differently:
+                // an exact decimal keeps 0.1 and 0.10000000000000001 apart and
+                // a binary float stores them as one value. Told apart wrongly
+                // in either direction and the duplicate check answers for a
+                // column the database does not have.
+                //
+                // A width only where one is declared. numeric(8,2) holds six
+                // digits in front of the point and refuses a seventh, which a
+                // restore meets as an overflow rather than as a type error.
+                $exact = preg_match('/numeric|decimal|money/i', $type) === 1;
+
+                $numeric[$name] = [
+                    'kind' => match (true) {
+                        $exact => 'exact',
+                        // Only the types that SAY they are single precision.
+                        // Reading a double as one would fold values it keeps
+                        // apart, and inventing a duplicate costs more than
+                        // missing one.
+                        preg_match('/float4|^real/i', $type) === 1 => 'real',
+                        default => 'double',
+                    },
+                    ...($exact && preg_match('/\((\d+)(?:,\s*(\d+))?\)/', (string) ($column['type'] ?? ''), $width) === 1
                         ? ['precision' => (int) $width[1], 'scale' => (int) ($width[2] ?? 0)]
-                        : null;
+                        : []),
+                ];
             } elseif (preg_match('/date|time/i', $type)) {
                 // Which KIND of moment, and all three are different: a date
                 // column keeps no clock, a time column keeps no calendar, and
@@ -727,7 +744,7 @@ class BackupDrill
      * Digits and an exponent instead: 1.50, 1.5 and 15e-1 come out alike
      * because the column holds them as one number, and nothing else does.
      */
-    private function decimalText(mixed $value): ?string
+    private function decimalText(mixed $value, ?int $scale = null): ?string
     {
         if (! is_scalar($value) || is_bool($value)
             || preg_match('/^([+-]?)(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/', trim((string) $value), $parts) !== 1) {
@@ -736,6 +753,15 @@ class BackupDrill
 
         $digits = ltrim($parts[2].($parts[3] ?? ''), '0');
         $exponent = (int) ($parts[4] ?? 0) - strlen($parts[3] ?? '');
+
+        // Rounded first where the column declares a scale, because that is what
+        // it stores: two values that differ only past the last place it keeps
+        // are one row there. A value so large that the rounding cannot even be
+        // written out is left alone — the width check reports it anyway.
+        if ($scale !== null && abs($drop = -$scale - $exponent) <= self::NUMERIC_WHOLE_DIGITS) {
+            $digits = $this->scaled($digits, $drop);
+            $exponent = -$scale;
+        }
 
         // Zero is zero at any exponent, and has no sign worth keeping.
         if ($digits === '') {
@@ -776,15 +802,30 @@ class BackupDrill
             return false;
         }
 
+        return strlen(ltrim($this->scaled($digits, $drop), '0')) <= $precision;
+    }
+
+    /**
+     * A string of digits moved to a given scale, rounded as the database
+     * rounds: half away from zero, and carrying where it has to.
+     *
+     * The caller keeps the shift inside what can be written out; an exponent
+     * beyond that is a value no column with a declared scale could hold.
+     */
+    private function scaled(string $digits, int|float $drop): string
+    {
         if ($drop < 0) {
-            $digits .= str_repeat('0', (int) -$drop);
-        } elseif ($drop > 0) {
-            $keep = $drop >= strlen($digits) ? '' : substr($digits, 0, -((int) $drop));
-            $next = $drop <= strlen($digits) ? $digits[strlen($digits) - (int) $drop] : '0';
-            $digits = $next >= '5' ? $this->carried($keep) : $keep;
+            return $digits.str_repeat('0', (int) -$drop);
         }
 
-        return strlen(ltrim($digits, '0')) <= $precision;
+        if ($drop === 0) {
+            return $digits;
+        }
+
+        $keep = $drop >= strlen($digits) ? '' : substr($digits, 0, -((int) $drop));
+        $next = $drop <= strlen($digits) ? $digits[strlen($digits) - (int) $drop] : '0';
+
+        return $next >= '5' ? $this->carried($keep) : $keep;
     }
 
     /** One added to a string of digits, carrying as far as it has to. */
@@ -826,8 +867,25 @@ class BackupDrill
             return $whole;
         }
 
-        if (array_key_exists($column, $schema['numeric']) && ($decimal = $this->decimalText($value)) !== null) {
-            return $decimal;
+        if (array_key_exists($column, $schema['numeric'])) {
+            $number = $schema['numeric'][$column];
+
+            // A binary float column stores what a float holds, and two texts
+            // that land on the same one are the same value there — so this is
+            // the one place where going through a float is the RIGHT answer.
+            if ($number['kind'] !== 'exact' && is_numeric($value)) {
+                $stored = (float) $value;
+
+                return (string) ($number['kind'] === 'real'
+                    ? (float) unpack('g', pack('g', $stored))[1]
+                    : $stored);
+            }
+
+            // And an exact one stores the value rounded to the scale it
+            // declares: 1.234 and 1.23 are one row in a numeric(5,2).
+            if (($decimal = $this->decimalText($value, $number['scale'] ?? null)) !== null) {
+                return $decimal;
+            }
         }
 
         return (string) $value;
@@ -1905,7 +1963,8 @@ class BackupDrill
                     // error, and every check before this one reads as fine.
                     $width = $schema['numeric'][(string) $column];
 
-                    if ($width !== null && ! $this->fitsPrecision($value, $width['precision'], $width['scale'])) {
+                    if (isset($width['precision'])
+                        && ! $this->fitsPrecision($value, $width['precision'], $width['scale'] ?? 0)) {
                         $mistyped[(string) $column] = true;
                     }
 

@@ -1647,6 +1647,44 @@ class BackupDrillTest extends TestCase
         $this->assertStringNotContainsString('amount', implode(' ', $report['problems']));
     }
 
+    /** A numeric(5,2) stores 1.234 as 1.23 — the same row twice. */
+    public function test_two_decimals_the_declared_scale_rounds_together_are_one_key(): void
+    {
+        DB::statement('CREATE TABLE scale_key_probe (amount numeric(5,2) primary key)');
+
+        $report = $this->drillWith('scale_key_probe', 2,
+            '{"amount":"1.234"}'."\n".'{"amount":"1.23"}'."\n");
+
+        $this->assertStringContainsString('כפולים', implode(' ', $report['problems']));
+    }
+
+    /** And two values that scale keeps apart stay apart. */
+    public function test_two_decimals_the_declared_scale_keeps_apart_are_not_one_key(): void
+    {
+        DB::statement('CREATE TABLE scale_apart_probe (amount numeric(5,2) primary key)');
+
+        $report = $this->drillWith('scale_apart_probe', 2,
+            '{"amount":"1.23"}'."\n".'{"amount":"1.24"}'."\n");
+
+        $this->assertStringNotContainsString('כפולים', implode(' ', $report['problems']));
+    }
+
+    /**
+     * A binary float column stores what a float holds.
+     *
+     * 0.1 and 0.10000000000000001 are two exact decimals and one double, so
+     * here — and only here — comparing through a float is the right answer.
+     */
+    public function test_two_texts_one_double_holds_are_one_key(): void
+    {
+        DB::statement('CREATE TABLE double_probe (amount double precision primary key)');
+
+        $report = $this->drillWith('double_probe', 2,
+            '{"amount":"0.1"}'."\n".'{"amount":"0.10000000000000001"}'."\n");
+
+        $this->assertStringContainsString('כפולים', implode(' ', $report['problems']));
+    }
+
     /** And an ordinary number, and digits inside a string, are left alone. */
     public function test_ordinary_numbers_in_a_jsonb_column_are_not_reported(): void
     {
