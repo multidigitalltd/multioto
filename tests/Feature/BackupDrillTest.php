@@ -266,6 +266,28 @@ class BackupDrillTest extends TestCase
     }
 
     /**
+     * A row whose columns this table does not have.
+     *
+     * insert() is handed exactly those keys and fails on them — with every
+     * table already emptied, which is the moment a restore is at its least
+     * recoverable. Cheaper to learn about it a month early.
+     */
+    public function test_rows_naming_columns_the_table_does_not_have_are_reported(): void
+    {
+        $backup = $this->backup();
+
+        $path = Storage::disk('backups')->path($backup->path);
+        $zip = new ZipArchive;
+        $zip->open($path);
+        $zip->addFromString('database/customers.ndjson', "{\"id\":1,\"bogus\":\"x\"}\n{\"id\":2,\"bogus\":\"y\"}\n");
+        $zip->close();
+
+        $report = app(BackupDrill::class)->run($backup);
+
+        $this->assertStringContainsString('bogus', implode(' ', $report['problems']));
+    }
+
+    /**
      * The archive ages without anybody touching it.
      *
      * An ATTACHMENT_DISK changed after a rebuild makes every archive written

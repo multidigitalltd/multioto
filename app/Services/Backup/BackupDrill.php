@@ -3,6 +3,7 @@
 namespace App\Services\Backup;
 
 use App\Models\Backup;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use RuntimeException;
 use ZipArchive;
@@ -228,7 +229,12 @@ class BackupDrill
                 continue;
             }
 
-            $read = $this->readRows($stream);
+            // The columns this installation actually has. A table the archive
+            // names and the database does not is already reported by
+            // tableProblems(); there is nothing here to compare against.
+            $columns = Schema::hasTable($table) ? Schema::getColumnListing($table) : null;
+
+            $read = $this->readRows($stream, $columns);
 
             if ($read['corrupt']) {
                 // The checksum, and nothing else, notices this one: a bit flip
@@ -249,6 +255,11 @@ class BackupDrill
             if ($read['damaged'] > 0) {
                 $problems[] = "הטבלה {$table}: {$read['damaged']} שורות אינן קריאות.";
             }
+
+            if ($read['unknown'] !== []) {
+                $problems[] = "הטבלה {$table}: הארכיון מכיל עמודות שאינן קיימות בטבלה ("
+                    .$this->few($read['unknown']).') — השחזור ייעצר.';
+            }
         }
 
         return $problems;
@@ -265,15 +276,22 @@ class BackupDrill
      * BackupRestorer::assertMemberIntact() does, is what surfaces it.
      *
      * @param  resource  $stream
-     * @return array{rows: int, damaged: int, corrupt: bool}
+     * @param  list<string>|null  $columns  the table's columns in this installation
+     * @return array{rows: int, damaged: int, unknown: list<string>, corrupt: bool}
      */
-    private function readRows($stream): array
+    private function readRows($stream, ?array $columns): array
     {
         $rows = 0;
         $damaged = 0;
+        $unknown = [];
         $buffer = '';
 
-        $count = function (string $line) use (&$rows, &$damaged): void {
+        // Rows in one member all carry the same key set, so it is examined once
+        // per distinct set rather than once per row — a table with millions of
+        // them should not pay for the check a million times.
+        $accepted = null;
+
+        $count = function (string $line) use (&$rows, &$damaged, &$unknown, &$accepted, $columns): void {
             if (trim($line) === '') {
                 return;
             }
@@ -290,6 +308,34 @@ class BackupDrill
             // refuse is worse than no drill.
             if (! is_array($row) || $row === [] || array_is_list($row)) {
                 $damaged++;
+
+                return;
+            }
+
+            if ($columns === null) {
+                return;
+            }
+
+            $keys = array_keys($row);
+            $signature = implode("\0", $keys);
+
+            if ($signature === $accepted) {
+                return;
+            }
+
+            // Named columns the table does not have. insert() is handed exactly
+            // these keys and fails on them — with every table already emptied,
+            // which is the point at which a restore is at its least recoverable.
+            $extra = array_diff($keys, $columns);
+
+            if ($extra === []) {
+                $accepted = $signature;
+
+                return;
+            }
+
+            foreach ($extra as $name) {
+                $unknown[(string) $name] = true;
             }
         };
 
@@ -298,7 +344,7 @@ class BackupDrill
                 $chunk = @fread($stream, self::READ_CHUNK);
 
                 if ($chunk === false) {
-                    return ['rows' => $rows, 'damaged' => $damaged, 'corrupt' => true];
+                    return ['rows' => $rows, 'damaged' => $damaged, 'unknown' => [], 'corrupt' => true];
                 }
 
                 if ($chunk === '') {
@@ -324,7 +370,12 @@ class BackupDrill
         // A final line with no newline after it is still a row.
         $count($buffer);
 
-        return ['rows' => $rows, 'damaged' => $damaged, 'corrupt' => false];
+        return [
+            'rows' => $rows,
+            'damaged' => $damaged,
+            'unknown' => array_keys($unknown),
+            'corrupt' => false,
+        ];
     }
 
     /**
