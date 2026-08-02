@@ -1453,6 +1453,42 @@ class BackupDrillTest extends TestCase
         $this->assertStringContainsString('כפולים', implode(' ', $report['problems']));
     }
 
+    /** And it is one key in a timestamp column too, where the date library cannot hold the year. */
+    public function test_the_two_spellings_of_a_bc_timestamp_are_one_key(): void
+    {
+        DB::statement('CREATE TABLE bc_stamp_probe (seen_at timestamp primary key)');
+
+        $report = $this->drillWith('bc_stamp_probe', 2,
+            '{"seen_at":"0001-01-01 00:00:00 BC"}'."\n"
+            .'{"seen_at":"-0001-01-01 00:00:00"}'."\n");
+
+        $this->assertStringContainsString('כפולים', implode(' ', $report['problems']));
+    }
+
+    /** And in a zoned one, where the same instant is written in two offsets. */
+    public function test_one_bc_instant_written_in_two_zones_is_one_key(): void
+    {
+        DB::statement('CREATE TABLE bc_zone_probe (seen_at timestamptz primary key)');
+
+        $report = $this->drillWith('bc_zone_probe', 2,
+            '{"seen_at":"0001-01-01 02:00:00+02 BC"}'."\n"
+            .'{"seen_at":"0001-01-01 00:00:00+00 BC"}'."\n");
+
+        $this->assertStringContainsString('כפולים', implode(' ', $report['problems']));
+    }
+
+    /** Two different BC moments stay two, whatever the year. */
+    public function test_two_bc_moments_are_not_read_as_one(): void
+    {
+        DB::statement('CREATE TABLE bc_apart_probe (seen_at timestamp primary key)');
+
+        $report = $this->drillWith('bc_apart_probe', 2,
+            '{"seen_at":"0001-01-01 00:00:00 BC"}'."\n"
+            .'{"seen_at":"0002-01-01 00:00:00 BC"}'."\n");
+
+        $this->assertStringNotContainsString('כפולים', implode(' ', $report['problems']));
+    }
+
     /** And an ordinary number, and digits inside a string, are left alone. */
     public function test_ordinary_numbers_in_a_jsonb_column_are_not_reported(): void
     {

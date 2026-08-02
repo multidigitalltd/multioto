@@ -900,16 +900,23 @@ class BackupDrill
         // different moments are two. A column without one ignores the offset
         // altogether, so keeping it would invent a difference the database
         // does not see.
+        // The year as the archive spells it, and the one the date library will
+        // actually be asked about. They differ only where the real one is out
+        // of its reach, and then the stand-in shares its leap rule — so the
+        // days are the same and the real year goes back on afterwards.
+        $year = $this->literalYear($text) ?? (is_int($parsed['year']) ? $parsed['year'] : null);
+        $stand = $this->literalYear($probe) ?? (is_int($parsed['year']) ? $parsed['year'] : null);
+
         if (str_contains($kind, 'tz')) {
-            // A year the parser cannot hold cannot be converted either: the
-            // instant would be built on the year it kept instead, and two
-            // values centuries apart would come back as one key. Left as its
-            // own text, which risks missing a duplicate and never invents one.
-            if ($probe !== $text) {
+            // Only where the value carries a NUMERIC offset, though: a named
+            // zone would be read with the rules it has today, which are not the
+            // rules a year the library cannot hold ever had — and a canonical
+            // form built on the wrong offset would invent a duplicate.
+            if ($probe !== $text && preg_match('/(Z|[+-]\d{1,2}(:?\d{2})?)\s*$/i', $text) !== 1) {
                 return null;
             }
 
-            $moment = rescue(fn (): \DateTimeImmutable => new \DateTimeImmutable($text), null, report: false);
+            $moment = rescue(fn (): \DateTimeImmutable => new \DateTimeImmutable($probe), null, report: false);
 
             if (! $moment instanceof \DateTimeImmutable) {
                 return null;
@@ -924,7 +931,19 @@ class BackupDrill
                 $precision,
             );
 
-            return $kind === 'timetz' ? $utc->format('H:i:s.u').'Z' : $utc->format('Y-m-d H:i:s.u').'Z';
+            if ($kind === 'timetz') {
+                return $utc->format('H:i:s.u').'Z';
+            }
+
+            if ($year === null || $stand === null) {
+                return null;
+            }
+
+            return $this->dateText(
+                $this->shiftYear($year, (int) $utc->format('Y') - $stand),
+                (int) $utc->format('n'),
+                (int) $utc->format('j'),
+            ).$utc->format(' H:i:s.u').'Z';
         }
 
         // Fractional seconds are part of the value, not decoration: a column
@@ -964,27 +983,19 @@ class BackupDrill
             return $this->toPrecision($moment->modify("+{$carry} seconds"), $precision)->format('H:i:s.u');
         }
 
-        if (! is_int($parsed['year']) || ! is_int($parsed['month']) || ! is_int($parsed['day'])) {
+        if ($year === null || $stand === null
+            || ! is_int($parsed['month']) || ! is_int($parsed['day'])) {
             return null;
         }
-
-        // The year from the TEXT: the parser hands back 1977 for 294277, and
-        // canonicalising to that would collide with a real 1977.
-        $date = sprintf(
-            '%04d-%02d-%02d',
-            $this->literalYear($text) ?? $parsed['year'],
-            $parsed['month'],
-            $parsed['day'],
-        );
 
         // A DATE column keeps no clock at all: the same day written with a time
         // beside it and without one is one value there, and would be two keys
         // to anything that kept what it was given.
         if ($kind === 'date') {
-            return $date;
+            return $this->dateText($year, $parsed['month'], $parsed['day']);
         }
 
-        // Built on the REAL date, not a placeholder one: rounding 23:59:59.9 to
+        // Built on the REAL day, not a placeholder one: rounding 23:59:59.9 to
         // a whole second lands on the next DAY, and a carry that moved only the
         // clock would put it back on the old one — reading the stored value as
         // midnight of the wrong day.
@@ -993,7 +1004,8 @@ class BackupDrill
         // it, so the two spellings of midnight come out as one key.
         $moment = \DateTimeImmutable::createFromFormat(
             'Y-m-d H:i:s.u',
-            $date.' '.($clock ?? '00:00:00.000000'),
+            sprintf('%04d-%02d-%02d ', $stand, $parsed['month'], $parsed['day'])
+                .($clock ?? '00:00:00.000000'),
             new \DateTimeZone('UTC'),
         );
 
@@ -1001,7 +1013,13 @@ class BackupDrill
             return null;
         }
 
-        return $this->toPrecision($moment->modify("+{$carry} seconds"), $precision)->format('Y-m-d H:i:s.u');
+        $rounded = $this->toPrecision($moment->modify("+{$carry} seconds"), $precision);
+
+        return $this->dateText(
+            $this->shiftYear($year, (int) $rounded->format('Y') - $stand),
+            (int) $rounded->format('n'),
+            (int) $rounded->format('j'),
+        ).$rounded->format(' H:i:s.u');
     }
 
     /**
@@ -1231,6 +1249,31 @@ class BackupDrill
      * here already speak, so the two spellings of the same date also come out
      * as one key rather than two.
      */
+    /**
+     * A date in the one spelling everything here compares.
+     *
+     * A year before the era keeps its minus, and the width is fixed, so two
+     * ways of writing the same day come out as one string.
+     */
+    private function dateText(int $year, int $month, int $day): string
+    {
+        return sprintf('%s%04d-%02d-%02d', $year < 0 ? '-' : '', abs($year), $month, $day);
+    }
+
+    /**
+     * A year moved by whole years, through a calendar that has no year zero.
+     *
+     * The day after the last of 1 BC is the first of 1 AD, and the arithmetic
+     * that says so is the same wherever a year is stepped — the end-of-day
+     * rewrite and a rounding that carries past new year alike.
+     */
+    private function shiftYear(int $year, int $by): int
+    {
+        $era = ($year < 0 ? $year + 1 : $year) + $by;
+
+        return $era <= 0 ? $era - 1 : $era;
+    }
+
     private function beforeEra(string $text): string
     {
         return preg_match('/^(\d.*?)\s+BC\s*$/i', $text, $parts) === 1
@@ -1277,21 +1320,12 @@ class BackupDrill
             $month++;
             $day = 1;
         } else {
-            // There is no year zero in this calendar, so the day after the last
-            // of 1 BC is the first of 1 AD.
-            $year = $year === -1 ? 1 : $year + 1;
+            $year = $this->shiftYear($year, 1);
             $month = 1;
             $day = 1;
         }
 
-        return sprintf(
-            '%s%04d-%02d-%02d 00:00:00%s',
-            $year < 0 ? '-' : '',
-            abs($year),
-            $month,
-            $day,
-            $parts[6],
-        );
+        return $this->dateText($year, $month, $day).' 00:00:00'.$parts[6];
     }
 
     /**
