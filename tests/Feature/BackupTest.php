@@ -20,6 +20,7 @@ use App\Models\Charge;
 use App\Models\Customer;
 use App\Models\Invoice;
 use App\Models\PaymentToken;
+use App\Models\Setting;
 use App\Models\Site;
 use App\Models\User;
 use App\Services\Backup\BackupArchive;
@@ -2718,6 +2719,116 @@ class BackupTest extends TestCase
         $raw[$payload + 4] = chr(ord($raw[$payload + 4]) ^ 0xFF);
 
         Storage::disk($backup->disk)->put($backup->path, $raw);
+    }
+
+    /**
+     * The destination is connected from the panel, not from a deploy.
+     *
+     * An operator who has to edit .env and redeploy to point the backup at a
+     * bucket is an operator who does it once, badly, at 2am.
+     */
+    public function test_the_destination_credentials_are_saved_and_take_effect(): void
+    {
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+
+        Livewire::test(ManageBackups::class)
+            ->fillForm([
+                'backup' => [
+                    'enabled' => true,
+                    'disk' => 'backups',
+                    'path' => 'multioto-backups',
+                    'daily_at' => '03:30',
+                    'retention_days' => 30,
+                    's3' => [
+                        'key' => 'R2KEY',
+                        'secret' => 'R2SECRET',
+                        'bucket' => 'multioto',
+                        'endpoint' => 'https://account.r2.cloudflarestorage.com',
+                        'region' => 'auto',
+                        'path_style' => true,
+                    ],
+                ],
+            ])
+            ->call('save')
+            ->assertHasNoFormErrors();
+
+        $this->assertSame('R2SECRET', config('filesystems.disks.backups.secret'));
+        $this->assertSame('https://account.r2.cloudflarestorage.com', config('filesystems.disks.backups.endpoint'));
+        $this->assertSame('backups', config('backup.disk'));
+
+        // Encrypted at rest, like every other credential in the settings table.
+        $this->assertNotSame(
+            'R2SECRET',
+            DB::table('settings')->where('key', 'backup.s3.secret')->value('value'),
+        );
+    }
+
+    /**
+     * The secret field is blank every time this screen loads. Saving the
+     * retention window must not therefore delete the credentials — a loss
+     * nobody would notice until the next nightly run.
+     */
+    public function test_saving_with_a_blank_secret_keeps_the_stored_one(): void
+    {
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+
+        Setting::put('backup.s3.key', 'R2KEY');
+        Setting::put('backup.s3.secret', 'R2SECRET');
+
+        Livewire::test(ManageBackups::class)
+            ->fillForm([
+                'backup' => [
+                    'enabled' => true,
+                    'disk' => 'backups',
+                    'path' => 'multioto-backups',
+                    'daily_at' => '04:00',
+                    'retention_days' => 14,
+                    's3' => [
+                        'key' => '',
+                        'secret' => '',
+                        'bucket' => 'multioto',
+                        'endpoint' => 'https://account.r2.cloudflarestorage.com',
+                        'region' => 'auto',
+                        'path_style' => true,
+                    ],
+                ],
+            ])
+            ->call('save');
+
+        $this->assertSame('R2SECRET', Setting::map()['backup.s3.secret'] ?? null);
+        $this->assertSame(14, (int) config('backup.retention_days'));
+    }
+
+    /**
+     * Reaching the bucket is not the question — writing to it is. A read-only
+     * token looks fine until the first nightly run reports its failure to a log
+     * nobody reads at 03:30.
+     */
+    public function test_the_connection_test_writes_reads_and_cleans_up(): void
+    {
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+        config(['backup.disk' => 'backups', 'backup.path' => 'archives']);
+
+        Livewire::test(ManageBackups::class)
+            ->call('testDestination')
+            ->assertNotified();
+
+        // Nothing of the probe is left behind on the destination.
+        $this->assertSame([], Storage::disk('backups')->files('archives'));
+    }
+
+    public function test_the_connection_test_reports_a_destination_that_refuses_writes(): void
+    {
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+        config(['backup.disk' => 'backups', 'backup.path' => 'archives']);
+
+        $disk = \Mockery::mock(Storage::disk('backups'))->makePartial();
+        $disk->shouldReceive('put')->andReturn(false);
+        Storage::set('backups', $disk);
+
+        Livewire::test(ManageBackups::class)
+            ->call('testDestination')
+            ->assertNotified();
     }
 
     /** Copy the stored archive to a local file the test can open. */

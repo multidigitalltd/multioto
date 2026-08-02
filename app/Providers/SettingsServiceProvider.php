@@ -51,6 +51,15 @@ class SettingsServiceProvider extends ServiceProvider
         'backup.path' => 'backup.path',
         'backup.daily_at' => 'backup.daily_at',
         'backup.retention_days' => 'backup.retention_days',
+        // The destination's own credentials, so a bucket can be connected from
+        // the panel rather than from a deploy. They configure the "backups"
+        // disk and nothing else — see config/filesystems.php.
+        'backup.s3.key' => 'filesystems.disks.backups.key',
+        'backup.s3.secret' => 'filesystems.disks.backups.secret',
+        'backup.s3.region' => 'filesystems.disks.backups.region',
+        'backup.s3.bucket' => 'filesystems.disks.backups.bucket',
+        'backup.s3.endpoint' => 'filesystems.disks.backups.endpoint',
+        'backup.s3.path_style' => 'filesystems.disks.backups.use_path_style_endpoint',
         'security.wpscan_token' => 'security.vulnerabilities.wpscan_token',
         'security.urlhaus_auth_key' => 'security.reputation.urlhaus_auth_key',
         'security.wordfence_api_key' => 'security.vulnerabilities.wordfence_api_key',
@@ -152,6 +161,16 @@ class SettingsServiceProvider extends ServiceProvider
         'backup.path' => 'backup.path',
         'backup.daily_at' => 'backup.daily_at',
         'backup.retention_days' => 'backup.retention_days',
+        // Same reasoning for the destination itself: an endpoint cleared in the
+        // panel — moving from R2 back to AWS — must not stay in a running
+        // worker, still writing archives to the bucket nobody is watching any
+        // more. The key and the secret are NOT here: they are write-only fields
+        // that are never submitted blank, and reverting them on a blank would
+        // mean an empty form wiped the credentials.
+        'backup.s3.region' => 'filesystems.disks.backups.region',
+        'backup.s3.bucket' => 'filesystems.disks.backups.bucket',
+        'backup.s3.endpoint' => 'filesystems.disks.backups.endpoint',
+        'backup.s3.path_style' => 'filesystems.disks.backups.use_path_style_endpoint',
     ];
 
     /** Pristine config-file defaults for RESET_ON_CLEAR keys, memoized once. */

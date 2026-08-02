@@ -60,6 +60,35 @@ return [
             'report' => false,
         ],
 
+        /*
+         * The backup destination, and nothing else.
+         *
+         * Kept apart from the disks the application stores files on so that
+         * configuring it from the panel can never repoint attachment storage —
+         * an operator setting up Cloudflare R2 at 2am must not be one typo away
+         * from sending every future upload somewhere else, or from making the
+         * files already written unreachable.
+         *
+         * Deliberately no 'url': a backup destination is never served over the
+         * web. The archive holds every customer, charge and invoice in the
+         * system, and its name is predictable.
+         *
+         * Region defaults to "auto" because R2 has no regions; AWS installs set
+         * a real one. Path-style addressing is the safe default for the
+         * S3-compatible providers this is most often pointed at.
+         */
+        'backups' => [
+            'driver' => 's3',
+            'key' => env('BACKUP_S3_KEY'),
+            'secret' => env('BACKUP_S3_SECRET'),
+            'region' => env('BACKUP_S3_REGION', 'auto'),
+            'bucket' => env('BACKUP_S3_BUCKET'),
+            'endpoint' => env('BACKUP_S3_ENDPOINT'),
+            'use_path_style_endpoint' => env('BACKUP_S3_PATH_STYLE', true),
+            'throw' => false,
+            'report' => false,
+        ],
+
     ],
 
     /*

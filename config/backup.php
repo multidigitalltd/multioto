@@ -24,6 +24,12 @@ return [
     | The filesystem disk backups are written to. Must be off-box (S3 or any
     | S3-compatible provider) and PRIVATE: an archive holds customer names,
     | phone numbers, addresses and invoice history.
+    |
+    | New installations are pointed at "backups" (see .env.example), the disk
+    | that exists only for this and is configured from the panel. The fallback
+    | stays "s3" so an installation already writing there — one that never set
+    | BACKUP_DISK because the default was enough — does not have its
+    | destination moved out from under it by an update.
     */
     'disk' => env('BACKUP_DISK', 's3'),
 

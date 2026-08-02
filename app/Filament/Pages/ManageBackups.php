@@ -18,6 +18,7 @@ use App\Services\Backup\BackupRunner;
 use App\Services\Backup\RestoreClaim;
 use Filament\Forms\Components\Actions\Action;
 use Filament\Forms\Components\Section;
+use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Toggle;
 use Filament\Forms\Concerns\InteractsWithForms;
@@ -31,6 +32,7 @@ use Filament\Tables\Concerns\InteractsWithTable;
 use Filament\Tables\Contracts\HasTable;
 use Filament\Tables\Table;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 
 /**
  * גיבוי ושחזור — עותק לילי של כל נתוני המערכת ליעד אחסון חיצוני, ואפשרות
@@ -70,7 +72,23 @@ class ManageBackups extends Page implements HasForms, HasTable
         'backup.path' => 'backup.path',
         'backup.daily_at' => 'backup.daily_at',
         'backup.retention_days' => 'backup.retention_days',
+        'backup.s3.key' => 'filesystems.disks.backups.key',
+        'backup.s3.secret' => 'filesystems.disks.backups.secret',
+        'backup.s3.region' => 'filesystems.disks.backups.region',
+        'backup.s3.bucket' => 'filesystems.disks.backups.bucket',
+        'backup.s3.endpoint' => 'filesystems.disks.backups.endpoint',
+        'backup.s3.path_style' => 'filesystems.disks.backups.use_path_style_endpoint',
     ];
+
+    /**
+     * Write-only: never rendered back into the form, and a blank field means
+     * "leave it alone" rather than "delete it".
+     *
+     * An operator who opens this screen to change the retention window must not
+     * lose the destination's credentials by pressing save with the secret field
+     * empty — which is exactly what it looks like every time the page loads.
+     */
+    private const SECRETS = ['backup.s3.key', 'backup.s3.secret'];
 
     /** @var array<string, mixed> */
     public array $data = [];
@@ -84,6 +102,15 @@ class ManageBackups extends Page implements HasForms, HasTable
                 'path' => (string) config('backup.path'),
                 'daily_at' => (string) config('backup.daily_at'),
                 'retention_days' => (int) config('backup.retention_days'),
+                // The credentials themselves stay blank — see SECRETS.
+                's3' => [
+                    'key' => '',
+                    'secret' => '',
+                    'region' => (string) config('filesystems.disks.backups.region'),
+                    'bucket' => (string) config('filesystems.disks.backups.bucket'),
+                    'endpoint' => (string) config('filesystems.disks.backups.endpoint'),
+                    'path_style' => (bool) config('filesystems.disks.backups.use_path_style_endpoint'),
+                ],
             ],
         ]);
     }
@@ -98,10 +125,12 @@ class ManageBackups extends Page implements HasForms, HasTable
                         Toggle::make('backup.enabled')
                             ->label('גיבוי אוטומטי יומי פעיל')
                             ->helperText('כשהוא כבוי הגיבוי הלילי אינו רץ. "גבה עכשיו" ימשיך לעבוד — לחיצה מפורשת אינה מבוטלת בשקט.'),
-                        TextInput::make('backup.disk')
-                            ->label('יעד אחסון (disk)')
+                        Select::make('backup.disk')
+                            ->label('יעד אחסון')
                             ->required()
-                            ->helperText('שם ה-disk מתוך config/filesystems.php. ברירת המחדל s3. יעד ציבורי אינו מתקבל.')
+                            ->native(false)
+                            ->options(fn (): array => $this->diskOptions())
+                            ->helperText('"S3 / Cloudflare R2" משתמש בפרטי החיבור שבמקטע הבא. יעד ציבורי או יעד שנמצא על השרת הזה אינו מתקבל.')
                             ->rule(fn (): \Closure => function (string $attribute, $value, \Closure $fail): void {
                                 $disks = (array) config('filesystems.disks', []);
 
@@ -154,6 +183,36 @@ class ManageBackups extends Page implements HasForms, HasTable
                                 .(int) config('backup.keep_at_least').' גיבויים אחרונים.'),
                     ])->columns(2)
                     ->footerActions([$this->saveAction()]),
+
+                Section::make('חיבור ליעד — S3 / Cloudflare R2')
+                    ->description('פרטי הגישה לדלי שאליו נכתבים הגיבויים. הם מגדירים את היעד בשם "backups" בלבד — '
+                        .'ולא את אחסון הקבצים של המערכת, כדי שהגדרה כאן לא תוכל להזיז את הקבצים הקיימים. '
+                        .'הדלי חייב להיות פרטי: הארכיון מכיל פרטי לקוחות, חיובים וחשבוניות.')
+                    ->collapsed(fn (): bool => (string) config('backup.disk') !== 'backups')
+                    ->schema([
+                        $this->secretInput('backup.s3.key', 'Access Key ID'),
+                        $this->secretInput('backup.s3.secret', 'Secret Access Key'),
+                        TextInput::make('backup.s3.bucket')
+                            ->label('שם הדלי (Bucket)')
+                            ->live(onBlur: true)
+                            ->autocomplete(false),
+                        TextInput::make('backup.s3.endpoint')
+                            ->label('כתובת השירות (Endpoint)')
+                            ->live(onBlur: true)
+                            ->autocomplete(false)
+                            ->url()
+                            ->helperText('ל-Cloudflare R2: https://<ACCOUNT_ID>.r2.cloudflarestorage.com — מתוך R2 ← Use S3 API. '
+                                .'ל-AWS השאירו ריק.'),
+                        TextInput::make('backup.s3.region')
+                            ->label('אזור (Region)')
+                            ->live(onBlur: true)
+                            ->autocomplete(false)
+                            ->helperText('ל-R2 אין אזורים — auto. ל-AWS למשל eu-central-1.'),
+                        Toggle::make('backup.s3.path_style')
+                            ->label('כתובות בסגנון נתיב (path-style)')
+                            ->helperText('נדרש ברוב השירותים תואמי S3, ובכללם R2. ל-AWS עצמה כבו.'),
+                    ])->columns(2)
+                    ->footerActions([$this->saveAction(), $this->testAction()]),
             ])
             ->statePath('data');
     }
@@ -171,12 +230,146 @@ class ManageBackups extends Page implements HasForms, HasTable
 
             $value = is_string($value) ? trim($value) : (string) $value;
 
+            // A blank secret means "leave it alone". The field is blank every
+            // time this page loads, so treating it as a delete would have an
+            // operator changing the retention window lose the credentials of
+            // the destination — and find out on the next nightly run.
+            if ($value === '' && in_array($settingKey, self::SECRETS, true)) {
+                continue;
+            }
+
             $value === '' ? Setting::forget($settingKey) : Setting::put($settingKey, $value);
         }
 
         $this->refreshConfig();
 
+        // The disk was already resolved with the old credentials and is cached
+        // for the rest of this request — including by the test button beside
+        // this one, which would otherwise report on the settings just replaced.
+        Storage::forgetDisk('backups');
+
+        // Blanked again after saving, so the screen never echoes a stored
+        // secret back and a filled field always means "this is a new value".
+        $state = $this->form->getState();
+
+        foreach (self::SECRETS as $secret) {
+            data_set($state, $secret, '');
+        }
+
+        $this->form->fill($state);
+
         Notification::make()->title('ההגדרות נשמרו')->success()->send();
+    }
+
+    /**
+     * The disks a backup may be written to, as a picker rather than a name to
+     * remember. The rule below still refuses a public or on-server disk — the
+     * list is convenience, not the guard.
+     *
+     * @return array<string, string>
+     */
+    protected function diskOptions(): array
+    {
+        $labels = [
+            'backups' => 'S3 / Cloudflare R2 — יעד גיבוי ייעודי (מוגדר למטה)',
+            's3' => 's3 — אחסון S3 של המערכת',
+        ];
+
+        return collect(array_keys((array) config('filesystems.disks', [])))
+            ->mapWithKeys(fn (string $disk): array => [$disk => $labels[$disk] ?? $disk])
+            ->all();
+    }
+
+    /**
+     * A write-only credential field.
+     *
+     * The value is never rendered back, so without the hint an operator cannot
+     * tell a saved key from an empty one — which reads as "the save did
+     * nothing". Masked with CSS on a plain text input rather than type=password
+     * for the reason given in ManageIntegrations: browsers autofill the panel
+     * password into password inputs on this domain.
+     */
+    protected function secretInput(string $key, string $label): TextInput
+    {
+        return TextInput::make($key)
+            ->label($label)
+            ->live(debounce: 500)
+            ->autocomplete('off')
+            ->extraInputAttributes([
+                'style' => '-webkit-text-security: disc',
+                'spellcheck' => 'false',
+                'autocapitalize' => 'off',
+                'data-1p-ignore' => 'true',
+                'data-lpignore' => 'true',
+                'data-bwignore' => 'true',
+                'data-form-type' => 'other',
+            ])
+            ->hint(fn (): ?string => filled(Setting::map()[$key] ?? null) ? 'שמור במערכת ✓' : null)
+            ->hintColor('success')
+            ->placeholder(fn (): ?string => filled(Setting::map()[$key] ?? null)
+                ? '•••••••• שמור — ריק = ללא שינוי'
+                : null);
+    }
+
+    protected function testAction(): Action
+    {
+        return Action::make('test_backup_destination')
+            ->label('בדוק חיבור')
+            ->icon('heroicon-o-signal')
+            ->color('gray')
+            ->action(fn () => $this->testDestination());
+    }
+
+    /**
+     * Write a small file to the destination, read it back, and remove it.
+     *
+     * Reaching the bucket is not the question — writing to it is. A token with
+     * read-only permissions, a bucket in another account and a wrong endpoint
+     * all look fine until the first nightly run, which reports its failure to a
+     * log nobody is reading at 03:30.
+     */
+    public function testDestination(): void
+    {
+        $disk = (string) config('backup.disk');
+        $folder = trim((string) config('backup.path'), '/');
+        $probe = ($folder === '' ? '' : $folder.'/').'.multioto-connection-test-'.Str::random(12);
+        $content = 'multioto';
+
+        try {
+            $storage = Storage::disk($disk);
+
+            if ($storage->put($probe, $content) === false) {
+                Notification::make()
+                    ->title('הכתיבה ליעד נכשלה — בדקו את ההרשאות של המפתח ואת שם הדלי.')
+                    ->danger()->send();
+
+                return;
+            }
+
+            $read = $storage->get($probe);
+            $storage->delete($probe);
+
+            if ($read !== $content) {
+                Notification::make()
+                    ->title('הקובץ נכתב אך חזר שונה — היעד אינו מתאים לגיבוי.')
+                    ->danger()->send();
+
+                return;
+            }
+        } catch (\Throwable $e) {
+            // Trimmed, and the credentials are never part of it: what comes
+            // back is the provider's message about the endpoint or the bucket.
+            Notification::make()
+                ->title('החיבור ליעד נכשל')
+                ->body(mb_substr($e->getMessage(), 0, 300))
+                ->danger()->send();
+
+            return;
+        }
+
+        Notification::make()
+            ->title('החיבור ליעד תקין — נכתב קובץ בדיקה, נקרא ונמחק.')
+            ->success()->send();
     }
 
     protected function saveAction(): Action
