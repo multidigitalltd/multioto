@@ -855,7 +855,7 @@ class BackupDrill
 
             // DateTimeImmutable truncates past six digits exactly as
             // date_parse does, so the same carry applies here.
-            $carry = intdiv($this->microseconds($text, $parsed), 1000000);
+            $carry = intdiv($this->microseconds($text), 1000000);
             $utc = $this->toPrecision(
                 $moment->modify("+{$carry} seconds")->setTimezone(new \DateTimeZone('UTC')),
                 $precision,
@@ -867,7 +867,7 @@ class BackupDrill
         // Fractional seconds are part of the value, not decoration: a column
         // with that precision stores .1 and .2 apart, and folding them together
         // would report a duplicate that is not one.
-        $micro = $this->microseconds($text, $parsed);
+        $micro = $this->microseconds($text);
         $carry = intdiv($micro, 1000000);
 
         $clock = is_int($parsed['hour']) && is_int($parsed['minute']) && is_int($parsed['second'])
@@ -942,15 +942,24 @@ class BackupDrill
      * digits: .9999999 is a microsecond short of the next second to the parser
      * and exactly the next second to the database.
      *
-     * @param  array<string, mixed>  $parsed
+     * And rounded from the DIGITS, never through a float. .5168455 is exactly
+     * half a microsecond and becomes 516845.49999999994 the moment it is
+     * multiplied as a binary fraction — rounding down where the database rounds
+     * up. The seventh digit decides it here, which is what the database does.
+     *
+     * The fraction is looked for after the seconds on purpose: a date written
+     * with dots carries digits after a full stop too, and they are not a
+     * fraction of anything.
      */
-    private function microseconds(string $text, array $parsed): int
+    private function microseconds(string $text): int
     {
-        if (preg_match('/\.(\d{7,})/', $text, $digits) === 1) {
-            return (int) round((float) ('0.'.$digits[1]) * 1000000);
+        if (preg_match('/:\d{1,2}\.(\d+)/', $text, $digits) !== 1) {
+            return 0;
         }
 
-        return (int) round((float) ($parsed['fraction'] ?: 0) * 1000000);
+        $decimals = str_pad(substr($digits[1], 0, 7), 7, '0');
+
+        return (int) substr($decimals, 0, 6) + ((int) $decimals[6] >= 5 ? 1 : 0);
     }
 
     /**

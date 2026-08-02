@@ -1022,6 +1022,24 @@ class BackupDrillTest extends TestCase
         $this->assertStringContainsString('כפולים', implode(' ', $report['problems']));
     }
 
+    /**
+     * Exactly half a microsecond.
+     *
+     * .5168455 becomes 516845.49999999994 the moment it is multiplied as a
+     * binary fraction, rounding down where the database rounds up. The digits
+     * decide it, not the arithmetic.
+     */
+    public function test_a_fraction_on_the_rounding_boundary_matches_the_database(): void
+    {
+        DB::statement('CREATE TABLE boundary_probe (seen_at timestamp primary key)');
+
+        $report = $this->drillWith('boundary_probe', 2,
+            '{"seen_at":"2026-01-01 00:00:00.5168455"}'."\n"
+            .'{"seen_at":"2026-01-01 00:00:00.516846"}'."\n");
+
+        $this->assertStringContainsString('כפולים', implode(' ', $report['problems']));
+    }
+
     /** A clock is not a date. date_parse reports no fault for "12:34:56". */
     public function test_a_clock_value_in_a_date_column_is_reported(): void
     {
