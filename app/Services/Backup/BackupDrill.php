@@ -973,6 +973,16 @@ class BackupDrill
             return $text;
         }
 
+        // The date this is about to advance must be a real one FIRST. February
+        // the 31st normalises to the third of March on its way through the date
+        // library, and a day added to that is a perfectly ordinary timestamp —
+        // the calendar error erased by the very rewrite meant to help.
+        $day = date_parse($parts[1]);
+
+        if ($day['error_count'] > 0 || $day['warning_count'] > 0) {
+            return $text;
+        }
+
         $day = rescue(
             fn (): string => (new \DateTimeImmutable($parts[1]))->modify('+1 day')->format('Y-m-d'),
             null,

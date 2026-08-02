@@ -1113,6 +1113,16 @@ class BackupDrillTest extends TestCase
         $this->assertStringContainsString('כפולים', $problems);
     }
 
+    /** The end-of-day rewrite must not launder an impossible date. */
+    public function test_an_impossible_date_with_an_end_of_day_time_is_reported(): void
+    {
+        DB::statement('CREATE TABLE laundry_probe (seen_at timestamp primary key)');
+
+        $report = $this->drillWith('laundry_probe', 1, '{"seen_at":"2026-02-31 24:00:00"}'."\n");
+
+        $this->assertStringContainsString('seen_at', implode(' ', $report['problems']));
+    }
+
     /** A clock is not a date. date_parse reports no fault for "12:34:56". */
     public function test_a_clock_value_in_a_date_column_is_reported(): void
     {
