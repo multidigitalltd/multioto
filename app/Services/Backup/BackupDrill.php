@@ -575,11 +575,15 @@ class BackupDrill
 
         foreach ($key as $column) {
             if (array_key_exists($column, $row)) {
-                if ($this->arrivesEmpty($row[$column])) {
+                // Decoded, like everything else that judges a value: the same
+                // key written once as 1 and once as {"__b64":"MQ=="} is one
+                // value to the restore and would be two envelopes here.
+                $value = $this->decoded($row[$column]);
+
+                if ($value === null) {
                     return null;
                 }
 
-                $value = $row[$column];
                 $parts[] = is_scalar($value) ? (string) $value : (string) json_encode($value);
 
                 continue;

@@ -492,6 +492,25 @@ class BackupDrillTest extends TestCase
         $this->assertStringContainsString('amount_agorot', implode(' ', $report['problems']));
     }
 
+    /** The same key written two ways is still the same key. */
+    public function test_a_key_repeated_as_a_base64_marker_is_reported(): void
+    {
+        $backup = $this->backup();
+
+        $path = Storage::disk('backups')->path($backup->path);
+        $zip = new ZipArchive;
+        $zip->open($path);
+        $zip->addFromString(
+            'database/customers.ndjson',
+            "{\"id\":1,\"name\":\"א\"}\n{\"id\":{\"__b64\":\"MQ==\"},\"name\":\"ב\"}\n",
+        );
+        $zip->close();
+
+        $report = app(BackupDrill::class)->run($backup);
+
+        $this->assertStringContainsString('כפולים', implode(' ', $report['problems']));
+    }
+
     /** The marker is not the value: this one decodes to the word "oops". */
     public function test_a_base64_marker_holding_the_wrong_type_is_reported(): void
     {
