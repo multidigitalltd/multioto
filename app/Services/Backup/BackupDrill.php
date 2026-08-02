@@ -460,7 +460,7 @@ class BackupDrill
      * The unique keys, the foreign keys and the numeric columns travel with
      * them: everything the insert would refuse, asked before it is attempted.
      *
-     * @return array{columns: list<string>, required: list<string>, notNull: list<string>, unique: list<list<string>>, defaults: array<string, string>, limits: array<string, int>, uuid: array<string, bool>, boolean: array<string, bool>, integer: array<string, int>, numeric: array<string, bool>, temporal: array<string, string>, json: array<string, bool>, foreign: list<array{columns: list<string>, table: string, references: list<string>}>}
+     * @return array{columns: list<string>, required: list<string>, notNull: list<string>, unique: list<list<string>>, defaults: array<string, string>, limits: array<string, int>, uuid: array<string, bool>, boolean: array<string, bool>, integer: array<string, int>, numeric: array<string, bool>, temporal: array<string, string>, precision: array<string, int>, json: array<string, bool>, foreign: list<array{columns: list<string>, table: string, references: list<string>}>}
      */
     private function columnsOf(string $table): array
     {
@@ -469,6 +469,7 @@ class BackupDrill
         $notNull = [];
         $defaults = [];
         $limits = [];
+        $precision = [];
         $uuid = [];
         $boolean = [];
         $integer = [];
@@ -524,6 +525,13 @@ class BackupDrill
                     preg_match('/^time/i', $type) === 1 => $zoned ? 'timetz' : 'time',
                     default => 'date',
                 };
+
+                // And how much of a second it keeps. A timestamp(0) rounds .1
+                // and .2 to the same stored second, so holding six digits for
+                // it would miss the collision that stops the restore.
+                $precision[$name] = preg_match('/\((\d+)\)/', (string) ($column['type'] ?? ''), $digits) === 1
+                    ? min(6, max(0, (int) $digits[1]))
+                    : 6;
             } elseif (preg_match('/json/i', $type)) {
                 // PostgreSQL refuses anything that is not a JSON document here.
                 // SQLite stores the same column as text and reports it as text,
@@ -573,6 +581,7 @@ class BackupDrill
             'integer' => $integer,
             'numeric' => $numeric,
             'temporal' => $temporal,
+            'precision' => $precision,
             'json' => $json,
             'foreign' => $foreign,
         ];
@@ -679,7 +688,11 @@ class BackupDrill
         }
 
         if (isset($schema['temporal'][$column]) && is_string($value)
-            && ($moment = $this->temporalText($value, $schema['temporal'][$column])) !== null) {
+            && ($moment = $this->temporalText(
+                $value,
+                $schema['temporal'][$column],
+                $schema['precision'][$column] ?? 6,
+            )) !== null) {
             return $moment;
         }
 
@@ -819,7 +832,7 @@ class BackupDrill
      * than a missed one. An offset, where the value carries one, is part of the
      * answer — two instants written in different zones are NOT the same moment.
      */
-    private function temporalText(string $value, string $kind): ?string
+    private function temporalText(string $value, string $kind, int $precision = 6): ?string
     {
         $text = trim($value);
         $parsed = date_parse($text);
@@ -840,7 +853,7 @@ class BackupDrill
                 return null;
             }
 
-            $utc = $moment->setTimezone(new \DateTimeZone('UTC'));
+            $utc = $this->toPrecision($moment->setTimezone(new \DateTimeZone('UTC')), $precision);
 
             return $kind === 'timetz' ? $utc->format('H:i:s.u').'Z' : $utc->format('Y-m-d H:i:s.u').'Z';
         }
@@ -848,15 +861,30 @@ class BackupDrill
         // Fractional seconds are part of the value, not decoration: a column
         // with that precision stores .1 and .2 apart, and folding them together
         // would report a duplicate that is not one.
-        $clock = is_int($parsed['hour']) && is_int($parsed['minute']) && is_int($parsed['second'])
-            ? sprintf(
-                '%02d:%02d:%02d.%06d',
-                $parsed['hour'],
-                $parsed['minute'],
-                $parsed['second'],
-                (int) round((float) ($parsed['fraction'] ?: 0) * 1000000),
-            )
-            : null;
+        $clock = null;
+
+        if (is_int($parsed['hour']) && is_int($parsed['minute']) && is_int($parsed['second'])) {
+            // Built as a moment rather than printed field by field, because
+            // rounding to the column's precision can carry into the next
+            // second — and from there into the next minute, hour and day.
+            $moment = \DateTimeImmutable::createFromFormat(
+                'Y-m-d H:i:s.u',
+                sprintf(
+                    '2000-01-01 %02d:%02d:%02d.%06d',
+                    $parsed['hour'],
+                    $parsed['minute'],
+                    $parsed['second'],
+                    (int) round((float) ($parsed['fraction'] ?: 0) * 1000000),
+                ),
+                new \DateTimeZone('UTC'),
+            );
+
+            if ($moment === false) {
+                return null;
+            }
+
+            $clock = $this->toPrecision($moment, $precision)->format('H:i:s.u');
+        }
 
         if ($kind === 'time') {
             return $clock;
@@ -878,6 +906,35 @@ class BackupDrill
         // A timestamp with no clock is midnight, exactly as the column stores
         // it — so the two spellings of midnight come out as one key.
         return $date.' '.($clock ?? '00:00:00.000000');
+    }
+
+    /**
+     * The same moment with its fraction rounded to what the column keeps.
+     *
+     * Rounded, not truncated, because that is what the database does — and the
+     * carry is done by the date library rather than by hand, since rounding up
+     * at .999999 crosses into the next second, and from there into the next
+     * minute, hour and day.
+     */
+    private function toPrecision(\DateTimeImmutable $moment, int $precision): \DateTimeImmutable
+    {
+        if ($precision >= 6) {
+            return $moment;
+        }
+
+        $scale = 10 ** (6 - $precision);
+        $micro = (int) round((int) $moment->format('u') / $scale) * $scale;
+
+        // Rounding up at the very top of a second carries into the next one.
+        $carried = $micro >= 1000000 ? $moment->modify('+1 second') : $moment;
+        $micro = $micro >= 1000000 ? 0 : $micro;
+
+        return $carried->setTime(
+            (int) $carried->format('H'),
+            (int) $carried->format('i'),
+            (int) $carried->format('s'),
+            $micro,
+        );
     }
 
     /** Whether an integer column would take this value. */

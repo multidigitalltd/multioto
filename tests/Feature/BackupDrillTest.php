@@ -970,6 +970,23 @@ class BackupDrillTest extends TestCase
         $this->assertStringNotContainsString('כפולים', implode(' ', $report['problems']));
     }
 
+    /**
+     * A column that keeps whole seconds rounds .1 and .2 to the same one.
+     *
+     * The mirror of the test above it: holding six digits for every column
+     * would miss this collision, and holding none would invent the other.
+     */
+    public function test_fractions_below_the_columns_precision_are_one_key(): void
+    {
+        DB::statement('CREATE TABLE second_probe (seen_at timestamp(0) primary key)');
+
+        $report = $this->drillWith('second_probe', 2,
+            '{"seen_at":"2026-01-01 00:00:00.1"}'."\n"
+            .'{"seen_at":"2026-01-01 00:00:00.2"}'."\n");
+
+        $this->assertStringContainsString('כפולים', implode(' ', $report['problems']));
+    }
+
     /** A clock is not a date. date_parse reports no fault for "12:34:56". */
     public function test_a_clock_value_in_a_date_column_is_reported(): void
     {
