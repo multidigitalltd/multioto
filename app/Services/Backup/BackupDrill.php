@@ -853,7 +853,13 @@ class BackupDrill
                 return null;
             }
 
-            $utc = $this->toPrecision($moment->setTimezone(new \DateTimeZone('UTC')), $precision);
+            // DateTimeImmutable truncates past six digits exactly as
+            // date_parse does, so the same carry applies here.
+            $carry = intdiv($this->microseconds($text, $parsed), 1000000);
+            $utc = $this->toPrecision(
+                $moment->modify("+{$carry} seconds")->setTimezone(new \DateTimeZone('UTC')),
+                $precision,
+            );
 
             return $kind === 'timetz' ? $utc->format('H:i:s.u').'Z' : $utc->format('Y-m-d H:i:s.u').'Z';
         }
@@ -861,13 +867,16 @@ class BackupDrill
         // Fractional seconds are part of the value, not decoration: a column
         // with that precision stores .1 and .2 apart, and folding them together
         // would report a duplicate that is not one.
+        $micro = $this->microseconds($text, $parsed);
+        $carry = intdiv($micro, 1000000);
+
         $clock = is_int($parsed['hour']) && is_int($parsed['minute']) && is_int($parsed['second'])
             ? sprintf(
                 '%02d:%02d:%02d.%06d',
                 $parsed['hour'],
                 $parsed['minute'],
                 $parsed['second'],
-                (int) round((float) ($parsed['fraction'] ?: 0) * 1000000),
+                $micro % 1000000,
             )
             : null;
 
@@ -885,7 +894,11 @@ class BackupDrill
                 new \DateTimeZone('UTC'),
             );
 
-            return $moment === false ? null : $this->toPrecision($moment, $precision)->format('H:i:s.u');
+            if ($moment === false) {
+                return null;
+            }
+
+            return $this->toPrecision($moment->modify("+{$carry} seconds"), $precision)->format('H:i:s.u');
         }
 
         if (! is_int($parsed['year']) || ! is_int($parsed['month']) || ! is_int($parsed['day'])) {
@@ -914,7 +927,30 @@ class BackupDrill
             new \DateTimeZone('UTC'),
         );
 
-        return $moment === false ? null : $this->toPrecision($moment, $precision)->format('Y-m-d H:i:s.u');
+        if ($moment === false) {
+            return null;
+        }
+
+        return $this->toPrecision($moment->modify("+{$carry} seconds"), $precision)->format('Y-m-d H:i:s.u');
+    }
+
+    /**
+     * The value's fraction in microseconds, which may round up to a whole
+     * second — the caller carries it.
+     *
+     * Taken from the TEXT rather than from date_parse, which truncates past six
+     * digits: .9999999 is a microsecond short of the next second to the parser
+     * and exactly the next second to the database.
+     *
+     * @param  array<string, mixed>  $parsed
+     */
+    private function microseconds(string $text, array $parsed): int
+    {
+        if (preg_match('/\.(\d{7,})/', $text, $digits) === 1) {
+            return (int) round((float) ('0.'.$digits[1]) * 1000000);
+        }
+
+        return (int) round((float) ($parsed['fraction'] ?: 0) * 1000000);
     }
 
     /**

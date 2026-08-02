@@ -1004,6 +1004,24 @@ class BackupDrillTest extends TestCase
         $this->assertStringContainsString('כפולים', implode(' ', $report['problems']));
     }
 
+    /**
+     * More digits than the parser keeps.
+     *
+     * .9999999 is a microsecond short of the next second to PHP, which
+     * truncates the seventh digit, and exactly the next second to the database,
+     * which rounds it.
+     */
+    public function test_a_fraction_longer_than_the_parser_keeps_is_rounded(): void
+    {
+        DB::statement('CREATE TABLE overflow_probe (seen_at timestamp primary key)');
+
+        $report = $this->drillWith('overflow_probe', 2,
+            '{"seen_at":"2026-01-01 23:59:59.9999999"}'."\n"
+            .'{"seen_at":"2026-01-02 00:00:00"}'."\n");
+
+        $this->assertStringContainsString('כפולים', implode(' ', $report['problems']));
+    }
+
     /** A clock is not a date. date_parse reports no fault for "12:34:56". */
     public function test_a_clock_value_in_a_date_column_is_reported(): void
     {
