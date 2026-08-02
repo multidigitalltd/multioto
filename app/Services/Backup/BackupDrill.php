@@ -815,9 +815,17 @@ class BackupDrill
             return true;
         }
 
+        // A value at the edge that cannot be worked out is reported, not
+        // waved through. Everywhere else "not understood" is left alone,
+        // because being wrong there costs a missed duplicate at most — here
+        // it is the difference between a row that restores and one that does
+        // not, and the drill has no business certifying what it could not
+        // compute. A named zone lands here: PostgreSQL reads CET as +01 and
+        // carries the earliest instant out of the calendar, and nothing here
+        // can say which of the several CETs was meant.
         $stored = $this->temporalText($value, $kind, $precision);
 
-        return $stored === null || $this->yearInRange($stored, $kind);
+        return $stored !== null && $this->yearInRange($stored, $kind);
     }
 
     /**

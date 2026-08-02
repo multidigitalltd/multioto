@@ -1560,6 +1560,35 @@ class BackupDrillTest extends TestCase
         $this->assertStringNotContainsString('seen_at', implode(' ', $report['problems']));
     }
 
+    /**
+     * A boundary instant nothing here can work out is reported, not accepted.
+     *
+     * PostgreSQL reads CET as +01 and carries the earliest instant out of the
+     * calendar; the abbreviation names several zones and this cannot say which.
+     * Certifying it would be a guess in the one place a guess decides whether
+     * the row restores.
+     */
+    public function test_a_boundary_instant_in_a_named_zone_is_reported(): void
+    {
+        DB::statement('CREATE TABLE named_zone_probe (seen_at timestamptz primary key)');
+
+        $report = $this->drillWith('named_zone_probe', 1,
+            '{"seen_at":"4713-01-01 00:00:00 CET BC"}'."\n");
+
+        $this->assertStringContainsString('seen_at', implode(' ', $report['problems']));
+    }
+
+    /** An ordinary year in a named zone is not the drill's business either way. */
+    public function test_an_ordinary_year_in_a_named_zone_is_not_reported(): void
+    {
+        DB::statement('CREATE TABLE named_zone_ok_probe (seen_at timestamptz primary key)');
+
+        $report = $this->drillWith('named_zone_ok_probe', 1,
+            '{"seen_at":"2026-01-01 00:00:00 CET"}'."\n");
+
+        $this->assertStringNotContainsString('seen_at', implode(' ', $report['problems']));
+    }
+
     /** And an ordinary number, and digits inside a string, are left alone. */
     public function test_ordinary_numbers_in_a_jsonb_column_are_not_reported(): void
     {
