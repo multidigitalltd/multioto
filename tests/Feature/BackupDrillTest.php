@@ -288,6 +288,57 @@ class BackupDrillTest extends TestCase
     }
 
     /**
+     * The other direction: a column the table requires and the row does not
+     * carry. The database has nothing to put there — no value, no default, and
+     * NULL refused — so that insert fails just as hard as an unknown column.
+     */
+    public function test_rows_missing_a_required_column_are_reported(): void
+    {
+        $backup = $this->backup();
+
+        $path = Storage::disk('backups')->path($backup->path);
+        $zip = new ZipArchive;
+        $zip->open($path);
+        $zip->addFromString('database/customers.ndjson', "{\"id\":1}\n{\"id\":2}\n");
+        $zip->close();
+
+        $report = app(BackupDrill::class)->run($backup);
+
+        $this->assertStringContainsString('עמודות חובה', implode(' ', $report['problems']));
+        $this->assertStringContainsString('name', implode(' ', $report['problems']));
+    }
+
+    /** A column that may be left out is not a problem, and must not be reported as one. */
+    public function test_a_good_archive_is_not_faulted_for_columns_a_row_may_omit(): void
+    {
+        $backup = $this->backup();
+
+        $report = app(BackupDrill::class)->run($backup);
+
+        $this->assertSame([], $report['problems']);
+    }
+
+    /**
+     * Nothing to check is not the same as checked.
+     *
+     * A screen that reports "the check started" when no archive exists is how
+     * somebody comes to believe one was examined.
+     */
+    public function test_a_manual_drill_with_no_archive_says_so(): void
+    {
+        (new DrillBackupJob(manual: true))->handle(app(BackupDrill::class));
+
+        $this->assertSame(1, SystemLog::where('source', 'backup')->where('level', 'warning')->count());
+    }
+
+    public function test_the_scheduled_drill_with_no_archive_stays_quiet(): void
+    {
+        (new DrillBackupJob)->handle(app(BackupDrill::class));
+
+        $this->assertSame(0, SystemLog::where('source', 'backup')->count());
+    }
+
+    /**
      * The archive ages without anybody touching it.
      *
      * An ATTACHMENT_DISK changed after a rebuild makes every archive written

@@ -12,6 +12,7 @@ use App\Jobs\RestoreBackupJob;
 use App\Jobs\RunBackupJob;
 use App\Models\Backup;
 use App\Models\Setting;
+use App\Services\Backup\BackupDrill;
 use App\Services\Backup\BackupRestorer;
 use App\Services\Backup\BackupRunner;
 use App\Services\Backup\RestoreClaim;
@@ -308,6 +309,16 @@ class ManageBackups extends Page implements HasForms, HasTable
                     ->modalHeading('לבדוק את הגיבוי האחרון?')
                     ->modalDescription('הגיבוי האחרון יורד מהיעד ונקרא במלואו — שום דבר לא משוחזר ושום דבר לא נמחק. התוצאה תופיע בעמודה "נבדק".')
                     ->action(function (): void {
+                        // Said here rather than left to the job: a screen that
+                        // reports "the check started" when there is nothing to
+                        // check is how somebody comes to believe an archive was
+                        // examined.
+                        if (! app(BackupDrill::class)->latest()) {
+                            Notification::make()->title('אין עדיין גיבוי שהושלם — אין מה לבדוק.')->warning()->send();
+
+                            return;
+                        }
+
                         try {
                             DrillBackupJob::dispatch(manual: true);
                         } catch (\Throwable $e) {

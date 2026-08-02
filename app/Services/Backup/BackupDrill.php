@@ -232,9 +232,9 @@ class BackupDrill
             // The columns this installation actually has. A table the archive
             // names and the database does not is already reported by
             // tableProblems(); there is nothing here to compare against.
-            $columns = Schema::hasTable($table) ? Schema::getColumnListing($table) : null;
+            $schema = Schema::hasTable($table) ? $this->columnsOf($table) : null;
 
-            $read = $this->readRows($stream, $columns);
+            $read = $this->readRows($stream, $schema);
 
             if ($read['corrupt']) {
                 // The checksum, and nothing else, notices this one: a bit flip
@@ -260,9 +260,45 @@ class BackupDrill
                 $problems[] = "הטבלה {$table}: הארכיון מכיל עמודות שאינן קיימות בטבלה ("
                     .$this->few($read['unknown']).') — השחזור ייעצר.';
             }
+
+            if ($read['absent'] !== []) {
+                $problems[] = "הטבלה {$table}: חסרות בארכיון עמודות חובה ("
+                    .$this->few($read['absent']).') — השחזור ייעצר.';
+            }
         }
 
         return $problems;
+    }
+
+    /**
+     * A table's columns, and of those the ones a row cannot leave out.
+     *
+     * Required means the database has nothing to put there: NOT NULL, with no
+     * default of its own and no counter behind it. Every other column may be
+     * absent from a row — the insert fills it in — and demanding them all would
+     * fail perfectly restorable archives written before a nullable column
+     * existed, which is the kind of false alarm that teaches people to ignore
+     * the report that matters.
+     *
+     * @return array{columns: list<string>, required: list<string>}
+     */
+    private function columnsOf(string $table): array
+    {
+        $columns = [];
+        $required = [];
+
+        foreach (Schema::getColumns($table) as $column) {
+            $name = (string) $column['name'];
+            $columns[] = $name;
+
+            if (! ($column['nullable'] ?? false)
+                && ($column['default'] ?? null) === null
+                && ! ($column['auto_increment'] ?? false)) {
+                $required[] = $name;
+            }
+        }
+
+        return ['columns' => $columns, 'required' => $required];
     }
 
     /**
@@ -276,14 +312,15 @@ class BackupDrill
      * BackupRestorer::assertMemberIntact() does, is what surfaces it.
      *
      * @param  resource  $stream
-     * @param  list<string>|null  $columns  the table's columns in this installation
-     * @return array{rows: int, damaged: int, unknown: list<string>, corrupt: bool}
+     * @param  array{columns: list<string>, required: list<string>}|null  $schema
+     * @return array{rows: int, damaged: int, unknown: list<string>, absent: list<string>, corrupt: bool}
      */
-    private function readRows($stream, ?array $columns): array
+    private function readRows($stream, ?array $schema): array
     {
         $rows = 0;
         $damaged = 0;
         $unknown = [];
+        $absent = [];
         $buffer = '';
 
         // Rows in one member all carry the same key set, so it is examined once
@@ -291,7 +328,7 @@ class BackupDrill
         // them should not pay for the check a million times.
         $accepted = null;
 
-        $count = function (string $line) use (&$rows, &$damaged, &$unknown, &$accepted, $columns): void {
+        $count = function (string $line) use (&$rows, &$damaged, &$unknown, &$absent, &$accepted, $schema): void {
             if (trim($line) === '') {
                 return;
             }
@@ -312,7 +349,7 @@ class BackupDrill
                 return;
             }
 
-            if ($columns === null) {
+            if ($schema === null) {
                 return;
             }
 
@@ -326,9 +363,14 @@ class BackupDrill
             // Named columns the table does not have. insert() is handed exactly
             // these keys and fails on them — with every table already emptied,
             // which is the point at which a restore is at its least recoverable.
-            $extra = array_diff($keys, $columns);
+            $extra = array_diff($keys, $schema['columns']);
 
-            if ($extra === []) {
+            // And the other direction: a column the table requires and the row
+            // does not carry. The database has nothing to put there — no value,
+            // no default, and NULL refused — so that insert fails just as hard.
+            $short = array_diff($schema['required'], $keys);
+
+            if ($extra === [] && $short === []) {
                 $accepted = $signature;
 
                 return;
@@ -337,6 +379,10 @@ class BackupDrill
             foreach ($extra as $name) {
                 $unknown[(string) $name] = true;
             }
+
+            foreach ($short as $name) {
+                $absent[(string) $name] = true;
+            }
         };
 
         try {
@@ -344,7 +390,13 @@ class BackupDrill
                 $chunk = @fread($stream, self::READ_CHUNK);
 
                 if ($chunk === false) {
-                    return ['rows' => $rows, 'damaged' => $damaged, 'unknown' => [], 'corrupt' => true];
+                    return [
+                        'rows' => $rows,
+                        'damaged' => $damaged,
+                        'unknown' => [],
+                        'absent' => [],
+                        'corrupt' => true,
+                    ];
                 }
 
                 if ($chunk === '') {
@@ -374,6 +426,7 @@ class BackupDrill
             'rows' => $rows,
             'damaged' => $damaged,
             'unknown' => array_keys($unknown),
+            'absent' => array_keys($absent),
             'corrupt' => false,
         ];
     }

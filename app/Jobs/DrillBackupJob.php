@@ -51,9 +51,16 @@ class DrillBackupJob implements ShouldQueue
         $backup = $drill->latest();
 
         if (! $backup) {
-            // Nothing has ever been written. The backup check on /health
-            // already says so, loudly and every minute; repeating it here would
-            // be a second alarm for one fact.
+            // Nothing has ever been written. On the schedule that is silence by
+            // design — the backup check on /health already says so, loudly and
+            // every minute, and repeating it here would be a second alarm for
+            // one fact. But somebody who pressed the button was told the check
+            // started, and a screen that acknowledges a no-op is how a person
+            // comes to believe an archive was examined when none exists.
+            if ($this->manual) {
+                SystemLog::record('warning', 'backup', 'בדיקת שחזור התבקשה, אך אין גיבוי שהושלם לבדוק.');
+            }
+
             return;
         }
 
