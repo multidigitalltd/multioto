@@ -1737,6 +1737,23 @@ class BackupDrillTest extends TestCase
         $this->assertStringContainsString('כפולים', implode(' ', $report['problems']));
     }
 
+    /**
+     * Two doubles the runtime's print width cannot tell apart.
+     *
+     * 9007199254740992 and 9007199254740994 are both exactly representable and
+     * both print as 9.007199254741E+15 at the default precision of 14 — one
+     * string, two values the column restores.
+     */
+    public function test_two_doubles_the_print_width_hides_are_not_a_duplicate(): void
+    {
+        DB::statement('CREATE TABLE double_apart_probe (amount double precision primary key)');
+
+        $report = $this->drillWith('double_apart_probe', 2,
+            '{"amount":"9007199254740992"}'."\n".'{"amount":"9007199254740994"}'."\n");
+
+        $this->assertStringNotContainsString('כפולים', implode(' ', $report['problems']));
+    }
+
     /** And an ordinary number, and digits inside a string, are left alone. */
     public function test_ordinary_numbers_in_a_jsonb_column_are_not_reported(): void
     {

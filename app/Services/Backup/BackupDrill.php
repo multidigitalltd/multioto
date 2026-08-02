@@ -906,9 +906,19 @@ class BackupDrill
                     ? (float) unpack('g', pack('g', (float) $value))[1]
                     : (float) $value;
 
-                // Both zeros are one value to the database, and two strings to
-                // PHP — which prints the negative one as "-0".
-                return $stored === 0.0 ? '0' : (string) $stored;
+                // Both zeros are one value to the database, and two different
+                // patterns of bits.
+                if ($stored === 0.0) {
+                    return '0';
+                }
+
+                // The BITS, not the printed number. PHP prints a float to the
+                // runtime's `precision` — 14 digits by default — and at that
+                // width 9007199254740992 and 9007199254740994 are one string
+                // and two values the column keeps apart. Nothing here reads
+                // these keys; they only have to be equal exactly when the
+                // column would say so.
+                return bin2hex(pack('E', $stored));
             }
 
             // And an exact one stores the value rounded to the scale it
