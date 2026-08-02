@@ -161,11 +161,22 @@ class HealthReport
      * A Postgres host that DROPS connection attempts rather than refusing them
      * holds the connect until the operating system gives up — minutes, on a
      * default install — and the endpoint whose entire job is to say "the
-     * database has stopped" would be the request that hangs on it. libpq reads
-     * its own timeout from the environment (PDO's timeout attribute does
-     * nothing for this driver), so the probe sets it for the length of the
-     * question and puts it back afterwards, leaving ordinary connections — a
-     * worker in the middle of a charge — exactly as they were.
+     * database has stopped" would be the request that hangs on it.
+     *
+     * Three separate ways to wait, so all three are bounded, and each has to be
+     * asked for by name:
+     *
+     *   PGCONNECT_TIMEOUT  getting connected at all.
+     *   PGOPTIONS          the server's own statement_timeout, sent in the
+     *                      startup packet — the connection can be established
+     *                      perfectly and the QUERY never come back.
+     *   PGTCPUSERTIMEOUT   the socket going quiet mid-answer, which neither of
+     *                      the other two can see.
+     *
+     * libpq reads all three from the environment (PDO's timeout attribute does
+     * nothing for this driver), so they are set for the length of this one
+     * question and put back afterwards — ordinary connections, a worker in the
+     * middle of a charge, are left exactly as they were.
      */
     private function askTheDatabase(): void
     {
@@ -178,8 +189,19 @@ class HealthReport
             return;
         }
 
-        $was = getenv('PGCONNECT_TIMEOUT');
-        putenv('PGCONNECT_TIMEOUT='.max(1, (int) config('health.database_probe_timeout', 2)));
+        $seconds = max(1, (int) config('health.database_probe_timeout', 2));
+        $bounds = [
+            'PGCONNECT_TIMEOUT' => (string) $seconds,
+            'PGOPTIONS' => '-c statement_timeout='.($seconds * 1000),
+            'PGTCPUSERTIMEOUT' => (string) ($seconds * 1000),
+        ];
+
+        $was = [];
+
+        foreach ($bounds as $variable => $value) {
+            $was[$variable] = getenv($variable);
+            putenv("{$variable}={$value}");
+        }
 
         config(['database.connections.'.self::PROBE => $connection]);
         DB::purge(self::PROBE);
@@ -188,7 +210,10 @@ class HealthReport
             DB::connection(self::PROBE)->select('select 1');
         } finally {
             DB::purge(self::PROBE);
-            $was === false ? putenv('PGCONNECT_TIMEOUT') : putenv("PGCONNECT_TIMEOUT={$was}");
+
+            foreach ($was as $variable => $value) {
+                $value === false ? putenv($variable) : putenv("{$variable}={$value}");
+            }
         }
     }
 
