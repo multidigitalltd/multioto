@@ -31,6 +31,7 @@ use Filament\Tables;
 use Filament\Tables\Concerns\InteractsWithTable;
 use Filament\Tables\Contracts\HasTable;
 use Filament\Tables\Table;
+use Illuminate\Contracts\Filesystem\Filesystem;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
@@ -327,16 +328,20 @@ class ManageBackups extends Page implements HasForms, HasTable
      * read-only permissions, a bucket in another account and a wrong endpoint
      * all look fine until the first nightly run, which reports its failure to a
      * log nobody is reading at 03:30.
+     *
+     * What is tested is what is ON SCREEN, not what was last saved: an operator
+     * types new credentials and presses this, and a green light earned by the
+     * old bucket would be worse than no button at all.
      */
     public function testDestination(): void
     {
-        $disk = (string) config('backup.disk');
-        $folder = trim((string) config('backup.path'), '/');
+        $values = $this->form->getState();
+        $folder = trim((string) data_get($values, 'backup.path'), '/');
         $probe = ($folder === '' ? '' : $folder.'/').'.multioto-connection-test-'.Str::random(12);
         $content = 'multioto';
 
         try {
-            $storage = Storage::disk($disk);
+            $storage = $this->destinationDisk($values);
 
             if ($storage->put($probe, $content) === false) {
                 Notification::make()
@@ -347,11 +352,24 @@ class ManageBackups extends Page implements HasForms, HasTable
             }
 
             $read = $storage->get($probe);
-            $storage->delete($probe);
+            $removed = $storage->delete($probe);
 
             if ($read !== $content) {
                 Notification::make()
                     ->title('הקובץ נכתב אך חזר שונה — היעד אינו מתאים לגיבוי.')
+                    ->danger()->send();
+
+                return;
+            }
+
+            // The disks are configured with throw => false, so a refused delete
+            // comes back as false rather than as an exception. It matters twice
+            // over: the test file stays behind, and the same missing permission
+            // means old archives will never be pruned either.
+            if ($removed === false) {
+                Notification::make()
+                    ->title('הכתיבה והקריאה עבדו, אך מחיקת קובץ הבדיקה נכשלה')
+                    ->body("למפתח אין הרשאת מחיקה — גיבויים ישנים לא יימחקו, וקובץ הבדיקה נשאר ביעד: {$probe}")
                     ->danger()->send();
 
                 return;
@@ -370,6 +388,75 @@ class ManageBackups extends Page implements HasForms, HasTable
         Notification::make()
             ->title('החיבור ליעד תקין — נכתב קובץ בדיקה, נקרא ונמחק.')
             ->success()->send();
+    }
+
+    /**
+     * The destination as the form currently describes it.
+     *
+     * Built ad hoc only when the screen holds something the saved
+     * configuration does not. Otherwise the configured disk is used, which is
+     * the same object the nightly job will use — testing a copy of it would
+     * prove slightly less.
+     *
+     * @param  array<string, mixed>  $values
+     */
+    private function destinationDisk(array $values): Filesystem
+    {
+        $disk = (string) data_get($values, 'backup.disk');
+
+        if ($disk !== 'backups') {
+            return Storage::disk($disk);
+        }
+
+        $typed = $this->destinationConfig($values);
+        $saved = (array) config('filesystems.disks.backups');
+
+        // Compared through one shape, because an unset value reads as null from
+        // config and as an empty string from a form field — and a difference
+        // that is only a spelling would send every test to an ad-hoc copy of
+        // the disk instead of the disk itself.
+        $shape = fn (array $config): array => [
+            (string) ($config['key'] ?? ''),
+            (string) ($config['secret'] ?? ''),
+            (string) ($config['region'] ?? ''),
+            (string) ($config['bucket'] ?? ''),
+            (string) ($config['endpoint'] ?? ''),
+            (bool) ($config['use_path_style_endpoint'] ?? false),
+        ];
+
+        return $shape($typed) === $shape($saved) ? Storage::disk($disk) : Storage::build($typed);
+    }
+
+    /**
+     * The S3 settings the form is showing, with the write-only fields falling
+     * back to what is stored: a blank secret means "unchanged", here as well as
+     * on save.
+     *
+     * @param  array<string, mixed>  $values
+     * @return array<string, mixed>
+     */
+    private function destinationConfig(array $values): array
+    {
+        $stored = Setting::map();
+
+        $secret = fn (string $key): ?string => filled(data_get($values, $key))
+            ? (string) data_get($values, $key)
+            : ($stored[$key] ?? config(self::KEYS[$key]));
+
+        return [
+            'driver' => 's3',
+            'key' => $secret('backup.s3.key'),
+            'secret' => $secret('backup.s3.secret'),
+            'region' => (string) data_get($values, 'backup.s3.region'),
+            'bucket' => (string) data_get($values, 'backup.s3.bucket'),
+            // Empty means AWS itself; an empty STRING is a broken endpoint.
+            'endpoint' => filled(data_get($values, 'backup.s3.endpoint'))
+                ? (string) data_get($values, 'backup.s3.endpoint')
+                : null,
+            'use_path_style_endpoint' => (bool) data_get($values, 'backup.s3.path_style'),
+            'throw' => false,
+            'report' => false,
+        ];
     }
 
     protected function saveAction(): Action

@@ -23,6 +23,7 @@ use App\Models\PaymentToken;
 use App\Models\Setting;
 use App\Models\Site;
 use App\Models\User;
+use App\Providers\SettingsServiceProvider;
 use App\Services\Backup\BackupArchive;
 use App\Services\Backup\BackupRestorer;
 use App\Services\Backup\BackupRunner;
@@ -2829,6 +2830,61 @@ class BackupTest extends TestCase
         Livewire::test(ManageBackups::class)
             ->call('testDestination')
             ->assertNotified();
+    }
+
+    /**
+     * A worker that already resolved the destination keeps the adapter it built
+     * for the life of the process. Applying the new config is only half the
+     * job: without dropping the adapter, a backup job goes on writing to the
+     * OLD bucket and records a successful row for it.
+     */
+    public function test_a_changed_destination_reaches_a_running_worker(): void
+    {
+        // The overlay remembers what it applied last, so the worker's baseline
+        // is established here — exactly as it would be at worker startup.
+        SettingsServiceProvider::refreshFromDatabase();
+
+        $before = Storage::disk('backups');
+
+        Setting::put('backup.s3.bucket', 'somewhere-else');
+        SettingsServiceProvider::refreshFromDatabase();
+
+        $this->assertSame('somewhere-else', config('filesystems.disks.backups.bucket'));
+        $this->assertNotSame($before, Storage::disk('backups'));
+    }
+
+    /** Nothing changed: the adapter must be left alone, not rebuilt per job. */
+    public function test_an_unchanged_destination_keeps_its_adapter(): void
+    {
+        SettingsServiceProvider::refreshFromDatabase();
+
+        $before = Storage::disk('backups');
+        SettingsServiceProvider::refreshFromDatabase();
+
+        $this->assertSame($before, Storage::disk('backups'));
+    }
+
+    /**
+     * A token without delete permission passes the write and the read. It also
+     * means retention will never prune an old archive — so this is a failed
+     * test, not a successful one with a leftover file.
+     */
+    public function test_the_connection_test_reports_a_destination_that_refuses_deletes(): void
+    {
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+        config(['backup.disk' => 'backups', 'backup.path' => 'archives']);
+
+        $disk = \Mockery::mock(Storage::disk('backups'))->makePartial();
+        // throw => false, so a refused delete comes back as false rather than
+        // as an exception — and would otherwise be read as success.
+        $disk->shouldReceive('delete')->andReturn(false);
+        Storage::set('backups', $disk);
+
+        Livewire::test(ManageBackups::class)
+            ->call('testDestination')
+            ->assertNotified();
+
+        $this->assertNotSame([], Storage::disk('backups')->files('archives'));
     }
 
     /** Copy the stored archive to a local file the test can open. */

@@ -6,6 +6,7 @@ use App\Http\Controllers\HealthController;
 use App\Models\Setting;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\ServiceProvider;
 use Throwable;
 
@@ -177,6 +178,22 @@ class SettingsServiceProvider extends ServiceProvider
     private static array $pristine = [];
 
     /**
+     * Disks whose settings this overlay can change, and what their config
+     * looked like the last time it did.
+     *
+     * Applying the config is only half the job in a long-lived process: a
+     * worker that has already resolved a disk keeps the adapter it built for
+     * the lifetime of the process, so a backup job would go on writing to the
+     * OLD bucket — and record a successful row for it — after an operator
+     * moved the destination. The adapter has to be thrown away too.
+     *
+     * @var array<string, string>
+     */
+    private static array $diskSignatures = [];
+
+    private const OVERLAID_DISKS = ['backups'];
+
+    /**
      * Re-apply stored settings onto config from the database, WITHOUT
      * re-registering the queue hook. Safe to call repeatedly from a long-lived
      * process (the scheduler) — unlike boot(), which would stack a Queue::before
@@ -250,6 +267,28 @@ class SettingsServiceProvider extends ServiceProvider
             if (blank($stored[$settingKey] ?? null)) {
                 config([$configPath => self::$pristine[$configPath]]);
             }
+        }
+
+        $this->purgeChangedDisks();
+    }
+
+    /**
+     * Throw away the resolved adapter of any disk whose configuration just
+     * changed under it.
+     *
+     * Cheap enough to run before every job: a hash of one config array, and a
+     * purge only when it actually moved.
+     */
+    private function purgeChangedDisks(): void
+    {
+        foreach (self::OVERLAID_DISKS as $disk) {
+            $signature = md5(serialize(config("filesystems.disks.{$disk}")));
+
+            if ((self::$diskSignatures[$disk] ?? $signature) !== $signature) {
+                Storage::forgetDisk($disk);
+            }
+
+            self::$diskSignatures[$disk] = $signature;
         }
     }
 }
