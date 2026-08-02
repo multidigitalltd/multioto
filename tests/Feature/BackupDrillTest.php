@@ -492,6 +492,26 @@ class BackupDrillTest extends TestCase
         $this->assertStringContainsString('amount_agorot', implode(' ', $report['problems']));
     }
 
+    /** The marker is not the value: this one decodes to the word "oops". */
+    public function test_a_base64_marker_holding_the_wrong_type_is_reported(): void
+    {
+        $backup = $this->backup();
+
+        $path = Storage::disk('backups')->path($backup->path);
+        $zip = new ZipArchive;
+        $zip->open($path);
+        $zip->addFromString(
+            'database/charges.ndjson',
+            '{"id":1,"subscription_id":5,"amount_agorot":{"__b64":"b29wcw=="},"total_agorot":100,'
+                .'"period_start":"2026-01-01","period_end":"2026-01-31"}'."\n",
+        );
+        $zip->close();
+
+        $report = app(BackupDrill::class)->run($backup);
+
+        $this->assertStringContainsString('amount_agorot', implode(' ', $report['problems']));
+    }
+
     /** A column that may be left out is not a problem, and must not be reported as one. */
     public function test_a_good_archive_is_not_faulted_for_columns_a_row_may_omit(): void
     {

@@ -535,12 +535,25 @@ class BackupDrill
      */
     private function arrivesEmpty(mixed $value): bool
     {
+        return $this->decoded($value) === null;
+    }
+
+    /**
+     * The value the restore would hand to the insert.
+     *
+     * A marker is not a value: {"__b64":"b29wcw=="} is a perfectly good array
+     * to every reading of the JSON and reaches the column as the word "oops".
+     * Everything that judges a value has to judge this one, or it judges the
+     * envelope instead of what is in it.
+     */
+    private function decoded(mixed $value): mixed
+    {
         if (is_array($value) && array_key_exists('__b64', $value)) {
             // Deliberately the same expression BackupRestorer::decodeRow() uses.
-            return (base64_decode((string) $value['__b64'], true) ?: null) === null;
+            return base64_decode((string) $value['__b64'], true) ?: null;
         }
 
-        return $value === null;
+        return $value;
     }
 
     /**
@@ -737,6 +750,11 @@ class BackupDrill
 
                     continue;
                 }
+
+                // The DECODED value, not the marker around it: a b64 marker is
+                // an array to every reading of the JSON and reaches the column
+                // as the bytes inside it.
+                $value = $this->decoded($value);
 
                 if (isset($schema['numeric'][$column]) && is_string($value) && ! is_numeric($value)) {
                     $mistyped[(string) $column] = true;
