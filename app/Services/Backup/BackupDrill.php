@@ -460,7 +460,7 @@ class BackupDrill
      * The unique keys, the foreign keys and the numeric columns travel with
      * them: everything the insert would refuse, asked before it is attempted.
      *
-     * @return array{columns: list<string>, required: list<string>, notNull: list<string>, unique: list<list<string>>, defaults: array<string, string>, limits: array<string, int>, uuid: array<string, bool>, boolean: array<string, bool>, integer: array<string, int>, numeric: array<string, bool>, temporal: array<string, bool>, json: array<string, bool>, foreign: list<array{columns: list<string>, table: string, references: list<string>}>}
+     * @return array{columns: list<string>, required: list<string>, notNull: list<string>, unique: list<list<string>>, defaults: array<string, string>, limits: array<string, int>, uuid: array<string, bool>, boolean: array<string, bool>, integer: array<string, int>, numeric: array<string, bool>, temporal: array<string, string>, json: array<string, bool>, foreign: list<array{columns: list<string>, table: string, references: list<string>}>}
      */
     private function columnsOf(string $table): array
     {
@@ -508,7 +508,12 @@ class BackupDrill
             } elseif (preg_match('/numeric|decimal|real|double|float|money/i', $type)) {
                 $numeric[$name] = true;
             } elseif (preg_match('/date|time/i', $type)) {
-                $temporal[$name] = true;
+                // Which KIND of moment: a time-only column takes literals a
+                // date column refuses, and the reverse.
+                $temporal[$name] = preg_match('/^time(tz|stamp)?/i', $type) === 1
+                    && preg_match('/stamp/i', $type) !== 1
+                        ? 'time'
+                        : 'date';
             } elseif (preg_match('/json/i', $type)) {
                 // PostgreSQL refuses anything that is not a JSON document here.
                 // SQLite stores the same column as text and reports it as text,
@@ -663,6 +668,11 @@ class BackupDrill
             return $uuid;
         }
 
+        if (isset($schema['temporal'][$column]) && is_string($value)
+            && ($moment = $this->temporalText($value, $schema['temporal'][$column])) !== null) {
+            return $moment;
+        }
+
         if (isset($schema['integer'][$column]) && ($whole = $this->integerText($value, PHP_INT_MAX)) !== null) {
             return $whole;
         }
@@ -682,9 +692,11 @@ class BackupDrill
      * time at all. Insisting on one format would fail archives written by a
      * different driver — while "not-a-date", the thing that actually stops a
      * restore, fails either way. PostgreSQL's own special literals are spelled
-     * out because they are valid there and meaningless to strtotime().
+     * out because they are valid there and meaningless to strtotime() — each
+     * with the kind of column it belongs to, since "allballs" is midnight to a
+     * time column and nonsense to a date one.
      */
-    private function readsAsTime(string $value): bool
+    private function readsAsTime(string $value, string $kind = 'date'): bool
     {
         $text = trim($value);
 
@@ -692,7 +704,9 @@ class BackupDrill
             return false;
         }
 
-        if (in_array(strtolower($text), ['infinity', '-infinity', 'epoch', 'allballs'], true)) {
+        $literals = $kind === 'time' ? ['allballs', 'now'] : ['infinity', '-infinity', 'epoch'];
+
+        if (in_array(strtolower($text), $literals, true)) {
             return true;
         }
 
@@ -769,6 +783,45 @@ class BackupDrill
             ['0', '1', 't', 'f', 'true', 'false', 'yes', 'no', 'on', 'off'],
             true,
         );
+    }
+
+    /**
+     * A moment in the one spelling the database would store it as, or null when
+     * it cannot be read whole.
+     *
+     * "2026-01-01" and "Jan 1 2026" are one date to the column and would be two
+     * keys to anything comparing text. Anything not fully understood is left
+     * exactly as it was: merging two values this cannot read completely would
+     * report a duplicate that is not one, and a wrong alarm costs more here
+     * than a missed one. An offset, where the value carries one, is part of the
+     * answer — two instants written in different zones are NOT the same moment.
+     */
+    private function temporalText(string $value, string $kind): ?string
+    {
+        $parsed = date_parse(trim($value));
+
+        if ($parsed['error_count'] > 0 || $parsed['warning_count'] > 0
+            || ! is_int($parsed['year']) || ! is_int($parsed['month']) || ! is_int($parsed['day'])) {
+            return null;
+        }
+
+        $date = sprintf('%04d-%02d-%02d', $parsed['year'], $parsed['month'], $parsed['day']);
+
+        if ($kind !== 'time' && ! is_int($parsed['hour'])) {
+            return $date;
+        }
+
+        if (! is_int($parsed['hour']) || ! is_int($parsed['minute']) || ! is_int($parsed['second'])) {
+            return null;
+        }
+
+        $offset = is_int($parsed['zone'] ?? null) ? sprintf('%+05d', $parsed['zone'] / 36) : '';
+
+        return $date.sprintf(' %02d:%02d:%02d', $parsed['hour'], $parsed['minute'], $parsed['second'])
+            .(is_float($parsed['fraction'] ?? null) && $parsed['fraction'] > 0
+                ? rtrim(rtrim(number_format($parsed['fraction'], 6, '.', ''), '0'), '.')
+                : '')
+            .$offset;
     }
 
     /** Whether an integer column would take this value. */
@@ -1074,7 +1127,7 @@ class BackupDrill
                 // it would mean elsewhere — the restore is handed the value as
                 // it stands and the column refuses it.
                 if (isset($schema['temporal'][$column])
-                    && (! is_string($value) || ! $this->readsAsTime($value))) {
+                    && (! is_string($value) || ! $this->readsAsTime($value, $schema['temporal'][$column]))) {
                     $mistyped[(string) $column] = true;
 
                     continue;
