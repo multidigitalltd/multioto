@@ -459,7 +459,7 @@ class BackupDrill
      * The unique keys, the foreign keys and the numeric columns travel with
      * them: everything the insert would refuse, asked before it is attempted.
      *
-     * @return array{columns: list<string>, required: list<string>, notNull: list<string>, unique: list<list<string>>, defaults: array<string, string>, boolean: array<string, bool>, integer: array<string, bool>, numeric: array<string, bool>, temporal: array<string, bool>, json: array<string, bool>, foreign: list<array{columns: list<string>, table: string, references: list<string>}>}
+     * @return array{columns: list<string>, required: list<string>, notNull: list<string>, unique: list<list<string>>, defaults: array<string, string>, uuid: array<string, bool>, boolean: array<string, bool>, integer: array<string, bool>, numeric: array<string, bool>, temporal: array<string, bool>, json: array<string, bool>, foreign: list<array{columns: list<string>, table: string, references: list<string>}>}
      */
     private function columnsOf(string $table): array
     {
@@ -467,6 +467,7 @@ class BackupDrill
         $required = [];
         $notNull = [];
         $defaults = [];
+        $uuid = [];
         $boolean = [];
         $integer = [];
         $numeric = [];
@@ -487,7 +488,9 @@ class BackupDrill
             // and two different strings to everything else.
             $type = (string) ($column['type_name'] ?? '');
 
-            if (preg_match('/^bool/i', $type)) {
+            if (preg_match('/^uuid/i', $type)) {
+                $uuid[$name] = true;
+            } elseif (preg_match('/^bool/i', $type)) {
                 $boolean[$name] = true;
             } elseif (preg_match('/^(big|small|medium|tiny)?(int|integer|serial)/i', $type)) {
                 $integer[$name] = true;
@@ -538,6 +541,7 @@ class BackupDrill
             'notNull' => $notNull,
             'unique' => $unique,
             'defaults' => $defaults,
+            'uuid' => $uuid,
             'boolean' => $boolean,
             'integer' => $integer,
             'numeric' => $numeric,
@@ -682,6 +686,21 @@ class BackupDrill
         $parsed = date_parse($text);
 
         return $parsed['error_count'] === 0 && $parsed['warning_count'] === 0;
+    }
+
+    /**
+     * Whether a uuid column would take this value.
+     *
+     * Hyphens optional and braces tolerated, because the database accepts both
+     * spellings and the question is what it would store, not how it was
+     * written.
+     */
+    private function readsAsUuid(mixed $value): bool
+    {
+        return is_string($value) && preg_match(
+            '/^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/i',
+            trim($value, " \t\n\r\0\x0B{}"),
+        ) === 1;
     }
 
     /**
@@ -924,6 +943,14 @@ class BackupDrill
                 // may hold it is the NULL check's question, and answering it
                 // here as well would put one fault in the report twice.
                 if ($value === null) {
+                    continue;
+                }
+
+                if (isset($schema['uuid'][$column])) {
+                    if (! $this->readsAsUuid($value)) {
+                        $mistyped[(string) $column] = true;
+                    }
+
                     continue;
                 }
 

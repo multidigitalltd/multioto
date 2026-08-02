@@ -678,6 +678,42 @@ class BackupDrillTest extends TestCase
         $this->assertStringNotContainsString('flag', implode(' ', $report['problems']));
     }
 
+    /**
+     * A uuid column takes a uuid.
+     *
+     * notifications.id is one in production; SQLite keeps it as char(36), so
+     * this table declares the type outright — otherwise the branch would never
+     * run here. Both spellings the database accepts are covered, because
+     * rejecting a valid archive is the failure that matters.
+     */
+    public function test_a_value_that_is_not_a_uuid_in_a_uuid_column_is_reported(): void
+    {
+        DB::statement('CREATE TABLE uuid_probe (id integer primary key, ref uuid)');
+
+        $backup = $this->backup();
+
+        $path = Storage::disk('backups')->path($backup->path);
+        $zip = new ZipArchive;
+        $zip->open($path);
+
+        $manifest = json_decode((string) $zip->getFromName('manifest.json'), true);
+        $manifest['tables']['uuid_probe'] = 3;
+        $zip->addFromString('manifest.json', (string) json_encode($manifest));
+        $zip->addFromString('database/uuid_probe.ndjson',
+            '{"id":1,"ref":"0198f1a2-3b4c-4d5e-8f90-1a2b3c4d5e6f"}'."\n"
+            .'{"id":2,"ref":"0198f1a23b4c4d5e8f901a2b3c4d5e6f"}'."\n"
+            .'{"id":3,"ref":"oops"}'."\n");
+        $zip->close();
+
+        $report = app(BackupDrill::class)->run($backup);
+        $problems = implode(' ', $report['problems']);
+
+        $this->assertStringContainsString('ref', $problems);
+        // One line, for the one bad row — the two valid spellings above must
+        // not have contributed to it.
+        $this->assertSame(1, substr_count($problems, 'סוג העמודה'));
+    }
+
     /** The marker is not the value: this one decodes to the word "oops". */
     public function test_a_base64_marker_holding_the_wrong_type_is_reported(): void
     {
