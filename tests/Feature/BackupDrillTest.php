@@ -1309,6 +1309,34 @@ class BackupDrillTest extends TestCase
         $this->assertStringContainsString('name', implode(' ', $report['problems']));
     }
 
+    /**
+     * jsonb keeps its document as text, and no PostgreSQL text holds U+0000.
+     *
+     * Valid JSON, valid to a plain json column, and refused by jsonb — so the
+     * syntax check alone certifies an archive the restore stops on.
+     */
+    public function test_a_zero_byte_escape_in_a_jsonb_column_is_reported(): void
+    {
+        DB::statement('CREATE TABLE jsonb_probe (id integer primary key, payload jsonb)');
+
+        $report = $this->drillWith('jsonb_probe', 1,
+            '{"id":1,"payload":"{\\"note\\":\\"\\\\u0000\\"}"}'."\n");
+
+        $this->assertStringContainsString('בית אפס או קידוד שבור', implode(' ', $report['problems']));
+        $this->assertStringContainsString('payload', implode(' ', $report['problems']));
+    }
+
+    /** A plain json column stores that escape, and must not be faulted for it. */
+    public function test_a_zero_byte_escape_in_a_json_column_is_not_reported(): void
+    {
+        DB::statement('CREATE TABLE plain_json_probe (id integer primary key, payload json)');
+
+        $report = $this->drillWith('plain_json_probe', 1,
+            '{"id":1,"payload":"{\\"note\\":\\"\\\\u0000\\"}"}'."\n");
+
+        $this->assertStringNotContainsString('payload', implode(' ', $report['problems']));
+    }
+
     /** A clock is not a date. date_parse reports no fault for "12:34:56". */
     public function test_a_clock_value_in_a_date_column_is_reported(): void
     {

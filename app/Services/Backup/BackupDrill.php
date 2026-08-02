@@ -465,7 +465,7 @@ class BackupDrill
      * The unique keys, the foreign keys and the numeric columns travel with
      * them: everything the insert would refuse, asked before it is attempted.
      *
-     * @return array{columns: list<string>, required: list<string>, notNull: list<string>, unique: list<list<string>>, defaults: array<string, string>, limits: array<string, int>, uuid: array<string, bool>, boolean: array<string, bool>, integer: array<string, int>, numeric: array<string, bool>, textual: array<string, bool>, temporal: array<string, string>, precision: array<string, int>, json: array<string, bool>, foreign: list<array{columns: list<string>, table: string, references: list<string>}>}
+     * @return array{columns: list<string>, required: list<string>, notNull: list<string>, unique: list<list<string>>, defaults: array<string, string>, limits: array<string, int>, uuid: array<string, bool>, boolean: array<string, bool>, integer: array<string, int>, numeric: array<string, bool>, textual: array<string, bool>, temporal: array<string, string>, precision: array<string, int>, json: array<string, string>, foreign: list<array{columns: list<string>, table: string, references: list<string>}>}
      */
     private function columnsOf(string $table): array
     {
@@ -550,7 +550,10 @@ class BackupDrill
                 // SQLite stores the same column as text and reports it as text,
                 // so this classification simply finds nothing there — the check
                 // is real in production and inert in the test suite.
-                $json[$name] = true;
+                // WHICH of the two: jsonb keeps the document as text and
+                // refuses a U+0000 escape that a plain json column stores
+                // without complaint.
+                $json[$name] = preg_match('/jsonb/i', $type) === 1 ? 'jsonb' : 'json';
             }
 
             if ($column['nullable'] ?? false) {
@@ -1036,6 +1039,34 @@ class BackupDrill
             && strlen(ltrim($year[1], '-0')) <= 7
                 ? (int) $year[1]
                 : null;
+    }
+
+    /**
+     * Whether a decoded JSON document carries a zero byte anywhere inside it —
+     * in a value or in a key.
+     *
+     * Asked of the DECODED document rather than of its text, because the two
+     * disagree: "\\u0000" written with an escaped backslash is the literal
+     * characters and stores perfectly well, while "\u0000" is the character
+     * jsonb refuses. Only decoding tells them apart.
+     */
+    private function holdsZeroByte(mixed $value): bool
+    {
+        if (is_string($value)) {
+            return str_contains($value, "\0");
+        }
+
+        if (! is_array($value)) {
+            return false;
+        }
+
+        foreach ($value as $key => $item) {
+            if ((is_string($key) && str_contains($key, "\0")) || $this->holdsZeroByte($item)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -1565,8 +1596,22 @@ class BackupDrill
                     continue;
                 }
 
-                if (isset($schema['json'][$column]) && is_string($value) && ! json_validate($value)) {
-                    $mistyped[(string) $column] = true;
+                if (isset($schema['json'][$column]) && is_string($value)) {
+                    if (! json_validate($value)) {
+                        $mistyped[(string) $column] = true;
+
+                        continue;
+                    }
+
+                    // Valid JSON is not the whole question for jsonb: it keeps
+                    // the document as TEXT, and PostgreSQL has no text that can
+                    // hold U+0000. The byte check above cannot see this one —
+                    // inside the archive the escape is six characters, not a
+                    // byte — and a plain json column takes it quite happily.
+                    if ($schema['json'][$column] === 'jsonb'
+                        && $this->holdsZeroByte(json_decode($value, true))) {
+                        $unstorable[(string) $column] = true;
+                    }
                 }
             }
 
