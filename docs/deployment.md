@@ -82,7 +82,7 @@ cd multioto
 
 | רכיב | דרישה |
 |---|---|
-| PHP | 8.3+ עם ההרחבות: `pdo_pgsql`, `redis`, `mbstring`, `bcmath`, `intl`, `gd` |
+| PHP | 8.3+ עם ההרחבות: `pdo_pgsql`, `pgsql`, `redis`, `mbstring`, `bcmath`, `intl`, `gd`. `pgsql` (בנוסף ל-`pdo_pgsql`) מאפשר ל-`/health` לשאול את המסד עם דדליין משלו — בלעדיה בדיקה מול מסד תקוע תמתין עד ל-timeout של שרת הווב |
 | מסד נתונים | PostgreSQL 15+ (בפרודקשן). SQLite רק לפיתוח/בדיקות |
 | תור + cache | Redis |
 | תהליך תור | `php artisan horizon` (worker רץ תמיד) |
