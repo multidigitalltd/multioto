@@ -55,6 +55,29 @@ class BackupDrillTest extends TestCase
         return app(BackupRunner::class)->run();
     }
 
+    /**
+     * Drill an archive with one extra table bolted into it — for column types
+     * this schema does not otherwise declare on SQLite.
+     *
+     * @return array<string, mixed>
+     */
+    private function drillWith(string $table, int $rows, string $ndjson): array
+    {
+        $backup = $this->backup();
+
+        $path = Storage::disk('backups')->path($backup->path);
+        $zip = new ZipArchive;
+        $zip->open($path);
+
+        $manifest = json_decode((string) $zip->getFromName('manifest.json'), true);
+        $manifest['tables'][$table] = $rows;
+        $zip->addFromString('manifest.json', (string) json_encode($manifest));
+        $zip->addFromString("database/{$table}.ndjson", $ndjson);
+        $zip->close();
+
+        return app(BackupDrill::class)->run($backup);
+    }
+
     /** The whole point: a real archive, read end to end, comes back clean. */
     public function test_a_good_archive_passes_the_drill(): void
     {
@@ -890,28 +913,59 @@ class BackupDrillTest extends TestCase
     }
 
     /**
-     * Two instants written in different zones are NOT the same moment, and
-     * reporting them as a duplicate would be an alarm over a sound archive.
+     * A plain timestamp column IGNORES the offset in its input.
+     *
+     * So the same clock written in two zones is one value there, and the
+     * collision is real. This is the one place where reading PostgreSQL's
+     * behaviour rather than the text is what decides the answer.
      */
-    public function test_two_moments_in_different_zones_are_not_a_duplicate(): void
+    public function test_zone_offsets_are_ignored_by_a_plain_timestamp_column(): void
     {
         DB::statement('CREATE TABLE zone_probe (seen_at timestamp primary key)');
 
-        $backup = $this->backup();
-
-        $path = Storage::disk('backups')->path($backup->path);
-        $zip = new ZipArchive;
-        $zip->open($path);
-
-        $manifest = json_decode((string) $zip->getFromName('manifest.json'), true);
-        $manifest['tables']['zone_probe'] = 2;
-        $zip->addFromString('manifest.json', (string) json_encode($manifest));
-        $zip->addFromString('database/zone_probe.ndjson',
+        $report = $this->drillWith('zone_probe', 2,
             '{"seen_at":"2026-01-01 00:00:00+02"}'."\n"
             .'{"seen_at":"2026-01-01 00:00:00+00"}'."\n");
-        $zip->close();
 
-        $report = app(BackupDrill::class)->run($backup);
+        $this->assertStringContainsString('כפולים', implode(' ', $report['problems']));
+    }
+
+    /** A column that DOES carry a zone: one instant, two spellings, one key. */
+    public function test_one_instant_in_two_zones_is_one_key_in_a_zoned_column(): void
+    {
+        DB::statement('CREATE TABLE zoned_probe (seen_at timestamptz primary key)');
+
+        $report = $this->drillWith('zoned_probe', 2,
+            '{"seen_at":"2026-01-01 02:00:00+02"}'."\n"
+            .'{"seen_at":"2026-01-01 00:00:00+00"}'."\n");
+
+        $this->assertStringContainsString('כפולים', implode(' ', $report['problems']));
+    }
+
+    /** And two genuinely different instants there are not a duplicate. */
+    public function test_two_instants_in_a_zoned_column_are_not_a_duplicate(): void
+    {
+        DB::statement('CREATE TABLE zoned_probe (seen_at timestamptz primary key)');
+
+        $report = $this->drillWith('zoned_probe', 2,
+            '{"seen_at":"2026-01-01 00:00:00+02"}'."\n"
+            .'{"seen_at":"2026-01-01 00:00:00+00"}'."\n");
+
+        $this->assertStringNotContainsString('כפולים', implode(' ', $report['problems']));
+    }
+
+    /**
+     * Fractional seconds are part of the value, not decoration: a column with
+     * that precision stores .1 and .2 apart, and folding them together would
+     * report a duplicate that is not one.
+     */
+    public function test_two_fractions_of_a_second_are_not_a_duplicate(): void
+    {
+        DB::statement('CREATE TABLE fraction_probe (seen_at timestamp primary key)');
+
+        $report = $this->drillWith('fraction_probe', 2,
+            '{"seen_at":"2026-01-01 00:00:00.1"}'."\n"
+            .'{"seen_at":"2026-01-01 00:00:00.2"}'."\n");
 
         $this->assertStringNotContainsString('כפולים', implode(' ', $report['problems']));
     }

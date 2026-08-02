@@ -513,9 +513,15 @@ class BackupDrill
                 // only a timestamp keeps both. Collapsing any two of them makes
                 // one value look like another that the column stores apart —
                 // or the reverse.
+                // Whether it carries a zone matters as much: PostgreSQL's
+                // plain timestamp IGNORES an offset in its input, so the same
+                // clock written in two zones is one value there — and two
+                // different instants in a timestamptz.
+                $zoned = preg_match('/tz|with time zone/i', $type) === 1;
+
                 $temporal[$name] = match (true) {
-                    preg_match('/stamp|datetime/i', $type) === 1 => 'timestamp',
-                    preg_match('/^time/i', $type) === 1 => 'time',
+                    preg_match('/stamp|datetime/i', $type) === 1 => $zoned ? 'timestamptz' : 'timestamp',
+                    preg_match('/^time/i', $type) === 1 => $zoned ? 'timetz' : 'time',
                     default => 'date',
                 };
             } elseif (preg_match('/json/i', $type)) {
@@ -708,9 +714,9 @@ class BackupDrill
             return false;
         }
 
-        $literals = match ($kind) {
-            'time' => ['allballs', 'now'],
-            'timestamp' => ['infinity', '-infinity', 'epoch', 'now'],
+        $literals = match (true) {
+            str_starts_with($kind, 'time') && ! str_contains($kind, 'stamp') => ['allballs', 'now'],
+            str_contains($kind, 'stamp') => ['infinity', '-infinity', 'epoch', 'now'],
             default => ['infinity', '-infinity', 'epoch'],
         };
 
@@ -730,7 +736,7 @@ class BackupDrill
         // And the parts the column actually needs. "12:34:56" parses without a
         // complaint and is not a date; "2026-01-01" is not a time. A parser
         // that reports no fault has not said the value belongs here.
-        return $kind === 'time'
+        return str_starts_with($kind, 'time') && ! str_contains($kind, 'stamp')
             ? is_int($parsed['hour']) && is_int($parsed['minute']) && is_int($parsed['second'])
             : is_int($parsed['year']) && is_int($parsed['month']) && is_int($parsed['day']);
     }
@@ -815,22 +821,45 @@ class BackupDrill
      */
     private function temporalText(string $value, string $kind): ?string
     {
-        $parsed = date_parse(trim($value));
+        $text = trim($value);
+        $parsed = date_parse($text);
 
         if ($parsed['error_count'] > 0 || $parsed['warning_count'] > 0) {
             return null;
         }
 
+        // A column that carries a zone is answered as the INSTANT it names:
+        // the same moment written in two zones is one value there, and two
+        // different moments are two. A column without one ignores the offset
+        // altogether, so keeping it would invent a difference the database
+        // does not see.
+        if (str_contains($kind, 'tz')) {
+            $moment = rescue(fn (): \DateTimeImmutable => new \DateTimeImmutable($text), null, report: false);
+
+            if (! $moment instanceof \DateTimeImmutable) {
+                return null;
+            }
+
+            $utc = $moment->setTimezone(new \DateTimeZone('UTC'));
+
+            return $kind === 'timetz' ? $utc->format('H:i:s.u').'Z' : $utc->format('Y-m-d H:i:s.u').'Z';
+        }
+
+        // Fractional seconds are part of the value, not decoration: a column
+        // with that precision stores .1 and .2 apart, and folding them together
+        // would report a duplicate that is not one.
         $clock = is_int($parsed['hour']) && is_int($parsed['minute']) && is_int($parsed['second'])
-            ? sprintf('%02d:%02d:%02d', $parsed['hour'], $parsed['minute'], $parsed['second'])
+            ? sprintf(
+                '%02d:%02d:%02d.%06d',
+                $parsed['hour'],
+                $parsed['minute'],
+                $parsed['second'],
+                (int) round((float) ($parsed['fraction'] ?: 0) * 1000000),
+            )
             : null;
 
-        // Two instants written in different zones are NOT the same moment, so
-        // the offset travels with the value that carries one.
-        $offset = is_int($parsed['zone'] ?? null) ? sprintf('%+05d', $parsed['zone'] / 36) : '';
-
         if ($kind === 'time') {
-            return $clock === null ? null : $clock.$offset;
+            return $clock;
         }
 
         if (! is_int($parsed['year']) || ! is_int($parsed['month']) || ! is_int($parsed['day'])) {
@@ -848,7 +877,7 @@ class BackupDrill
 
         // A timestamp with no clock is midnight, exactly as the column stores
         // it — so the two spellings of midnight come out as one key.
-        return $date.' '.($clock ?? '00:00:00').$offset;
+        return $date.' '.($clock ?? '00:00:00.000000');
     }
 
     /** Whether an integer column would take this value. */
