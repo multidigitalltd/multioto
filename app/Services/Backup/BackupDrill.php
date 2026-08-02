@@ -280,10 +280,15 @@ class BackupDrill
 
             $rows++;
 
-            // An ARRAY, not merely valid JSON: a line reading "false" or "0"
-            // parses perfectly and is not a row. The restore rejects exactly
-            // those.
-            if (! is_array(json_decode($line, true))) {
+            $row = json_decode($line, true);
+
+            // A row is a MAP of column => value. A line reading "false" or "0"
+            // parses perfectly and is not one; neither is a JSON list such as
+            // ["x"], which decodes to an array with numeric keys and would be
+            // handed to insert() as columns named 0, 1, 2. The restore fails on
+            // all of them, and a drill that certifies what the restore will
+            // refuse is worse than no drill.
+            if (! is_array($row) || $row === [] || array_is_list($row)) {
                 $damaged++;
             }
         };
@@ -323,7 +328,8 @@ class BackupDrill
     }
 
     /**
-     * Every attachment the archive declares is present AND readable.
+     * Every attachment the archive declares is present, readable, AND belongs
+     * somewhere this installation can put it back.
      *
      * Read to the end, not merely located: a corrupt payload or a bad checksum
      * still has a perfectly valid directory entry, so opening it succeeds and
@@ -358,8 +364,15 @@ class BackupDrill
 
         $missing = [];
         $damaged = [];
+        $unplaceable = [];
 
         foreach ($files as $file) {
+            if (($reason = $this->destinationProblem($file)) !== null) {
+                $unplaceable[$reason][] = $file;
+
+                continue;
+            }
+
             $stream = $zip->getStream('files/'.$file);
 
             if ($stream === false) {
@@ -395,7 +408,49 @@ class BackupDrill
             $problems[] = 'קבצים בארכיון שלא ניתן לקרוא עד הסוף: '.$this->few($damaged);
         }
 
+        foreach ($unplaceable as $reason => $names) {
+            $problems[] = $reason.': '.$this->few($names);
+        }
+
         return $problems;
+    }
+
+    /**
+     * Why the restore would refuse to put this file back, or null when it would
+     * accept it.
+     *
+     * The archive names its attachments "{disk}/{path}", and the restore stops
+     * outright — before a single row is replaced — for a disk this installation
+     * no longer configures, or for a path that would write outside the disk's
+     * root. Configuration drift is exactly the kind of thing a monthly drill
+     * exists to find: ATTACHMENT_DISK changed after a rebuild, and the archives
+     * written before it became unrestorable without anybody touching them.
+     */
+    private function destinationProblem(string $entry): ?string
+    {
+        $slash = strpos($entry, '/');
+
+        if ($slash === false) {
+            return 'רשומות קבצים בארכיון שאינן נתיב תקין';
+        }
+
+        $disk = substr($entry, 0, $slash);
+        $path = substr($entry, $slash + 1);
+
+        if ($path === '') {
+            return 'רשומות קבצים בארכיון שאינן נתיב תקין';
+        }
+
+        if (! array_key_exists($disk, (array) config('backup.files', []))) {
+            return "הגיבוי מכיל קבצים מיעד אחסון \"{$disk}\" שאינו מוגדר בהתקנה הזו — השחזור ייעצר. "
+                .'יש להגדיר את אותם יעדי אחסון (ATTACHMENT_DISK ו-backup.files)';
+        }
+
+        if (str_starts_with($path, '/') || in_array('..', explode('/', $path), true)) {
+            return 'נתיבים לא חוקיים בארכיון — השחזור ייעצר';
+        }
+
+        return null;
     }
 
     /**

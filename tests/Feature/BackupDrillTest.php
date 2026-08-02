@@ -249,6 +249,47 @@ class BackupDrillTest extends TestCase
         $this->assertStringContainsString('סכום ביקורת', implode(' ', $report['problems']));
     }
 
+    /** A JSON list is not a row either: insert() would read it as columns 0, 1, 2. */
+    public function test_rows_that_are_json_lists_are_reported(): void
+    {
+        $backup = $this->backup();
+
+        $path = Storage::disk('backups')->path($backup->path);
+        $zip = new ZipArchive;
+        $zip->open($path);
+        $zip->addFromString('database/customers.ndjson', "[\"x\"]\n[1,2]\n");
+        $zip->close();
+
+        $report = app(BackupDrill::class)->run($backup);
+
+        $this->assertStringContainsString('אינן קריאות', implode(' ', $report['problems']));
+    }
+
+    /**
+     * The archive ages without anybody touching it.
+     *
+     * An ATTACHMENT_DISK changed after a rebuild makes every archive written
+     * before it unrestorable — the restore stops outright rather than put a
+     * database back without its files. That is precisely the drift a monthly
+     * drill exists to find, months before somebody needs the archive.
+     */
+    public function test_files_from_a_disk_this_installation_no_longer_has_are_reported(): void
+    {
+        Storage::disk('public')->put('logo.png', str_repeat('x', 512));
+
+        $backup = $this->backup();
+        $this->assertGreaterThan(0, $backup->manifest['files']);
+
+        // The rebuild: "public" is no longer one of the disks this installation
+        // backs up, so the restore would refuse the archive that names it.
+        config(['backup.files' => ['local' => []]]);
+
+        $report = app(BackupDrill::class)->run($backup);
+
+        $this->assertStringContainsString('public', implode(' ', $report['problems']));
+        $this->assertStringContainsString('ייעצר', implode(' ', $report['problems']));
+    }
+
     /**
      * A backup nobody has opened is a hope, and the health screen says so —
      * as something for a person to act on, not as a system that has stopped.
