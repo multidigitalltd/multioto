@@ -328,17 +328,22 @@ class BackupDrill
      * The unique keys travel with them: a member holding the same primary key
      * twice restores no further than the first insert.
      *
-     * @return array{columns: list<string>, required: list<string>, notNull: list<string>, unique: list<list<string>>}
+     * @return array{columns: list<string>, required: list<string>, notNull: list<string>, unique: list<list<string>>, defaults: array<string, string>}
      */
     private function columnsOf(string $table): array
     {
         $columns = [];
         $required = [];
         $notNull = [];
+        $defaults = [];
 
         foreach (Schema::getColumns($table) as $column) {
             $name = (string) $column['name'];
             $columns[] = $name;
+
+            if (($column['default'] ?? null) !== null) {
+                $defaults[$name] = (string) $column['default'];
+            }
 
             if ($column['nullable'] ?? false) {
                 continue;
@@ -364,6 +369,7 @@ class BackupDrill
             'required' => $required,
             'notNull' => $notNull,
             'unique' => $unique,
+            'defaults' => $defaults,
         ];
     }
 
@@ -390,24 +396,64 @@ class BackupDrill
     /**
      * One row's value for a unique key, or null when it has no complete one.
      *
+     * A column the row leaves out is NOT uncheckable when the table fills it in:
+     * charges.attempt_number defaults to 1 and belongs to the unique key on
+     * (subscription_id, period_start, attempt_number), so two rows that both
+     * omit it are handed the same 1 and collide. Skipping them would leave the
+     * commonest defaulted-key collision invisible.
+     *
      * @param  array<string, mixed>  $row
      * @param  list<string>  $key
+     * @param  array<string, string>  $defaults
      */
-    private function keyValue(array $row, array $key): ?string
+    private function keyValue(array $row, array $key, array $defaults): ?string
     {
         $parts = [];
 
         foreach ($key as $column) {
-            if (! array_key_exists($column, $row) || $this->arrivesEmpty($row[$column])) {
+            if (array_key_exists($column, $row)) {
+                if ($this->arrivesEmpty($row[$column])) {
+                    return null;
+                }
+
+                $value = $row[$column];
+                $parts[] = is_scalar($value) ? (string) $value : (string) json_encode($value);
+
+                continue;
+            }
+
+            $default = $defaults[$column] ?? null;
+
+            // No default, or one the database COMPUTES per row — nextval(),
+            // now(), a generated uuid. Those are not a constant every row
+            // shares, and treating them as one would invent collisions.
+            if ($default === null || str_contains($default, '(')) {
                 return null;
             }
 
-            $value = $row[$column];
-
-            $parts[] = is_scalar($value) ? (string) $value : (string) json_encode($value);
+            $parts[] = $this->literal($default);
         }
 
         return implode("\0", $parts);
+    }
+
+    /**
+     * A column default as the value it stands for.
+     *
+     * Defaults come back in the database's own spelling — PostgreSQL writes a
+     * string default as 'x'::character varying — and the point of stripping
+     * that down is to compare it with a row that states the value outright.
+     * A spelling this does not recognise costs a detection, never a false one.
+     */
+    private function literal(string $default): string
+    {
+        $value = trim((string) preg_replace('/::[a-z0-9_ \[\]"]+$/i', '', trim($default)));
+
+        if (strlen($value) >= 2 && str_starts_with($value, "'") && str_ends_with($value, "'")) {
+            return str_replace("''", "'", substr($value, 1, -1));
+        }
+
+        return $value;
     }
 
     /**
@@ -421,7 +467,7 @@ class BackupDrill
      * BackupRestorer::assertMemberIntact() does, is what surfaces it.
      *
      * @param  resource  $stream
-     * @param  array{columns: list<string>, required: list<string>, notNull: list<string>, unique: list<list<string>>}|null  $schema
+     * @param  array{columns: list<string>, required: list<string>, notNull: list<string>, unique: list<list<string>>, defaults: array<string, string>}|null  $schema
      * @return array{rows: int, damaged: int, unknown: list<string>, absent: list<string>, nulls: list<string>, repeated: list<string>, unchecked: bool, mixed: bool, corrupt: bool}
      */
     private function readRows($stream, ?array $schema): array
@@ -536,7 +582,7 @@ class BackupDrill
                     break;
                 }
 
-                $value = $this->keyValue($row, $key);
+                $value = $this->keyValue($row, $key, $schema['defaults']);
 
                 // A key the row does not carry in full is not a duplicate of
                 // anything, and NULL never collides with NULL in SQL.

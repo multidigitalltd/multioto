@@ -404,6 +404,31 @@ class BackupDrillTest extends TestCase
         $this->assertStringContainsString('כפולים', implode(' ', $report['problems']));
     }
 
+    /**
+     * A key column the rows leave out is not a key that cannot be checked.
+     *
+     * charges.attempt_number defaults to 1 and belongs to the unique key on
+     * (subscription_id, period_start, attempt_number), so two rows that both
+     * omit it are handed the same 1 — and collide.
+     */
+    public function test_a_duplicate_key_completed_by_a_default_is_reported(): void
+    {
+        $backup = $this->backup();
+
+        $row = '{"subscription_id":5,"amount_agorot":100,"total_agorot":100,'
+            .'"period_start":"2026-01-01","period_end":"2026-01-31"';
+
+        $path = Storage::disk('backups')->path($backup->path);
+        $zip = new ZipArchive;
+        $zip->open($path);
+        $zip->addFromString('database/charges.ndjson', $row.',"id":1}'."\n".$row.',"id":2}'."\n");
+        $zip->close();
+
+        $report = app(BackupDrill::class)->run($backup);
+
+        $this->assertStringContainsString('כפולים', implode(' ', $report['problems']));
+    }
+
     /** A column that may be left out is not a problem, and must not be reported as one. */
     public function test_a_good_archive_is_not_faulted_for_columns_a_row_may_omit(): void
     {
