@@ -1181,6 +1181,42 @@ class BackupDrillTest extends TestCase
         $this->assertStringNotContainsString('כפולים', implode(' ', $report['problems']));
     }
 
+    /**
+     * The end-of-day spelling at a year the date library cannot hold.
+     *
+     * 294276-01-01 24:00:00 is the following midnight to the database, exactly
+     * as 2026-01-01 24:00:00 is. Reported as a bad value, it would fail an
+     * archive that restores perfectly well.
+     */
+    public function test_a_wide_year_at_the_end_of_the_day_is_the_following_midnight(): void
+    {
+        DB::statement('CREATE TABLE wide_probe (seen_at timestamp primary key)');
+
+        $report = $this->drillWith('wide_probe', 1, '{"seen_at":"294276-01-01 24:00:00"}'."\n");
+
+        $this->assertStringNotContainsString('seen_at', implode(' ', $report['problems']));
+
+        // And on a date column, where the key builder can hold a year this
+        // wide, it is the same value as that midnight written outright.
+        DB::statement('CREATE TABLE wide_day_key_probe (seen_on date primary key)');
+
+        $report = $this->drillWith('wide_day_key_probe', 2,
+            '{"seen_on":"294276-01-01 24:00:00"}'."\n"
+            .'{"seen_on":"294276-01-02"}'."\n");
+
+        $this->assertStringContainsString('כפולים', implode(' ', $report['problems']));
+    }
+
+    /** A day the calendar does not have stays a fault, whatever its year. */
+    public function test_a_wide_year_with_an_impossible_day_is_reported(): void
+    {
+        DB::statement('CREATE TABLE wide_day_probe (seen_at timestamp primary key)');
+
+        $report = $this->drillWith('wide_day_probe', 1, '{"seen_at":"294276-02-30 24:00:00"}'."\n");
+
+        $this->assertStringContainsString('seen_at', implode(' ', $report['problems']));
+    }
+
     /** A clock is not a date. date_parse reports no fault for "12:34:56". */
     public function test_a_clock_value_in_a_date_column_is_reported(): void
     {

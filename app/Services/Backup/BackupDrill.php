@@ -1024,31 +1024,72 @@ class BackupDrill
      *
      * A time column is left alone: 24:00:00 is the top of its own range there
      * and stays exactly that.
+     *
+     * The year is read at whatever width it is written, and the day advanced by
+     * arithmetic rather than through the date library: that library holds 294276
+     * as 1976, so it would answer both the calendar question and the increment
+     * for a different year entirely.
      */
     private function endOfDay(string $text, string $kind): string
     {
         if ($kind === 'time' || $kind === 'timetz'
-            || preg_match('/^(\d{4}-\d{1,2}-\d{1,2})[ T]24:00(:00(\.0+)?)?(.*)$/', $text, $parts) !== 1) {
+            || preg_match('/^(-?\d{1,7})-(\d{1,2})-(\d{1,2})[ T]24:00(:00(\.0+)?)?(.*)$/', $text, $parts) !== 1) {
             return $text;
         }
+
+        [$year, $month, $day] = [(int) $parts[1], (int) $parts[2], (int) $parts[3]];
 
         // The date this is about to advance must be a real one FIRST. February
-        // the 31st normalises to the third of March on its way through the date
+        // the 31st normalises to the third of March on its way through a date
         // library, and a day added to that is a perfectly ordinary timestamp —
         // the calendar error erased by the very rewrite meant to help.
-        $day = date_parse($parts[1]);
-
-        if ($day['error_count'] > 0 || $day['warning_count'] > 0) {
+        if ($year === 0 || $month < 1 || $month > 12
+            || $day < 1 || $day > $this->daysInMonth($year, $month)) {
             return $text;
         }
 
-        $day = rescue(
-            fn (): string => (new \DateTimeImmutable($parts[1]))->modify('+1 day')->format('Y-m-d'),
-            null,
-            report: false,
-        );
+        if ($day < $this->daysInMonth($year, $month)) {
+            $day++;
+        } elseif ($month < 12) {
+            $month++;
+            $day = 1;
+        } else {
+            // There is no year zero in this calendar, so the day after the last
+            // of 1 BC is the first of 1 AD.
+            $year = $year === -1 ? 1 : $year + 1;
+            $month = 1;
+            $day = 1;
+        }
 
-        return $day === null ? $text : $day.' 00:00:00'.$parts[4];
+        return sprintf(
+            '%s%04d-%02d-%02d 00:00:00%s',
+            $year < 0 ? '-' : '',
+            abs($year),
+            $month,
+            $day,
+            $parts[6],
+        );
+    }
+
+    /**
+     * How many days a month has in the proleptic Gregorian calendar.
+     *
+     * Worked out here rather than asked of the date library, which cannot hold
+     * the years a date column reaches: it reads 294300 as 4300 and would answer
+     * the leap question for that instead.
+     */
+    private function daysInMonth(int $year, int $month): int
+    {
+        if ($month === 2) {
+            // A year before the era is written as its count, not as an
+            // astronomical number: 1 BC is -1 here and 0 in the arithmetic the
+            // leap rule is stated in, so 1 BC is a leap year and -1 is not.
+            $era = $year < 0 ? $year + 1 : $year;
+
+            return $era % 4 === 0 && ($era % 100 !== 0 || $era % 400 === 0) ? 29 : 28;
+        }
+
+        return in_array($month, [4, 6, 9, 11], true) ? 30 : 31;
     }
 
     /**
