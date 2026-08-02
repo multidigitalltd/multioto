@@ -265,13 +265,23 @@ class BackupDrill
                 $problems[] = "הטבלה {$table}: חסרות בארכיון עמודות חובה ("
                     .$this->few($read['absent']).') — השחזור ייעצר.';
             }
+
+            if ($read['nulls'] !== []) {
+                $problems[] = "הטבלה {$table}: עמודות שאינן יכולות להיות ריקות מכילות ערך ריק בארכיון ("
+                    .$this->few($read['nulls']).') — השחזור ייעצר.';
+            }
+
+            if ($read['mixed']) {
+                $problems[] = "הטבלה {$table}: לשורות בארכיון מבנה שונה זו מזו — השחזור ייעצר.";
+            }
         }
 
         return $problems;
     }
 
     /**
-     * A table's columns, and of those the ones a row cannot leave out.
+     * A table's columns, the ones a row cannot leave out, and the ones that
+     * cannot hold NULL.
      *
      * Required means the database has nothing to put there: NOT NULL, with no
      * default of its own and no counter behind it. Every other column may be
@@ -280,25 +290,33 @@ class BackupDrill
      * existed, which is the kind of false alarm that teaches people to ignore
      * the report that matters.
      *
-     * @return array{columns: list<string>, required: list<string>}
+     * "Cannot hold NULL" is the wider set: a default saves a column that is
+     * absent, and does nothing for one that is present and null.
+     *
+     * @return array{columns: list<string>, required: list<string>, notNull: list<string>}
      */
     private function columnsOf(string $table): array
     {
         $columns = [];
         $required = [];
+        $notNull = [];
 
         foreach (Schema::getColumns($table) as $column) {
             $name = (string) $column['name'];
             $columns[] = $name;
 
-            if (! ($column['nullable'] ?? false)
-                && ($column['default'] ?? null) === null
-                && ! ($column['auto_increment'] ?? false)) {
+            if ($column['nullable'] ?? false) {
+                continue;
+            }
+
+            $notNull[] = $name;
+
+            if (($column['default'] ?? null) === null && ! ($column['auto_increment'] ?? false)) {
                 $required[] = $name;
             }
         }
 
-        return ['columns' => $columns, 'required' => $required];
+        return ['columns' => $columns, 'required' => $required, 'notNull' => $notNull];
     }
 
     /**
@@ -312,8 +330,8 @@ class BackupDrill
      * BackupRestorer::assertMemberIntact() does, is what surfaces it.
      *
      * @param  resource  $stream
-     * @param  array{columns: list<string>, required: list<string>}|null  $schema
-     * @return array{rows: int, damaged: int, unknown: list<string>, absent: list<string>, corrupt: bool}
+     * @param  array{columns: list<string>, required: list<string>, notNull: list<string>}|null  $schema
+     * @return array{rows: int, damaged: int, unknown: list<string>, absent: list<string>, nulls: list<string>, mixed: bool, corrupt: bool}
      */
     private function readRows($stream, ?array $schema): array
     {
@@ -321,14 +339,21 @@ class BackupDrill
         $damaged = 0;
         $unknown = [];
         $absent = [];
+        $nulls = [];
+        $mixed = false;
         $buffer = '';
 
-        // Rows in one member all carry the same key set, so it is examined once
-        // per distinct set rather than once per row — a table with millions of
-        // them should not pay for the check a million times.
+        // Rows in one member all carry the same key set, so the SHAPE is
+        // examined once per distinct set rather than once per row — a table
+        // with millions of them should not pay for that check a million times.
         $accepted = null;
 
-        $count = function (string $line) use (&$rows, &$damaged, &$unknown, &$absent, &$accepted, $schema): void {
+        // The columns of that shape which cannot hold NULL. Values, unlike
+        // shape, are per row and have to be looked at every time — but only
+        // these few columns, not all of them.
+        $noNulls = [];
+
+        $count = function (string $line) use (&$rows, &$damaged, &$unknown, &$absent, &$nulls, &$mixed, &$accepted, &$noNulls, $schema): void {
             if (trim($line) === '') {
                 return;
             }
@@ -356,32 +381,51 @@ class BackupDrill
             $keys = array_keys($row);
             $signature = implode("\0", $keys);
 
-            if ($signature === $accepted) {
-                return;
-            }
+            if ($signature !== $accepted) {
+                // Named columns the table does not have. insert() is handed
+                // exactly these keys and fails on them — with every table
+                // already emptied, which is the point at which a restore is at
+                // its least recoverable.
+                $extra = array_diff($keys, $schema['columns']);
 
-            // Named columns the table does not have. insert() is handed exactly
-            // these keys and fails on them — with every table already emptied,
-            // which is the point at which a restore is at its least recoverable.
-            $extra = array_diff($keys, $schema['columns']);
+                // And the other direction: a column the table requires and the
+                // row does not carry. The database has nothing to put there —
+                // no value, no default, and NULL refused.
+                $short = array_diff($schema['required'], $keys);
 
-            // And the other direction: a column the table requires and the row
-            // does not carry. The database has nothing to put there — no value,
-            // no default, and NULL refused — so that insert fails just as hard.
-            $short = array_diff($schema['required'], $keys);
+                if ($extra !== [] || $short !== []) {
+                    foreach ($extra as $name) {
+                        $unknown[(string) $name] = true;
+                    }
 
-            if ($extra === [] && $short === []) {
+                    foreach ($short as $name) {
+                        $absent[(string) $name] = true;
+                    }
+
+                    return;
+                }
+
+                // Two shapes in one member, each fine on its own. The restore
+                // batches rows into a single insert whose column list comes
+                // from the first of them while every tuple keeps its own
+                // values, so the second shape does not get its defaults filled
+                // in — it makes the statement itself invalid.
+                if ($accepted !== null) {
+                    $mixed = true;
+                }
+
                 $accepted = $signature;
-
-                return;
+                $noNulls = array_values(array_intersect($schema['notNull'], $keys));
             }
 
-            foreach ($extra as $name) {
-                $unknown[(string) $name] = true;
-            }
-
-            foreach ($short as $name) {
-                $absent[(string) $name] = true;
+            // A column that is present and null. A default rescues a column the
+            // row leaves out and does nothing for one it explicitly empties, so
+            // this is the wider set — and it has to be looked at per row, since
+            // the shape says nothing about the values.
+            foreach ($noNulls as $name) {
+                if ($row[$name] === null) {
+                    $nulls[$name] = true;
+                }
             }
         };
 
@@ -395,6 +439,8 @@ class BackupDrill
                         'damaged' => $damaged,
                         'unknown' => [],
                         'absent' => [],
+                        'nulls' => [],
+                        'mixed' => false,
                         'corrupt' => true,
                     ];
                 }
@@ -427,6 +473,8 @@ class BackupDrill
             'damaged' => $damaged,
             'unknown' => array_keys($unknown),
             'absent' => array_keys($absent),
+            'nulls' => array_keys($nulls),
+            'mixed' => $mixed,
             'corrupt' => false,
         ];
     }

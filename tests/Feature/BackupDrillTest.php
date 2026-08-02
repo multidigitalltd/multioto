@@ -308,6 +308,52 @@ class BackupDrillTest extends TestCase
         $this->assertStringContainsString('name', implode(' ', $report['problems']));
     }
 
+    /**
+     * Present is not the same as filled.
+     *
+     * A default rescues a column the row leaves out; it does nothing for one the
+     * row explicitly empties, and NOT NULL refuses it either way.
+     */
+    public function test_a_null_in_a_column_that_cannot_hold_one_is_reported(): void
+    {
+        $backup = $this->backup();
+
+        $path = Storage::disk('backups')->path($backup->path);
+        $zip = new ZipArchive;
+        $zip->open($path);
+        $zip->addFromString('database/customers.ndjson', "{\"id\":1,\"name\":null}\n{\"id\":2,\"name\":null}\n");
+        $zip->close();
+
+        $report = app(BackupDrill::class)->run($backup);
+
+        $this->assertStringContainsString('ערך ריק', implode(' ', $report['problems']));
+    }
+
+    /**
+     * Two shapes in one member, each fine on its own.
+     *
+     * The restore batches rows into a single insert whose column list comes from
+     * the first of them while every tuple keeps its own values — so the second
+     * shape does not quietly get its defaults, it makes the statement invalid.
+     */
+    public function test_rows_with_different_shapes_in_one_table_are_reported(): void
+    {
+        $backup = $this->backup();
+
+        $path = Storage::disk('backups')->path($backup->path);
+        $zip = new ZipArchive;
+        $zip->open($path);
+        $zip->addFromString(
+            'database/customers.ndjson',
+            "{\"id\":1,\"name\":\"א\",\"email\":\"a@example.com\"}\n{\"id\":2,\"name\":\"ב\"}\n",
+        );
+        $zip->close();
+
+        $report = app(BackupDrill::class)->run($backup);
+
+        $this->assertStringContainsString('מבנה שונה', implode(' ', $report['problems']));
+    }
+
     /** A column that may be left out is not a problem, and must not be reported as one. */
     public function test_a_good_archive_is_not_faulted_for_columns_a_row_may_omit(): void
     {
