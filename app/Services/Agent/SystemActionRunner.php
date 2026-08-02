@@ -19,6 +19,7 @@ use App\Models\Ticket;
 use App\Services\Billing\SubscriptionCollectionService;
 use App\Services\Cloudflare\CloudflareClient;
 use App\Services\Hosting\HostingClient;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
@@ -149,11 +150,33 @@ class SystemActionRunner
      */
     public function adoptAssignees(Task $task, array $assignees): void
     {
-        if ($assignees === [] || $task->assignees()->exists()) {
+        if ($assignees === []) {
             return;
         }
 
-        $task->assignees()->sync($assignees);
+        // One claim, taken under the task's own row lock. Two workers can be
+        // running the same repeated request at once — the one that lost the
+        // insert arrives here while the winner is still attaching owners, and
+        // without the lock both would see an ownerless task, both would write,
+        // and the person would be told twice about one assignment (or told the
+        // wrong thing, if the two runs resolved different people).
+        $claimed = DB::transaction(function () use ($task, $assignees): bool {
+            $locked = Task::query()->whereKey($task->getKey())->lockForUpdate()->first();
+
+            if (! $locked || $locked->assignees()->exists()) {
+                return false;
+            }
+
+            $locked->assignees()->sync($assignees);
+
+            return true;
+        });
+
+        // Only the worker that actually claimed it announces anything, and only
+        // once the write is committed.
+        if (! $claimed) {
+            return;
+        }
 
         try {
             NotifyTaskCreatedJob::dispatch($task->id, $assignees);
