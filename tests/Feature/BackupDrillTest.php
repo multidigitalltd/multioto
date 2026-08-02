@@ -1532,6 +1532,34 @@ class BackupDrillTest extends TestCase
         $this->assertStringNotContainsString('seen_at', implode(' ', $report['problems']));
     }
 
+    /**
+     * A carry off the OTHER end of the range.
+     *
+     * The earliest instant PostgreSQL holds, written with a positive offset,
+     * is a day earlier in UTC — and that day is before the calendar the column
+     * keeps.
+     */
+    public function test_an_offset_carrying_past_the_first_year_is_reported(): void
+    {
+        DB::statement('CREATE TABLE floor_probe (seen_at timestamptz primary key)');
+
+        $report = $this->drillWith('floor_probe', 1,
+            '{"seen_at":"4713-01-01 00:00:00+02 BC"}'."\n");
+
+        $this->assertStringContainsString('seen_at', implode(' ', $report['problems']));
+    }
+
+    /** And the same first day in UTC is left alone. */
+    public function test_the_first_year_itself_is_not_reported(): void
+    {
+        DB::statement('CREATE TABLE floor_ok_probe (seen_at timestamptz primary key)');
+
+        $report = $this->drillWith('floor_ok_probe', 1,
+            '{"seen_at":"4713-01-01 00:00:00+00 BC"}'."\n");
+
+        $this->assertStringNotContainsString('seen_at', implode(' ', $report['problems']));
+    }
+
     /** And an ordinary number, and digits inside a string, are left alone. */
     public function test_ordinary_numbers_in_a_jsonb_column_are_not_reported(): void
     {

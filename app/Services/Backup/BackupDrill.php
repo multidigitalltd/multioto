@@ -53,6 +53,14 @@ class BackupDrill
      * How far PostgreSQL's numeric type reaches, which is how far jsonb does:
      * every number in a jsonb document is stored as one.
      */
+    /**
+     * The first year PostgreSQL reaches, for a date and a timestamp alike.
+     *
+     * Unlike the ceiling, which differs between the two, this end is the same
+     * for both.
+     */
+    private const EARLIEST_YEAR = -4713;
+
     private const NUMERIC_WHOLE_DIGITS = 131072;
 
     private const NUMERIC_FRACTION_DIGITS = 16383;
@@ -797,10 +805,13 @@ class BackupDrill
 
         // And still inside it once the value is STORED. A timestamp(0) given
         // 294276-12-31 23:59:59.9 rounds to the first instant of the next year,
-        // and an offset can carry the last day over too: the literal is in
-        // range and the value the column would hold is not. Asked only at the
-        // very edge, where it is the only thing that can happen.
-        if ($this->literalYear($text) !== $this->yearCeiling($kind)) {
+        // and an offset can carry a day over either end: the literal is in
+        // range and the value the column would hold is not. Asked at BOTH
+        // edges, and only there, since nowhere else can a carry of a day or a
+        // second leave the range.
+        $literal = $this->literalYear($text);
+
+        if ($literal !== $this->yearCeiling($kind) && $literal !== self::EARLIEST_YEAR) {
             return true;
         }
 
@@ -1075,7 +1086,7 @@ class BackupDrill
             return false;
         }
 
-        return (int) $year[1] !== 0 && (int) $year[1] >= -4713 && (int) $year[1] <= $ceiling;
+        return (int) $year[1] !== 0 && (int) $year[1] >= self::EARLIEST_YEAR && (int) $year[1] <= $ceiling;
     }
 
     /**
