@@ -459,7 +459,7 @@ class BackupDrill
      * The unique keys, the foreign keys and the numeric columns travel with
      * them: everything the insert would refuse, asked before it is attempted.
      *
-     * @return array{columns: list<string>, required: list<string>, notNull: list<string>, unique: list<list<string>>, defaults: array<string, string>, numeric: array<string, bool>, foreign: list<array{columns: list<string>, table: string, references: list<string>}>}
+     * @return array{columns: list<string>, required: list<string>, notNull: list<string>, unique: list<list<string>>, defaults: array<string, string>, integer: array<string, bool>, numeric: array<string, bool>, foreign: list<array{columns: list<string>, table: string, references: list<string>}>}
      */
     private function columnsOf(string $table): array
     {
@@ -467,6 +467,7 @@ class BackupDrill
         $required = [];
         $notNull = [];
         $defaults = [];
+        $integer = [];
         $numeric = [];
 
         foreach (Schema::getColumns($table) as $column) {
@@ -477,9 +478,15 @@ class BackupDrill
                 $defaults[$name] = (string) $column['default'];
             }
 
-            // Only the one category a value can be checked against without
-            // guessing: a column that holds numbers refuses a word.
-            if (preg_match('/int|serial|numeric|decimal|real|double|float|money/i', (string) ($column['type_name'] ?? ''))) {
+            // Integers kept apart from the wider numeric family, because the
+            // two answer differently: a bigint refuses "1.5", which every
+            // decimal column takes, and 1 and "01" are ONE value to a bigint
+            // and two different strings to everything else.
+            $type = (string) ($column['type_name'] ?? '');
+
+            if (preg_match('/^(big|small|medium|tiny)?(int|integer|serial)/i', $type)) {
+                $integer[$name] = true;
+            } elseif (preg_match('/numeric|decimal|real|double|float|money/i', $type)) {
                 $numeric[$name] = true;
             }
 
@@ -518,6 +525,7 @@ class BackupDrill
             'notNull' => $notNull,
             'unique' => $unique,
             'defaults' => $defaults,
+            'integer' => $integer,
             'numeric' => $numeric,
             'foreign' => $foreign,
         ];
@@ -567,9 +575,9 @@ class BackupDrill
      *
      * @param  array<string, mixed>  $row
      * @param  list<string>  $key
-     * @param  array<string, string>  $defaults
+     * @param  array<string, mixed>  $schema
      */
-    private function keyValue(array $row, array $key, array $defaults): ?string
+    private function keyValue(array $row, array $key, array $schema): ?string
     {
         $parts = [];
 
@@ -584,12 +592,12 @@ class BackupDrill
                     return null;
                 }
 
-                $parts[] = is_scalar($value) ? (string) $value : (string) json_encode($value);
+                $parts[] = $this->normalised($column, $value, $schema);
 
                 continue;
             }
 
-            $default = $defaults[$column] ?? null;
+            $default = $schema['defaults'][$column] ?? null;
 
             // No default, or one the database COMPUTES per row — nextval(),
             // now(), a generated uuid. Those are not a constant every row
@@ -598,10 +606,92 @@ class BackupDrill
                 return null;
             }
 
-            $parts[] = $this->literal($default);
+            $parts[] = $this->normalised($column, $this->literal($default), $schema);
         }
 
         return implode("\0", $parts);
+    }
+
+    /**
+     * One key component in the spelling the DATABASE would compare.
+     *
+     * A bigint reads 1 and "01" as one value; as strings they are two, and the
+     * collision that stops a restore would go unreported. The same holds one
+     * decimal place down: 1.50 and 1.5 are one number and two spellings.
+     *
+     * @param  array<string, mixed>  $schema
+     */
+    private function normalised(string $column, mixed $value, array $schema): string
+    {
+        if (! is_scalar($value)) {
+            return (string) json_encode($value);
+        }
+
+        if (isset($schema['integer'][$column]) && ($whole = $this->integerText($value)) !== null) {
+            return $whole;
+        }
+
+        if (isset($schema['numeric'][$column]) && is_numeric($value)) {
+            return (string) (float) $value;
+        }
+
+        return (string) $value;
+    }
+
+    /** Whether an integer column would take this value. */
+    private function fitsInteger(mixed $value): bool
+    {
+        return $this->integerText($value) !== null;
+    }
+
+    /**
+     * The one spelling an integer column would store this value as, or null
+     * when it would refuse it altogether.
+     *
+     * Both questions are answered here on purpose. "01" and 1 are one value to
+     * a bigint, so a duplicate written both ways has to compare equal — and a
+     * separate validator that read "01" as malformed would raise a false alarm
+     * over a row the restore takes without blinking. One function, and the two
+     * cannot disagree.
+     *
+     * The range is the 64-bit one, and deliberately NOT the declared width: on
+     * SQLite every integer column reports as "integer" whatever it was declared
+     * as, so a smallint check would fail legitimate values on the driver the
+     * tests themselves run on. A wrong alarm costs more here than a missed one.
+     */
+    private function integerText(mixed $value): ?string
+    {
+        if (is_bool($value)) {
+            return $value ? '1' : '0';
+        }
+
+        if (is_int($value)) {
+            return (string) $value;
+        }
+
+        if (is_float($value)) {
+            return $value === floor($value) && abs($value) <= PHP_INT_MAX ? (string) (int) $value : null;
+        }
+
+        if (! is_string($value) || preg_match('/^\s*[+-]?\d+\s*$/', $value) !== 1) {
+            return null;
+        }
+
+        $text = trim($value);
+        $sign = $text[0] === '-' ? '-' : '';
+        $digits = ltrim(ltrim($text, '+-'), '0');
+        $digits = $digits === '' ? '0' : $digits;
+
+        // Compared as text, because the number may not fit in an int to begin
+        // with — which is itself the answer.
+        $ceiling = $sign === '-' ? '9223372036854775808' : '9223372036854775807';
+
+        if (strlen($digits) > strlen($ceiling)
+            || (strlen($digits) === strlen($ceiling) && strcmp($digits, $ceiling) > 0)) {
+            return null;
+        }
+
+        return $digits === '0' ? '0' : $sign.$digits;
     }
 
     /**
@@ -760,6 +850,21 @@ class BackupDrill
                 // as the bytes inside it.
                 $value = $this->decoded($value);
 
+                // An empty value is not a badly typed one. Whether the column
+                // may hold it is the NULL check's question, and answering it
+                // here as well would put one fault in the report twice.
+                if ($value === null) {
+                    continue;
+                }
+
+                if (isset($schema['integer'][$column])) {
+                    if (! $this->fitsInteger($value)) {
+                        $mistyped[(string) $column] = true;
+                    }
+
+                    continue;
+                }
+
                 if (isset($schema['numeric'][$column]) && is_string($value) && ! is_numeric($value)) {
                     $mistyped[(string) $column] = true;
                 }
@@ -772,7 +877,7 @@ class BackupDrill
                     break;
                 }
 
-                $value = $this->keyValue($row, $key, $schema['defaults']);
+                $value = $this->keyValue($row, $key, $schema);
 
                 // A key the row does not carry in full is not a duplicate of
                 // anything, and NULL never collides with NULL in SQL.
@@ -801,7 +906,7 @@ class BackupDrill
                     break;
                 }
 
-                $value = $this->keyValue($row, $columns, $schema['defaults']);
+                $value = $this->keyValue($row, $columns, $schema);
 
                 if ($value === null || isset($values[$name][$value])) {
                     continue;

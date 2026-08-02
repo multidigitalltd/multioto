@@ -492,6 +492,45 @@ class BackupDrillTest extends TestCase
         $this->assertStringContainsString('amount_agorot', implode(' ', $report['problems']));
     }
 
+    /** 1 and "01" are one value to the column and two strings to everything else. */
+    public function test_a_key_repeated_in_another_spelling_is_reported(): void
+    {
+        $backup = $this->backup();
+
+        $path = Storage::disk('backups')->path($backup->path);
+        $zip = new ZipArchive;
+        $zip->open($path);
+        $zip->addFromString(
+            'database/customers.ndjson',
+            "{\"id\":1,\"name\":\"א\"}\n{\"id\":\"01\",\"name\":\"ב\"}\n",
+        );
+        $zip->close();
+
+        $report = app(BackupDrill::class)->run($backup);
+
+        $this->assertStringContainsString('כפולים', implode(' ', $report['problems']));
+    }
+
+    /** A whole-number column refuses "1.5", which every decimal column takes. */
+    public function test_a_fraction_in_a_whole_number_column_is_reported(): void
+    {
+        $backup = $this->backup();
+
+        $path = Storage::disk('backups')->path($backup->path);
+        $zip = new ZipArchive;
+        $zip->open($path);
+        $zip->addFromString(
+            'database/charges.ndjson',
+            '{"id":1,"subscription_id":5,"amount_agorot":"1.5","total_agorot":100,'
+                .'"period_start":"2026-01-01","period_end":"2026-01-31"}'."\n",
+        );
+        $zip->close();
+
+        $report = app(BackupDrill::class)->run($backup);
+
+        $this->assertStringContainsString('amount_agorot', implode(' ', $report['problems']));
+    }
+
     /** The same key written two ways is still the same key. */
     public function test_a_key_repeated_as_a_base64_marker_is_reported(): void
     {
