@@ -714,6 +714,65 @@ class BackupDrillTest extends TestCase
         $this->assertSame(1, substr_count($problems, 'סוג העמודה'));
     }
 
+    /**
+     * Wider than the column.
+     *
+     * charges.currency is three characters in production. SQLite keeps no width
+     * for a Laravel string column — which is why the check is written to apply
+     * only where a width is actually declared, and why this table declares one.
+     */
+    public function test_a_value_longer_than_the_column_is_reported(): void
+    {
+        DB::statement('CREATE TABLE width_probe (id integer primary key, code varchar(3))');
+
+        $backup = $this->backup();
+
+        $path = Storage::disk('backups')->path($backup->path);
+        $zip = new ZipArchive;
+        $zip->open($path);
+
+        $manifest = json_decode((string) $zip->getFromName('manifest.json'), true);
+        $manifest['tables']['width_probe'] = 2;
+        $zip->addFromString('manifest.json', (string) json_encode($manifest));
+        $zip->addFromString('database/width_probe.ndjson',
+            '{"id":1,"code":"ILS"}'."\n".'{"id":2,"code":"USDX"}'."\n");
+        $zip->close();
+
+        $report = app(BackupDrill::class)->run($backup);
+        $problems = implode(' ', $report['problems']);
+
+        $this->assertStringContainsString('code', $problems);
+        // The three-character value beside it must not have contributed.
+        $this->assertSame(1, substr_count($problems, 'סוג העמודה'));
+    }
+
+    /** A lone brace is not a wrapper, and the database refuses it. */
+    public function test_a_uuid_with_an_unmatched_brace_is_reported(): void
+    {
+        DB::statement('CREATE TABLE brace_probe (id integer primary key, ref uuid)');
+
+        $backup = $this->backup();
+
+        $path = Storage::disk('backups')->path($backup->path);
+        $zip = new ZipArchive;
+        $zip->open($path);
+
+        $manifest = json_decode((string) $zip->getFromName('manifest.json'), true);
+        $manifest['tables']['brace_probe'] = 2;
+        $zip->addFromString('manifest.json', (string) json_encode($manifest));
+        $zip->addFromString('database/brace_probe.ndjson',
+            '{"id":1,"ref":"{0198f1a2-3b4c-4d5e-8f90-1a2b3c4d5e6f}"}'."\n"
+            .'{"id":2,"ref":"{0198f1a2-3b4c-4d5e-8f90-1a2b3c4d5e6f"}'."\n");
+        $zip->close();
+
+        $report = app(BackupDrill::class)->run($backup);
+        $problems = implode(' ', $report['problems']);
+
+        $this->assertStringContainsString('ref', $problems);
+        // The properly wrapped one above is valid and must not be reported.
+        $this->assertSame(1, substr_count($problems, 'סוג העמודה'));
+    }
+
     /** The marker is not the value: this one decodes to the word "oops". */
     public function test_a_base64_marker_holding_the_wrong_type_is_reported(): void
     {

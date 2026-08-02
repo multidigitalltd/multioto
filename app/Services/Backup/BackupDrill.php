@@ -459,7 +459,7 @@ class BackupDrill
      * The unique keys, the foreign keys and the numeric columns travel with
      * them: everything the insert would refuse, asked before it is attempted.
      *
-     * @return array{columns: list<string>, required: list<string>, notNull: list<string>, unique: list<list<string>>, defaults: array<string, string>, uuid: array<string, bool>, boolean: array<string, bool>, integer: array<string, bool>, numeric: array<string, bool>, temporal: array<string, bool>, json: array<string, bool>, foreign: list<array{columns: list<string>, table: string, references: list<string>}>}
+     * @return array{columns: list<string>, required: list<string>, notNull: list<string>, unique: list<list<string>>, defaults: array<string, string>, limits: array<string, int>, uuid: array<string, bool>, boolean: array<string, bool>, integer: array<string, bool>, numeric: array<string, bool>, temporal: array<string, bool>, json: array<string, bool>, foreign: list<array{columns: list<string>, table: string, references: list<string>}>}
      */
     private function columnsOf(string $table): array
     {
@@ -467,6 +467,7 @@ class BackupDrill
         $required = [];
         $notNull = [];
         $defaults = [];
+        $limits = [];
         $uuid = [];
         $boolean = [];
         $integer = [];
@@ -487,6 +488,15 @@ class BackupDrill
             // decimal column takes, and 1 and "01" are ONE value to a bigint
             // and two different strings to everything else.
             $type = (string) ($column['type_name'] ?? '');
+
+            // A declared width, where the database keeps one. PostgreSQL
+            // renders varchar(3) as "character varying(3)"; SQLite reports the
+            // type it was given, which for a Laravel string column carries no
+            // width at all — so the check simply does not apply there.
+            if (preg_match('/char/i', $type)
+                && preg_match('/\((\d+)\)/', (string) ($column['type'] ?? ''), $width) === 1) {
+                $limits[$name] = (int) $width[1];
+            }
 
             if (preg_match('/^uuid/i', $type)) {
                 $uuid[$name] = true;
@@ -541,6 +551,7 @@ class BackupDrill
             'notNull' => $notNull,
             'unique' => $unique,
             'defaults' => $defaults,
+            'limits' => $limits,
             'uuid' => $uuid,
             'boolean' => $boolean,
             'integer' => $integer,
@@ -697,9 +708,22 @@ class BackupDrill
      */
     private function readsAsUuid(mixed $value): bool
     {
-        return is_string($value) && preg_match(
+        if (! is_string($value)) {
+            return false;
+        }
+
+        $text = trim($value);
+
+        // Both delimiters or neither. A lone brace is not a wrapper, and the
+        // database refuses it — stripping it here would have this agree with a
+        // restore that does not.
+        if (str_starts_with($text, '{') && str_ends_with($text, '}')) {
+            $text = substr($text, 1, -1);
+        }
+
+        return preg_match(
             '/^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/i',
-            trim($value, " \t\n\r\0\x0B{}"),
+            $text,
         ) === 1;
     }
 
@@ -943,6 +967,16 @@ class BackupDrill
                 // may hold it is the NULL check's question, and answering it
                 // here as well would put one fault in the report twice.
                 if ($value === null) {
+                    continue;
+                }
+
+                // Longer than the column is wide. Counted in characters, as
+                // the database counts it, not in bytes.
+                if (isset($schema['limits'][$column])
+                    && is_string($value)
+                    && mb_strlen($value) > $schema['limits'][$column]) {
+                    $mistyped[(string) $column] = true;
+
                     continue;
                 }
 
