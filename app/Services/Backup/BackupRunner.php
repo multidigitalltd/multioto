@@ -73,7 +73,7 @@ class BackupRunner
             // upload that succeeded and whose response was lost, leaves an
             // archive at the destination and a row that never got to say so.
             // From here on this row is the only thing naming that object.
-            $backup->update(['upload_started_at' => now()]);
+            $backup->update(['upload_phase' => Backup::UPLOAD_REACHED]);
 
             try {
                 // Streamed, so a large archive never has to fit in memory.
@@ -103,6 +103,13 @@ class BackupRunner
             // A half-written object on the destination would look like a real
             // archive in the bucket listing.
             $backup->deleteArchive();
+
+            // Said outright rather than left to be inferred from the absence of
+            // the other: this run stopped before it ever touched the
+            // destination, so its row names nothing and can be cleared away.
+            if ($backup->upload_phase === null) {
+                $backup->upload_phase = Backup::UPLOAD_SKIPPED;
+            }
 
             $this->fail($backup, $e->getMessage());
 
@@ -156,6 +163,7 @@ class BackupRunner
     public function fail(Backup $backup, string $reason): void
     {
         $backup->update([
+            'upload_phase' => $backup->upload_phase,
             'status' => BackupStatus::Failed,
             'error' => mb_substr($reason, 0, 2000),
             'finished_at' => now(),
@@ -194,6 +202,8 @@ class BackupRunner
             'disk' => (string) config('backup.disk'),
             'path' => '',
             'user_id' => $userId,
+            // Nothing was ever built, let alone sent.
+            'upload_phase' => Backup::UPLOAD_SKIPPED,
         ]);
 
         $this->fail($backup, $reason);
@@ -345,17 +355,15 @@ class BackupRunner
             // there the object is known to BE there. Dropping its only
             // reference would throw away a recovery point that a passing outage
             // was merely hiding.
-            $found = $backup->error === self::IMPORT_UNREADABLE;
-
-            // And only for a run that never reached out to the destination at
-            // all. Once the upload has been attempted the row may be the only
-            // thing naming a whole archive — a worker killed mid-upload, or an
-            // upload that worked and whose answer was lost, both land here as
-            // "failed" — and the destination that will not confirm the delete
-            // cannot say which it was either.
-            $attempted = $backup->upload_started_at !== null;
-
-            if (! $removed && ($found || $attempted || $backup->status === BackupStatus::Completed)) {
+            // Dropped only on the run's own word that it never reached the
+            // destination. Everything else stays, and the same sentence covers
+            // all of it: a completed archive, an archive a scan found and could
+            // not read, a run killed mid-upload, a run whose upload worked and
+            // whose answer was lost, and a row nothing can speak for because it
+            // predates this marker or was written by a worker mid-deployment.
+            // The destination that will not confirm the delete cannot tell them
+            // apart either, so the absence of an answer is not one.
+            if (! $removed && $backup->upload_phase !== Backup::UPLOAD_SKIPPED) {
                 return 'archive';
             }
 

@@ -2613,7 +2613,7 @@ class BackupTest extends TestCase
         $backup->update([
             'status' => BackupStatus::Failed,
             'error' => 'היעד אינו זמין',
-            'upload_started_at' => null,
+            'upload_phase' => Backup::UPLOAD_SKIPPED,
         ]);
 
         $disk = \Mockery::mock(Storage::disk('backups'))->makePartial();
@@ -2640,7 +2640,7 @@ class BackupTest extends TestCase
         $backup = $this->runBackup();
         $backup->update(['status' => BackupStatus::Failed, 'error' => 'העובד נעצר']);
 
-        $this->assertNotNull($backup->fresh()->upload_started_at);
+        $this->assertSame(Backup::UPLOAD_REACHED, $backup->fresh()->upload_phase);
 
         $disk = \Mockery::mock(Storage::disk('backups'))->makePartial();
         $disk->shouldReceive('delete')->andReturn(false);
@@ -2665,6 +2665,26 @@ class BackupTest extends TestCase
             'status' => BackupStatus::Failed,
             'error' => BackupRunner::IMPORT_UNREADABLE,
         ]);
+
+        $disk = \Mockery::mock(Storage::disk('backups'))->makePartial();
+        $disk->shouldReceive('delete')->andReturn(false);
+        Storage::set('backups', $disk);
+
+        $this->assertSame('archive', app(BackupRunner::class)->deleteRecord($backup->id));
+        $this->assertNotNull(Backup::find($backup->id));
+    }
+
+    /**
+     * A row nothing can speak for keeps its archive.
+     *
+     * It predates the marker, or a worker still running the previous code
+     * wrote it while the deployment was in flight. The absence of an answer is
+     * not an answer, and the safe reading is the one that keeps the row.
+     */
+    public function test_a_failed_run_with_no_recorded_phase_keeps_its_row(): void
+    {
+        $backup = $this->runBackup();
+        $backup->update(['status' => BackupStatus::Failed, 'upload_phase' => null]);
 
         $disk = \Mockery::mock(Storage::disk('backups'))->makePartial();
         $disk->shouldReceive('delete')->andReturn(false);
