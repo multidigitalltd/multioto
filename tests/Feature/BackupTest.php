@@ -2694,6 +2694,49 @@ class BackupTest extends TestCase
         $this->assertNotNull(Backup::find($backup->id));
     }
 
+    /**
+     * A destination that cannot even be built never got touched.
+     *
+     * Nothing before the upload resolves the disk, so a value of the wrong type
+     * in its config passes every guard and throws when the adapter is built.
+     * Recording that as "reached" would make the row undeletable for exactly
+     * the reason the run failed.
+     */
+    public function test_a_run_that_cannot_build_its_destination_is_deletable(): void
+    {
+        config([
+            'backup.disk' => 'broken',
+            'filesystems.disks.broken' => [
+                'driver' => 's3',
+                'key' => 'K',
+                'secret' => 'S',
+                'region' => 'auto',
+                'bucket' => 'b',
+                'endpoint' => 'https://x.r2.cloudflarestorage.com',
+                // A string where the SDK insists on a bool — the fault 1.97.1
+                // fixed, and the one that produced these rows.
+                'use_path_style_endpoint' => '1',
+            ],
+        ]);
+
+        try {
+            app(BackupRunner::class)->run();
+            $this->fail('הריצה הייתה אמורה להיכשל.');
+        } catch (\Throwable) {
+            // The failure is the point; the row it leaves is what is tested.
+        }
+
+        $backup = Backup::query()->latest('id')->first();
+
+        $this->assertSame(BackupStatus::Failed, $backup->status);
+        $this->assertSame(Backup::UPLOAD_SKIPPED, $backup->upload_phase);
+        // "orphan", not "ok": the destination still cannot be built, so nothing
+        // can confirm the archive is gone — and the screen says so rather than
+        // claiming a clean delete.
+        $this->assertSame('orphan', app(BackupRunner::class)->deleteRecord($backup->id));
+        $this->assertNull(Backup::find($backup->id));
+    }
+
     /** A COMPLETED archive is still never orphaned, whatever the destination says. */
     public function test_a_completed_backup_is_not_deleted_when_its_archive_survives(): void
     {

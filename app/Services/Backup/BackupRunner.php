@@ -68,16 +68,25 @@ class BackupRunner
 
             $stream = fopen($local, 'rb');
 
-            // Written down BEFORE the reach-out, because afterwards the two
-            // cases cannot be told apart: a worker killed mid-upload, or an
-            // upload that succeeded and whose response was lost, leaves an
-            // archive at the destination and a row that never got to say so.
-            // From here on this row is the only thing naming that object.
-            $backup->update(['upload_phase' => Backup::UPLOAD_REACHED]);
-
             try {
+                // Resolved first, and only THEN recorded as reached. Building
+                // the adapter is itself something that can fail — a disk with
+                // no driver, or a value of the wrong type in its config — and
+                // that is a run which never touched the destination at all.
+                // Saying otherwise would make its row the one kind that cannot
+                // be cleared away: undeletable for exactly the reason it
+                // failed.
+                $destination = Storage::disk($disk);
+
+                // Written down BEFORE the reach-out, because afterwards the two
+                // cases cannot be told apart: a worker killed mid-upload, or an
+                // upload that succeeded and whose response was lost, leaves an
+                // archive at the destination and a row that never got to say so.
+                // From here on this row is the only thing naming that object.
+                $backup->update(['upload_phase' => Backup::UPLOAD_REACHED]);
+
                 // Streamed, so a large archive never has to fit in memory.
-                if (! Storage::disk($disk)->put($path, $stream)) {
+                if (! $destination->put($path, $stream)) {
                     throw new \RuntimeException("ההעלאה ליעד \"{$disk}\" נכשלה.");
                 }
             } finally {
