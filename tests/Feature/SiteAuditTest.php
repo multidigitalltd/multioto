@@ -72,6 +72,22 @@ class SiteAuditTest extends TestCase
         $this->assertTrue(true);
     }
 
+    /**
+     * לא כל מה שאינו "פרטי" הוא האינטרנט.
+     *
+     * טווח ה-CGNAT וטווח הבדיקות מנותבים בתוך רשתות רבות ומגיעים לדברים שאיש לא
+     * התכוון לפרסם — ודגלי ה-private/reserved של PHP מעבירים את שניהם הלאה.
+     */
+    public function test_an_address_that_is_routable_but_not_public_is_refused(): void
+    {
+        foreach (['100.64.0.1', '198.18.0.1', '192.0.2.5', '64:ff9b::7f00:1'] as $address) {
+            $this->assertFalse(
+                $this->targetResolving([$address])->allows('somewhere.example.com'),
+                $address.' התקבלה ככתובת פומבית',
+            );
+        }
+    }
+
     public function test_a_name_that_does_not_resolve_is_refused(): void
     {
         $this->expectExceptionMessageMatches('/לאתר את הדומיין/u');
@@ -343,6 +359,36 @@ class SiteAuditTest extends TestCase
         $titles = array_column($findings, 'title');
 
         $this->assertContains('בדיקת רשימות החסימה הושלמה חלקית', $titles);
+    }
+
+    /**
+     * גם לחיצת היד של התעודה מחויגת לכתובת שאושרה.
+     *
+     * שתי חיצות היד כאן הן חיבור נוסף לרשת, ואם הן שואלות את ה-DNS מחדש הן
+     * פותחות בדיוק את הפרצה שהשליפה סגרה — שם שהחליף כתובת בין שאלה לשאלה.
+     */
+    public function test_the_certificate_handshake_dials_the_approved_address(): void
+    {
+        $this->bindTargetResolving(['93.184.216.34']);
+
+        $inspector = new class(app(PublicTarget::class)) extends CertificateInspector
+        {
+            /** @var list<string> */
+            public array $dialled = [];
+
+            protected function connect(string $endpoint, mixed $context, ?string &$error = null)
+            {
+                $this->dialled[] = $endpoint;
+                $error = 'לא נוסה חיבור אמיתי';
+
+                return false;
+            }
+        };
+
+        $result = $inspector->inspect('example.com');
+
+        $this->assertSame(['ssl://93.184.216.34:443'], $inspector->dialled);
+        $this->assertFalse($result['reachable']);
     }
 
     /** תשובה אינסופית אינה מפילה את העובד — הקריאה נעצרת בגבול. */

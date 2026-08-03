@@ -16,6 +16,25 @@ use RuntimeException;
  */
 class PublicTarget
 {
+    /**
+     * Ranges that are not the public internet, whatever PHP's flags think.
+     *
+     * The private ones are obvious; the rest are the reason this list exists.
+     * Carrier-grade NAT (100.64/10) and the benchmarking range (198.18/15) are
+     * routable inside plenty of networks and reach things nobody meant to
+     * publish, and `FILTER_FLAG_NO_PRIV_RANGE|NO_RES_RANGE` waves both through.
+     * IPv6 is listed in full for the same reason — a name that answers only on
+     * AAAA would otherwise be judged by a shorter rule than its IPv4 twin.
+     */
+    private const NOT_PUBLIC = [
+        '0.0.0.0/8', '10.0.0.0/8', '100.64.0.0/10', '127.0.0.0/8', '169.254.0.0/16',
+        '172.16.0.0/12', '192.0.0.0/24', '192.0.2.0/24', '192.88.99.0/24',
+        '192.168.0.0/16', '198.18.0.0/15', '198.51.100.0/24', '203.0.113.0/24',
+        '224.0.0.0/4', '240.0.0.0/4',
+        '::/128', '::1/128', '::ffff:0:0/96', '64:ff9b::/96', '100::/64',
+        '2001::/32', '2001:db8::/32', '2002::/16', 'fc00::/7', 'fe80::/10', 'ff00::/8',
+    ];
+
     /** @var array<string, list<string>> */
     private array $decided = [];
 
@@ -55,12 +74,59 @@ class PublicTarget
         }
 
         foreach ($addresses as $address) {
-            if (filter_var($address, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false) {
+            if (! self::routable($address)) {
                 throw new RuntimeException('הכתובת מפנה לכתובת פנימית — הכלי בודק אתרים פומביים בלבד.');
             }
         }
 
         return $this->decided[$host] = array_values($addresses);
+    }
+
+    /** Whether an address is one the public internet can reach. */
+    private static function routable(string $address): bool
+    {
+        $packed = @inet_pton($address);
+
+        if ($packed === false) {
+            return false;
+        }
+
+        foreach (self::NOT_PUBLIC as $range) {
+            [$network, $bits] = explode('/', $range);
+            $start = @inet_pton($network);
+
+            // Comparing an IPv4 address against an IPv6 range, or the reverse,
+            // is not a match — it is a different question, and skipping it is
+            // what keeps each family judged by its own list.
+            if ($start === false || strlen($start) !== strlen($packed)) {
+                continue;
+            }
+
+            if (self::sharesPrefix($packed, $start, (int) $bits)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /** Whether two packed addresses agree on their first $bits bits. */
+    private static function sharesPrefix(string $address, string $network, int $bits): bool
+    {
+        $whole = intdiv($bits, 8);
+        $spare = $bits % 8;
+
+        if ($whole > 0 && substr($address, 0, $whole) !== substr($network, 0, $whole)) {
+            return false;
+        }
+
+        if ($spare === 0) {
+            return true;
+        }
+
+        $mask = chr((0xFF << (8 - $spare)) & 0xFF);
+
+        return ($address[$whole] & $mask) === ($network[$whole] & $mask);
     }
 
     /** Whether an address may be fetched, without the exception. */
