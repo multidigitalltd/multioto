@@ -76,6 +76,44 @@ class Availability implements Check
             )];
         }
 
-        return [Finding::ok($this->area(), 'שתי צורות הכתובת עובדות', "גם {$host} וגם {$other} נענים.")];
+        // Answering is not the same as agreeing. Two names that each serve the
+        // site at their own address, with no redirect and no canonical tag
+        // between them, are two sites as far as a search engine is concerned —
+        // which is the fault this check exists to find, and the one it would
+        // otherwise mark green.
+        if ($this->converges($probe, $site)) {
+            return [Finding::ok($this->area(), 'שתי צורות הכתובת מובילות לאותו מקום', "גם {$host} וגם {$other} נענים, ואחת מפנה לשנייה.")];
+        }
+
+        return [Finding::warning(
+            $this->area(),
+            'שתי צורות הכתובת מגישות את האתר בנפרד',
+            "גם {$host} וגם {$other} מחזירים את האתר בלי שאחת מפנה לשנייה. לגוגל אלה שני אתרים עם אותו תוכן, והדירוג מתחלק ביניהם.",
+            'לבחור כתובת ראשית אחת ולהפנות אליה בהפניה קבועה (301) מהשנייה.',
+        )];
+    }
+
+    /** Whether the other name ends up at the same place, by redirect or by canonical. */
+    private function converges(SiteProbe $probe, AuditContext $site): bool
+    {
+        $canonical = self::origin($site->base());
+
+        if (self::origin($probe->finalUrl) === $canonical) {
+            return true;
+        }
+
+        // A rel=canonical pointing home is the site saying, in the only other
+        // way available to it, which of the two addresses is the real one.
+        return preg_match('#<link\b[^>]*\brel\s*=\s*["\']?canonical["\']?[^>]*>#i', $probe->body, $tag) === 1
+            && preg_match('#\bhref\s*=\s*(["\'])(.*?)\1#is', $tag[0], $href) === 1
+            && self::origin($href[2]) === $canonical;
+    }
+
+    /** Scheme and host, which is all "the same place" means here. */
+    private static function origin(string $url): string
+    {
+        $parts = parse_url(trim($url));
+
+        return mb_strtolower(($parts['scheme'] ?? '').'://'.($parts['host'] ?? ''));
     }
 }

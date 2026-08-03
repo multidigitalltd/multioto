@@ -13,6 +13,7 @@ use App\Services\Audit\CertificateInspector;
 use App\Services\Audit\Checks\Availability;
 use App\Services\Audit\Checks\Discoverability;
 use App\Services\Audit\Checks\DomainHealth;
+use App\Services\Audit\Checks\SecurityHeaders;
 use App\Services\Audit\Checks\Transport;
 use App\Services\Audit\PublicTarget;
 use App\Services\Audit\SiteAuditor;
@@ -488,6 +489,105 @@ class SiteAuditTest extends TestCase
                 return $this->records[$domain] ?? null;
             }
         };
+    }
+
+    /**
+     * שתי כתובות שנענות אינן שתי כתובות שמסכימות.
+     *
+     * כששתיהן מגישות את האתר בלי שאחת מפנה לשנייה, אלה שני אתרים לגוגל עם אותו
+     * תוכן — וזו בדיוק התקלה שהבדיקה הזו קיימת כדי למצוא, לא לצבוע בירוק.
+     */
+    public function test_two_names_that_do_not_agree_are_not_reported_as_fine(): void
+    {
+        $this->bindTargetResolving(['93.184.216.34']);
+
+        Http::fake(['*' => Http::response('<html lang="he"><body>אותו תוכן</body></html>', 200)]);
+
+        $split = array_column(app(Availability::class)->run($this->contextFor('example.co.il')), 'title');
+
+        $this->assertContains('שתי צורות הכתובת מגישות את האתר בנפרד', $split);
+    }
+
+    /** ואתר שמצהיר על כתובת אחת כקנונית אמר בדיוק את מה שנדרש. */
+    public function test_a_canonical_tag_settles_which_of_the_two_names_is_the_real_one(): void
+    {
+        $this->bindTargetResolving(['93.184.216.34']);
+
+        Http::fake([
+            'https://www.example.co.il' => Http::response(
+                '<html><head><link rel="canonical" href="https://example.co.il/"></head><body></body></html>', 200,
+            ),
+            '*' => Http::response('<html lang="he"><body></body></html>', 200),
+        ]);
+
+        $titles = array_column(app(Availability::class)->run($this->contextFor('example.co.il')), 'title');
+
+        $this->assertContains('שתי צורות הכתובת מובילות לאותו מקום', $titles);
+    }
+
+    /**
+     * Googlebot-News אינו Googlebot.
+     *
+     * "לכולם אסור, ולחדשות מותר" הוא אתר שבאמת נעלם מהחיפוש, ולתת לסורק אחר
+     * לחתום עליו כתקין זו הטעות שהכי יקר לגלות מאוחר.
+     */
+    public function test_a_group_naming_another_google_crawler_does_not_stand_in_for_the_main_one(): void
+    {
+        $this->bindTargetResolving(['93.184.216.34']);
+
+        Http::fake([
+            '*/robots.txt' => Http::response("User-agent: *\nDisallow: /\n\nUser-agent: Googlebot-News\nAllow: /", 200),
+            '*' => Http::response('<html lang="he"><head><title>ד</title></head><body><h1>כ</h1></body></html>', 200),
+        ]);
+
+        $titles = array_column(app(Discoverability::class)->run($this->contextFor('example.com')), 'title');
+
+        $this->assertContains('הקובץ robots.txt חוסם את כל האתר מגוגל', $titles);
+    }
+
+    /**
+     * סדר התכונות ב-HTML אינו קובע — ובדיקה שכן קובעת אותו ממציאה תקלה.
+     *
+     * ממצא כזב על תיאור שקיים הוא הראשון שהקורא בודק, והוא זה שמפיל את האמון
+     * בכל מה שמתחתיו.
+     */
+    public function test_a_description_written_the_other_way_round_is_still_a_description(): void
+    {
+        $this->bindTargetResolving(['93.184.216.34']);
+
+        Http::fake(['*' => Http::response(
+            '<html lang="he"><head><title>ד</title>'
+            .'<meta content="תיאור ארוך דיו של העסק והשירות שהוא מספק" name="description">'
+            .'<meta content="כותרת" property="og:title"><meta content="/a.png" property="og:image">'
+            .'</head><body><h1>כ</h1></body></html>', 200,
+        )]);
+
+        $titles = array_column(app(Discoverability::class)->run($this->contextFor('example.com')), 'title');
+
+        $this->assertNotContains('אין תיאור לדף', $titles);
+        $this->assertNotContains('לינק לאתר משותף בלי תמונה וכותרת', $titles);
+    }
+
+    /**
+     * CSP עם frame-ancestors הוא ההגנה המודרנית — ולא היעדר הגנה.
+     *
+     * לומר לאתר שעשה את הדבר הנכון שהוא חשוף זו טעות שגם פוגעת וגם מסגירה שהכלי
+     * בודק נוכחות של כותרת ולא את השאלה עצמה.
+     */
+    public function test_a_content_security_policy_counts_as_framing_protection(): void
+    {
+        $this->bindTargetResolving(['93.184.216.34']);
+
+        Http::fake(['*' => Http::response('<html lang="he"><body></body></html>', 200, [
+            'Strict-Transport-Security' => 'max-age=31536000',
+            'X-Content-Type-Options' => 'nosniff',
+            'Content-Security-Policy' => "frame-ancestors 'none'",
+        ])]);
+
+        $titles = array_column(app(SecurityHeaders::class)->run($this->contextFor('example.com')), 'title');
+
+        $this->assertNotContains('ניתן להטמיע את האתר בתוך אתר אחר', $titles);
+        $this->assertContains('הגנות הדפדפן מוגדרות', $titles);
     }
 
     /** תשובה אינסופית אינה מפילה את העובד — הקריאה נעצרת בגבול. */

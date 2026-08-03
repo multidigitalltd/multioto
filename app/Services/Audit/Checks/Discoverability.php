@@ -55,7 +55,7 @@ class Discoverability implements Check
 
     private function description(AuditContext $site): ?Finding
     {
-        if ($site->match('#<meta[^>]+name=["\']description["\'][^>]+content=["\']([^"\']{10,})#i') !== null) {
+        if (self::meta($site->markup(), 'name', 'description', 10) !== null) {
             return null;
         }
 
@@ -93,7 +93,9 @@ class Discoverability implements Check
     /** The card that appears when the link is pasted into WhatsApp or Facebook. */
     private function sharing(AuditContext $site): ?Finding
     {
-        if ($site->occurrences('#<meta[^>]+property=["\']og:(title|image)["\']#i') >= 2) {
+        $markup = $site->markup();
+
+        if (self::meta($markup, 'property', 'og:title') !== null && self::meta($markup, 'property', 'og:image') !== null) {
             return null;
         }
 
@@ -103,6 +105,36 @@ class Discoverability implements Check
             'כשמדביקים את הכתובת בוואטסאפ או בפייסבוק לא מופיע כרטיס עם תמונה — רק כתובת יבשה, שנלחצת הרבה פחות.',
             'להוסיף תגיות Open Graph: og:title, og:description ו-og:image.',
         );
+    }
+
+    /**
+     * The content of a meta tag identified by one of its attributes.
+     *
+     * Attributes in HTML have no order — `<meta content="…" name="description">`
+     * is the same tag as the other way round — and a pattern that insists on one
+     * order tells a site with a perfectly good description that it has none. In
+     * a document handed to a prospect, that is the finding that gets checked
+     * first and discredits everything under it.
+     */
+    private static function meta(string $markup, string $attribute, string $value, int $minimum = 1): ?string
+    {
+        preg_match_all('#<meta\b[^>]*>#i', $markup, $tags);
+
+        foreach ($tags[0] as $tag) {
+            $named = preg_match('#\b'.$attribute.'\s*=\s*(["\']?)'.preg_quote($value, '#').'\1[\s/>]#i', $tag.' ') === 1;
+
+            if (! $named || preg_match('#\bcontent\s*=\s*(["\'])(.*?)\1#is', $tag, $found) !== 1) {
+                continue;
+            }
+
+            $content = trim($found[2]);
+
+            if (mb_strlen($content) >= $minimum) {
+                return $content;
+            }
+        }
+
+        return null;
     }
 
     private function robots(AuditContext $site): ?Finding
@@ -145,6 +177,11 @@ class Discoverability implements Check
      * when no such group exists. The common shape — everybody turned away, then
      * "User-agent: Googlebot / Allow: /" — is a site deliberately admitting only
      * Google, and calling that "blocked from Google" gets the file backwards.
+     *
+     * The name must be the crawler itself. Googlebot-News and Googlebot-Image
+     * are separate crawlers with their own groups, and letting one of them stand
+     * in for the main one turns "everybody out, news in" into a clean bill of
+     * health for a site that really is invisible in search.
      */
     private static function blocksGoogle(string $robots): bool
     {
@@ -154,7 +191,7 @@ class Discoverability implements Check
             $groups,
             static fn (array $group): bool => array_filter(
                 $group['agents'],
-                static fn (string $agent): bool => str_starts_with($agent, 'googlebot'),
+                static fn (string $agent): bool => $agent === 'googlebot',
             ) !== [],
         ));
 

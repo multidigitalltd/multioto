@@ -47,7 +47,7 @@ class SecurityHeaders implements Check
         $missing = [];
 
         foreach (self::EXPECTED as $header => [$title, $detail, $fix]) {
-            if (! $site->home->hasHeader($header)) {
+            if (! $site->home->hasHeader($header) && ! $this->coveredOtherwise($header, $site)) {
                 $missing[] = Finding::notice($this->area(), $title, $detail, $fix);
             }
         }
@@ -57,6 +57,20 @@ class SecurityHeaders implements Check
         }
 
         return array_merge($missing, $this->versionLeak($site));
+    }
+
+    /**
+     * Whether a newer header already does the older one's job.
+     *
+     * A site that dropped X-Frame-Options in favour of a Content-Security-Policy
+     * with frame-ancestors did the modern, better thing — and telling it that it
+     * can be framed is both wrong and insulting to whoever did the work. The fix
+     * text already names CSP as the alternative; the check has to know it too.
+     */
+    private function coveredOtherwise(string $header, AuditContext $site): bool
+    {
+        return $header === 'x-frame-options'
+            && str_contains(mb_strtolower((string) $site->home->header('content-security-policy')), 'frame-ancestors');
     }
 
     /**
