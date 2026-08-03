@@ -2620,6 +2620,30 @@ class BackupTest extends TestCase
         $this->assertNull(Backup::find($backup->id));
     }
 
+    /**
+     * A row a SCAN wrote is not a failed run, however identical it looks.
+     *
+     * An archive found at the destination and not readable is recorded as
+     * failed on purpose, so a later scan retries it — and there the object is
+     * known to be there. Dropping its only reference would throw away a
+     * recovery point that a passing outage was merely hiding.
+     */
+    public function test_an_archive_found_by_a_scan_is_not_deleted_when_it_cannot_be_removed(): void
+    {
+        $backup = $this->runBackup();
+        $backup->update([
+            'status' => BackupStatus::Failed,
+            'error' => BackupRunner::IMPORT_UNREADABLE,
+        ]);
+
+        $disk = \Mockery::mock(Storage::disk('backups'))->makePartial();
+        $disk->shouldReceive('delete')->andReturn(false);
+        Storage::set('backups', $disk);
+
+        $this->assertSame('archive', app(BackupRunner::class)->deleteRecord($backup->id));
+        $this->assertNotNull(Backup::find($backup->id));
+    }
+
     /** A COMPLETED archive is still never orphaned, whatever the destination says. */
     public function test_a_completed_backup_is_not_deleted_when_its_archive_survives(): void
     {

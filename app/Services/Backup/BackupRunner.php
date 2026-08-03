@@ -323,15 +323,24 @@ class BackupRunner
             // archive full of customer data stays at the destination with
             // nothing left to find it by.
             //
-            // A run that FAILED is the exception, and it has to be: a row is
-            // marked completed only after the upload itself returned success,
-            // so a failed one never had a whole archive to orphan — the failure
-            // path already tried to remove whatever partial object there might
-            // be. And the usual reason its archive cannot be deleted now is the
-            // very reason it failed then: the destination cannot be reached.
-            // Holding the row hostage to that would leave the screen carrying
-            // every failed night for ever, unremovable from the panel.
-            if (! $removed && $backup->status === BackupStatus::Completed) {
+            // A failed RUN is the exception, and it has to be: a row is marked
+            // completed only after the upload itself returned success, so a
+            // failed one never had a whole archive to orphan — the failure path
+            // already tried to remove whatever partial object there might be.
+            // And the usual reason its archive cannot be deleted now is the very
+            // reason it failed then: the destination cannot be reached. Holding
+            // the row hostage to that would leave the screen carrying every
+            // failed night for ever, unremovable from the panel.
+            //
+            // A row a SCAN wrote is not that, however identical its status
+            // looks. An archive found at the destination and not readable is
+            // recorded as failed on purpose, so a later scan retries it — and
+            // there the object is known to BE there. Dropping its only
+            // reference would throw away a recovery point that a passing outage
+            // was merely hiding.
+            $found = $backup->error === self::IMPORT_UNREADABLE;
+
+            if (! $removed && ($found || $backup->status === BackupStatus::Completed)) {
                 return 'archive';
             }
 
