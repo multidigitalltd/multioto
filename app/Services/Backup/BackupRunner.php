@@ -68,6 +68,13 @@ class BackupRunner
 
             $stream = fopen($local, 'rb');
 
+            // Written down BEFORE the reach-out, because afterwards the two
+            // cases cannot be told apart: a worker killed mid-upload, or an
+            // upload that succeeded and whose response was lost, leaves an
+            // archive at the destination and a row that never got to say so.
+            // From here on this row is the only thing naming that object.
+            $backup->update(['upload_started_at' => now()]);
+
             try {
                 // Streamed, so a large archive never has to fit in memory.
                 if (! Storage::disk($disk)->put($path, $stream)) {
@@ -340,7 +347,15 @@ class BackupRunner
             // was merely hiding.
             $found = $backup->error === self::IMPORT_UNREADABLE;
 
-            if (! $removed && ($found || $backup->status === BackupStatus::Completed)) {
+            // And only for a run that never reached out to the destination at
+            // all. Once the upload has been attempted the row may be the only
+            // thing naming a whole archive — a worker killed mid-upload, or an
+            // upload that worked and whose answer was lost, both land here as
+            // "failed" — and the destination that will not confirm the delete
+            // cannot say which it was either.
+            $attempted = $backup->upload_started_at !== null;
+
+            if (! $removed && ($found || $attempted || $backup->status === BackupStatus::Completed)) {
                 return 'archive';
             }
 

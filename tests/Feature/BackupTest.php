@@ -2607,7 +2607,14 @@ class BackupTest extends TestCase
         $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
 
         $backup = $this->runBackup();
-        $backup->update(['status' => BackupStatus::Failed, 'error' => 'היעד אינו זמין']);
+
+        // The shape a destination failure leaves: the row exists, the upload
+        // was never reached, and nothing was written.
+        $backup->update([
+            'status' => BackupStatus::Failed,
+            'error' => 'היעד אינו זמין',
+            'upload_started_at' => null,
+        ]);
 
         $disk = \Mockery::mock(Storage::disk('backups'))->makePartial();
         $disk->shouldReceive('delete')->andReturn(false);
@@ -2618,6 +2625,29 @@ class BackupTest extends TestCase
             ->assertNotified();
 
         $this->assertNull(Backup::find($backup->id));
+    }
+
+    /**
+     * A failed run that DID reach the destination keeps its row.
+     *
+     * A worker killed mid-upload, and an upload that worked whose answer was
+     * lost, both land here as "failed" — and the destination that will not
+     * confirm the delete cannot say which it was. The row may be the only thing
+     * naming a whole archive.
+     */
+    public function test_a_failed_run_that_reached_the_destination_keeps_its_row(): void
+    {
+        $backup = $this->runBackup();
+        $backup->update(['status' => BackupStatus::Failed, 'error' => 'העובד נעצר']);
+
+        $this->assertNotNull($backup->fresh()->upload_started_at);
+
+        $disk = \Mockery::mock(Storage::disk('backups'))->makePartial();
+        $disk->shouldReceive('delete')->andReturn(false);
+        Storage::set('backups', $disk);
+
+        $this->assertSame('archive', app(BackupRunner::class)->deleteRecord($backup->id));
+        $this->assertNotNull(Backup::find($backup->id));
     }
 
     /**

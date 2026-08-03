@@ -22,7 +22,7 @@ class Backup extends Model
 
     protected $fillable = [
         'status', 'disk', 'path', 'size_bytes', 'manifest', 'error',
-        'user_id', 'run_attempt', 'finished_at', 'restore_status', 'restore_error', 'restored_at',
+        'user_id', 'run_attempt', 'upload_started_at', 'finished_at', 'restore_status', 'restore_error', 'restored_at',
         'restore_attempt', 'restore_queued_at', 'restore_started_at', 'restore_report', 'restore_journal',
         'drilled_at', 'drill_report',
     ];
@@ -35,6 +35,7 @@ class Backup extends Model
             'manifest' => 'array',
             'restore_report' => 'array',
             'drill_report' => 'array',
+            'upload_started_at' => 'datetime',
             'finished_at' => 'datetime',
             'restored_at' => 'datetime',
             'restore_queued_at' => 'datetime',
