@@ -23,10 +23,20 @@
                 <x-filament::badge :color="$color" class="align-middle">{{ count($items) }}</x-filament::badge>
             </h3>
 
+            @if ($severity === 'ok')
+                <p class="mb-2 text-gray-500 dark:text-gray-400">
+                    מה שנבדק ונמצא במצב טוב. זה מופיע גם במסמך ללקוח — דוח של תקלות בלבד נקרא ככתב אישום.
+                </p>
+            @endif
+
             <ul class="space-y-3">
                 @foreach ($items as $item)
                     <li class="border-s-4 ps-3 border-{{ $color }}-500">
                         <div class="font-medium">{{ $item['title'] }}</div>
+
+                        @if (! empty($item['area']))
+                            <div class="text-xs text-gray-500 dark:text-gray-400">{{ $item['area'] }}</div>
+                        @endif
 
                         @if (! empty($item['detail']))
                             <div class="text-gray-600 dark:text-gray-300">{{ $item['detail'] }}</div>

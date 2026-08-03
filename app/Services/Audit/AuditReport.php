@@ -38,9 +38,26 @@ class AuditReport
             mkdir($tmp, 0775, true);
         }
 
-        $mpdf = new Mpdf(['mode' => 'utf-8', 'format' => 'A4', 'directionality' => 'rtl', 'tempDir' => $tmp]);
-        $mpdf->autoScriptToLang = true;
-        $mpdf->autoLangToFont = true;
+        // DejaVu, pinned — NOT mPDF's automatic script-to-font switching.
+        //
+        // Left on, that switching sent every Hebrew run to TaameyDavidCLM, a
+        // Hebrew-only face with no bold weight and no coverage for the
+        // punctuation around it. That is both of the faults this fixes at once:
+        // characters that came out as empty boxes, and headings that were not
+        // any heavier than the text under them, because the font had nothing
+        // heavier to offer. DejaVu covers every character this report uses and
+        // ships a real Bold.
+        //
+        // Substitutions stay on for one reason: the evidence lines quote other
+        // people's websites, and a site may answer in any script on earth.
+        $mpdf = new Mpdf([
+            'mode' => 'utf-8',
+            'format' => 'A4',
+            'directionality' => 'rtl',
+            'tempDir' => $tmp,
+            'default_font' => 'dejavusans',
+            'useSubstitutions' => true,
+        ]);
         $mpdf->WriteHTML($html);
 
         return (string) $mpdf->Output('', 'S');
@@ -67,7 +84,14 @@ class AuditReport
             'audit' => $audit,
             'groups' => $groups,
             'problems' => $audit->problems(),
-            'passed' => $audit->of('ok'),
+            // Grouped by area rather than listed flat: "we checked this and it
+            // is in order" is worth as much as any fault to somebody deciding
+            // whether to hand over their site, and a run of unlabelled ticks
+            // reads as filler while the same items under their headings read as
+            // a survey that was actually carried out.
+            'passed' => $audit->byArea('ok'),
+            'passedCount' => $audit->count('ok'),
+            'areas' => $audit->areas(),
             'counts' => (array) ($audit->summary['counts'] ?? []),
             'logo' => Branding::logoDataUri(),
             'company' => (string) config('billing.company.name', 'מולטי דיגיטל'),
