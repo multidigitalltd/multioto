@@ -317,16 +317,27 @@ class BackupRunner
                 return 'journal';
             }
 
+            $removed = $backup->deleteArchive();
+
             // Only drop the row once the object is really gone — otherwise an
             // archive full of customer data stays at the destination with
             // nothing left to find it by.
-            if (! $backup->deleteArchive()) {
+            //
+            // A run that FAILED is the exception, and it has to be: a row is
+            // marked completed only after the upload itself returned success,
+            // so a failed one never had a whole archive to orphan — the failure
+            // path already tried to remove whatever partial object there might
+            // be. And the usual reason its archive cannot be deleted now is the
+            // very reason it failed then: the destination cannot be reached.
+            // Holding the row hostage to that would leave the screen carrying
+            // every failed night for ever, unremovable from the panel.
+            if (! $removed && $backup->status === BackupStatus::Completed) {
                 return 'archive';
             }
 
             $backup->delete();
 
-            return 'ok';
+            return $removed ? 'ok' : 'orphan';
         });
     }
 

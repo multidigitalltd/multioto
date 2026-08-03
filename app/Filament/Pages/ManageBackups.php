@@ -841,6 +841,11 @@ class ManageBackups extends Page implements HasForms, HasTable
                         // restore from this very archive.
                         match (app(BackupRunner::class)->deleteRecord($record->id)) {
                             'ok' => Notification::make()->title('הגיבוי נמחק')->success()->send(),
+                            'orphan' => Notification::make()
+                                ->title('הרשומה נמחקה')
+                                ->body('לא ניתן היה להגיע ליעד האחסון. הריצה נכשלה לפני שנכתב ארכיון שלם, '
+                                    .'אך אם נשאר שם קובץ חלקי — יש למחוק אותו ידנית.')
+                                ->warning()->send(),
                             'gone' => Notification::make()->title('הגיבוי כבר נמחק.')->warning()->send(),
                             'busy' => Notification::make()
                                 ->title('לא ניתן למחוק — גיבוי או שחזור פועלים על הרשומה הזו כרגע.')

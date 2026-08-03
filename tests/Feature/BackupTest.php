@@ -2594,6 +2594,45 @@ class BackupTest extends TestCase
         $this->assertNotNull(Backup::find($backup->id));
     }
 
+    /**
+     * A failed run has to be removable from the screen.
+     *
+     * The row is written before the destination is even checked, so a run that
+     * failed because the destination is unreachable has a path and no object —
+     * and the delete could never succeed. That left every failed night sitting
+     * on the screen for ever, with no way out short of the database.
+     */
+    public function test_a_failed_backup_can_be_deleted_when_the_destination_is_unreachable(): void
+    {
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+
+        $backup = $this->runBackup();
+        $backup->update(['status' => BackupStatus::Failed, 'error' => 'היעד אינו זמין']);
+
+        $disk = \Mockery::mock(Storage::disk('backups'))->makePartial();
+        $disk->shouldReceive('delete')->andReturn(false);
+        Storage::set('backups', $disk);
+
+        Livewire::test(ManageBackups::class)
+            ->callTableAction('delete', $backup)
+            ->assertNotified();
+
+        $this->assertNull(Backup::find($backup->id));
+    }
+
+    /** A COMPLETED archive is still never orphaned, whatever the destination says. */
+    public function test_a_completed_backup_is_not_deleted_when_its_archive_survives(): void
+    {
+        $backup = $this->runBackup();
+
+        $disk = \Mockery::mock(Storage::disk('backups'))->makePartial();
+        $disk->shouldReceive('delete')->andReturn(false);
+        Storage::set('backups', $disk);
+
+        $this->assertSame('archive', app(BackupRunner::class)->deleteRecord($backup->id));
+        $this->assertNotNull(Backup::find($backup->id));
+    }
+
     public function test_a_backup_row_survives_when_its_archive_cannot_be_deleted(): void
     {
         config(['backup.retention_days' => 1, 'backup.keep_at_least' => 1]);
