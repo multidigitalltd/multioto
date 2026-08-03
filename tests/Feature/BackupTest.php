@@ -2594,6 +2594,162 @@ class BackupTest extends TestCase
         $this->assertNotNull(Backup::find($backup->id));
     }
 
+    /**
+     * A failed run has to be removable from the screen.
+     *
+     * The row is written before the destination is even checked, so a run that
+     * failed because the destination is unreachable has a path and no object —
+     * and the delete could never succeed. That left every failed night sitting
+     * on the screen for ever, with no way out short of the database.
+     */
+    public function test_a_failed_backup_can_be_deleted_when_the_destination_is_unreachable(): void
+    {
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+
+        $backup = $this->runBackup();
+
+        // The shape a destination failure leaves: the row exists, the upload
+        // was never reached, and nothing was written.
+        $backup->update([
+            'status' => BackupStatus::Failed,
+            'error' => 'היעד אינו זמין',
+            'upload_phase' => Backup::UPLOAD_SKIPPED,
+        ]);
+
+        $disk = \Mockery::mock(Storage::disk('backups'))->makePartial();
+        $disk->shouldReceive('delete')->andReturn(false);
+        Storage::set('backups', $disk);
+
+        Livewire::test(ManageBackups::class)
+            ->callTableAction('delete', $backup)
+            ->assertNotified();
+
+        $this->assertNull(Backup::find($backup->id));
+    }
+
+    /**
+     * A failed run that DID reach the destination keeps its row.
+     *
+     * A worker killed mid-upload, and an upload that worked whose answer was
+     * lost, both land here as "failed" — and the destination that will not
+     * confirm the delete cannot say which it was. The row may be the only thing
+     * naming a whole archive.
+     */
+    public function test_a_failed_run_that_reached_the_destination_keeps_its_row(): void
+    {
+        $backup = $this->runBackup();
+        $backup->update(['status' => BackupStatus::Failed, 'error' => 'העובד נעצר']);
+
+        $this->assertSame(Backup::UPLOAD_REACHED, $backup->fresh()->upload_phase);
+
+        $disk = \Mockery::mock(Storage::disk('backups'))->makePartial();
+        $disk->shouldReceive('delete')->andReturn(false);
+        Storage::set('backups', $disk);
+
+        $this->assertSame('archive', app(BackupRunner::class)->deleteRecord($backup->id));
+        $this->assertNotNull(Backup::find($backup->id));
+    }
+
+    /**
+     * A row a SCAN wrote is not a failed run, however identical it looks.
+     *
+     * An archive found at the destination and not readable is recorded as
+     * failed on purpose, so a later scan retries it — and there the object is
+     * known to be there. Dropping its only reference would throw away a
+     * recovery point that a passing outage was merely hiding.
+     */
+    public function test_an_archive_found_by_a_scan_is_not_deleted_when_it_cannot_be_removed(): void
+    {
+        $backup = $this->runBackup();
+        $backup->update([
+            'status' => BackupStatus::Failed,
+            'error' => BackupRunner::IMPORT_UNREADABLE,
+        ]);
+
+        $disk = \Mockery::mock(Storage::disk('backups'))->makePartial();
+        $disk->shouldReceive('delete')->andReturn(false);
+        Storage::set('backups', $disk);
+
+        $this->assertSame('archive', app(BackupRunner::class)->deleteRecord($backup->id));
+        $this->assertNotNull(Backup::find($backup->id));
+    }
+
+    /**
+     * A row nothing can speak for keeps its archive.
+     *
+     * It predates the marker, or a worker still running the previous code
+     * wrote it while the deployment was in flight. The absence of an answer is
+     * not an answer, and the safe reading is the one that keeps the row.
+     */
+    public function test_a_failed_run_with_no_recorded_phase_keeps_its_row(): void
+    {
+        $backup = $this->runBackup();
+        $backup->update(['status' => BackupStatus::Failed, 'upload_phase' => null]);
+
+        $disk = \Mockery::mock(Storage::disk('backups'))->makePartial();
+        $disk->shouldReceive('delete')->andReturn(false);
+        Storage::set('backups', $disk);
+
+        $this->assertSame('archive', app(BackupRunner::class)->deleteRecord($backup->id));
+        $this->assertNotNull(Backup::find($backup->id));
+    }
+
+    /**
+     * A destination that cannot even be built never got touched.
+     *
+     * Nothing before the upload resolves the disk, so a value of the wrong type
+     * in its config passes every guard and throws when the adapter is built.
+     * Recording that as "reached" would make the row undeletable for exactly
+     * the reason the run failed.
+     */
+    public function test_a_run_that_cannot_build_its_destination_is_deletable(): void
+    {
+        config([
+            'backup.disk' => 'broken',
+            'filesystems.disks.broken' => [
+                'driver' => 's3',
+                'key' => 'K',
+                'secret' => 'S',
+                'region' => 'auto',
+                'bucket' => 'b',
+                'endpoint' => 'https://x.r2.cloudflarestorage.com',
+                // A string where the SDK insists on a bool — the fault 1.97.1
+                // fixed, and the one that produced these rows.
+                'use_path_style_endpoint' => '1',
+            ],
+        ]);
+
+        try {
+            app(BackupRunner::class)->run();
+            $this->fail('הריצה הייתה אמורה להיכשל.');
+        } catch (\Throwable) {
+            // The failure is the point; the row it leaves is what is tested.
+        }
+
+        $backup = Backup::query()->latest('id')->first();
+
+        $this->assertSame(BackupStatus::Failed, $backup->status);
+        $this->assertSame(Backup::UPLOAD_SKIPPED, $backup->upload_phase);
+        // "orphan", not "ok": the destination still cannot be built, so nothing
+        // can confirm the archive is gone — and the screen says so rather than
+        // claiming a clean delete.
+        $this->assertSame('orphan', app(BackupRunner::class)->deleteRecord($backup->id));
+        $this->assertNull(Backup::find($backup->id));
+    }
+
+    /** A COMPLETED archive is still never orphaned, whatever the destination says. */
+    public function test_a_completed_backup_is_not_deleted_when_its_archive_survives(): void
+    {
+        $backup = $this->runBackup();
+
+        $disk = \Mockery::mock(Storage::disk('backups'))->makePartial();
+        $disk->shouldReceive('delete')->andReturn(false);
+        Storage::set('backups', $disk);
+
+        $this->assertSame('archive', app(BackupRunner::class)->deleteRecord($backup->id));
+        $this->assertNotNull(Backup::find($backup->id));
+    }
+
     public function test_a_backup_row_survives_when_its_archive_cannot_be_deleted(): void
     {
         config(['backup.retention_days' => 1, 'backup.keep_at_least' => 1]);

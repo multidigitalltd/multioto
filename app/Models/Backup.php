@@ -20,9 +20,22 @@ class Backup extends Model
 {
     use HasFactory;
 
+    /**
+     * How far a run got towards the destination, recorded as it happens.
+     *
+     * Both are positive statements, and neither is ever inferred from the
+     * absence of the other: a row with NEITHER is one nothing can speak for —
+     * it predates the column, or a worker still running the previous code
+     * wrote it during a deployment — and it has to be read as possibly having
+     * left an archive behind.
+     */
+    public const UPLOAD_REACHED = 'reached';
+
+    public const UPLOAD_SKIPPED = 'skipped';
+
     protected $fillable = [
         'status', 'disk', 'path', 'size_bytes', 'manifest', 'error',
-        'user_id', 'run_attempt', 'finished_at', 'restore_status', 'restore_error', 'restored_at',
+        'user_id', 'run_attempt', 'upload_phase', 'finished_at', 'restore_status', 'restore_error', 'restored_at',
         'restore_attempt', 'restore_queued_at', 'restore_started_at', 'restore_report', 'restore_journal',
         'drilled_at', 'drill_report',
     ];

@@ -69,8 +69,24 @@ class BackupRunner
             $stream = fopen($local, 'rb');
 
             try {
+                // Resolved first, and only THEN recorded as reached. Building
+                // the adapter is itself something that can fail — a disk with
+                // no driver, or a value of the wrong type in its config — and
+                // that is a run which never touched the destination at all.
+                // Saying otherwise would make its row the one kind that cannot
+                // be cleared away: undeletable for exactly the reason it
+                // failed.
+                $destination = Storage::disk($disk);
+
+                // Written down BEFORE the reach-out, because afterwards the two
+                // cases cannot be told apart: a worker killed mid-upload, or an
+                // upload that succeeded and whose response was lost, leaves an
+                // archive at the destination and a row that never got to say so.
+                // From here on this row is the only thing naming that object.
+                $backup->update(['upload_phase' => Backup::UPLOAD_REACHED]);
+
                 // Streamed, so a large archive never has to fit in memory.
-                if (! Storage::disk($disk)->put($path, $stream)) {
+                if (! $destination->put($path, $stream)) {
                     throw new \RuntimeException("ההעלאה ליעד \"{$disk}\" נכשלה.");
                 }
             } finally {
@@ -96,6 +112,13 @@ class BackupRunner
             // A half-written object on the destination would look like a real
             // archive in the bucket listing.
             $backup->deleteArchive();
+
+            // Said outright rather than left to be inferred from the absence of
+            // the other: this run stopped before it ever touched the
+            // destination, so its row names nothing and can be cleared away.
+            if ($backup->upload_phase === null) {
+                $backup->upload_phase = Backup::UPLOAD_SKIPPED;
+            }
 
             $this->fail($backup, $e->getMessage());
 
@@ -149,6 +172,7 @@ class BackupRunner
     public function fail(Backup $backup, string $reason): void
     {
         $backup->update([
+            'upload_phase' => $backup->upload_phase,
             'status' => BackupStatus::Failed,
             'error' => mb_substr($reason, 0, 2000),
             'finished_at' => now(),
@@ -187,6 +211,8 @@ class BackupRunner
             'disk' => (string) config('backup.disk'),
             'path' => '',
             'user_id' => $userId,
+            // Nothing was ever built, let alone sent.
+            'upload_phase' => Backup::UPLOAD_SKIPPED,
         ]);
 
         $this->fail($backup, $reason);
@@ -317,16 +343,42 @@ class BackupRunner
                 return 'journal';
             }
 
+            $removed = $backup->deleteArchive();
+
             // Only drop the row once the object is really gone — otherwise an
             // archive full of customer data stays at the destination with
             // nothing left to find it by.
-            if (! $backup->deleteArchive()) {
+            //
+            // A failed RUN is the exception, and it has to be: a row is marked
+            // completed only after the upload itself returned success, so a
+            // failed one never had a whole archive to orphan — the failure path
+            // already tried to remove whatever partial object there might be.
+            // And the usual reason its archive cannot be deleted now is the very
+            // reason it failed then: the destination cannot be reached. Holding
+            // the row hostage to that would leave the screen carrying every
+            // failed night for ever, unremovable from the panel.
+            //
+            // A row a SCAN wrote is not that, however identical its status
+            // looks. An archive found at the destination and not readable is
+            // recorded as failed on purpose, so a later scan retries it — and
+            // there the object is known to BE there. Dropping its only
+            // reference would throw away a recovery point that a passing outage
+            // was merely hiding.
+            // Dropped only on the run's own word that it never reached the
+            // destination. Everything else stays, and the same sentence covers
+            // all of it: a completed archive, an archive a scan found and could
+            // not read, a run killed mid-upload, a run whose upload worked and
+            // whose answer was lost, and a row nothing can speak for because it
+            // predates this marker or was written by a worker mid-deployment.
+            // The destination that will not confirm the delete cannot tell them
+            // apart either, so the absence of an answer is not one.
+            if (! $removed && $backup->upload_phase !== Backup::UPLOAD_SKIPPED) {
                 return 'archive';
             }
 
             $backup->delete();
 
-            return 'ok';
+            return $removed ? 'ok' : 'orphan';
         });
     }
 
