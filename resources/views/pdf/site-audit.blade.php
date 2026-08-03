@@ -31,8 +31,12 @@
         .item .fix b { color: #3730a3; }
         .item .evidence { margin-top: 3px; color: #55606e; font-size: 10px; direction: ltr; unicode-bidi: embed; text-align: right; }
 
-        .passed { color: #166534; }
-        .passed li { margin-bottom: 2px; }
+        .item.ok { border-right-color: #15803d; }
+        .item.ok .title { color: #166534; }
+
+        .passed-head { background: #f0fdf4; border-radius: 8px; padding: 10px 14px; margin: 20px 0 12px; }
+        .passed-head .h { font-weight: bold; font-size: 13px; color: #166534; }
+        .area-head { font-weight: bold; font-size: 11.5px; color: #55606e; margin: 12px 0 5px; }
         ul { margin: 4px 0; padding-right: 18px; }
 
         .foot { margin-top: 24px; color: #55606e; font-size: 10px; border-top: 1px solid #e2e8f0; padding-top: 10px; }
@@ -50,10 +54,14 @@
 
     <div class="lead">
         @if ($problems === [])
-            לא נמצאו ליקויים בבדיקות שבוצעו. פירוט מה שנבדק ונמצא תקין מופיע בהמשך.
+            לא נמצאו ליקויים בבדיקות שבוצעו@if ($passedCount > 0), ו-{{ $passedCount }} בדיקות עברו בהצלחה@endif.
+            הפירוט המלא מופיע בהמשך.
         @else
             להלן {{ count($problems) }} ממצאים שנמצאו בבדיקה חיצונית של האתר, מסודרים לפי דחיפות.
             לכל ממצא מצורף הסבר מה המשמעות שלו ומה נדרש כדי לתקן.
+            @if ($passedCount > 0)
+                בסוף המסמך מפורטות {{ $passedCount }} הבדיקות שהאתר עבר בהצלחה.
+            @endif
         @endif
 
         <table class="tally">
@@ -88,17 +96,30 @@
     @endforeach
 
     @if ($passed !== [])
-        <h2>נבדק ונמצא תקין</h2>
-        <ul class="passed">
-            @foreach ($passed as $item)
-                <li>{{ $item['title'] }}@if (! empty($item['detail'])) — {{ $item['detail'] }}@endif</li>
+        <div class="passed-head">
+            <div class="h">נבדק ונמצא תקין — {{ $passedCount }} {{ $passedCount === 1 ? 'בדיקה' : 'בדיקות' }}</div>
+            <div>אלה הדברים שנבדקו ונמצאו במצב טוב. הם מופיעים כאן במפורש כדי שיהיה ברור מה כן עובד באתר, ולא רק מה דורש טיפול.</div>
+        </div>
+
+        @foreach ($passed as $area => $items)
+            <div class="area-head">{{ $area }}</div>
+
+            @foreach ($items as $item)
+                <div class="item ok">
+                    <div class="title">{{ $item['title'] }}</div>
+                    @if (! empty($item['detail']))
+                        <div class="detail">{{ $item['detail'] }}</div>
+                    @endif
+                </div>
             @endforeach
-        </ul>
+        @endforeach
     @endif
 
     <div class="foot">
         הבדיקה בוצעה מבחוץ, ללא גישה לניהול האתר, בתאריך {{ $checkedAt }} — בדיוק כפי שהאתר נראה למבקר ולמנועי החיפוש.
-        היא מכסה זמינות, אבטחת התחברות, הגנות דפדפן, מהירות, נראות בגוגל, נגישות ותקינות הדומיין.
+        @if ($areas !== [])
+            התחומים שנבדקו: {{ implode(' · ', $areas) }}.
+        @endif
         אין בה כדי להעיד על מה שאינו נראה מבחוץ — תוכן מסדי הנתונים, גיבויים או קוד פנימי.
         ממצא שלא נבדק אינו ממצא תקין.
     </div>

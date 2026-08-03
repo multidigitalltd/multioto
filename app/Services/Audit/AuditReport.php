@@ -67,7 +67,14 @@ class AuditReport
             'audit' => $audit,
             'groups' => $groups,
             'problems' => $audit->problems(),
-            'passed' => $audit->of('ok'),
+            // Grouped by area rather than listed flat: "we checked this and it
+            // is in order" is worth as much as any fault to somebody deciding
+            // whether to hand over their site, and a run of unlabelled ticks
+            // reads as filler while the same items under their headings read as
+            // a survey that was actually carried out.
+            'passed' => $audit->byArea('ok'),
+            'passedCount' => $audit->count('ok'),
+            'areas' => $audit->areas(),
             'counts' => (array) ($audit->summary['counts'] ?? []),
             'logo' => Branding::logoDataUri(),
             'company' => (string) config('billing.company.name', 'מולטי דיגיטל'),

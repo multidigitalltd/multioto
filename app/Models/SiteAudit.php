@@ -80,6 +80,48 @@ class SiteAudit extends Model
         return (bool) ($this->summary['blocked'] ?? false);
     }
 
+    /**
+     * The findings of one severity, gathered under the area they belong to.
+     *
+     * @return array<string, list<array<string, mixed>>>
+     */
+    public function byArea(string $severity): array
+    {
+        $grouped = [];
+
+        foreach ($this->of($severity) as $finding) {
+            $grouped[(string) ($finding['area'] ?? 'כללי')][] = $finding;
+        }
+
+        return $grouped;
+    }
+
+    /**
+     * Every area the audit actually covered, in the order it ran them.
+     *
+     * Read from the findings rather than written down anywhere, so the sentence
+     * that tells the reader what was examined cannot fall out of step with what
+     * was examined. A list maintained by hand goes stale the first time a check
+     * is added, and then the report is overclaiming in the one place a reader
+     * would never think to doubt it.
+     *
+     * @return list<string>
+     */
+    public function areas(): array
+    {
+        $areas = [];
+
+        foreach ((array) $this->findings as $finding) {
+            $area = (string) ($finding['area'] ?? '');
+
+            if ($area !== '') {
+                $areas[$area] = true;
+            }
+        }
+
+        return array_keys($areas);
+    }
+
     /** Everything that needs doing, worst first. Whatever passed is not it. */
     public function problems(): array
     {

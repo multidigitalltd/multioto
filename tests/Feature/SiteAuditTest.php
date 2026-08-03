@@ -1040,6 +1040,26 @@ class SiteAuditTest extends TestCase
         $this->assertStringContainsString('example.com', app(AuditReport::class)->filename($audit));
     }
 
+    /**
+     * מה שעבר מופיע במסמך לפי תחום, ולא כרשימת תבליטים בסוף.
+     *
+     * "בדקנו את זה וזה בסדר" שווה בדיוק כמו ממצא למי שמחליט אם למסור לנו את
+     * האתר, ורצף של סימני וי בלי כותרות נקרא כמילוי מקום.
+     */
+    public function test_the_document_gives_the_passing_checks_their_own_section(): void
+    {
+        $audit = $this->completed();
+
+        $report = app(AuditReport::class);
+        $pdf = $report->pdf($audit);
+
+        $this->assertStringStartsWith('%PDF', $pdf);
+
+        // הנתונים שמזינים את המסמך — הקיבוץ לפי תחום ורשימת התחומים שנבדקו.
+        $this->assertSame(['זמינות' => [['severity' => 'ok', 'area' => 'זמינות', 'title' => 'האתר נטען']]], $audit->byArea('ok'));
+        $this->assertSame(['זמינות', 'מהירות', 'אבטחה', 'נגישות'], $audit->areas());
+    }
+
     /** הממצאים מסודרים לפי דחיפות, ומה שתקין אינו נספר כבעיה. */
     public function test_problems_come_worst_first_and_exclude_what_passed(): void
     {
