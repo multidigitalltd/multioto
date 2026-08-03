@@ -181,6 +181,32 @@ class SettingsServiceProvider extends ServiceProvider
         'backup.s3.path_style' => 'filesystems.disks.backups.use_path_style_endpoint',
     ];
 
+    /**
+     * Settings whose config value has to be a real boolean, not "1" or "0".
+     *
+     * Everything in this table is stored as text, and our own code reads a "0"
+     * as false without complaint — but not every reader is ours. The AWS SDK
+     * validates the TYPE of use_path_style_endpoint and refuses a string
+     * outright, so the backup destination stopped working the moment it was
+     * configured from the panel instead of from .env.
+     *
+     * Listed rather than guessed: a value is only converted where the config
+     * file itself holds a boolean.
+     */
+    private const BOOLEANS = [
+        'backup.enabled',
+        'backup.s3.path_style',
+        'ai.enabled',
+        'ai.dynamic_ack',
+        'notifications.copy_customer_messages',
+        'shabbat.block_automations',
+        'service_days.enabled',
+        'agent.actions_enabled',
+        'agent.auto_investigate_tickets',
+        'agent.notify_owner_whatsapp',
+        'agent.system_actions_enabled',
+    ];
+
     /** Pristine config-file defaults for RESET_ON_CLEAR keys, memoized once. */
     private static array $pristine = [];
 
@@ -276,7 +302,9 @@ class SettingsServiceProvider extends ServiceProvider
 
         foreach (self::MAP as $settingKey => $configPath) {
             if (filled($stored[$settingKey] ?? null)) {
-                config([$configPath => $stored[$settingKey]]);
+                config([$configPath => in_array($settingKey, self::BOOLEANS, true)
+                    ? filter_var($stored[$settingKey], FILTER_VALIDATE_BOOLEAN)
+                    : $stored[$settingKey]]);
             }
         }
 
