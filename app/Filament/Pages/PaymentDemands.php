@@ -3,10 +3,11 @@
 namespace App\Filament\Pages;
 
 use App\Enums\ChargeStatus;
+use App\Filament\Concerns\OpensNewCustomer;
+use App\Filament\Concerns\OpensPaymentDemand;
 use App\Filament\Concerns\RespectsModuleAccess;
 use App\Filament\Resources\CustomerResource;
 use App\Jobs\IssueInvoiceJob;
-use App\Jobs\SendPaymentLinkJob;
 use App\Models\Charge;
 use App\Models\Customer;
 use App\Services\Billing\DemandDispatcher;
@@ -32,6 +33,8 @@ use Illuminate\Support\Str;
 class PaymentDemands extends Page implements HasTable
 {
     use InteractsWithTable;
+    use OpensNewCustomer;
+    use OpensPaymentDemand;
     use RespectsModuleAccess;
 
     protected static ?string $navigationIcon = 'heroicon-o-document-currency-dollar';
@@ -83,112 +86,42 @@ class PaymentDemands extends Page implements HasTable
             ->icon('heroicon-o-plus')
             ->modalWidth('2xl')
             ->form([
+                $this->newCustomerToggle(),
                 Forms\Components\Select::make('customer_id')
                     ->label('לקוח')
                     ->options(fn (): array => Customer::orderBy('name')->pluck('name', 'id')->all())
-                    ->searchable()->required(),
-                Forms\Components\TextInput::make('description')
-                    ->label('עבור (יופיע ללקוח ובחשבונית)')->default('תשלום')->maxLength(120)->required(),
-                Forms\Components\Repeater::make('items')
-                    ->label('פירוט פריטים (אופציונלי)')
-                    ->helperText('הוסיפו פריטים כדי שהלקוח יראה פירוט לפי מוצר. המחיר מוזן לפני מע״מ, ולכל פריט בוחרים אם להוסיף מע״מ. אם ריק — תישלח שורת הסכום שלמטה.')
-                    ->schema([
-                        Forms\Components\TextInput::make('name')->label('פריט')->maxLength(120)->required()->columnSpan(2),
-                        Forms\Components\TextInput::make('qty')->label('כמות')->numeric()->default(1)->minValue(1)->required(),
-                        Forms\Components\TextInput::make('unit_price')->label('מחיר ליח׳ (₪, לפני מע״מ)')
-                            ->numeric()->prefix('₪')->step('0.01')->minValue(0)->inputMode('decimal')->required(),
-                        Forms\Components\Toggle::make('add_vat')->label('להוסיף מע״מ')
-                            ->default(true)->inline(false),
-                    ])
-                    ->columns(5)->addActionLabel('הוסף פריט')->default([]),
-                Forms\Components\TextInput::make('amount')
-                    ->label('סכום לתשלום (₪, כולל מע״מ)')
-                    ->helperText('בשימוש רק כשאין פירוט פריטים.')
-                    ->numeric()->prefix('₪')->step('0.01')->minValue(0)->inputMode('decimal')
-                    ->requiredWithout('items'),
-                Forms\Components\DatePicker::make('due_at')
-                    ->label('לתשלום עד')
-                    ->helperText('התאריך שעד אליו מצופה שהתשלום יתקבל — מוצג במעקב ומשמש את מסך תזרים וגבייה.')
-                    ->default(fn (): Carbon => now()->addDays((int) config('billing.demands.due_days', 14)))
-                    ->minDate(fn (): Carbon => now()->startOfDay())
-                    ->native(false)->firstDayOfWeek(7),
-                Forms\Components\Radio::make('channel')
-                    ->label('לשלוח דרך')
-                    ->options(['email' => 'מייל', 'whatsapp' => 'וואטסאפ'])
-                    ->default('email')->required()
-                    ->helperText('הדרישה מדגישה תשלום בהעברה בנקאית (הדרך המועדפת) ומאפשרת גם קישור לתשלום בכרטיס — לעולם לא מתבצע חיוב אוטומטי.'),
+                    ->searchable()
+                    ->visible(fn (Forms\Get $get): bool => ! $get('new_customer'))
+                    ->required(fn (Forms\Get $get): bool => ! $get('new_customer')),
+                // הפרט שדרכו הדרישה נשלחת הוא חובה כבר כאן: לקוח שנפתח בלי מייל
+                // ואז הדרישה אליו לא נשלחת — נשאר ככרטיס ריק שאיש לא ביקש.
+                $this->newCustomerFields(
+                    emailRequired: fn (Forms\Get $get): bool => (bool) $get('new_customer') && ($get('channel') ?? 'email') === 'email',
+                    phoneRequired: fn (Forms\Get $get): bool => (bool) $get('new_customer') && $get('channel') === 'whatsapp',
+                ),
+                ...$this->demandFields(),
             ])
             ->action(function (array $data): void {
-                $customer = Customer::find($data['customer_id']);
-
-                if (! $customer) {
-                    Notification::make()->title('לקוח לא נמצא')->danger()->send();
-
-                    return;
-                }
-
-                $lines = $this->demandLines($data['items'] ?? []);
-                $totalAgorot = $lines !== []
-                    ? array_sum(array_map(fn (array $l): int => $l['qty'] * $l['unit_price_agorot'], $lines))
-                    : (int) round(((float) ($data['amount'] ?? 0)) * 100);
-
-                if ($totalAgorot <= 0) {
+                // הסכום נבדק לפני פתיחת הלקוח: דרישה שלא תצא ממילא אינה סיבה
+                // להשאיר במערכת כרטיס לקוח שנפתח לחינם.
+                if ($this->demandTotal($data) <= 0) {
                     Notification::make()->title('סכום לא תקין')->danger()->send();
 
                     return;
                 }
 
-                $channel = $data['channel'] ?? 'email';
-                $missing = $channel === 'email' ? blank($customer->email) : (blank($customer->whatsapp_jid) && blank($customer->phone));
+                $customer = $this->resolveCustomer($data);
 
-                if ($missing) {
-                    Notification::make()->title('אין ללקוח פרטי '.($channel === 'email' ? 'מייל' : 'וואטסאפ'))->danger()->send();
+                if (! $customer) {
+                    Notification::make()
+                        ->title(empty($data['new_customer']) ? 'לקוח לא נמצא' : 'חסר שם ללקוח החדש')
+                        ->danger()->send();
 
                     return;
                 }
 
-                // A demand always offers BOTH options; bank transfer is listed
-                // first (our preferred method) and the (non-auto-charging) card
-                // link second. The proforma is issued by the job.
-                $dueAt = filled($data['due_at'] ?? null) ? Carbon::parse($data['due_at'])->toDateString() : null;
-
-                SendPaymentLinkJob::dispatch($customer->id, $totalAgorot, filled($data['description']) ? $data['description'] : 'תשלום', $channel, $lines, ['transfer', 'link'], $dueAt);
-
-                Notification::make()
-                    ->title('דרישת התשלום נשלחה')
-                    ->body('נוצרה חשבונית עסקה ונשלחה ל'.$customer->name.' ב'.($channel === 'email' ? 'מייל' : 'וואטסאפ').' עם קישור לתשלום ופרטי העברה. עם התשלום תיסגר החשבונית עסקה ותונפק חשבונית מס/קבלה.')
-                    ->success()->send();
+                $this->sendDemand($customer, $data);
             });
-    }
-
-    /**
-     * Normalise the items repeater into charge line rows (agorot), dropping blank
-     * rows. The unit price is entered NET (pre-VAT); when "add_vat" is on we gross
-     * it up by the configured VAT rate, so the stored unit_price_agorot is always
-     * the final billed price — keeping the charge/invoice pipeline unchanged.
-     * Returns [] when nothing usable was entered.
-     *
-     * @param  array<int, array{name?: string, qty?: mixed, unit_price?: mixed, add_vat?: mixed}>  $items
-     * @return array<int, array{name: string, qty: int, unit_price_agorot: int}>
-     */
-    private function demandLines(array $items): array
-    {
-        $vatRate = (float) config('billing.vat_rate');
-
-        return collect($items)
-            ->map(function (array $item) use ($vatRate): array {
-                $net = (float) ($item['unit_price'] ?? 0);
-                $gross = ($item['add_vat'] ?? true) ? $net * (1 + $vatRate) : $net;
-
-                return [
-                    'name' => trim((string) ($item['name'] ?? '')),
-                    'qty' => max(1, (int) ($item['qty'] ?? 1)),
-                    'unit_price_agorot' => (int) round($gross * 100),
-                ];
-            })
-            ->filter(fn (array $line): bool => $line['name'] !== '' && $line['unit_price_agorot'] > 0)
-            ->values()
-            ->all();
     }
 
     /**

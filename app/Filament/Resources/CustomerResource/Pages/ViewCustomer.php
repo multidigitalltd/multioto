@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\CustomerResource\Pages;
 
+use App\Filament\Concerns\OpensPaymentDemand;
 use App\Filament\Resources\CustomerResource;
 use App\Filament\Resources\CustomerResource\Concerns\InteractsWithCustomerCards;
 use App\Jobs\SendPaymentLinkJob;
@@ -25,6 +26,7 @@ use Illuminate\Support\Str;
 class ViewCustomer extends ViewRecord
 {
     use InteractsWithCustomerCards;
+    use OpensPaymentDemand;
 
     protected static string $resource = CustomerResource::class;
 
@@ -53,6 +55,7 @@ class ViewCustomer extends ViewRecord
             $this->contactCustomerAction(),
             $finance ? $this->chargeAction() : null,
             Actions\ActionGroup::make(array_values(array_filter([
+                $finance ? $this->paymentDemandAction() : null,
                 $finance ? $this->paymentLinkAction() : null,
                 $finance ? $this->cardLinkAction() : null,
                 $finance ? $this->syncCardAction() : null,
@@ -110,6 +113,26 @@ class ViewCustomer extends ViewRecord
                     ->body("נפתחה פנייה #{$ticket->id} — תשובת הלקוח תיכנס לאותה שיחה.")
                     ->success()->send();
             });
+    }
+
+    /**
+     * דרישת תשלום (חשבונית עסקה) ללקוח הזה, מתוך הכרטיס שלו.
+     *
+     * אותו טופס ואותה התנהגות בדיוק כמו במסך "דרישות תשלום" — הוא יושב ב-
+     * concert משותף — אלא שהלקוח כבר ידוע, ולכן אין כאן בחירת לקוח. ההבדל מ-
+     * "שליחת קישור תשלום" שלידו הוא לא ניסוח: דרישה מנפיקה חשבונית עסקה,
+     * מקבלת תאריך יעד, נכנסת למעקב הגבייה ומנדנדת עד שמשולם.
+     */
+    private function paymentDemandAction(): Actions\Action
+    {
+        return Actions\Action::make('paymentDemand')
+            ->label('דרישת תשלום (חשבונית עסקה)')
+            ->icon('heroicon-o-document-currency-dollar')
+            ->modalWidth('2xl')
+            ->form(fn (Customer $record): array => $this->demandFields(
+                filled($record->email) ? 'email' : 'whatsapp',
+            ))
+            ->action(fn (array $data, Customer $record) => $this->sendDemand($record, $data));
     }
 
     /** Create a hosted payment page for an amount and send the link to the customer. */
