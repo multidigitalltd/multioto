@@ -28,6 +28,16 @@ return [
         'region' => env('AWS_DEFAULT_REGION', 'us-east-1'),
     ],
 
+    // Google sign-in for the team panel. The values are normally set from
+    // הגדרות ← אינטגרציות, and fall back to the environment for an install that
+    // prefers to keep them there; the redirect is derived so it cannot drift
+    // from the route that actually receives the callback.
+    'google' => [
+        'client_id' => env('GOOGLE_CLIENT_ID'),
+        'client_secret' => env('GOOGLE_CLIENT_SECRET'),
+        'redirect' => env('GOOGLE_REDIRECT_URI'),
+    ],
+
     'resend' => [
         'key' => env('RESEND_KEY'),
     ],

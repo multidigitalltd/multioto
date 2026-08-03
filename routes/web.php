@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Agent\AgentPluginController;
+use App\Http\Controllers\Auth\GoogleLoginController;
 use App\Http\Controllers\Auth\TwoFactorChallengeController;
 use App\Http\Controllers\BillingController;
 use App\Http\Controllers\BrandingController;
@@ -147,6 +148,22 @@ Route::get('/support/attachments/{message}/{index}', SupportAttachmentController
     ->middleware(['web', 'auth'])
     ->whereNumber('index')
     ->name('support.attachment');
+
+/*
+ | Google sign-in. Guest-only by nature and rate limited, because the callback
+ | is a public URL that anybody may hit. It signs in ONLY an address that is
+ | already a user — the controller says why at length — and the 2FA gate that
+ | follows is untouched: this establishes who you are, it does not waive the
+ | second step.
+ */
+Route::middleware(['web'])->group(function () {
+    Route::get('/auth/google', [GoogleLoginController::class, 'redirect'])
+        ->middleware('throttle:10,1')
+        ->name('auth.google.redirect');
+    Route::get('/auth/google/callback', [GoogleLoginController::class, 'callback'])
+        ->middleware('throttle:10,1')
+        ->name('auth.google.callback');
+});
 
 /*
  | One-time-code (2FA) challenge. Deliberately OUTSIDE the admin panel so the

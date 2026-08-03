@@ -84,6 +84,10 @@ class ManageIntegrations extends Page implements HasForms
             'label' => 'WAHA',
             'keys' => ['waha.base_url', 'waha.api_key', 'waha.session', 'waha.owner_number'],
         ],
+        'google' => [
+            'label' => 'התחברות עם גוגל',
+            'keys' => ['google.client_id', 'google.client_secret', 'google.allowed_domain'],
+        ],
         'security' => [
             'label' => 'אבטחה ומוניטין',
             'keys' => ['security.wpscan_token', 'security.safe_browsing_key', 'security.urlhaus_auth_key', 'security.wordfence_api_key'],
@@ -119,6 +123,7 @@ class ManageIntegrations extends Page implements HasForms
         'flywp.api_token',
         'waha.api_key',
         'cloudflare.api_token',
+        'google.client_secret',
         'security.wpscan_token',
         'security.safe_browsing_key',
         'security.urlhaus_auth_key',
@@ -134,6 +139,10 @@ class ManageIntegrations extends Page implements HasForms
     public const CLEARABLE_KEYS = [
         'linet.payment_type_bank_transfer',
         'linet.payment_type_standing_order',
+        // Emptying the domain restriction is a real instruction ("any address
+        // that is already a user"), not an omission — so it must be storable
+        // as empty rather than treated as "leave what was there".
+        'google.allowed_domain',
     ];
 
     /** @var array<string, mixed> */
@@ -279,6 +288,20 @@ class ManageIntegrations extends Page implements HasForms
                             ->helperText('משמש לכל האתרים שמנוהלים תחת חשבון ה-Cloudflare הזה. אפשר גם להזין טוקן חד-פעמי בפעולה עצמה במקום לשמור כאן.'),
                     ])->columns(1)
                     ->footerActions($this->groupActions('cloudflare')),
+
+                Section::make('התחברות עם גוגל')
+                    ->description('מאפשר לצוות להיכנס לפאנל בלחיצה אחת במקום בסיסמה. פותחים ב-Google Cloud Console פרויקט → OAuth client ID מסוג Web application, ומזינים כ-Authorized redirect URI בדיוק את הכתובת שמופיעה למטה. הכניסה מיועדת למי שכבר רשום כמשתמש כאן — חשבון גוגל שאינו רשום לא ייכנס, ואימות דו-שלבי (אם מוגדר) עדיין נדרש.')
+                    ->schema([
+                        TextInput::make('google.client_id')->label('Client ID')->autocomplete(false)
+                            ->helperText('מסתיים ב-apps.googleusercontent.com.'),
+                        $this->secretInput('google.client_secret', 'Client Secret'),
+                        TextInput::make('google.allowed_domain')->label('הגבלה לדומיין (אופציונלי)')
+                            ->placeholder('multi-digital.co.il')->autocomplete(false)
+                            ->helperText('ריק = כל כתובת שכבר רשומה כמשתמש. עם ערך — רק כתובות בדומיין הזה יוכלו להשתמש בגוגל.'),
+                        Placeholder::make('google.redirect')->label('Authorized redirect URI')
+                            ->content(fn (): string => route('auth.google.callback')),
+                    ])->columns(2)
+                    ->footerActions($this->groupActions('google')),
 
                 Section::make('אבטחה ומוניטין — מפתחות')
                     ->description('URLhaus דורש Auth-Key חינמי מ-auth.abuse.ch, ופיד הפגיעויות של Wordfence דורש מפתח API מ-wordfence.com (הפיד הישן ללא מפתח הוסר). Spamhaus DBL ללא מפתח; WPScan/Safe Browsing אופציונליים. הכול נשמר מוצפן; השאירו ריק כדי לא לשנות, ולחצו "בדיקת חיבור" לאימות כל המקורות.')
