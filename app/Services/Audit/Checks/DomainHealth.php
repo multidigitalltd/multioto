@@ -69,33 +69,51 @@ class DomainHealth implements Check
         return Finding::ok($this->area(), 'רישום הדומיין בתוקף', 'עד '.$expires->format('d/m/Y').'.');
     }
 
-    /** @return list<Finding> */
+    /**
+     * Blocklists — and, just as importantly, which of them actually answered.
+     *
+     * Nothing found and nothing asked are different answers, and that holds per
+     * source as well as overall: one provider silent while another came back
+     * clean still leaves a hole in the report, and a hole that looks exactly
+     * like a clean bill of health is the one thing this must never produce.
+     *
+     * @return list<Finding>
+     */
     private function reputationFindings(AuditContext $site): array
     {
         $result = $this->reputation->check($site->host);
         $listings = (array) ($result['listings'] ?? []);
+        $sources = (array) ($result['sources'] ?? []);
+        $silent = array_keys(array_filter($sources, static fn ($answered): bool => ! $answered));
+        $findings = [];
 
-        if ($listings === []) {
-            // Nothing found and nothing asked are different answers. A source
-            // that could not be reached leaves the report looking exactly like
-            // a clean bill of health, which is the one thing it must not do.
-            return array_filter((array) ($result['sources'] ?? [])) === []
-                ? [Finding::notice(
-                    $this->area(),
-                    'בדיקת רשימות החסימה לא הושלמה',
-                    'אף אחד ממאגרי המוניטין לא השיב בזמן הבדיקה. אין בכך כדי לומר שהדומיין נקי — פשוט לא נבדק.',
-                    'לנסות שוב מאוחר יותר.',
-                )]
-                : [];
+        if ($listings !== []) {
+            $findings[] = Finding::critical(
+                $this->area(),
+                'הדומיין מופיע ברשימות חסימה',
+                'הדומיין מסומן כמסוכן באחד המאגרים. התוצאה היא אזהרה אדומה בדפדפן ומיילים שנוחתים בספאם — או לא מגיעים כלל.',
+                'לברר את הסיבה, לנקות את האתר אם יש בו קוד זדוני, ולהגיש בקשת הסרה למאגר.',
+                implode(', ', array_slice(array_column($listings, 'source'), 0, 3)) ?: null,
+            );
         }
 
-        return [Finding::critical(
+        if ($sources !== [] && $silent === []) {
+            return $findings;
+        }
+
+        $all = $sources === [] || count($silent) === count($sources);
+
+        $findings[] = Finding::notice(
             $this->area(),
-            'הדומיין מופיע ברשימות חסימה',
-            'הדומיין מסומן כמסוכן באחד המאגרים. התוצאה היא אזהרה אדומה בדפדפן ומיילים שנוחתים בספאם — או לא מגיעים כלל.',
-            'לברר את הסיבה, לנקות את האתר אם יש בו קוד זדוני, ולהגיש בקשת הסרה למאגר.',
-            implode(', ', array_slice(array_column($listings, 'source'), 0, 3)) ?: null,
-        )];
+            $all ? 'בדיקת רשימות החסימה לא הושלמה' : 'בדיקת רשימות החסימה הושלמה חלקית',
+            $all
+                ? 'אף אחד ממאגרי המוניטין לא השיב בזמן הבדיקה. אין בכך כדי לומר שהדומיין נקי — פשוט לא נבדק.'
+                : 'חלק ממאגרי המוניטין לא השיבו בזמן הבדיקה. מה שנבדק נמצא כפי שמופיע כאן, אך זו אינה תמונה מלאה.',
+            'לנסות שוב מאוחר יותר.',
+            $silent !== [] ? 'לא השיבו: '.implode(', ', $silent) : null,
+        );
+
+        return $findings;
     }
 
     /**

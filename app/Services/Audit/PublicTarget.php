@@ -16,10 +16,27 @@ use RuntimeException;
  */
 class PublicTarget
 {
-    /** @var array<string, bool> */
+    /** @var array<string, list<string>> */
     private array $decided = [];
 
     public function assert(string $host): void
+    {
+        $this->addresses($host);
+    }
+
+    /**
+     * The addresses a name is allowed to be reached at.
+     *
+     * The list is returned rather than merely approved because approving a NAME
+     * settles nothing: between the check and the connection the name is looked
+     * up a second time, and a server that answers with a public address to the
+     * first query and a private one to the second walks straight past a guard
+     * that only said yes. The fetcher connects to what came back from here, so
+     * the address that was judged is the address that is dialled.
+     *
+     * @return list<string>
+     */
+    public function addresses(string $host): array
     {
         $host = mb_strtolower(trim($host));
 
@@ -27,8 +44,8 @@ class PublicTarget
             throw new RuntimeException('הכתובת אינה תקינה.');
         }
 
-        if ($this->decided[$host] ?? false) {
-            return;
+        if (isset($this->decided[$host])) {
+            return $this->decided[$host];
         }
 
         $addresses = $this->resolve($host);
@@ -43,7 +60,7 @@ class PublicTarget
             }
         }
 
-        $this->decided[$host] = true;
+        return $this->decided[$host] = array_values($addresses);
     }
 
     /** Whether an address may be fetched, without the exception. */

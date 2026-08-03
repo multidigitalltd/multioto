@@ -43,6 +43,35 @@ class AuditContext
             .(isset($parts['port']) ? ':'.$parts['port'] : '');
     }
 
+    /**
+     * Every https origin the visit passed through, in order and without repeats.
+     *
+     * A site that redirects carries the visitor across certificates: the address
+     * typed in, the www form, sometimes a different name entirely. Judging only
+     * the first one can report a trusted certificate for an endpoint no visitor
+     * ever lands on, while the one they do land on shows a full-page warning.
+     *
+     * @return list<array{host: string, port: int}>
+     */
+    public function httpsOrigins(): array
+    {
+        $origins = [];
+
+        foreach (array_merge([$this->home->url], $this->home->redirects) as $url) {
+            $parts = parse_url((string) $url);
+            $host = mb_strtolower((string) ($parts['host'] ?? ''));
+
+            if ($host === '' || mb_strtolower((string) ($parts['scheme'] ?? '')) !== 'https') {
+                continue;
+            }
+
+            $port = (int) ($parts['port'] ?? 443);
+            $origins[$host.':'.$port] = ['host' => $host, 'port' => $port];
+        }
+
+        return array_values($origins);
+    }
+
     public function servesHttps(): bool
     {
         return str_starts_with(mb_strtolower($this->base()), 'https://');

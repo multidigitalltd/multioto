@@ -39,33 +39,71 @@ class Transport implements Check
      * shows the visitor a full-page warning, and calling it "valid" in a report
      * a customer relies on is the worst thing this tool could get wrong.
      *
+     * Every https address the visit passed through is examined, not only the one
+     * that was typed: a site that redirects hands the visitor from certificate
+     * to certificate, and the one they end up in front of is often not the one
+     * the audit started at.
+     *
      * @return list<Finding>
      */
     private function certificate(AuditContext $site): array
     {
-        $result = $this->certificates->inspect($site->host);
+        $origins = $site->httpsOrigins() ?: [['host' => $site->host, 'port' => 443]];
+        $lifetimes = [];
 
-        if (! $result['reachable']) {
-            return [Finding::notice(
-                $this->area(),
-                'לא ניתן היה לבדוק את תעודת האבטחה',
-                'הבדיקה לא הצליחה ליצור חיבור מאובטח לשרת. ייתכן חסימה של הבדיקה, ולא בהכרח תקלה — אך זה גם לא אישור שהכול תקין.',
-                'לוודא ידנית בדפדפן שהתעודה בתוקף ומזוהה.',
-                $result['error'],
-            )];
+        foreach ($origins as $origin) {
+            $result = $this->certificates->inspect($origin['host'], $origin['port']);
+            $where = $this->where($origin, count($origins));
+
+            if (! $result['reachable']) {
+                return [Finding::notice(
+                    $this->area(),
+                    'לא ניתן היה לבדוק את תעודת האבטחה',
+                    'הבדיקה לא הצליחה ליצור חיבור מאובטח לשרת. ייתכן חסימה של הבדיקה, ולא בהכרח תקלה — אך זה גם לא אישור שהכול תקין.',
+                    'לוודא ידנית בדפדפן שהתעודה בתוקף ומזוהה.',
+                    $this->join($where, $result['error']),
+                )];
+            }
+
+            if (! $result['trusted']) {
+                return [Finding::critical(
+                    $this->area(),
+                    'הדפדפן אינו מקבל את תעודת האבטחה',
+                    'התעודה אינה מזוהה כתקפה לאתר הזה — היא חתומה עצמית, הונפקה לשם אחר, אינה מגורם מוכר או שטרם נכנסה לתוקף. המבקר רואה מסך אזהרה במקום האתר.',
+                    'להנפיק תעודה מגורם מוכר עבור השם המדויק של האתר, ולוודא שהותקנה כולל שרשרת האישורים.',
+                    $this->join($where, $result['error']),
+                )];
+            }
+
+            if ($result['days_left'] !== null) {
+                $lifetimes[] = (int) $result['days_left'];
+            }
         }
 
-        if (! $result['trusted']) {
-            return [Finding::critical(
-                $this->area(),
-                'הדפדפן אינו מקבל את תעודת האבטחה',
-                'התעודה אינה מזוהה כתקפה לאתר הזה — היא חתומה עצמית, הונפקה לשם אחר, אינה מגורם מוכר או שטרם נכנסה לתוקף. המבקר רואה מסך אזהרה במקום האתר.',
-                'להנפיק תעודה מגורם מוכר עבור השם המדויק של האתר, ולוודא שהותקנה כולל שרשרת האישורים.',
-                $result['error'],
-            )];
+        // The soonest expiry across the chain: the first one to lapse breaks the
+        // visit, wherever along the way it sits.
+        return $this->expiry($lifetimes === [] ? 0 : min($lifetimes), $lifetimes === []);
+    }
+
+    /**
+     * Which endpoint a certificate finding is about — named only when it could
+     * be more than one, so an ordinary single-address site is not made to look
+     * complicated.
+     *
+     * @param  array{host: string, port: int}  $origin
+     */
+    private function where(array $origin, int $total): ?string
+    {
+        if ($total < 2 && $origin['port'] === 443) {
+            return null;
         }
 
-        return $this->expiry((int) ($result['days_left'] ?? 0), $result['days_left'] === null);
+        return $origin['host'].($origin['port'] === 443 ? '' : ':'.$origin['port']);
+    }
+
+    private function join(?string $where, ?string $error): ?string
+    {
+        return implode(' — ', array_filter([$where, $error])) ?: null;
     }
 
     /** @return list<Finding> */

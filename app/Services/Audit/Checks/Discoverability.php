@@ -139,39 +139,90 @@ class Discoverability implements Check
      * doing something deliberate and correct. Reporting that as "you are
      * invisible on Google" would be a false alarm of the most alarming kind, in
      * a document handed to somebody who cannot check it.
+     *
+     * Specificity decides which group applies, exactly as Google does it: a
+     * group naming Googlebot is the one it obeys, and the catch-all is read only
+     * when no such group exists. The common shape — everybody turned away, then
+     * "User-agent: Googlebot / Allow: /" — is a site deliberately admitting only
+     * Google, and calling that "blocked from Google" gets the file backwards.
      */
     private static function blocksGoogle(string $robots): bool
     {
-        $applies = false;
-        $blocked = false;
+        $groups = self::groups($robots);
+
+        $applicable = array_values(array_filter(
+            $groups,
+            static fn (array $group): bool => array_filter(
+                $group['agents'],
+                static fn (string $agent): bool => str_starts_with($agent, 'googlebot'),
+            ) !== [],
+        ));
+
+        if ($applicable === []) {
+            $applicable = array_values(array_filter(
+                $groups,
+                static fn (array $group): bool => in_array('*', $group['agents'], true),
+            ));
+        }
+
+        if ($applicable === []) {
+            return false;
+        }
+
+        // Groups naming the same crawler are read together, and an explicit
+        // allow anywhere among them means the block is not total.
+        $blocks = array_filter($applicable, static fn (array $group): bool => $group['blocks']) !== [];
+        $allows = array_filter($applicable, static fn (array $group): bool => $group['allows']) !== [];
+
+        return $blocks && ! $allows;
+    }
+
+    /**
+     * The file split into its user-agent groups, in order.
+     *
+     * Consecutive user-agent lines belong to one group; the first rule closes
+     * the list of names, and the next user-agent line after a rule opens the
+     * next group.
+     *
+     * @return list<array{agents: list<string>, blocks: bool, allows: bool}>
+     */
+    private static function groups(string $robots): array
+    {
+        $groups = [];
+        $index = -1;
+        $naming = false;
 
         foreach (preg_split('/\R/', $robots) ?: [] as $line) {
             $line = trim(preg_replace('/#.*$/', '', $line) ?? '');
 
             if (preg_match('/^user-agent\s*:\s*(.+)$/i', $line, $agent) === 1) {
-                // A new group starts wherever a user-agent line follows a rule.
-                if ($blocked && $applies) {
-                    return true;
+                if (! $naming) {
+                    $groups[] = ['agents' => [], 'blocks' => false, 'allows' => false];
+                    $index++;
+                    $naming = true;
                 }
 
-                $name = mb_strtolower(trim($agent[1]));
-                $applies = $name === '*' || str_starts_with($name, 'googlebot');
-                $blocked = false;
+                $groups[$index]['agents'][] = mb_strtolower(trim($agent[1]));
 
                 continue;
             }
 
-            if ($applies && preg_match('/^disallow\s*:\s*\/\s*$/i', $line) === 1) {
-                $blocked = true;
+            if ($line === '' || $index < 0) {
+                continue;
             }
 
-            // An explicit allow anywhere in the group means the block is not total.
-            if ($applies && preg_match('/^allow\s*:\s*\//i', $line) === 1) {
-                $blocked = false;
+            $naming = false;
+
+            if (preg_match('/^disallow\s*:\s*\/\s*$/i', $line) === 1) {
+                $groups[$index]['blocks'] = true;
+            }
+
+            if (preg_match('/^allow\s*:\s*\//i', $line) === 1) {
+                $groups[$index]['allows'] = true;
             }
         }
 
-        return $blocked && $applies;
+        return $groups;
     }
 
     private function sitemap(AuditContext $site): ?Finding

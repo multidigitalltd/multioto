@@ -10,7 +10,9 @@ use App\Models\User;
 use App\Services\Audit\AuditContext;
 use App\Services\Audit\AuditReport;
 use App\Services\Audit\CertificateInspector;
+use App\Services\Audit\Checks\Availability;
 use App\Services\Audit\Checks\Discoverability;
+use App\Services\Audit\Checks\DomainHealth;
 use App\Services\Audit\Checks\Transport;
 use App\Services\Audit\PublicTarget;
 use App\Services\Audit\SiteAuditor;
@@ -212,6 +214,135 @@ class SiteAuditTest extends TestCase
 
         $this->assertTrue($guard->allows('example.com'));
         $this->assertFalse($guard->allows('redirected.example.net'));
+    }
+
+    /**
+     * הפניה אל תוך הרשת עוצרת את הקריאה — גם כשההפניה מגיעה תוך כדי.
+     *
+     * הכתובת שהוקלדה נבדקה ואושרה; המקום שאליו האתר שלח את הבודק לא. מי שעוקב
+     * אחרי ההפניה בלי לשאול שוב, מביא בחזרה את מה שיש בפנים.
+     */
+    public function test_a_redirect_into_the_network_stops_the_fetch(): void
+    {
+        $this->app->instance(PublicTarget::class, new class extends PublicTarget
+        {
+            protected function resolve(string $host): array
+            {
+                return $host === 'example.com' ? ['93.184.216.34'] : ['169.254.169.254'];
+            }
+        });
+
+        Http::fake([
+            'https://example.com' => Http::response('', 302, ['Location' => 'http://metadata.example.net/']),
+            '*' => Http::response('סוד מהרשת הפנימית', 200),
+        ]);
+
+        $probe = SiteProbe::fetch('https://example.com');
+
+        $this->assertNotNull($probe->error);
+        $this->assertStringNotContainsString('סוד מהרשת הפנימית', $probe->body);
+    }
+
+    /**
+     * התעודה שנבדקת היא זו שהמבקר באמת רואה.
+     *
+     * אתר שמפנה מעביר את המבקר בין תעודות, ולבדוק רק את הכתובת שהוקלדה זה
+     * לאשר תעודה שאיש לא מגיע אליה — בזמן שבזו שכן מגיעים אליה מוצג מסך אזהרה.
+     */
+    public function test_the_certificate_judged_is_the_one_the_visitor_lands_on(): void
+    {
+        $this->bindTargetResolving(['93.184.216.34']);
+
+        $certificates = \Mockery::mock(CertificateInspector::class)->makePartial();
+        $certificates->shouldReceive('inspect')->with('example.com', 443)->andReturn([
+            'reachable' => true, 'trusted' => true, 'days_left' => 200, 'error' => null,
+        ]);
+        $certificates->shouldReceive('inspect')->with('elsewhere.example.net', 443)->andReturn([
+            'reachable' => true, 'trusted' => false, 'days_left' => 200, 'error' => 'hostname mismatch',
+        ]);
+        $this->app->instance(CertificateInspector::class, $certificates);
+
+        Http::fake([
+            'https://example.com' => Http::response('', 301, ['Location' => 'https://elsewhere.example.net/']),
+            '*' => Http::response('<html lang="he"><body></body></html>', 200),
+        ]);
+
+        $titles = array_column(app(Transport::class)->run($this->contextFor('example.com')), 'title');
+
+        $this->assertContains('הדפדפן אינו מקבל את תעודת האבטחה', $titles);
+    }
+
+    /**
+     * לתת-דומיין אין צורת www, ואין להאשים אותו בהיעדרה.
+     *
+     * shop.example.com הוא שם שמישהו בחר; www.shop.example.com הוא שם שהכלי
+     * ממציא. ממצא על המצאה הוא תקלה שלאתר אין.
+     */
+    public function test_a_subdomain_is_not_faulted_for_a_www_it_never_had(): void
+    {
+        $this->bindTargetResolving(['93.184.216.34']);
+
+        Http::fake([
+            'https://www.*' => Http::response('', 404),
+            '*' => Http::response('<html lang="he"><body></body></html>', 200),
+        ]);
+
+        $subdomain = array_column(app(Availability::class)->run($this->contextFor('shop.example.com')), 'title');
+        $domain = array_column(app(Availability::class)->run($this->contextFor('example.co.il')), 'title');
+
+        $this->assertNotContains('הכתובת www.shop.example.com אינה עובדת', $subdomain);
+        // ובדומיין עצמו — שם ל-www באמת יש משמעות — הממצא כן מופיע.
+        $this->assertContains('הכתובת www.example.co.il אינה עובדת', $domain);
+    }
+
+    /**
+     * קבוצה שנוקבת בשם גוגל גוברת על הכללית.
+     *
+     * "לכולם אסור, ולגוגל מותר" הוא אתר שמכניס את גוגל בכוונה. לדווח לו שהוא
+     * חסום מגוגל זה לקרוא את הקובץ הפוך.
+     */
+    public function test_a_group_naming_google_beats_the_catch_all(): void
+    {
+        $this->bindTargetResolving(['93.184.216.34']);
+
+        Http::fake([
+            '*/robots.txt' => Http::response("User-agent: *\nDisallow: /\n\nUser-agent: Googlebot\nAllow: /", 200),
+            '*' => Http::response('<html lang="he"><head><title>ד</title></head><body><h1>כ</h1></body></html>', 200),
+        ]);
+
+        $titles = array_column(app(Discoverability::class)->run($this->contextFor('example.com')), 'title');
+
+        $this->assertNotContains('הקובץ robots.txt חוסם את כל האתר מגוגל', $titles);
+    }
+
+    /**
+     * מאגר ששתק אינו מאגר שאמר "נקי".
+     *
+     * כשאחד המאגרים עונה והשני לא, הדוח נראה בדיוק כמו אישור נקיון — וזה הדבר
+     * היחיד שאסור לו להיראות כמוהו.
+     */
+    public function test_a_source_that_did_not_answer_is_not_read_as_clean(): void
+    {
+        $this->bindTargetResolving(['93.184.216.34']);
+
+        $expiry = \Mockery::mock(DomainExpiry::class)->makePartial();
+        $expiry->shouldReceive('expiresAt')->andReturn(null);
+        $this->app->instance(DomainExpiry::class, $expiry);
+
+        $reputation = \Mockery::mock(DomainReputationClient::class)->makePartial();
+        $reputation->shouldReceive('check')->andReturn([
+            'sources' => ['urlhaus' => true, 'spamhaus' => false],
+            'listings' => [],
+            'errors' => ['spamhaus' => 'לא נענה'],
+        ]);
+        $this->app->instance(DomainReputationClient::class, $reputation);
+
+        Http::fake(['*' => Http::response('<html lang="he"><body></body></html>', 200)]);
+
+        $findings = app(DomainHealth::class)->run($this->contextFor('example.com'));
+        $titles = array_column($findings, 'title');
+
+        $this->assertContains('בדיקת רשימות החסימה הושלמה חלקית', $titles);
     }
 
     /** תשובה אינסופית אינה מפילה את העובד — הקריאה נעצרת בגבול. */

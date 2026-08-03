@@ -9,6 +9,15 @@ use App\Services\Audit\SiteProbe;
 /** Does the site answer at all, and does it answer to both of its names. */
 class Availability implements Check
 {
+    /**
+     * סיומות שנייה שמאחוריהן מסתתר הדומיין עצמו — example.co.il הוא דומיין,
+     * לא תת-דומיין של example.
+     */
+    private const SECOND_LEVEL = [
+        'co', 'com', 'net', 'org', 'ac', 'gov', 'muni', 'idf', 'k12', 'sch',
+        'edu', 'ne', 'or', 'gr', 'biz', 'info', 'nic',
+    ];
+
     public function area(): string
     {
         return 'זמינות';
@@ -56,8 +65,13 @@ class Availability implements Check
      */
     private function bothNames(AuditContext $site): array
     {
-        $host = $site->host;
-        $other = str_starts_with($host, 'www.') ? substr($host, 4) : 'www.'.$host;
+        $host = mb_strtolower($site->host);
+        $other = self::counterpart($host);
+
+        if ($other === null) {
+            return [];
+        }
+
         $probe = SiteProbe::fetch(($site->servesHttps() ? 'https://' : 'http://').$other);
 
         if ($probe->error !== null || $probe->status === null || $probe->status >= 400) {
@@ -71,5 +85,27 @@ class Availability implements Check
         }
 
         return [Finding::ok($this->area(), 'שתי צורות הכתובת עובדות', "גם {$host} וגם {$other} נענים.")];
+    }
+
+    /**
+     * הצורה השנייה של הכתובת — כשבאמת יש כזו.
+     *
+     * www שייך לדומיין עצמו. shop.example.com הוא שם שמישהו בחר, ו-
+     * www.shop.example.com הוא שם שהכלי היה ממציא — ולדווח שההמצאה לא נענית זו
+     * תקלה שלאתר אין, במסמך שנשלח ללקוח.
+     */
+    private static function counterpart(string $host): ?string
+    {
+        if (str_starts_with($host, 'www.')) {
+            return substr($host, 4);
+        }
+
+        $labels = explode('.', $host);
+
+        return match (true) {
+            count($labels) === 2 => 'www.'.$host,
+            count($labels) === 3 && in_array($labels[1], self::SECOND_LEVEL, true) => 'www.'.$host,
+            default => null,
+        };
     }
 }

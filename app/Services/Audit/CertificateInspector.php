@@ -22,15 +22,15 @@ class CertificateInspector
     /**
      * @return array{reachable: bool, trusted: bool, days_left: ?int, error: ?string}
      */
-    public function inspect(string $host): array
+    public function inspect(string $host, int $port = 443): array
     {
-        $offered = $this->handshake($host, verify: false);
+        $offered = $this->handshake($host, verify: false, port: $port);
 
         if (! $offered['connected']) {
             return ['reachable' => false, 'trusted' => false, 'days_left' => null, 'error' => $offered['error']];
         }
 
-        $verified = $this->handshake($host, verify: true);
+        $verified = $this->handshake($host, verify: true, port: $port);
 
         return [
             'reachable' => true,
@@ -43,7 +43,7 @@ class CertificateInspector
     /**
      * @return array{connected: bool, days_left: ?int, error: ?string}
      */
-    protected function handshake(string $host, bool $verify): array
+    protected function handshake(string $host, bool $verify, int $port = 443): array
     {
         $context = stream_context_create(['ssl' => [
             'capture_peer_cert' => true,
@@ -54,7 +54,7 @@ class CertificateInspector
         ]]);
 
         $client = @stream_socket_client(
-            'ssl://'.$host.':443',
+            'ssl://'.$host.':'.$port,
             $errno,
             $error,
             (float) self::TIMEOUT,

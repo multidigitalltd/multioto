@@ -2,9 +2,13 @@
 
 namespace App\Services\Audit;
 
+use GuzzleHttp\Psr7\Uri;
+use GuzzleHttp\Psr7\UriResolver;
+use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
-use Psr\Http\Message\UriInterface;
+use Psr\Http\Message\StreamInterface;
+use RuntimeException;
 
 /**
  * One fetch of one address, and nothing else.
@@ -30,6 +34,9 @@ class SiteProbe
      */
     private const MAX_BYTES = 512 * 1024;
 
+    /** Enough for the http→https→www chains real sites have, and no further. */
+    private const MAX_REDIRECTS = 6;
+
     public function __construct(
         public readonly string $url,
         public readonly ?int $status,
@@ -54,52 +61,36 @@ class SiteProbe
     {
         $started = hrtime(true);
         $guard = app(PublicTarget::class);
+        $redirects = [];
+        $current = $url;
 
         try {
-            $guard->assert((string) parse_url($url, PHP_URL_HOST));
+            for ($hop = 0; ; $hop++) {
+                $response = self::request($guard, $current);
+                $headers = self::normalise($response->headers());
+                $location = $follow ? self::redirect($response->status(), $headers, $current) : null;
 
-            $request = Http::withHeaders([
-                // Announced honestly. A site that blocks us should block a name
-                // its owner can look up, not a browser we are pretending to be.
-                'User-Agent' => 'MultiotoSiteAudit/1.0 (+site health check)',
-                'Accept' => 'text/html,application/xhtml+xml',
-            ])->timeout(self::TIMEOUT)->connectTimeout(8)->withOptions([
-                // A certificate that does not verify is a FINDING, not a reason
-                // to come back with nothing. The certificate check does its own
-                // verified handshake; this only stops the fetch dying on it.
-                'verify' => false,
-                'stream' => true,
-            ]);
+                if ($location === null) {
+                    return new self(
+                        url: $url,
+                        status: $response->status(),
+                        ms: self::elapsed($started),
+                        headers: $headers,
+                        body: self::read($response),
+                        error: null,
+                        finalUrl: $current,
+                        redirects: $redirects,
+                    );
+                }
 
-            $request = $follow
-                ? $request->withOptions([
-                    'allow_redirects' => [
-                        'max' => 6,
-                        'track_redirects' => true,
-                        // Every hop is checked, not only the address typed in.
-                        // A public site is free to answer "go to 169.254.169.254",
-                        // and following that would turn this tool into a way to
-                        // read the inside of the network it runs in.
-                        'on_redirect' => static function ($request, $response, UriInterface $to) use ($guard): void {
-                            $guard->assert($to->getHost());
-                        },
-                    ],
-                ])
-                : $request->withoutRedirecting();
+                if ($hop >= self::MAX_REDIRECTS) {
+                    throw new RuntimeException('האתר מפנה במעגל — יותר מ-'.self::MAX_REDIRECTS.' הפניות.');
+                }
 
-            $response = $request->get($url);
-            $redirects = $response->getHeader('X-Guzzle-Redirect-History');
-
-            return new self(
-                url: $url,
-                status: $response->status(),
-                ms: self::elapsed($started),
-                headers: self::normalise($response->headers()),
-                body: self::read($response),
-                error: null,
-                finalUrl: (string) (end($redirects) ?: $url),
-                redirects: array_values($redirects),
-            );
+                self::release($response->toPsrResponse()->getBody());
+                $redirects[] = $location;
+                $current = $location;
+            }
         } catch (\Throwable $e) {
             return new self(
                 url: $url,
@@ -130,10 +121,102 @@ class SiteProbe
         return $this->header($name) !== null;
     }
 
+    /**
+     * One hop: judged, pinned to the judged address, and not followed further.
+     *
+     * Redirects are followed by this class rather than by the HTTP client for
+     * one reason — the client would resolve each new hostname itself, and the
+     * whole point is that nothing is dialled except an address this guard has
+     * already looked at.
+     */
+    private static function request(PublicTarget $guard, string $url): Response
+    {
+        $parts = parse_url($url);
+        $host = (string) ($parts['host'] ?? '');
+        $secure = mb_strtolower((string) ($parts['scheme'] ?? 'https')) === 'https';
+        $port = (int) ($parts['port'] ?? ($secure ? 443 : 80));
+
+        $request = Http::withHeaders([
+            // Announced honestly. A site that blocks us should block a name
+            // its owner can look up, not a browser we are pretending to be.
+            'User-Agent' => 'MultiotoSiteAudit/1.0 (+site health check)',
+            'Accept' => 'text/html,application/xhtml+xml',
+        ])->timeout(self::TIMEOUT)->connectTimeout(8)->withOptions([
+            // A certificate that does not verify is a FINDING, not a reason
+            // to come back with nothing. The certificate check does its own
+            // verified handshake; this only stops the fetch dying on it.
+            'verify' => false,
+            'stream' => true,
+        ])->withoutRedirecting();
+
+        return self::pin($request, $guard, $host, $port)->get($url);
+    }
+
+    /**
+     * Bind the connection to an address the guard approved.
+     *
+     * Approving a name and then letting the client look it up again leaves a
+     * gap: the second answer can be a private address, and the request lands
+     * inside the network the panel runs in. Pinning keeps the hostname for TLS
+     * and for the Host header — the site sees an ordinary visit — while the
+     * socket goes only where it was allowed to go.
+     */
+    private static function pin(PendingRequest $request, PublicTarget $guard, string $host, int $port): PendingRequest
+    {
+        $addresses = $guard->addresses($host);
+
+        if (! defined('CURLOPT_RESOLVE')) {
+            return $request;
+        }
+
+        $literal = array_map(
+            static fn (string $address): string => filter_var($address, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== false
+                ? '['.$address.']'
+                : $address,
+            $addresses,
+        );
+
+        return $request->withOptions(['curl' => [
+            CURLOPT_RESOLVE => [$host.':'.$port.':'.implode(',', $literal)],
+        ]]);
+    }
+
+    /**
+     * Where this response sends us next, as an absolute address, or null.
+     *
+     * @param  array<string, list<string>>  $headers
+     */
+    private static function redirect(int $status, array $headers, string $from): ?string
+    {
+        $location = trim((string) ($headers['location'][0] ?? ''));
+
+        if ($status < 300 || $status >= 400 || $location === '') {
+            return null;
+        }
+
+        $to = UriResolver::resolve(new Uri($from), new Uri($location));
+
+        // Only the two schemes a website is served over. file:// and gopher://
+        // are things curl will happily follow and no site legitimately sends.
+        if (! in_array($to->getScheme(), ['http', 'https'], true)) {
+            throw new RuntimeException('האתר מפנה לכתובת שאינה http/https.');
+        }
+
+        return (string) $to;
+    }
+
     /** Read up to the cap and stop, whatever the server intends to keep sending. */
     private static function read(Response $response): string
     {
         $stream = $response->toPsrResponse()->getBody();
+
+        // A seekable body is one already held in memory. Reading it from the
+        // start rather than from wherever it was left makes a second read of the
+        // same response give the same answer as the first.
+        if ($stream->isSeekable()) {
+            $stream->rewind();
+        }
+
         $body = '';
 
         while (! $stream->eof() && strlen($body) < self::MAX_BYTES) {
@@ -146,9 +229,23 @@ class SiteProbe
             $body .= $chunk;
         }
 
-        $stream->close();
+        self::release($stream);
 
         return $body;
+    }
+
+    /**
+     * Let go of a live connection — and only of a live one.
+     *
+     * A body still attached to a socket must be closed or the connection is held
+     * for as long as the audit runs. A buffered body holds nothing, and closing
+     * it only destroys something that could still be read.
+     */
+    private static function release(StreamInterface $stream): void
+    {
+        if (! $stream->isSeekable()) {
+            $stream->close();
+        }
     }
 
     /** @param array<string, list<string>> $headers */
