@@ -2878,6 +2878,37 @@ class BackupTest extends TestCase
         $this->assertNotSame('OLDKEY', config('filesystems.disks.backups.key'));
     }
 
+    /**
+     * The destination has to be usable, not merely saved.
+     *
+     * Settings are stored as text, and the AWS SDK validates the TYPE of
+     * use_path_style_endpoint — a "1" is refused outright, so a destination
+     * configured from the panel threw where the same destination from .env
+     * worked.
+     */
+    public function test_a_destination_saved_from_the_panel_builds_a_working_disk(): void
+    {
+        Setting::put('backup.s3.key', 'R2KEY');
+        Setting::put('backup.s3.secret', 'R2SECRET');
+        Setting::put('backup.s3.bucket', 'multioto');
+        Setting::put('backup.s3.endpoint', 'https://account.r2.cloudflarestorage.com');
+        Setting::put('backup.s3.region', 'auto');
+        Setting::put('backup.s3.path_style', '1');
+        Setting::put('backup.enabled', '0');
+        SettingsServiceProvider::refreshFromDatabase();
+
+        $this->assertTrue(config('filesystems.disks.backups.use_path_style_endpoint'));
+        $this->assertFalse(config('backup.enabled'));
+
+        // Building the adapter is where the SDK checks the type — no network.
+        $disk = Storage::build(array_merge(
+            config('filesystems.disks.backups'),
+            ['driver' => 's3'],
+        ));
+
+        $this->assertNotNull($disk);
+    }
+
     public function test_the_connection_test_reports_a_destination_that_refuses_writes(): void
     {
         $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
