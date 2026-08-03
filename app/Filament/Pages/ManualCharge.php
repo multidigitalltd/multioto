@@ -3,6 +3,7 @@
 namespace App\Filament\Pages;
 
 use App\Enums\TokenStatus;
+use App\Filament\Concerns\OpensNewCustomer;
 use App\Filament\Concerns\RespectsModuleAccess;
 use App\Models\Customer;
 use App\Services\Billing\ManualChargeService;
@@ -34,6 +35,7 @@ use Illuminate\Support\Str;
 class ManualCharge extends Page implements HasForms
 {
     use InteractsWithForms;
+    use OpensNewCustomer;
     use RespectsModuleAccess;
 
     protected static ?string $navigationIcon = 'heroicon-o-banknotes';
@@ -66,10 +68,7 @@ class ManualCharge extends Page implements HasForms
                 Section::make('פרטי החיוב')
                     ->description('בוחרים לקוח קיים או פותחים לקוח חדש, ממלאים סכום ותיאור, ולוחצים "בצע חיוב". אם ללקוח יש כרטיס שמור הוא יחויב מיד; אחרת ייווצר עמוד תשלום מאובטח שאפשר לפתוח כאן או לשלוח ללקוח.')
                     ->schema([
-                        Toggle::make('new_customer')
-                            ->label('לקוח חדש (לא קיים במערכת)')
-                            ->live()
-                            ->columnSpanFull(),
+                        $this->newCustomerToggle(),
 
                         Select::make('customer_id')
                             ->label('לקוח קיים')
@@ -88,16 +87,7 @@ class ManualCharge extends Page implements HasForms
                             ->helperText('לקוחות עם "כרטיס שמור ✓" יחויבו מיד; לאחרים ייווצר עמוד תשלום.')
                             ->columnSpanFull(),
 
-                        Grid::make(2)
-                            ->visible(fn (Get $get): bool => (bool) $get('new_customer'))
-                            ->schema([
-                                TextInput::make('new_name')->label('שם הלקוח')->maxLength(120)
-                                    ->required(fn (Get $get): bool => (bool) $get('new_customer')),
-                                TextInput::make('new_email')->label('אימייל')->email()->maxLength(150),
-                                TextInput::make('new_phone')->label('טלפון')->tel()->maxLength(30),
-                                TextInput::make('new_business_number')->label('ח.פ / עוסק')->maxLength(30),
-                                Toggle::make('new_vat_exempt')->label('פטור ממע״מ'),
-                            ]),
+                        $this->newCustomerFields(),
 
                         Grid::make(2)
                             // Single-line charge: hidden once the operator adds
@@ -227,31 +217,6 @@ class ManualCharge extends Page implements HasForms
             ->filter(fn (array $line): bool => $line['name'] !== '' && $line['unit_price_agorot'] > 0)
             ->values()
             ->all();
-    }
-
-    /** Existing selected customer, or a freshly created one for a walk-in. */
-    private function resolveCustomer(array $data): ?Customer
-    {
-        if (empty($data['new_customer'])) {
-            return filled($data['customer_id'] ?? null) ? Customer::find($data['customer_id']) : null;
-        }
-
-        $name = trim((string) ($data['new_name'] ?? ''));
-
-        if ($name === '') {
-            return null;
-        }
-
-        $email = filled($data['new_email'] ?? null) ? $data['new_email'] : null;
-
-        return ($email ? Customer::where('email', $email)->first() : null)
-            ?? Customer::create([
-                'name' => $name,
-                'email' => $email,
-                'phone' => $data['new_phone'] ?? null,
-                'business_number' => $data['new_business_number'] ?? null,
-                'vat_exempt' => (bool) ($data['new_vat_exempt'] ?? false),
-            ]);
     }
 
     /**

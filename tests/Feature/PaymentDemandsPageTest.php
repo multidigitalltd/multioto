@@ -100,6 +100,91 @@ class PaymentDemandsPageTest extends TestCase
         });
     }
 
+    /**
+     * דרישה ללקוח שעדיין אינו במערכת — נפתח כרטיס ונשלחת הדרישה, בפעולה אחת.
+     *
+     * מי שנאלץ לעצור, לעבור למסך לקוחות ולחזור, שולח בסוף בקשת תשלום בוואטסאפ
+     * בלי חשבונית עסקה ובלי מעקב.
+     */
+    public function test_a_demand_can_open_the_customer_it_is_addressed_to(): void
+    {
+        Queue::fake();
+        $this->actingAs(User::factory()->create());
+
+        Livewire::test(PaymentDemands::class)
+            ->callAction('newDemand', data: [
+                'new_customer' => true,
+                'new_name' => 'עסק חדש בע״מ',
+                'new_email' => 'new@example.co.il',
+                'new_business_number' => '515151515',
+                'description' => 'בניית אתר',
+                'items' => [],
+                'amount' => 1000,
+                'channel' => 'email',
+            ])
+            ->assertHasNoActionErrors();
+
+        $customer = Customer::where('email', 'new@example.co.il')->first();
+
+        $this->assertNotNull($customer);
+        $this->assertSame('עסק חדש בע״מ', $customer->name);
+        $this->assertSame('515151515', $customer->business_number);
+
+        Queue::assertPushed(SendPaymentLinkJob::class,
+            fn (SendPaymentLinkJob $job): bool => $job->customerId === $customer->id && $job->totalAgorot === 100000);
+    }
+
+    /**
+     * כתובת מייל שכבר במערכת מחזירה את הלקוח הקיים.
+     *
+     * כפילות בכרטיס לקוח היא כפילות בחיובים ובחשבוניות — ומי שממלא את הטופס
+     * אינו יודע, ואינו אמור לדעת, שהלקוח כבר שם.
+     */
+    public function test_a_known_email_reuses_the_customer_instead_of_duplicating_it(): void
+    {
+        Queue::fake();
+        $this->actingAs(User::factory()->create());
+
+        $existing = Customer::factory()->create(['email' => 'known@example.co.il']);
+
+        Livewire::test(PaymentDemands::class)
+            ->callAction('newDemand', data: [
+                'new_customer' => true,
+                'new_name' => 'שם אחר לגמרי',
+                'new_email' => 'known@example.co.il',
+                'description' => 'תשלום',
+                'items' => [],
+                'amount' => 100,
+                'channel' => 'email',
+            ])
+            ->assertHasNoActionErrors();
+
+        $this->assertSame(1, Customer::where('email', 'known@example.co.il')->count());
+        Queue::assertPushed(SendPaymentLinkJob::class,
+            fn (SendPaymentLinkJob $job): bool => $job->customerId === $existing->id);
+    }
+
+    /** סכום לא תקין לא פותח לקוח שאיש לא ביקש. */
+    public function test_an_invalid_amount_does_not_leave_a_customer_behind(): void
+    {
+        Queue::fake();
+        $this->actingAs(User::factory()->create());
+
+        Livewire::test(PaymentDemands::class)
+            ->callAction('newDemand', data: [
+                'new_customer' => true,
+                'new_name' => 'עסק חדש',
+                'new_email' => 'zero@example.co.il',
+                'description' => 'תשלום',
+                'items' => [],
+                'amount' => 0,
+                'channel' => 'email',
+            ]);
+
+        $this->assertSame(0, Customer::where('email', 'zero@example.co.il')->count());
+        Queue::assertNotPushed(SendPaymentLinkJob::class);
+    }
+
     public function test_the_table_lists_only_sent_demands(): void
     {
         $this->actingAs(User::factory()->create());
