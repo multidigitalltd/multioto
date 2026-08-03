@@ -9,6 +9,9 @@ use App\Services\Audit\Checks\Check;
 use App\Services\Audit\Checks\Discoverability;
 use App\Services\Audit\Checks\DomainHealth;
 use App\Services\Audit\Checks\LegalDocuments;
+use App\Services\Audit\Checks\Links;
+use App\Services\Audit\Checks\Measurement;
+use App\Services\Audit\Checks\MobileReadiness;
 use App\Services\Audit\Checks\ReadsPage;
 use App\Services\Audit\Checks\SecurityHeaders;
 use App\Services\Audit\Checks\Speed;
@@ -41,6 +44,9 @@ class SiteAuditor
         private Accessibility $accessibility,
         private DomainHealth $domain,
         private LegalDocuments $documents,
+        private Measurement $measurement,
+        private Links $links,
+        private MobileReadiness $mobile,
         private PublicTarget $target,
     ) {}
 
@@ -86,9 +92,12 @@ class SiteAuditor
             $this->headers,
             $this->wordpress,
             $this->speed,
+            $this->mobile,
             $this->discoverability,
             $this->accessibility,
             $this->documents,
+            $this->measurement,
+            $this->links,
             $this->domain,
         ];
     }

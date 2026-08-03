@@ -57,7 +57,7 @@ class SiteProbe
      * is the single most important thing this tool can report, and a throw
      * would turn it into an audit that produced nothing at all.
      */
-    public static function fetch(string $url, bool $follow = true): self
+    public static function fetch(string $url, bool $follow = true, ?string $agent = null): self
     {
         $started = hrtime(true);
         $guard = app(PublicTarget::class);
@@ -66,7 +66,7 @@ class SiteProbe
 
         try {
             for ($hop = 0; ; $hop++) {
-                $response = self::request($guard, $current);
+                $response = self::request($guard, $current, $agent);
                 $headers = self::normalise($response->headers());
                 $location = $follow ? self::redirect($response->status(), $headers, $current) : null;
 
@@ -187,7 +187,7 @@ class SiteProbe
      * whole point is that nothing is dialled except an address this guard has
      * already looked at.
      */
-    private static function request(PublicTarget $guard, string $url): Response
+    private static function request(PublicTarget $guard, string $url, ?string $agent = null): Response
     {
         $parts = parse_url($url);
         $host = (string) ($parts['host'] ?? '');
@@ -196,8 +196,10 @@ class SiteProbe
 
         $request = Http::withHeaders([
             // Announced honestly. A site that blocks us should block a name
-            // its owner can look up, not a browser we are pretending to be.
-            'User-Agent' => 'MultiotoSiteAudit/1.0 (+site health check)',
+            // its owner can look up, not a browser we are pretending to be —
+            // and when a check needs the phone's answer, the phone is named
+            // alongside us rather than instead of us.
+            'User-Agent' => $agent ?? 'MultiotoSiteAudit/1.0 (+site health check)',
             'Accept' => 'text/html,application/xhtml+xml',
         ])->timeout(self::TIMEOUT)->connectTimeout(8)->withOptions([
             // A certificate that does not verify is a FINDING, not a reason

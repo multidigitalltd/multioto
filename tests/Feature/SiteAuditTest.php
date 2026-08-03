@@ -15,6 +15,9 @@ use App\Services\Audit\Checks\Availability;
 use App\Services\Audit\Checks\Discoverability;
 use App\Services\Audit\Checks\DomainHealth;
 use App\Services\Audit\Checks\LegalDocuments;
+use App\Services\Audit\Checks\Links;
+use App\Services\Audit\Checks\Measurement;
+use App\Services\Audit\Checks\MobileReadiness;
 use App\Services\Audit\Checks\SecurityHeaders;
 use App\Services\Audit\Checks\Transport;
 use App\Services\Audit\PublicTarget;
@@ -800,6 +803,142 @@ class SiteAuditTest extends TestCase
         $titles = array_column(app(LegalDocuments::class)->run($this->contextFor('example.co.il')), 'title');
 
         $this->assertSame(['כל מסמכי החובה מקושרים מהדף הראשי'], $titles);
+    }
+
+    /**
+     * אתר בלי מדידה הוא אתר שכל החלטה לגביו היא ניחוש.
+     *
+     * הבדיקה שואלת אם יש מדידה כלשהי, לא איזו: לדרוש פיקסל של פייסבוק ממי שאינו
+     * מפרסם שם זו המלצה שנשמעת כמו מכירה.
+     */
+    public function test_a_site_with_no_analytics_is_told_it_cannot_measure_anything(): void
+    {
+        $this->bindTargetResolving(['93.184.216.34']);
+
+        Http::fake(['*' => Http::response('<html lang="he"><body>תוכן</body></html>', 200)]);
+
+        $titles = array_column(app(Measurement::class)->run($this->contextFor('example.co.il')), 'title');
+
+        $this->assertContains('אין באתר מערכת מדידה', $titles);
+    }
+
+    public function test_analytics_that_is_installed_is_recognised(): void
+    {
+        $this->bindTargetResolving(['93.184.216.34']);
+
+        Http::fake(['*' => Http::response(
+            '<html lang="he"><head><script src="https://www.googletagmanager.com/gtag/js?id=G-ABC"></script>'
+            .'</head><body></body></html>', 200,
+        )]);
+
+        $titles = array_column(app(Measurement::class)->run($this->contextFor('example.co.il')), 'title');
+
+        $this->assertContains('באתר מותקנת מערכת מדידה', $titles);
+    }
+
+    /**
+     * מעקב בלי באנר הסכמה הוא מעקב בלי רשות — אבל רק כשיש מעקב.
+     *
+     * אתר סטטי בלי שום כלי מעקב אינו חייב באנר, ולדרוש ממנו אחד זה לחשוף
+     * שהבדיקה סופרת רכיבים במקום לשאול שאלה.
+     */
+    public function test_tracking_without_consent_is_reported_and_tracking_free_pages_are_not(): void
+    {
+        $this->bindTargetResolving(['93.184.216.34']);
+
+        Http::fake(['*' => Http::response(
+            '<html lang="he"><head><script>fbq(\'init\', \'123\');</script></head>'
+            .'<body><a href="/privacy">מדיניות פרטיות</a><a href="/terms">תקנון</a>'
+            .'<a href="/a11y">הצהרת נגישות</a></body></html>', 200,
+        )]);
+
+        $tracked = array_column(app(LegalDocuments::class)->run($this->contextFor('example.co.il')), 'title');
+
+        $this->assertContains('האתר עוקב אחרי מבקרים בלי לבקש הסכמה', $tracked);
+    }
+
+    public function test_a_page_with_a_consent_banner_is_left_alone(): void
+    {
+        $this->bindTargetResolving(['93.184.216.34']);
+
+        Http::fake(['*' => Http::response(
+            '<html lang="he"><head><script>fbq(\'init\', \'123\');</script>'
+            .'<script src="https://consent.cookiebot.com/uc.js"></script></head>'
+            .'<body><a href="/privacy">מדיניות פרטיות</a><a href="/terms">תקנון</a>'
+            .'<a href="/a11y">הצהרת נגישות</a></body></html>', 200,
+        )]);
+
+        $titles = array_column(app(LegalDocuments::class)->run($this->contextFor('example.co.il')), 'title');
+
+        $this->assertNotContains('האתר עוקב אחרי מבקרים בלי לבקש הסכמה', $titles);
+    }
+
+    /**
+     * קישור שבור בדף הראשי — התקלה שבעל האתר הכי פחות סביר לגלות לבד.
+     *
+     * הוא מגיע לעמודים דרך הניהול, לא דרך התפריט. ודף שנחסם על ידי חומת אש אינו
+     * קישור שבור — זו אותה האשמה בתקלה שאינה קיימת, במקום אחר.
+     */
+    public function test_broken_links_are_found_and_blocked_pages_are_not_counted(): void
+    {
+        $this->bindTargetResolving(['93.184.216.34']);
+
+        Http::fake([
+            '*/missing' => Http::response('', 404),
+            '*/guarded' => Http::response('', 403),
+            '*' => Http::response(
+                '<html lang="he"><body>'
+                .'<a href="/about">אודות</a><a href="/missing">מחירון</a><a href="/guarded">אזור אישי</a>'
+                .'<a href="mailto:a@example.co.il">מייל</a><a href="#top">למעלה</a>'
+                .'</body></html>', 200,
+            ),
+        ]);
+
+        $findings = app(Links::class)->run($this->contextFor('example.co.il'));
+        $titles = array_column($findings, 'title');
+
+        $this->assertContains('יש בדף הראשי קישורים שבורים', $titles);
+
+        $evidence = $findings[0]->evidence;
+        $this->assertStringContainsString('/missing', (string) $evidence);
+        $this->assertStringNotContainsString('/guarded', (string) $evidence);
+    }
+
+    /**
+     * מובייל — מה שרוב המבקרים באמת רואים.
+     *
+     * אתר בלי viewport אינו "פחות יפה בנייד": הוא אתר שצריך לזום בו כדי לקרוא
+     * מילה, וגוגל מדרג לפי הגרסה הניידת.
+     */
+    public function test_a_site_with_no_viewport_is_told_it_is_not_mobile_ready(): void
+    {
+        $this->bindTargetResolving(['93.184.216.34']);
+
+        Http::fake(['*' => Http::response('<html lang="he"><head><title>ד</title></head><body></body></html>', 200)]);
+
+        $findings = app(MobileReadiness::class)->run($this->contextFor('example.co.il'));
+        $titles = array_column($findings, 'title');
+
+        $this->assertContains('האתר אינו מותאם למסך של טלפון', $titles);
+        $this->assertSame('critical', $findings[0]->severity);
+    }
+
+    /** והפניה של הטלפון לכתובת אחרת היא אתר נייד נפרד — פתרון מלפני עשור. */
+    public function test_a_separate_mobile_site_is_reported(): void
+    {
+        $this->bindTargetResolving(['93.184.216.34']);
+
+        Http::fake([
+            'https://example.co.il' => Http::sequence()
+                // הביקור הראשון הוא של הדפדפן הרגיל, השני של הטלפון.
+                ->push('<html lang="he"><head><meta name="viewport" content="width=device-width"></head><body></body></html>', 200)
+                ->push('', 301, ['Location' => 'https://m.example.co.il/']),
+            '*' => Http::response('<html lang="he"><body>גרסה ניידת</body></html>', 200),
+        ]);
+
+        $titles = array_column(app(MobileReadiness::class)->run($this->contextFor('example.co.il')), 'title');
+
+        $this->assertContains('לטלפון מוגשת גרסה נפרדת של האתר', $titles);
     }
 
     /** תשובה אינסופית אינה מפילה את העובד — הקריאה נעצרת בגבול. */

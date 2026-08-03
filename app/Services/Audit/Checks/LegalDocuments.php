@@ -4,6 +4,7 @@ namespace App\Services\Audit\Checks;
 
 use App\Services\Audit\AuditContext;
 use App\Services\Audit\Finding;
+use App\Services\Audit\Trackers;
 
 /**
  * המסמכים שאתר עסקי בישראל חייב לפרסם.
@@ -91,7 +92,33 @@ class LegalDocuments implements Check, ReadsPage
             $findings[] = Finding::ok($this->area(), 'כל מסמכי החובה מקושרים מהדף הראשי');
         }
 
-        return array_merge($findings, array_filter([$this->businessDetails($site, $store)]));
+        return array_merge($findings, array_filter([
+            $this->businessDetails($site, $store),
+            $this->cookieConsent($site),
+        ]));
+    }
+
+    /**
+     * באנר הסכמה — נשאל רק כשיש על מה להסכים.
+     *
+     * פיקסל של פייסבוק או אנליטיקס שרצים לפני שנשאלה שאלה הם מעקב בלי רשות, וזו
+     * חשיפה אמיתית. אבל אתר סטטי בלי שום כלי מעקב אינו חייב באנר, ולדרוש ממנו
+     * אחד זה גם להטריד וגם לחשוף שהבדיקה סופרת רכיבים במקום לשאול שאלה.
+     */
+    private function cookieConsent(AuditContext $site): ?Finding
+    {
+        $trackers = Trackers::measuring($site->markup());
+
+        if ($trackers === [] || Trackers::asksConsent($site->markup())) {
+            return null;
+        }
+
+        return Finding::warning(
+            $this->area(),
+            'האתר עוקב אחרי מבקרים בלי לבקש הסכמה',
+            'נמצאו כלי מעקב ('.implode(', ', $trackers).') שנטענים לפני שהמבקר נשאל דבר. איסוף מידע דרך עוגיות מחייב הסכמה, וזו גם דרישה של גוגל ופייסבוק ממי שמריץ אצלם פרסום.',
+            'להתקין באנר הסכמה לעוגיות שחוסם את כלי המעקב עד לאישור, ולקשר ממנו למדיניות הפרטיות.',
+        );
     }
 
     /**
