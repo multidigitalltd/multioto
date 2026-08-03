@@ -1,0 +1,76 @@
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+
+/**
+ * One outside-in inspection of a website and everything it found.
+ *
+ * The findings are a snapshot, never re-derived: the PDF handed to a customer
+ * says what was true on the day it was produced, and a document that quietly
+ * changed when it was reopened would be worse than no document.
+ */
+class SiteAudit extends Model
+{
+    use HasFactory;
+
+    /** Ordered worst-first — the order the report is read in. */
+    public const SEVERITIES = ['critical', 'warning', 'notice', 'ok'];
+
+    public const STATUS_RUNNING = 'running';
+
+    public const STATUS_COMPLETED = 'completed';
+
+    public const STATUS_FAILED = 'failed';
+
+    protected $fillable = [
+        'url', 'host', 'site_id', 'user_id', 'status', 'error', 'findings', 'summary', 'finished_at',
+    ];
+
+    protected function casts(): array
+    {
+        return [
+            'findings' => 'array',
+            'summary' => 'array',
+            'finished_at' => 'datetime',
+        ];
+    }
+
+    public function site(): BelongsTo
+    {
+        return $this->belongsTo(Site::class);
+    }
+
+    public function user(): BelongsTo
+    {
+        return $this->belongsTo(User::class);
+    }
+
+    /**
+     * The findings of one severity, in the order they were produced.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function of(string $severity): array
+    {
+        return array_values(array_filter(
+            (array) $this->findings,
+            fn (array $finding): bool => ($finding['severity'] ?? '') === $severity,
+        ));
+    }
+
+    /** How many findings of a severity — 0 when the audit never finished. */
+    public function count(string $severity): int
+    {
+        return (int) (($this->summary['counts'][$severity] ?? 0));
+    }
+
+    /** Everything that needs doing, worst first. Whatever passed is not it. */
+    public function problems(): array
+    {
+        return array_merge($this->of('critical'), $this->of('warning'), $this->of('notice'));
+    }
+}
