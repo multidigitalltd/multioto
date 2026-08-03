@@ -13,7 +13,7 @@ use App\Services\Audit\Finding;
  * report says so. The structural findings — no compression, scripts that block
  * rendering — are facts about the page rather than about the network.
  */
-class Speed implements Check
+class Speed implements Check, ReadsPage
 {
     private const SLOW_MS = 1500;
 

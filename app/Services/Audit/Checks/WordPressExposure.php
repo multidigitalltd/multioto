@@ -12,7 +12,7 @@ use App\Services\Audit\Finding;
  * worth reporting: the owner did not decide to publish the list of usernames,
  * it simply is published, and it has been since the day the site went up.
  */
-class WordPressExposure implements Check
+class WordPressExposure implements Check, ReadsPage
 {
     public function area(): string
     {

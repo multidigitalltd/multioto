@@ -10,6 +10,7 @@ use App\Models\User;
 use App\Services\Audit\AuditContext;
 use App\Services\Audit\AuditReport;
 use App\Services\Audit\CertificateInspector;
+use App\Services\Audit\Checks\Accessibility;
 use App\Services\Audit\Checks\Availability;
 use App\Services\Audit\Checks\Discoverability;
 use App\Services\Audit\Checks\DomainHealth;
@@ -19,6 +20,7 @@ use App\Services\Audit\PublicTarget;
 use App\Services\Audit\SiteAuditor;
 use App\Services\Audit\SiteProbe;
 use App\Services\Monitoring\DomainExpiry;
+use App\Services\Security\DnsLookup;
 use App\Services\Security\DomainReputationClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\ConnectionException;
@@ -434,9 +436,9 @@ class SiteAuditTest extends TestCase
      */
     public function test_spf_is_looked_for_on_the_domain_and_not_only_on_the_subdomain(): void
     {
-        $health = $this->domainHealthWithTxt([
-            'example.co.il' => [['txt' => 'v=spf1 include:_spf.example.com ~all']],
-            'shop.example.co.il' => [],
+        $health = $this->domainHealthWithDns([
+            'example.co.il|'.DNS_TXT => [['txt' => 'v=spf1 include:_spf.example.com ~all']],
+            'shop.example.co.il|'.DNS_TXT => [],
         ]);
 
         $titles = array_column($health->run($this->contextFor('shop.example.co.il')), 'title');
@@ -447,23 +449,70 @@ class SiteAuditTest extends TestCase
     /** ושאילתה שלא נענתה אינה "אין רשומה" — היא "לא נבדק". */
     public function test_a_dns_lookup_that_failed_is_not_reported_as_a_missing_record(): void
     {
-        $health = $this->domainHealthWithTxt([]);
+        $health = $this->domainHealthWithDns([]);
 
         $titles = array_column($health->run($this->contextFor('example.co.il')), 'title');
 
         $this->assertContains('לא ניתן היה לבדוק את הגדרת ה-SPF', $titles);
         $this->assertNotContains('אין הגדרת SPF לדומיין', $titles);
+        // וגם השאר שותקים — לא נשאלו, אז אין להם מה לומר.
+        $this->assertNotContains('אין הגדרת DMARC לדומיין', $titles);
+        $this->assertNotContains('לדומיין אין הגדרת דואר (MX)', $titles);
     }
 
     /**
-     * A DomainHealth whose TXT answers are decided here.
+     * הדומיין נבדק גם על מה שמחזיק את הדואר ואת האמון בו.
      *
-     * A name missing from the map is a lookup that did NOT answer — which is the
-     * distinction under test, and one real DNS cannot be asked to reproduce.
+     * SPF מסמן, DMARC מורה לחסום; MX הוא השאלה אם מייל לדומיין מגיע בכלל
+     * לאנשהו; CAA הוא מי רשאי להנפיק תעודה בשמו; ושרת שמות יחיד הוא נקודת
+     * כשל שמפילה גם אתר תקין לגמרי.
+     */
+    public function test_the_domain_is_judged_on_its_mail_and_its_trust_records(): void
+    {
+        $health = $this->domainHealthWithDns([
+            'example.co.il|'.DNS_TXT => [['txt' => 'v=spf1 -all']],
+            '_dmarc.example.co.il|'.DNS_TXT => [],
+            'example.co.il|'.DNS_MX => [],
+            'example.co.il|'.DNS_CAA => [],
+            'example.co.il|'.DNS_NS => [['target' => 'ns1.example.net']],
+        ]);
+
+        $titles = array_column($health->run($this->contextFor('example.co.il')), 'title');
+
+        $this->assertContains('אין הגדרת DMARC לדומיין', $titles);
+        $this->assertContains('לדומיין אין הגדרת דואר (MX)', $titles);
+        $this->assertContains('אין הגבלה על מי רשאי להנפיק תעודת אבטחה לדומיין', $titles);
+        $this->assertContains('לדומיין מוגדר שרת שמות אחד בלבד', $titles);
+    }
+
+    /** DMARC שרק מדווח אינו DMARC שחוסם — ונאמר כך. */
+    public function test_a_dmarc_policy_of_none_is_reported_as_not_yet_blocking(): void
+    {
+        $health = $this->domainHealthWithDns([
+            'example.co.il|'.DNS_TXT => [['txt' => 'v=spf1 -all']],
+            '_dmarc.example.co.il|'.DNS_TXT => [['txt' => 'v=DMARC1; p=none; rua=mailto:a@example.co.il']],
+            'example.co.il|'.DNS_MX => [['target' => 'mail.example.co.il']],
+            'example.co.il|'.DNS_CAA => [['value' => 'letsencrypt.org']],
+            'example.co.il|'.DNS_NS => [['target' => 'ns1.example.net'], ['target' => 'ns2.example.net']],
+        ]);
+
+        $titles = array_column($health->run($this->contextFor('example.co.il')), 'title');
+
+        $this->assertContains('הגדרת ה-DMARC אינה חוסמת התחזות', $titles);
+        $this->assertNotContains('אין הגדרת DMARC לדומיין', $titles);
+    }
+
+    /**
+     * A DomainHealth whose DNS answers are decided here.
+     *
+     * Keyed "name|type" so one map can settle SPF, DMARC, MX, CAA and NS at
+     * once. A key that is missing is a lookup that did NOT answer, and one
+     * mapped to [] is an authoritative "nothing published" — the distinction the
+     * whole check turns on, and one real DNS cannot be asked to reproduce.
      *
      * @param  array<string, array<int, array<string, mixed>>>  $records
      */
-    private function domainHealthWithTxt(array $records): DomainHealth
+    private function domainHealthWithDns(array $records): DomainHealth
     {
         $this->bindTargetResolving(['93.184.216.34']);
         Http::fake(['*' => Http::response('<html lang="he"><body></body></html>', 200)]);
@@ -476,17 +525,21 @@ class SiteAuditTest extends TestCase
             'sources' => ['urlhaus' => true], 'listings' => [], 'errors' => [],
         ]);
 
-        return new class($expiry, $reputation, $records) extends DomainHealth
+        return new class($expiry, $reputation, app(DnsLookup::class), $records) extends DomainHealth
         {
             /** @param array<string, array<int, array<string, mixed>>> $records */
-            public function __construct(DomainExpiry $expiry, DomainReputationClient $reputation, private array $records)
-            {
-                parent::__construct($expiry, $reputation);
+            public function __construct(
+                DomainExpiry $expiry,
+                DomainReputationClient $reputation,
+                DnsLookup $dns,
+                private array $answers,
+            ) {
+                parent::__construct($expiry, $reputation, $dns);
             }
 
-            protected function txt(string $domain): ?array
+            protected function records(string $domain, int $type): ?array
             {
-                return $this->records[$domain] ?? null;
+                return $this->answers[$domain.'|'.$type] ?? null;
             }
         };
     }
@@ -588,6 +641,108 @@ class SiteAuditTest extends TestCase
 
         $this->assertNotContains('ניתן להטמיע את האתר בתוך אתר אחר', $titles);
         $this->assertContains('הגנות הדפדפן מוגדרות', $titles);
+    }
+
+    /**
+     * 403 מחומת אש אינו אתר שבור — הוא אתר שלא נתן לנו להיכנס.
+     *
+     * זו ההבחנה שמפרידה בין דוח שאומר "האתר שלך מקולקל" לבין דוח שאומר "האתר
+     * שלך לא נתן לנו להסתכל". הראשון, כשהוא נאמר על אתר תקין, הוא השורה שמפילה
+     * את האמון בכל המסמך — ובמקרה הזה גם כל בדיקות התוכן היו מדווחות על דף
+     * החסימה: בלי כותרת, בלי H1, בלי טקסט חלופי ובלי הצהרת נגישות.
+     */
+    public function test_a_firewall_block_is_not_reported_as_a_broken_site(): void
+    {
+        $this->fakeCollaborators();
+
+        Http::fake(['*' => Http::response(
+            '<html><head><title>Attention Required! | Cloudflare</title></head>'
+            .'<body>Please enable cookies. Cloudflare Ray ID: 8a2b</body></html>',
+            403,
+            ['CF-RAY' => '8a2b3c4d', 'Server' => 'cloudflare'],
+        )]);
+
+        $result = $this->auditorFor(['93.184.216.34'])->run('example.com');
+        $titles = array_column($result['findings'], 'title');
+
+        $this->assertContains('האתר חסם את הבדיקה', $titles);
+        $this->assertNotContains('האתר מחזיר שגיאה 403', $titles);
+
+        // ובדיקות התוכן עמדו מהצד — ואמרו שכך עשו.
+        $this->assertContains('לא נבדק — האתר חסם את הבדיקה', $titles);
+        $this->assertNotContains('לדף הראשי אין כותרת', $titles);
+        $this->assertNotContains('לא נמצאה הצהרת נגישות', $titles);
+        $this->assertNotContains('אין כותרת ראשית (H1) בדף', $titles);
+
+        // חסום ולא-זמין הן שתי תשובות שונות, והדוח יודע להבחין ביניהן.
+        $this->assertTrue($result['summary']['blocked']);
+    }
+
+    /** אתר מוגן בסיסמה נאמר בשמו, ולא כתקלה. */
+    public function test_a_password_protected_site_is_named_as_such(): void
+    {
+        $this->fakeCollaborators();
+
+        Http::fake(['*' => Http::response('', 401, ['WWW-Authenticate' => 'Basic realm="staging"'])]);
+
+        $titles = array_column($this->auditorFor(['93.184.216.34'])->run('example.com')['findings'], 'title');
+
+        $this->assertContains('האתר מוגן בסיסמה', $titles);
+    }
+
+    /**
+     * נגישות — מה שקורא מסך וגולש מקלדת נתקלים בו בפועל.
+     *
+     * שדה בלי תווית הוא טופס יצירת קשר שלא נשלח; אתר שאוסר זום נועל בחוץ את מי
+     * שצריך להגדיל טקסט; ועברית בלי dir="rtl" נשברת באמצע משפט.
+     */
+    public function test_the_accessibility_check_reads_forms_zoom_and_direction(): void
+    {
+        $this->bindTargetResolving(['93.184.216.34']);
+
+        Http::fake(['*' => Http::response(
+            '<html lang="he"><head>'
+            .'<meta name="viewport" content="width=device-width, user-scalable=no">'
+            .'</head><body><form>'
+            .'<input type="text" placeholder="שם מלא"><input type="email" placeholder="אימייל">'
+            .'<input type="submit" value="שליחה"></form>'
+            .'<iframe src="/map"></iframe>'
+            .'<a href="/f"><i class="icon"></i></a><a href="/t"><span class="icon"></span></a>'
+            .'</body></html>', 200,
+        )]);
+
+        $titles = array_column(app(Accessibility::class)->run($this->contextFor('example.co.il')), 'title');
+
+        $this->assertContains('לשדות בטופס אין תווית', $titles);
+        $this->assertContains('האתר מונע הגדלה במכשירים ניידים', $titles);
+        $this->assertContains('האתר בעברית אך אינו מוגדר ככיוון ימין-לשמאל', $titles);
+        $this->assertContains('לתוכן מוטמע בדף אין כותרת', $titles);
+        $this->assertContains('קישורים ללא טקסט כלל', $titles);
+        $this->assertContains('אין אזור תוכן ראשי מוגדר בדף', $titles);
+    }
+
+    /** ואתר שעשה את זה נכון אינו מקבל אף אחד מהם. */
+    public function test_an_accessible_page_collects_none_of_those_findings(): void
+    {
+        $this->bindTargetResolving(['93.184.216.34']);
+
+        Http::fake(['*' => Http::response(
+            '<html lang="he" dir="rtl"><head>'
+            .'<meta name="viewport" content="width=device-width, initial-scale=1">'
+            .'</head><body><main><form>'
+            .'<label for="n">שם מלא</label><input type="text" id="n">'
+            .'<input type="email" aria-label="אימייל">'
+            .'</form><iframe src="/map" title="מפת הגעה"></iframe></main></body></html>', 200,
+        )]);
+
+        $titles = array_column(app(Accessibility::class)->run($this->contextFor('example.co.il')), 'title');
+
+        $this->assertNotContains('לשדות בטופס אין תווית', $titles);
+        $this->assertNotContains('האתר מונע הגדלה במכשירים ניידים', $titles);
+        $this->assertNotContains('האתר בעברית אך אינו מוגדר ככיוון ימין-לשמאל', $titles);
+        $this->assertNotContains('לתוכן מוטמע בדף אין כותרת', $titles);
+        $this->assertNotContains('אין אזור תוכן ראשי מוגדר בדף', $titles);
+        $this->assertContains('לכל שדות הטופס יש תווית', $titles);
     }
 
     /** תשובה אינסופית אינה מפילה את העובד — הקריאה נעצרת בגבול. */

@@ -140,14 +140,20 @@ class SiteAudits extends Page implements HasForms, HasTable
                 Tables\Columns\TextColumn::make('status')
                     ->label('סטטוס')
                     ->badge()
-                    ->formatStateUsing(fn (string $state): string => match ($state) {
-                        SiteAudit::STATUS_RUNNING => 'בבדיקה',
-                        SiteAudit::STATUS_COMPLETED => 'הושלמה',
+                    // "נחסמה" is not a failure and not a pass: the site answered,
+                    // but with a firewall page, so most of the audit could not
+                    // run. A reader not told that reads a short list of findings
+                    // as a short list of problems.
+                    ->formatStateUsing(fn (string $state, SiteAudit $record): string => match (true) {
+                        $state === SiteAudit::STATUS_RUNNING => 'בבדיקה',
+                        $state === SiteAudit::STATUS_COMPLETED && $record->blocked() => 'נחסמה',
+                        $state === SiteAudit::STATUS_COMPLETED => 'הושלמה',
                         default => 'נכשלה',
                     })
-                    ->color(fn (string $state): string => match ($state) {
-                        SiteAudit::STATUS_COMPLETED => 'success',
-                        SiteAudit::STATUS_FAILED => 'danger',
+                    ->color(fn (string $state, SiteAudit $record): string => match (true) {
+                        $state === SiteAudit::STATUS_COMPLETED && $record->blocked() => 'warning',
+                        $state === SiteAudit::STATUS_COMPLETED => 'success',
+                        $state === SiteAudit::STATUS_FAILED => 'danger',
                         default => 'warning',
                     }),
                 Tables\Columns\TextColumn::make('critical')

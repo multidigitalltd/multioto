@@ -72,6 +72,12 @@ class AuditContext
         return array_values($origins);
     }
 
+    /** Whether the site answered with a gate instead of a page. */
+    public function blocked(): bool
+    {
+        return $this->home->blocked();
+    }
+
     public function servesHttps(): bool
     {
         return str_starts_with(mb_strtolower($this->base()), 'https://');

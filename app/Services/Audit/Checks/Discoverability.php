@@ -6,7 +6,7 @@ use App\Services\Audit\AuditContext;
 use App\Services\Audit\Finding;
 
 /** What a search engine, and a link shared in WhatsApp, make of the page. */
-class Discoverability implements Check
+class Discoverability implements Check, ReadsPage
 {
     public function area(): string
     {

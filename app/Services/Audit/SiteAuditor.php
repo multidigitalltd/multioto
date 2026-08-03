@@ -8,6 +8,7 @@ use App\Services\Audit\Checks\Availability;
 use App\Services\Audit\Checks\Check;
 use App\Services\Audit\Checks\Discoverability;
 use App\Services\Audit\Checks\DomainHealth;
+use App\Services\Audit\Checks\ReadsPage;
 use App\Services\Audit\Checks\SecurityHeaders;
 use App\Services\Audit\Checks\Speed;
 use App\Services\Audit\Checks\Transport;
@@ -58,7 +59,15 @@ class SiteAuditor
         $findings = [];
 
         foreach ($this->checks() as $check) {
-            foreach ($this->safely($check, $site) as $finding) {
+            // A firewall's block page has no title, no H1, no alt text and no
+            // accessibility statement. Running the page checks against it would
+            // fill the report with faults belonging to the firewall and blame
+            // them on the site — so they stand down, and say that they did.
+            $results = $site->blocked() && $check instanceof ReadsPage
+                ? [$this->standDown($check)]
+                : $this->safely($check, $site);
+
+            foreach ($results as $finding) {
                 $findings[] = $finding->toArray();
             }
         }
@@ -79,6 +88,23 @@ class SiteAuditor
             $this->accessibility,
             $this->domain,
         ];
+    }
+
+    /**
+     * A check that was not run, said out loud.
+     *
+     * Silence would be the worse answer: a report missing a section reads
+     * exactly like a report where that section was fine, and this one is being
+     * handed to somebody deciding whether to trust us with their site.
+     */
+    private function standDown(Check $check): Finding
+    {
+        return Finding::notice(
+            $check->area(),
+            'לא נבדק — האתר חסם את הבדיקה',
+            'חומת האש של האתר לא נתנה לבדיקה לקרוא את תוכן הדף, ולכן אי אפשר לומר דבר על התחום הזה — לא לטובה ולא לרעה.',
+            'לבדוק ידנית, או להתיר זמנית בחומת האש את הכתובת שממנה רצה הבדיקה ולהריץ שוב.',
+        );
     }
 
     /**
@@ -141,6 +167,10 @@ class SiteAuditor
             'final_url' => $site->home->finalUrl,
             'response_ms' => $site->home->ms,
             'reachable' => $site->home->reachable(),
+            // Kept apart from `reachable` on purpose: a site that turned the
+            // check away is not a site that is down, and the report must be
+            // able to tell the reader which of the two it is looking at.
+            'blocked' => $site->blocked(),
         ];
     }
 }

@@ -29,6 +29,13 @@ class Availability implements Check
             )];
         }
 
+        // Asked before the status is read as a fault, because it is not one.
+        // The second name would be refused by the same firewall, so checking it
+        // would only add a second wrong finding to the first.
+        if ($home->blocked()) {
+            return [$this->refused($site)];
+        }
+
         $findings = [];
 
         if ($home->status !== null && $home->status >= 400) {
@@ -44,6 +51,40 @@ class Availability implements Check
         }
 
         return array_merge($findings, $this->bothNames($site));
+    }
+
+    /**
+     * האתר לא נשבר — הוא פשוט לא נתן לנו להיכנס.
+     *
+     * חומת אש (קלאודפלייר, סוקורי וכדומה) שחוסמת בקשה אוטומטית משרת היא הסיבה
+     * הסבירה ביותר לכך שאתר בריא לגמרי עונה לנו בשגיאה. המבקר שנדחה כאן הוא
+     * אנחנו, לא הלקוח — ולכתוב לבעל האתר "האתר שלך מחזיר 403" זו האשמה בתקלה
+     * שאין לו, במסמך שכל השאר בו נשען על האמון שהשורה הזו הורסת.
+     */
+    private function refused(AuditContext $site): Finding
+    {
+        $guard = $site->home->guard();
+        $evidence = 'HTTP '.$site->home->status.($guard !== null ? ' · '.$guard : '');
+
+        if ($site->home->status === 401) {
+            return Finding::notice(
+                $this->area(),
+                'האתר מוגן בסיסמה',
+                'הכתובת מבקשת שם משתמש וסיסמה לפני שהיא מציגה דבר. זה תקין באתר בבנייה או בסביבת בדיקות, אך המשמעות היא שאיש — כולל גוגל — אינו רואה אותו.',
+                'אם זו הגרסה החיה, להסיר את ההגנה; אם לא, לבדוק את הכתובת של האתר החי.',
+                $evidence,
+            );
+        }
+
+        return Finding::notice(
+            $this->area(),
+            'האתר חסם את הבדיקה',
+            'חומת האש של האתר'.($guard !== null ? " ({$guard})" : '').' דחתה את הפנייה שלנו לפני שהגיעה לאתר. '
+                .'ברוב המקרים זה לא אומר דבר על תקינות האתר — כך בדיוק אמורה חומת אש להתנהג מול פנייה אוטומטית משרת. '
+                .'המשמעות היא שהבדיקות שקוראות את תוכן הדף לא יכלו להתבצע.',
+            'לבדוק ידנית בדפדפן, או להתיר זמנית בחומת האש את הכתובת שממנה רצה הבדיקה ולהריץ שוב.',
+            $evidence,
+        );
     }
 
     /**

@@ -47,6 +47,21 @@ class DnsLookup
         ];
     }
 
+    /**
+     * Raw records of one type, or null when the lookup itself did not answer.
+     *
+     * Public because callers outside the snapshot/diff flow need types this
+     * class does not normalise (TXT, CAA) and, more importantly, need the same
+     * null-versus-empty discipline: an empty answer means "nothing published",
+     * and a resolver that failed means nothing at all.
+     *
+     * @return ?array<int, array<string, mixed>>
+     */
+    public function lookup(string $domain, int $type): ?array
+    {
+        return $this->query(self::host($domain), $type);
+    }
+
     /** @return ?list<string> */
     protected function values(string $domain, int $type, string $field, ?string $priorityField = null): ?array
     {

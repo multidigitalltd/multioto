@@ -110,6 +110,64 @@ class SiteProbe
         return $this->error === null && $this->status !== null && $this->status < 400;
     }
 
+    /**
+     * Statuses that mean "not for you" rather than "not working".
+     *
+     * A firewall refusing an automated request from a datacentre is the single
+     * most likely reason a perfectly healthy site answers us with an error, and
+     * the visitor it turns away is us — not the customer.
+     */
+    private const GATES = [401, 403, 406, 409, 418, 429];
+
+    /** Fingerprints of the things that sit in front of sites and say no. */
+    private const GUARDS = [
+        'Cloudflare' => ['cf-ray', 'cf-mitigated', 'attention required', 'just a moment', 'cloudflare ray id'],
+        'Sucuri' => ['x-sucuri-id', 'x-sucuri-block', 'sucuri website firewall'],
+        'Imperva' => ['x-iinfo', 'incap_ses', 'request unsuccessful'],
+        'Akamai' => ['akamaighost', 'akamai reference'],
+        'Wordfence' => ['wordfence'],
+        'ModSecurity' => ['mod_security', 'modsecurity'],
+        'AWS WAF' => ['x-amzn-waf', 'awselb/'],
+    ];
+
+    /**
+     * Whether the answer is a gate rather than the site.
+     *
+     * This distinction is the difference between a report that says "your site
+     * is broken" and one that says "your site would not let us look" — and the
+     * first, said about a site that is fine, is the finding that discredits the
+     * whole document.
+     */
+    public function blocked(): bool
+    {
+        if ($this->status === null) {
+            return false;
+        }
+
+        return in_array($this->status, self::GATES, true)
+            || ($this->status >= 400 && $this->guard() !== null);
+    }
+
+    /** Which gatekeeper answered, when one announces itself. */
+    public function guard(): ?string
+    {
+        $announced = mb_strtolower(implode(' ', array_merge(
+            array_keys($this->headers),
+            array_merge(...array_values($this->headers) ?: [[]]),
+            [mb_substr($this->body, 0, 4000)],
+        )));
+
+        foreach (self::GUARDS as $name => $signs) {
+            foreach ($signs as $sign) {
+                if (str_contains($announced, $sign)) {
+                    return $name;
+                }
+            }
+        }
+
+        return null;
+    }
+
     /** A header's first value, case-insensitively, or null. */
     public function header(string $name): ?string
     {
