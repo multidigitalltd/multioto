@@ -121,7 +121,10 @@ class Discoverability implements Check
         preg_match_all('#<meta\b[^>]*>#i', $markup, $tags);
 
         foreach ($tags[0] as $tag) {
-            $named = preg_match('#\b'.$attribute.'\s*=\s*(["\']?)'.preg_quote($value, '#').'\1[\s/>]#i', $tag.' ') === 1;
+            // (?<![-\w]) and not \b: \b would also match the tail of data-name=,
+            // and a tag matched by the wrong attribute is the same false finding
+            // by another route.
+            $named = preg_match('#(?<![-\w])'.$attribute.'\s*=\s*(["\']?)'.preg_quote($value, '#').'\1[\s/>]#i', $tag.' ') === 1;
 
             if (! $named || preg_match('#\bcontent\s*=\s*(["\'])(.*?)\1#is', $tag, $found) !== 1) {
                 continue;
