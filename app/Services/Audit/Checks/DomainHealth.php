@@ -4,6 +4,7 @@ namespace App\Services\Audit\Checks;
 
 use App\Services\Audit\AuditContext;
 use App\Services\Audit\Finding;
+use App\Services\Audit\Hostname;
 use App\Services\Monitoring\DomainExpiry;
 use App\Services\Security\DomainReputationClient;
 
@@ -123,16 +124,38 @@ class DomainHealth implements Check
      */
     private function mailFindings(AuditContext $site): array
     {
-        // On the mail domain, not on the address that was typed. SPF lives on
-        // example.com while the site is at www.example.com, and asking the
-        // wrong name produces a confident warning about a policy that exists.
-        $domain = preg_replace('/^www\./i', '', $site->host) ?? $site->host;
+        // Asked of the address itself AND of the domain it belongs to. A policy
+        // is published where the mail is sent from — usually example.com, while
+        // the site sits at www.example.com or shop.example.com — and asking only
+        // the name that was typed produces a confident warning about a record
+        // that exists and is easy to go and look at.
+        $names = array_unique([mb_strtolower($site->host), Hostname::registrable($site->host)]);
+        $answered = false;
 
-        $records = rescue(fn (): array => (array) dns_get_record($domain, DNS_TXT), [], report: false);
-        $texts = mb_strtolower(implode(' ', array_column($records, 'txt')));
+        foreach ($names as $name) {
+            $records = $this->txt($name);
 
-        if (str_contains($texts, 'v=spf1')) {
-            return [];
+            if ($records === null) {
+                continue;
+            }
+
+            $answered = true;
+
+            if (str_contains(mb_strtolower(implode(' ', array_column($records, 'txt'))), 'v=spf1')) {
+                return [];
+            }
+        }
+
+        // No answer at all is not an answer of "no record". A resolver that
+        // timed out and a domain with nothing published look identical from
+        // here, and only one of them is somebody's fault.
+        if (! $answered) {
+            return [Finding::notice(
+                $this->area(),
+                'לא ניתן היה לבדוק את הגדרת ה-SPF',
+                'שאילתת ה-DNS לרשומות הטקסט של הדומיין לא נענתה בזמן הבדיקה. אין בכך כדי לומר שאין SPF — פשוט לא נבדק.',
+                'לנסות שוב מאוחר יותר, או לבדוק ידנית מול ספק ה-DNS.',
+            )];
         }
 
         return [Finding::warning(
@@ -141,5 +164,21 @@ class DomainHealth implements Check
             'בלי SPF כל אחד יכול לשלוח מייל שנראה כאילו הגיע מהדומיין הזה, והמיילים שאתם שולחים נוטים יותר להיחסם כספאם.',
             'להוסיף רשומת SPF ל-DNS, ואחריה DKIM ו-DMARC.',
         )];
+    }
+
+    /**
+     * TXT records for a name — null when the lookup itself did not answer.
+     *
+     * Its own method for the distinction it keeps: `dns_get_record` returns an
+     * empty array for "nothing published" and false for "could not ask", and a
+     * cast flattens the two into the same thing.
+     *
+     * @return array<int, array<string, mixed>>|null
+     */
+    protected function txt(string $domain): ?array
+    {
+        $records = rescue(fn () => @dns_get_record($domain, DNS_TXT), false, report: false);
+
+        return $records === false ? null : (array) $records;
     }
 }

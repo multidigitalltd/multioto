@@ -26,42 +26,53 @@ class CertificateInspector
      */
     public function inspect(string $host, int $port = 443): array
     {
-        $offered = $this->handshake($host, verify: false, port: $port);
-
-        if (! $offered['connected']) {
-            return ['reachable' => false, 'trusted' => false, 'days_left' => null, 'error' => $offered['error']];
+        // Every approved address is tried, not only the first. A dual-stack name
+        // whose IPv6 address is dead while its IPv4 one serves the site is
+        // ordinary, and reporting "the certificate could not be checked" for a
+        // site that a browser opens without complaint is worse than saying
+        // nothing: it sends somebody to look for a fault that is not there.
+        try {
+            $addresses = $this->target->addresses($host);
+        } catch (\Throwable $e) {
+            return ['reachable' => false, 'trusted' => false, 'days_left' => null, 'error' => mb_substr($e->getMessage(), 0, 200)];
         }
 
-        $verified = $this->handshake($host, verify: true, port: $port);
+        $failure = null;
 
-        return [
-            'reachable' => true,
-            'trusted' => $verified['connected'],
-            'days_left' => $offered['days_left'],
-            'error' => $verified['connected'] ? null : $verified['error'],
-        ];
+        foreach ($addresses as $address) {
+            $offered = $this->handshake($host, $address, verify: false, port: $port);
+
+            if (! $offered['connected']) {
+                $failure ??= $offered['error'];
+
+                continue;
+            }
+
+            // Verified against the SAME address, so both answers describe one
+            // endpoint — two addresses can carry two different certificates.
+            $verified = $this->handshake($host, $address, verify: true, port: $port);
+
+            return [
+                'reachable' => true,
+                'trusted' => $verified['connected'],
+                'days_left' => $offered['days_left'],
+                'error' => $verified['connected'] ? null : $verified['error'],
+            ];
+        }
+
+        return ['reachable' => false, 'trusted' => false, 'days_left' => null, 'error' => $failure];
     }
 
     /**
      * @return array{connected: bool, days_left: ?int, error: ?string}
      */
-    protected function handshake(string $host, bool $verify, int $port = 443): array
+    protected function handshake(string $host, string $address, bool $verify, int $port = 443): array
     {
         // The socket goes to an address the guard approved, while the hostname
         // stays the TLS peer name — so SNI, the name check and the report are all
-        // about the site. Looking the name up again here would reopen precisely
-        // the hole the fetcher closed: the second answer can point inwards, and
-        // this connection would follow it.
-        try {
-            $address = $this->target->addresses($host)[0] ?? null;
-        } catch (\Throwable $e) {
-            return ['connected' => false, 'days_left' => null, 'error' => mb_substr($e->getMessage(), 0, 200)];
-        }
-
-        if ($address === null) {
-            return ['connected' => false, 'days_left' => null, 'error' => 'לא נמצאה כתובת לדומיין.'];
-        }
-
+        // about the site. Looking the name up here would reopen precisely the
+        // hole the fetcher closed: the second answer can point inwards, and this
+        // connection would follow it.
         $context = stream_context_create(['ssl' => [
             'capture_peer_cert' => true,
             'verify_peer' => $verify,

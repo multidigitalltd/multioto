@@ -165,8 +165,13 @@ class SiteProbe
     {
         $addresses = $guard->addresses($host);
 
-        if (! defined('CURLOPT_RESOLVE')) {
-            return $request;
+        // Without curl there is no way to say "this name, that address", and the
+        // client would look the name up again on its own. Refusing is the only
+        // honest answer: an audit that did not run is a visible failure, while
+        // one that ran unpinned is the hole this guard exists to close, with
+        // nothing on screen to say so.
+        if (! extension_loaded('curl') || ! defined('CURLOPT_RESOLVE')) {
+            throw new RuntimeException('לא ניתן לאבטח את החיבור לאתר (חסרה הרחבת curl ב-PHP).');
         }
 
         $literal = array_map(

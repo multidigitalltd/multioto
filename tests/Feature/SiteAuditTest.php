@@ -80,7 +80,7 @@ class SiteAuditTest extends TestCase
      */
     public function test_an_address_that_is_routable_but_not_public_is_refused(): void
     {
-        foreach (['100.64.0.1', '198.18.0.1', '192.0.2.5', '64:ff9b::7f00:1'] as $address) {
+        foreach (['100.64.0.1', '198.18.0.1', '192.0.2.5', '64:ff9b::7f00:1', '2001:2::1', '3fff::1'] as $address) {
             $this->assertFalse(
                 $this->targetResolving([$address])->allows('somewhere.example.com'),
                 $address.' התקבלה ככתובת פומבית',
@@ -389,6 +389,105 @@ class SiteAuditTest extends TestCase
 
         $this->assertSame(['ssl://93.184.216.34:443'], $inspector->dialled);
         $this->assertFalse($result['reachable']);
+    }
+
+    /**
+     * שם עם כמה כתובות — מנסים את כולן.
+     *
+     * כתובת IPv6 מתה לצד IPv4 שמגישה את האתר היא מצב רגיל לגמרי, ולדווח
+     * "לא ניתן לבדוק את התעודה" על אתר שהדפדפן פותח בלי היסוס זה לשלוח מישהו
+     * לחפש תקלה שאין.
+     */
+    public function test_every_approved_address_is_tried_for_the_certificate(): void
+    {
+        $this->bindTargetResolving(['2606:2800:220::1', '93.184.216.34']);
+
+        $inspector = new class(app(PublicTarget::class)) extends CertificateInspector
+        {
+            /** @var list<string> */
+            public array $dialled = [];
+
+            protected function connect(string $endpoint, mixed $context, ?string &$error = null)
+            {
+                $this->dialled[] = $endpoint;
+                $error = 'אין מענה';
+
+                return false;
+            }
+        };
+
+        $inspector->inspect('example.com');
+
+        $this->assertSame(
+            ['ssl://[2606:2800:220::1]:443', 'ssl://93.184.216.34:443'],
+            $inspector->dialled,
+        );
+    }
+
+    /**
+     * SPF נבדק גם על הדומיין עצמו, לא רק על הכתובת שהוקלדה.
+     *
+     * המדיניות מתפרסמת במקום שממנו יוצא הדואר — בדרך כלל example.com — בזמן
+     * שהאתר יושב על shop.example.com. אזהרה על רשומה שקיימת, במסמך שנשלח
+     * ללקוח, היא בדיוק סוג התקלה שהורס את אמון הקורא בכל השאר.
+     */
+    public function test_spf_is_looked_for_on_the_domain_and_not_only_on_the_subdomain(): void
+    {
+        $health = $this->domainHealthWithTxt([
+            'example.co.il' => [['txt' => 'v=spf1 include:_spf.example.com ~all']],
+            'shop.example.co.il' => [],
+        ]);
+
+        $titles = array_column($health->run($this->contextFor('shop.example.co.il')), 'title');
+
+        $this->assertNotContains('אין הגדרת SPF לדומיין', $titles);
+    }
+
+    /** ושאילתה שלא נענתה אינה "אין רשומה" — היא "לא נבדק". */
+    public function test_a_dns_lookup_that_failed_is_not_reported_as_a_missing_record(): void
+    {
+        $health = $this->domainHealthWithTxt([]);
+
+        $titles = array_column($health->run($this->contextFor('example.co.il')), 'title');
+
+        $this->assertContains('לא ניתן היה לבדוק את הגדרת ה-SPF', $titles);
+        $this->assertNotContains('אין הגדרת SPF לדומיין', $titles);
+    }
+
+    /**
+     * A DomainHealth whose TXT answers are decided here.
+     *
+     * A name missing from the map is a lookup that did NOT answer — which is the
+     * distinction under test, and one real DNS cannot be asked to reproduce.
+     *
+     * @param  array<string, array<int, array<string, mixed>>>  $records
+     */
+    private function domainHealthWithTxt(array $records): DomainHealth
+    {
+        $this->bindTargetResolving(['93.184.216.34']);
+        Http::fake(['*' => Http::response('<html lang="he"><body></body></html>', 200)]);
+
+        $expiry = \Mockery::mock(DomainExpiry::class)->makePartial();
+        $expiry->shouldReceive('expiresAt')->andReturn(null);
+
+        $reputation = \Mockery::mock(DomainReputationClient::class)->makePartial();
+        $reputation->shouldReceive('check')->andReturn([
+            'sources' => ['urlhaus' => true], 'listings' => [], 'errors' => [],
+        ]);
+
+        return new class($expiry, $reputation, $records) extends DomainHealth
+        {
+            /** @param array<string, array<int, array<string, mixed>>> $records */
+            public function __construct(DomainExpiry $expiry, DomainReputationClient $reputation, private array $records)
+            {
+                parent::__construct($expiry, $reputation);
+            }
+
+            protected function txt(string $domain): ?array
+            {
+                return $this->records[$domain] ?? null;
+            }
+        };
     }
 
     /** תשובה אינסופית אינה מפילה את העובד — הקריאה נעצרת בגבול. */
