@@ -4,6 +4,7 @@ namespace App\Services\Audit\Checks;
 
 use App\Services\Audit\AuditContext;
 use App\Services\Audit\Finding;
+use App\Services\Audit\Markup;
 
 /** What a search engine, and a link shared in WhatsApp, make of the page. */
 class Discoverability implements Check, ReadsPage
@@ -55,7 +56,7 @@ class Discoverability implements Check, ReadsPage
 
     private function description(AuditContext $site): ?Finding
     {
-        if (self::meta($site->markup(), 'name', 'description', 10) !== null) {
+        if (Markup::meta($site->markup(), 'name', 'description', 10) !== null) {
             return null;
         }
 
@@ -95,7 +96,7 @@ class Discoverability implements Check, ReadsPage
     {
         $markup = $site->markup();
 
-        if (self::meta($markup, 'property', 'og:title') !== null && self::meta($markup, 'property', 'og:image') !== null) {
+        if (Markup::meta($markup, 'property', 'og:title') !== null && Markup::meta($markup, 'property', 'og:image') !== null) {
             return null;
         }
 
@@ -105,39 +106,6 @@ class Discoverability implements Check, ReadsPage
             'כשמדביקים את הכתובת בוואטסאפ או בפייסבוק לא מופיע כרטיס עם תמונה — רק כתובת יבשה, שנלחצת הרבה פחות.',
             'להוסיף תגיות Open Graph: og:title, og:description ו-og:image.',
         );
-    }
-
-    /**
-     * The content of a meta tag identified by one of its attributes.
-     *
-     * Attributes in HTML have no order — `<meta content="…" name="description">`
-     * is the same tag as the other way round — and a pattern that insists on one
-     * order tells a site with a perfectly good description that it has none. In
-     * a document handed to a prospect, that is the finding that gets checked
-     * first and discredits everything under it.
-     */
-    private static function meta(string $markup, string $attribute, string $value, int $minimum = 1): ?string
-    {
-        preg_match_all('#<meta\b[^>]*>#i', $markup, $tags);
-
-        foreach ($tags[0] as $tag) {
-            // (?<![-\w]) and not \b: \b would also match the tail of data-name=,
-            // and a tag matched by the wrong attribute is the same false finding
-            // by another route.
-            $named = preg_match('#(?<![-\w])'.$attribute.'\s*=\s*(["\']?)'.preg_quote($value, '#').'\1[\s/>]#i', $tag.' ') === 1;
-
-            if (! $named || preg_match('#\bcontent\s*=\s*(["\'])(.*?)\1#is', $tag, $found) !== 1) {
-                continue;
-            }
-
-            $content = trim($found[2]);
-
-            if (mb_strlen($content) >= $minimum) {
-                return $content;
-            }
-        }
-
-        return null;
     }
 
     private function robots(AuditContext $site): ?Finding

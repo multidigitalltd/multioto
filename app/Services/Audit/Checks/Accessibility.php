@@ -4,6 +4,7 @@ namespace App\Services\Audit\Checks;
 
 use App\Services\Audit\AuditContext;
 use App\Services\Audit\Finding;
+use App\Services\Audit\Markup;
 
 /**
  * The things a screen reader needs, and the document Israeli law asks for.
@@ -168,8 +169,10 @@ class Accessibility implements Check, ReadsPage
      */
     private function zoom(AuditContext $site): ?Finding
     {
-        $viewport = $site->match('#<meta[^>]+name=["\']?viewport["\']?[^>]*content=["\']([^"\']+)#i')
-            ?? $site->match('#<meta[^>]+content=["\']([^"\']*(?:user-scalable|maximum-scale)[^"\']*)["\'][^>]*name=["\']?viewport#i');
+        // Through the shared reader, because a viewport written content-first is
+        // the same viewport — and inventing an accessibility fault out of
+        // attribute order is the mistake this whole file exists to avoid.
+        $viewport = Markup::meta($site->markup(), 'name', 'viewport');
 
         if ($viewport === null) {
             return null;
