@@ -1060,6 +1060,41 @@ class SiteAuditTest extends TestCase
         $this->assertSame(['זמינות', 'מהירות', 'אבטחה', 'נגישות'], $audit->areas());
     }
 
+    /**
+     * המסמך מוטבע בגופן שיש לו גם עברית וגם משקל מודגש.
+     *
+     * ההחלפה האוטומטית של mPDF לפי סקריפט שלחה כל עברית לגופן עברי בלי משקל
+     * מודגש ובלי כיסוי לסימנים שסביבה — ומכאן גם הריבועים במקום תווים וגם
+     * כותרות שלא היו כבדות יותר מהטקסט שתחתיהן. זה נבדק כאן ולא בעין, כי זו
+     * בדיוק תקלה שחוזרת בשקט.
+     */
+    public function test_the_document_embeds_a_font_that_has_hebrew_and_a_bold_weight(): void
+    {
+        $pdf = app(AuditReport::class)->pdf($this->completed());
+
+        preg_match_all('/BaseFont\s*\/([A-Za-z0-9+\-,]+)/', $pdf, $fonts);
+        $embedded = implode(' ', array_unique($fonts[1]));
+
+        $this->assertStringContainsString('DejaVuSans', $embedded);
+        $this->assertStringContainsString('DejaVuSans-Bold', $embedded);
+        $this->assertStringNotContainsString('Taamey', $embedded);
+    }
+
+    /**
+     * מה שצריך לעשות אינו נכנס למסמך שנשלח החוצה.
+     *
+     * הממצא הוא מה שמוסרים; דרך התיקון היא מה שמוכרים. במסך היא נשארת, כי שם
+     * היא נחוצה למי שיבצע אותה.
+     */
+    public function test_the_remedy_stays_out_of_the_document(): void
+    {
+        $audit = $this->completed();
+
+        $this->assertStringNotContainsString('מה צריך לעשות', app(AuditReport::class)->pdf($audit));
+        // אבל הוא נשמר בממצא עצמו, ומוצג בפאנל.
+        $this->assertSame('פ', $audit->problems()[0]['fix']);
+    }
+
     /** הממצאים מסודרים לפי דחיפות, ומה שתקין אינו נספר כבעיה. */
     public function test_problems_come_worst_first_and_exclude_what_passed(): void
     {

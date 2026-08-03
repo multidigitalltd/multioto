@@ -3,7 +3,9 @@
 <head>
     <meta charset="utf-8">
     <style>
-        * { font-family: "DejaVu Sans", sans-serif; }
+        /* mPDF's own family name — anything else leaves its script-to-font
+           switcher in charge, and that picks a Hebrew face with no bold. */
+        * { font-family: dejavusans, sans-serif; }
         body { direction: rtl; color: #16181d; font-size: 12px; line-height: 1.65; margin: 0; padding: 26px 30px; }
         .head { border-bottom: 2px solid #4f46e5; padding-bottom: 14px; margin-bottom: 18px; text-align: center; }
         .head img { max-height: 56px; margin-bottom: 8px; }
@@ -20,15 +22,15 @@
         .ok .dot, .dot.ok { background: #15803d; }
 
         h2 { font-size: 14px; margin: 20px 0 8px; padding-bottom: 5px; border-bottom: 1px solid #e2e8f0; }
-        .item { border-right: 3px solid #cbd5e1; padding: 0 12px 0 0; margin-bottom: 13px; }
+        .item { border-right: 3px solid #cbd5e1; padding: 1px 12px 3px 0; margin-bottom: 16px; }
         .item.critical { border-right-color: #b91c1c; }
         .item.warning { border-right-color: #b45309; }
         .item.notice { border-right-color: #1d4ed8; }
-        .item .title { font-weight: bold; font-size: 12.5px; }
-        .item .area { color: #55606e; font-size: 10px; }
-        .item .detail { margin-top: 3px; }
-        .item .fix { margin-top: 4px; background: #f6f7f9; border-radius: 6px; padding: 6px 9px; }
-        .item .fix b { color: #3730a3; }
+        .item .title { font-weight: bold; font-size: 14px; color: #16181d; }
+        .item.critical .title { color: #991b1b; }
+        .item.warning .title { color: #92400e; }
+        .item .area { color: #55606e; font-size: 10px; margin-top: 1px; }
+        .item .detail { margin-top: 4px; }
         .item .evidence { margin-top: 3px; color: #55606e; font-size: 10px; direction: ltr; unicode-bidi: embed; text-align: right; }
 
         .item.ok { border-right-color: #15803d; }
@@ -58,7 +60,7 @@
             הפירוט המלא מופיע בהמשך.
         @else
             להלן {{ count($problems) }} ממצאים שנמצאו בבדיקה חיצונית של האתר, מסודרים לפי דחיפות.
-            לכל ממצא מצורף הסבר מה המשמעות שלו ומה נדרש כדי לתקן.
+            לכל ממצא מצורף הסבר מה המשמעות שלו עבור העסק.
             @if ($passedCount > 0)
                 בסוף המסמך מפורטות {{ $passedCount }} הבדיקות שהאתר עבר בהצלחה.
             @endif
@@ -84,9 +86,6 @@
                 <div class="area">{{ $item['area'] ?? '' }}</div>
                 @if (! empty($item['detail']))
                     <div class="detail">{{ $item['detail'] }}</div>
-                @endif
-                @if (! empty($item['fix']))
-                    <div class="fix"><b>מה צריך לעשות:</b> {{ $item['fix'] }}</div>
                 @endif
                 @if (! empty($item['evidence']))
                     <div class="evidence">{{ $item['evidence'] }}</div>

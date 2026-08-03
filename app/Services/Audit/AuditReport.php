@@ -38,9 +38,26 @@ class AuditReport
             mkdir($tmp, 0775, true);
         }
 
-        $mpdf = new Mpdf(['mode' => 'utf-8', 'format' => 'A4', 'directionality' => 'rtl', 'tempDir' => $tmp]);
-        $mpdf->autoScriptToLang = true;
-        $mpdf->autoLangToFont = true;
+        // DejaVu, pinned — NOT mPDF's automatic script-to-font switching.
+        //
+        // Left on, that switching sent every Hebrew run to TaameyDavidCLM, a
+        // Hebrew-only face with no bold weight and no coverage for the
+        // punctuation around it. That is both of the faults this fixes at once:
+        // characters that came out as empty boxes, and headings that were not
+        // any heavier than the text under them, because the font had nothing
+        // heavier to offer. DejaVu covers every character this report uses and
+        // ships a real Bold.
+        //
+        // Substitutions stay on for one reason: the evidence lines quote other
+        // people's websites, and a site may answer in any script on earth.
+        $mpdf = new Mpdf([
+            'mode' => 'utf-8',
+            'format' => 'A4',
+            'directionality' => 'rtl',
+            'tempDir' => $tmp,
+            'default_font' => 'dejavusans',
+            'useSubstitutions' => true,
+        ]);
         $mpdf->WriteHTML($html);
 
         return (string) $mpdf->Output('', 'S');
