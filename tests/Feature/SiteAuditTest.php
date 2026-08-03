@@ -14,6 +14,7 @@ use App\Services\Audit\Checks\Accessibility;
 use App\Services\Audit\Checks\Availability;
 use App\Services\Audit\Checks\Discoverability;
 use App\Services\Audit\Checks\DomainHealth;
+use App\Services\Audit\Checks\LegalDocuments;
 use App\Services\Audit\Checks\SecurityHeaders;
 use App\Services\Audit\Checks\Transport;
 use App\Services\Audit\PublicTarget;
@@ -743,6 +744,62 @@ class SiteAuditTest extends TestCase
         $this->assertNotContains('לתוכן מוטמע בדף אין כותרת', $titles);
         $this->assertNotContains('אין אזור תוכן ראשי מוגדר בדף', $titles);
         $this->assertContains('לכל שדות הטופס יש תווית', $titles);
+    }
+
+    /**
+     * מסמכי חובה — התחום היחיד שבו הממצא הוא חשיפה משפטית, לא איכות.
+     *
+     * אתר תדמית נשאל על נגישות, פרטיות ותקנון. הוא אינו נשאל על מדיניות
+     * החזרות — דרישות חוק הגנת הצרכן חלות על מכירה, ולדרוש מאתר שאינו מוכר
+     * מסמך שאינו חייב בו זו התראת שווא.
+     */
+    public function test_a_brochure_site_is_asked_only_for_the_documents_it_owes(): void
+    {
+        $this->bindTargetResolving(['93.184.216.34']);
+
+        Http::fake(['*' => Http::response('<html lang="he" dir="rtl"><body>אודות</body></html>', 200)]);
+
+        $titles = array_column(app(LegalDocuments::class)->run($this->contextFor('example.co.il')), 'title');
+
+        $this->assertContains('לא נמצאה הצהרת נגישות', $titles);
+        $this->assertContains('לא נמצאה מדיניות פרטיות', $titles);
+        $this->assertContains('לא נמצא תקנון או תנאי שימוש', $titles);
+        $this->assertNotContains('לא נמצאה מדיניות ביטולים והחזרות', $titles);
+        $this->assertNotContains('לא נמצאו פרטי העוסק באתר', $titles);
+    }
+
+    /** חנות נשאלת גם על ביטולים ועל פרטי העוסק. */
+    public function test_a_store_owes_the_consumer_law_documents_too(): void
+    {
+        $this->bindTargetResolving(['93.184.216.34']);
+
+        Http::fake(['*' => Http::response(
+            '<html lang="he" dir="rtl"><body><a href="/cart">עגלת קניות</a>'
+            .'<button class="add-to-cart">הוספה לסל</button></body></html>', 200,
+        )]);
+
+        $titles = array_column(app(LegalDocuments::class)->run($this->contextFor('example.co.il')), 'title');
+
+        $this->assertContains('לא נמצאה מדיניות ביטולים והחזרות', $titles);
+        $this->assertContains('לא נמצאו פרטי העוסק באתר', $titles);
+    }
+
+    /** ואתר שפרסם הכול אינו מקבל ממצא — הוא מקבל אישור. */
+    public function test_a_site_with_every_document_is_told_so(): void
+    {
+        $this->bindTargetResolving(['93.184.216.34']);
+
+        Http::fake(['*' => Http::response(
+            '<html lang="he" dir="rtl"><body><footer>'
+            .'<a href="/accessibility">הצהרת נגישות</a>'
+            .'<a href="/privacy">מדיניות פרטיות</a>'
+            .'<a href="/terms">תקנון</a>'
+            .'</footer></body></html>', 200,
+        )]);
+
+        $titles = array_column(app(LegalDocuments::class)->run($this->contextFor('example.co.il')), 'title');
+
+        $this->assertSame(['כל מסמכי החובה מקושרים מהדף הראשי'], $titles);
     }
 
     /** תשובה אינסופית אינה מפילה את העובד — הקריאה נעצרת בגבול. */

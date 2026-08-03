@@ -8,6 +8,7 @@ use App\Services\Audit\Checks\Availability;
 use App\Services\Audit\Checks\Check;
 use App\Services\Audit\Checks\Discoverability;
 use App\Services\Audit\Checks\DomainHealth;
+use App\Services\Audit\Checks\LegalDocuments;
 use App\Services\Audit\Checks\ReadsPage;
 use App\Services\Audit\Checks\SecurityHeaders;
 use App\Services\Audit\Checks\Speed;
@@ -39,6 +40,7 @@ class SiteAuditor
         private Discoverability $discoverability,
         private Accessibility $accessibility,
         private DomainHealth $domain,
+        private LegalDocuments $documents,
         private PublicTarget $target,
     ) {}
 
@@ -86,6 +88,7 @@ class SiteAuditor
             $this->speed,
             $this->discoverability,
             $this->accessibility,
+            $this->documents,
             $this->domain,
         ];
     }

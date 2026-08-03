@@ -9,6 +9,10 @@ use App\Services\Audit\Markup;
 /**
  * The things a screen reader needs, and the document Israeli law asks for.
  *
+ * The accessibility STATEMENT is not here but under "מסמכי חובה", beside the
+ * privacy policy and the terms: it is a document the law requires a business to
+ * publish, and the reader needs those in one list rather than scattered.
+ *
  * Read from the markup only. That catches the faults that are ALWAYS faults —
  * an image with no description is one whatever the design — and cannot judge
  * contrast or keyboard order, which the report says outright rather than
@@ -31,7 +35,6 @@ class Accessibility implements Check, ReadsPage
             $this->language($site),
             $this->direction($site),
             $this->imageText($site),
-            $this->statement($site),
             $this->linkText($site),
             $this->formLabels($site),
             $this->zoom($site),
@@ -76,21 +79,6 @@ class Accessibility implements Check, ReadsPage
             'לתמונות אין תיאור טקסטואלי',
             "עבור עיוור שגולש עם קורא מסך, {$missing} מתוך {$images} התמונות בדף הן שקט. זו גם דרישה בתקן הישראלי.",
             'להוסיף טקסט חלופי (alt) המתאר את תוכן התמונה. לתמונות עיצוביות בלבד — alt ריק.',
-        );
-    }
-
-    /** The declaration Israeli sites are required to publish. */
-    private function statement(AuditContext $site): ?Finding
-    {
-        if ($site->occurrences('#(הצהרת נגישות|accessibility[- ]statement)#iu') > 0) {
-            return null;
-        }
-
-        return Finding::warning(
-            $this->area(),
-            'לא נמצאה הצהרת נגישות',
-            'אתר עסקי בישראל נדרש לפרסם הצהרת נגישות נגישה מכל דף. היעדרה היא חשיפה לתביעה, והיא נפוצה מאוד.',
-            'לפרסם הצהרת נגישות ולקשר אליה מהתחתית של כל דף.',
         );
     }
 
