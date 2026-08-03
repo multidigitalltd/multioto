@@ -14,7 +14,6 @@ use App\Services\Audit\Checks\Transport;
 use App\Services\Audit\Checks\WordPressExposure;
 use App\Services\Security\DnsLookup;
 use Illuminate\Support\Facades\Log;
-use RuntimeException;
 
 /**
  * Look at a website from the outside and say what is wrong with it.
@@ -39,6 +38,7 @@ class SiteAuditor
         private Discoverability $discoverability,
         private Accessibility $accessibility,
         private DomainHealth $domain,
+        private PublicTarget $target,
     ) {}
 
     /**
@@ -51,7 +51,7 @@ class SiteAuditor
         $url = self::normaliseUrl($url);
         $host = DnsLookup::host($url);
 
-        $this->assertPublicTarget($host);
+        $this->target->assert($host);
 
         $site = new AuditContext($url, $host, SiteProbe::fetch($url));
 
@@ -118,49 +118,6 @@ class SiteAuditor
         $url = trim($url);
 
         return preg_match('#^https?://#i', $url) === 1 ? $url : 'https://'.ltrim($url, '/');
-    }
-
-    /**
-     * Refuse anything that is not a public website.
-     *
-     * Without this the panel becomes a way to knock on doors inside the network
-     * it is hosted in — a private address or a name that resolves to one — and
-     * to read back whatever answers. The tool exists to look at the public web,
-     * so that is all it is allowed to look at.
-     */
-    public function assertPublicTarget(string $host): void
-    {
-        if ($host === '' || ! str_contains($host, '.') || preg_match('/^[a-z0-9.\-]+$/i', $host) !== 1) {
-            throw new RuntimeException('הכתובת אינה תקינה.');
-        }
-
-        $addresses = $this->resolve($host);
-
-        if ($addresses === []) {
-            throw new RuntimeException('לא ניתן לאתר את הדומיין. ייתכן שהוא שגוי או שאינו רשום.');
-        }
-
-        foreach ($addresses as $address) {
-            if (filter_var($address, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false) {
-                throw new RuntimeException('הכתובת מפנה לכתובת פנימית — הכלי בודק אתרים פומביים בלבד.');
-            }
-        }
-    }
-
-    /**
-     * Every address the name answers with, IPv6 included.
-     *
-     * Its own method so a test can decide what a name resolves to: a guard that
-     * can only be exercised against the live internet is a guard nobody checks.
-     *
-     * @return list<string>
-     */
-    protected function resolve(string $host): array
-    {
-        return array_values(array_filter(array_merge(
-            gethostbynamel($host) ?: [],
-            array_column(rescue(fn (): array => (array) dns_get_record($host, DNS_AAAA), [], report: false), 'ipv6'),
-        )));
     }
 
     /**

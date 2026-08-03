@@ -6,6 +6,7 @@ use App\Jobs\RunSiteAuditJob;
 use App\Models\Site;
 use App\Models\SiteAudit;
 use App\Services\Audit\AuditReport;
+use App\Services\Audit\PublicTarget;
 use App\Services\Audit\SiteAuditor;
 use App\Services\Security\DnsLookup;
 use Filament\Forms\Components\Actions\Action as FormAction;
@@ -95,7 +96,7 @@ class SiteAudits extends Page implements HasForms, HasTable
         $host = DnsLookup::host($url);
 
         try {
-            app(SiteAuditor::class)->assertPublicTarget($host);
+            app(PublicTarget::class)->assert($host);
         } catch (\Throwable $e) {
             Notification::make()->title('לא ניתן לבדוק את הכתובת')->body($e->getMessage())->danger()->send();
 

@@ -3,14 +3,14 @@
 namespace App\Services\Audit\Checks;
 
 use App\Services\Audit\AuditContext;
+use App\Services\Audit\CertificateInspector;
 use App\Services\Audit\Finding;
 use App\Services\Audit\SiteProbe;
-use App\Services\Hosting\SiteDiagnostics;
 
-/** HTTPS: is there one, is it valid, and does plain http lead to it. */
+/** HTTPS: is there one, would a browser accept it, and does plain http lead to it. */
 class Transport implements Check
 {
-    public function __construct(private SiteDiagnostics $diagnostics) {}
+    public function __construct(private CertificateInspector $certificates) {}
 
     public function area(): string
     {
@@ -31,28 +31,48 @@ class Transport implements Check
         return array_merge($this->certificate($site), $this->plainHttp($site));
     }
 
-    /** @return list<Finding> */
+    /**
+     * What a browser would make of the certificate — not merely when it expires.
+     *
+     * A date that has not passed says nothing about a certificate issued for
+     * another name, signed by nobody, or not yet in force. Every one of those
+     * shows the visitor a full-page warning, and calling it "valid" in a report
+     * a customer relies on is the worst thing this tool could get wrong.
+     *
+     * @return list<Finding>
+     */
     private function certificate(AuditContext $site): array
     {
-        $days = $this->diagnostics->sslDaysLeft($site->host);
+        $result = $this->certificates->inspect($site->host);
 
-        if ($days === null) {
+        if (! $result['reachable']) {
             return [Finding::notice(
                 $this->area(),
-                'לא ניתן היה לקרוא את תעודת האבטחה',
-                'הבדיקה לא הצליחה לקרוא את תוקף התעודה. ייתכן חסימה של הבדיקה, ולא בהכרח תקלה.',
-                'לוודא ידנית בדפדפן שהתעודה בתוקף.',
+                'לא ניתן היה לבדוק את תעודת האבטחה',
+                'הבדיקה לא הצליחה ליצור חיבור מאובטח לשרת. ייתכן חסימה של הבדיקה, ולא בהכרח תקלה — אך זה גם לא אישור שהכול תקין.',
+                'לוודא ידנית בדפדפן שהתעודה בתוקף ומזוהה.',
+                $result['error'],
             )];
         }
 
-        if ($days < 0) {
+        if (! $result['trusted']) {
             return [Finding::critical(
                 $this->area(),
-                'תעודת האבטחה פגה',
-                'הדפדפן מציג אזהרה אדומה במקום האתר. רוב המבקרים עוזבים בשלב הזה.',
-                'לחדש את התעודה מיד ולהפעיל חידוש אוטומטי.',
-                "פג לפני {$this->plural(abs($days))}",
+                'הדפדפן אינו מקבל את תעודת האבטחה',
+                'התעודה אינה מזוהה כתקפה לאתר הזה — היא חתומה עצמית, הונפקה לשם אחר, אינה מגורם מוכר או שטרם נכנסה לתוקף. המבקר רואה מסך אזהרה במקום האתר.',
+                'להנפיק תעודה מגורם מוכר עבור השם המדויק של האתר, ולוודא שהותקנה כולל שרשרת האישורים.',
+                $result['error'],
             )];
+        }
+
+        return $this->expiry((int) ($result['days_left'] ?? 0), $result['days_left'] === null);
+    }
+
+    /** @return list<Finding> */
+    private function expiry(int $days, bool $unknown): array
+    {
+        if ($unknown) {
+            return [Finding::ok($this->area(), 'תעודת האבטחה מזוהה כתקפה')];
         }
 
         if ($days <= 21) {
@@ -65,7 +85,7 @@ class Transport implements Check
             )];
         }
 
-        return [Finding::ok($this->area(), 'תעודת האבטחה בתוקף', "נותרו {$this->plural($days)}.")];
+        return [Finding::ok($this->area(), 'תעודת האבטחה תקפה ומזוהה', "נותרו {$this->plural($days)}.")];
     }
 
     /**
@@ -98,6 +118,10 @@ class Transport implements Check
 
     private function plural(int $days): string
     {
-        return $days === 1 ? 'יום אחד' : "{$days} ימים";
+        return match (true) {
+            $days < 0 => abs($days).' ימים (פגה)',
+            $days === 1 => 'יום אחד',
+            default => "{$days} ימים",
+        };
     }
 }

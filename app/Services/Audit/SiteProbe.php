@@ -2,7 +2,9 @@
 
 namespace App\Services\Audit;
 
+use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
+use Psr\Http\Message\UriInterface;
 
 /**
  * One fetch of one address, and nothing else.
@@ -17,6 +19,16 @@ class SiteProbe
 {
     /** Long enough for a slow shared host, short enough to fail an audit fast. */
     private const TIMEOUT = 15;
+
+    /**
+     * How much of a response is read.
+     *
+     * A report is built from the head and the markup; nothing here needs more.
+     * The bound is enforced while READING, not after — a server can answer with
+     * a stream that never ends, and a worker that politely downloads all of it
+     * dies with the audit stuck on "running".
+     */
+    private const MAX_BYTES = 512 * 1024;
 
     public function __construct(
         public readonly string $url,
@@ -41,28 +53,41 @@ class SiteProbe
     public static function fetch(string $url, bool $follow = true): self
     {
         $started = hrtime(true);
-        $redirects = [];
+        $guard = app(PublicTarget::class);
 
         try {
+            $guard->assert((string) parse_url($url, PHP_URL_HOST));
+
             $request = Http::withHeaders([
                 // Announced honestly. A site that blocks us should block a name
                 // its owner can look up, not a browser we are pretending to be.
                 'User-Agent' => 'MultiotoSiteAudit/1.0 (+site health check)',
                 'Accept' => 'text/html,application/xhtml+xml',
-            ])->timeout(self::TIMEOUT)->connectTimeout(8);
+            ])->timeout(self::TIMEOUT)->connectTimeout(8)->withOptions([
+                // A certificate that does not verify is a FINDING, not a reason
+                // to come back with nothing. The certificate check does its own
+                // verified handshake; this only stops the fetch dying on it.
+                'verify' => false,
+                'stream' => true,
+            ]);
 
             $request = $follow
                 ? $request->withOptions([
-                    'allow_redirects' => ['max' => 6, 'track_redirects' => true],
-                    // A certificate that does not verify is a FINDING, not a
-                    // reason to come back with nothing. The check reads the
-                    // certificate itself; this only stops the fetch dying on it.
-                    'verify' => false,
+                    'allow_redirects' => [
+                        'max' => 6,
+                        'track_redirects' => true,
+                        // Every hop is checked, not only the address typed in.
+                        // A public site is free to answer "go to 169.254.169.254",
+                        // and following that would turn this tool into a way to
+                        // read the inside of the network it runs in.
+                        'on_redirect' => static function ($request, $response, UriInterface $to) use ($guard): void {
+                            $guard->assert($to->getHost());
+                        },
+                    ],
                 ])
-                : $request->withoutRedirecting()->withOptions(['verify' => false]);
+                : $request->withoutRedirecting();
 
             $response = $request->get($url);
-
             $redirects = $response->getHeader('X-Guzzle-Redirect-History');
 
             return new self(
@@ -70,9 +95,7 @@ class SiteProbe
                 status: $response->status(),
                 ms: self::elapsed($started),
                 headers: self::normalise($response->headers()),
-                // Bounded: a report is built from the head and the markup, and
-                // an endless response must not become an endless audit.
-                body: mb_substr((string) $response->body(), 0, 512 * 1024),
+                body: self::read($response),
                 error: null,
                 finalUrl: (string) (end($redirects) ?: $url),
                 redirects: array_values($redirects),
@@ -105,6 +128,27 @@ class SiteProbe
     public function hasHeader(string $name): bool
     {
         return $this->header($name) !== null;
+    }
+
+    /** Read up to the cap and stop, whatever the server intends to keep sending. */
+    private static function read(Response $response): string
+    {
+        $stream = $response->toPsrResponse()->getBody();
+        $body = '';
+
+        while (! $stream->eof() && strlen($body) < self::MAX_BYTES) {
+            $chunk = $stream->read(self::MAX_BYTES - strlen($body));
+
+            if ($chunk === '') {
+                break;
+            }
+
+            $body .= $chunk;
+        }
+
+        $stream->close();
+
+        return $body;
     }
 
     /** @param array<string, list<string>> $headers */

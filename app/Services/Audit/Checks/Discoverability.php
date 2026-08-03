@@ -118,23 +118,71 @@ class Discoverability implements Check
             );
         }
 
-        if (preg_match('#^\s*Disallow:\s*/\s*$#mi', $probe->body) === 1) {
-            return Finding::critical(
-                $this->area(),
-                'הקובץ robots.txt חוסם את כל האתר מגוגל',
-                'הקובץ אומר למנועי החיפוש לא לסרוק שום דף. זו הסיבה הנפוצה ביותר לאתר שפשוט לא מופיע בחיפוש.',
-                'להסיר את החסימה הגורפת — לרוב היא נשארה מהתקופה שבה האתר היה בבנייה.',
-                'Disallow: /',
-            );
+        if (! self::blocksGoogle($probe->body)) {
+            return null;
         }
 
-        return null;
+        return Finding::critical(
+            $this->area(),
+            'הקובץ robots.txt חוסם את כל האתר מגוגל',
+            'הקובץ אומר למנועי החיפוש לא לסרוק שום דף. זו הסיבה הנפוצה ביותר לאתר שפשוט לא מופיע בחיפוש.',
+            'להסיר את החסימה הגורפת — לרוב היא נשארה מהתקופה שבה האתר היה בבנייה.',
+            'Disallow: /',
+        );
+    }
+
+    /**
+     * Whether the file blocks GOOGLE from the whole site — not merely somebody.
+     *
+     * The directives belong to the user-agent group above them, so a site that
+     * turned away an AI crawler ("User-agent: GPTBot" then "Disallow: /") is
+     * doing something deliberate and correct. Reporting that as "you are
+     * invisible on Google" would be a false alarm of the most alarming kind, in
+     * a document handed to somebody who cannot check it.
+     */
+    private static function blocksGoogle(string $robots): bool
+    {
+        $applies = false;
+        $blocked = false;
+
+        foreach (preg_split('/\R/', $robots) ?: [] as $line) {
+            $line = trim(preg_replace('/#.*$/', '', $line) ?? '');
+
+            if (preg_match('/^user-agent\s*:\s*(.+)$/i', $line, $agent) === 1) {
+                // A new group starts wherever a user-agent line follows a rule.
+                if ($blocked && $applies) {
+                    return true;
+                }
+
+                $name = mb_strtolower(trim($agent[1]));
+                $applies = $name === '*' || str_starts_with($name, 'googlebot');
+                $blocked = false;
+
+                continue;
+            }
+
+            if ($applies && preg_match('/^disallow\s*:\s*\/\s*$/i', $line) === 1) {
+                $blocked = true;
+            }
+
+            // An explicit allow anywhere in the group means the block is not total.
+            if ($applies && preg_match('/^allow\s*:\s*\//i', $line) === 1) {
+                $blocked = false;
+            }
+        }
+
+        return $blocked && $applies;
     }
 
     private function sitemap(AuditContext $site): ?Finding
     {
         foreach (['/sitemap.xml', '/sitemap_index.xml', '/wp-sitemap.xml'] as $path) {
-            if ($site->path($path)->reachable()) {
+            $probe = $site->path($path);
+
+            // Reachable is not enough. A site whose 404 handler answers 200 with
+            // its ordinary page would make every guess look like a sitemap, and
+            // the check would quietly pass for a site that has none.
+            if ($probe->reachable() && preg_match('/<(urlset|sitemapindex)\b/i', $probe->body) === 1) {
                 return null;
             }
         }

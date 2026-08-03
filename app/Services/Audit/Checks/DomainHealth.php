@@ -72,10 +72,21 @@ class DomainHealth implements Check
     /** @return list<Finding> */
     private function reputationFindings(AuditContext $site): array
     {
-        $listings = (array) ($this->reputation->check($site->host)['listings'] ?? []);
+        $result = $this->reputation->check($site->host);
+        $listings = (array) ($result['listings'] ?? []);
 
         if ($listings === []) {
-            return [];
+            // Nothing found and nothing asked are different answers. A source
+            // that could not be reached leaves the report looking exactly like
+            // a clean bill of health, which is the one thing it must not do.
+            return array_filter((array) ($result['sources'] ?? [])) === []
+                ? [Finding::notice(
+                    $this->area(),
+                    'בדיקת רשימות החסימה לא הושלמה',
+                    'אף אחד ממאגרי המוניטין לא השיב בזמן הבדיקה. אין בכך כדי לומר שהדומיין נקי — פשוט לא נבדק.',
+                    'לנסות שוב מאוחר יותר.',
+                )]
+                : [];
         }
 
         return [Finding::critical(
@@ -94,7 +105,12 @@ class DomainHealth implements Check
      */
     private function mailFindings(AuditContext $site): array
     {
-        $records = rescue(fn (): array => (array) dns_get_record($site->host, DNS_TXT), [], report: false);
+        // On the mail domain, not on the address that was typed. SPF lives on
+        // example.com while the site is at www.example.com, and asking the
+        // wrong name produces a confident warning about a policy that exists.
+        $domain = preg_replace('/^www\./i', '', $site->host) ?? $site->host;
+
+        $records = rescue(fn (): array => (array) dns_get_record($domain, DNS_TXT), [], report: false);
         $texts = mb_strtolower(implode(' ', array_column($records, 'txt')));
 
         if (str_contains($texts, 'v=spf1')) {

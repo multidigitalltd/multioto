@@ -7,17 +7,14 @@ use App\Filament\Pages\SiteAudits;
 use App\Jobs\RunSiteAuditJob;
 use App\Models\SiteAudit;
 use App\Models\User;
+use App\Services\Audit\AuditContext;
 use App\Services\Audit\AuditReport;
-use App\Services\Audit\Checks\Accessibility;
-use App\Services\Audit\Checks\Availability;
+use App\Services\Audit\CertificateInspector;
 use App\Services\Audit\Checks\Discoverability;
-use App\Services\Audit\Checks\DomainHealth;
-use App\Services\Audit\Checks\SecurityHeaders;
-use App\Services\Audit\Checks\Speed;
 use App\Services\Audit\Checks\Transport;
-use App\Services\Audit\Checks\WordPressExposure;
+use App\Services\Audit\PublicTarget;
 use App\Services\Audit\SiteAuditor;
-use App\Services\Hosting\SiteDiagnostics;
+use App\Services\Audit\SiteProbe;
 use App\Services\Monitoring\DomainExpiry;
 use App\Services\Security\DomainReputationClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -55,7 +52,7 @@ class SiteAuditTest extends TestCase
     {
         $this->expectExceptionMessageMatches('/פנימית/u');
 
-        $this->auditorResolving(['10.0.0.5'])->assertPublicTarget('intranet.example.com');
+        $this->targetResolving(['10.0.0.5'])->assert('intranet.example.com');
     }
 
     /** ו-IPv6 נבדק גם הוא — שם שעונה רק שם היה חומק. */
@@ -63,12 +60,12 @@ class SiteAuditTest extends TestCase
     {
         $this->expectExceptionMessageMatches('/פנימית/u');
 
-        $this->auditorResolving(['::1'])->assertPublicTarget('intranet.example.com');
+        $this->targetResolving(['::1'])->assert('intranet.example.com');
     }
 
     public function test_a_public_address_is_accepted(): void
     {
-        $this->auditorResolving(['93.184.216.34'])->assertPublicTarget('example.com');
+        $this->targetResolving(['93.184.216.34'])->assert('example.com');
 
         $this->assertTrue(true);
     }
@@ -77,21 +74,21 @@ class SiteAuditTest extends TestCase
     {
         $this->expectExceptionMessageMatches('/לאתר את הדומיין/u');
 
-        $this->auditorResolving([])->assertPublicTarget('nope.example.com');
+        $this->targetResolving([])->assert('nope.example.com');
     }
 
     public function test_a_malformed_address_is_refused(): void
     {
         $this->expectExceptionMessageMatches('/תקינה/u');
 
-        $this->auditorResolving(['93.184.216.34'])->assertPublicTarget('not a host');
+        $this->targetResolving(['93.184.216.34'])->assert('not a host');
     }
 
     /** הכפתור פותח שורה ומעביר את העבודה לתור — לא מריץ אותה בתוך הקליק. */
     public function test_the_button_records_the_audit_and_queues_the_work(): void
     {
         Queue::fake();
-        $this->bindAuditorResolving(['93.184.216.34']);
+        $this->bindTargetResolving(['93.184.216.34']);
         $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
 
         Livewire::test(SiteAudits::class)
@@ -113,7 +110,7 @@ class SiteAuditTest extends TestCase
     public function test_an_internal_address_is_answered_on_the_screen(): void
     {
         Queue::fake();
-        $this->bindAuditorResolving(['127.0.0.1']);
+        $this->bindTargetResolving(['127.0.0.1']);
         $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
 
         Livewire::test(SiteAudits::class)
@@ -163,7 +160,7 @@ class SiteAuditTest extends TestCase
             ),
         ]);
 
-        $result = $this->auditorResolving(['93.184.216.34'])->run('example.com');
+        $result = $this->auditorFor(['93.184.216.34'])->run('example.com');
 
         $titles = array_column($result['findings'], 'title');
 
@@ -187,11 +184,122 @@ class SiteAuditTest extends TestCase
 
         Http::fake(fn () => throw new ConnectionException('timed out'));
 
-        $result = $this->auditorResolving(['93.184.216.34'])->run('example.com');
+        $result = $this->auditorFor(['93.184.216.34'])->run('example.com');
 
         $this->assertSame('האתר לא נענה', $result['findings'][0]['title']);
         $this->assertSame('critical', $result['findings'][0]['severity']);
         $this->assertFalse($result['summary']['reachable']);
+    }
+
+    /**
+     * הפניה אל תוך הרשת נחסמת — גם כשהכתובת שהוקלדה עצמה תקינה.
+     *
+     * אתר פומבי לגמרי רשאי לענות "לך אל 169.254.169.254", ושומר שרץ פעם אחת על
+     * הכתובת שהוקלדה היה מעביר את זה הלאה.
+     */
+    public function test_a_redirect_into_the_network_is_refused(): void
+    {
+        // The address typed in is fine; the place it sends the fetcher is not.
+        // The fetcher asks this same guard about every hop, which is the whole
+        // reason the question lives in one object rather than at one call site.
+        $guard = new class extends PublicTarget
+        {
+            protected function resolve(string $host): array
+            {
+                return $host === 'example.com' ? ['93.184.216.34'] : ['169.254.169.254'];
+            }
+        };
+
+        $this->assertTrue($guard->allows('example.com'));
+        $this->assertFalse($guard->allows('redirected.example.net'));
+    }
+
+    /** תשובה אינסופית אינה מפילה את העובד — הקריאה נעצרת בגבול. */
+    public function test_an_endless_response_is_cut_at_the_limit(): void
+    {
+        $this->bindTargetResolving(['93.184.216.34']);
+
+        Http::fake(['*' => Http::response(str_repeat('x', 900 * 1024), 200)]);
+
+        $probe = SiteProbe::fetch('https://example.com');
+
+        $this->assertLessThanOrEqual(512 * 1024, strlen($probe->body));
+    }
+
+    /**
+     * תעודה שהדפדפן דוחה אינה "תעודה בתוקף".
+     *
+     * תאריך שטרם עבר אינו אומר דבר על תעודה שהונפקה לשם אחר או שאיש אינו חותם
+     * עליה — ובכל אחד מהמקרים המבקר רואה מסך אזהרה במקום האתר.
+     */
+    public function test_an_untrusted_certificate_is_not_reported_as_valid(): void
+    {
+        $this->bindTargetResolving(['93.184.216.34']);
+
+        $certificates = \Mockery::mock(CertificateInspector::class)->makePartial();
+        $certificates->shouldReceive('inspect')->andReturn([
+            'reachable' => true, 'trusted' => false, 'days_left' => 300, 'error' => 'self signed certificate',
+        ]);
+        $this->app->instance(CertificateInspector::class, $certificates);
+
+        Http::fake(['*' => Http::response('<html lang="he"><body></body></html>', 200)]);
+
+        $titles = array_column(app(Transport::class)->run($this->contextFor('example.com')), 'title');
+
+        $this->assertContains('הדפדפן אינו מקבל את תעודת האבטחה', $titles);
+    }
+
+    /**
+     * robots.txt שחוסם רק סורק אחר אינו חוסם את גוגל.
+     *
+     * ההנחיות שייכות לקבוצת ה-user-agent שמעליהן, ואתר שסירב ל-GPTBot עשה משהו
+     * מכוון ונכון. לדווח לו שהוא נעלם מגוגל זו התראת שווא מהסוג המבהיל, במסמך
+     * שהוא לא יכול לאמת.
+     */
+    public function test_a_block_aimed_at_another_crawler_is_not_a_google_block(): void
+    {
+        $this->bindTargetResolving(['93.184.216.34']);
+
+        Http::fake([
+            '*/robots.txt' => Http::response("User-agent: GPTBot\nDisallow: /\n\nUser-agent: *\nAllow: /", 200),
+            '*' => Http::response('<html lang="he"><head><title>ד</title></head><body><h1>כ</h1></body></html>', 200),
+        ]);
+
+        $titles = array_column(app(Discoverability::class)->run($this->contextFor('example.com')), 'title');
+
+        $this->assertNotContains('הקובץ robots.txt חוסם את כל האתר מגוגל', $titles);
+    }
+
+    /** ובאמת חוסם — כשהקבוצה היא הכללית. */
+    public function test_a_block_on_every_crawler_is_reported(): void
+    {
+        $this->bindTargetResolving(['93.184.216.34']);
+
+        Http::fake([
+            '*/robots.txt' => Http::response("User-agent: *\nDisallow: /", 200),
+            '*' => Http::response('<html lang="he"><head><title>ד</title></head><body><h1>כ</h1></body></html>', 200),
+        ]);
+
+        $titles = array_column(app(Discoverability::class)->run($this->contextFor('example.com')), 'title');
+
+        $this->assertContains('הקובץ robots.txt חוסם את כל האתר מגוגל', $titles);
+    }
+
+    /**
+     * דף 404 שמחזיר 200 אינו מפת אתר.
+     *
+     * אתר שמגיש את הדף הרגיל שלו לכל נתיב לא מוכר היה גורם לכל ניחוש להיראות
+     * כמו מפת אתר, והבדיקה הייתה עוברת בשקט לאתר שאין לו אחת.
+     */
+    public function test_a_soft_404_is_not_mistaken_for_a_sitemap(): void
+    {
+        $this->bindTargetResolving(['93.184.216.34']);
+
+        Http::fake(['*' => Http::response('<html lang="he"><head><title>ד</title></head><body><h1>כ</h1></body></html>', 200)]);
+
+        $titles = array_column(app(Discoverability::class)->run($this->contextFor('example.com')), 'title');
+
+        $this->assertContains('לא נמצאה מפת אתר', $titles);
     }
 
     /** המסמך מרנדר את מה שנשמר — ולא בודק שוב. */
@@ -220,36 +328,20 @@ class SiteAuditTest extends TestCase
     }
 
     /**
-     * A real auditor, checks and all, whose DNS answers are decided here.
+     * A guard whose DNS answers are decided here.
      *
-     * Deciding what a name resolves to is the guard's whole job, and one that
-     * can only be exercised against the live internet is a guard nobody checks
-     * — including the case that matters most: a public NAME pointing at a
-     * private address.
+     * Deciding what a name resolves to is its whole job, and one that can only
+     * be exercised against the live internet is a guard nobody checks —
+     * including the case that matters most: a public NAME pointing inwards.
      *
      * @param  list<string>  $addresses
      */
-    private function auditorResolving(array $addresses): SiteAuditor
+    private function targetResolving(array $addresses): PublicTarget
     {
-        return new class(app(Availability::class), app(Transport::class), app(SecurityHeaders::class), app(WordPressExposure::class), app(Speed::class), app(Discoverability::class), app(Accessibility::class), app(DomainHealth::class), $addresses) extends SiteAuditor
+        return new class($addresses) extends PublicTarget
         {
             /** @param list<string> $addresses */
-            public function __construct(
-                Availability $availability,
-                Transport $transport,
-                SecurityHeaders $headers,
-                WordPressExposure $wordpress,
-                Speed $speed,
-                Discoverability $discoverability,
-                Accessibility $accessibility,
-                DomainHealth $domain,
-                private array $addresses,
-            ) {
-                parent::__construct(
-                    $availability, $transport, $headers, $wordpress,
-                    $speed, $discoverability, $accessibility, $domain,
-                );
-            }
+            public function __construct(private array $addresses) {}
 
             protected function resolve(string $host): array
             {
@@ -259,9 +351,23 @@ class SiteAuditTest extends TestCase
     }
 
     /** @param list<string> $addresses */
-    private function bindAuditorResolving(array $addresses): void
+    private function bindTargetResolving(array $addresses): void
     {
-        $this->app->instance(SiteAuditor::class, $this->auditorResolving($addresses));
+        $this->app->instance(PublicTarget::class, $this->targetResolving($addresses));
+    }
+
+    /** @param list<string> $addresses */
+    private function auditorFor(array $addresses): SiteAuditor
+    {
+        $this->bindTargetResolving($addresses);
+
+        return app(SiteAuditor::class);
+    }
+
+    /** The context a single check reads from, for tests that exercise one check. */
+    private function contextFor(string $host): AuditContext
+    {
+        return new AuditContext('https://'.$host, $host, SiteProbe::fetch('https://'.$host));
     }
 
     /**
@@ -273,9 +379,11 @@ class SiteAuditTest extends TestCase
      */
     private function fakeCollaborators(): void
     {
-        $diagnostics = \Mockery::mock(SiteDiagnostics::class)->makePartial();
-        $diagnostics->shouldReceive('sslDaysLeft')->andReturn(120);
-        $this->app->instance(SiteDiagnostics::class, $diagnostics);
+        $certificates = \Mockery::mock(CertificateInspector::class)->makePartial();
+        $certificates->shouldReceive('inspect')->andReturn([
+            'reachable' => true, 'trusted' => true, 'days_left' => 120, 'error' => null,
+        ]);
+        $this->app->instance(CertificateInspector::class, $certificates);
 
         $expiry = \Mockery::mock(DomainExpiry::class)->makePartial();
         $expiry->shouldReceive('expiresAt')->andReturn(null);
