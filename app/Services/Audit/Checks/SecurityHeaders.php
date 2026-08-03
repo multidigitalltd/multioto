@@ -12,7 +12,7 @@ use App\Services\Audit\Finding;
  * often absent — nobody notices their absence either, until the day somebody
  * frames the site or a script runs where it should not have.
  */
-class SecurityHeaders implements Check
+class SecurityHeaders implements Check, ReadsPage
 {
     /** header => [what it stops, what to do] */
     private const EXPECTED = [

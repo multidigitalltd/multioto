@@ -6,6 +6,7 @@ use App\Services\Audit\AuditContext;
 use App\Services\Audit\Finding;
 use App\Services\Audit\Hostname;
 use App\Services\Monitoring\DomainExpiry;
+use App\Services\Security\DnsLookup;
 use App\Services\Security\DomainReputationClient;
 
 /**
@@ -21,6 +22,7 @@ class DomainHealth implements Check
     public function __construct(
         private DomainExpiry $expiry,
         private DomainReputationClient $reputation,
+        private DnsLookup $dns,
     ) {}
 
     public function area(): string
@@ -34,6 +36,10 @@ class DomainHealth implements Check
             [$this->expiryFinding($site)],
             $this->reputationFindings($site),
             $this->mailFindings($site),
+            $this->dmarcFindings($site),
+            $this->mailRoutingFindings($site),
+            $this->certificateAuthorityFindings($site),
+            $this->nameServerFindings($site),
         ));
     }
 
@@ -133,7 +139,7 @@ class DomainHealth implements Check
         $answered = false;
 
         foreach ($names as $name) {
-            $records = $this->txt($name);
+            $records = $this->records($name, DNS_TXT);
 
             if ($records === null) {
                 continue;
@@ -167,18 +173,140 @@ class DomainHealth implements Check
     }
 
     /**
-     * TXT records for a name — null when the lookup itself did not answer.
+     * DMARC — מה שאומר לעולם מה לעשות עם מייל מזויף בשם הדומיין.
      *
-     * Its own method for the distinction it keeps: `dns_get_record` returns an
-     * empty array for "nothing published" and false for "could not ask", and a
-     * cast flattens the two into the same thing.
+     * SPF לבדו מסמן; DMARC הוא זה שמורה לחסום, וגם זה שמחזיר דוחות על מי שמנסה.
+     * בלעדיו אפשר לזייף מייל בשם העסק אל הלקוחות שלו — וזו ההונאה הנפוצה ביותר
+     * שמתחילה בדומיין מוזנח.
+     *
+     * @return list<Finding>
+     */
+    private function dmarcFindings(AuditContext $site): array
+    {
+        $records = $this->records('_dmarc.'.Hostname::registrable($site->host), DNS_TXT);
+
+        if ($records === null) {
+            return [];
+        }
+
+        $policy = null;
+
+        foreach ($records as $record) {
+            $text = mb_strtolower((string) ($record['txt'] ?? ''));
+
+            if (str_contains($text, 'v=dmarc1') && preg_match('/\bp\s*=\s*(none|quarantine|reject)/', $text, $found) === 1) {
+                $policy = $found[1];
+            }
+        }
+
+        if ($policy === null) {
+            return [Finding::warning(
+                $this->area(),
+                'אין הגדרת DMARC לדומיין',
+                'DMARC הוא מה שאומר לשרתי הדואר בעולם מה לעשות עם מייל שמתחזה לדומיין שלכם. בלעדיו אפשר לשלוח ללקוחות שלכם מייל שנראה כאילו הגיע מכם, ואיש לא יעצור אותו.',
+                'להוסיף רשומת TXT בשם _dmarc עם מדיניות — להתחיל ב-p=none לצורך מעקב, ולהחמיר ל-quarantine או reject.',
+            )];
+        }
+
+        if ($policy === 'none') {
+            return [Finding::notice(
+                $this->area(),
+                'הגדרת ה-DMARC אינה חוסמת התחזות',
+                'המדיניות מוגדרת p=none, כלומר "לדווח ולא לעשות דבר". זו נקודת התחלה נכונה, אך כל עוד היא כך, מייל שמתחזה לדומיין עדיין מגיע ליעדו.',
+                'לאחר תקופת מעקב — להחמיר את המדיניות ל-quarantine ואז ל-reject.',
+                'p=none',
+            )];
+        }
+
+        return [Finding::ok($this->area(), 'הדומיין מוגן מהתחזות בדואר', 'DMARC פעיל עם p='.$policy.'.')];
+    }
+
+    /**
+     * MX — לאן הולך הדואר, ואם בכלל.
+     *
+     * @return list<Finding>
+     */
+    private function mailRoutingFindings(AuditContext $site): array
+    {
+        $records = $this->records(Hostname::registrable($site->host), DNS_MX);
+
+        if ($records === null || $records !== []) {
+            return [];
+        }
+
+        return [Finding::warning(
+            $this->area(),
+            'לדומיין אין הגדרת דואר (MX)',
+            'אין שרת דואר מוגדר לדומיין, כלומר מייל שנשלח לכתובת בדומיין הזה פשוט לא מגיע לשום מקום. אם משתמשים בכתובת מייל של הדומיין — היא אינה עובדת.',
+            'להגדיר רשומות MX אצל ספק הדואר (Google Workspace, Microsoft 365 או ספק האחסון).',
+        )];
+    }
+
+    /**
+     * CAA — מי רשאי בכלל להנפיק תעודת אבטחה בשם הדומיין.
+     *
+     * בלי הרשומה הזו כל רשות אישורים בעולם יכולה להנפיק תעודה תקפה לדומיין,
+     * וזה בדיוק מה שהופך השתלטות על הדומיין להשתלטות שקטה על התעבורה.
+     *
+     * @return list<Finding>
+     */
+    private function certificateAuthorityFindings(AuditContext $site): array
+    {
+        if (! defined('DNS_CAA')) {
+            return [];
+        }
+
+        $records = $this->records(Hostname::registrable($site->host), DNS_CAA);
+
+        if ($records === null || $records !== []) {
+            return [];
+        }
+
+        return [Finding::notice(
+            $this->area(),
+            'אין הגבלה על מי רשאי להנפיק תעודת אבטחה לדומיין',
+            'בלי רשומת CAA כל רשות אישורים בעולם יכולה להנפיק תעודה תקפה לדומיין הזה. זו שכבת הגנה חסרה, לא תקלה פעילה.',
+            'להוסיף רשומת CAA ל-DNS שמגבילה את ההנפקה לרשות שבה משתמשים בפועל.',
+        )];
+    }
+
+    /**
+     * שרתי שמות — כמה מהם, ומה קורה כשאחד מהם נופל.
+     *
+     * @return list<Finding>
+     */
+    private function nameServerFindings(AuditContext $site): array
+    {
+        $records = $this->records(Hostname::registrable($site->host), DNS_NS);
+
+        if ($records === null || count($records) >= 2) {
+            return [];
+        }
+
+        if ($records === []) {
+            return [];
+        }
+
+        return [Finding::notice(
+            $this->area(),
+            'לדומיין מוגדר שרת שמות אחד בלבד',
+            'כשיש שרת שמות יחיד, תקלה בו מנתקת את האתר ואת הדואר גם אם השרת עצמו עובד מצוין — הדפדפן פשוט אינו מצליח לתרגם את השם לכתובת.',
+            'להגדיר לפחות שני שרתי שמות אצל ספק ה-DNS. אצל רוב הספקים זו ברירת המחדל.',
+        )];
+    }
+
+    /**
+     * Records of one type, or null when the lookup itself did not answer.
+     *
+     * The distinction is the whole point, and it is why this goes through
+     * DnsLookup rather than dns_get_record: an empty answer means "nothing
+     * published", a failed resolver means nothing at all, and a cast flattens
+     * the two into the same confident warning.
      *
      * @return array<int, array<string, mixed>>|null
      */
-    protected function txt(string $domain): ?array
+    protected function records(string $domain, int $type): ?array
     {
-        $records = rescue(fn () => @dns_get_record($domain, DNS_TXT), false, report: false);
-
-        return $records === false ? null : (array) $records;
+        return rescue(fn (): ?array => $this->dns->lookup($domain, $type), null, report: false);
     }
 }

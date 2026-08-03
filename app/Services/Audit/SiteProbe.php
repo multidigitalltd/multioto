@@ -57,7 +57,7 @@ class SiteProbe
      * is the single most important thing this tool can report, and a throw
      * would turn it into an audit that produced nothing at all.
      */
-    public static function fetch(string $url, bool $follow = true): self
+    public static function fetch(string $url, bool $follow = true, ?string $agent = null): self
     {
         $started = hrtime(true);
         $guard = app(PublicTarget::class);
@@ -66,7 +66,7 @@ class SiteProbe
 
         try {
             for ($hop = 0; ; $hop++) {
-                $response = self::request($guard, $current);
+                $response = self::request($guard, $current, $agent);
                 $headers = self::normalise($response->headers());
                 $location = $follow ? self::redirect($response->status(), $headers, $current) : null;
 
@@ -110,6 +110,64 @@ class SiteProbe
         return $this->error === null && $this->status !== null && $this->status < 400;
     }
 
+    /**
+     * Statuses that mean "not for you" rather than "not working".
+     *
+     * A firewall refusing an automated request from a datacentre is the single
+     * most likely reason a perfectly healthy site answers us with an error, and
+     * the visitor it turns away is us — not the customer.
+     */
+    private const GATES = [401, 403, 406, 409, 418, 429];
+
+    /** Fingerprints of the things that sit in front of sites and say no. */
+    private const GUARDS = [
+        'Cloudflare' => ['cf-ray', 'cf-mitigated', 'attention required', 'just a moment', 'cloudflare ray id'],
+        'Sucuri' => ['x-sucuri-id', 'x-sucuri-block', 'sucuri website firewall'],
+        'Imperva' => ['x-iinfo', 'incap_ses', 'request unsuccessful'],
+        'Akamai' => ['akamaighost', 'akamai reference'],
+        'Wordfence' => ['wordfence'],
+        'ModSecurity' => ['mod_security', 'modsecurity'],
+        'AWS WAF' => ['x-amzn-waf', 'awselb/'],
+    ];
+
+    /**
+     * Whether the answer is a gate rather than the site.
+     *
+     * This distinction is the difference between a report that says "your site
+     * is broken" and one that says "your site would not let us look" — and the
+     * first, said about a site that is fine, is the finding that discredits the
+     * whole document.
+     */
+    public function blocked(): bool
+    {
+        if ($this->status === null) {
+            return false;
+        }
+
+        return in_array($this->status, self::GATES, true)
+            || ($this->status >= 400 && $this->guard() !== null);
+    }
+
+    /** Which gatekeeper answered, when one announces itself. */
+    public function guard(): ?string
+    {
+        $announced = mb_strtolower(implode(' ', array_merge(
+            array_keys($this->headers),
+            array_merge(...array_values($this->headers) ?: [[]]),
+            [mb_substr($this->body, 0, 4000)],
+        )));
+
+        foreach (self::GUARDS as $name => $signs) {
+            foreach ($signs as $sign) {
+                if (str_contains($announced, $sign)) {
+                    return $name;
+                }
+            }
+        }
+
+        return null;
+    }
+
     /** A header's first value, case-insensitively, or null. */
     public function header(string $name): ?string
     {
@@ -129,7 +187,7 @@ class SiteProbe
      * whole point is that nothing is dialled except an address this guard has
      * already looked at.
      */
-    private static function request(PublicTarget $guard, string $url): Response
+    private static function request(PublicTarget $guard, string $url, ?string $agent = null): Response
     {
         $parts = parse_url($url);
         $host = (string) ($parts['host'] ?? '');
@@ -138,8 +196,10 @@ class SiteProbe
 
         $request = Http::withHeaders([
             // Announced honestly. A site that blocks us should block a name
-            // its owner can look up, not a browser we are pretending to be.
-            'User-Agent' => 'MultiotoSiteAudit/1.0 (+site health check)',
+            // its owner can look up, not a browser we are pretending to be —
+            // and when a check needs the phone's answer, the phone is named
+            // alongside us rather than instead of us.
+            'User-Agent' => $agent ?? 'MultiotoSiteAudit/1.0 (+site health check)',
             'Accept' => 'text/html,application/xhtml+xml',
         ])->timeout(self::TIMEOUT)->connectTimeout(8)->withOptions([
             // A certificate that does not verify is a FINDING, not a reason

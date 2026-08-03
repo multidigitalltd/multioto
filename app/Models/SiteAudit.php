@@ -68,6 +68,18 @@ class SiteAudit extends Model
         return (int) (($this->summary['counts'][$severity] ?? 0));
     }
 
+    /**
+     * Whether the site turned the check away rather than answering it.
+     *
+     * Its own question because a blocked audit is not a failed one and not a
+     * clean one: most of it could not run, and a reader who is not told that
+     * will read the short list of findings as a short list of problems.
+     */
+    public function blocked(): bool
+    {
+        return (bool) ($this->summary['blocked'] ?? false);
+    }
+
     /** Everything that needs doing, worst first. Whatever passed is not it. */
     public function problems(): array
     {
