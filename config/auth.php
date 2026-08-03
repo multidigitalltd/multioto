@@ -6,6 +6,21 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Google sign-in
+    |--------------------------------------------------------------------------
+    |
+    | An optional extra fence. Sign-in already refuses any address that is not
+    | already a user, so this narrows an already-narrow door: set it and only
+    | addresses at that domain may use Google at all.
+    |
+    */
+
+    'google' => [
+        'allowed_domain' => env('GOOGLE_ALLOWED_DOMAIN', ''),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Authentication Defaults
     |--------------------------------------------------------------------------
     |

@@ -61,6 +61,11 @@ class SettingsServiceProvider extends ServiceProvider
         'backup.s3.bucket' => 'filesystems.disks.backups.bucket',
         'backup.s3.endpoint' => 'filesystems.disks.backups.endpoint',
         'backup.s3.path_style' => 'filesystems.disks.backups.use_path_style_endpoint',
+        // Google sign-in for the team panel, so it can be connected from the
+        // panel rather than from a deploy.
+        'google.client_id' => 'services.google.client_id',
+        'google.client_secret' => 'services.google.client_secret',
+        'google.allowed_domain' => 'auth.google.allowed_domain',
         'security.wpscan_token' => 'security.vulnerabilities.wpscan_token',
         'security.urlhaus_auth_key' => 'security.reputation.urlhaus_auth_key',
         'security.wordfence_api_key' => 'security.vulnerabilities.wordfence_api_key',

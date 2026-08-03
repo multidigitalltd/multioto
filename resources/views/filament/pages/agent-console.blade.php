@@ -135,10 +135,13 @@
             {{ $this->form }}
 
             <div class="flex flex-wrap items-center justify-between gap-3">
-                <x-filament::button type="submit" icon="heroicon-o-paper-airplane" wire:loading.attr="disabled" wire:target="run">
-                    <span wire:loading.remove wire:target="run">שלח</span>
-                    <span wire:loading wire:target="run">הסוכן חושב…</span>
-                </x-filament::button>
+                <div class="flex items-center gap-3">
+                    <x-filament::button type="submit" icon="heroicon-o-paper-airplane" wire:loading.attr="disabled" wire:target="run">
+                        <span wire:loading.remove wire:target="run">שלח</span>
+                        <span wire:loading wire:target="run">הסוכן חושב…</span>
+                    </x-filament::button>
+                    <x-voice-input target="data.instruction" />
+                </div>
                 <p class="text-xs text-gray-500 dark:text-gray-400">
                     שום דבר לא נשלח ללקוח ולא מתבצע באתר ללא אישורכם — כל פעולה מוצעת כאן לאישור.
                 </p>

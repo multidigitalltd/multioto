@@ -81,6 +81,10 @@ class AdminPanelProvider extends PanelProvider
             // this tab is in the background. The view is a no-op unless VAPID keys
             // are configured, so an install without keys is unaffected.
             ->renderHook(PanelsRenderHook::BODY_END, fn (): string => view('webpush.register')->render())
+            // "התחברות עם גוגל" under the password form. The view renders
+            // nothing when Google is not configured, so an install that never
+            // set it up sees the login screen exactly as before.
+            ->renderHook(PanelsRenderHook::AUTH_LOGIN_FORM_AFTER, fn (): string => view('auth.google-button')->render())
             ->sidebarCollapsibleOnDesktop()
             ->navigationGroups(['תמיכה', 'כספים', 'ניהול'])
             ->discoverResources(in: app_path('Filament/Resources'), for: 'App\\Filament\\Resources')
