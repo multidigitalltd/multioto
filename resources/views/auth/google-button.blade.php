@@ -11,12 +11,9 @@
 @endif
 
 @if ($configured)
-    <div class="mt-6">
-        <div class="relative mb-4 text-center">
-            <span class="relative z-10 bg-white px-3 text-xs text-gray-500 dark:bg-gray-900 dark:text-gray-400">או</span>
-            <span class="absolute inset-x-0 top-1/2 border-t border-gray-200 dark:border-gray-700"></span>
-        </div>
-
+    {{-- מעל טופס הסיסמה: זו הדרך שבה נכנסים בפועל, והסיסמה נשארת מתחת למי
+         שצריך אותה. --}}
+    <div class="mb-6">
         {{-- קישור ולא טופס: זו ניווט אל גוגל, ולא פעולה שמשנה משהו אצלנו. --}}
         <a href="{{ route('auth.google.redirect') }}"
            class="flex w-full items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5
@@ -32,8 +29,9 @@
             התחברות עם גוגל
         </a>
 
-        <p class="mt-3 text-center text-xs text-gray-500 dark:text-gray-400">
-            הכניסה מיועדת לחשבונות שכבר רשומים במערכת. חשבון גוגל שאינו רשום לא ייכנס.
-        </p>
+        <div class="relative mt-6 text-center">
+            <span class="relative z-10 bg-white px-3 text-xs text-gray-500 dark:bg-gray-900 dark:text-gray-400">או</span>
+            <span class="absolute inset-x-0 top-1/2 border-t border-gray-200 dark:border-gray-700"></span>
+        </div>
     </div>
 @endif

@@ -18,8 +18,6 @@
         <form wire:submit="run" class="flex flex-col gap-2">
             {{ $this->form }}
             <div class="flex items-center justify-between gap-2">
-                <x-voice-input target="data.instruction" />
-
                 <x-filament::button type="submit" size="sm" icon="heroicon-o-paper-airplane" wire:loading.attr="disabled">
                     <span wire:loading.remove wire:target="run">שלח לסוכן</span>
                     <span wire:loading wire:target="run">הסוכן חושב…</span>
