@@ -19,10 +19,38 @@
         אם ההודעה הזו נשארת על המסך — ה-JavaScript של העמוד (Livewire) לא נטען, ולכן כפתורי השמירה לא מגיבים.
         נסו לכבות תוספי דפדפן (חוסמי פרסומות/סקריפטים), לרענן עם Ctrl+F5, או להשתמש בטופס הגיבוי שבתחתית העמוד — הוא עובד גם בלי JavaScript.
     </div>
-    <script>
-        document.addEventListener('livewire:init', function () {
-            document.getElementById('lw-health-warning')?.remove();
-        });
+    <script data-navigate-once>
+        /*
+         * מסיר את האזהרה ברגע שידוע ש-Livewire חי.
+         *
+         * לא להסתמך רק על האירוע livewire:init: הוא קורה פעם אחת, בטעינה
+         * הראשונה של הפאנל. מי שמגיע למסך הזה דרך התפריט (ניווט פנימי) מגיע
+         * אחרי שהאירוע כבר קרה, ומאזין שנרשם עכשיו ממתין למשהו שלא יחזור —
+         * ואז האזהרה נשארת על המסך גם כשהכול תקין.
+         *
+         * אזהרה שנשארת כשאין תקלה גרועה מאזהרה שאין: היא שולחת לחפש בעיה
+         * שאינה קיימת, ובפעם הבאה שהיא תופיע באמת — לא יאמינו לה.
+         */
+        (function () {
+            var remove = function () {
+                document.getElementById('lw-health-warning')?.remove();
+            };
+
+            if (window.Livewire) {
+                remove();
+
+                return;
+            }
+
+            document.addEventListener('livewire:init', remove, { once: true });
+
+            // ואם הוא נטען בין שתי הבדיקות — נבדק שוב, פעם אחת, אחרי רגע.
+            setTimeout(function () {
+                if (window.Livewire) {
+                    remove();
+                }
+            }, 2500);
+        })();
     </script>
 
     @if ($statusText)
