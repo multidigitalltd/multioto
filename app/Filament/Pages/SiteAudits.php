@@ -6,6 +6,7 @@ use App\Jobs\RunSiteAuditJob;
 use App\Models\Site;
 use App\Models\SiteAudit;
 use App\Services\Audit\AuditReport;
+use App\Services\Audit\Comparison;
 use App\Services\Audit\PublicTarget;
 use App\Services\Audit\SiteAuditor;
 use App\Services\Security\DnsLookup;
@@ -92,7 +93,27 @@ class SiteAudits extends Page implements HasForms, HasTable
      */
     public function startAudit(): void
     {
-        $url = SiteAuditor::normaliseUrl((string) ($this->form->getState()['url'] ?? ''));
+        if ($this->queue((string) ($this->form->getState()['url'] ?? ''))) {
+            $this->form->fill(['url' => '']);
+        }
+    }
+
+    /**
+     * Run the same site again, from the row of an earlier audit.
+     *
+     * Deliberately not a shortcut around the address check: the name is
+     * approved afresh every time, because where a name points is not a property
+     * of the name and an address that was public last month need not be now.
+     */
+    public function recheck(SiteAudit $audit): void
+    {
+        $this->queue($audit->url);
+    }
+
+    /** Validate the address and put one audit of it on the queue. */
+    private function queue(string $address): bool
+    {
+        $url = SiteAuditor::normaliseUrl($address);
         $host = DnsLookup::host($url);
 
         try {
@@ -100,7 +121,7 @@ class SiteAudits extends Page implements HasForms, HasTable
         } catch (\Throwable $e) {
             Notification::make()->title('לא ניתן לבדוק את הכתובת')->body($e->getMessage())->danger()->send();
 
-            return;
+            return false;
         }
 
         $audit = SiteAudit::create([
@@ -117,13 +138,13 @@ class SiteAudits extends Page implements HasForms, HasTable
 
         RunSiteAuditJob::dispatch($audit->id);
 
-        $this->form->fill(['url' => '']);
-
         Notification::make()
             ->title('הבדיקה יצאה לדרך')
             ->body('התוצאות יופיעו ברשימה שלמטה תוך דקה-שתיים. אפשר לרענן את הדף.')
             ->success()
             ->send();
+
+        return true;
     }
 
     public function table(Table $table): Table
@@ -180,6 +201,29 @@ class SiteAudits extends Page implements HasForms, HasTable
                     ->modalSubmitAction(false)
                     ->modalCancelActionLabel('סגירה')
                     ->modalWidth('4xl'),
+
+                Tables\Actions\Action::make('changes')
+                    ->label('מה השתנה')
+                    ->icon('heroicon-o-arrows-right-left')
+                    ->color('gray')
+                    ->visible(fn (SiteAudit $record): bool => $record->status === SiteAudit::STATUS_COMPLETED)
+                    ->modalHeading(fn (SiteAudit $record): string => 'מה השתנה מאז הבדיקה הקודמת — '.$record->host)
+                    ->modalContent(fn (SiteAudit $record) => view('filament.pages.partials.site-audit-changes', [
+                        'comparison' => Comparison::for($record),
+                    ]))
+                    ->modalSubmitAction(false)
+                    ->modalCancelActionLabel('סגירה')
+                    ->modalWidth('3xl'),
+
+                Tables\Actions\Action::make('recheck')
+                    ->label('בדיקה חוזרת')
+                    ->icon('heroicon-o-arrow-path')
+                    ->color('gray')
+                    ->requiresConfirmation()
+                    ->modalHeading('לבדוק שוב את האתר?')
+                    ->modalDescription('הבדיקה תרוץ מחדש על אותה כתובת ותתווסף כשורה חדשה. הבדיקה הנוכחית נשמרת כפי שהיא.')
+                    ->modalSubmitActionLabel('בדוק שוב')
+                    ->action(fn (SiteAudit $record) => $this->recheck($record)),
 
                 Tables\Actions\Action::make('pdf')
                     ->label('הורדת PDF')
