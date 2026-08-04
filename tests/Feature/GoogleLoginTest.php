@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Enums\TwoFactorChannel;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Socialite\Facades\Socialite;
@@ -37,6 +38,48 @@ class GoogleLoginTest extends TestCase
 
         $this->assertAuthenticatedAs($user);
         $this->assertSame('1234567890', $user->fresh()->google_id);
+    }
+
+    /**
+     * מי שנכנס דרך גוגל אינו נדרש לקוד חד-פעמי.
+     *
+     * גוגל היא הגורם המאמת בכניסה הזו. המחיר ידוע ומכוון: אם חשבון הגוגל עצמו
+     * מוגן רק בסיסמה, הגורם השני עבר בפועל לאחריות של גוגל.
+     */
+    public function test_google_sign_in_satisfies_the_two_factor_gate(): void
+    {
+        $user = User::factory()->create([
+            'email' => 'team@example.co.il',
+            'two_factor_enabled' => true,
+            'two_factor_channel' => TwoFactorChannel::Email,
+        ]);
+
+        $this->assertTrue($user->requiresTwoFactor());
+
+        $this->pretendGoogleReturns('team@example.co.il', verified: true, id: '1');
+
+        $this->get(route('auth.google.callback'))->assertRedirect();
+
+        $this->assertAuthenticatedAs($user);
+        $this->assertTrue(session('two_factor.confirmed'));
+
+        // ולכן הפאנל נפתח ישירות, בלי מעבר למסך הקוד.
+        $this->get(route('filament.admin.pages.dashboard'))
+            ->assertOk();
+    }
+
+    /** בכניסה עם סיסמה מקומית לא השתנה דבר — שם עדיין נדרש קוד. */
+    public function test_a_password_login_still_owes_its_code(): void
+    {
+        $user = User::factory()->create([
+            'two_factor_enabled' => true,
+            'two_factor_channel' => TwoFactorChannel::Email,
+        ]);
+
+        $this->actingAs($user);
+
+        $this->get(route('filament.admin.pages.dashboard'))
+            ->assertRedirect(route('two-factor.challenge'));
     }
 
     /**
