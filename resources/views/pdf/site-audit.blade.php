@@ -41,6 +41,11 @@
         .area-head { font-weight: bold; font-size: 11.5px; color: #55606e; margin: 12px 0 5px; }
         ul { margin: 4px 0; padding-right: 18px; }
 
+        .since { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 14px; margin-bottom: 16px; }
+        .since .h { font-weight: bold; font-size: 13px; margin-bottom: 4px; }
+        .since .fixed-head { font-weight: bold; color: #166534; margin-top: 6px; }
+        .since .new-head { font-weight: bold; color: #991b1b; margin-top: 6px; }
+
         .foot { margin-top: 24px; color: #55606e; font-size: 10px; border-top: 1px solid #e2e8f0; padding-top: 10px; }
     </style>
 </head>
@@ -75,6 +80,36 @@
             </tr>
         </table>
     </div>
+
+    {{-- מה השתנה מאז הבדיקה הקודמת. מופיע רק כשיש בדיקה קודמת להשוות אליה,
+         ולפני הממצאים — מי שכבר קיבל דוח על האתר הזה שואל קודם כול מה זז. --}}
+    @if ($comparison !== null)
+        <div class="since">
+            <div class="h">מאז הבדיקה הקודמת ({{ $comparison['at'] }})</div>
+
+            @if ($comparison['fixed'] === [] && $comparison['appeared'] === [])
+                אף ממצא לא נפתר ולא נוסף בין שתי הבדיקות.
+            @else
+                @if ($comparison['fixed'] !== [])
+                    <div class="fixed-head">תוקנו — {{ count($comparison['fixed']) }}</div>
+                    <ul>
+                        @foreach ($comparison['fixed'] as $item)
+                            <li>{{ $item['title'] }}</li>
+                        @endforeach
+                    </ul>
+                @endif
+
+                @if ($comparison['appeared'] !== [])
+                    <div class="new-head">חדשים — {{ count($comparison['appeared']) }}</div>
+                    <ul>
+                        @foreach ($comparison['appeared'] as $item)
+                            <li>{{ $item['title'] }}</li>
+                        @endforeach
+                    </ul>
+                @endif
+            @endif
+        </div>
+    @endif
 
     @foreach ($groups as $label => $items)
         @continue($items === [])

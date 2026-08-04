@@ -122,6 +122,28 @@ class SiteAudit extends Model
         return array_keys($areas);
     }
 
+    /**
+     * The most recent earlier audit of the same host that can be compared to.
+     *
+     * Blocked and unfinished audits are skipped rather than reached for: a run
+     * where most checks never happened would make everything it missed look
+     * like something that was fixed since.
+     */
+    public function previousComparable(): ?self
+    {
+        return static::query()
+            ->where('host', $this->host)
+            ->where('id', '<', $this->id)
+            ->where('status', self::STATUS_COMPLETED)
+            ->orderByDesc('id')
+            ->select(['id', 'host', 'url', 'status', 'findings', 'summary', 'created_at', 'finished_at'])
+            // Streamed, not fetched: "blocked" lives inside the summary JSON and
+            // cannot be filtered in SQL on both databases, and the findings
+            // column is heavy. This stops at the first row that qualifies.
+            ->cursor()
+            ->first(fn (self $audit): bool => ! $audit->blocked());
+    }
+
     /** Everything that needs doing, worst first. Whatever passed is not it. */
     public function problems(): array
     {

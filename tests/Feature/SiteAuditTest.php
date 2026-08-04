@@ -20,6 +20,7 @@ use App\Services\Audit\Checks\Measurement;
 use App\Services\Audit\Checks\MobileReadiness;
 use App\Services\Audit\Checks\SecurityHeaders;
 use App\Services\Audit\Checks\Transport;
+use App\Services\Audit\Comparison;
 use App\Services\Audit\PublicTarget;
 use App\Services\Audit\SiteAuditor;
 use App\Services\Audit\SiteProbe;
@@ -1174,6 +1175,196 @@ class SiteAuditTest extends TestCase
         $reputation = \Mockery::mock(DomainReputationClient::class)->makePartial();
         $reputation->shouldReceive('check')->andReturn(['sources' => [], 'listings' => [], 'errors' => []]);
         $this->app->instance(DomainReputationClient::class, $reputation);
+    }
+
+    /** ההשוואה אומרת מה נסגר, מה נפתח, ומה עדיין פתוח. */
+    public function test_the_comparison_names_what_was_fixed_and_what_appeared(): void
+    {
+        $this->storedAudit('example.com', [
+            $this->problem('אבטחה', 'אין HTTPS', 'critical'),
+            $this->problem('נגישות', 'אין הצהרת נגישות'),
+            $this->problem('זמינות', 'האתר איטי', 'notice'),
+        ]);
+
+        $current = $this->storedAudit('example.com', [
+            $this->problem('נגישות', 'אין הצהרת נגישות'),
+            $this->problem('קידום', 'אין מפת אתר', 'notice'),
+            ['severity' => 'ok', 'area' => 'אבטחה', 'title' => 'האתר מוגש בחיבור מאובטח'],
+        ]);
+
+        $comparison = Comparison::for($current);
+
+        $this->assertTrue($comparison->available());
+        $this->assertTrue($comparison->changed());
+        $this->assertSame(['אין HTTPS', 'האתר איטי'], array_column($comparison->fixed(), 'title'));
+        $this->assertSame(['אין מפת אתר'], array_column($comparison->appeared(), 'title'));
+        $this->assertSame(['אין הצהרת נגישות'], array_column($comparison->remaining(), 'title'));
+
+        // ומה שהמסך מציג בפועל, ולא רק מה שהשירות מחזיר.
+        $screen = view('filament.pages.partials.site-audit-changes', ['comparison' => $comparison])->render();
+
+        $this->assertStringContainsString('אין HTTPS', $screen);
+        $this->assertStringContainsString('אין מפת אתר', $screen);
+    }
+
+    /**
+     * אותה תקלה עם מספר אחר היא אותה תקלה.
+     *
+     * שגיאה 500 שהפכה ל-502 היא אתר שעדיין שבור. דיווח שהראשונה תוקנה והשנייה
+     * נולדה הוא דיווח על עבודה שלא נעשתה.
+     */
+    public function test_a_finding_whose_number_changed_is_still_the_same_finding(): void
+    {
+        $this->storedAudit('example.com', [$this->problem('זמינות', 'האתר מחזיר שגיאה 500', 'critical')]);
+        $current = $this->storedAudit('example.com', [$this->problem('זמינות', 'האתר מחזיר שגיאה 502', 'critical')]);
+
+        $comparison = Comparison::for($current);
+
+        $this->assertSame([], $comparison->fixed());
+        $this->assertSame([], $comparison->appeared());
+        $this->assertFalse($comparison->changed());
+        $this->assertSame(['האתר מחזיר שגיאה 502'], array_column($comparison->remaining(), 'title'));
+    }
+
+    /**
+     * בדיקה שנחסמה אינה בסיס להשוואה.
+     *
+     * ברוב הבדיקות שם לא רצו כלל, וכל ממצא שהיה קודם ואינו בה ייראה כאילו
+     * תוקן. עדיף להשוות מול הבדיקה המלאה שלפניה מאשר לדווח על תיקון שלא היה.
+     */
+    public function test_a_blocked_audit_is_not_used_as_a_baseline(): void
+    {
+        $full = $this->storedAudit('example.com', [$this->problem('אבטחה', 'אין HTTPS', 'critical')]);
+        $this->storedAudit('example.com', [], blocked: true);
+
+        $current = $this->storedAudit('example.com', [$this->problem('אבטחה', 'אין HTTPS', 'critical')]);
+
+        $comparison = Comparison::for($current);
+
+        $this->assertSame($full->id, $comparison->previous?->id);
+        $this->assertSame([], $comparison->fixed());
+    }
+
+    /** וכשהבדיקה הנוכחית היא זו שנחסמה — אין השוואה בכלל. */
+    public function test_a_blocked_current_audit_has_no_comparison(): void
+    {
+        $this->storedAudit('example.com', [$this->problem('אבטחה', 'אין HTTPS', 'critical')]);
+
+        $comparison = Comparison::for($this->storedAudit('example.com', [], blocked: true));
+
+        $this->assertFalse($comparison->available());
+        $this->assertNotNull($comparison->unavailable);
+        $this->assertSame([], $comparison->fixed());
+    }
+
+    /** בדיקה של אתר אחר אינה בסיס להשוואה, גם אם היא האחרונה שרצה. */
+    public function test_the_comparison_stays_within_the_same_host(): void
+    {
+        $this->storedAudit('other.co.il', [$this->problem('אבטחה', 'אין HTTPS', 'critical')]);
+
+        $comparison = Comparison::for($this->storedAudit('example.com', []));
+
+        $this->assertFalse($comparison->available());
+    }
+
+    /** לבדיקה הראשונה של אתר אין למה להשוות, והמסך אומר זאת. */
+    public function test_the_first_audit_of_a_site_has_nothing_to_compare(): void
+    {
+        $comparison = Comparison::for($this->storedAudit('example.com', []));
+
+        $this->assertFalse($comparison->available());
+        $this->assertStringContainsString('הראשונה', (string) $comparison->unavailable);
+    }
+
+    /**
+     * המסמך ללקוח אומר מה זז מאז הפעם הקודמת.
+     *
+     * זו השאלה הראשונה של מי שכבר קיבל דוח על האתר הזה, ובלי התשובה הזו הדוח
+     * החוזר הוא עוד רשימה שצריך להשוות ביד מול הקודמת.
+     */
+    public function test_the_document_states_what_changed_since_the_previous_audit(): void
+    {
+        $this->storedAudit('example.com', [$this->problem('אבטחה', 'אין HTTPS', 'critical')]);
+        $current = $this->storedAudit('example.com', [$this->problem('נגישות', 'אין הצהרת נגישות')]);
+
+        $comparison = Comparison::for($current);
+
+        $this->assertSame(['אין HTTPS'], array_column($comparison->fixed(), 'title'));
+        $this->assertSame(['אין הצהרת נגישות'], array_column($comparison->appeared(), 'title'));
+        $this->assertStringStartsWith('%PDF', app(AuditReport::class)->pdf($current));
+    }
+
+    /** ובבדיקה ראשונה הפרק הזה פשוט אינו קיים — אין על מה לדווח. */
+    public function test_the_document_omits_the_comparison_when_there_is_none(): void
+    {
+        $audit = $this->completed();
+
+        $this->assertStringStartsWith('%PDF', app(AuditReport::class)->pdf($audit));
+        $this->assertFalse(Comparison::for($audit)->available());
+    }
+
+    /** "בדיקה חוזרת" פותחת שורה חדשה ומשאירה את הישנה כפי שהיא. */
+    public function test_a_recheck_queues_a_fresh_audit_of_the_same_address(): void
+    {
+        Queue::fake();
+        $this->bindTargetResolving(['93.184.216.34']);
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+
+        $existing = $this->completed();
+
+        Livewire::test(SiteAudits::class)
+            ->call('recheck', $existing)
+            ->assertNotified();
+
+        $fresh = SiteAudit::query()->latest('id')->first();
+
+        $this->assertNotSame($existing->id, $fresh->id);
+        $this->assertSame('https://example.com', $fresh->url);
+        $this->assertSame(SiteAudit::STATUS_RUNNING, $fresh->status);
+        $this->assertSame(SiteAudit::STATUS_COMPLETED, $existing->fresh()->status);
+
+        Queue::assertPushed(RunSiteAuditJob::class);
+    }
+
+    /** גם בבדיקה חוזרת הכתובת נבדקת מחדש — כתובת אינה תכונה של השם. */
+    public function test_a_recheck_of_an_address_that_now_points_inside_is_refused(): void
+    {
+        Queue::fake();
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+
+        $existing = $this->completed();
+
+        $this->bindTargetResolving(['127.0.0.1']);
+
+        Livewire::test(SiteAudits::class)
+            ->call('recheck', $existing)
+            ->assertNotified();
+
+        $this->assertSame(1, SiteAudit::query()->count());
+        Queue::assertNothingPushed();
+    }
+
+    /**
+     * בדיקה שמורה עם ממצאים נתונים — הבסיס לבדיקות ההשוואה.
+     *
+     * @param  list<array<string, mixed>>  $findings
+     */
+    private function storedAudit(string $host, array $findings, bool $blocked = false, string $status = SiteAudit::STATUS_COMPLETED): SiteAudit
+    {
+        return SiteAudit::create([
+            'url' => 'https://'.$host,
+            'host' => $host,
+            'status' => $status,
+            'finished_at' => now(),
+            'findings' => $findings,
+            'summary' => ['counts' => [], 'blocked' => $blocked],
+        ]);
+    }
+
+    /** ממצא בשורה אחת, בשביל בדיקות שאכפת להן רק מהזהות שלו. */
+    private function problem(string $area, string $title, string $severity = 'warning'): array
+    {
+        return ['severity' => $severity, 'area' => $area, 'title' => $title, 'detail' => 'ד', 'fix' => 'פ'];
     }
 
     private function completed(): SiteAudit

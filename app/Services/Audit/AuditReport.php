@@ -71,6 +71,28 @@ class AuditReport
         return 'בדיקת-אתר-'.$host.'-'.$audit->created_at->format('Y-m-d').'.pdf';
     }
 
+    /**
+     * The "since last time" block, or null when there is none to state.
+     *
+     * @return array{at: string, fixed: list<array<string, mixed>>, appeared: list<array<string, mixed>>}|null
+     */
+    private function since(SiteAudit $audit): ?array
+    {
+        $comparison = Comparison::for($audit);
+
+        if (! $comparison->available()) {
+            return null;
+        }
+
+        $previous = $comparison->previous;
+
+        return [
+            'at' => $previous->finished_at?->format('d/m/Y') ?? $previous->created_at->format('d/m/Y'),
+            'fixed' => $comparison->fixed(),
+            'appeared' => $comparison->appeared(),
+        ];
+    }
+
     /** @return array<string, mixed> */
     private function data(SiteAudit $audit): array
     {
@@ -83,6 +105,13 @@ class AuditReport
         return [
             'audit' => $audit,
             'groups' => $groups,
+            // What moved since the last comparable audit of the same site. Null
+            // when there is nothing honest to compare against — a first audit,
+            // or one where a firewall stopped most of the checks from running
+            // and every fault it never reached would read as one that was
+            // fixed. Telling a customer their site improved when it did not is
+            // the one mistake this document cannot afford.
+            'comparison' => $this->since($audit),
             'problems' => $audit->problems(),
             // Grouped by area rather than listed flat: "we checked this and it
             // is in order" is worth as much as any fault to somebody deciding
