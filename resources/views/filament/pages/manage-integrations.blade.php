@@ -55,7 +55,7 @@
     {{-- NOT collapsible: expanding needs Alpine, and this form exists exactly
          for the case where the page's JavaScript is broken. --}}
     <x-filament::section class="mt-6" icon="heroicon-o-lifebuoy">
-        <x-slot name="heading">טופס גיבוי — שמירת מפתחות אבטחה (עובד גם בלי JavaScript)</x-slot>
+        <x-slot name="heading">טופס גיבוי — שמירת מפתחות (עובד גם בלי JavaScript)</x-slot>
         <x-slot name="description">אם כפתור השמירה למעלה לא מגיב, שמרו כאן: טופס רגיל ששולח ישירות לשרת. שדה ריק לא משנה ערך קיים.</x-slot>
 
         @php
@@ -64,6 +64,9 @@
                 ['name' => 'wordfence_api_key', 'label' => 'Wordfence Intelligence API Key', 'help' => 'נדרש לפיד הפגיעויות: wordfence.com → Wordfence Intelligence → API Keys.'],
                 ['name' => 'safe_browsing_key', 'label' => 'Google Safe Browsing API Key', 'help' => null],
                 ['name' => 'wpscan_token', 'label' => 'WPScan API Token', 'help' => null],
+                ['name' => 'google_client_id', 'label' => 'גוגל — Client ID', 'help' => 'מסתיים ב-apps.googleusercontent.com.', 'plain' => true],
+                ['name' => 'google_client_secret', 'label' => 'גוגל — Client Secret', 'help' => null],
+                ['name' => 'google_allowed_domain', 'label' => 'גוגל — הגבלה לדומיין (אופציונלי)', 'help' => 'ריק = לא משנה את הקיים. לביטול ההגבלה — סמנו את התיבה שמתחת.', 'plain' => true],
             ];
         @endphp
 
@@ -74,7 +77,8 @@
                 <div>
                     <label for="fb-{{ $field['name'] }}" class="mb-1 block text-sm font-medium">{{ $field['label'] }}</label>
                     <input id="fb-{{ $field['name'] }}" name="{{ $field['name'] }}" type="text"
-                           style="-webkit-text-security: disc" autocomplete="off" spellcheck="false"
+                           @unless ($field['plain'] ?? false) style="-webkit-text-security: disc" @endunless
+                           autocomplete="off" spellcheck="false"
                            data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
                            class="fi-input block w-full rounded-lg border-gray-300 text-sm shadow-sm dark:border-gray-600 dark:bg-gray-800"
                            @if ($field['help']) aria-describedby="fb-{{ $field['name'] }}-help" @endif>
@@ -83,6 +87,14 @@
                     @endif
                 </div>
             @endforeach
+
+            <div class="sm:col-span-2">
+                <label class="flex items-center gap-2 text-sm">
+                    <input type="checkbox" name="clear_google_allowed_domain" value="1"
+                           class="rounded border-gray-300 dark:border-gray-600 dark:bg-gray-800">
+                    לבטל את הגבלת הדומיין בהתחברות עם גוגל (לאפשר לכל כתובת שכבר רשומה כמשתמש)
+                </label>
+            </div>
 
             <div class="sm:col-span-2">
                 <x-filament::button type="submit" icon="heroicon-o-check">

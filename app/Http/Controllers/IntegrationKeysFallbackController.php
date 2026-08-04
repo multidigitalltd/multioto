@@ -23,12 +23,22 @@ use Illuminate\Support\Str;
  */
 class IntegrationKeysFallbackController extends Controller
 {
-    /** The keys this fallback may touch — the security group only. */
+    /**
+     * The keys this fallback may touch.
+     *
+     * An explicit list rather than "whatever was posted": this endpoint exists
+     * for the moment the page's JavaScript is broken, and a route that writes
+     * any setting it is handed would be a much larger door than the problem it
+     * solves.
+     */
     private const ALLOWED_KEYS = [
         'wpscan_token' => 'security.wpscan_token',
         'safe_browsing_key' => 'security.safe_browsing_key',
         'urlhaus_auth_key' => 'security.urlhaus_auth_key',
         'wordfence_api_key' => 'security.wordfence_api_key',
+        'google_client_id' => 'google.client_id',
+        'google_client_secret' => 'google.client_secret',
+        'google_allowed_domain' => 'google.allowed_domain',
     ];
 
     public function save(Request $request): RedirectResponse
@@ -40,10 +50,22 @@ class IntegrationKeysFallbackController extends Controller
             'safe_browsing_key' => ['nullable', 'string', 'max:500'],
             'urlhaus_auth_key' => ['nullable', 'string', 'max:500'],
             'wordfence_api_key' => ['nullable', 'string', 'max:500'],
+            'google_client_id' => ['nullable', 'string', 'max:500'],
+            'google_client_secret' => ['nullable', 'string', 'max:500'],
+            'google_allowed_domain' => ['nullable', 'string', 'max:255'],
+            'clear_google_allowed_domain' => ['nullable'],
         ]);
 
         $saved = [];
         $rejected = false;
+
+        // Emptying the domain fence is an instruction ("any address that is
+        // already a user"), and a blank field cannot say it — blank means
+        // "leave alone" everywhere else on this form. So it is said explicitly.
+        if ($request->boolean('clear_google_allowed_domain')) {
+            Setting::put('google.allowed_domain', '');
+            $saved[] = 'google.allowed_domain';
+        }
 
         foreach (self::ALLOWED_KEYS as $field => $key) {
             $raw = (string) ($validated[$field] ?? '');
