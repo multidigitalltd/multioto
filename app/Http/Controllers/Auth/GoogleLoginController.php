@@ -20,8 +20,13 @@ use Laravel\Socialite\Two\GoogleProvider;
  * להתחבר היא בדיוק דלת פתוחה לפאנל שמנהל כסף של לקוחות. מי שאינו כבר ברשימת
  * המשתמשים מקבל סירוב, גם אם גוגל אישרה אותו בשמחה.
  *
- * שאר ההגנות נשארות במקומן: אימות דו-שלבי, אם הוא מוגדר למשתמש, נדרש גם אחרי
- * כניסה עם גוגל — הכניסה מזהה מי אתה, היא אינה מוותרת על השלב השני.
+ * כניסה דרך גוגל נחשבת כאן גם כאימות דו-שלבי, ולכן לא נדרש קוד חד-פעמי אחריה.
+ * זו החלטה מודעת עם מחיר שכדאי לדעת: גוגל אימתה מי אתה, אך לא בהכרח בשני
+ * גורמים — אם חשבון הגוגל עצמו מוגן רק בסיסמה, סיסמת הגוגל היא כעת הדבר היחיד
+ * שעומד בין תוקף לפאנל. במילים אחרות, הגורם השני עבר לאחריות של גוגל, וההנחה
+ * היא שאימות דו-שלבי מופעל שם על חשבונות הצוות.
+ *
+ * כניסה בסיסמה מקומית ממשיכה לדרוש קוד כרגיל — שם לא השתנה דבר.
  */
 class GoogleLoginController extends Controller
 {
@@ -85,10 +90,18 @@ class GoogleLoginController extends Controller
             $user->forceFill(['google_id' => $googleId])->save();
         }
 
-        AuditLog::record('auth.google.login', 'התחברות עם גוגל', actor: $user);
+        AuditLog::record(
+            'auth.google.login',
+            'התחברות עם גוגל'.($user->requiresTwoFactor() ? ' (במקום קוד חד-פעמי)' : ''),
+            actor: $user,
+        );
 
         Auth::login($user, remember: true);
         $request->session()->regenerate();
+
+        // גוגל היא כאן הגורם המאמת, ולכן אין קוד חד-פעמי אחריה. נכתב אחרי
+        // regenerate כדי שהסימון ישב על המושב החדש ולא על זה שהוחלף.
+        $request->session()->put('two_factor.confirmed', true);
 
         return redirect()->intended(route('filament.admin.pages.dashboard'));
     }
