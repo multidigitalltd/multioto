@@ -559,6 +559,9 @@ class ManageIntegrations extends Page implements HasForms
         'security.safe_browsing_key' => 'Google Safe Browsing',
         'security.urlhaus_auth_key' => 'abuse.ch Auth-Key',
         'security.wordfence_api_key' => 'Wordfence API',
+        'google.client_id' => 'גוגל Client ID',
+        'google.client_secret' => 'גוגל Client Secret',
+        'google.allowed_domain' => 'גוגל — הגבלת דומיין',
     ];
 
     /**

@@ -34,6 +34,49 @@ class IntegrationKeysFallbackTest extends TestCase
         $this->assertArrayNotHasKey('security.safe_browsing_key', Setting::map());
     }
 
+    /**
+     * מפתחות ההתחברות עם גוגל נשמרים גם דרך הטופס הזה.
+     *
+     * זו הנקודה של הטופס כולו: כשה-JavaScript של הדף לא נטען, זה המסלול
+     * שעובד. הגדרה שאפשר לשמור רק דרך המסלול השבור אינה הגדרה.
+     */
+    public function test_the_google_sign_in_keys_can_be_saved_without_javascript(): void
+    {
+        $this->actingAs(User::factory()->create());
+
+        $response = $this->post(route('integrations.security-keys.fallback'), [
+            'google_client_id' => '  1234.apps.googleusercontent.com  ',
+            'google_client_secret' => 'GOCSPX-secret',
+            'google_allowed_domain' => 'multi-digital.co.il',
+        ]);
+
+        $response->assertRedirect();
+        $response->assertSessionHas('integration_status', fn ($s): bool => $s['variant'] === 'success');
+
+        $stored = Setting::map();
+
+        $this->assertSame('1234.apps.googleusercontent.com', $stored['google.client_id'] ?? null);
+        $this->assertSame('GOCSPX-secret', $stored['google.client_secret'] ?? null);
+        $this->assertSame('multi-digital.co.il', $stored['google.allowed_domain'] ?? null);
+    }
+
+    /**
+     * ביטול הגבלת הדומיין נאמר במפורש, כי שדה ריק אינו יכול לומר אותו.
+     *
+     * בכל שאר הטופס ריק פירושו "אל תיגע", ולכן להסרת ההגבלה יש תיבת סימון.
+     */
+    public function test_the_domain_fence_can_be_lifted_deliberately(): void
+    {
+        Setting::put('google.allowed_domain', 'multi-digital.co.il');
+        $this->actingAs(User::factory()->create());
+
+        $this->post(route('integrations.security-keys.fallback'), [
+            'clear_google_allowed_domain' => '1',
+        ])->assertRedirect();
+
+        $this->assertSame('', Setting::map()['google.allowed_domain'] ?? null);
+    }
+
     public function test_the_fallback_rejects_the_panel_password_as_autofill(): void
     {
         $this->actingAs(User::factory()->create(['password' => bcrypt('Panel-Pass-9!')]));
