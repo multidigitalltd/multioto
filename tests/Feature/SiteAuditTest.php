@@ -2,10 +2,16 @@
 
 namespace Tests\Feature;
 
+use App\Enums\TaskStatus;
+use App\Enums\TicketPriority;
 use App\Enums\UserRole;
 use App\Filament\Pages\SiteAudits;
+use App\Jobs\NotifyTaskCreatedJob;
 use App\Jobs\RunSiteAuditJob;
+use App\Models\Customer;
+use App\Models\Site;
 use App\Models\SiteAudit;
+use App\Models\Task;
 use App\Models\User;
 use App\Services\Audit\AuditContext;
 use App\Services\Audit\AuditReport;
@@ -31,6 +37,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
+use Livewire\Features\SupportTesting\Testable;
 use Livewire\Livewire;
 use Tests\TestCase;
 
@@ -1342,6 +1349,115 @@ class SiteAuditTest extends TestCase
 
         $this->assertSame(1, SiteAudit::query()->count());
         Queue::assertNothingPushed();
+    }
+
+    /**
+     * הממצאים הופכים למשימה אחת עם צ'ק-ליסט, לא לארבע-עשרה משימות.
+     *
+     * תיקון אתר הוא עבודה אחת. רשימה שמגיעה כארבע-עשרה משימות נפרדות היא רשימה
+     * שאיש לא סוגר.
+     */
+    public function test_the_findings_become_one_task_with_a_checklist(): void
+    {
+        Queue::fake();
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+
+        $audit = $this->completed();
+
+        $this->openTask(Livewire::test(SiteAudits::class), $audit, [0, 1, 2])
+            ->assertNotified();
+
+        $task = Task::query()->latest('id')->first();
+
+        $this->assertNotNull($task);
+        $this->assertSame('תיקון ממצאי בדיקת אתר — example.com', $task->title);
+        $this->assertSame(TaskStatus::Open, $task->status);
+        // הממצא החמור ביותר קובע את העדיפות.
+        $this->assertSame(TicketPriority::High, $task->priority);
+        $this->assertSame(
+            ['[מיידי] אין HTTPS', '[חשוב] אין הצהרת נגישות', '[מומלץ] סקריפטים חוסמים'],
+            array_column((array) $task->subtasks, 'title'),
+        );
+        // מה שצריך לעשות נשמר בתיאור, כדי שמי שמבצע לא יצטרך לחזור לבדיקה.
+        $this->assertStringContainsString('פ', (string) $task->description);
+
+        Queue::assertPushed(NotifyTaskCreatedJob::class);
+    }
+
+    /** אפשר לבחור רק חלק מהממצאים, ורק הם נכנסים לצ'ק-ליסט. */
+    public function test_only_the_chosen_findings_reach_the_checklist(): void
+    {
+        Queue::fake();
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+
+        $this->openTask(Livewire::test(SiteAudits::class), $this->completed(), [1]);
+
+        $task = Task::query()->latest('id')->first();
+
+        $this->assertSame(['[חשוב] אין הצהרת נגישות'], array_column((array) $task->subtasks, 'title'));
+        $this->assertSame(TicketPriority::Normal, $task->priority);
+    }
+
+    /** לחיצה שנייה לא פותחת עותק שני של עבודה שכבר נקבעה. */
+    public function test_a_second_press_does_not_open_a_second_task(): void
+    {
+        Queue::fake();
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+
+        $audit = $this->completed();
+
+        $screen = Livewire::test(SiteAudits::class);
+
+        $this->openTask($screen, $audit, [0]);
+        $this->openTask($screen, $audit, [0, 1]);
+
+        $this->assertSame(1, Task::query()->count());
+        $this->assertSame(['[מיידי] אין HTTPS'], array_column((array) Task::first()->subtasks, 'title'));
+    }
+
+    /** בדיקה של אתר שאנחנו מנהלים — המשימה נקשרת ללקוח. */
+    public function test_the_task_is_linked_to_the_customer_when_the_site_is_ours(): void
+    {
+        Queue::fake();
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+
+        $customer = Customer::factory()->create();
+        $site = Site::factory()->create(['customer_id' => $customer->id, 'domain' => 'example.com']);
+
+        $audit = $this->completed();
+        $audit->update(['site_id' => $site->id]);
+
+        $this->openTask(Livewire::test(SiteAudits::class), $audit, [0]);
+
+        $this->assertSame($customer->id, Task::query()->latest('id')->first()->customer_id);
+    }
+
+    /** בלי בחירה אין משימה — ולא נפתחת משימה ריקה. */
+    public function test_no_task_is_opened_when_nothing_is_chosen(): void
+    {
+        Queue::fake();
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+
+        $this->openTask(Livewire::test(SiteAudits::class), $this->completed(), []);
+
+        $this->assertSame(0, Task::query()->count());
+    }
+
+    /**
+     * פתיחת המשימה עם בחירה מפורשת של ממצאים.
+     *
+     * הבחירה נכתבת לתוך מצב הטופס במקום דרך callTableAction: זה משטח את המערך
+     * ומיזוג איבר-איבר משאיר את ברירת המחדל (הכול מסומן) במקומות שלא נגעו בהם,
+     * וכל בדיקה של בחירה חלקית הייתה עוברת בלי לבדוק דבר.
+     *
+     * @param  list<int>  $indexes
+     */
+    private function openTask(Testable $screen, SiteAudit $audit, array $indexes): Testable
+    {
+        return $screen
+            ->mountTableAction('task', $audit)
+            ->set('mountedTableActionsData.0.findings', $indexes)
+            ->callMountedTableAction();
     }
 
     /**
