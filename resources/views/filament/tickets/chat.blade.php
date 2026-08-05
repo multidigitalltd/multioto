@@ -19,6 +19,11 @@
         .chat-rich em, .chat-rich i { font-style: italic; }
         .chat-rich blockquote { margin: .25rem 0; padding-inline-start: .75rem; border-inline-start: 3px solid rgb(209 213 219); color: rgb(107 114 128); }
         .chat-rich h1, .chat-rich h2, .chat-rich h3, .chat-rich h4 { font-weight: 700; margin: .5rem 0 .25rem; }
+        /* Text the sender highlighted. Stated rather than left to the browser:
+           the bubble is dark in dark mode, and a default that inherits the
+           foreground colour would paint yellow on yellow. */
+        .chat-rich mark { background-color: rgb(254 240 138); color: rgb(24 24 27); padding: 0 .1em; border-radius: .15em; }
+        .dark .chat-rich mark { background-color: rgb(202 138 4); color: rgb(255 255 255); }
     </style>
 
     {{-- Context strip: who + channel + status at a glance. --}}
