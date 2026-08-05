@@ -1,4 +1,41 @@
 <x-filament-panels::page>
+    {{-- An empty screen used to mean two very different things: "you are up to
+         date" and "nobody has checked in weeks". Only one of them is safe to
+         act on, so when the check is stale or failed the page says so instead
+         of quietly implying the first. --}}
+    @if ($checkStale || $checkError)
+        <x-filament::section icon="heroicon-o-exclamation-triangle" class="border-danger-300 dark:border-danger-700">
+            <x-slot name="heading">בדיקת העדכונים אינה פועלת</x-slot>
+
+            <div class="space-y-2 text-sm text-gray-700 dark:text-gray-200">
+                @if ($checkError)
+                    <p>
+                        הבדיקה האחרונה נכשלה@if (! empty($lastCheck['at'])) ({{ $lastCheck['at'] }})@endif.
+                        כל עוד היא נכשלת, המסך הזה לא יכול לדעת אם יש גרסה חדשה — היעדר הודעה כאן אינו אומר שאתם מעודכנים.
+                    </p>
+                    <pre class="overflow-x-auto rounded-lg bg-gray-100 dark:bg-gray-800 p-3 font-mono text-xs" dir="ltr">{{ $checkError }}</pre>
+                    <p>ברוב המקרים זו הרשאת גישה למאגר בשרת (git fetch נכשל) — יש לוודא שהשרת יכול למשוך מהמאגר.</p>
+                @elseif ($lastCheck === null)
+                    <p>
+                        סוכן העדכון בשרת מעולם לא רץ, ולכן אף פעם לא נבדק אם יש גרסה חדשה.
+                        התקינו אותו פעם אחת בשרת:
+                    </p>
+                    <pre class="overflow-x-auto rounded-lg bg-gray-100 dark:bg-gray-800 p-3 font-mono text-xs" dir="ltr">bash docker/install-deploy-watcher.sh</pre>
+                @else
+                    <p>
+                        הבדיקה האחרונה רצה ב-{{ $lastCheck['at'] }} ומאז שקט. הסוכן אמור לבדוק כל דקה,
+                        ולכן כנראה הפסיק לרוץ. בדקו בשרת שה-cron פעיל:
+                    </p>
+                    <pre class="overflow-x-auto rounded-lg bg-gray-100 dark:bg-gray-800 p-3 font-mono text-xs" dir="ltr">crontab -l | grep deploy-watcher</pre>
+                @endif
+
+                <p class="text-gray-500 dark:text-gray-400">
+                    בינתיים אפשר תמיד לעדכן ידנית: כפתור "עדכן עכשיו" למעלה פועל גם כשהבדיקה שבורה, וכך גם <code>./update.sh</code> בשרת.
+                </p>
+            </div>
+        </x-filament::section>
+    @endif
+
     @if ($available)
         <x-filament::section icon="heroicon-o-arrow-up-circle" class="border-warning-300 dark:border-warning-700">
             <x-slot name="heading">עדכון זמין</x-slot>
@@ -94,8 +131,21 @@
             </div>
         @else
             <p class="text-sm text-gray-500 dark:text-gray-400">
-                גרסה לא ידועה עדיין — תסומן אוטומטית לאחר העדכון הבא.
+                גרסה לא ידועה — סוכן העדכון בשרת מסמן אותה בכל סבב, כך שערך חסר כאן מעיד שהסוכן אינו רץ.
             </p>
+        @endif
+
+        {{-- Stands on its own, outside the version block: when the timestamp is
+             the thing that is missing, hiding it behind another missing value
+             leaves the screen saying nothing at all. --}}
+        @if (! empty($lastCheck['at']))
+            <div class="mt-2 text-sm">
+                <span class="text-gray-500 dark:text-gray-400">נבדקו עדכונים:</span>
+                <span class="font-semibold">{{ $lastCheck['at'] }}</span>
+                @if (! $available && ! $checkStale && ! $checkError)
+                    <span class="text-success-600 dark:text-success-400">· אתם מעודכנים</span>
+                @endif
+            </div>
         @endif
     </x-filament::section>
 

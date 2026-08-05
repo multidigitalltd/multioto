@@ -16,6 +16,11 @@ use Illuminate\Support\Carbon;
  *   deploy.request — presence means "please update" (written here)
  *   deploy.lock    — presence means the host agent is mid-update
  *   deploy.status  — {state, message, at} written by the host agent
+ *   available.json — {behind, short, at, releases} when a newer build waits
+ *   update-check.json — {at, ok, error} stamped on EVERY check, including the
+ *                       ones that found nothing or failed. Without it, "no
+ *                       update banner" and "nobody has looked in three weeks"
+ *                       are the same screen.
  */
 class DeployManager
 {
@@ -48,6 +53,52 @@ class DeployManager
         $info = $this->readJson('available.json');
 
         return ($info !== null && (int) ($info['behind'] ?? 0) > 0) ? $info : null;
+    }
+
+    /**
+     * The last time the host agent looked for a newer version, and how it went.
+     * Shape: {at, ok, behind, branch, error}. Null means it has never run at all.
+     */
+    public function lastCheck(): ?array
+    {
+        return $this->readJson('update-check.json');
+    }
+
+    /**
+     * Is the "no update available" answer on screen actually trustworthy?
+     *
+     * The agent looks once a minute, so an answer from hours ago means it
+     * stopped looking — the cron was never installed, the fetch has no
+     * credentials, the host is down. Silence reads as "you are up to date",
+     * which is the one wrong conclusion a team can act on for months.
+     */
+    public function checkIsStale(int $minutes = 120): bool
+    {
+        $check = $this->lastCheck();
+
+        if ($check === null || blank($check['at'] ?? null)) {
+            return true;
+        }
+
+        try {
+            return Carbon::parse((string) $check['at'])->lt(Carbon::now()->subMinutes($minutes));
+        } catch (\Throwable) {
+            return true;
+        }
+    }
+
+    /** The error from the last failed check, or null when the last one worked. */
+    public function lastCheckError(): ?string
+    {
+        $check = $this->lastCheck();
+
+        if ($check === null || ($check['ok'] ?? false) === true) {
+            return null;
+        }
+
+        $error = trim((string) ($check['error'] ?? ''));
+
+        return $error !== '' ? $error : 'הבדיקה נכשלה ללא פירוט.';
     }
 
     /** True while an update is requested or actively running. */

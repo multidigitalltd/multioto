@@ -45,6 +45,13 @@ class SystemUpdates extends Page
 
     public bool $configured = false;
 
+    /** When the host agent last looked for a newer version, and how it went. */
+    public ?array $lastCheck = null;
+
+    public bool $checkStale = false;
+
+    public ?string $checkError = null;
+
     /** The "מה חדש" release feed. */
     public function getReleasesProperty(): Collection
     {
@@ -63,6 +70,9 @@ class SystemUpdates extends Page
         $this->available = $deploy->availableUpdate();
         $this->pending = $deploy->isPending();
         $this->configured = $deploy->isConfigured();
+        $this->lastCheck = $deploy->lastCheck();
+        $this->checkStale = $deploy->checkIsStale();
+        $this->checkError = $deploy->lastCheckError();
     }
 
     protected function getHeaderActions(): array
