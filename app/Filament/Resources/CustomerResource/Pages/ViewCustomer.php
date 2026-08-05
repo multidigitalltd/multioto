@@ -4,6 +4,7 @@ namespace App\Filament\Resources\CustomerResource\Pages;
 
 use App\Filament\Concerns\OpensPaymentDemand;
 use App\Filament\Resources\CustomerResource;
+use App\Filament\Resources\CustomerResource\Actions\MergeCustomerAction;
 use App\Filament\Resources\CustomerResource\Concerns\InteractsWithCustomerCards;
 use App\Jobs\SendPaymentLinkJob;
 use App\Models\Customer;
@@ -60,6 +61,7 @@ class ViewCustomer extends ViewRecord
                 $finance ? $this->cardLinkAction() : null,
                 $finance ? $this->syncCardAction() : null,
                 Actions\EditAction::make()->label('עריכה'),
+                MergeCustomerAction::make(),
             ])))
                 ->label('עוד פעולות')
                 ->icon('heroicon-m-ellipsis-horizontal')
