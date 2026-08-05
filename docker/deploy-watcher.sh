@@ -20,17 +20,36 @@ LOCK="$OPS/deploy.lock"
 STATUS="$OPS/deploy.status"
 VERSION="$OPS/version.json"
 AVAILABLE="$OPS/available.json"
+CHECK="$OPS/update-check.json"
 
 mkdir -p "$OPS"
 
+# Record that a check happened, and how it went — on EVERY run, including the
+# ones that find nothing and the ones that fail. A silent failure here used to
+# look exactly like "you are up to date", and a team can act on that wrong
+# conclusion for months without a single thing on screen to contradict it.
+# $1=ok(true|false)  $2=behind  $3=branch  $4=error
+write_check() {
+    printf '{"at":"%s","ok":%s,"behind":%s,"branch":"%s","error":"%s"}\n' \
+        "$(date '+%Y-%m-%d %H:%M')" "$1" "${2:-0}" "$3" \
+        "$(echo "${4:-}" | tr -d '"\\' | tr '\n' ' ' | cut -c1-300)" > "$CHECK"
+}
+
 # Detect whether a newer version is waiting upstream, so the panel can show
-# "עדכון זמין" with the count of pending commits. Best-effort — a fetch failure
-# (offline) just leaves the previous state untouched.
+# "עדכון זמין" with the count of pending commits. A fetch failure (offline, no
+# credentials for the remote) leaves the previous state untouched — but is
+# reported, so the panel can say the answer is not to be trusted.
 check_available() {
-    local branch behind short
+    local branch behind short fetch_error
     branch="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)"
-    git -C "$ROOT" fetch --quiet origin "$branch" 2>/dev/null || return 0
+
+    if ! fetch_error="$(git -C "$ROOT" fetch --quiet origin "$branch" 2>&1)"; then
+        write_check false 0 "$branch" "$fetch_error"
+        return 0
+    fi
+
     behind="$(git -C "$ROOT" rev-list --count "HEAD..origin/$branch" 2>/dev/null || echo 0)"
+    write_check true "${behind:-0}" "$branch" ""
 
     if [ "${behind:-0}" -gt 0 ]; then
         short="$(git -C "$ROOT" rev-parse --short "origin/$branch" 2>/dev/null || echo unknown)"

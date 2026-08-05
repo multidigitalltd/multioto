@@ -84,4 +84,58 @@ class DeployManagerTest extends TestCase
         file_put_contents($this->dir.'/available.json', json_encode(['behind' => 0]));
         $this->assertNull($manager->availableUpdate());
     }
+
+    /**
+     * "אין עדכון" ו"אף אחד לא בדק שבועיים" נראו על המסך בדיוק אותו דבר. רק
+     * אחת מהן בטוחה לפעול לפיה, ולכן היעדר בדיקה נחשב מיושן.
+     */
+    public function test_a_check_that_never_ran_counts_as_stale(): void
+    {
+        $manager = new DeployManager($this->dir);
+
+        $this->assertNull($manager->lastCheck());
+        $this->assertTrue($manager->checkIsStale());
+        $this->assertNull($manager->lastCheckError());
+    }
+
+    /** בדיקה שרצה עכשיו ומצאה שהכול מעודכן — תשובה שאפשר לסמוך עליה. */
+    public function test_a_fresh_successful_check_is_not_stale(): void
+    {
+        file_put_contents($this->dir.'/update-check.json', json_encode([
+            'at' => now()->format('Y-m-d H:i'), 'ok' => true, 'behind' => 0, 'branch' => 'main',
+        ]));
+
+        $manager = new DeployManager($this->dir);
+
+        $this->assertFalse($manager->checkIsStale());
+        $this->assertNull($manager->lastCheckError());
+    }
+
+    /** בדיקה מלפני שעות פירושה שהסוכן הפסיק לרוץ — הוא אמור לבדוק כל דקה. */
+    public function test_an_old_check_is_stale(): void
+    {
+        file_put_contents($this->dir.'/update-check.json', json_encode([
+            'at' => now()->subHours(6)->format('Y-m-d H:i'), 'ok' => true, 'behind' => 0,
+        ]));
+
+        $this->assertTrue((new DeployManager($this->dir))->checkIsStale());
+    }
+
+    /** כישלון מסירת הסיבה — בלעדיה אי אפשר לדעת מה לתקן בשרת. */
+    public function test_it_surfaces_the_reason_a_check_failed(): void
+    {
+        file_put_contents($this->dir.'/update-check.json', json_encode([
+            'at' => now()->format('Y-m-d H:i'), 'ok' => false, 'error' => 'Permission denied (publickey)',
+        ]));
+
+        $this->assertSame('Permission denied (publickey)', (new DeployManager($this->dir))->lastCheckError());
+    }
+
+    /** תאריך פגום אינו נחשב לתשובה תקפה. */
+    public function test_an_unreadable_timestamp_counts_as_stale(): void
+    {
+        file_put_contents($this->dir.'/update-check.json', json_encode(['at' => 'לא תאריך', 'ok' => true]));
+
+        $this->assertTrue((new DeployManager($this->dir))->checkIsStale());
+    }
 }
