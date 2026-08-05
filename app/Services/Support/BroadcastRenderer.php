@@ -84,7 +84,15 @@ class BroadcastRenderer
     {
         $body = $this->substitute((string) $broadcast->body, $customer);
 
-        return $this->looksLikeHtml($body) ? EmailBody::toSafeHtml($body) : null;
+        if (! $this->looksLikeHtml($body)) {
+            return null;
+        }
+
+        $html = EmailBody::toSafeHtml($body);
+
+        // Highlights get their colour stated on the tag: the mail client that
+        // opens this has no stylesheet of ours to consult.
+        return $html === null ? null : EmailBody::inlineHighlights($html);
     }
 
     /** Was this body written in the rich editor rather than typed as text? */

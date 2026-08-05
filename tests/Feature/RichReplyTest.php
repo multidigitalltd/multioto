@@ -72,6 +72,35 @@ class RichReplyTest extends TestCase
         Mail::assertSent(TicketReplyMail::class, fn (TicketReplyMail $mail): bool => str_contains((string) $mail->bodyHtml, '<strong>מודגש</strong>'));
     }
 
+    /**
+     * הדגשה שהסוכן סימן מגיעה ללקוח צבועה.
+     *
+     * התגית לבדה אינה מספיקה: לקוח דואר אינו קורא את גיליון הסגנונות של הפאנל,
+     * ואאוטלוק מתעלם מברירת המחדל של <mark> — ההדגשה הייתה מגיעה כטקסט רגיל.
+     */
+    public function test_a_highlighted_reply_reaches_the_customer_in_colour(): void
+    {
+        Mail::fake();
+
+        $customer = Customer::factory()->create(['email' => 'lead@example.com']);
+        $ticket = Ticket::create([
+            'customer_id' => $customer->id, 'channel' => TicketChannel::Email,
+            'subject' => 'x', 'status' => TicketStatus::Open,
+        ]);
+        $message = $ticket->messages()->create([
+            'direction' => MessageDirection::Outbound, 'channel' => MessageChannel::Email,
+            'body' => 'שימו לב לתאריך', 'body_html' => '<p>שימו לב <mark>לתאריך</mark></p>',
+            'author' => MessageAuthor::Agent,
+        ]);
+
+        SendTicketReplyJob::dispatchSync($message->id);
+
+        Mail::assertSent(TicketReplyMail::class, fn (TicketReplyMail $mail): bool => str_contains(
+            (string) $mail->bodyHtml,
+            '<mark style="background-color:#fde047;color:#111111">לתאריך</mark>',
+        ));
+    }
+
     public function test_the_editor_stores_plain_and_html_bodies(): void
     {
         Http::fake(['*/api/sendText' => Http::response(['id' => 'w1'])]);

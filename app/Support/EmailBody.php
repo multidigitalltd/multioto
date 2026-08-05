@@ -120,6 +120,27 @@ class EmailBody
     }
 
     /**
+     * Give <mark> an inline colour for the trip out to a mail client.
+     *
+     * In the panel a stylesheet does this, but an email has no stylesheet it
+     * can rely on: Outlook in particular ignores the tag's default rendering
+     * entirely, and the highlight an agent applied would arrive as ordinary
+     * text. The colour is stated on the tag itself, which is the only styling
+     * every mail client honours.
+     *
+     * Applied to our own outgoing HTML, after sanitizing — never to inbound
+     * mail, where a style attribute is exactly what we refuse to trust.
+     */
+    public static function inlineHighlights(?string $html): string
+    {
+        return (string) preg_replace(
+            '#<mark(\s[^>]*)?>#i',
+            '<mark style="background-color:#fde047;color:#111111">',
+            (string) $html,
+        );
+    }
+
+    /**
      * The inline tags a mail client uses to carry highlighted text.
      *
      * Deliberately not block or table elements: newsletters paint whole

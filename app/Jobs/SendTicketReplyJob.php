@@ -9,6 +9,7 @@ use App\Mail\TicketReplyMail;
 use App\Models\NotificationLog;
 use App\Models\TicketMessage;
 use App\Services\Waha\WahaClient;
+use App\Support\EmailBody;
 use App\Support\RichText;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -130,16 +131,16 @@ class SendTicketReplyJob implements ShouldQueue
     /**
      * Append the signature to an HTML body as its own paragraph (escaped, line
      * breaks preserved), so the delivered email keeps the agent's formatting.
+     *
+     * Highlights are given their colour here, on the way out: a mail client has
+     * no stylesheet of ours to consult.
      */
     private function htmlWithSignature(string $html, string $signature): string
     {
+        $html = EmailBody::inlineHighlights($html);
         $signature = trim($signature);
 
-        if ($signature === '') {
-            return $html;
-        }
-
-        return $html.'<p>'.nl2br(e($signature)).'</p>';
+        return $signature === '' ? $html : $html.'<p>'.nl2br(e($signature)).'</p>';
     }
 
     /**
