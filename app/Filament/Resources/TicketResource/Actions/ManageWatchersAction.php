@@ -6,6 +6,7 @@ use App\Models\AuditLog;
 use App\Models\Ticket;
 use Filament\Actions\Action;
 use Filament\Forms;
+use Filament\Forms\Components\Actions\Action as FormAction;
 use Filament\Notifications\Notification;
 
 /**
@@ -38,7 +39,7 @@ class ManageWatchersAction
                     ->map(fn ($w): array => ['email' => $w->email, 'name' => $w->name])
                     ->all(),
             ])
-            ->form([
+            ->form(fn (Ticket $record): array => [
                 Forms\Components\Repeater::make('watchers')
                     ->label('כתובות מכותבות')
                     ->schema([
@@ -56,7 +57,8 @@ class ManageWatchersAction
                     ->addActionLabel('הוספת מכותב')
                     ->reorderable(false)
                     ->default([])
-                    ->helperText('כל אחד יקבל את ההודעות הבאות בפנייה. להסרה — לחצו על סמל הפח.'),
+                    ->extraItemActions([self::promoteToContactAction($record)])
+                    ->helperText('כל אחד יקבל את ההודעות הבאות בפנייה. להסרה — לחצו על סמל הפח. הכפתור עם האדם מוסיף את המכותב כאיש קשר קבוע בכרטיס הלקוח.'),
             ])
             ->action(function (array $data, Ticket $record): void {
                 $before = $record->watchers()->pluck('email')->all();
@@ -104,6 +106,58 @@ class ManageWatchersAction
                     ->body($kept === []
                         ? 'הפנייה חזרה להתנהל מול הלקוח בלבד.'
                         : count($kept).' כתובות יקבלו את ההודעות הבאות בפנייה.')
+                    ->success()->send();
+            });
+    }
+
+    /**
+     * Promote one row of the list to a permanent contact on the customer card.
+     *
+     * This is a deliberate widening of scope, not a shortcut: a watcher belongs
+     * to one ticket, while a contact is matched on every future inbound message
+     * and lands it on this customer. Worth one button — and worth saying out
+     * loud in the confirmation, because "add contact" does not imply it.
+     */
+    private static function promoteToContactAction(Ticket $ticket): FormAction
+    {
+        return FormAction::make('promoteToContact')
+            ->label('הוספה כאיש קשר בלקוח')
+            ->icon('heroicon-m-user-plus')
+            ->tooltip('הוספה כאיש קשר קבוע בכרטיס הלקוח')
+            ->visible($ticket->customer_id !== null)
+            ->requiresConfirmation()
+            ->modalHeading('הוספה כאיש קשר בכרטיס הלקוח')
+            ->modalDescription('מרגע זה כל הודעה מהכתובת הזאת — גם בפניות אחרות — תזוהה אוטומטית כשייכת ללקוח הזה. המכותב נשאר מכותב גם בפנייה הנוכחית.')
+            ->modalSubmitActionLabel('הוסף כאיש קשר')
+            ->action(function (array $arguments, Forms\Components\Repeater $component) use ($ticket): void {
+                $row = $component->getRawState()[$arguments['item']] ?? [];
+                $contact = $ticket->promoteWatcherToContact((string) ($row['email'] ?? ''), $row['name'] ?? null);
+
+                if ($contact === null) {
+                    Notification::make()->title('אין כתובת מייל תקינה בשורה הזאת')->warning()->send();
+
+                    return;
+                }
+
+                if (! $contact->wasRecentlyCreated) {
+                    Notification::make()
+                        ->title('כבר קיים כאיש קשר')
+                        ->body("{$contact->email} כבר רשום בכרטיס הלקוח.")
+                        ->info()->send();
+
+                    return;
+                }
+
+                AuditLog::record(
+                    'created',
+                    "מכותב בפנייה #{$ticket->id} נוסף כאיש קשר בלקוח {$ticket->customer->name}",
+                    $contact,
+                    ['email' => $contact->email],
+                );
+
+                Notification::make()
+                    ->title('נוסף כאיש קשר')
+                    ->body("{$contact->email} יזוהה מעכשיו אוטומטית כשייך ל{$ticket->customer->name}.")
                     ->success()->send();
             });
     }

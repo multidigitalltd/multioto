@@ -127,6 +127,31 @@ class Ticket extends Model
         return $this->hasMany(TicketMessage::class);
     }
 
+    /**
+     * Make an address copied on this ticket a permanent contact of the customer.
+     *
+     * A deliberate widening of scope: a watcher belongs to this ticket alone,
+     * while a contact is matched against every future inbound message and lands
+     * it on this customer. Returns null when there is no customer or the address
+     * is not one, and the existing contact (never a duplicate) when it is
+     * already on the card.
+     */
+    public function promoteWatcherToContact(string $email, ?string $name = null): ?Contact
+    {
+        $email = mb_strtolower(trim($email));
+
+        if ($this->customer === null || filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
+            return null;
+        }
+
+        return $this->customer->contacts()->firstOrCreate(
+            ['email' => $email],
+            // A contact with no name shows as a bare address everywhere it
+            // appears; the address is a poor name but a worse blank.
+            ['name' => filled($name) ? trim($name) : $email, 'is_primary' => false],
+        );
+    }
+
     /** Addresses copied on this ticket besides the customer. */
     public function watchers(): HasMany
     {
