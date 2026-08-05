@@ -191,4 +191,27 @@ class EmailBodyTest extends TestCase
 
         $this->assertSame('<p>שלום <strong>עולם</strong></p>', $out);
     }
+
+    /**
+     * בדרך החוצה ההדגשה מקבלת צבע על התגית עצמה.
+     *
+     * בפאנל גיליון סגנונות עושה את זה; למייל אין גיליון סגנונות שלנו לפנות
+     * אליו, ואאוטלוק מתעלם מברירת המחדל של התגית לגמרי — כלומר ההדגשה שהסוכן
+     * סימן הייתה מגיעה כטקסט רגיל.
+     */
+    public function test_outgoing_highlights_carry_their_colour_on_the_tag(): void
+    {
+        $out = EmailBody::inlineHighlights('<p>שלום <mark>זה דחוף</mark></p>');
+
+        $this->assertStringContainsString('<mark style="background-color:#fde047;color:#111111">זה דחוף</mark>', $out);
+    }
+
+    /** גם כשהתגית כבר נושאת תכונות, ובלי לגעת בטקסט אחר. */
+    public function test_inlining_replaces_existing_attributes_and_leaves_the_rest_alone(): void
+    {
+        $out = EmailBody::inlineHighlights('<mark class="x">א</mark><p>rgb(1,2,3)</p>');
+
+        $this->assertStringNotContainsString('class="x"', $out);
+        $this->assertStringContainsString('<p>rgb(1,2,3)</p>', $out);
+    }
 }

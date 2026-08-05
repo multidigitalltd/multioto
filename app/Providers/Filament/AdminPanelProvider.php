@@ -85,6 +85,9 @@ class AdminPanelProvider extends PanelProvider
             // טופס: בפאנל עשרות טפסים, חלקם נפתחים בחלוניות, וגישה שדורשת לגעת
             // בכל אחד מהם בנפרד נשארת חלקית ביום שאחרי.
             ->renderHook(PanelsRenderHook::BODY_END, fn (): string => view('voice.dictation')->render())
+            // כפתור הדגשה בעורכי הטקסט. לקוחות מסמנים לנו את המשפט החשוב, ומאז
+            // שההדגשה שלהם שורדת את הסינון היה מוזר שאי אפשר להשיב באותה שפה.
+            ->renderHook(PanelsRenderHook::BODY_END, fn (): string => view('editor.highlight')->render())
             // "התחברות עם גוגל" above the password form — it is the way the
             // team actually signs in, and the password stays below for whoever
             // still needs it. The view renders nothing when Google is not
