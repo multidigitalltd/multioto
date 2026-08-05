@@ -139,4 +139,56 @@ class EmailBodyTest extends TestCase
 
         $this->assertNull(EmailBody::toSafeHtml($huge));
     }
+
+    /**
+     * טקסט שהלקוח סימן בצהוב מגיע מסומן.
+     *
+     * ההדגשה מגיעה כ-style, והמסנן מוריד כל style — ובצדק. ההודעה עצמה
+     * ("זה החלק החשוב") נשמרת כאן ב-mark, שהוא סימון שהרשימה הלבנה כבר סומכת
+     * עליו, בלי שורת CSS זרה אחת שמגיעה לדפדפן.
+     */
+    public function test_safe_html_keeps_highlighted_text_as_a_mark(): void
+    {
+        $out = EmailBody::toSafeHtml('<p>שלום <span style="background-color:yellow">זה דחוף</span> תודה</p>');
+
+        $this->assertStringContainsString('<mark>זה דחוף</mark>', $out);
+        $this->assertStringNotContainsString('style', $out);
+    }
+
+    /** גם בכתיב הקיצור ובערכי rgb, ששני לקוחות דואר נפוצים משתמשים בהם. */
+    public function test_safe_html_recognises_the_shorthand_and_rgb_forms_of_a_highlight(): void
+    {
+        $shorthand = EmailBody::toSafeHtml("<p><span style='background:#ffff00'>א</span></p>");
+        $rgb = EmailBody::toSafeHtml('<p><b style="background-color: rgb(255, 255, 0)">ב</b></p>');
+        $legacy = EmailBody::toSafeHtml('<p><font bgcolor="#ff0">ג</font></p>');
+
+        $this->assertStringContainsString('<mark>א</mark>', $shorthand);
+        $this->assertStringContainsString('<mark>ב</mark>', $rgb);
+        $this->assertStringContainsString('<mark>ג</mark>', $legacy);
+    }
+
+    /**
+     * רקע לבן או שקוף אינו הדגשה, וגם לא רקע של טבלה עוטפת.
+     *
+     * זו ההחלטה שמונעת את התקלה ההפוכה: ניוזלטרים צובעים טבלאות שלמות ואת גוף
+     * המסמך, ואם היינו קוראים לזה הדגשה — כל המייל היה מגיע צהוב.
+     */
+    public function test_safe_html_does_not_mistake_a_page_background_for_a_highlight(): void
+    {
+        $white = EmailBody::toSafeHtml('<p><span style="background-color:#ffffff">א</span></p>');
+        $transparent = EmailBody::toSafeHtml('<p><span style="background:transparent">ב</span></p>');
+        $table = EmailBody::toSafeHtml('<table bgcolor="#f4f4f4"><tr><td style="background-color:#eeeeee">ג</td></tr></table>');
+
+        $this->assertStringNotContainsString('<mark>', (string) $white);
+        $this->assertStringNotContainsString('<mark>', (string) $transparent);
+        $this->assertStringNotContainsString('<mark>', (string) $table);
+    }
+
+    /** מייל בלי רקע כלל אינו נכנס לפירוק DOM מיותר — והפלט זהה. */
+    public function test_safe_html_leaves_ordinary_mail_untouched(): void
+    {
+        $out = EmailBody::toSafeHtml('<p>שלום <strong>עולם</strong></p>');
+
+        $this->assertSame('<p>שלום <strong>עולם</strong></p>', $out);
+    }
 }
