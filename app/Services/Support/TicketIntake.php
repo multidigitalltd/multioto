@@ -10,6 +10,7 @@ use App\Enums\TicketStatus;
 use App\Jobs\ClassifyTicketJob;
 use App\Jobs\InvestigateTicketJob;
 use App\Jobs\NotifyTeamJob;
+use App\Jobs\NotifyTicketWatchersJob;
 use App\Jobs\PlanContentChangeJob;
 use App\Jobs\SendTicketNotificationJob;
 use App\Models\Contact;
@@ -124,6 +125,11 @@ class TicketIntake
                 'body_html' => $bodyHtml,
                 'author' => MessageAuthor::Customer,
                 'attachments' => $attachments,
+                // A message threaded onto a ticket did not necessarily come from
+                // that ticket's customer — a copied bookkeeper replies here too.
+                // Attributing their words to the customer is worse than not
+                // showing the reply at all.
+                'sender_label' => $this->senderLabel($ticket, $customer, $contactName, $contactHandle),
             ],
         );
 
@@ -159,6 +165,13 @@ class TicketIntake
                 NotifyTeamJob::dispatch($ticket->id, 'new_reply', $message->id);
             }
 
+            // Anyone copied on this ticket sees the customer's answer too. Our
+            // own replies reach them as a Cc; without this they would read our
+            // side of a conversation whose other half they never see.
+            if ($ticket->watchers()->exists()) {
+                NotifyTicketWatchersJob::dispatch($message->id, $contactHandle);
+            }
+
             // Kick off optional Tier-1 AI (classification → draft reply). The
             // job is a no-op when the AI layer is disabled, and never sends
             // anything to the customer — drafts await agent approval.
@@ -183,6 +196,38 @@ class TicketIntake
         }
 
         return $message;
+    }
+
+    /**
+     * Who wrote this inbound message, when it wasn't the ticket's own customer.
+     *
+     * Null for the ordinary case — the customer answering their own ticket —
+     * so the conversation stays clean and only genuinely third-party messages
+     * carry a "from" line.
+     */
+    protected function senderLabel(Ticket $ticket, ?Customer $customer, ?string $contactName, ?string $contactHandle): ?string
+    {
+        // Matched to this ticket's customer: it IS the customer speaking.
+        if ($customer !== null && $customer->id === $ticket->customer_id) {
+            return null;
+        }
+
+        $handle = mb_strtolower(trim((string) $contactHandle));
+
+        if ($handle === '') {
+            return filled($contactName) ? $contactName : null;
+        }
+
+        $own = array_filter(array_map(
+            fn (?string $value): string => mb_strtolower(trim((string) $value)),
+            [$ticket->customer?->email, $ticket->customer?->phone, $ticket->customer?->whatsapp_jid, $ticket->contact_handle],
+        ));
+
+        if (in_array($handle, $own, true)) {
+            return null;
+        }
+
+        return filled($contactName) ? "{$contactName} <{$contactHandle}>" : (string) $contactHandle;
     }
 
     /**

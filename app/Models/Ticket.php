@@ -127,6 +127,35 @@ class Ticket extends Model
         return $this->hasMany(TicketMessage::class);
     }
 
+    /** Addresses copied on this ticket besides the customer. */
+    public function watchers(): HasMany
+    {
+        return $this->hasMany(TicketWatcher::class);
+    }
+
+    /**
+     * The watcher addresses to copy on an outbound message, minus the customer's
+     * own address — a customer copied on their own reply gets it twice and reads
+     * it as a system that lost track of who it is talking to.
+     *
+     * @param  string|null  $except  An address to leave out (e.g. the sender of
+     *                               the message being forwarded)
+     * @return list<string>
+     */
+    public function watcherEmails(?string $except = null): array
+    {
+        $skip = array_filter([
+            mb_strtolower(trim((string) $this->customer?->email)),
+            $except !== null ? mb_strtolower(trim($except)) : null,
+        ]);
+
+        return $this->watchers()
+            ->pluck('email')
+            ->reject(fn (string $email): bool => in_array(mb_strtolower($email), $skip, true))
+            ->values()
+            ->all();
+    }
+
     /** Statuses where the ball is in the customer's court (SLA clock paused). */
     public const AWAITING_CUSTOMER = [TicketStatus::Pending];
 

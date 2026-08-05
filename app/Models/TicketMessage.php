@@ -18,7 +18,7 @@ class TicketMessage extends Model
 
     protected $fillable = [
         'ticket_id', 'direction', 'channel', 'body', 'body_html', 'external_message_id', 'author', 'attachments',
-        'quality_rating',
+        'quality_rating', 'sender_label',
     ];
 
     protected function casts(): array

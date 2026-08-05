@@ -92,9 +92,17 @@ class SendTicketReplyJob implements ShouldQueue
             NotificationLog::record('whatsapp', NotificationType::TicketReply, $chatId, null, $body, $ticket->customer?->id);
         } else {
             $email = $ticket->customer?->email;
+            $cc = $ticket->watcherEmails();
 
+            // No customer address but someone IS copied — the conversation is
+            // being held with them, so they become the recipient rather than a
+            // copy of a message sent to nobody.
             if (! $email) {
-                return;
+                if ($cc === []) {
+                    return;
+                }
+
+                $email = array_shift($cc);
             }
 
             $body = $this->withSignature($message->body, (string) config('billing.notifications.reply_signature'));
@@ -105,7 +113,9 @@ class SendTicketReplyJob implements ShouldQueue
                 : null;
             // Tag the subject so the customer's reply threads back onto this ticket.
             $subject = $ticket->subject.' '.$ticket->emailTag();
-            Mail::to($email)->send(new TicketReplyMail($subject, $body, $message->attachments ?? [], $bodyHtml));
+            // The copied addresses get the same tagged subject, so their reply
+            // threads back onto this ticket exactly like the customer's does.
+            Mail::to($email)->cc($cc)->send(new TicketReplyMail($subject, $body, $message->attachments ?? [], $bodyHtml));
             $message->update(['external_message_id' => 'mail-'.$message->id]);
             NotificationLog::record('email', NotificationType::TicketReply, $email, $subject, $body, $ticket->customer?->id);
         }
