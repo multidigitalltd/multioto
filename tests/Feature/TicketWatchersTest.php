@@ -240,4 +240,69 @@ class TicketWatchersTest extends TestCase
         Queue::assertPushed(SendTicketReplyJob::class);
         $this->assertSame(['roeh@example.com'], $ticket->watcherEmails());
     }
+
+    /**
+     * הוספת מכותב כאיש קשר: מרגע זה כל הודעה מהכתובת תזוהה כשייכת ללקוח —
+     * הרחבה מכוונת של ההיקף, לא קיצור דרך.
+     */
+    public function test_a_watcher_promoted_to_a_contact_matches_future_messages(): void
+    {
+        $customer = Customer::factory()->create(['email' => 'lakoach@example.com']);
+        $ticket = $this->ticket($customer);
+
+        $contact = $ticket->promoteWatcherToContact('roeh@example.com', 'רואה חשבון');
+
+        $this->assertNotNull($contact);
+        $this->assertSame('רואה חשבון', $contact->name);
+        $this->assertFalse($contact->is_primary);
+        $this->assertSame($customer->id, app(TicketIntake::class)->matchCustomer(email: 'roeh@example.com')?->id);
+    }
+
+    /** הוספה חוזרת אינה יוצרת כפילות בכרטיס הלקוח. */
+    public function test_promoting_the_same_address_twice_creates_one_contact(): void
+    {
+        $customer = Customer::factory()->create(['email' => 'lakoach@example.com']);
+        $ticket = $this->ticket($customer);
+
+        $ticket->promoteWatcherToContact('roeh@example.com', 'רואה חשבון');
+        $second = $ticket->promoteWatcherToContact('ROEH@example.com', 'שם אחר');
+
+        $this->assertFalse($second->wasRecentlyCreated);
+        $this->assertSame(1, $customer->contacts()->count());
+        $this->assertSame('רואה חשבון', $customer->contacts()->first()->name);
+    }
+
+    /** בלי שם, הכתובת עצמה משמשת כשם — כתובת היא שם גרוע, ריק גרוע יותר. */
+    public function test_a_promoted_contact_without_a_name_falls_back_to_the_address(): void
+    {
+        $ticket = $this->ticket();
+
+        $this->assertSame('roeh@example.com', $ticket->promoteWatcherToContact('roeh@example.com')->name);
+    }
+
+    /** כתובת פסולה או פנייה בלי לקוח — אין למי לצרף, ולא נוצר כלום. */
+    public function test_nothing_is_created_without_a_customer_or_a_valid_address(): void
+    {
+        $ticket = $this->ticket();
+
+        $this->assertNull($ticket->promoteWatcherToContact('לא כתובת'));
+
+        $orphan = Ticket::create([
+            'channel' => TicketChannel::Email, 'subject' => 'פנייה לא מזוהה', 'status' => TicketStatus::Open,
+        ]);
+
+        $this->assertNull($orphan->promoteWatcherToContact('roeh@example.com'));
+    }
+
+    /** הכפתור מוצג בפנייה שיש לה לקוח. */
+    public function test_the_watchers_screen_offers_promoting_to_a_contact(): void
+    {
+        $this->actingAs(User::factory()->create());
+        $ticket = $this->ticket();
+        $ticket->watchers()->create(['email' => 'roeh@example.com']);
+
+        Livewire::test(ViewTicket::class, ['record' => $ticket->getRouteKey()])
+            ->mountAction('manageWatchers')
+            ->assertSee('הוספה כאיש קשר בלקוח');
+    }
 }
