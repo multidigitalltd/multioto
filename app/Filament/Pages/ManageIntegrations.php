@@ -8,6 +8,7 @@ use App\Filament\Concerns\PersistsSettings;
 use App\Models\Setting;
 use App\Providers\SettingsServiceProvider;
 use App\Services\Health\IntegrationHealth;
+use App\Services\Waha\InboundDiagnosis;
 use App\Services\Waha\WahaClient;
 use App\Support\CardcomWebhook;
 use Filament\Forms\Components\Actions\Action as FormAction;
@@ -621,6 +622,11 @@ class ManageIntegrations extends Page implements HasForms
         }
 
         if ($group === 'waha') {
+            $actions[] = FormAction::make('waha_inbound_check')
+                ->label('בדיקת קליטה נכנסת')
+                ->icon('heroicon-o-magnifying-glass')
+                ->color('gray')
+                ->action(fn () => $this->checkWahaInbound());
             $actions[] = FormAction::make('waha_inbound')
                 ->label('הפעלת האזנה להודעות נכנסות')
                 ->icon('heroicon-o-arrow-down-on-square')
@@ -668,6 +674,23 @@ class ManageIntegrations extends Page implements HasForms
             'וואטסאפ ידווח כל הודעה נכנסת למערכת — פניות ייפתחו ויאושרו אוטומטית. שלחו הודעת בדיקה למספר העסק כדי לוודא.',
             'success',
         );
+    }
+
+    /**
+     * Why is nothing arriving from WhatsApp?
+     *
+     * Outbound working proves the session is connected and proves nothing about
+     * inbound, which needs a webhook registered on the WAHA session pointing
+     * back at us. When that is missing the panel just stays quiet — no error,
+     * no ticket, no clue — so the question has to be askable out loud.
+     */
+    public function checkWahaInbound(): void
+    {
+        Log::info('ManageIntegrations: checkWahaInbound invoked');
+
+        $result = app(InboundDiagnosis::class)->run();
+
+        $this->announce($result['title'], $result['detail'], $result['variant']);
     }
 
     /** The per-section save button. */
