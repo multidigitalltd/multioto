@@ -46,7 +46,12 @@
                 $inbound = $message->direction === \App\Enums\MessageDirection::Inbound;
                 $note = $message->channel === \App\Enums\MessageChannel::InternalNote;
                 $authorLabel = match ($message->author) {
-                    \App\Enums\MessageAuthor::Customer => $ticket->customer?->name ?? ($ticket->contact_name ?: 'לקוח'),
+                    // A message threaded onto this ticket by someone who is not
+                    // the customer (a copied bookkeeper, a supplier) is shown
+                    // under THEIR name — attributing their words to the customer
+                    // would be a quiet lie in the middle of a support thread.
+                    \App\Enums\MessageAuthor::Customer => $message->sender_label
+                        ?: ($ticket->customer?->name ?? ($ticket->contact_name ?: 'לקוח')),
                     \App\Enums\MessageAuthor::Agent => 'צוות',
                     \App\Enums\MessageAuthor::System => 'מערכת',
                     \App\Enums\MessageAuthor::Ai => 'סוכן AI',

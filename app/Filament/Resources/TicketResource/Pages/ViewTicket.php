@@ -10,6 +10,7 @@ use App\Enums\TicketChannel;
 use App\Enums\TicketPriority;
 use App\Enums\TicketStatus;
 use App\Filament\Resources\TicketResource;
+use App\Filament\Resources\TicketResource\Actions\ManageWatchersAction;
 use App\Jobs\DraftReplyJob;
 use App\Jobs\InvestigateTicketJob;
 use App\Jobs\NotifyTaskCreatedJob;
@@ -440,6 +441,7 @@ class ViewTicket extends ViewRecord
                     $this->record->update(['status' => TicketStatus::Closed, 'resolved_at' => now()]);
                     Notification::make()->title('הפנייה נסגרה (ללא הודעה ללקוח)')->success()->send();
                 }),
+            ManageWatchersAction::make(),
             $this->linkToCustomerAction(),
             $this->convertToTaskAction(),
             Actions\EditAction::make()->label('עריכת פרטים'),
