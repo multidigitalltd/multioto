@@ -31,15 +31,23 @@ class WahaInboundDiagnosisTest extends TestCase
         Http::fake(['*/api/sessions/default' => Http::response(['config' => ['webhooks' => $webhooks]])]);
     }
 
+    /**
+     * created_at is not fillable on WebhookEvent, so an "old" event has to be
+     * aged explicitly — passing it to create() silently stamps it now, and the
+     * test then passes for the wrong reason.
+     */
     private function event(string $type, ?string $at = null): void
     {
-        WebhookEvent::create([
+        $event = WebhookEvent::create([
             'source' => WebhookSource::Waha,
             'event_type' => $type,
             'external_id' => 'evt-'.uniqid(),
             'payload' => [],
-            'created_at' => $at ?? now(),
         ]);
+
+        if ($at !== null) {
+            $event->forceFill(['created_at' => $at])->save();
+        }
     }
 
     /** אין רישום בכלל — זה הרוב המכריע של המקרים, ויש כפתור שמסדר אותו. */
@@ -123,5 +131,25 @@ class WahaInboundDiagnosisTest extends TestCase
 
         $this->assertFalse($result['ok']);
         $this->assertStringContainsString('WAHA', $result['title']);
+    }
+
+    /** שבוע שקט עם רישום תקין אינו מדווח כתקלה — יש לו מצב משלו. */
+    public function test_a_quiet_week_is_reported_as_quiet_not_broken(): void
+    {
+        $this->sessionReturns([['url' => route('webhooks.waha')]]);
+        $this->event('message', now()->subDays(30)->toDateTimeString());
+
+        $result = app(InboundDiagnosis::class)->run();
+
+        $this->assertSame('quiet', $result['state']);
+        $this->assertNotContains('quiet', InboundDiagnosis::FAULTS);
+    }
+
+    /** לכל מצב יש מזהה יציב, כדי שההתראה תחליט לפיו ולא לפי ניסוח בעברית. */
+    public function test_every_outcome_carries_a_stable_state(): void
+    {
+        $this->sessionReturns([]);
+
+        $this->assertSame('not_registered', app(InboundDiagnosis::class)->run()['state']);
     }
 }

@@ -24,7 +24,14 @@ class InboundDiagnosis
     public function __construct(private WahaClient $waha) {}
 
     /**
-     * @return array{ok: bool, title: string, detail: string, variant: string}
+     * States that are a definite fault — someone must fix something. A quiet
+     * week is NOT one of them: alerting on silence that might just be a slow
+     * week is how an alert becomes noise, and then the real one is ignored too.
+     */
+    public const FAULTS = ['unreachable', 'not_registered', 'wrong_target', 'never_delivered', 'no_messages'];
+
+    /**
+     * @return array{ok: bool, state: string, title: string, detail: string, variant: string}
      */
     public function run(): array
     {
@@ -34,12 +41,13 @@ class InboundDiagnosis
         try {
             $registered = $this->registeredWebhooks();
         } catch (Throwable $e) {
-            return $this->result(false, 'לא ניתן לקרוא את הגדרות WAHA', 'החיבור לשרת WAHA נכשל: '.$this->short($e).' בדקו את כתובת השרת וה-API Key בסעיף הזה.');
+            return $this->result(false, 'unreachable', 'לא ניתן לקרוא את הגדרות WAHA', 'החיבור לשרת WAHA נכשל: '.$this->short($e).' בדקו את כתובת השרת וה-API Key בסעיף הזה.');
         }
 
         if ($registered === []) {
             return $this->result(
                 false,
+                'not_registered',
                 'וואטסאפ לא מדווח למערכת על הודעות נכנסות',
                 'לא רשום ב-WAHA שום יעד לדיווח, ולכן הודעות של לקוחות לא מגיעות לכאן — שליחה החוצה עובדת בלי קשר. לחצו "הפעלת האזנה להודעות נכנסות".'
                     .$this->lastSeen($last),
@@ -53,6 +61,7 @@ class InboundDiagnosis
 
             return $this->result(
                 false,
+                'wrong_target',
                 'וואטסאפ מדווח ליעד אחר',
                 "ב-WAHA רשום דיווח ל: {$urls} — ולא לכתובת של המערכת ({$ours}). לחצו \"הפעלת האזנה להודעות נכנסות\" כדי לרשום מחדש."
                     .$this->lastSeen($last),
@@ -65,6 +74,7 @@ class InboundDiagnosis
         if ($last === null) {
             return $this->result(
                 false,
+                'never_delivered',
                 'הרישום תקין אבל אף הודעה לא הגיעה',
                 "WAHA מכוון לכתובת הנכונה ({$ours}), אך מעולם לא התקבלה ממנו הודעה. סימן שהוא לא מצליח להגיע לכתובת הזאת מהמקום שבו הוא רץ — בדקו שכתובת המערכת (APP_URL) נגישה מתוך WAHA, ולא כתובת שנכונה רק בדפדפן.",
             );
@@ -73,19 +83,37 @@ class InboundDiagnosis
         $events = $this->recentEventTypes();
         $messages = $events['message'] ?? 0;
 
-        if ($messages === 0) {
-            $types = implode(', ', array_keys($events)) ?: 'ללא';
+        // Events arriving, none of them messages: the registration exists but
+        // subscribes to the wrong event. A definite fault.
+        if ($events !== [] && $messages === 0) {
+            $types = implode(', ', array_keys($events));
 
             return $this->result(
                 false,
+                'no_messages',
                 'מגיעים אירועים, אבל לא הודעות',
                 "התקבלו אירועים מסוג: {$types}. אירוע ההודעות עצמו (message) לא מגיע — לחצו \"הפעלת האזנה להודעות נכנסות\" כדי לרשום את סוג האירוע הנכון."
                     .$this->lastSeen($last),
             );
         }
 
+        // Registered correctly, delivered before, nothing this week. That is a
+        // quiet week as often as it is a fault, and calling it a fault would
+        // make every slow week an alarm. Reported, not raised.
+        if ($messages === 0) {
+            return $this->result(
+                false,
+                'quiet',
+                'ההגדרות תקינות, אך לא התקבלו הודעות השבוע',
+                'הרישום מול WAHA תקין והודעות כבר הגיעו בעבר, ולכן ייתכן ששבוע פשוט היה שקט. אם ידוע לכם על הודעה שנשלחה ולא הגיעה — לחצו "הפעלת האזנה להודעות נכנסות" ושלחו הודעת בדיקה.'
+                    .$this->lastSeen($last),
+                'warning',
+            );
+        }
+
         return $this->result(
             true,
+            'ok',
             'הקליטה מוואטסאפ תקינה',
             "התקבלו {$messages} הודעות נכנסות ב-7 הימים האחרונים.".$this->lastSeen($last),
         );
@@ -167,10 +195,16 @@ class InboundDiagnosis
     }
 
     /**
-     * @return array{ok: bool, title: string, detail: string, variant: string}
+     * @return array{ok: bool, state: string, title: string, detail: string, variant: string}
      */
-    private function result(bool $ok, string $title, string $detail): array
+    private function result(bool $ok, string $state, string $title, string $detail, ?string $variant = null): array
     {
-        return ['ok' => $ok, 'title' => $title, 'detail' => $detail, 'variant' => $ok ? 'success' : 'danger'];
+        return [
+            'ok' => $ok,
+            'state' => $state,
+            'title' => $title,
+            'detail' => $detail,
+            'variant' => $variant ?? ($ok ? 'success' : 'danger'),
+        ];
     }
 }

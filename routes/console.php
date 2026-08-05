@@ -14,6 +14,7 @@ use App\Jobs\CheckSiteReputationJob;
 use App\Jobs\CheckSlaBreachesJob;
 use App\Jobs\CheckSslExpiryJob;
 use App\Jobs\CheckStoreSalesJob;
+use App\Jobs\CheckWhatsappInboundJob;
 use App\Jobs\DrillBackupJob;
 use App\Jobs\FollowUpPendingTicketsJob;
 use App\Jobs\HeartbeatJob;
@@ -312,6 +313,13 @@ Schedule::job(new FollowUpPendingTicketsJob)
 // on $awake so it stays quiet over Shabbat / Yom Tov like the other dispatchers.
 Schedule::job(new CheckSlaBreachesJob)
     ->hourly()->name('support:sla-breaches')->when($awake)->onOneServer();
+
+// Watch the inbound WhatsApp path. A broken one has no symptom — outbound keeps
+// working and the ticket queue just stops filling, which looks exactly like a
+// quiet day. Alerts only on a definite fault (nothing registered, registered
+// elsewhere, never delivered), never on a merely quiet week.
+Schedule::job(new CheckWhatsappInboundJob)
+    ->hourly()->name('support:whatsapp-inbound-health')->onOneServer();
 
 // Chase unpaid payment demands: after the quiet interval, resend the request
 // (link/transfer) up to the configured maximum, then stop.
