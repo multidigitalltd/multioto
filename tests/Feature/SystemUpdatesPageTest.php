@@ -71,14 +71,19 @@ class SystemUpdatesPageTest extends TestCase
             ->assertSee('crontab');
     }
 
-    /** בדיקה טרייה שמצאה שהכול מעודכן — אישור חיובי, בלי אזהרה. */
+    /**
+     * בדיקה טרייה שמצאה שהכול מעודכן — אישור חיובי, בלי אזהרה.
+     *
+     * הסימון כולל את התו המפריד, כי העמוד מרנדר גם את יומן הגרסאות: ניסוח של
+     * גרסה כלשהי שמצטט את המילים האלה היה מפיל בדיקה שאין לו קשר אליה.
+     */
     public function test_a_healthy_check_reports_being_up_to_date(): void
     {
         $this->writeCheck(['at' => now()->format('Y-m-d H:i'), 'ok' => true, 'behind' => 0, 'branch' => 'main']);
 
         Livewire::test(SystemUpdates::class)
             ->assertDontSee('בדיקת העדכונים אינה פועלת')
-            ->assertSee('אתם מעודכנים');
+            ->assertSee('· אתם מעודכנים');
     }
 
     /** יש עדכון ממתין — לא מוצג "אתם מעודכנים" לצדו. */
@@ -89,6 +94,6 @@ class SystemUpdatesPageTest extends TestCase
 
         Livewire::test(SystemUpdates::class)
             ->assertSee('עדכון זמין')
-            ->assertDontSee('אתם מעודכנים');
+            ->assertDontSee('· אתם מעודכנים');
     }
 }
