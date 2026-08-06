@@ -239,4 +239,49 @@ class WahaInboundDiagnosisTest extends TestCase
 
         $this->assertSame('not_registered', app(InboundDiagnosis::class)->run()['state']);
     }
+
+    /**
+     * ערוץ שקיבל הודעות בקביעות ואז השתתק לא "נהיה שקט" — הוא נפסק. לקרוא לזה
+     * שבוע איטי זה מה שאיפשר להפסקה אמיתית לשבת שמונה ימים בלי שאיש ידע.
+     */
+    public function test_a_channel_that_stopped_after_delivering_regularly_is_a_fault(): void
+    {
+        $this->sessionReturns([['url' => route('webhooks.waha')]]);
+
+        foreach ([40, 30, 20, 9] as $daysAgo) {
+            $this->event('message', now()->subDays($daysAgo)->toDateTimeString());
+        }
+
+        $result = app(InboundDiagnosis::class)->run();
+
+        $this->assertSame('stalled', $result['state']);
+        $this->assertContains('stalled', InboundDiagnosis::FAULTS);
+    }
+
+    /** ערוץ שמעולם לא היה לו קצב אינו "נפסק" — שם שקט הוא באמת שקט. */
+    public function test_a_channel_without_a_rhythm_stays_merely_quiet(): void
+    {
+        $this->sessionReturns([['url' => route('webhooks.waha')]]);
+        $this->event('message', now()->subDays(30)->toDateTimeString());
+
+        $this->assertSame('quiet', app(InboundDiagnosis::class)->run()['state']);
+    }
+
+    /** הפקודה מהשורה מחזירה כישלון על תקלה — כדי שאפשר יהיה לתלות בה בדיקה. */
+    public function test_the_console_command_fails_on_a_fault(): void
+    {
+        $this->sessionReturns([]);
+
+        $this->artisan('waha:inbound')->assertFailed();
+    }
+
+    /** ועל מצב תקין — הצלחה. */
+    public function test_the_console_command_succeeds_when_healthy(): void
+    {
+        $this->sessionReturns([['url' => route('webhooks.waha')]]);
+        $this->event('message');
+        $this->ticketMessage();
+
+        $this->artisan('waha:inbound')->assertSuccessful();
+    }
 }

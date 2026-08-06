@@ -32,7 +32,7 @@ class InboundDiagnosis
      * week is NOT one of them: alerting on silence that might just be a slow
      * week is how an alert becomes noise, and then the real one is ignored too.
      */
-    public const FAULTS = ['unreachable', 'not_registered', 'wrong_target', 'never_delivered', 'no_messages', 'not_processed', 'no_tickets'];
+    public const FAULTS = ['unreachable', 'not_registered', 'wrong_target', 'never_delivered', 'no_messages', 'not_processed', 'no_tickets', 'stalled'];
 
     /**
      * @return array{ok: bool, state: string, title: string, detail: string, variant: string}
@@ -101,10 +101,24 @@ class InboundDiagnosis
             );
         }
 
-        // Registered correctly, delivered before, nothing this week. That is a
-        // quiet week as often as it is a fault, and calling it a fault would
-        // make every slow week an alarm. Reported, not raised.
         if ($messages === 0) {
+            // A channel that used to deliver on most days and has now been
+            // silent for a week did not get quiet — it stopped. Treating that as
+            // "maybe a slow week" is what let a real outage sit unnoticed for
+            // eight days: the registration looked fine, so the screen said fine.
+            if ($this->deliveredRegularly()) {
+                return $this->result(
+                    false,
+                    'stalled',
+                    'הקליטה פעלה ונפסקה',
+                    'הודעות הגיעו כאן באופן סדיר ואז נפסקו לגמרי. הרישום מול WAHA קיים, ולכן ההסבר הסביר הוא ש-WAHA עלה מחדש ואיבד את ההגדרה, או שהסשן נוצר מחדש. לחצו "הפעלת האזנה להודעות נכנסות" כדי לרשום שוב, ושלחו הודעת בדיקה.'
+                        .$this->lastSeen($last),
+                );
+            }
+
+            // Never had a steady rhythm to lose: this really may be a slow week.
+            // Reported, not raised — an alert that fires on quiet weeks is one
+            // people learn to ignore.
             return $this->result(
                 false,
                 'quiet',
@@ -227,6 +241,27 @@ class InboundDiagnosis
             'unprocessed' => $unprocessed,
             'tickets' => $this->ticketMessagesThisWeek(),
         ];
+    }
+
+    /**
+     * Did this channel have a rhythm to lose?
+     *
+     * Messages on three or more separate days over the last two months means
+     * the silence now is a change in behaviour, not a slow week — the
+     * difference between "nobody wrote" and "we stopped hearing".
+     */
+    private function deliveredRegularly(): bool
+    {
+        $days = WebhookEvent::query()
+            ->where('source', WebhookSource::Waha)
+            ->where('event_type', 'message')
+            ->where('created_at', '>=', now()->subDays(60))
+            ->get(['created_at'])
+            ->map(fn (WebhookEvent $event): string => (string) $event->created_at?->toDateString())
+            ->unique()
+            ->count();
+
+        return $days >= 3;
     }
 
     /** Inbound WhatsApp messages that actually landed in a ticket this week. */

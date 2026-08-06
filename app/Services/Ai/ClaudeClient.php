@@ -134,6 +134,8 @@ class ClaudeClient
             return null;
         }
 
+        $system = $this->withCurrentTime($system);
+
         try {
             return match (config('billing.ai.provider')) {
                 'openai' => $this->openAi($system, $prompt, $schema),
@@ -157,6 +159,27 @@ class ClaudeClient
     }
 
     /**
+     * Stamp every prompt with the local date and time.
+     *
+     * A model has no clock. Asked to open a message warmly it will guess, and
+     * "בוקר טוב" at nine in the evening is exactly the kind of small wrongness
+     * that tells a customer nobody was really there. One line removes the guess
+     * — and it belongs here, in the one place every AI-written message passes
+     * through, rather than in each prompt that happens to remember.
+     */
+    private function withCurrentTime(string $system): string
+    {
+        $now = now();
+
+        return trim($system."\n\n".implode("\n", [
+            // The zone is read, not assumed: writing "שעון ישראל" under a
+            // differently-configured install would be a confident falsehood.
+            'התאריך והשעה כעת: '.$now->format('d/m/Y H:i').' ('.config('app.timezone').').',
+            'ברכה תלוית שעה חייבת להתאים לשעה הזאת — "בוקר טוב" רק בבוקר, "צהריים טובים" בצהריים, "ערב טוב" בערב. בספק, פתח בברכה ניטרלית ("שלום").',
+        ]));
+    }
+
+    /**
      * Run a tool-use conversation with Claude (Anthropic only). The model may
      * call the supplied tools; $handler executes each call and returns its
      * result. Loops until the model stops requesting tools or a turn cap is
@@ -174,6 +197,8 @@ class ClaudeClient
         if (! $this->isEnabled()) {
             return null;
         }
+
+        $system = $this->withCurrentTime($system);
 
         try {
             return match (config('billing.ai.provider', 'anthropic')) {
