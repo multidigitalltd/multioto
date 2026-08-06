@@ -114,4 +114,12 @@ return [
         'log_max_rows' => 500,
     ],
 
+    // Free-space thresholds. BOTH the share and the absolute floor must be low
+    // before anything is said: 8% of a 2TB disk is 160GB and nobody needs
+    // waking for it, while 8% of a 20GB server is the last warning anyone gets.
+    'disk' => [
+        'floor_gb' => (float) env('HEALTH_DISK_FLOOR_GB', 5),
+        'warn_percent' => (int) env('HEALTH_DISK_WARN_PERCENT', 10),
+        'critical_percent' => (int) env('HEALTH_DISK_CRITICAL_PERCENT', 5),
+    ],
 ];
