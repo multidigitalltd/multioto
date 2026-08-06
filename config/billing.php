@@ -55,6 +55,19 @@ return [
         'due_days' => (int) env('DEMAND_DUE_DAYS', 14),
     ],
 
+    // A customer set to pay by card whose charge date passed with no card on
+    // file is asked for one automatically — nothing else in the system would,
+    // because no charge is attempted and therefore no failure exists to chase.
+    // Asked at most once every `interval_days`, and at most `max_requests`
+    // times per unpaid period; set max_requests to 0 to switch this off and
+    // handle it by hand from the collections screen.
+    'cards' => [
+        'missing_request' => [
+            'interval_days' => (int) env('CARD_MISSING_REQUEST_INTERVAL_DAYS', 3),
+            'max_requests' => (int) env('CARD_MISSING_MAX_REQUESTS', 5),
+        ],
+    ],
+
     /*
      | Public signup form (/join). The customer fills their details, signs, and
      | picks how they'll pay. The non-card methods show setup instructions the
