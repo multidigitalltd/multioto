@@ -50,6 +50,7 @@ class CheckMoneyIntegrityJob implements ShouldQueue
             $this->invoicedWithoutSuccess(),
             $this->amountMismatch(),
             $this->overdueSubscriptions(),
+            $this->dueWithoutCard(),
             $this->stuckPendingCharges(),
         ]));
 
@@ -177,6 +178,31 @@ class CheckMoneyIntegrityJob implements ShouldQueue
             'מנויים שעבר מועד החיוב שלהם ולא חויבו',
             fn (Subscription $subscription): string => "מנוי #{$subscription->id} · מועד: "
                 .$subscription->next_charge_at->format('d/m/Y H:i'),
+        );
+    }
+
+    /**
+     * A customer set to pay by card, past their charge date, with no card.
+     *
+     * The overdue check above cannot see these: it asks dueForCharge(), which
+     * requires a token, so a subscription with no card is not "late" — it is
+     * invisible. Nothing is attempted, nothing fails, the subscription stays
+     * Active, and the money is simply never asked for. This is the one finding
+     * here that is not a broken invariant but a missing one.
+     */
+    private function dueWithoutCard(): ?array
+    {
+        $rows = Subscription::query()
+            ->awaitingCardOverdue()
+            ->orderBy('next_charge_at');
+
+        return $this->finding(
+            $rows,
+            ['id', 'customer_id', 'next_charge_at'],
+            'מנויים שאמורים להיגבות בכרטיס — ואין כרטיס שמור',
+            fn (Subscription $subscription): string => "מנוי #{$subscription->id} · מועד: "
+                .$subscription->next_charge_at->format('d/m/Y')
+                .' · שלחו ללקוח קישור להזנת כרטיס',
         );
     }
 

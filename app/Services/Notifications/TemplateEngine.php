@@ -79,6 +79,22 @@ class TemplateEngine
                 'body' => "היי {{customer_name}} 👋\nכדי להפעיל את המנוי {{plan}} ({{amount}} ₪ לחודש) נותר רק להזין את פרטי הכרטיס בעמוד המאובטח:\n{{link}}\n\nהעמוד מאובטח ומופעל ע״י חברת הסליקה — איננו רואים או שומרים את מספר הכרטיס.\nתודה, {{business_name}}",
             ],
         ],
+        // A customer whose charge date arrived with no card on file. Neither
+        // of the neighbouring templates fits: "welcome, let's activate" is
+        // wrong for someone who has been with us for months, and "we couldn't
+        // charge your card" claims an attempt that never happened. Saying the
+        // true thing — the date arrived and there is no card — is also the only
+        // version the customer can act on without first being confused.
+        'card.missing' => [
+            'email' => [
+                'subject' => 'הגיע מועד החיוב — חסרים פרטי תשלום | {{business_name}}',
+                'body' => "היי {{customer_name}},\n\nהגיע מועד החיוב של המנוי {{plan}} ({{amount}} ₪), אך לא שמורים אצלנו פרטי כרטיס אשראי ולכן החיוב לא בוצע.\n\nכדי שהשירות ימשיך לפעול כרגיל, יש להזין את פרטי הכרטיס בעמוד המאובטח:\n{{link}}\n\nהעמוד מאובטח לחלוטין ומופעל על ידי חברת הסליקה — אנחנו לא רואים ולא שומרים את מספר הכרטיס.\n\nאם כבר סידרתם את התשלום בדרך אחרת — אפשר להתעלם מההודעה.\n\nתודה,\n{{business_name}}",
+            ],
+            'whatsapp' => [
+                'subject' => null,
+                'body' => "היי {{customer_name}} 👋\nהגיע מועד החיוב של המנוי {{plan}} ({{amount}} ₪), אך לא שמורים אצלנו פרטי כרטיס ולכן החיוב לא בוצע.\n\nכדי שהשירות ימשיך לפעול, יש להזין את פרטי הכרטיס בעמוד המאובטח:\n{{link}}\n\nהעמוד מאובטח ומופעל ע״י חברת הסליקה — איננו רואים או שומרים את מספר הכרטיס.\nאם כבר סידרתם את התשלום בדרך אחרת — אפשר להתעלם.\nתודה, {{business_name}}",
+            ],
+        ],
         'card.expiring' => [
             'email' => [
                 'subject' => 'כרטיס האשראי עומד לפוג — עדכון פרטי תשלום | {{business_name}}',

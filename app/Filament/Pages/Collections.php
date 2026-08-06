@@ -38,7 +38,9 @@ class Collections extends Page implements HasTable
     /** Show a red count badge in the nav when there are debtors. */
     public static function getNavigationBadge(): ?string
     {
-        $count = Subscription::query()->inArrears()->count();
+        $count = Subscription::query()
+            ->where(fn ($query) => $query->inArrears()->orWhere(fn ($q) => $q->awaitingCardOverdue()))
+            ->count();
 
         return $count > 0 ? (string) $count : null;
     }
@@ -51,19 +53,39 @@ class Collections extends Page implements HasTable
     public function table(Table $table): Table
     {
         return $table
-            ->query(Subscription::query()->inArrears()->with(['customer', 'plan']))
+            // Debtors AND the subscriptions nobody is going to collect: a
+            // card customer with no card on file, past their charge date. They
+            // never turn past-due — no charge is ever attempted — so without
+            // this they owe money while every screen says all is well.
+            ->query(Subscription::query()
+                ->where(fn ($query) => $query->inArrears()->orWhere(fn ($q) => $q->awaitingCardOverdue()))
+                ->with(['customer', 'plan']))
             ->columns([
                 Tables\Columns\TextColumn::make('customer.name')->label('לקוח')->searchable()->sortable()->weight('bold'),
                 Tables\Columns\TextColumn::make('plan_name')->label('תוכנית')
                     ->state(fn (Subscription $record): string => $record->planName()),
+                // "ממתין לכרטיס" is not a subscription status — it is the
+                // absence of one. Showing the raw status here would say
+                // "פעיל" next to a customer who owes us money.
                 Tables\Columns\TextColumn::make('status')
                     ->label('סטטוס')->badge()
-                    ->color(fn (SubscriptionStatus $state): string => $state === SubscriptionStatus::Suspended ? 'danger' : 'warning'),
+                    ->state(fn (Subscription $record): string => $record->token_id === null
+                        ? 'ממתין לכרטיס'
+                        : $record->status->getLabel())
+                    ->color(fn (Subscription $record): string => match (true) {
+                        $record->token_id === null => 'danger',
+                        $record->status === SubscriptionStatus::Suspended => 'danger',
+                        default => 'warning',
+                    }),
                 Tables\Columns\TextColumn::make('dunning_stage')->label('שלב דאנינג')->badge()->sortable(),
                 Tables\Columns\TextColumn::make('amount')
                     ->label('סכום')
                     ->getStateUsing(fn (Subscription $record): string => Money::ils($record->totalChargeAgorot())),
-                Tables\Columns\TextColumn::make('next_charge_at')->label('ניסיון הבא')->dateTime('d/m/Y H:i')->placeholder('—')->sortable(),
+                Tables\Columns\TextColumn::make('next_charge_at')
+                    ->label('ניסיון הבא')->dateTime('d/m/Y H:i')->placeholder('—')->sortable()
+                    ->description(fn (Subscription $record): ?string => $record->token_id === null
+                        ? 'לא ייגבה — אין כרטיס שמור'
+                        : null),
             ])
             ->defaultSort('dunning_stage', 'desc')
             ->actions([
@@ -72,6 +94,6 @@ class Collections extends Page implements HasTable
                 DebtorActions::viewCustomer(),
             ])
             ->emptyStateHeading('אין חייבים 🎉')
-            ->emptyStateDescription('כל המנויים משולמים ובתוקף.');
+            ->emptyStateDescription('כל המנויים משולמים ובתוקף, ולכל לקוח שאמור לשלם בכרטיס יש כרטיס שמור.');
     }
 }

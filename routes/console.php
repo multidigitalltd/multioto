@@ -20,6 +20,7 @@ use App\Jobs\FollowUpPendingTicketsJob;
 use App\Jobs\HeartbeatJob;
 use App\Jobs\MonitorSiteJob;
 use App\Jobs\ReconcileChargeJob;
+use App\Jobs\RequestMissingCardJob;
 use App\Jobs\RunBackupJob;
 use App\Jobs\ScanSiteComplianceJob;
 use App\Jobs\ScanSiteOpportunitiesJob;
@@ -320,6 +321,14 @@ Schedule::job(new CheckSlaBreachesJob)
 // elsewhere, never delivered), never on a merely quiet week.
 Schedule::job(new CheckWhatsappInboundJob)
     ->hourly()->name('support:whatsapp-inbound-health')->onOneServer();
+
+// Ask for a card when the charge date passed and none is on file. Nothing else
+// would: no charge is attempted without a token, so no failure exists, so the
+// dunning machine — which chases failures — never starts, and the customer is
+// never told their subscription is unpaid. Gated on $awake like every other
+// outward automation.
+Schedule::job(new RequestMissingCardJob)
+    ->dailyAt('09:30')->name('billing:request-missing-cards')->when($awake)->onOneServer();
 
 // Chase unpaid payment demands: after the quiet interval, resend the request
 // (link/transfer) up to the configured maximum, then stop.
