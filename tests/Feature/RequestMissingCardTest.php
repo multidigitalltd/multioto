@@ -172,6 +172,19 @@ class RequestMissingCardTest extends TestCase
         $this->assertSame(0, $this->cardRequests($subscription->customer));
     }
 
+    /**
+     * לקוח בתקופת ניסיון לא מקבל דרישה לכרטיס: הוא אינו חייב דבר, וכל לקוח
+     * חדש נקלט בדיוק כך — בלי כרטיס, בכוונה.
+     */
+    public function test_a_trialing_customer_is_not_asked_as_if_in_debt(): void
+    {
+        $subscription = $this->awaitingCard(['status' => SubscriptionStatus::Trialing]);
+
+        $this->ask();
+
+        $this->assertSame(0, $this->cardRequests($subscription->customer));
+    }
+
     /** ומי שמשלם בהעברה בנקאית לא מקבל בקשה לכרטיס. */
     public function test_a_bank_transfer_customer_is_not_asked_for_a_card(): void
     {

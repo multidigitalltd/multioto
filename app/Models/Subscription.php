@@ -158,12 +158,21 @@ class Subscription extends Model
      * collection list ignores them because their payment method is not manual.
      * The result is a customer who quietly owes money while every screen in the
      * system says everything is fine.
+     *
+     * Scoped to the statuses the scheduler would actually have charged: a
+     * subscription still in its trial is not in debt, it is in its trial.
      */
     public function scopeAwaitingCard(Builder $query): Builder
     {
         return $query
             ->whereNull('token_id')
-            ->whereNot('status', SubscriptionStatus::Canceled)
+            // The test is "would this have been charged if a card existed?" —
+            // AUTO_CHARGE_STATUSES is exactly that question, already answered.
+            // A TRIAL owes nothing yet and is deliberately created without a
+            // card (see OnboardCustomer), so calling it a debt would turn every
+            // newly onboarded customer into a debtor on day one and send them a
+            // demand for money they do not owe.
+            ->whereIn('status', self::AUTO_CHARGE_STATUSES)
             ->whereNotNull('next_charge_at')
             // A blank payment method means nobody chose bank transfer, and the
             // default arrangement is a card — so it belongs here, not in limbo.
