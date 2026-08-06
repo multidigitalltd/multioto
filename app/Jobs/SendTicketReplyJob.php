@@ -88,7 +88,12 @@ class SendTicketReplyJob implements ShouldQueue
                 }
             }
 
-            $message->update(['external_message_id' => $externalId]);
+            // Clamped to the column width. The reply has already reached the
+            // customer by now, and a write that throws here leaves the "sent"
+            // marker unset — so the job retries and sends the whole thing
+            // again. A provider id too long to store must never cost the
+            // customer a second copy of the same message.
+            $message->update(['external_message_id' => $this->storableId($externalId)]);
             NotificationLog::record('whatsapp', NotificationType::TicketReply, $chatId, null, $body, $ticket->customer?->id);
         } else {
             $email = $ticket->customer?->email;
@@ -123,6 +128,12 @@ class SendTicketReplyJob implements ShouldQueue
         if ($ticket->first_response_at === null) {
             $ticket->update(['first_response_at' => now()]);
         }
+    }
+
+    /** The provider's id, cut to what the column can hold (null stays null). */
+    private function storableId(?string $externalId): ?string
+    {
+        return $externalId === null ? null : mb_substr($externalId, 0, 500);
     }
 
     /**

@@ -305,4 +305,42 @@ class TicketWatchersTest extends TestCase
             ->mountAction('manageWatchers')
             ->assertSee('הוספה כאיש קשר בלקוח');
     }
+
+    /**
+     * מזהה הודעה ארוך מהספק אינו מפיל את הרישום.
+     *
+     * זה קרה בשרת אמיתי: WAHA החזיר מזהה ארוך מהעמודה, הכתיבה נכשלה — והתשובה
+     * כבר יצאה ללקוח. סימן ה"נשלח" לא נרשם, העבודה ניסתה שוב, והלקוח קיבל את
+     * אותה הודעה שלוש פעמים לפני שזה נחת ביומן הכשלים.
+     */
+    public function test_an_over_long_provider_id_does_not_cost_the_customer_a_second_copy(): void
+    {
+        $ticket = Ticket::create([
+            'customer_id' => Customer::factory()->create(['whatsapp_jid' => '972500000000@c.us'])->id,
+            'channel' => TicketChannel::Whatsapp,
+            'subject' => 'שאלה',
+            'status' => TicketStatus::Open,
+            'external_thread_ref' => '972500000000@c.us',
+        ]);
+
+        $message = $ticket->messages()->create([
+            'direction' => MessageDirection::Outbound,
+            'channel' => MessageChannel::Whatsapp,
+            'body' => 'תשובה',
+            'author' => MessageAuthor::Agent,
+        ]);
+
+        $waha = \Mockery::mock(WahaClient::class);
+        $waha->shouldReceive('sendMessage')->once()->andReturn(['id' => str_repeat('x', 900)]);
+
+        (new SendTicketReplyJob($message->id))->handle($waha);
+
+        // Recorded (so the guard holds) and short enough to have been stored.
+        $stored = (string) $message->fresh()->external_message_id;
+        $this->assertNotSame('', $stored);
+        $this->assertLessThanOrEqual(500, mb_strlen($stored));
+
+        // A second run must not send anything again.
+        (new SendTicketReplyJob($message->id))->handle($waha);
+    }
 }
