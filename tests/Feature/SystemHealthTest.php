@@ -32,6 +32,7 @@ use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Route;
 use Illuminate\View\Middleware\ShareErrorsFromSession;
 use Mockery;
+use ReflectionMethod;
 use Tests\TestCase;
 
 /**
@@ -53,6 +54,11 @@ class SystemHealthTest extends TestCase
         // The backup check has its own tests; here it would report "no backup
         // has ever run" on every case and hide what is being asked.
         config(['backup.enabled' => false]);
+
+        // Likewise the disk: its verdict is tested with numbers below. Leaving
+        // it live would make every OTHER case in this file depend on how full
+        // the machine running the tests happens to be.
+        config(['health.disk.floor_gb' => 0]);
     }
 
     private function alive(): void
@@ -734,5 +740,68 @@ class SystemHealthTest extends TestCase
         // Reporting only: money is never corrected by a background job.
         $this->assertSame(ChargeStatus::Succeeded, $charge->fresh()->status);
         $this->assertSame(0, Invoice::count());
+    }
+
+    /**
+     * מקום בדיסק. כל עדכון בונה תמונה חדשה ומשאיר את הקודמת, ושרת שמתעדכן
+     * הרבה מתמלא מעצמו — והסימפטום הראשון אינו תיקייה גדולה אלא מסד נתונים
+     * שלא מצליח לכתוב.
+     *
+     * השיפוט נבדק במספרים ולא מול הדיסק שבמקרה מריץ את הבדיקה: בדיקה שהתוצאה
+     * שלה תלויה במכונה נכשלת מסיבות שאין להן קשר לקוד.
+     */
+    private function verdictFor(int $freeGb, int $totalGb): array
+    {
+        // Explicit thresholds: setUp neutralises the disk check for every other
+        // case in this file, and these cases are the ones that judge it.
+        config([
+            'health.disk.floor_gb' => 5,
+            'health.disk.warn_percent' => 10,
+            'health.disk.critical_percent' => 5,
+        ]);
+
+        $report = new ReflectionMethod(HealthReport::class, 'diskVerdict');
+
+        return $report->invoke(app(HealthReport::class), $freeGb * 1073741824, $totalGb * 1073741824);
+    }
+
+    /** דיסק גדול עם מעט אחוזים פנויים אינו התרעה — יש עליו עוד מאות ג׳יגה. */
+    public function test_a_small_share_of_a_large_disk_is_not_an_alarm(): void
+    {
+        $this->assertSame(HealthReport::OK, $this->verdictFor(80, 2000)['status']);
+    }
+
+    /** שרת קטן שנשארו בו מעט — אזהרה. */
+    public function test_a_small_server_running_low_is_a_warning(): void
+    {
+        $this->assertSame(HealthReport::DEGRADED, $this->verdictFor(4, 50)['status']);
+    }
+
+    /** וכשכמעט לא נשאר — זו כבר לא אזהרה. */
+    public function test_an_almost_full_disk_is_down(): void
+    {
+        $verdict = $this->verdictFor(1, 50);
+
+        $this->assertSame(HealthReport::DOWN, $verdict['status']);
+        $this->assertStringContainsString('docker image prune', $verdict['detail']);
+    }
+
+    /** דיסק עם מקום — תקין, והכמות נאמרת. */
+    public function test_a_healthy_disk_reports_the_amount(): void
+    {
+        $verdict = $this->verdictFor(120, 500);
+
+        $this->assertSame(HealthReport::OK, $verdict['status']);
+        $this->assertStringContainsString('ג׳יגה', $verdict['detail']);
+    }
+
+    /** והבדיקה קיימת בדוח בכלל. */
+    public function test_the_report_includes_the_disk_check(): void
+    {
+        $this->alive();
+
+        $this->assertNotNull(
+            collect(app(HealthReport::class)->collect()['checks'])->firstWhere('key', 'disk'),
+        );
     }
 }

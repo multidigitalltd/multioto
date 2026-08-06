@@ -54,5 +54,16 @@ else
     # "require(bootstrap/cache/config.php): No such file or directory". This
     # matches docker/entrypoint.sh, which reads config live on purpose.
     docker compose exec -T app php artisan optimize:clear
+
+    # Every rebuild leaves the previous image untagged, and the build cache
+    # grows with it. Nothing removes them, so a server that updates often
+    # fills its disk — quietly, until the day nothing can be written at all.
+    # Only DANGLING images (no tag, no container) and cache older than a week
+    # are removed: the running containers and the layers the next build reuses
+    # are untouched, so this costs nothing but disk that nobody can use.
+    echo "→ Cleaning up old images and build cache"
+    docker image prune -f > /dev/null 2>&1 || true
+    docker builder prune -f --filter until=168h > /dev/null 2>&1 || true
+
     echo "✓ Updated. All data and uploads are intact."
 fi

@@ -24,6 +24,15 @@ CHECK="$OPS/update-check.json"
 
 mkdir -p "$OPS"
 
+# This script runs every minute, forever, with its output appended to a log
+# nothing rotates. Left alone that is a file which only grows — and the first
+# symptom is a full disk, not a large log. Keep the recent history, drop the
+# rest.
+LOG="$OPS/watcher.log"
+if [ -f "$LOG" ] && [ "$(stat -c %s "$LOG" 2>/dev/null || echo 0)" -gt 5242880 ]; then
+    tail -n 500 "$LOG" > "$LOG.tmp" 2>/dev/null && mv "$LOG.tmp" "$LOG"
+fi
+
 # Record that a check happened, and how it went — on EVERY run, including the
 # ones that find nothing and the ones that fail. A silent failure here used to
 # look exactly like "you are up to date", and a team can act on that wrong

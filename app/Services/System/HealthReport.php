@@ -90,6 +90,7 @@ class HealthReport
                 ? $this->check('backlog', 'עומס בתור', self::OK, 'לא נמדד — עובד התור אינו מגיב.')
                 : $this->backlog(),
             $this->failedJobs(),
+            $this->diskSpace(),
             $this->backup(),
             $this->drill(),
         ];
@@ -113,6 +114,65 @@ class HealthReport
             ->reject(fn (array $check): bool => $check['status'] === self::OK)
             ->values()
             ->all();
+    }
+
+    /**
+     * Room left on the disk.
+     *
+     * Every update builds a new image and leaves the previous one behind, and
+     * nothing used to remove them — a server that updates often fills up on its
+     * own. The first symptom of that is not a large directory: it is a database
+     * that cannot write, a queue that cannot record, a backup that silently
+     * produces nothing. By then the panel is the last place anyone looks.
+     *
+     * Asked of the partition the application actually writes to, so a separate
+     * data mount is measured rather than assumed. Thresholds live in config —
+     * a build server and a production host do not agree on what "low" means,
+     * and a check whose verdict depends on the machine running the tests is a
+     * check that fails for reasons that have nothing to do with the code.
+     */
+    private function diskSpace(): array
+    {
+        $free = @disk_free_space(base_path());
+        $total = @disk_total_space(base_path());
+
+        if ($free === false || $total === false || $total <= 0) {
+            return $this->check('disk', 'מקום בדיסק', self::OK, 'לא נמדד.');
+        }
+
+        return $this->diskVerdict((int) $free, (int) $total);
+    }
+
+    /**
+     * The verdict for a given amount of free space — separated from reading the
+     * filesystem so the judgement itself can be tested with numbers instead of
+     * with whatever disk the test happens to run on.
+     *
+     * Both a share AND an absolute floor must be low: 8% of a 2TB disk is 160GB
+     * and nobody needs waking for it, while 8% of a 20GB server is the last
+     * warning anyone will get.
+     */
+    private function diskVerdict(int $free, int $total): array
+    {
+        $freeGb = round($free / 1073741824, 1);
+        $percentFree = (int) round($free / max(1, $total) * 100);
+        $detail = "נותרו {$freeGb} ג׳יגה ({$percentFree}%).";
+
+        $criticalPercent = (int) config('health.disk.critical_percent', 5);
+        $warnPercent = (int) config('health.disk.warn_percent', 10);
+        $floorGb = (float) config('health.disk.floor_gb', 5);
+
+        if ($freeGb > $floorGb) {
+            return $this->check('disk', 'מקום בדיסק', self::OK, $detail);
+        }
+
+        return match (true) {
+            $percentFree <= $criticalPercent => $this->check('disk', 'מקום בדיסק', self::DOWN,
+                "{$detail} הדיסק כמעט מלא — כתיבות עלולות להיכשל. נקו עם: docker image prune -f"),
+            $percentFree <= $warnPercent => $this->check('disk', 'מקום בדיסק', self::DEGRADED,
+                "{$detail} מומלץ לפנות מקום: docker image prune -f"),
+            default => $this->check('disk', 'מקום בדיסק', self::OK, $detail),
+        };
     }
 
     /** @param list<array{status: string}> $checks */
