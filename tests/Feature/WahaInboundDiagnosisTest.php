@@ -2,7 +2,13 @@
 
 namespace Tests\Feature;
 
+use App\Enums\MessageAuthor;
+use App\Enums\MessageChannel;
+use App\Enums\MessageDirection;
+use App\Enums\TicketChannel;
+use App\Enums\TicketStatus;
 use App\Enums\WebhookSource;
+use App\Models\Ticket;
 use App\Models\WebhookEvent;
 use App\Services\Waha\InboundDiagnosis;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -36,18 +42,34 @@ class WahaInboundDiagnosisTest extends TestCase
      * aged explicitly — passing it to create() silently stamps it now, and the
      * test then passes for the wrong reason.
      */
-    private function event(string $type, ?string $at = null): void
+    private function event(string $type, ?string $at = null, ?string $from = '972500000000@c.us', bool $processed = true): void
     {
         $event = WebhookEvent::create([
             'source' => WebhookSource::Waha,
             'event_type' => $type,
             'external_id' => 'evt-'.uniqid(),
-            'payload' => [],
+            'payload' => ['event' => $type, 'payload' => ['from' => $from]],
+            'processed_at' => $processed ? now() : null,
         ]);
 
         if ($at !== null) {
             $event->forceFill(['created_at' => $at])->save();
         }
+    }
+
+    /** הודעה שנכנסה בפועל לפנייה — ההוכחה שהמסלול עבד עד הסוף. */
+    private function ticketMessage(): void
+    {
+        $ticket = Ticket::create([
+            'channel' => TicketChannel::Whatsapp, 'subject' => 'פנייה', 'status' => TicketStatus::Open,
+        ]);
+
+        $ticket->messages()->create([
+            'direction' => MessageDirection::Inbound,
+            'channel' => MessageChannel::Whatsapp,
+            'body' => 'שלום',
+            'author' => MessageAuthor::Customer,
+        ]);
     }
 
     /** אין רישום בכלל — זה הרוב המכריע של המקרים, ויש כפתור שמסדר אותו. */
@@ -101,7 +123,7 @@ class WahaInboundDiagnosisTest extends TestCase
     public function test_it_reports_events_arriving_without_messages(): void
     {
         $this->sessionReturns([['url' => route('webhooks.waha')]]);
-        $this->event('session.status');
+        $this->event('session.status', from: null);
 
         $result = app(InboundDiagnosis::class)->run();
 
@@ -109,17 +131,82 @@ class WahaInboundDiagnosisTest extends TestCase
         $this->assertStringContainsString('session.status', $result['detail']);
     }
 
-    /** הכול עובד — ונאמר במפורש, עם כמה הודעות התקבלו. */
+    /** הכול עובד — ונאמר במפורש, עם כמה הודעות התקבלו וכמה נכנסו לפניות. */
     public function test_it_confirms_a_healthy_inbound_path(): void
     {
         $this->sessionReturns([['url' => route('webhooks.waha').'?secret=x', 'events' => ['message']]]);
         $this->event('message');
         $this->event('message');
+        $this->ticketMessage();
 
         $result = app(InboundDiagnosis::class)->run();
 
         $this->assertTrue($result['ok']);
         $this->assertStringContainsString('2 הודעות', $result['detail']);
+    }
+
+    /**
+     * הודעות מגיעות אבל אף פנייה לא נפתחת — בדיקה שנעצרת ב"נמסר" הייתה מדווחת
+     * תקין בזמן שהתור ריק, וזו התשובה המטעה מכולן.
+     */
+    public function test_messages_arriving_without_tickets_is_a_fault(): void
+    {
+        $this->sessionReturns([['url' => route('webhooks.waha')]]);
+        $this->event('message');
+
+        $result = app(InboundDiagnosis::class)->run();
+
+        $this->assertFalse($result['ok']);
+        $this->assertSame('no_tickets', $result['state']);
+    }
+
+    /** הודעות שנרשמו ולא עובדו: תור העבודות אינו רץ. */
+    public function test_unprocessed_messages_point_at_a_stopped_queue(): void
+    {
+        $this->sessionReturns([['url' => route('webhooks.waha')]]);
+        $this->event('message', now()->subHour()->toDateTimeString(), processed: false);
+
+        $result = app(InboundDiagnosis::class)->run();
+
+        $this->assertSame('not_processed', $result['state']);
+        $this->assertStringContainsString('Horizon', $result['detail']);
+    }
+
+    /** הודעה מלפני רגע שטרם עובדה אינה תקלה — היא עדיין בדרך. */
+    public function test_a_just_arrived_message_is_not_called_stuck(): void
+    {
+        $this->sessionReturns([['url' => route('webhooks.waha')]]);
+        $this->event('message', processed: false);
+        $this->ticketMessage();
+
+        $this->assertSame('ok', app(InboundDiagnosis::class)->run()['state']);
+    }
+
+    /**
+     * הבדיקה ששלחה את השאלה הזאת: כל ההודעות הגיעו ממספר האישורים, שהוא צ׳אט
+     * התפעול של הצוות ולעולם אינו פותח פניות לקוח.
+     */
+    public function test_messages_only_from_the_management_chat_are_explained(): void
+    {
+        config(['billing.waha.owner_number' => '0501111111']);
+        $this->sessionReturns([['url' => route('webhooks.waha')]]);
+        $this->event('message', from: '972501111111@c.us');
+
+        $result = app(InboundDiagnosis::class)->run();
+
+        $this->assertSame('owner_only', $result['state']);
+        $this->assertStringContainsString('ממספר אחר', $result['detail']);
+    }
+
+    /** וכך גם הודעות שהגיעו רק מקבוצות — המערכת מקשיבה לצ׳אטים ישירים. */
+    public function test_messages_only_from_groups_are_explained(): void
+    {
+        $this->sessionReturns([['url' => route('webhooks.waha')]]);
+        $this->event('message', from: '12036@g.us');
+
+        $result = app(InboundDiagnosis::class)->run();
+
+        $this->assertSame('groups_only', $result['state']);
     }
 
     /** שרת WAHA שלא נענה — זו תשובה בפני עצמה, לא כישלון שקט. */

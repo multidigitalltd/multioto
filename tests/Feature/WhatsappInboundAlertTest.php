@@ -2,10 +2,16 @@
 
 namespace Tests\Feature;
 
+use App\Enums\MessageAuthor;
+use App\Enums\MessageChannel;
+use App\Enums\MessageDirection;
+use App\Enums\TicketChannel;
+use App\Enums\TicketStatus;
 use App\Enums\WebhookSource;
 use App\Jobs\CheckWhatsappInboundJob;
 use App\Mail\NotificationMail;
 use App\Models\Setting;
+use App\Models\Ticket;
 use App\Models\WebhookEvent;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -40,11 +46,27 @@ class WhatsappInboundAlertTest extends TestCase
         Http::fake(['*/api/sessions/default' => Http::response(['config' => ['webhooks' => $webhooks]])]);
     }
 
+    /**
+     * A healthy inbound path end to end: the event arrived, was processed, and
+     * a ticket message came out of it. The event alone is no longer "healthy" —
+     * messages that arrive and open nothing are exactly the fault being watched.
+     */
     private function message(): void
     {
         WebhookEvent::create([
             'source' => WebhookSource::Waha, 'event_type' => 'message',
-            'external_id' => 'evt-'.uniqid(), 'payload' => [],
+            'external_id' => 'evt-'.uniqid(),
+            'payload' => ['event' => 'message', 'payload' => ['from' => '972500000000@c.us']],
+            'processed_at' => now(),
+        ]);
+
+        Ticket::create([
+            'channel' => TicketChannel::Whatsapp, 'subject' => 'פנייה', 'status' => TicketStatus::Open,
+        ])->messages()->create([
+            'direction' => MessageDirection::Inbound,
+            'channel' => MessageChannel::Whatsapp,
+            'body' => 'שלום',
+            'author' => MessageAuthor::Customer,
         ]);
     }
 

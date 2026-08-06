@@ -2,8 +2,12 @@
 
 namespace App\Services\Waha;
 
+use App\Enums\MessageChannel;
+use App\Enums\MessageDirection;
 use App\Enums\WebhookSource;
+use App\Models\TicketMessage;
 use App\Models\WebhookEvent;
+use App\Services\Automation\ApprovalGate;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 use Throwable;
@@ -28,7 +32,7 @@ class InboundDiagnosis
      * week is NOT one of them: alerting on silence that might just be a slow
      * week is how an alert becomes noise, and then the real one is ignored too.
      */
-    public const FAULTS = ['unreachable', 'not_registered', 'wrong_target', 'never_delivered', 'no_messages'];
+    public const FAULTS = ['unreachable', 'not_registered', 'wrong_target', 'never_delivered', 'no_messages', 'not_processed', 'no_tickets'];
 
     /**
      * @return array{ok: bool, state: string, title: string, detail: string, variant: string}
@@ -111,12 +115,128 @@ class InboundDiagnosis
             );
         }
 
+        // Messages ARE arriving. That still does not mean tickets are opening —
+        // the message can be claimed by the management chat, dropped as a group,
+        // or sit in a queue nobody is working. A check that stops at "delivered"
+        // reports everything healthy while the queue stays empty, which is the
+        // most misleading answer of all.
+        $outcome = $this->outcomeOfRecentMessages();
+
+        if ($outcome['unprocessed'] > 0) {
+            return $this->result(
+                false,
+                'not_processed',
+                'הודעות מתקבלות אך לא מעובדות',
+                "{$outcome['unprocessed']} הודעות התקבלו ולא עובדו. סימן שתור העבודות אינו רץ בשרת — הפעילו את Horizon (docker compose ps / restart) והן ייקלטו."
+                    .$this->lastSeen($last),
+            );
+        }
+
+        if ($outcome['tickets'] === 0 && $outcome['owner'] === $outcome['total'] && $outcome['total'] > 0) {
+            return $this->result(
+                false,
+                'owner_only',
+                'כל ההודעות הגיעו מצ׳אט הניהול',
+                'ההודעות שהתקבלו הגיעו כולן ממספר/קבוצת האישורים — צ׳אט התפעול של הצוות, שלעולם אינו פותח פניות לקוח (שם מריצים פקודות ניהול). שלחו הודעת בדיקה ממספר אחר, שאינו מספר האישורים.'
+                    .$this->lastSeen($last),
+                'warning',
+            );
+        }
+
+        if ($outcome['tickets'] === 0 && $outcome['group'] === $outcome['total'] && $outcome['total'] > 0) {
+            return $this->result(
+                false,
+                'groups_only',
+                'כל ההודעות הגיעו מקבוצות',
+                'ההודעות שהתקבלו הגיעו מקבוצות, ערוצים או סטטוסים — המערכת מקשיבה רק לצ׳אטים ישירים של לקוחות. שלחו הודעה ישירה למספר העסק.'
+                    .$this->lastSeen($last),
+                'warning',
+            );
+        }
+
+        if ($outcome['tickets'] === 0) {
+            return $this->result(
+                false,
+                'no_tickets',
+                'הודעות מתקבלות אך לא נפתחות פניות',
+                "התקבלו {$messages} הודעות ואף פנייה לא נפתחה מהן. בדקו ביומן האירועים אם ההודעות נדחו (הודעה ללא טקסט, קבוצה, או צ׳אט הניהול)."
+                    .$this->lastSeen($last),
+            );
+        }
+
+        $note = $outcome['owner'] > 0
+            ? " ({$outcome['owner']} מתוכן מצ׳אט הניהול, שאינו פותח פניות)"
+            : '';
+
         return $this->result(
             true,
             'ok',
             'הקליטה מוואטסאפ תקינה',
-            "התקבלו {$messages} הודעות נכנסות ב-7 הימים האחרונים.".$this->lastSeen($last),
+            "התקבלו {$messages} הודעות נכנסות ב-7 הימים האחרונים{$note}, ונפתחו מהן {$outcome['tickets']} הודעות בפניות.".$this->lastSeen($last),
         );
+    }
+
+    /**
+     * What became of the messages that did arrive.
+     *
+     * Reads the last 50 recorded message events and asks who sent them and
+     * whether they were handled at all — the difference between "WhatsApp is
+     * reaching us" and "customers are reaching us", which is exactly the gap a
+     * delivery-only check reports as healthy.
+     *
+     * @return array{total: int, owner: int, group: int, unprocessed: int, tickets: int}
+     */
+    private function outcomeOfRecentMessages(): array
+    {
+        $ownerChat = app(ApprovalGate::class)->ownerChatId();
+
+        $events = WebhookEvent::query()
+            ->where('source', WebhookSource::Waha)
+            ->where('event_type', 'message')
+            ->where('created_at', '>=', now()->subDays(7))
+            ->latest('id')
+            ->limit(50)
+            ->get(['payload', 'processed_at', 'created_at']);
+
+        $owner = 0;
+        $group = 0;
+        $unprocessed = 0;
+
+        foreach ($events as $event) {
+            $from = (string) data_get($event->payload, 'payload.from', data_get($event->payload, 'from', ''));
+
+            if ($ownerChat !== null && $from === $ownerChat) {
+                $owner++;
+            }
+
+            if (Str::endsWith($from, ['@g.us', '@newsletter', '@broadcast'])) {
+                $group++;
+            }
+
+            // A message from the last few minutes may legitimately still be in
+            // flight; older than that and nothing is working the queue.
+            if ($event->processed_at === null && $event->created_at?->lt(now()->subMinutes(5))) {
+                $unprocessed++;
+            }
+        }
+
+        return [
+            'total' => $events->count(),
+            'owner' => $owner,
+            'group' => $group,
+            'unprocessed' => $unprocessed,
+            'tickets' => $this->ticketMessagesThisWeek(),
+        ];
+    }
+
+    /** Inbound WhatsApp messages that actually landed in a ticket this week. */
+    private function ticketMessagesThisWeek(): int
+    {
+        return TicketMessage::query()
+            ->where('direction', MessageDirection::Inbound)
+            ->where('channel', MessageChannel::Whatsapp)
+            ->where('created_at', '>=', now()->subDays(7))
+            ->count();
     }
 
     /**
