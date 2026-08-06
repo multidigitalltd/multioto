@@ -74,6 +74,26 @@ class AwaitingCardTest extends TestCase
         $this->assertSame([], Subscription::query()->awaitingCardOverdue()->pluck('id')->all());
     }
 
+    /**
+     * מנוי בתקופת ניסיון אינו בחוב — הוא בניסיון. מסך הקליטה יוצר כל לקוח חדש
+     * ככה בכוונה, בלי כרטיס, ולכן בלי ההבחנה הזאת כל לקוח שנקלט היה נחשב חייב
+     * ביום הראשון שלו.
+     */
+    public function test_a_trial_is_not_a_debt(): void
+    {
+        $this->awaitingCard(['status' => SubscriptionStatus::Trialing]);
+
+        $this->assertSame([], Subscription::query()->awaitingCardOverdue()->pluck('id')->all());
+    }
+
+    /** מנוי בפיגור בלי כרטיס — כן. הוא כבר היה אמור להיגבות. */
+    public function test_a_past_due_subscription_still_counts(): void
+    {
+        $stuck = $this->awaitingCard(['status' => SubscriptionStatus::PastDue]);
+
+        $this->assertSame([$stuck->id], Subscription::query()->awaitingCardOverdue()->pluck('id')->all());
+    }
+
     /** מנוי מבוטל אינו חייב דבר. */
     public function test_a_canceled_subscription_is_ignored(): void
     {
