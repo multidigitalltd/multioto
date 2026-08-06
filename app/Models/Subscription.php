@@ -149,6 +149,36 @@ class Subscription extends Model
     }
 
     /**
+     * Subscriptions nobody is going to collect: a customer set to pay BY CARD
+     * who has no card on file.
+     *
+     * These fall through every net. The scheduler skips them (dueForCharge
+     * requires a token), so no charge is attempted, so the subscription never
+     * turns past-due and never reaches the debtors screen — and the manual
+     * collection list ignores them because their payment method is not manual.
+     * The result is a customer who quietly owes money while every screen in the
+     * system says everything is fine.
+     */
+    public function scopeAwaitingCard(Builder $query): Builder
+    {
+        return $query
+            ->whereNull('token_id')
+            ->whereNot('status', SubscriptionStatus::Canceled)
+            ->whereNotNull('next_charge_at')
+            // A blank payment method means nobody chose bank transfer, and the
+            // default arrangement is a card — so it belongs here, not in limbo.
+            ->whereHas('customer', fn (Builder $c) => $c
+                ->whereNotIn('payment_method', self::MANUAL_PAYMENT_METHODS)
+                ->orWhereNull('payment_method'));
+    }
+
+    /** Awaiting a card AND already past the date it should have been charged. */
+    public function scopeAwaitingCardOverdue(Builder $query): Builder
+    {
+        return $query->awaitingCard()->where('next_charge_at', '<=', now());
+    }
+
+    /**
      * Manually-collected subscriptions whose payment is due now — the team's
      * "collect these" work list, so a bank-transfer/standing-order collection
      * can't slip through unnoticed.
