@@ -481,6 +481,10 @@ return [
             'enabled' => (bool) env('SUPPORT_CSAT_ENABLED', true),
             // How long the rating link stays valid (days).
             'link_days' => (int) env('SUPPORT_CSAT_LINK_DAYS', 30),
+            // Where a customer who gave five stars is invited to say so
+            // publicly. Blank = no invitation shown; the thank-you page is
+            // simply a thank-you. Editable in תמיכה ← דירוגי לקוחות.
+            'google_review_url' => (string) env('SUPPORT_CSAT_GOOGLE_URL', ''),
         ],
 
         // Auto follow-up for a ticket stuck "waiting for customer" (Pending):

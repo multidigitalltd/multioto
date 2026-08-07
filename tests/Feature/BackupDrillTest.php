@@ -2056,4 +2056,54 @@ class BackupDrillTest extends TestCase
 
         $this->assertSame(HealthReport::DEGRADED, $drill['status']);
     }
+
+    /**
+     * הקצב נקבע בעבודה עצמה, לא בקרון.
+     *
+     * תזמון חודשי יורה בדקה אחת בחודש: קונטיינר שעולה מחדש ב-04:30 באחד לחודש,
+     * דיפלוי, אתחול שרת — כל אחד מהם עולה חודש שלם, בשקט, וההזדמנות הבאה בעוד
+     * שלושים יום. ככה מערכת חיה הגיעה לאוגוסט בלי שאף בדיקת שחזור נרשמה.
+     */
+    public function test_a_drill_that_ran_recently_is_skipped(): void
+    {
+        $backup = $this->backup();
+        $backup->forceFill(['drilled_at' => now()->subDays(3), 'drill_report' => ['problems' => []]])->save();
+
+        (new DrillBackupJob)->handle(app(BackupDrill::class));
+
+        // Untouched: the recent drill still stands.
+        $this->assertTrue($backup->fresh()->drilled_at->isSameDay(now()->subDays(3)));
+    }
+
+    /** ואחרי שחלף המרווח — היא רצה, גם אם היום שנקבע לה חלף מזמן. */
+    public function test_a_drill_overdue_by_weeks_runs_on_the_next_daily_pass(): void
+    {
+        $backup = $this->backup();
+        $backup->forceFill(['drilled_at' => now()->subDays(40), 'drill_report' => ['problems' => []]])->save();
+
+        (new DrillBackupJob)->handle(app(BackupDrill::class));
+
+        $this->assertTrue($backup->fresh()->drilled_at->isToday());
+    }
+
+    /** ארכיון שמעולם לא נבדק נבדק בהזדמנות הראשונה. */
+    public function test_a_never_drilled_archive_is_drilled(): void
+    {
+        $backup = $this->backup();
+
+        (new DrillBackupJob)->handle(app(BackupDrill::class));
+
+        $this->assertNotNull($backup->fresh()->drilled_at);
+    }
+
+    /** ולחיצה ידנית עוקפת את המרווח — מי שלחץ שאל עכשיו. */
+    public function test_a_manual_drill_ignores_the_interval(): void
+    {
+        $backup = $this->backup();
+        $backup->forceFill(['drilled_at' => now()->subHour(), 'drill_report' => ['problems' => []]])->save();
+
+        (new DrillBackupJob(manual: true))->handle(app(BackupDrill::class));
+
+        $this->assertTrue($backup->fresh()->drilled_at->gt(now()->subMinute()));
+    }
 }

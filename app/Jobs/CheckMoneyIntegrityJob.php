@@ -84,23 +84,25 @@ class CheckMoneyIntegrityJob implements ShouldQueue
     private function chargedWithoutInvoice(): ?array
     {
         $grace = now()->subMinutes((int) config('health.money.invoice_grace_minutes', 120));
-        $since = now()->subDays(max(1, (int) config('health.money.window_days', 14)));
 
-        // BOTH bounds run off the moment the money actually came in, not off
-        // the day the row was opened. A payment demand can sit unpaid for a
-        // fortnight: the invoice job starts when it is PAID, so the opening
-        // date would report every demand paid this morning — and would then
-        // hide the one paid today whose invoice failed, because the row itself
-        // is older than the lookback window.
+        // NO lower bound, unlike every other check here. Money taken without a
+        // document is a tax exposure that does not expire — and a finding that
+        // ages out of the report is a finding that gets forgotten. One such
+        // charge was found on this system a month after the invoice job failed,
+        // by which time the report had long stopped mentioning it.
+        //
+        // The upper bound runs off the moment the money actually came in, not
+        // the day the row was opened: a payment demand can sit unpaid for a
+        // fortnight, and the invoice job starts when it is PAID.
         $rows = Charge::query()
             ->where('status', ChargeStatus::Succeeded)
             ->where(fn (Builder $query) => $query
                 ->where(fn (Builder $paid) => $paid
                     ->whereNotNull('charged_at')
-                    ->whereBetween('charged_at', [$since, $grace]))
+                    ->where('charged_at', '<=', $grace))
                 ->orWhere(fn (Builder $legacy) => $legacy
                     ->whereNull('charged_at')
-                    ->whereBetween('created_at', [$since, $grace])))
+                    ->where('created_at', '<=', $grace)))
             ->whereDoesntHave('invoice')
             ->orderBy('id');
 

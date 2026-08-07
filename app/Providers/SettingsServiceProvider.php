@@ -121,6 +121,7 @@ class SettingsServiceProvider extends ServiceProvider
         // Master switch for executing internal system actions from the console.
         'agent.system_actions_enabled' => 'agent.system_actions_enabled',
         // Public signup form — payment-method setup instructions (editable text).
+        'support.csat_google_url' => 'billing.support.csat.google_review_url',
         'signup.instructions.standing_order' => 'billing.signup.instructions.standing_order',
         'signup.instructions.bank_transfer' => 'billing.signup.instructions.bank_transfer',
         'signup.instructions.checks' => 'billing.signup.instructions.checks',
