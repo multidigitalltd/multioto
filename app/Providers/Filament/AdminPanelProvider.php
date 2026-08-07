@@ -81,6 +81,12 @@ class AdminPanelProvider extends PanelProvider
             // this tab is in the background. The view is a no-op unless VAPID keys
             // are configured, so an install without keys is unaffected.
             ->renderHook(PanelsRenderHook::BODY_END, fn (): string => view('webpush.register')->render())
+            // And an offer, at the top of the page, for a member who has not
+            // turned them on in THIS browser. Push is per-browser, so somebody
+            // notified on their desktop is still un-notified on the laptop they
+            // are reading this on — and the feature is worth nothing to a person
+            // who never knew it was there. Dismissable, and remembered.
+            ->renderHook(PanelsRenderHook::CONTENT_START, fn (): string => view('webpush.offer')->render())
             // הכתבה קולית בכל שדה טקסט בפאנל — מאזין אחד על הדף, ולא רכיב לכל
             // טופס: בפאנל עשרות טפסים, חלקם נפתחים בחלוניות, וגישה שדורשת לגעת
             // בכל אחד מהם בנפרד נשארת חלקית ביום שאחרי.
