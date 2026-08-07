@@ -26,6 +26,22 @@
         h1 { font-size: 1.3rem; margin: .5rem 0; }
         p { color: var(--muted); margin: 0 0 .75rem; line-height: 1.6; }
         .rating { font-size: 1.75rem; letter-spacing: .15rem; }
+        .google {
+            display: inline-flex; align-items: center; justify-content: center; gap: .5rem;
+            margin: .5rem 0 1rem; padding: .85rem 1.5rem; border-radius: 10px;
+            background: #1a73e8; color: #fff; text-decoration: none; font-weight: 600;
+            font-size: 1rem; line-height: 1.2;
+        }
+        .google:hover, .google:focus { background: #1557b0; }
+        /* Visible focus for keyboard users — the button is the whole point of
+           this page for a happy customer, and a keyboard must be able to find it. */
+        .google:focus-visible { outline: 3px solid #16181d; outline-offset: 3px; }
+        @media (prefers-color-scheme: dark) {
+            .google:focus-visible { outline-color: #f4f5f7; }
+        }
+        @media (prefers-reduced-motion: no-preference) {
+            .google { transition: background-color .15s ease-in-out; }
+        }
     </style>
 </head>
 <body>
@@ -36,6 +52,18 @@
         <p class="rating" aria-label="דירוג {{ $ticket->csat_rating }} מתוך 5">
             {{ str_repeat('★', (int) $ticket->csat_rating) }}{{ str_repeat('☆', 5 - (int) $ticket->csat_rating) }}
         </p>
+        {{-- Five stars, and only five: someone who has just said the service was
+             perfect is the one person it is fair to ask for a public word. A
+             four-star customer had a reservation, and asking them to publish it
+             is asking for the review nobody wanted. Shown only when a link is
+             actually configured — a button that goes nowhere is worse than none. --}}
+        @if ((int) $ticket->csat_rating === 5 && filled($google = config('billing.support.csat.google_review_url')))
+            <p>יעשה לנו את היום אם תשתפו גם אחרים 🙂</p>
+            <a class="google" href="{{ $google }}" target="_blank" rel="noopener noreferrer">
+                <span aria-hidden="true">⭐</span> דרגו אותנו בגוגל
+            </a>
+        @endif
+
         @if ($support = config('billing.email.support_address'))
             <p>צריך עוד עזרה? כתבו לנו: <a href="mailto:{{ $support }}">{{ $support }}</a></p>
         @endif
