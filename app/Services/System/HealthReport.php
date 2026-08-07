@@ -535,21 +535,41 @@ class HealthReport
     {
         $limit = (int) config('health.failed_jobs', 5);
 
-        $count = rescue(
-            fn (): int => DB::table('failed_jobs')->where('failed_at', '>=', now()->subDay())->count(),
+        $counts = rescue(
+            fn (): array => [
+                'recent' => DB::table('failed_jobs')->where('failed_at', '>=', now()->subDay())->count(),
+                'total' => DB::table('failed_jobs')->count(),
+            ],
             null,
             report: false,
         );
 
-        if ($count === null) {
+        if ($counts === null) {
             return $this->check('failed_jobs', 'עבודות שנכשלו', self::OK, 'לא ניתן למדוד — מדלג.');
         }
+
+        if ($counts['total'] === 0) {
+            return $this->check('failed_jobs', 'עבודות שנכשלו', self::OK, 'אין כשלים ממתינים.');
+        }
+
+        // The whole backlog, not only the last day. Each row is something the
+        // system set out to do and did not do — a reply never sent, an invoice
+        // never issued — and none of them fixes itself with age. Counting a day
+        // meant a failure was forgotten 24 hours after it happened: nineteen of
+        // them sat unattended for a month on a live system while this very line
+        // reported "no failures".
+        $older = $counts['total'] - $counts['recent'];
+        $detail = "{$counts['total']} עבודות שנכשלו ממתינות";
+        $detail .= $counts['recent'] > 0 ? " ({$counts['recent']} ביממה האחרונה)." : ' (הישנה מביניהן לפני יותר מיממה).';
+        $detail .= ' לצפייה, ניסיון חוזר או מחיקה: /horizon/failed';
 
         return $this->check(
             'failed_jobs',
             'עבודות שנכשלו',
-            $limit > 0 && $count >= $limit ? self::DEGRADED : self::OK,
-            $count === 0 ? 'אין כשלים ביממה האחרונה.' : "{$count} ביממה האחרונה.",
+            // A burst in one day is the louder signal; a backlog that nobody
+            // has cleared is the quieter one, and both are worth saying.
+            $limit > 0 && $counts['recent'] >= $limit ? self::DOWN : self::DEGRADED,
+            $detail.($older > 0 && $counts['recent'] > 0 ? " (מתוכן {$older} ישנות יותר)" : ''),
         );
     }
 

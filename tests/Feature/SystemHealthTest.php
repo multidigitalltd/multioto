@@ -28,8 +28,10 @@ use Illuminate\Queue\Events\JobProcessed;
 use Illuminate\Routing\Router;
 use Illuminate\Session\Middleware\StartSession;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Str;
 use Illuminate\View\Middleware\ShareErrorsFromSession;
 use Mockery;
 use ReflectionMethod;
@@ -803,5 +805,42 @@ class SystemHealthTest extends TestCase
         $this->assertNotNull(
             collect(app(HealthReport::class)->collect()['checks'])->firstWhere('key', 'disk'),
         );
+    }
+
+    /**
+     * עבודות שנכשלו נספרות כולן, לא רק של היממה האחרונה.
+     *
+     * כל שורה כזאת היא משהו שהמערכת התכוונה לעשות ולא עשתה — תשובה שלא נשלחה,
+     * חשבונית שלא הונפקה — ואף אחת מהן לא מתקנת את עצמה עם הזמן. ספירה של יום
+     * אחד פירושה שכישלון נשכח 24 שעות אחריו: בשרת אמיתי ישבו 19 כאלה חודש,
+     * בזמן שהשורה הזאת בדיוק דיווחה "אין כשלים".
+     */
+    public function test_an_old_backlog_of_failures_is_still_reported(): void
+    {
+        $this->alive();
+
+        DB::table('failed_jobs')->insert([
+            'uuid' => (string) Str::uuid(),
+            'connection' => 'redis', 'queue' => 'default',
+            'payload' => '{}', 'exception' => 'boom',
+            'failed_at' => now()->subMonth(),
+        ]);
+
+        $check = collect(app(HealthReport::class)->collect()['checks'])->firstWhere('key', 'failed_jobs');
+
+        $this->assertSame(HealthReport::DEGRADED, $check['status']);
+        $this->assertStringContainsString('1 עבודות שנכשלו ממתינות', $check['detail']);
+        $this->assertStringContainsString('/horizon/failed', $check['detail']);
+    }
+
+    /** ובלי כשלים כלל — שקט. */
+    public function test_no_failures_is_quiet(): void
+    {
+        $this->alive();
+
+        $check = collect(app(HealthReport::class)->collect()['checks'])->firstWhere('key', 'failed_jobs');
+
+        $this->assertSame(HealthReport::OK, $check['status']);
+        $this->assertStringContainsString('אין כשלים ממתינים', $check['detail']);
     }
 }
