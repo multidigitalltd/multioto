@@ -7,8 +7,12 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
 /**
- * The profile screen shows a browser-notifications on/off section — but only
- * when Web Push is configured (VAPID keys).
+ * The profile screen's browser-notifications section.
+ *
+ * It used to disappear entirely when Web Push was unconfigured, which is how
+ * somebody waiting for notifications that never came found nothing on screen to
+ * explain why. The section now always appears: with the toggle when the keys
+ * exist, and with the one-time server command when they do not.
  */
 class ProfilePushToggleTest extends TestCase
 {
@@ -24,13 +28,18 @@ class ProfilePushToggleTest extends TestCase
             ->assertSee('התראות דפדפן');
     }
 
-    public function test_the_profile_hides_the_push_toggle_when_not_configured(): void
+    /**
+     * Unconfigured: the section stays, and says so. Hiding it answered the
+     * question "why am I not getting notifications?" with an empty space.
+     */
+    public function test_the_profile_explains_instead_of_hiding_when_not_configured(): void
     {
         config(['webpush.vapid.public_key' => null, 'webpush.vapid.private_key' => null]);
 
         $this->actingAs(User::factory()->create())
             ->get(route('filament.admin.auth.profile'))
             ->assertOk()
-            ->assertDontSee('התראות דפדפן');
+            ->assertSee('התראות דפדפן')
+            ->assertSee('אינן מופעלות בשרת', false);
     }
 }
