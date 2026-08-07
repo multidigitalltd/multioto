@@ -9,6 +9,7 @@ use App\Services\Backup\BackupDrill;
 use App\Support\EmailList;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Mail;
 
 /**
@@ -42,9 +43,27 @@ class DrillBackupJob implements ShouldQueue
      */
     public function __construct(public bool $manual = false) {}
 
+    /** Has enough time passed since the last drill of any outcome? */
+    private function due(): bool
+    {
+        $days = max(1, (int) config('backup.drill_interval_days', 30));
+
+        $last = Backup::query()->whereNotNull('drilled_at')->max('drilled_at');
+
+        return $last === null || Carbon::parse($last)->lt(now()->subDays($days));
+    }
+
     public function handle(BackupDrill $drill): void
     {
         if (! $this->manual && ! config('backup.enabled')) {
+            return;
+        }
+
+        // The schedule asks every day; the interval is decided here. Putting it
+        // in the job rather than in the cron expression is what makes a missed
+        // day recoverable — the run is due until it happens, instead of being
+        // due for one minute and then not again for a month.
+        if (! $this->manual && ! $this->due()) {
             return;
         }
 

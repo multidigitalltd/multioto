@@ -93,11 +93,18 @@ Schedule::job(new HeartbeatJob(HealthHeartbeat::WORKLOAD))->everyFiveMinutes()
 Schedule::job(new CheckMoneyIntegrityJob)->dailyAt('08:15')
     ->name('billing:money-integrity')->onOneServer();
 
-// Once a month, the newest archive is fetched and read through. Everything else
-// about backups reports on the WRITE — the run finished, the upload succeeded —
-// and none of that is the question anybody has on the day it matters. Nothing is
-// restored; see BackupDrill.
-Schedule::job(new DrillBackupJob)->monthlyOn(1, '04:30')
+// The newest archive is fetched and read through. Everything else about backups
+// reports on the WRITE — the run finished, the upload succeeded — and none of
+// that is the question anybody has on the day it matters. Nothing is restored;
+// see BackupDrill.
+//
+// Asked DAILY, and the job itself decides whether enough time has passed. A
+// monthly schedule fires in exactly one minute per month: a container restarting
+// at 04:30 on the 1st, a deploy, a host reboot — any of them costs the whole
+// month, silently, and the next chance is thirty days away. This is how a live
+// system reached August with no drill ever recorded. Daily, the same mishap
+// costs a day.
+Schedule::job(new DrillBackupJob)->dailyAt('04:30')
     ->name('backup:drill')->onOneServer();
 
 // Billing: enqueue a charge for every subscription that is due. The job holds

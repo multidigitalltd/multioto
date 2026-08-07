@@ -73,6 +73,11 @@ return [
     */
     'drill_stale_days' => (int) env('BACKUP_DRILL_STALE_DAYS', 45),
 
+    // How often the drill actually runs. The scheduler asks daily and the job
+    // compares against this, so a day the scheduler was down costs a day rather
+    // than the whole month a once-a-month cron would have cost.
+    'drill_interval_days' => (int) env('BACKUP_DRILL_INTERVAL_DAYS', 30),
+
     'restore_claim_minutes' => (int) env('BACKUP_RESTORE_CLAIM_MINUTES', 30),
 
     /** Archives older than this are pruned after each successful run. */
