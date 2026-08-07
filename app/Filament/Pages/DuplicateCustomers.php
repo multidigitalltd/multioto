@@ -7,6 +7,7 @@ use App\Filament\Resources\CustomerResource;
 use App\Services\Customers\DuplicateFinder;
 use Filament\Pages\Page;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 
 /**
  * כרטיסים כפולים — לקוחות שנפתחו פעמיים.
@@ -34,10 +35,22 @@ class DuplicateCustomers extends Page
 
     protected static string $view = 'filament.pages.duplicate-customers';
 
-    /** Amber count in the nav — nothing when there is nothing to merge. */
+    /**
+     * Amber count in the nav — nothing when there is nothing to merge.
+     *
+     * Cached for a few minutes because Filament asks EVERY navigation item for
+     * its badge on EVERY page render: without this, opening any screen in the
+     * panel would read the whole customers table to decide whether to draw a
+     * number. The page itself is never cached — someone who opens it is asking
+     * about now.
+     */
     public static function getNavigationBadge(): ?string
     {
-        $count = self::groups()->count();
+        $count = Cache::remember(
+            'duplicate-customers-count',
+            now()->addMinutes(5),
+            fn (): int => self::groups()->count(),
+        );
 
         return $count > 0 ? (string) $count : null;
     }

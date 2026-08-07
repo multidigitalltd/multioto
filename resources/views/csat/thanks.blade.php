@@ -29,10 +29,12 @@
         .google {
             display: inline-flex; align-items: center; justify-content: center; gap: .5rem;
             margin: .5rem 0 1rem; padding: .85rem 1.5rem; border-radius: 10px;
-            background: #1a73e8; color: #fff; text-decoration: none; font-weight: 600;
+            /* לבן על הכחול הזה = יחס 6.95:1. הגוון הרשמי של גוגל (#1a73e8)
+               נותן 4.51 — עובר AA בשוליים של מאית, וזה לא מרווח שסומכים עליו. */
+            background: #1557b0; color: #fff; text-decoration: none; font-weight: 600;
             font-size: 1rem; line-height: 1.2;
         }
-        .google:hover, .google:focus { background: #1557b0; }
+        .google:hover, .google:focus { background: #0f4695; }
         /* Visible focus for keyboard users — the button is the whole point of
            this page for a happy customer, and a keyboard must be able to find it. */
         .google:focus-visible { outline: 3px solid #16181d; outline-offset: 3px; }
