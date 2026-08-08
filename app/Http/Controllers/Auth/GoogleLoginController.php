@@ -106,10 +106,25 @@ class GoogleLoginController extends Controller
         return redirect()->intended(route('filament.admin.pages.dashboard'));
     }
 
-    /** סירוב אחיד — בלי לרמוז מי רשום במערכת ומי לא. */
+    /**
+     * סירוב אחיד — בלי לרמוז מי רשום במערכת ומי לא.
+     *
+     * מי שיצא לגוגל ממסך האימות הדו-שלבי חוזר לשם ולא למסך ההתחברות: הוא כבר
+     * מחובר בסיסמה, ומסך ההתחברות יחזיר אותו הלאה בגלגול הפניות שבסופו הסיבה
+     * לסירוב כבר לא קיימת בסשן — כלומר מסך שלא אומר דבר. הוא אינו מנותק כאן:
+     * ניסיון כניסה שנכשל בגוגל אינו סיבה לבטל התחברות תקפה שכבר קיימת.
+     */
     private function refuse(string $reason): RedirectResponse
     {
-        return redirect()->route('filament.admin.auth.login')->with('error', $reason);
+        $user = Auth::user();
+
+        $midTwoFactor = $user !== null
+            && $user->requiresTwoFactor()
+            && ! session()->get('two_factor.confirmed', false);
+
+        return redirect()
+            ->route($midTwoFactor ? 'two-factor.challenge' : 'filament.admin.auth.login')
+            ->with('error', $reason);
     }
 
     /**

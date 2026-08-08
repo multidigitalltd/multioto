@@ -49,6 +49,28 @@
         }
         .row { display: flex; justify-content: space-between; align-items: center; margin-top: 1rem; gap: .5rem; }
         .error { color: var(--error); font-size: .9rem; margin: .5rem 0 0; }
+        .alert {
+            border: 1px solid var(--error); border-radius: 10px; padding: .6rem .8rem;
+            color: var(--error); font-size: .9rem; margin: 0 0 1rem;
+        }
+        /* כניסה עם גוגל: כפתור בעיצוב העמוד (ולא לבן קבוע), כדי שהניגודיות
+           תישמר גם במצב כהה. הטקסט הוא var(--fg) על var(--card) — היחס שם הוא
+           של גוף העמוד עצמו, הרבה מעל AA. */
+        .google {
+            display: flex; align-items: center; justify-content: center; gap: .5rem;
+            width: 100%; margin: 0; padding: .7rem 1rem; font-size: .95rem; font-weight: 600;
+            border: 1px solid var(--border); border-radius: 10px;
+            background: transparent; color: var(--fg); text-decoration: none;
+        }
+        .google:hover { border-color: var(--primary); }
+        .google:focus-visible { outline: 3px solid var(--primary); outline-offset: 2px; }
+        .google svg { width: 1.1rem; height: 1.1rem; flex: none; }
+        .divider { position: relative; text-align: center; margin: 1.25rem 0; }
+        .divider span { position: relative; z-index: 1; background: var(--card); padding: 0 .6rem; color: var(--muted); font-size: .8rem; }
+        .divider::before {
+            content: ""; position: absolute; inset-inline: 0; top: 50%;
+            border-top: 1px solid var(--border);
+        }
         .status { color: var(--muted); font-size: .9rem; margin: .75rem 0 0; text-align: center; }
         form.inline { display: inline; }
     </style>
@@ -57,6 +79,26 @@
     <main>
         <div class="icon" aria-hidden="true">🔐</div>
         <h1>אימות דו-שלבי</h1>
+
+        @if (session('error'))
+            <p class="alert" role="alert">{{ session('error') }}</p>
+        @endif
+
+        {{-- כניסה עם גוגל גם כאן, ולא רק במסך הסיסמה: מי שהגיע לשלב הזה וקוד
+             לא הגיע אליו — מייל שמתעכב, ואטסאפ שלא מגיע — נשאר תקוע מול שדה
+             ריק. גוגל היא דרך ההתחברות שכבר קיימת במערכת, והיא נחשבת כאן גם
+             כאימות הדו-שלבי (ההסבר המלא, כולל המחיר, ב-GoogleLoginController).
+             אין כאן פרצה חדשה: אותו כפתור בדיוק כבר עומד במסך ההתחברות, ומי
+             שלוחץ עליו נדרש להוכיח את זהותו מול גוגל בכל מקרה. --}}
+        @if (\App\Http\Controllers\Auth\GoogleLoginController::configured())
+            <a href="{{ route('auth.google.redirect') }}" class="google">
+                @include('auth.google-mark')
+                התחברות עם גוגל
+            </a>
+
+            <div class="divider"><span>או באמצעות הקוד שנשלח</span></div>
+        @endif
+
         <p class="lead">
             שלחנו קוד חד-פעמי
             @if ($channel === \App\Enums\TwoFactorChannel::Whatsapp)
