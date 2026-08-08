@@ -24,8 +24,13 @@ use Illuminate\Support\Str;
  */
 class SiteAlerts extends BaseWidget
 {
-    /** בין המשימות הפתוחות (70-) ל"אתרים בבעיה" (50-). */
-    protected static ?int $sort = -60;
+    /**
+     * מתחת ל"אתרים בבעיה" (50-) ומעל מעקב ה-SLA (45-).
+     *
+     * אתר שנפל עכשיו קודם לממצא שממתין לבדיקה: הראשון הוא לקוח בלי אתר ברגע
+     * זה, השני הוא משהו שצריך לבדוק היום.
+     */
+    protected static ?int $sort = -47;
 
     protected int|string|array $columnSpan = 'full';
 
