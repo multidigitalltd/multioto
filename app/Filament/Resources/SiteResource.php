@@ -7,6 +7,7 @@ use App\Enums\SiteType;
 use App\Filament\Concerns\RespectsModuleAccess;
 use App\Filament\Resources\SiteResource\Pages;
 use App\Filament\Support\SiteActions;
+use App\Filament\Widgets\SiteAlerts;
 use App\Jobs\RestoreSiteJob;
 use App\Jobs\SuspendSiteJob;
 use App\Models\Site;
@@ -41,6 +42,22 @@ class SiteResource extends Resource
     protected static ?int $navigationSort = 4;
 
     protected static ?string $recordTitleAttribute = 'domain';
+
+    /**
+     * מספר ממצאי האבטחה שעוד לא סומנו כטופלו — אותו מספר שמופיע בווידג'ט
+     * בפאנל הראשי, כדי שגם מי שגלל מעבר לדשבורד יראה שיש משהו שממתין.
+     */
+    public static function getNavigationBadge(): ?string
+    {
+        $count = SiteAlerts::pendingCount();
+
+        return $count > 0 ? (string) $count : null;
+    }
+
+    public static function getNavigationBadgeColor(): ?string
+    {
+        return 'danger';
+    }
 
     public static function form(Form $form): Form
     {

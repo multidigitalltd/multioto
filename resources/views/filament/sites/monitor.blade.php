@@ -624,7 +624,7 @@
             <span class="text-xs text-gray-500 dark:text-gray-400">מה זוהה באתר ומתי</span>
         </div>
 
-        @php $events = $site->events()->latest('detected_at')->limit(30)->get(); @endphp
+        @php $events = $site->events()->with('acknowledgedBy')->latest('detected_at')->limit(30)->get(); @endphp
 
         @forelse ($events as $event)
             <div @class([
@@ -633,10 +633,17 @@
                 <span class="whitespace-nowrap text-xs text-gray-500 dark:text-gray-400">
                     {{ $event->detected_at?->format('d/m/Y H:i') }}
                 </span>
-                <x-filament::badge :color="match ($event->severity) { 'critical' => 'danger', 'warning' => 'warning', default => 'gray' }">
+                <x-filament::badge :color="$event->severityColor()">
                     {{ $event->label() }}
                 </x-filament::badge>
                 <span class="font-medium">{{ $event->title }}</span>
+                {{-- מי בדק את הממצא ומתי. בלי זה היומן מספר מה קרה ולא אם מישהו
+                     טיפל בזה, וזו בדיוק השאלה ששואלים חודש אחרי. --}}
+                @if ($event->acknowledged_at)
+                    <span class="whitespace-nowrap text-xs text-gray-500 dark:text-gray-400">
+                        ✓ טופל {{ $event->acknowledged_at->format('d/m/Y') }}@if ($event->acknowledgedBy) · {{ $event->acknowledgedBy->name }}@endif
+                    </span>
+                @endif
                 @if ($event->detail)
                     <span class="w-full text-xs text-gray-500 dark:text-gray-400">{{ $event->detail }}</span>
                 @endif

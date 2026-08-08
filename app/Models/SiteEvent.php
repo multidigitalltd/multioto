@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Support\Facades\Schema;
@@ -34,16 +35,57 @@ class SiteEvent extends Model
         'content_change' => ['✏️', 'עדכון תוכן לבקשת הלקוח'],
     ];
 
+    /** Severities that are a finding to act on, as opposed to a logged fact. */
+    public const ACTIONABLE_SEVERITIES = ['critical', 'warning'];
+
     protected $fillable = ['site_id', 'type', 'severity', 'title', 'detail', 'detected_at'];
 
     protected function casts(): array
     {
-        return ['detected_at' => 'datetime'];
+        return ['detected_at' => 'datetime', 'acknowledged_at' => 'datetime'];
     }
 
     public function site(): BelongsTo
     {
         return $this->belongsTo(Site::class);
+    }
+
+    /** מי סימן שהממצא טופל (ריק כל עוד לא טופל, או אם המשתמש נמחק מאז). */
+    public function acknowledgedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'acknowledged_by');
+    }
+
+    /**
+     * ממצאים שממתינים לצוות: אזהרה או קריטי שאיש עוד לא סימן כטופל.
+     *
+     * `info` נשאר בחוץ במכוון — עדכון תוכן שהלקוח ביקש הוא תיעוד, לא מטלה,
+     * וחיווי שסופר גם אותו מפסיק להיות אמין תוך שבוע.
+     */
+    public function scopePendingReview(Builder $query): Builder
+    {
+        return $query
+            ->whereNull('acknowledged_at')
+            ->whereIn('severity', self::ACTIONABLE_SEVERITIES);
+    }
+
+    /** סימון "טופל" — נרשם עם השעה ועם מי שסימן, כדי שיהיה למי לפנות. */
+    public function acknowledge(?User $user = null): void
+    {
+        $this->forceFill([
+            'acknowledged_at' => now(),
+            'acknowledged_by' => $user?->id,
+        ])->save();
+    }
+
+    /** צבע Filament לפי חומרת הממצא — אותו מיפוי בכל מסך שמציג ממצאים. */
+    public function severityColor(): string
+    {
+        return match ($this->severity) {
+            'critical' => 'danger',
+            'warning' => 'warning',
+            default => 'gray',
+        };
     }
 
     /**

@@ -148,6 +148,69 @@ class GoogleLoginTest extends TestCase
         $this->assertGuest();
     }
 
+    /**
+     * גם מסך הקוד החד-פעמי מציע כניסה עם גוגל.
+     *
+     * מי שקוד לא הגיע אליו — מייל שנתקע, ואטסאפ שלא נשלח — נשאר תקוע מול שדה
+     * ריק, בעוד שדרך כניסה תקפה אחרת כבר קיימת במערכת.
+     */
+    public function test_the_one_time_code_screen_offers_google_sign_in(): void
+    {
+        $user = User::factory()->create([
+            'two_factor_enabled' => true,
+            'two_factor_channel' => TwoFactorChannel::Email,
+        ]);
+
+        $this->actingAs($user)
+            ->get(route('two-factor.challenge'))
+            ->assertOk()
+            ->assertSee('התחברות עם גוגל')
+            ->assertSee(route('auth.google.redirect'), false);
+    }
+
+    /** לא מוגדרת התחברות עם גוגל — אין כפתור שמוביל לשום מקום. */
+    public function test_the_one_time_code_screen_hides_google_when_it_is_not_configured(): void
+    {
+        config(['services.google.client_id' => null, 'services.google.client_secret' => null]);
+
+        $user = User::factory()->create([
+            'two_factor_enabled' => true,
+            'two_factor_channel' => TwoFactorChannel::Email,
+        ]);
+
+        $this->actingAs($user)
+            ->get(route('two-factor.challenge'))
+            ->assertOk()
+            ->assertDontSee('התחברות עם גוגל');
+    }
+
+    /**
+     * כניסת גוגל שנכשלה מחזירה למסך הקוד — עם הסיבה.
+     *
+     * סירוב שמפנה למסך ההתחברות נבלע בגלגול הפניות (המשתמש כבר מחובר בסיסמה),
+     * ומי שלחץ על הכפתור היה חוזר למסך שלא אומר דבר על מה שקרה.
+     */
+    public function test_a_failed_google_attempt_returns_to_the_code_screen_with_the_reason(): void
+    {
+        $user = User::factory()->create([
+            'email' => 'team@example.co.il',
+            'two_factor_enabled' => true,
+            'two_factor_channel' => TwoFactorChannel::Email,
+        ]);
+
+        $this->actingAs($user);
+
+        // חשבון גוגל אחר, שאינו רשום כמשתמש.
+        $this->pretendGoogleReturns('stranger@gmail.com', verified: true, id: '999');
+
+        $this->get(route('auth.google.callback'))
+            ->assertRedirect(route('two-factor.challenge'))
+            ->assertSessionHas('error');
+
+        // וההתחברות הקיימת לא בוטלה בגלל ניסיון שנכשל.
+        $this->assertAuthenticatedAs($user);
+    }
+
     /** תשובה מגוגל, בלי לצאת לרשת. */
     private function pretendGoogleReturns(string $email, bool $verified, string $id): void
     {
