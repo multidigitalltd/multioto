@@ -4,11 +4,14 @@ namespace Tests\Feature;
 
 use App\Enums\ChargeStatus;
 use App\Enums\SubscriptionStatus;
+use App\Enums\TokenStatus;
+use App\Filament\Pages\ManualCharge;
 use App\Filament\Resources\SubscriptionResource\Pages\CreateSubscription;
 use App\Jobs\ChargeSubscriptionJob;
 use App\Jobs\IssueInvoiceJob;
 use App\Jobs\SendDunningNotificationJob;
 use App\Models\Customer;
+use App\Models\PaymentToken;
 use App\Models\Subscription;
 use App\Models\User;
 use App\Services\Billing\SubscriptionCollectionService;
@@ -345,6 +348,66 @@ class InstallmentPlanTest extends TestCase
 
         $this->assertSame(1, $plan->charges()->where('status', ChargeStatus::Succeeded)->count());
         $this->assertSame(1, $plan->refresh()->installmentsPaid());
+    }
+
+    /*
+    | ----------------------------------------------------------------
+    | פריסה מתוך "חיוב ידני"
+    | ----------------------------------------------------------------
+    */
+
+    /** סכום ומספר תשלומים בחיוב ידני פותחים מנוי פריסה וגובים את הראשון. */
+    public function test_the_manual_charge_screen_opens_a_plan(): void
+    {
+        Queue::fake([ChargeSubscriptionJob::class]);
+        $this->actingAs(User::factory()->create());
+
+        $customer = Customer::factory()->create(['vat_exempt' => true]);
+        PaymentToken::factory()->create(['customer_id' => $customer->id, 'status' => TokenStatus::Active]);
+
+        Livewire::test(ManualCharge::class)
+            ->fillForm([
+                'customer_id' => $customer->id,
+                'amount' => 7000,
+                'description' => 'פריסת חוב',
+                'vat_exempt' => true,
+                'installments' => 14,
+            ])
+            ->call('submit');
+
+        $plan = Subscription::where('customer_id', $customer->id)->sole();
+
+        $this->assertSame(14, $plan->installments_total);
+        $this->assertSame(50000, $plan->price_agorot_override);   // ₪500 לחודש
+        $this->assertSame(700000, $plan->installmentsTotalAgorot());
+
+        Queue::assertPushed(ChargeSubscriptionJob::class);
+    }
+
+    /**
+     * בלי כרטיס שמור אין פריסה — ונאמר למה.
+     *
+     * עמוד התשלום של קארדקום גובה פעם אחת ואינו שומר כרטיס, כך שפריסה שתיפתח
+     * בלעדיו הייתה גובה תשלום אחד ונתקעת — מול לקוח שכבר סוכם איתו אחרת.
+     */
+    public function test_a_plan_is_refused_without_a_saved_card(): void
+    {
+        Queue::fake();
+        $this->actingAs(User::factory()->create());
+
+        $customer = Customer::factory()->create();
+
+        Livewire::test(ManualCharge::class)
+            ->fillForm([
+                'customer_id' => $customer->id,
+                'amount' => 7000,
+                'description' => 'פריסת חוב',
+                'installments' => 14,
+            ])
+            ->call('submit');
+
+        $this->assertSame(0, Subscription::where('customer_id', $customer->id)->count());
+        Queue::assertNotPushed(ChargeSubscriptionJob::class);
     }
 
     /** הטופס נטען, ושני הכיוונים מוצעים בו. */
