@@ -10,7 +10,8 @@
 
 **🌐 {{ $site['domain'] }}**
 
-<table width="100%" cellpadding="4" cellspacing="0" style="direction: rtl; text-align: right; font-size: 14px;">
+{{-- mo-kv: על מסך צר שתי העמודות נערמות זו מתחת לזו (ראו layout) --}}
+<table class="mo-kv" width="100%" cellpadding="4" cellspacing="0" style="direction: rtl; text-align: right; font-size: 14px;">
 <tr>
 <td>זמינות (Uptime)</td>
 <td><strong>{{ $site['uptime'] !== null ? number_format($site['uptime'], 2).'%' : '—' }}</strong></td>

@@ -81,6 +81,9 @@ p.sub {
 
 img {
     max-width: 100%;
+    /* Without this an image scaled down by max-width keeps its original height
+       and arrives stretched. */
+    height: auto;
 }
 
 /* Layout */
@@ -150,6 +153,9 @@ img {
     margin: 0 auto;
     padding: 0;
     width: 570px;
+    /* The 570px column is the design; this is the floor under it for a client
+       that ignores the media query in the layout. Never wider than the screen. */
+    max-width: 100%;
 }
 
 .inner-body a {
@@ -180,6 +186,7 @@ img {
     padding: 0;
     text-align: center;
     width: 570px;
+    max-width: 100%;
 }
 
 .footer p {
@@ -217,6 +224,10 @@ img {
     margin: 0;
     padding: 10px 0;
     text-align: right;
+    /* A long value in a narrow cell must wrap rather than widen the table and
+       push the whole message sideways. */
+    word-break: break-word;
+    overflow-wrap: break-word;
 }
 
 .content-cell {

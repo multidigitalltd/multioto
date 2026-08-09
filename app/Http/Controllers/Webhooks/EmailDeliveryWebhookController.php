@@ -28,12 +28,9 @@ class EmailDeliveryWebhookController extends Controller
     public function __invoke(Request $request, DeliveryEvents $events): Response
     {
         // Fail closed: a blank/unset secret must never mean "accept everything".
-        $secret = (string) config('billing.email.webhook_secret');
-
-        abort_unless(
-            $secret !== '' && hash_equals($secret, $this->providedSecret($request)),
-            403,
-        );
+        // A refusal is remembered: a provider pointed here WITHOUT the secret
+        // looks, from the panel, exactly like one that was never connected.
+        $this->abortUnlessSecretMatches($request, (string) config('billing.email.webhook_secret'), 'email.delivery');
 
         $payload = $request->except('secret');
         $type = (string) $request->input('RecordType', 'unknown');

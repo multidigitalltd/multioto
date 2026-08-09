@@ -1,9 +1,8 @@
 <x-mail::message>
 <div dir="rtl">
-@if ($footer['is_marketing'] ?? false)
-{{-- חוק התקשורת ס' 30א(ב)(1): הודעת פרסומת נושאת את המילה "פרסומת" בראשה. --}}
-<p style="margin:0 0 1rem;font-size:12px;color:#6b7280;letter-spacing:.05em">פרסומת</p>
-@endif
+{{-- המילה "פרסומת" יושבת בסוגריים בסוף שורת הנושא (BroadcastRenderer::subject)
+     ולא ככותרת בגוף ההודעה: שם רואים אותה לפני שפותחים את המייל, וזו גם
+     הכותרת שהחוק מבקש מהודעה פרסומית במייל לשאת. --}}
 
 @if (filled($bodyHtml ?? null))
 {{-- The rich editor's HTML, already run through the allow-list sanitizer. --}}

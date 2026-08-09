@@ -6,6 +6,7 @@ use App\Models\Customer;
 use App\Models\NotificationLog;
 use App\Models\SystemLog;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
 
 /**
@@ -37,6 +38,11 @@ class DeliveryEvents
         if (! in_array($type, self::HANDLED, true)) {
             return false;
         }
+
+        // The broadcasts list tells the team when delivery tracking was never
+        // connected at all, and caches that answer. The first real event is
+        // exactly the moment it stops being true.
+        Cache::forget('broadcast-delivery-tracking-connected');
 
         $at = $this->timestamp($payload);
         $log = $this->findLog($payload);

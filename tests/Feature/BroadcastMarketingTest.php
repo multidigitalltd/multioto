@@ -139,6 +139,47 @@ class BroadcastMarketingTest extends TestCase
         $this->assertStringContainsString('הסר', $body);
     }
 
+    /**
+     * במייל פרסומי המילה "(פרסומת)" יושבת בסוף שורת הנושא.
+     *
+     * שם היא נקראת לפני שפותחים את ההודעה — ולא ככותרת בגוף, שנראית רק אחרי
+     * שכבר נפתחה.
+     */
+    public function test_a_marketing_email_says_it_is_advertising_at_the_end_of_the_subject(): void
+    {
+        $customer = Customer::factory()->create(['email' => 'x@b.co.il']);
+        $broadcast = $this->broadcast(['subject' => 'מבצע קיץ', 'body' => 'מבצע']);
+
+        $this->assertSame('מבצע קיץ (פרסומת)', $this->renderer()->subject($broadcast, $customer));
+    }
+
+    /** הודעת שירות אינה פרסומת, ושורת הנושא שלה נשארת כפי שנכתבה. */
+    public function test_a_service_email_subject_is_left_alone(): void
+    {
+        $customer = Customer::factory()->create(['email' => 'x@b.co.il']);
+        $broadcast = $this->broadcast(['subject' => 'תחזוקה בשבת', 'is_marketing' => false]);
+
+        $this->assertSame('תחזוקה בשבת', $this->renderer()->subject($broadcast, $customer));
+    }
+
+    /** מי שכתב את המילה בעצמו לא יקבל אותה פעמיים. */
+    public function test_the_marker_is_not_added_twice(): void
+    {
+        $customer = Customer::factory()->create(['email' => 'x@b.co.il']);
+        $broadcast = $this->broadcast(['subject' => 'מבצע קיץ (פרסומת)']);
+
+        $this->assertSame('מבצע קיץ (פרסומת)', $this->renderer()->subject($broadcast, $customer));
+    }
+
+    /** בוואטסאפ אין שורת נושא — שם המילה נשארת בכותרת התחתונה של ההודעה. */
+    public function test_the_whatsapp_subject_is_never_marked(): void
+    {
+        $customer = Customer::factory()->create();
+        $broadcast = $this->broadcast(['subject' => 'מבצע קיץ', 'channel' => BroadcastChannel::Whatsapp]);
+
+        $this->assertSame('מבצע קיץ', $this->renderer()->subject($broadcast, $customer));
+    }
+
     public function test_a_service_announcement_carries_no_advertising_footer(): void
     {
         $customer = Customer::factory()->create();
@@ -206,7 +247,9 @@ class BroadcastMarketingTest extends TestCase
             $this->renderer()->emailFooter($broadcast, $customer),
         ))->render();
 
-        $this->assertStringContainsString('פרסומת', $html);
+        // המילה עצמה יושבת בשורת הנושא, לא ככותרת בגוף ההודעה — שם רואים אותה
+        // לפני הפתיחה.
+        $this->assertStringEndsWith('(פרסומת)', $this->renderer()->subject($broadcast, $customer));
         $this->assertStringContainsString('מולטי דיגיטל', $html);
         $this->assertStringContainsString('להסרה מרשימת התפוצה', $html);
         $this->assertStringContainsString('marketing/unsubscribe/'.$customer->id, $html);
@@ -248,8 +291,9 @@ class BroadcastMarketingTest extends TestCase
         ))->render();
 
         $this->assertStringContainsString('טקסט משלי', $html);
-        // The parts the law requires are added by the template regardless.
-        $this->assertStringContainsString('פרסומת', $html);
+        // The parts the law requires are added regardless of the wording: the
+        // marker on the subject line, the way out in the footer.
+        $this->assertStringEndsWith('(פרסומת)', $this->renderer()->subject($broadcast, $customer));
         $this->assertStringContainsString('להסרה מרשימת התפוצה', $html);
     }
 

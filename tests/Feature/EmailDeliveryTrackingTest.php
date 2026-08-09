@@ -477,6 +477,74 @@ class EmailDeliveryTrackingTest extends TestCase
     | ----------------------------------------------------------------
     */
 
+    /**
+     * הספק מדפדף בדלת ונדחה — וזה נאמר, במקום להיראות כמו "לא הוגדר".
+     *
+     * Webhook שהוגדר עם הכתובת בלי הסוד מחזיר 403 שוב ושוב. הדחייה נשלחת לספק
+     * ואיש אצלנו אינו רואה אותה, כך שבפאנל זה נראה זהה להתקנה שבה לא נגעו —
+     * וזה ההבדל בין לחפש איפה מגדירים לבין לתקן תו אחד בכתובת.
+     */
+    public function test_a_rejected_provider_call_is_named_instead_of_looking_unconfigured(): void
+    {
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+
+        $broadcast = Broadcast::create([
+            'subject' => 'עדכון', 'body' => 'x', 'channel' => BroadcastChannel::Email,
+            'status' => BroadcastStatus::Sent,
+        ]);
+        $this->log(['broadcast_id' => $broadcast->id]);
+
+        // Postmark מוגדר, אבל הכתובת שהודבקה שם היא בלי הסוד.
+        $this->event(['RecordType' => 'Delivery', 'MessageID' => 'pm-1'], secret: null)
+            ->assertForbidden();
+
+        Livewire::test(ListBroadcasts::class)
+            ->assertTableColumnStateSet('delivery', '— הספק מדווח אך נדחה: הסוד בכתובת אינו תואם', $broadcast);
+    }
+
+    /**
+     * טיוטה לא נשלחה לאיש, ולכן אין לה מה לדווח ואין מה לאבחן.
+     *
+     * אבחון על שורה שמעולם לא נגעה בספק הוא שאלה על אינטגרציה שלא הייתה בשימוש.
+     */
+    public function test_a_draft_broadcast_says_nothing_about_tracking(): void
+    {
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+
+        $draft = Broadcast::create([
+            'subject' => 'טיוטה', 'body' => 'x', 'channel' => BroadcastChannel::Email,
+            'status' => BroadcastStatus::Draft,
+        ]);
+
+        Livewire::test(ListBroadcasts::class)
+            ->assertTableColumnStateSet('delivery', '—', $draft);
+    }
+
+    /**
+     * מרגע שהספק דיווח פעם אחת, דיוור בלי מספרים הוא דיוור שממתין — לא מעקב חסר.
+     */
+    public function test_a_broadcast_with_tracking_connected_says_it_is_waiting(): void
+    {
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+
+        $reported = Broadcast::create([
+            'subject' => 'קודם', 'body' => 'x', 'channel' => BroadcastChannel::Email,
+            'status' => BroadcastStatus::Sent,
+        ]);
+        $this->log(['broadcast_id' => $reported->id]);
+        $this->event(['RecordType' => 'Delivery', 'MessageID' => 'pm-1'])->assertOk();
+
+        // נשלח (יש שורת לוג), אבל הספק עוד לא דיווח עליו.
+        $fresh = Broadcast::create([
+            'subject' => 'חדש', 'body' => 'x', 'channel' => BroadcastChannel::Email,
+            'status' => BroadcastStatus::Sent,
+        ]);
+        $this->log(['broadcast_id' => $fresh->id, 'provider_message_id' => 'pm-2']);
+
+        Livewire::test(ListBroadcasts::class)
+            ->assertTableColumnStateSet('delivery', '— ממתין לדיווח מהספק', $fresh);
+    }
+
     public function test_a_broadcast_still_awaiting_the_provider_shows_no_numbers_at_all(): void
     {
         $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
@@ -490,8 +558,12 @@ class EmailDeliveryTrackingTest extends TestCase
         // A log row exists the moment we hand the mail over, so counting rows
         // would show "0 נמסרו" a second after sending — which reads like a
         // failed send rather than one the provider has yet to report on.
+        //
+        // And on an install where the provider's webhook was never registered,
+        // "—" would stay forever while the team waits for numbers that cannot
+        // arrive — so the placeholder says which of the two it is.
         Livewire::test(ListBroadcasts::class)
-            ->assertTableColumnStateSet('delivery', '—', $broadcast);
+            ->assertTableColumnStateSet('delivery', '— מעקב מסירה לא מוגדר', $broadcast);
 
         $this->event(['RecordType' => 'Delivery', 'MessageID' => 'pm-1'])->assertOk();
 

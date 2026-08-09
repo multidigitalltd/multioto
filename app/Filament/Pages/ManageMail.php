@@ -9,6 +9,7 @@ use App\Models\Setting;
 use App\Services\Health\IntegrationHealth;
 use App\Services\Mail\PostmarkClient;
 use App\Support\EmailList;
+use App\Support\WebhookRejections;
 use Filament\Forms\Components\Actions\Action as FormAction;
 use Filament\Forms\Components\FileUpload;
 use Filament\Forms\Components\Placeholder;
@@ -21,7 +22,9 @@ use Filament\Forms\Form;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 use Filament\Pages\SubNavigationPosition;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\HtmlString;
 use Illuminate\Support\Str;
 
 /**
@@ -143,7 +146,7 @@ class ManageMail extends Page implements HasForms
                     ->footerActions([$this->saveAction()]),
 
                 Section::make('הסבר בתחתית דיוור')
-                    ->description('השורות שמסבירות ללקוח למה קיבל את ההודעה, מתחת לתוכן הדיוור. אפשר להשתמש ב-{{עסק}} לשם השולח. השאירו ריק לנוסח ברירת המחדל. הכותרת "פרסומת", זהות המפרסם וקישור ההסרה נוספים אוטומטית להודעה פרסומית ואינם תלויים בטקסטים כאן.')
+                    ->description('השורות שמסבירות ללקוח למה קיבל את ההודעה, מתחת לתוכן הדיוור. אפשר להשתמש ב-{{עסק}} לשם השולח. השאירו ריק לנוסח ברירת המחדל. המילה "(פרסומת)" בשורת הנושא, זהות המפרסם וקישור ההסרה נוספים אוטומטית להודעה פרסומית ואינם תלויים בטקסטים כאן.')
                     ->schema([
                         Textarea::make('broadcasts.service_note')
                             ->label('בהודעת שירות')
@@ -192,7 +195,13 @@ class ManageMail extends Page implements HasForms
                         TextInput::make('email.webhook_secret')
                             ->label('סוד ה-Webhook הנכנס')
                             ->password()->revealable()->autocomplete('new-password')
-                            ->helperText('מחרוזת סודית כלשהי (למשל 32 תווים אקראיים). חייבת להיות זהה למה שמופיע בכתובת שתדביקו ב-Postmark. אם ריק — כל המיילים הנכנסים נדחים.'),
+                            ->helperText('מחרוזת סודית כלשהי (למשל 32 תווים אקראיים). ב-Postmark אין שדה נפרד לסוד — הוא חלק מהכתובת עצמה, ולכן יש להדביק שם את הכתובת המלאה שמופיעה למטה, כולל ‎?secret=‎. אם ריק — כל הפניות הנכנסות נדחות.'),
+                        Placeholder::make('webhook_rejections')
+                            ->label('')
+                            ->content(fn (): HtmlString => $this->rejectionNotice())
+                            // מוצג רק כשבאמת נדחתה פנייה — אזהרה קבועה על מסך
+                            // הגדרות היא רעש שמפסיקים לקרוא.
+                            ->visible(fn (): bool => $this->lastRejection() !== null),
                         Placeholder::make('inbound_url')
                             ->label('כתובת ה-Webhook להדבקה ב-Postmark')
                             ->content(fn (): string => $this->inboundWebhookUrl()),
@@ -236,6 +245,15 @@ class ManageMail extends Page implements HasForms
             if (filled($value)) {
                 Setting::put($key, (string) $value);
             }
+        }
+
+        // A new webhook secret means the old refusals describe a world that no
+        // longer exists. Leaving the warning up would send somebody to fix
+        // something they just fixed; if the address at the provider is still
+        // wrong, the very next call puts it back within the hour.
+        if (filled(data_get($data, 'email.webhook_secret'))) {
+            WebhookRejections::forget('email.delivery');
+            WebhookRejections::forget('email.inbound');
         }
 
         // If Postmark is (now or already) configured, make it the active mailer.
@@ -364,6 +382,41 @@ class ManageMail extends Page implements HasForms
      * opened, bounced, marked as spam. Same shared secret as the inbound hook;
      * a different path so the two payload shapes never mix.
      */
+    /**
+     * מתי בפעם האחרונה דחינו פנייה נכנסת בגלל סוד שאינו תואם — בשני ה-Webhooks
+     * של המייל, המוקדם מביניהם אינו מעניין: מספיקה עדות אחת שמישהו דופק בדלת.
+     */
+    protected function lastRejection(): ?Carbon
+    {
+        $times = array_filter([
+            WebhookRejections::lastAt('email.delivery'),
+            WebhookRejections::lastAt('email.inbound'),
+        ]);
+
+        return $times === [] ? null : collect($times)->max();
+    }
+
+    /**
+     * ההודעה שמסבירה מה קורה.
+     *
+     * זה המסך היחיד שיכול לספר את זה: הדחייה נשלחת לספק, והספק ממשיך לנסות
+     * בשקט. בלי השורה הזו, "Webhook שהוגדר בלי הסוד" נראה בדיוק כמו "Webhook
+     * שלא הוגדר" — ומחפשים איפה מגדירים במקום לתקן תו אחד בכתובת.
+     */
+    protected function rejectionNotice(): HtmlString
+    {
+        $at = $this->lastRejection();
+
+        return new HtmlString(
+            '<span class="text-sm text-danger-600 dark:text-danger-400">'
+            .'⚠️ פניות מ-Postmark מגיעות אלינו אך נדחות — האחרונה ב-'
+            .e($at?->format('d/m/Y H:i') ?? '')
+            .'. פירוש הדבר שה-Webhook מוגדר, אבל הכתובת שהודבקה שם אינה כוללת את הסוד הנכון. '
+            .'העתיקו את הכתובת המלאה שלמטה (היא כוללת את הסוד) והחליפו אותה ב-Postmark.'
+            .'</span>'
+        );
+    }
+
     protected function deliveryWebhookUrl(): string
     {
         $base = rtrim((string) config('app.url'), '/').'/webhooks/email/delivery';

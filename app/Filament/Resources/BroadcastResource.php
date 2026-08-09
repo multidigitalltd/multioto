@@ -5,6 +5,7 @@ namespace App\Filament\Resources;
 use App\Enums\BroadcastChannel;
 use App\Enums\BroadcastStatus;
 use App\Enums\CustomerStatus;
+use App\Enums\WebhookSource;
 use App\Filament\Concerns\RespectsModuleAccess;
 use App\Filament\Pages\ManageMail;
 use App\Filament\Resources\BroadcastResource\Actions\BroadcastSendActions;
@@ -13,9 +14,12 @@ use App\Models\Broadcast;
 use App\Models\Customer;
 use App\Models\NotificationLog;
 use App\Models\Plan;
+use App\Models\WebhookEvent;
 use App\Services\Support\BroadcastAudience;
 use App\Services\Support\BroadcastComposer;
 use App\Services\Support\BroadcastRenderer;
+use App\Services\Support\MarketingEngagement;
+use App\Support\WebhookRejections;
 use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Notifications\Notification;
@@ -23,6 +27,7 @@ use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\HtmlString;
 
 class BroadcastResource extends Resource
@@ -132,7 +137,7 @@ class BroadcastResource extends Resource
                             ->default(true)
                             ->live()
                             ->descriptions([
-                                1 => 'מבצע, שירות חדש, הצעה. תתווסף הכותרת "פרסומת", פרטי העסק וקישור הסרה, ולקוחות שביקשו להסיר אותם לא יקבלו — כנדרש בחוק התקשורת.',
+                                1 => 'מבצע, שירות חדש, הצעה. לשורת הנושא תתווסף המילה "(פרסומת)", בתחתית ההודעה פרטי העסק וקישור הסרה, ולקוחות שביקשו להסיר אותם לא יקבלו — כנדרש בחוק התקשורת.',
                                 0 => 'תחזוקה מתוכננת, עדכון אבטחה, שינוי בשירות. אינה פרסומת, ולכן נשלחת גם ללקוחות שהוסרו מרשימת הדיוור.',
                             ])
                             ->required(),
@@ -167,6 +172,16 @@ class BroadcastResource extends Resource
                             ->helperText('ריק = כל מי שתואם לתנאים שלמעלה')
                             ->live()
                             ->columnSpanFull(),
+                        Forms\Components\Toggle::make('segment.include_non_openers')
+                            ->label('לשלוח גם למי שאינו פותח')
+                            ->live()
+                            // מוצג רק כשהכלל בכלל פועל — מתג שאין לו מה לבטל
+                            // הוא שאלה מיותרת בכל דיוור.
+                            ->visible(fn (Forms\Get $get): bool => (bool) $get('is_marketing')
+                                && static::channelOf($get('channel')) === BroadcastChannel::Email
+                                && app(MarketingEngagement::class)->skipsNonOpeners())
+                            ->helperText('כברירת מחדל, לקוח שקיבל כמה הודעות ולא פתח אף אחת מדולג — שליחה למי שאינו קורא פוגעת בשיעור הפתיחה, וזה מה שספקי הדואר מדרגים לפיו את המסירה של כל השאר. הפעילו כאן כדי לכלול אותם בדיוור הזה בכל זאת.')
+                            ->columnSpanFull(),
                         Forms\Components\Placeholder::make('audience_summary')
                             ->label('כמה יקבלו')
                             ->content(fn (Forms\Get $get): HtmlString => static::audienceSummary($get))
@@ -181,6 +196,35 @@ class BroadcastResource extends Resource
                             ->seconds(false)
                             ->after('now')
                             ->helperText('המערכת בודקת כל חמש דקות, כך שהשליחה תתחיל סמוך לשעה שנבחרה. בשבת ובחג השליחה נדחית אוטומטית למוצאי החג.'),
+                        Forms\Components\Actions::make([
+                            // ההמלצה שווה משהו רק במקום שבו אפשר לפעול לפיה.
+                            // מסך מדדים שאומר "הכי טוב ב-9:00" ומשאיר את ההקלדה
+                            // למשתמש הוא מסך שנקרא פעם אחת.
+                            Forms\Components\Actions\Action::make('scheduleAtBestHour')
+                                ->label(fn (): string => static::bestHourLabel())
+                                ->icon('heroicon-o-clock')
+                                ->color('gray')
+                                ->visible(fn (): bool => app(MarketingEngagement::class)->bestWindow() !== null)
+                                ->action(function (Forms\Set $set): void {
+                                    $best = app(MarketingEngagement::class)->bestWindow();
+
+                                    if ($best === null) {
+                                        return;
+                                    }
+
+                                    // המופע הבא של השעה הזו: היום אם עוד לא
+                                    // עברה, אחרת מחר. תזמון לרגע שכבר חלף היה
+                                    // נשלח מיד — ההפך מהכוונה.
+                                    $at = now()->setTime($best['from'], 0);
+
+                                    $set('scheduled_at', ($at->isPast() ? $at->addDay() : $at)->format('Y-m-d H:i'));
+
+                                    Notification::make()->success()
+                                        ->title('תוזמן לשעת השיא')
+                                        ->body('אפשר לשנות את התאריך; השעה נבחרה לפי דפוס הפתיחה בפועל.')
+                                        ->send();
+                                }),
+                        ])->columnSpanFull(),
                     ])->columns(2)
                     // A sent broadcast is history: rescheduling it would either do
                     // nothing or invite a second send to the same people.
@@ -189,6 +233,19 @@ class BroadcastResource extends Resource
             ->disabled(fn (?Broadcast $record): bool => $record !== null && in_array(
                 $record->status, [BroadcastStatus::Sending, BroadcastStatus::Sent], true,
             ));
+    }
+
+    /** תווית הכפתור, עם השעה עצמה — כדי שלא צריך ללחוץ כדי לדעת מה יקרה. */
+    protected static function bestHourLabel(): string
+    {
+        $best = app(MarketingEngagement::class)->bestWindow();
+
+        if ($best === null) {
+            return 'תזמון לשעת השיא';
+        }
+
+        return 'תזמון לשעת השיא ('.str_pad((string) $best['from'], 2, '0', STR_PAD_LEFT).':00 — '
+            .round($best['share'] * 100).'% מהפתיחות)';
     }
 
     /**
@@ -244,6 +301,7 @@ class BroadcastResource extends Resource
             'status' => $get('segment.status'),
             'plan_ids' => $get('segment.plan_ids'),
             'customer_ids' => $get('segment.customer_ids'),
+            'include_non_openers' => (bool) $get('segment.include_non_openers'),
         ], marketing: (bool) $get('is_marketing'));
 
         if ($counts['reachable'] === 0) {
@@ -279,6 +337,10 @@ class BroadcastResource extends Resource
             $line .= '<br><span class="text-sm text-gray-500">'.$counts['opted_out'].' לקוחות ביקשו להסיר אותם מדיוור פרסומי ולא יקבלו.</span>';
         }
 
+        if (($counts['never_opens'] ?? 0) > 0) {
+            $line .= '<br><span class="text-sm text-gray-500">'.$counts['never_opens'].' לקוחות ידולגו כי לא פתחו אף אחת מההודעות האחרונות שנמסרו להם — אפשר לכלול אותם במתג שלמעלה.</span>';
+        }
+
         return new HtmlString($line);
     }
 
@@ -296,10 +358,20 @@ class BroadcastResource extends Resource
 
         $stats = NotificationLog::query()
             ->where('broadcast_id', $record->id)
+            ->selectRaw('COUNT(*) AS handed_over')
             ->selectRaw('COUNT(delivered_at) AS delivered')
             ->selectRaw('COUNT(opened_at) AS opened')
             ->selectRaw('COUNT(bounced_at) AS bounced')
             ->first();
+
+        // Nothing was ever handed to the provider — a draft, a scheduled send
+        // that hasn't run, or a send that found nobody to send to. There is no
+        // report to wait for and nothing to diagnose, so the column stays blank
+        // rather than raising a question about an integration this row never
+        // used.
+        if ((int) ($stats?->handed_over ?? 0) === 0) {
+            return '—';
+        }
 
         // The placeholder hangs on whether the PROVIDER has said anything, not
         // on whether we queued anything: a log row exists the moment we hand the
@@ -310,7 +382,17 @@ class BroadcastResource extends Resource
             + (int) ($stats?->bounced ?? 0);
 
         if ($reported === 0) {
-            return '—';
+            if (static::deliveryTrackingConnected()) {
+                return '— ממתין לדיווח מהספק';
+            }
+
+            // Three states look identical from here, and only one of them is
+            // "nobody set this up". A provider that IS calling and being turned
+            // away at the door is the one worth naming: the work is done, one
+            // wrong character in the address is all that stands in the way.
+            return WebhookRejections::lastAt('email.delivery') !== null
+                ? '— הספק מדווח אך נדחה: הסוד בכתובת אינו תואם'
+                : '— מעקב מסירה לא מוגדר';
         }
 
         $parts = [$stats->delivered.' נמסרו', $stats->opened.' נפתחו'];
@@ -320,6 +402,32 @@ class BroadcastResource extends Resource
         }
 
         return implode(' · ', $parts);
+    }
+
+    /**
+     * Has the email provider EVER posted a delivery event to us?
+     *
+     * The counts come from the provider's webhook, so an install where that
+     * webhook was never registered (or where open tracking was never switched
+     * on at the provider) reports nothing at all — for every broadcast, forever.
+     * One "did anything ever arrive" answer separates a young send from a
+     * missing integration.
+     *
+     * Cached: this runs once per row on a list screen, and the answer flips at
+     * most once in the life of an install.
+     */
+    protected static function deliveryTrackingConnected(): bool
+    {
+        return Cache::remember('broadcast-delivery-tracking-connected', now()->addMinutes(10), function (): bool {
+            try {
+                return WebhookEvent::query()
+                    ->where('source', WebhookSource::Email)
+                    ->where('event_type', 'like', 'delivery_%')
+                    ->exists();
+            } catch (\Throwable) {
+                return true; // never let the log table turn into a false alarm
+            }
+        });
     }
 
     /** A one-line, human reading of a stored segment, for the list screen. */

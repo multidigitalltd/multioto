@@ -21,13 +21,9 @@ class EmailWebhookController extends Controller
     public function __invoke(Request $request): Response
     {
         // Fail closed: a blank/unset secret must never mean "accept everything".
-        // Secret may arrive via an X-Webhook-Secret header or the legacy query.
-        $secret = (string) config('billing.email.webhook_secret');
-
-        abort_unless(
-            $secret !== '' && hash_equals($secret, $this->providedSecret($request)),
-            403,
-        );
+        // Secret may arrive via an X-Webhook-Secret header or the legacy query;
+        // a refusal is remembered so a misconfigured sender is visible.
+        $this->abortUnlessSecretMatches($request, (string) config('billing.email.webhook_secret'), 'email.inbound');
 
         [$event, $fresh] = WebhookEvent::record(
             WebhookSource::Email,
