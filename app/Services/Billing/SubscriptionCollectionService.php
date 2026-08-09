@@ -37,6 +37,20 @@ class SubscriptionCollectionService
             return DB::transaction(function () use ($subscription, $notes): Charge {
                 $subscription->refresh()->loadMissing(['plan', 'customer']);
 
+                // A payment plan that is fully paid has nothing left to collect.
+                // This check comes FIRST because closing the plan clears
+                // next_charge_at, and the future-date guard below reads a null
+                // date as "collect from today" — so a second click on the final
+                // instalment would open a brand-new period, record another
+                // payment and issue another invoice for money nobody owes.
+                if ($subscription->installmentPlanComplete()) {
+                    $last = $subscription->charges()->where('status', ChargeStatus::Succeeded)->latest('id')->first();
+
+                    if ($last) {
+                        return $last;
+                    }
+                }
+
                 // Already collected for the current period: next_charge_at has
                 // rolled into the future. A second click (double submit) must not
                 // bill the next period too — return the last recorded payment.

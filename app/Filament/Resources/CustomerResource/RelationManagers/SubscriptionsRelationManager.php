@@ -4,6 +4,7 @@ namespace App\Filament\Resources\CustomerResource\RelationManagers;
 
 use App\Enums\BillingInterval;
 use App\Enums\SubscriptionStatus;
+use App\Filament\Support\InstallmentFields;
 use App\Filament\Support\MoneyField;
 use App\Jobs\ChargeSubscriptionJob;
 use App\Models\Subscription;
@@ -66,6 +67,8 @@ class SubscriptionsRelationManager extends RelationManager
             Forms\Components\Select::make('status')->label('סטטוס')->options(SubscriptionStatus::class)
                 ->default(SubscriptionStatus::Active)->required(),
             Forms\Components\DateTimePicker::make('next_charge_at')->label('חיוב הבא'),
+            // פריסת תשלומים — אותם שדות בדיוק כמו בטופס המנוי המלא.
+            ...InstallmentFields::schema(),
         ]);
     }
 

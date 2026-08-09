@@ -9,11 +9,11 @@ use App\Enums\SubscriptionStatus;
 use App\Filament\Concerns\RespectsModuleAccess;
 use App\Filament\Resources\SubscriptionResource\Pages;
 use App\Filament\Support\DebtorActions;
+use App\Filament\Support\InstallmentFields;
 use App\Filament\Support\MoneyField;
 use App\Models\PaymentToken;
 use App\Models\Site;
 use App\Models\Subscription;
-use App\Support\Money;
 use Closure;
 use Filament\Forms;
 use Filament\Forms\Form;
@@ -175,17 +175,7 @@ class SubscriptionResource extends Resource
                             // a price is mandatory — otherwise the scheduler would charge ₪0.
                             ->required(fn (Forms\Get $get): bool => blank($get('plan_id')))
                             ->helperText('חובה למנוי חופשי; בתוכנית קבועה — רק אם סוכם מחיר שונה מהתוכנית.'),
-                        Forms\Components\TextInput::make('installments_total')
-                            ->label('מספר תשלומים (פריסת חוב)')
-                            ->numeric()
-                            ->minValue(1)
-                            ->maxValue(120)
-                            ->live(onBlur: true)
-                            ->helperText('ריק = מנוי מתמשך רגיל, בלי סוף. מספר = פריסת תשלומים שנסגרת מעצמה אחרי התשלום האחרון, כך שאי אפשר לגבות תשלום נוסף.'),
-                        Forms\Components\Placeholder::make('installments_summary')
-                            ->label('סך הפריסה')
-                            ->content(fn (Forms\Get $get, ?Subscription $record): string => static::installmentsPreview($get, $record))
-                            ->visible(fn (Forms\Get $get): bool => filled($get('installments_total'))),
+                        ...InstallmentFields::schema(),
                     ])->columns(2),
 
                 Forms\Components\Section::make('גבייה')
@@ -199,37 +189,6 @@ class SubscriptionResource extends Resource
                             ->label('בוטל בתאריך'),
                     ])->columns(2),
             ]);
-    }
-
-    /**
-     * מה בעצם נגבה בפריסה הזו — הסכום הכולל, וכמה כבר שולם.
-     *
-     * המספר הכולל מוצג בזמן ההקלדה ולא רק אחרי שמירה: "14 תשלומים" ו"₪500"
-     * הם שני שדות שקל להחליף ביניהם בטעות, וסכום הפריסה הוא הבדיקה שהופכת
-     * טעות כזו לגלויה לפני שהיא הופכת לחיוב.
-     */
-    protected static function installmentsPreview(Forms\Get $get, ?Subscription $record): string
-    {
-        $count = (int) $get('installments_total');
-        // המחיר בטופס הוא בשקלים; באגורות נשמר.
-        $priceAgorot = (int) round(((float) $get('price_agorot_override')) * 100);
-
-        if ($count < 1) {
-            return '—';
-        }
-
-        if ($priceAgorot < 1 && $record?->exists) {
-            $priceAgorot = $record->totalChargeAgorot();
-        }
-
-        $line = sprintf('%d × %s = %s', $count, Money::ils($priceAgorot), Money::ils($count * $priceAgorot));
-
-        // בעריכת פריסה קיימת — גם המצב בפועל, שהוא מה שבאמת קובע.
-        if ($record?->exists && $record->isInstallmentPlan()) {
-            $line .= '  ·  '.$record->installmentSummary();
-        }
-
-        return $line;
     }
 
     public static function table(Table $table): Table

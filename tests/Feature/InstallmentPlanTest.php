@@ -4,16 +4,20 @@ namespace Tests\Feature;
 
 use App\Enums\ChargeStatus;
 use App\Enums\SubscriptionStatus;
+use App\Filament\Resources\SubscriptionResource\Pages\CreateSubscription;
 use App\Jobs\ChargeSubscriptionJob;
 use App\Jobs\IssueInvoiceJob;
 use App\Jobs\SendDunningNotificationJob;
 use App\Models\Customer;
 use App\Models\Subscription;
+use App\Models\User;
 use App\Services\Billing\SubscriptionCollectionService;
 use App\Services\Cardcom\CardcomClient;
 use App\Services\Cardcom\ChargeResult;
+use App\Support\InstallmentSplit;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
+use Livewire\Livewire;
 use Tests\TestCase;
 
 /**
@@ -241,6 +245,117 @@ class InstallmentPlanTest extends TestCase
         $this->assertSame(2, $plan->installmentsPaid());
         $this->assertSame(SubscriptionStatus::Canceled, $plan->status);
         $this->assertNull($plan->next_charge_at);
+    }
+
+    /*
+    | ----------------------------------------------------------------
+    | חלוקת סכום כולל
+    | ----------------------------------------------------------------
+    */
+
+    /** 7,000 ₪ ל-14 תשלומים, כשהסכום כולל מע״מ — ₪500 בחודש. */
+    public function test_a_total_is_split_into_a_monthly_amount(): void
+    {
+        $split = InstallmentSplit::compute(700000, 14, 0.18, totalIncludesVat: true);
+
+        $this->assertSame(50000, $split['per_charge_agorot']);
+        $this->assertSame(700000, $split['collected_agorot']);
+        $this->assertSame(0, $split['difference_agorot']);
+    }
+
+    /** בלי מע״מ (לקוח פטור) החלוקה היא פשוט הסכום חלקי המספר. */
+    public function test_a_vat_free_total_divides_directly(): void
+    {
+        $split = InstallmentSplit::compute(700000, 14, 0.0, totalIncludesVat: true);
+
+        $this->assertSame(50000, $split['base_agorot']);
+        $this->assertSame(0, $split['vat_agorot']);
+        $this->assertSame(700000, $split['collected_agorot']);
+    }
+
+    /**
+     * סכום שאינו מתחלק — הפער נאמר, לא מוסתר.
+     *
+     * המנוי גובה את אותו סכום בכל חודש, ולכן חלוקה שאינה יוצאת עגולה תיגבה
+     * בפועל סכום מעט שונה מזה שהוזן. מי שמזין חייב לראות את הסכום האמיתי.
+     */
+    public function test_a_total_that_does_not_divide_reports_the_gap(): void
+    {
+        $split = InstallmentSplit::compute(700000, 12, 0.0, totalIncludesVat: true);
+
+        $this->assertNotSame(0, $split['difference_agorot']);
+        $this->assertSame($split['per_charge_agorot'] * 12, $split['collected_agorot']);
+        $this->assertStringContainsString('אינו מתחלק', InstallmentSplit::describe($split, 12));
+    }
+
+    /** קלט חסר מחזיר אפסים ולא מחלק באפס. */
+    public function test_nonsense_input_computes_nothing(): void
+    {
+        $this->assertSame(0, InstallmentSplit::compute(700000, 0, 0.18, true)['per_charge_agorot']);
+        $this->assertSame(0, InstallmentSplit::compute(0, 12, 0.18, true)['per_charge_agorot']);
+        $this->assertSame('—', InstallmentSplit::describe(InstallmentSplit::compute(0, 0, 0.18, true), 0));
+    }
+
+    /*
+    | ----------------------------------------------------------------
+    | סגירה בלי תשלום
+    | ----------------------------------------------------------------
+    */
+
+    /**
+     * הורדת מספר התשלומים למה שכבר שולם סוגרת את הפריסה מיד.
+     *
+     * בלי זה המנוי היה נשאר פעיל עם תאריך חיוב, בלתי ניתן לגבייה — המתזמן היה
+     * מרים אותו כל רבע שעה לנצח, ובדיקת תקינות הכספים הייתה מדווחת עליו כפיגור
+     * שלעולם לא ייפתר.
+     */
+    public function test_saving_a_count_that_is_already_reached_closes_the_plan(): void
+    {
+        Queue::fake([IssueInvoiceJob::class]);
+        $this->fakeCardcom(success: true);
+
+        $plan = $this->plan(5);
+        ChargeSubscriptionJob::dispatchSync($plan->id);
+
+        $plan->refresh()->update(['installments_total' => 1]);
+
+        $plan->refresh();
+        $this->assertSame(SubscriptionStatus::Canceled, $plan->status);
+        $this->assertNull($plan->next_charge_at);
+    }
+
+    /**
+     * לחיצה שנייה על "סמן כשולם" בתשלום האחרון אינה גובה עוד תשלום.
+     *
+     * סגירת הפריסה מוחקת את תאריך החיוב, ושומר הכפילות הקיים נשען על תאריך
+     * עתידי — כך שבלי בדיקה מפורשת הקריאה השנייה הייתה פותחת תקופה חדשה מהיום,
+     * רושמת תשלום נוסף ומנפיקה עליו חשבונית.
+     */
+    public function test_a_second_click_on_the_final_manual_payment_collects_nothing(): void
+    {
+        Queue::fake([IssueInvoiceJob::class]);
+
+        $plan = $this->plan(1);
+        $plan->update(['token_id' => null]);
+
+        $service = app(SubscriptionCollectionService::class);
+
+        $service->recordPayment($plan->refresh());
+        $service->recordPayment($plan->refresh());
+
+        $this->assertSame(1, $plan->charges()->where('status', ChargeStatus::Succeeded)->count());
+        $this->assertSame(1, $plan->refresh()->installmentsPaid());
+    }
+
+    /** הטופס נטען, ושני הכיוונים מוצעים בו. */
+    public function test_the_form_offers_both_directions(): void
+    {
+        $this->actingAs(User::factory()->create());
+
+        Livewire::test(CreateSubscription::class)
+            ->assertOk()
+            ->assertSee('מספר תשלומים (פריסת חוב)')
+            ->assertSee('חישוב מסכום כולל');
     }
 
     /** הטקסט שמופיע במסכים. */

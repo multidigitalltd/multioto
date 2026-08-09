@@ -65,6 +65,20 @@ class Subscription extends Model
                 $subscription->card_expiry_alerted_at = null;
             }
         });
+
+        // A payment plan can also become complete the moment somebody SAVES the
+        // instalment count — converting a subscription that has already
+        // collected that many periods, or lowering the count to what was
+        // already paid. No payment happens on that path, so nothing would close
+        // it: it would stay Active with a due date, unchargeable, picked up by
+        // the scheduler every quarter of an hour forever and reported as
+        // overdue by the money-integrity check. Closing here covers every way
+        // the number can be set, not just the two screens that set it today.
+        static::saved(function (self $subscription): void {
+            if ($subscription->wasChanged('installments_total')) {
+                $subscription->closeIfInstallmentPlanComplete();
+            }
+        });
     }
 
     public function customer(): BelongsTo
