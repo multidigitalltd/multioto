@@ -4,6 +4,7 @@ namespace App\Filament\Resources\SiteResource\Pages;
 
 use App\Filament\Resources\SiteResource;
 use App\Filament\Support\SiteActions;
+use App\Jobs\CheckDomainExpiryJob;
 use App\Jobs\CheckSiteContentJob;
 use App\Jobs\CheckSiteDnsJob;
 use App\Jobs\CheckSiteLayoutJob;
@@ -335,6 +336,39 @@ class ViewSite extends ViewRecord
 
                         Notification::make()->title('בדיקת ה-DNS רצה ברקע')
                             ->body('רשומות ה-A/MX/NS יושוו לתמונה הקודמת; שינוי ישלח התראה לצוות והתוצאה תופיע בעמוד האתר.')
+                            ->success()->send();
+                    }),
+
+                // Re-read the registration date from the registry, right now.
+                //
+                // The daily check leaves the cached date alone when the registry
+                // doesn't answer, which is right — but it means a customer who
+                // renewed can keep seeing "פג" for as long as the lookup keeps
+                // failing, with no way to ask again. This asks again, and says
+                // plainly which of the two happened.
+                Actions\Action::make('checkDomain')
+                    ->label('בדיקת תוקף דומיין')
+                    ->icon('heroicon-o-calendar-days')
+                    ->action(function (): void {
+                        $before = $this->record->domain_checked_at;
+
+                        CheckDomainExpiryJob::dispatchSync($this->record->id);
+                        self::logManualCheck('בדיקת תוקף דומיין', $this->record->id);
+
+                        $site = $this->record->refresh();
+                        $answered = $site->domain_checked_at !== null
+                            && ($before === null || $site->domain_checked_at->gt($before));
+
+                        if (! $answered) {
+                            Notification::make()->title('רשם הדומיינים לא ענה')
+                                ->body('לא התקבלה תשובה מהרישום, והתאריך שמוצג הוא הקריאה הקודמת ולא המצב הנוכחי. אפשר לנסות שוב בעוד כמה דקות.')
+                                ->warning()->send();
+
+                            return;
+                        }
+
+                        Notification::make()->title('תוקף הדומיין עודכן')
+                            ->body('לפי הרישום, '.$site->domain.' בתוקף עד '.$site->domain_expiry_at?->format('d/m/Y').'.')
                             ->success()->send();
                     }),
 

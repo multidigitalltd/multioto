@@ -10,6 +10,7 @@ use App\Enums\TicketChannel;
 use App\Mail\NotificationMail;
 use App\Models\NotificationLog;
 use App\Models\Ticket;
+use App\Models\TicketMessage;
 use App\Services\Ai\ClaudeClient;
 use App\Services\Calendar\ShabbatClock;
 use App\Services\Notifications\TemplateEngine;
@@ -104,8 +105,11 @@ class SendTicketNotificationJob implements ShouldQueue
 
             $rendered['body'] = $this->withCsatInvite($ticket, $rendered['body']);
 
-            $waha->sendMessage($chatId, $rendered['body']);
-            $this->record($ticket, MessageChannel::Whatsapp, $rendered['body'], $dedupeKey);
+            $this->deliver(
+                fn () => $waha->sendMessage($chatId, $rendered['body']),
+                $ticket, MessageChannel::Whatsapp, $rendered['body'], $dedupeKey,
+            );
+
             NotificationLog::record('whatsapp', NotificationType::Ticket, $chatId, null, $rendered['body'], $ticket->customer?->id);
             $this->copyToTeam($ticket, $rendered['body'], 'וואטסאפ');
 
@@ -135,8 +139,12 @@ class SendTicketNotificationJob implements ShouldQueue
 
         // Tag the subject so a reply to this acknowledgement threads onto the ticket.
         $subject = ($rendered['subject'] ?? $ticket->subject).' '.$ticket->emailTag();
-        Mail::to($email)->send(new NotificationMail($subject, $rendered['body']));
-        $this->record($ticket, MessageChannel::Email, $rendered['body'], $dedupeKey);
+
+        $this->deliver(
+            fn () => Mail::to($email)->send(new NotificationMail($subject, $rendered['body'])),
+            $ticket, MessageChannel::Email, $rendered['body'], $dedupeKey,
+        );
+
         NotificationLog::record('email', NotificationType::Ticket, $email, $subject, $rendered['body'], $ticket->customer?->id);
         $this->copyToTeam($ticket, $rendered['body'], 'מייל');
     }
@@ -367,14 +375,55 @@ class SendTicketNotificationJob implements ShouldQueue
         return rtrim($body)."\n\nנשמח לשמוע — איך היה השירות שקיבלת? דירוג קצר (דקה):\n{$link}";
     }
 
-    protected function record(Ticket $ticket, MessageChannel $channel, string $body, string $dedupeKey): void
+    protected function record(Ticket $ticket, MessageChannel $channel, string $body, string $dedupeKey): TicketMessage
     {
-        $ticket->messages()->create([
+        return $ticket->messages()->create([
             'direction' => MessageDirection::Outbound,
             'channel' => $channel,
             'body' => $body,
             'author' => MessageAuthor::System,
             'external_message_id' => $dedupeKey,
         ]);
+    }
+
+    /**
+     * Write the dedupe marker FIRST, then send.
+     *
+     * The marker is what stops this job from notifying the same customer twice,
+     * and it used to be written after the send — so every step in between, and
+     * the write itself, was a chance to fail with the message already in the
+     * customer's hands, and to be answered by a retry that sent it again. This
+     * job retries three times; a customer could receive the same "we got your
+     * enquiry" three times over five minutes and conclude the system is broken.
+     *
+     * Claiming first flips the failure to the harmless side: if the send itself
+     * fails the claim is withdrawn and the retry sends normally, and if anything
+     * fails after a successful send, the claim is already standing and the retry
+     * stops at the guard. `external_message_id` is unique, so two workers
+     * racing here end with one send, not two.
+     */
+    protected function deliver(callable $send, Ticket $ticket, MessageChannel $channel, string $body, string $dedupeKey): void
+    {
+        try {
+            $claim = $this->record($ticket, $channel, $body, $dedupeKey);
+        } catch (\Throwable $e) {
+            // The unique index refused a second claim — somebody already sent
+            // this exact notification. Nothing more to do.
+            Log::info('SendTicketNotificationJob: already claimed', [
+                'ticket' => $ticket->id, 'key' => $dedupeKey, 'error' => $e->getMessage(),
+            ]);
+
+            return;
+        }
+
+        try {
+            $send();
+        } catch (\Throwable $e) {
+            // Nothing reached the customer — release the claim so the retry can
+            // try again, and let the failure surface as it did before.
+            $claim->delete();
+
+            throw $e;
+        }
     }
 }

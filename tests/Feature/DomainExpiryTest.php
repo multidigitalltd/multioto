@@ -107,6 +107,47 @@ class DomainExpiryTest extends TestCase
         $this->assertSame('ישראל ישראלי', $site->domain_registrant);
     }
 
+    /**
+     * חידוש שהתקבל מהרישום מעדכן גם את התאריך וגם את שעת הבדיקה.
+     */
+    public function test_a_successful_lookup_stamps_when_it_was_checked(): void
+    {
+        Http::fake([
+            'rdap.org/domain/renewed.com' => Http::response([
+                'events' => [['eventAction' => 'expiration', 'eventDate' => now()->addYear()->toIso8601String()]],
+            ]),
+        ]);
+
+        $site = Site::factory()->create(['domain' => 'renewed.com']);
+
+        CheckDomainExpiryJob::dispatchSync($site->id);
+
+        $this->assertNotNull($site->refresh()->domain_checked_at);
+    }
+
+    /**
+     * הרישום לא ענה — התאריך הישן נשאר, אבל שעת הבדיקה לא זזה.
+     *
+     * זה כל ההבדל בין "הדומיין פג" ל"כך זה נראה בקריאה האחרונה שהצליחה". לקוח
+     * שחידש והמערכת עדיין מציגה "פג" הוא בדיוק המקרה שבו הערך הישן נראה כמו
+     * עובדה עדכנית, ולא היה שום דבר על המסך שיסגיר את הפער.
+     */
+    public function test_a_failed_lookup_keeps_the_old_date_but_does_not_claim_it_was_verified(): void
+    {
+        Http::fake(['*' => Http::response([], 500)]);
+
+        $site = Site::factory()->create([
+            'domain' => 'silent-registry.com',
+            'domain_expiry_at' => now()->subDays(5)->toDateString(),
+        ]);
+
+        CheckDomainExpiryJob::dispatchSync($site->id);
+
+        $site->refresh();
+        $this->assertSame(now()->subDays(5)->toDateString(), $site->domain_expiry_at?->toDateString());
+        $this->assertNull($site->domain_checked_at);
+    }
+
     public function test_domain_expiry_alerts_the_team_once_then_re_arms_after_renewal(): void
     {
         config(['billing.monitoring.domain_warn_days' => 30]);
