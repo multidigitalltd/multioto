@@ -39,8 +39,16 @@ class CheckDomainExpiryJob implements ShouldQueue
         }
 
         if ($expiresAt === null) {
-            return; // TLD has no RDAP / lookup failed — leave the cached value alone.
+            // The registry didn't answer (or the TLD has no RDAP). The cached
+            // date stays — a network blip must not erase what we know — but the
+            // "checked at" stamp deliberately does NOT move, so the site page
+            // can say how old the reading is instead of presenting it as today's
+            // truth. A customer who renewed and still sees "פג" is looking at a
+            // stale number, and the screen has to admit that.
+            return;
         }
+
+        $site->update(['domain_checked_at' => now()]);
 
         $warnDays = (int) config('billing.monitoring.domain_warn_days', 30);
         $daysLeft = (int) floor(now()->startOfDay()->diffInDays($expiresAt, false));

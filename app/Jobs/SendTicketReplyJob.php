@@ -64,7 +64,24 @@ class SendTicketReplyJob implements ShouldQueue
             $externalId = null;
 
             if (trim($body) !== '') {
-                $externalId = $waha->sendMessage($chatId, $body)['id'] ?? null;
+                $sent = $waha->sendMessage($chatId, $body);
+
+                // MARK IT SENT NOW, before anything else can fail.
+                //
+                // The guard at the top of this job is the only thing standing
+                // between a retry and a second copy of the same message in the
+                // customer's chat — and until this write lands, that guard is
+                // open. It used to be written at the END of the WhatsApp branch,
+                // which meant every line in between (the attachment loop, a
+                // provider id in an unexpected shape) was a chance to fail after
+                // the customer had already been messaged, and be answered with a
+                // retry that sent it all again.
+                //
+                // The value is ours and always storable; the provider's own id is
+                // a nicety, filled in below if it can be read at all.
+                $this->markSent($message, 'wa-'.$message->id);
+
+                $externalId = $this->providerId($sent);
             }
 
             // Each attachment is sent as its own file message (base64 — WAHA
@@ -77,8 +94,9 @@ class SendTicketReplyJob implements ShouldQueue
                 }
 
                 try {
-                    $sent = $waha->sendFile($chatId, $file['name'] ?? 'file', $file['mime'] ?? 'application/octet-stream', $contents);
-                    $externalId ??= $sent['id'] ?? null;
+                    $sentFile = $waha->sendFile($chatId, $file['name'] ?? 'file', $file['mime'] ?? 'application/octet-stream', $contents);
+                    $this->markSent($message, 'wa-'.$message->id);
+                    $externalId ??= $this->providerId($sentFile);
                 } catch (\Throwable $e) {
                     Log::warning('SendTicketReplyJob: WhatsApp attachment failed', [
                         'ticket' => $ticket->id,
@@ -88,12 +106,14 @@ class SendTicketReplyJob implements ShouldQueue
                 }
             }
 
-            // Clamped to the column width. The reply has already reached the
-            // customer by now, and a write that throws here leaves the "sent"
-            // marker unset — so the job retries and sends the whole thing
-            // again. A provider id too long to store must never cost the
-            // customer a second copy of the same message.
-            $message->update(['external_message_id' => $this->storableId($externalId)]);
+            // Upgrade the marker to the provider's own id when we got one — it is
+            // what ties this row to the message in WhatsApp. Best-effort: the
+            // message is already marked as sent, so failing here costs a
+            // traceability id, never a second copy.
+            if ($externalId !== null) {
+                $this->markSent($message, $externalId);
+            }
+
             NotificationLog::record('whatsapp', NotificationType::TicketReply, $chatId, null, $body, $ticket->customer?->id);
         } else {
             $email = $ticket->customer?->email;
@@ -121,13 +141,63 @@ class SendTicketReplyJob implements ShouldQueue
             // The copied addresses get the same tagged subject, so their reply
             // threads back onto this ticket exactly like the customer's does.
             Mail::to($email)->cc($cc)->send(new TicketReplyMail($subject, $body, $message->attachments ?? [], $bodyHtml));
-            $message->update(['external_message_id' => 'mail-'.$message->id]);
+            // Same rule as WhatsApp: once it has left, nothing that follows may
+            // reopen the door to a retry that sends it again.
+            $this->markSent($message, 'mail-'.$message->id);
             NotificationLog::record('email', NotificationType::TicketReply, $email, $subject, $body, $ticket->customer?->id);
         }
 
         if ($ticket->first_response_at === null) {
             $ticket->update(['first_response_at' => now()]);
         }
+    }
+
+    /**
+     * Stamp the "already delivered" marker, swallowing anything that goes wrong.
+     *
+     * This write is the duplicate guard, so it must not be able to fail loudly:
+     * an exception here would be answered by a retry that sends the customer a
+     * second copy — the exact outcome the marker exists to prevent. A marker
+     * that could not be written is worth a log line, not a repeated message.
+     */
+    private function markSent(TicketMessage $message, string $externalId): void
+    {
+        try {
+            $message->update(['external_message_id' => $this->storableId($externalId)]);
+        } catch (\Throwable $e) {
+            Log::warning('SendTicketReplyJob: could not stamp the sent marker', [
+                'message' => $message->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * The provider's message id, whatever shape the WAHA engine returned it in.
+     *
+     * It is a plain string on some engines, an object on others (WEBJS returns
+     * `id: {_serialized: "true_972…@c.us_3EB0…", …}`), and absent on others
+     * still (NOWEB answers with `key`). Reading it as a string worked only on
+     * the first of those, and the value ends up in a string column — so it is
+     * flattened here rather than at the point of use.
+     *
+     * @param  array<string, mixed>  $response
+     */
+    private function providerId(array $response): ?string
+    {
+        $id = $response['id'] ?? $response['key'] ?? null;
+
+        if (is_array($id)) {
+            $id = $id['_serialized'] ?? $id['id'] ?? null;
+        }
+
+        if (is_array($id) || is_object($id) || $id === null) {
+            return null;
+        }
+
+        $id = trim((string) $id);
+
+        return $id !== '' ? $id : null;
     }
 
     /** The provider's id, cut to what the column can hold (null stays null). */

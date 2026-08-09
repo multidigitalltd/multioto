@@ -86,6 +86,20 @@
                 @else
                     לא נבדק עדיין
                 @endif
+                {{-- מתי המספר הזה נקרא מהרישום. הבדיקה היומית משאירה את הערך
+                     הישן כשהרישום לא עונה, ולכן "פג" לבדו יכול להיות קריאה
+                     מלפני שבועיים — למשל אצל לקוח שכבר חידש. תאריך הבדיקה הופך
+                     את זה לניתן לבדיקה, ו"עוד כלים ← בדיקת תוקף דומיין" קורא
+                     מחדש עכשיו. --}}
+                @if ($domainExpiry !== null)
+                    @if ($site->domain_checked_at === null)
+                        <br><span class="text-amber-600 dark:text-amber-400">לא אומת מול הרישום מאז העדכון האחרון של המערכת</span>
+                    @elseif ($site->domain_checked_at->lt(now()->subDays(3)))
+                        <br><span class="text-amber-600 dark:text-amber-400">נבדק לאחרונה ב-{{ $site->domain_checked_at->format('d/m/Y') }} — ייתכן שהתאריך אינו עדכני</span>
+                    @else
+                        <br>נבדק מול הרישום ב-{{ $site->domain_checked_at->format('d/m/Y') }}
+                    @endif
+                @endif
                 @if (filled($site->domain_registrant))
                     <br>בעלים: {{ $site->domain_registrant }}
                 @endif
