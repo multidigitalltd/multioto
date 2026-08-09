@@ -38,10 +38,29 @@ class BroadcastRenderer
 
     public function __construct(private MarketingPreferences $preferences) {}
 
-    /** The subject line for this customer (email only; null on WhatsApp). */
+    /**
+     * The subject line for this customer (email only; null on WhatsApp).
+     *
+     * An advertising message says so in its subject, in brackets at the end —
+     * that is where the recipient reads it before deciding to open, and it is
+     * the header the law asks an emailed advertisement to carry. It used to be
+     * a line at the top of the body instead, where it was only seen after the
+     * message was already opened.
+     *
+     * Nothing is added when the operator already wrote the word themselves — a
+     * subject reading "מבצע פרסומת קיץ (פרסומת)" helps nobody.
+     */
     public function subject(Broadcast $broadcast, Customer $customer): string
     {
-        return $this->substitute((string) $broadcast->subject, $customer);
+        $subject = trim($this->substitute((string) $broadcast->subject, $customer));
+
+        if (! $broadcast->is_marketing
+            || $broadcast->channel === BroadcastChannel::Whatsapp
+            || str_contains($subject, 'פרסומת')) {
+            return $subject;
+        }
+
+        return $subject.' (פרסומת)';
     }
 
     /**

@@ -5,6 +5,7 @@ namespace App\Filament\Resources;
 use App\Enums\BroadcastChannel;
 use App\Enums\BroadcastStatus;
 use App\Enums\CustomerStatus;
+use App\Enums\WebhookSource;
 use App\Filament\Concerns\RespectsModuleAccess;
 use App\Filament\Pages\ManageMail;
 use App\Filament\Resources\BroadcastResource\Actions\BroadcastSendActions;
@@ -13,6 +14,7 @@ use App\Models\Broadcast;
 use App\Models\Customer;
 use App\Models\NotificationLog;
 use App\Models\Plan;
+use App\Models\WebhookEvent;
 use App\Services\Support\BroadcastAudience;
 use App\Services\Support\BroadcastComposer;
 use App\Services\Support\BroadcastRenderer;
@@ -23,6 +25,7 @@ use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\HtmlString;
 
 class BroadcastResource extends Resource
@@ -132,7 +135,7 @@ class BroadcastResource extends Resource
                             ->default(true)
                             ->live()
                             ->descriptions([
-                                1 => 'מבצע, שירות חדש, הצעה. תתווסף הכותרת "פרסומת", פרטי העסק וקישור הסרה, ולקוחות שביקשו להסיר אותם לא יקבלו — כנדרש בחוק התקשורת.',
+                                1 => 'מבצע, שירות חדש, הצעה. לשורת הנושא תתווסף המילה "(פרסומת)", בתחתית ההודעה פרטי העסק וקישור הסרה, ולקוחות שביקשו להסיר אותם לא יקבלו — כנדרש בחוק התקשורת.',
                                 0 => 'תחזוקה מתוכננת, עדכון אבטחה, שינוי בשירות. אינה פרסומת, ולכן נשלחת גם ללקוחות שהוסרו מרשימת הדיוור.',
                             ])
                             ->required(),
@@ -310,7 +313,13 @@ class BroadcastResource extends Resource
             + (int) ($stats?->bounced ?? 0);
 
         if ($reported === 0) {
-            return '—';
+            // "—" alone cannot tell "the provider hasn't reported yet" from
+            // "nobody ever connected the provider" — and the second one stays
+            // "—" forever while the team waits for numbers that can never
+            // arrive. Say which it is.
+            return static::deliveryTrackingConnected()
+                ? '— ממתין לדיווח מהספק'
+                : '— מעקב מסירה לא מוגדר';
         }
 
         $parts = [$stats->delivered.' נמסרו', $stats->opened.' נפתחו'];
@@ -320,6 +329,32 @@ class BroadcastResource extends Resource
         }
 
         return implode(' · ', $parts);
+    }
+
+    /**
+     * Has the email provider EVER posted a delivery event to us?
+     *
+     * The counts come from the provider's webhook, so an install where that
+     * webhook was never registered (or where open tracking was never switched
+     * on at the provider) reports nothing at all — for every broadcast, forever.
+     * One "did anything ever arrive" answer separates a young send from a
+     * missing integration.
+     *
+     * Cached: this runs once per row on a list screen, and the answer flips at
+     * most once in the life of an install.
+     */
+    protected static function deliveryTrackingConnected(): bool
+    {
+        return Cache::remember('broadcast-delivery-tracking-connected', now()->addMinutes(10), function (): bool {
+            try {
+                return WebhookEvent::query()
+                    ->where('source', WebhookSource::Email)
+                    ->where('event_type', 'like', 'delivery_%')
+                    ->exists();
+            } catch (\Throwable) {
+                return true; // never let the log table turn into a false alarm
+            }
+        });
     }
 
     /** A one-line, human reading of a stored segment, for the list screen. */

@@ -58,7 +58,7 @@ class BroadcastSendActions
         }
 
         if ($record->is_marketing) {
-            $text .= '<br><em>ההודעה תישלח כפרסומת: תתווסף הכותרת "פרסומת", פרטי העסק וקישור הסרה.</em>';
+            $text .= '<br><em>ההודעה תישלח כפרסומת: לשורת הנושא תתווסף המילה "(פרסומת)", ובתחתית ההודעה פרטי העסק וקישור הסרה.</em>';
         }
 
         if ($record->channel === BroadcastChannel::Whatsapp) {

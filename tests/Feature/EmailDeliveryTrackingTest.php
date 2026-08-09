@@ -477,6 +477,29 @@ class EmailDeliveryTrackingTest extends TestCase
     | ----------------------------------------------------------------
     */
 
+    /**
+     * מרגע שהספק דיווח פעם אחת, דיוור בלי מספרים הוא דיוור שממתין — לא מעקב חסר.
+     */
+    public function test_a_broadcast_with_tracking_connected_says_it_is_waiting(): void
+    {
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+
+        $reported = Broadcast::create([
+            'subject' => 'קודם', 'body' => 'x', 'channel' => BroadcastChannel::Email,
+            'status' => BroadcastStatus::Sent,
+        ]);
+        $this->log(['broadcast_id' => $reported->id]);
+        $this->event(['RecordType' => 'Delivery', 'MessageID' => 'pm-1'])->assertOk();
+
+        $fresh = Broadcast::create([
+            'subject' => 'חדש', 'body' => 'x', 'channel' => BroadcastChannel::Email,
+            'status' => BroadcastStatus::Sent,
+        ]);
+
+        Livewire::test(ListBroadcasts::class)
+            ->assertTableColumnStateSet('delivery', '— ממתין לדיווח מהספק', $fresh);
+    }
+
     public function test_a_broadcast_still_awaiting_the_provider_shows_no_numbers_at_all(): void
     {
         $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
@@ -490,8 +513,12 @@ class EmailDeliveryTrackingTest extends TestCase
         // A log row exists the moment we hand the mail over, so counting rows
         // would show "0 נמסרו" a second after sending — which reads like a
         // failed send rather than one the provider has yet to report on.
+        //
+        // And on an install where the provider's webhook was never registered,
+        // "—" would stay forever while the team waits for numbers that cannot
+        // arrive — so the placeholder says which of the two it is.
         Livewire::test(ListBroadcasts::class)
-            ->assertTableColumnStateSet('delivery', '—', $broadcast);
+            ->assertTableColumnStateSet('delivery', '— מעקב מסירה לא מוגדר', $broadcast);
 
         $this->event(['RecordType' => 'Delivery', 'MessageID' => 'pm-1'])->assertOk();
 
