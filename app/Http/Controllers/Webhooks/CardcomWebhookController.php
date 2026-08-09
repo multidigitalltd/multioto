@@ -22,13 +22,9 @@ class CardcomWebhookController extends Controller
     {
         // Fail closed: a blank/unset secret must never mean "accept everything".
         // Accept the secret from a header (preferred — stays out of URLs/logs) or
-        // the legacy ?secret= query param.
-        $secret = (string) config('billing.cardcom.webhook_secret');
-
-        abort_unless(
-            $secret !== '' && hash_equals($secret, $this->providedSecret($request)),
-            403,
-        );
+        // the legacy ?secret= query param. A refusal is remembered so the panel
+        // can tell "never configured" from "configured with the wrong secret".
+        $this->abortUnlessSecretMatches($request, (string) config('billing.cardcom.webhook_secret'), 'cardcom');
 
         [$event, $fresh] = WebhookEvent::record(
             WebhookSource::Cardcom,

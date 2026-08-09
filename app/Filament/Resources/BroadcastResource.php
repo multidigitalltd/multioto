@@ -18,6 +18,7 @@ use App\Models\WebhookEvent;
 use App\Services\Support\BroadcastAudience;
 use App\Services\Support\BroadcastComposer;
 use App\Services\Support\BroadcastRenderer;
+use App\Support\WebhookRejections;
 use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Notifications\Notification;
@@ -323,12 +324,16 @@ class BroadcastResource extends Resource
             + (int) ($stats?->bounced ?? 0);
 
         if ($reported === 0) {
-            // "—" alone cannot tell "the provider hasn't reported yet" from
-            // "nobody ever connected the provider" — and the second one stays
-            // "—" forever while the team waits for numbers that can never
-            // arrive. Say which it is.
-            return static::deliveryTrackingConnected()
-                ? '— ממתין לדיווח מהספק'
+            if (static::deliveryTrackingConnected()) {
+                return '— ממתין לדיווח מהספק';
+            }
+
+            // Three states look identical from here, and only one of them is
+            // "nobody set this up". A provider that IS calling and being turned
+            // away at the door is the one worth naming: the work is done, one
+            // wrong character in the address is all that stands in the way.
+            return WebhookRejections::lastAt('email.delivery') !== null
+                ? '— הספק מדווח אך נדחה: הסוד בכתובת אינו תואם'
                 : '— מעקב מסירה לא מוגדר';
         }
 

@@ -478,6 +478,31 @@ class EmailDeliveryTrackingTest extends TestCase
     */
 
     /**
+     * הספק מדפדף בדלת ונדחה — וזה נאמר, במקום להיראות כמו "לא הוגדר".
+     *
+     * Webhook שהוגדר עם הכתובת בלי הסוד מחזיר 403 שוב ושוב. הדחייה נשלחת לספק
+     * ואיש אצלנו אינו רואה אותה, כך שבפאנל זה נראה זהה להתקנה שבה לא נגעו —
+     * וזה ההבדל בין לחפש איפה מגדירים לבין לתקן תו אחד בכתובת.
+     */
+    public function test_a_rejected_provider_call_is_named_instead_of_looking_unconfigured(): void
+    {
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+
+        $broadcast = Broadcast::create([
+            'subject' => 'עדכון', 'body' => 'x', 'channel' => BroadcastChannel::Email,
+            'status' => BroadcastStatus::Sent,
+        ]);
+        $this->log(['broadcast_id' => $broadcast->id]);
+
+        // Postmark מוגדר, אבל הכתובת שהודבקה שם היא בלי הסוד.
+        $this->event(['RecordType' => 'Delivery', 'MessageID' => 'pm-1'], secret: null)
+            ->assertForbidden();
+
+        Livewire::test(ListBroadcasts::class)
+            ->assertTableColumnStateSet('delivery', '— הספק מדווח אך נדחה: הסוד בכתובת אינו תואם', $broadcast);
+    }
+
+    /**
      * טיוטה לא נשלחה לאיש, ולכן אין לה מה לדווח ואין מה לאבחן.
      *
      * אבחון על שורה שמעולם לא נגעה בספק הוא שאלה על אינטגרציה שלא הייתה בשימוש.
