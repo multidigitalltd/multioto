@@ -478,6 +478,24 @@ class EmailDeliveryTrackingTest extends TestCase
     */
 
     /**
+     * טיוטה לא נשלחה לאיש, ולכן אין לה מה לדווח ואין מה לאבחן.
+     *
+     * אבחון על שורה שמעולם לא נגעה בספק הוא שאלה על אינטגרציה שלא הייתה בשימוש.
+     */
+    public function test_a_draft_broadcast_says_nothing_about_tracking(): void
+    {
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+
+        $draft = Broadcast::create([
+            'subject' => 'טיוטה', 'body' => 'x', 'channel' => BroadcastChannel::Email,
+            'status' => BroadcastStatus::Draft,
+        ]);
+
+        Livewire::test(ListBroadcasts::class)
+            ->assertTableColumnStateSet('delivery', '—', $draft);
+    }
+
+    /**
      * מרגע שהספק דיווח פעם אחת, דיוור בלי מספרים הוא דיוור שממתין — לא מעקב חסר.
      */
     public function test_a_broadcast_with_tracking_connected_says_it_is_waiting(): void
@@ -491,10 +509,12 @@ class EmailDeliveryTrackingTest extends TestCase
         $this->log(['broadcast_id' => $reported->id]);
         $this->event(['RecordType' => 'Delivery', 'MessageID' => 'pm-1'])->assertOk();
 
+        // נשלח (יש שורת לוג), אבל הספק עוד לא דיווח עליו.
         $fresh = Broadcast::create([
             'subject' => 'חדש', 'body' => 'x', 'channel' => BroadcastChannel::Email,
             'status' => BroadcastStatus::Sent,
         ]);
+        $this->log(['broadcast_id' => $fresh->id, 'provider_message_id' => 'pm-2']);
 
         Livewire::test(ListBroadcasts::class)
             ->assertTableColumnStateSet('delivery', '— ממתין לדיווח מהספק', $fresh);

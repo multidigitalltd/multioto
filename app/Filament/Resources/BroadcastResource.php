@@ -299,10 +299,20 @@ class BroadcastResource extends Resource
 
         $stats = NotificationLog::query()
             ->where('broadcast_id', $record->id)
+            ->selectRaw('COUNT(*) AS handed_over')
             ->selectRaw('COUNT(delivered_at) AS delivered')
             ->selectRaw('COUNT(opened_at) AS opened')
             ->selectRaw('COUNT(bounced_at) AS bounced')
             ->first();
+
+        // Nothing was ever handed to the provider — a draft, a scheduled send
+        // that hasn't run, or a send that found nobody to send to. There is no
+        // report to wait for and nothing to diagnose, so the column stays blank
+        // rather than raising a question about an integration this row never
+        // used.
+        if ((int) ($stats?->handed_over ?? 0) === 0) {
+            return '—';
+        }
 
         // The placeholder hangs on whether the PROVIDER has said anything, not
         // on whether we queued anything: a log row exists the moment we hand the
