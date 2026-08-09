@@ -349,6 +349,13 @@ class ViewSite extends ViewRecord
                 Actions\Action::make('checkDomain')
                     ->label('בדיקת תוקף דומיין')
                     ->icon('heroicon-o-calendar-days')
+                    // הבדיקה עצמה מדלגת על אתר שהניטור שלו כבוי, ולכן היא הייתה
+                    // מדווחת "הרישום לא ענה" בלי ששאלה אותו דבר. נשארת על המסך
+                    // (כדי שלא תיראה כיכולת חסרה) ומסבירה למה היא כבויה.
+                    ->disabled(fn (): bool => ! $this->record->monitor_enabled)
+                    ->tooltip(fn (): ?string => $this->record->monitor_enabled
+                        ? null
+                        : 'הניטור של האתר כבוי — הפעילו אותו בהגדרות האתר כדי לבדוק את תוקף הדומיין')
                     ->action(function (): void {
                         $before = $this->record->domain_checked_at;
 

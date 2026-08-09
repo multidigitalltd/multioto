@@ -18,6 +18,7 @@ use App\Services\Support\ServiceStatus;
 use App\Services\Waha\WahaClient;
 use App\Support\EmailList;
 use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
@@ -105,13 +106,18 @@ class SendTicketNotificationJob implements ShouldQueue
 
             $rendered['body'] = $this->withCsatInvite($ticket, $rendered['body']);
 
-            $this->deliver(
+            $sent = $this->deliver(
                 fn () => $waha->sendMessage($chatId, $rendered['body']),
                 $ticket, MessageChannel::Whatsapp, $rendered['body'], $dedupeKey,
             );
 
-            NotificationLog::record('whatsapp', NotificationType::Ticket, $chatId, null, $rendered['body'], $ticket->customer?->id);
-            $this->copyToTeam($ticket, $rendered['body'], 'וואטסאפ');
+            // Only a send that actually happened is logged and copied. Logging a
+            // send somebody else already made would show the owner two copies of
+            // a message the customer received once.
+            if ($sent) {
+                NotificationLog::record('whatsapp', NotificationType::Ticket, $chatId, null, $rendered['body'], $ticket->customer?->id);
+                $this->copyToTeam($ticket, $rendered['body'], 'וואטסאפ');
+            }
 
             return;
         }
@@ -140,13 +146,15 @@ class SendTicketNotificationJob implements ShouldQueue
         // Tag the subject so a reply to this acknowledgement threads onto the ticket.
         $subject = ($rendered['subject'] ?? $ticket->subject).' '.$ticket->emailTag();
 
-        $this->deliver(
+        $sent = $this->deliver(
             fn () => Mail::to($email)->send(new NotificationMail($subject, $rendered['body'])),
             $ticket, MessageChannel::Email, $rendered['body'], $dedupeKey,
         );
 
-        NotificationLog::record('email', NotificationType::Ticket, $email, $subject, $rendered['body'], $ticket->customer?->id);
-        $this->copyToTeam($ticket, $rendered['body'], 'מייל');
+        if ($sent) {
+            NotificationLog::record('email', NotificationType::Ticket, $email, $subject, $rendered['body'], $ticket->customer?->id);
+            $this->copyToTeam($ticket, $rendered['body'], 'מייל');
+        }
     }
 
     /**
@@ -401,19 +409,35 @@ class SendTicketNotificationJob implements ShouldQueue
      * fails after a successful send, the claim is already standing and the retry
      * stops at the guard. `external_message_id` is unique, so two workers
      * racing here end with one send, not two.
+     *
+     * The one case this cannot resolve is a worker killed mid-send — a deploy or
+     * an OOM between the request leaving and the response arriving. The claim
+     * stands, so the retry stays quiet and an acknowledgement may be lost.
+     * That is a deliberate choice, not an oversight: WhatsApp gives us no
+     * idempotency key, so the ambiguity has to be resolved by picking a side,
+     * and for an automatic "we got your enquiry" a missing message is cheaper
+     * than the same message arriving three times. Deliberate sends (an agent's
+     * reply) are unaffected — they carry their own marker and their own retry.
+     *
+     * @return bool whether this run actually delivered the message
      */
-    protected function deliver(callable $send, Ticket $ticket, MessageChannel $channel, string $body, string $dedupeKey): void
+    protected function deliver(callable $send, Ticket $ticket, MessageChannel $channel, string $body, string $dedupeKey): bool
     {
         try {
             $claim = $this->record($ticket, $channel, $body, $dedupeKey);
-        } catch (\Throwable $e) {
+        } catch (UniqueConstraintViolationException $e) {
             // The unique index refused a second claim — somebody already sent
             // this exact notification. Nothing more to do.
+            //
+            // ONLY this exception may be swallowed. A dropped connection or any
+            // other write failure is not evidence that the customer was
+            // notified, and treating it as one would drop the message silently
+            // and tell the queue there is nothing to retry.
             Log::info('SendTicketNotificationJob: already claimed', [
                 'ticket' => $ticket->id, 'key' => $dedupeKey, 'error' => $e->getMessage(),
             ]);
 
-            return;
+            return false;
         }
 
         try {
@@ -425,5 +449,7 @@ class SendTicketNotificationJob implements ShouldQueue
 
             throw $e;
         }
+
+        return true;
     }
 }

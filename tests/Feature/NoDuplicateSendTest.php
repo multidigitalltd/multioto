@@ -12,6 +12,7 @@ use App\Jobs\SendTicketReplyJob;
 use App\Models\Customer;
 use App\Models\Ticket;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
@@ -119,6 +120,30 @@ class NoDuplicateSendTest extends TestCase
         SendTicketNotificationJob::dispatchSync($ticket->id, 'ticket.received');
 
         Http::assertSentCount(1);
+    }
+
+    /**
+     * כתיבה שנכשלה מסיבה שאינה כפילות אינה נחשבת ל"כבר נשלח".
+     *
+     * ניתוק רגעי מבסיס הנתונים אינו ראיה לכך שהלקוח קיבל משהו. אם הוא ייבלע
+     * כאילו היה כפילות, ההודעה נעלמת בשקט והתור מקבל הודעה שאין מה לנסות שוב.
+     */
+    public function test_a_write_failure_that_is_not_a_duplicate_is_not_swallowed(): void
+    {
+        Http::fake(['*/api/sendText' => Http::response(['id' => 'a1'])]);
+
+        $ticket = $this->whatsappTicket();
+
+        // כל כתיבה של הודעה נכשלת — לא בגלל מפתח כפול.
+        DB::listen(function ($query) {
+            if (str_contains($query->sql, 'insert into "ticket_messages"')) {
+                throw new \RuntimeException('connection lost');
+            }
+        });
+
+        $this->expectException(\Throwable::class);
+
+        SendTicketNotificationJob::dispatchSync($ticket->id, 'ticket.received');
     }
 
     /**
