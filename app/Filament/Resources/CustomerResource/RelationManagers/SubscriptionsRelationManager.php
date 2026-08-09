@@ -75,7 +75,8 @@ class SubscriptionsRelationManager extends RelationManager
             ->recordTitleAttribute('id')
             ->columns([
                 Tables\Columns\TextColumn::make('plan_name')->label('תוכנית')
-                    ->state(fn (Subscription $record): string => $record->planName()),
+                    ->state(fn (Subscription $record): string => $record->planName())
+                    ->description(fn (Subscription $record): ?string => $record->installmentSummary()),
                 Tables\Columns\TextColumn::make('status')->label('סטטוס')->badge(),
                 Tables\Columns\TextColumn::make('next_charge_at')->label('חיוב הבא')->dateTime('d/m/Y')->placeholder('—'),
                 Tables\Columns\TextColumn::make('dunning_stage')->label('שלב דאנינג')->badge(),

@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Enums\BillingInterval;
 use App\Enums\ChargeStatus;
 use App\Enums\SubscriptionStatus;
+use App\Support\Money;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -21,6 +22,7 @@ class Subscription extends Model
 
     protected $fillable = [
         'customer_id', 'plan_id', 'external_ref', 'name', 'billing_interval', 'vat_applies',
+        'installments_total',
         'site_id', 'token_id', 'status',
         'current_period_start', 'current_period_end', 'next_charge_at', 'card_expiry_alerted_at',
         'price_agorot_override', 'dunning_stage', 'canceled_at',
@@ -37,6 +39,7 @@ class Subscription extends Model
             'next_charge_at' => 'datetime',
             'card_expiry_alerted_at' => 'datetime',
             'price_agorot_override' => 'integer',
+            'installments_total' => 'integer',
             'dunning_stage' => 'integer',
             'canceled_at' => 'datetime',
         ];
@@ -280,11 +283,126 @@ class Subscription extends Model
      */
     public function isChargeable(): bool
     {
+        // A finished payment plan is never chargeable again. This sits in front
+        // of EVERY charge path — the scheduler, "charge now", a dunning retry,
+        // a card-update recovery — because a fifteenth payment on a fourteen
+        // payment plan is money taken from someone who does not owe it, and
+        // that is discovered by the customer rather than by us.
+        if ($this->installmentPlanComplete()) {
+            return false;
+        }
+
         return in_array($this->status, [
             SubscriptionStatus::Active,
             SubscriptionStatus::PastDue,
             SubscriptionStatus::Suspended,
         ], true) && $this->token_id !== null;
+    }
+
+    /*
+    | ----------------------------------------------------------------
+    | פריסת תשלומים
+    | ----------------------------------------------------------------
+    |
+    | חוב שנפרס למספר תשלומים קבוע. הכל כמו במנוי רגיל — אותה גבייה, אותו
+    | דאנינג, אותה חשבונית — חוץ מזה שיש לו סוף שהמערכת מכירה.
+    */
+
+    /** מנוי שהוא פריסת תשלומים (ולא מנוי מתמשך). */
+    public function isInstallmentPlan(): bool
+    {
+        return $this->installments_total !== null && $this->installments_total > 0;
+    }
+
+    /**
+     * כמה תשלומים כבר נגבו.
+     *
+     * נספר מהחיובים עצמם, ולא מעמודה שמישהו צריך לזכור לקדם: רק חיוב שהצליח
+     * נחשב, ולכן חיוב שנכשל ונגבה שוב בדאנינג נספר פעם אחת ולא פעמיים. הספירה
+     * היא לפי תקופות ולא לפי שורות — 14 תשלומים ייגבו, לא 13.
+     */
+    public function installmentsPaid(): int
+    {
+        if (! $this->isInstallmentPlan()) {
+            return 0;
+        }
+
+        return (int) $this->charges()
+            ->where('status', ChargeStatus::Succeeded)
+            ->distinct()
+            ->count('period_start');
+    }
+
+    /** כמה תשלומים נותרו (לעולם לא שלילי). */
+    public function installmentsRemaining(): int
+    {
+        return $this->isInstallmentPlan()
+            ? max(0, (int) $this->installments_total - $this->installmentsPaid())
+            : 0;
+    }
+
+    /** היתרה שנותרה לגבייה, באגורות. */
+    public function installmentsRemainingAgorot(): int
+    {
+        return $this->installmentsRemaining() * $this->totalChargeAgorot();
+    }
+
+    /** סך הפריסה כולה, באגורות. */
+    public function installmentsTotalAgorot(): int
+    {
+        return $this->isInstallmentPlan()
+            ? (int) $this->installments_total * $this->totalChargeAgorot()
+            : 0;
+    }
+
+    /** האם כל התשלומים כבר נגבו. */
+    public function installmentPlanComplete(): bool
+    {
+        return $this->isInstallmentPlan() && $this->installmentsRemaining() === 0;
+    }
+
+    /**
+     * סגירת פריסה שהסתיימה — נקראת אחרי כל תשלום שנקלט, מכל מסלול.
+     *
+     * גם הסטטוס וגם תאריך החיוב הבא מתאפסים: הסטטוס כדי שהמסכים יראו שהסתיים,
+     * ותאריך החיוב כדי שאפילו קריאה ידנית ל"חייב עכשיו" לא תמצא מה לגבות.
+     * מחזירה true אם נסגרה עכשיו.
+     */
+    public function closeIfInstallmentPlanComplete(): bool
+    {
+        if (! $this->installmentPlanComplete() || $this->status === SubscriptionStatus::Canceled) {
+            return false;
+        }
+
+        $this->update([
+            'status' => SubscriptionStatus::Canceled,
+            'canceled_at' => now(),
+            'next_charge_at' => null,
+            'dunning_stage' => 0,
+        ]);
+
+        return true;
+    }
+
+    /** "תשלום 5 מתוך 14 · נותרו 4,500 ₪" — או null למנוי רגיל. */
+    public function installmentSummary(): ?string
+    {
+        if (! $this->isInstallmentPlan()) {
+            return null;
+        }
+
+        $paid = $this->installmentsPaid();
+
+        if ($paid >= (int) $this->installments_total) {
+            return "שולמו כל {$this->installments_total} התשלומים";
+        }
+
+        return sprintf(
+            'שולמו %d מתוך %d · נותרו %s',
+            $paid,
+            $this->installments_total,
+            Money::ils($this->installmentsRemainingAgorot()),
+        );
     }
 
     /**

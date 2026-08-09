@@ -96,6 +96,11 @@ class SubscriptionCollectionService
                     RestoreSiteJob::dispatch($subscription->site_id);
                 }
 
+                // A payment plan collected by hand ends the same way one collected
+                // by card does — the last instalment closes it, whichever route
+                // the money arrived by.
+                $subscription->closeIfInstallmentPlanComplete();
+
                 // Issue the Linet invoice for the recorded payment (idempotent).
                 IssueInvoiceJob::dispatch($charge->id);
 
