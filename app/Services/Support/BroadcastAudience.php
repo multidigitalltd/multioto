@@ -54,6 +54,10 @@ class BroadcastAudience
         // would leave the customer uninformed about their own site.
         if ($marketing) {
             $query->whereNull('marketing_opt_out_at');
+
+            if (($skip = $this->nonOpeners($channel, $segment, $marketing)) !== []) {
+                $query->whereKeyNot($skip);
+            }
         }
 
         // An address the provider told us is dead stays out of every send.
@@ -77,7 +81,7 @@ class BroadcastAudience
      * The buckets do not overlap — a customer who both opted out and bounced is
      * counted once, under the reason that comes first.
      *
-     * @return array{total: int, reachable: int, unreachable: int, opted_out: int, bounced: int}
+     * @return array{total: int, reachable: int, unreachable: int, opted_out: int, bounced: int, never_opens: int}
      */
     public function summary(BroadcastChannel $channel, ?array $segment, bool $marketing = false): array
     {
@@ -95,13 +99,54 @@ class BroadcastAudience
                 ->count()
             : 0;
 
+        // בתוך הקהל הזה, כמה מדולגים כי אינם פותחים. נספר בנפרד ולא נבלע
+        // ב"לא ניתן להשגה": יש להם כתובת תקינה, וזו החלטה שלנו — כזו שאפשר
+        // לבטל לדיוור מסוים, ולכן חייבים לראות אותה לפני שליחה.
+        $neverOpens = ($skip = $this->nonOpeners($channel, $segment, $marketing)) === []
+            ? 0
+            : $this->query($segment)
+                ->whereNull('marketing_opt_out_at')
+                ->whereNull('email_bounced_at')
+                ->where(fn ($q) => $this->filled($q, 'email'))
+                ->whereKey($skip)
+                ->count();
+
         return [
             'total' => $total,
             'reachable' => $reachable,
-            'unreachable' => max(0, $total - $reachable - $optedOut - $bounced),
+            'unreachable' => max(0, $total - $reachable - $optedOut - $bounced - $neverOpens),
             'opted_out' => $optedOut,
             'bounced' => $bounced,
+            'never_opens' => $neverOpens,
         ];
+    }
+
+    /**
+     * לקוחות שיידלגו כי הם אינם פותחים — ריק כשהכלל אינו חל.
+     *
+     * חל רק על דיוור פרסומי במייל. בוואטסאפ אין מדד פתיחה בכלל, ובהודעת שירות
+     * אין שאלה: תחזוקה או עדכון אבטחה נשלחים גם למי שמעולם לא פתח דבר.
+     *
+     * לכל דיוור אפשר לבטל את הכלל (`segment['include_non_openers']`) — יש
+     * הודעות שרוצים שיגיעו לכולם, וההחלטה הזו צריכה להיות של מי ששולח.
+     *
+     * @return list<int>
+     */
+    private function nonOpeners(BroadcastChannel $channel, ?array $segment, bool $marketing): array
+    {
+        if (! $marketing || $channel !== BroadcastChannel::Email) {
+            return [];
+        }
+
+        if ((bool) (($segment ?? [])['include_non_openers'] ?? false)) {
+            return [];
+        }
+
+        $engagement = app(MarketingEngagement::class);
+
+        // הבדיקה הזו היא כל ההבדל בין "אינו פותח" לבין "אין לנו מעקב פתיחות":
+        // בלי נתונים כולם ייראו כמי שאינם פותחים, והדיוור היה נעצר כולו בשקט.
+        return $engagement->skipsNonOpeners() ? $engagement->nonOpenerIds() : [];
     }
 
     /**

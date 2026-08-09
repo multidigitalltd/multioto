@@ -18,6 +18,7 @@ use App\Models\WebhookEvent;
 use App\Services\Support\BroadcastAudience;
 use App\Services\Support\BroadcastComposer;
 use App\Services\Support\BroadcastRenderer;
+use App\Services\Support\MarketingEngagement;
 use App\Support\WebhookRejections;
 use Filament\Forms;
 use Filament\Forms\Form;
@@ -171,6 +172,16 @@ class BroadcastResource extends Resource
                             ->helperText('ריק = כל מי שתואם לתנאים שלמעלה')
                             ->live()
                             ->columnSpanFull(),
+                        Forms\Components\Toggle::make('segment.include_non_openers')
+                            ->label('לשלוח גם למי שאינו פותח')
+                            ->live()
+                            // מוצג רק כשהכלל בכלל פועל — מתג שאין לו מה לבטל
+                            // הוא שאלה מיותרת בכל דיוור.
+                            ->visible(fn (Forms\Get $get): bool => (bool) $get('is_marketing')
+                                && static::channelOf($get('channel')) === BroadcastChannel::Email
+                                && app(MarketingEngagement::class)->skipsNonOpeners())
+                            ->helperText('כברירת מחדל, לקוח שקיבל כמה הודעות ולא פתח אף אחת מדולג — שליחה למי שאינו קורא פוגעת בשיעור הפתיחה, וזה מה שספקי הדואר מדרגים לפיו את המסירה של כל השאר. הפעילו כאן כדי לכלול אותם בדיוור הזה בכל זאת.')
+                            ->columnSpanFull(),
                         Forms\Components\Placeholder::make('audience_summary')
                             ->label('כמה יקבלו')
                             ->content(fn (Forms\Get $get): HtmlString => static::audienceSummary($get))
@@ -185,6 +196,35 @@ class BroadcastResource extends Resource
                             ->seconds(false)
                             ->after('now')
                             ->helperText('המערכת בודקת כל חמש דקות, כך שהשליחה תתחיל סמוך לשעה שנבחרה. בשבת ובחג השליחה נדחית אוטומטית למוצאי החג.'),
+                        Forms\Components\Actions::make([
+                            // ההמלצה שווה משהו רק במקום שבו אפשר לפעול לפיה.
+                            // מסך מדדים שאומר "הכי טוב ב-9:00" ומשאיר את ההקלדה
+                            // למשתמש הוא מסך שנקרא פעם אחת.
+                            Forms\Components\Actions\Action::make('scheduleAtBestHour')
+                                ->label(fn (): string => static::bestHourLabel())
+                                ->icon('heroicon-o-clock')
+                                ->color('gray')
+                                ->visible(fn (): bool => app(MarketingEngagement::class)->bestWindow() !== null)
+                                ->action(function (Forms\Set $set): void {
+                                    $best = app(MarketingEngagement::class)->bestWindow();
+
+                                    if ($best === null) {
+                                        return;
+                                    }
+
+                                    // המופע הבא של השעה הזו: היום אם עוד לא
+                                    // עברה, אחרת מחר. תזמון לרגע שכבר חלף היה
+                                    // נשלח מיד — ההפך מהכוונה.
+                                    $at = now()->setTime($best['from'], 0);
+
+                                    $set('scheduled_at', ($at->isPast() ? $at->addDay() : $at)->format('Y-m-d H:i'));
+
+                                    Notification::make()->success()
+                                        ->title('תוזמן לשעת השיא')
+                                        ->body('אפשר לשנות את התאריך; השעה נבחרה לפי דפוס הפתיחה בפועל.')
+                                        ->send();
+                                }),
+                        ])->columnSpanFull(),
                     ])->columns(2)
                     // A sent broadcast is history: rescheduling it would either do
                     // nothing or invite a second send to the same people.
@@ -193,6 +233,19 @@ class BroadcastResource extends Resource
             ->disabled(fn (?Broadcast $record): bool => $record !== null && in_array(
                 $record->status, [BroadcastStatus::Sending, BroadcastStatus::Sent], true,
             ));
+    }
+
+    /** תווית הכפתור, עם השעה עצמה — כדי שלא צריך ללחוץ כדי לדעת מה יקרה. */
+    protected static function bestHourLabel(): string
+    {
+        $best = app(MarketingEngagement::class)->bestWindow();
+
+        if ($best === null) {
+            return 'תזמון לשעת השיא';
+        }
+
+        return 'תזמון לשעת השיא ('.str_pad((string) $best['from'], 2, '0', STR_PAD_LEFT).':00 — '
+            .round($best['share'] * 100).'% מהפתיחות)';
     }
 
     /**
@@ -248,6 +301,7 @@ class BroadcastResource extends Resource
             'status' => $get('segment.status'),
             'plan_ids' => $get('segment.plan_ids'),
             'customer_ids' => $get('segment.customer_ids'),
+            'include_non_openers' => (bool) $get('segment.include_non_openers'),
         ], marketing: (bool) $get('is_marketing'));
 
         if ($counts['reachable'] === 0) {
@@ -281,6 +335,10 @@ class BroadcastResource extends Resource
 
         if ($counts['opted_out'] > 0) {
             $line .= '<br><span class="text-sm text-gray-500">'.$counts['opted_out'].' לקוחות ביקשו להסיר אותם מדיוור פרסומי ולא יקבלו.</span>';
+        }
+
+        if (($counts['never_opens'] ?? 0) > 0) {
+            $line .= '<br><span class="text-sm text-gray-500">'.$counts['never_opens'].' לקוחות ידולגו כי לא פתחו אף אחת מההודעות האחרונות שנמסרו להם — אפשר לכלול אותם במתג שלמעלה.</span>';
         }
 
         return new HtmlString($line);
