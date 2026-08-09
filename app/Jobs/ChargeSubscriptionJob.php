@@ -186,6 +186,12 @@ class ChargeSubscriptionJob implements ShouldQueue
             RestoreSiteJob::dispatch($subscription->site_id);
         }
 
+        // A payment plan that just collected its last instalment closes itself.
+        // The line above has already scheduled the next charge, as it must for
+        // an ordinary subscription — this takes that date away again, so there
+        // is nothing left for the scheduler (or a manual "charge now") to find.
+        $subscription->closeIfInstallmentPlanComplete();
+
         // The billing day is the natural cadence for the customer's monthly
         // monitoring report (no-op unless the feature is enabled; sent at most
         // once per month).

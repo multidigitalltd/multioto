@@ -4,6 +4,7 @@ namespace App\Filament\Resources\CustomerResource\RelationManagers;
 
 use App\Enums\BillingInterval;
 use App\Enums\SubscriptionStatus;
+use App\Filament\Support\InstallmentFields;
 use App\Filament\Support\MoneyField;
 use App\Jobs\ChargeSubscriptionJob;
 use App\Models\Subscription;
@@ -66,6 +67,8 @@ class SubscriptionsRelationManager extends RelationManager
             Forms\Components\Select::make('status')->label('סטטוס')->options(SubscriptionStatus::class)
                 ->default(SubscriptionStatus::Active)->required(),
             Forms\Components\DateTimePicker::make('next_charge_at')->label('חיוב הבא'),
+            // פריסת תשלומים — אותם שדות בדיוק כמו בטופס המנוי המלא.
+            ...InstallmentFields::schema(),
         ]);
     }
 
@@ -75,7 +78,8 @@ class SubscriptionsRelationManager extends RelationManager
             ->recordTitleAttribute('id')
             ->columns([
                 Tables\Columns\TextColumn::make('plan_name')->label('תוכנית')
-                    ->state(fn (Subscription $record): string => $record->planName()),
+                    ->state(fn (Subscription $record): string => $record->planName())
+                    ->description(fn (Subscription $record): ?string => $record->installmentSummary()),
                 Tables\Columns\TextColumn::make('status')->label('סטטוס')->badge(),
                 Tables\Columns\TextColumn::make('next_charge_at')->label('חיוב הבא')->dateTime('d/m/Y')->placeholder('—'),
                 Tables\Columns\TextColumn::make('dunning_stage')->label('שלב דאנינג')->badge(),

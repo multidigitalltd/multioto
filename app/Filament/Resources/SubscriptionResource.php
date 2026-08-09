@@ -9,6 +9,7 @@ use App\Enums\SubscriptionStatus;
 use App\Filament\Concerns\RespectsModuleAccess;
 use App\Filament\Resources\SubscriptionResource\Pages;
 use App\Filament\Support\DebtorActions;
+use App\Filament\Support\InstallmentFields;
 use App\Filament\Support\MoneyField;
 use App\Models\PaymentToken;
 use App\Models\Site;
@@ -174,6 +175,7 @@ class SubscriptionResource extends Resource
                             // a price is mandatory — otherwise the scheduler would charge ₪0.
                             ->required(fn (Forms\Get $get): bool => blank($get('plan_id')))
                             ->helperText('חובה למנוי חופשי; בתוכנית קבועה — רק אם סוכם מחיר שונה מהתוכנית.'),
+                        ...InstallmentFields::schema(),
                     ])->columns(2),
 
                 Forms\Components\Section::make('גבייה')
@@ -203,7 +205,10 @@ class SubscriptionResource extends Resource
                     ->weight('bold'),
                 Tables\Columns\TextColumn::make('plan_name')
                     ->label('תוכנית')
-                    ->state(fn (Subscription $record): string => $record->planName()),
+                    ->state(fn (Subscription $record): string => $record->planName())
+                    // פריסת תשלומים נראית ברשימה כמו כל מנוי אחר, וההבדל היחיד
+                    // — שיש לה סוף — הוא בדיוק מה שצריך לראות בלי להיכנס.
+                    ->description(fn (Subscription $record): ?string => $record->installmentSummary()),
                 Tables\Columns\TextColumn::make('site.domain')
                     ->label('אתר')
                     ->searchable()

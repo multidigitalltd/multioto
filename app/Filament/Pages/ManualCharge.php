@@ -2,14 +2,20 @@
 
 namespace App\Filament\Pages;
 
+use App\Enums\BillingInterval;
+use App\Enums\SubscriptionStatus;
 use App\Enums\TokenStatus;
 use App\Filament\Concerns\OpensNewCustomer;
 use App\Filament\Concerns\RespectsModuleAccess;
+use App\Jobs\ChargeSubscriptionJob;
 use App\Models\Customer;
+use App\Models\Subscription;
 use App\Services\Billing\ManualChargeService;
+use App\Support\InstallmentSplit;
 use App\Support\Money;
 use Filament\Forms\Components\Actions\Action as FormAction;
 use Filament\Forms\Components\Grid;
+use Filament\Forms\Components\Placeholder;
 use Filament\Forms\Components\Repeater;
 use Filament\Forms\Components\Section;
 use Filament\Forms\Components\Select;
@@ -133,15 +139,33 @@ class ManualCharge extends Page implements HasForms
                         Toggle::make('vat_exempt')
                             ->label('פטור ממע״מ')
                             ->helperText('סמנו אם החיוב הספציפי הזה פטור ממע״מ (מבטל את חישוב המע״מ והחשבונית תונפק כפטורה).')
+                            ->live()
+                            ->columnSpanFull(),
+
+                        // פריסה לתשלומים. הסכום שלמעלה הוא החוב הכולל, וכאן
+                        // נקבע לכמה חודשים הוא מתחלק. ריק = חיוב חד-פעמי,
+                        // בדיוק כפי שהיה.
+                        TextInput::make('installments')
+                            ->label('פריסה לתשלומים חודשיים (אופציונלי)')
+                            ->numeric()->minValue(1)->maxValue(120)->step(1)
+                            ->live(onBlur: true)
+                            ->helperText('ריק או 1 = חיוב חד-פעמי. מספר גדול יותר = הסכום שלמעלה ייגבה בתשלומים חודשיים שווים, כמנוי שנסגר מעצמו אחרי התשלום האחרון.')
+                            ->columnSpanFull(),
+                        Placeholder::make('installments_preview')
+                            ->label('מה ייגבה')
+                            ->content(fn (Get $get): string => $this->installmentsPreview($get))
+                            ->visible(fn (Get $get): bool => (int) $get('installments') > 1)
                             ->columnSpanFull(),
                     ])
                     ->footerActions([
                         FormAction::make('submit')
-                            ->label('בצע חיוב')
+                            ->label(fn (Get $get): string => (int) $get('installments') > 1 ? 'פתח פריסת תשלומים' : 'בצע חיוב')
                             ->icon('heroicon-o-credit-card')
                             ->requiresConfirmation()
-                            ->modalHeading('אישור חיוב')
-                            ->modalDescription('אם ללקוח יש כרטיס שמור — הוא יחויב מיד מול קארדקום. אחרת ייווצר עמוד תשלום מאובטח. להמשיך?')
+                            ->modalHeading(fn (Get $get): string => (int) $get('installments') > 1 ? 'אישור פריסת תשלומים' : 'אישור חיוב')
+                            ->modalDescription(fn (Get $get): string => (int) $get('installments') > 1
+                                ? 'ייפתח מנוי פריסה על הכרטיס השמור של הלקוח, התשלום הראשון ייגבה עכשיו והשאר ייגבו מדי חודש עד לתשלום האחרון. להמשיך?'
+                                : 'אם ללקוח יש כרטיס שמור — הוא יחויב מיד מול קארדקום. אחרת ייווצר עמוד תשלום מאובטח. להמשיך?')
                             ->modalSubmitActionLabel('המשך')
                             ->action(fn () => $this->submit()),
                     ]),
@@ -192,6 +216,17 @@ class ManualCharge extends Page implements HasForms
             && $customer->paymentTokens()->where('status', TokenStatus::Active)->exists();
 
         $vatExempt = (bool) ($data['vat_exempt'] ?? false);
+
+        // פריסה לתשלומים היא מסלול אחר לגמרי: לא חיוב אחד אלא מנוי שגובה
+        // בכל חודש ונסגר בסופו. הוא מטופל כאן ומחזיר, כדי שהמסלול החד-פעמי
+        // שלמטה יישאר בדיוק כפי שהיה.
+        if ((int) ($data['installments'] ?? 0) > 1) {
+            $this->openInstallmentPlan(
+                $customer, $totalAgorot, (int) $data['installments'], $description, $vatExempt, $activeToken,
+            );
+
+            return;
+        }
 
         if ($activeToken) {
             $this->chargeSavedToken($customer, $totalAgorot, $description, $notes, $lines, $vatExempt);
@@ -260,6 +295,95 @@ class ManualCharge extends Page implements HasForms
             ->body('הזינו את הכרטיס בחלון המאובטח שנפתח למטה. לאחר התשלום החיוב יתעדכן והחשבונית תופק אוטומטית.')
             ->success()
             ->send();
+
+        $this->resetForm();
+    }
+
+    /**
+     * מה ייגבה בפועל בפריסה — לפני שפותחים אותה.
+     *
+     * הסכום נגבה בסכומים שווים, ולכן חוב שאינו מתחלק בדיוק ייגבה בסך הכל מעט
+     * אחרת ממה שהוזן. עדיף לדעת את זה כאן מאשר כשהלקוח סופר.
+     */
+    private function installmentsPreview(Get $get): string
+    {
+        $count = (int) $get('installments');
+        $totalAgorot = (int) round(((float) $get('amount')) * 100);
+
+        if ($count < 2 || $totalAgorot < 1) {
+            return '—';
+        }
+
+        $split = InstallmentSplit::compute(
+            $totalAgorot,
+            $count,
+            (bool) $get('vat_exempt') ? 0.0 : (float) config('billing.vat_rate'),
+            totalIncludesVat: true,
+        );
+
+        return InstallmentSplit::describe($split, $count);
+    }
+
+    /**
+     * פתיחת פריסת תשלומים: מנוי ייעודי שגובה בכל חודש ונסגר אחרי האחרון.
+     *
+     * דורש כרטיס שמור, ולא במקרה. עמוד התשלום המאובטח של קארדקום גובה פעם אחת
+     * ואינו שומר כרטיס (ChargeOnly), כך שפריסה שתיפתח בלעדיו הייתה גובה תשלום
+     * אחד ואז נתקעת בלי אמצעי גבייה — עם לקוח שכבר סוכם איתו על פריסה. עדיף
+     * לומר את זה מראש.
+     */
+    private function openInstallmentPlan(
+        Customer $customer,
+        int $totalAgorot,
+        int $count,
+        string $description,
+        bool $vatExempt,
+        bool $activeToken,
+    ): void {
+        if (! $activeToken) {
+            Notification::make()
+                ->title('אין כרטיס שמור ללקוח')
+                ->body('פריסה לתשלומים גובה כל חודש, ולכן היא דורשת כרטיס שמור. שלחו ללקוח קישור להזנת כרטיס מכרטיס הלקוח, ואז פתחו כאן את הפריסה.')
+                ->warning()->persistent()->send();
+
+            return;
+        }
+
+        $split = InstallmentSplit::compute(
+            $totalAgorot,
+            $count,
+            $vatExempt ? 0.0 : (float) config('billing.vat_rate'),
+            totalIncludesVat: true,
+        );
+
+        if ($split['per_charge_agorot'] < 1) {
+            Notification::make()->title('לא ניתן לחשב את הפריסה')->danger()->send();
+
+            return;
+        }
+
+        $subscription = Subscription::create([
+            'customer_id' => $customer->id,
+            'plan_id' => null,
+            'name' => Str::limit($description, 180, ''),
+            'billing_interval' => BillingInterval::Monthly,
+            // המחיר שנשמר הוא לפני מע״מ; המע״מ נוסף בזמן החיוב.
+            'price_agorot_override' => $split['base_agorot'],
+            'vat_applies' => ! $vatExempt,
+            'installments_total' => $count,
+            'status' => SubscriptionStatus::Active,
+            'current_period_start' => now()->toDateString(),
+            'current_period_end' => now()->addMonth()->toDateString(),
+            // התשלום הראשון נגבה עכשיו; השאר בכל חודש אחריו.
+            'next_charge_at' => now(),
+        ]);
+
+        ChargeSubscriptionJob::dispatch($subscription->id, manual: true);
+
+        Notification::make()
+            ->title('נפתחה פריסת תשלומים ל'.$customer->name)
+            ->body(InstallmentSplit::describe($split, $count).' — התשלום הראשון נשלח לגבייה עכשיו, והשאר ייגבו מדי חודש. הפריסה תיסגר מעצמה אחרי התשלום האחרון.')
+            ->success()->persistent()->send();
 
         $this->resetForm();
     }
