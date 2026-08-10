@@ -241,6 +241,19 @@ class TicketResource extends Resource
                 // Quick "mark as resolved" straight from the list — the customer
                 // gets the automatic "טופל" update on their channel (model event),
                 // exactly like resolving from inside the conversation.
+                // "בטיפול" מהרשימה, כמו "סמן כטופל" — זו הפעולה שעושים ברגע
+                // שלוקחים פנייה לעבודה, ומסך הרשימה הוא המקום שבו זה קורה.
+                Tables\Actions\Action::make('startWork')
+                    ->label('סמן: בטיפול')
+                    ->icon('heroicon-o-wrench-screwdriver')
+                    ->color('primary')
+                    ->visible(fn (Ticket $record): bool => ! in_array($record->status, [
+                        TicketStatus::InProgress, TicketStatus::Resolved, TicketStatus::Closed,
+                    ], true))
+                    ->requiresConfirmation()
+                    ->modalHeading('סימון הפנייה כבטיפול')
+                    ->modalDescription('הלקוח יקבל עדכון שהפנייה בטיפול, בערוץ שממנו פנה. הפנייה תרד ממוני ההמתנה למענה ותישאר בתור העבודה.')
+                    ->action(fn (Ticket $record) => $record->update(['status' => TicketStatus::InProgress])),
                 Tables\Actions\Action::make('resolve')
                     ->label('סמן כטופל')
                     ->icon('heroicon-o-check-circle')
@@ -254,6 +267,33 @@ class TicketResource extends Resource
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([
+                    // Take several tickets into work at once.
+                    //
+                    // Saved one by one, unlike the silent close below: that one
+                    // uses a query update precisely so no model event fires and
+                    // no message goes out. Here the message IS the point — the
+                    // customer is being told we are on it — so each ticket has
+                    // to pass through the observer.
+                    Tables\Actions\BulkAction::make('startWork')
+                        ->label('סימון: בטיפול (הלקוחות יעודכנו)')
+                        ->icon('heroicon-o-wrench-screwdriver')
+                        ->color('primary')
+                        ->requiresConfirmation()
+                        ->modalHeading('סימון פניות כבטיפול')
+                        ->modalDescription('כל לקוח יקבל עדכון שהפנייה שלו נמצאת בטיפול, בערוץ שממנו פנה. פניות שכבר טופלו או נסגרו ידולגו.')
+                        ->successNotificationTitle('הפניות סומנו — הלקוחות עודכנו')
+                        ->deselectRecordsAfterCompletion()
+                        ->action(function (Collection $records): void {
+                            $changed = $records
+                                ->reject(fn (Ticket $ticket): bool => in_array($ticket->status, [
+                                    TicketStatus::InProgress, TicketStatus::Resolved, TicketStatus::Closed,
+                                ], true))
+                                ->each(fn (Ticket $ticket) => $ticket->update(['status' => TicketStatus::InProgress]));
+
+                            if ($changed->isNotEmpty()) {
+                                AuditLog::record('updated', 'סימון פניות כבטיפול ('.$changed->count().'): #'.implode(', #', $changed->modelKeys()));
+                            }
+                        }),
                     // Close tickets in bulk without ever notifying the customer.
                     // Only "טופל" (Resolved) triggers the resolved notification;
                     // this sets "סגור" (Closed) via a query update, so no model

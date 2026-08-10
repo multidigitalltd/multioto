@@ -5,13 +5,16 @@ namespace Tests\Feature;
 use App\Enums\MessageChannel;
 use App\Enums\TicketChannel;
 use App\Enums\TicketStatus;
+use App\Filament\Resources\TicketResource\Pages\ListTickets;
 use App\Jobs\SendTicketNotificationJob;
 use App\Models\Customer;
 use App\Models\Ticket;
+use App\Models\User;
 use App\Services\Support\TicketIntake;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
+use Livewire\Livewire;
 use Tests\TestCase;
 
 /**
@@ -126,6 +129,58 @@ class TicketInProgressTest extends TestCase
         );
 
         $this->assertSame(TicketStatus::Open, $ticket->fresh()->status);
+    }
+
+    /*
+    | ----------------------------------------------------------------
+    | הפעולות המהירות ברשימה
+    | ----------------------------------------------------------------
+    */
+
+    /** פעולה מהירה על שורה ברשימת הפניות. */
+    public function test_the_list_can_take_a_ticket_into_work(): void
+    {
+        Queue::fake([SendTicketNotificationJob::class]);
+        $this->actingAs(User::factory()->create());
+
+        $ticket = $this->ticket();
+
+        Livewire::test(ListTickets::class)
+            ->callTableAction('startWork', $ticket);
+
+        $this->assertSame(TicketStatus::InProgress, $ticket->fresh()->status);
+        Queue::assertPushed(SendTicketNotificationJob::class);
+    }
+
+    /**
+     * ופעולה קבוצתית — כל לקוח מעודכן.
+     *
+     * שלא כמו הסגירה השקטה לידה, שנעשית בעדכון שאילתה כדי שלא תישלח הודעה,
+     * כאן ההודעה היא כל העניין — ולכן כל פנייה נשמרת בנפרד ועוברת דרך המאזין.
+     */
+    public function test_several_tickets_can_be_taken_into_work_at_once(): void
+    {
+        Queue::fake([SendTicketNotificationJob::class]);
+        $this->actingAs(User::factory()->create());
+
+        $first = $this->ticket();
+        $second = $this->ticket();
+        $done = $this->ticket();
+        $done->update(['status' => TicketStatus::Resolved]);
+
+        Livewire::test(ListTickets::class)
+            ->callTableBulkAction('startWork', [$first, $second, $done]);
+
+        $this->assertSame(TicketStatus::InProgress, $first->fresh()->status);
+        $this->assertSame(TicketStatus::InProgress, $second->fresh()->status);
+        // פנייה שכבר טופלה אינה נפתחת מחדש בטעות.
+        $this->assertSame(TicketStatus::Resolved, $done->fresh()->status);
+
+        // שתי הודעות "בטיפול" בדיוק. (הודעת הסגירה שנשלחה בהכנת הבדיקה על
+        // הפנייה השלישית אינה נספרת כאן.)
+        $this->assertSame(2, Queue::pushed(SendTicketNotificationJob::class)
+            ->filter(fn (SendTicketNotificationJob $job): bool => $job->templateKey === 'ticket.in_progress')
+            ->count());
     }
 
     /*
