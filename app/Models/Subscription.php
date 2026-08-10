@@ -406,18 +406,45 @@ class Subscription extends Model
      * חלק מסכום שסוכם, ותאריכים על החיוב קוראים כאילו נגבה כאן שירות חודשי.
      * שם הספירה היא מה שאומר משהו — "תשלום 3 מתוך 14".
      *
-     * מספר התשלום נגזר ממה שכבר נגבה, ולכן ניסיון חוזר על אותה תקופה שנכשלה
-     * נושא את אותו מספר ולא מקדם אותו.
+     * מספר התשלום נגזר מהתקופה של החיוב עצמו — ראו installmentNumberFor.
      */
     public function chargeDescription(Carbon $periodStart, Carbon $periodEnd): string
     {
         if ($this->isInstallmentPlan()) {
-            $number = min($this->installmentsPaid() + 1, (int) $this->installments_total);
-
-            return sprintf('%s — תשלום %d מתוך %d', $this->chargeLabel(), $number, $this->installments_total);
+            return sprintf(
+                '%s — תשלום %d מתוך %d',
+                $this->chargeLabel(),
+                $this->installmentNumberFor($periodStart),
+                $this->installments_total,
+            );
         }
 
         return sprintf('%s — %s עד %s', $this->chargeLabel(), $periodStart->format('d/m/Y'), $periodEnd->format('d/m/Y'));
+    }
+
+    /**
+     * מספרו הסידורי של התשלום שגובה את התקופה הזו.
+     *
+     * נספרות התקופות ששולמו **לפני** התקופה הזו, ועוד אחת. זה נראה כמו פרט
+     * טכני והוא ההבדל בין תיאור נכון לתיאור שגוי בכל מקום שבו הוא מופיע:
+     *
+     *  · החשבונית מונפקת אחרי שהחיוב סומן כמוצלח, ולכן ספירה של "כמה שולמו עד
+     *    עכשיו ועוד אחד" כוללת את החיוב הנוכחי — והחשבונית הראשונה בפריסה
+     *    הייתה יוצאת ללקוח עם "תשלום 2 מתוך 14";
+     *  · שורה היסטורית במסך החיובים מחושבת מחדש בכל טעינה, וספירה שמסתמכת על
+     *    ההווה הייתה נותנת לכל השורות הישנות את אותו מספר ככל שהפריסה מתקדמת;
+     *  · ניסיון חוזר על תקופה שנכשלה נושא את אותו מספר, כי התקופות שלפניה לא
+     *    השתנו.
+     */
+    public function installmentNumberFor(Carbon $periodStart): int
+    {
+        $paidBefore = (int) $this->charges()
+            ->where('status', ChargeStatus::Succeeded)
+            ->whereDate('period_start', '<', $periodStart->toDateString())
+            ->distinct()
+            ->count('period_start');
+
+        return min($paidBefore + 1, (int) $this->installments_total);
     }
 
     /** "תשלום 5 מתוך 14 · נותרו 4,500 ₪" — או null למנוי רגיל. */

@@ -447,9 +447,20 @@ class InstallmentPlanTest extends TestCase
 
         ChargeSubscriptionJob::dispatchSync($plan->id);
 
+        // אותה תקופה, אחרי שנגבתה — עדיין "תשלום 1". החשבונית מונפקת אחרי
+        // שהחיוב סומן כמוצלח, וספירה של "כמה שולמו ועוד אחד" הייתה שולחת
+        // ללקוח חשבונית ראשונה שכתוב עליה "תשלום 2 מתוך 14".
+        $charge = $plan->charges()->latest('id')->sole();
+
+        $this->assertSame(
+            'פריסת חוב — תשלום 1 מתוך 14',
+            $plan->refresh()->chargeDescription($charge->period_start, $charge->period_end),
+        );
+
+        // והתקופה הבאה היא 2.
         $this->assertSame(
             'פריסת חוב — תשלום 2 מתוך 14',
-            $plan->refresh()->chargeDescription(now(), now()->addMonth()),
+            $plan->chargeDescription($charge->period_end, $charge->period_end->copy()->addMonth()),
         );
     }
 
