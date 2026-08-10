@@ -398,6 +398,28 @@ class Subscription extends Model
         return true;
     }
 
+    /**
+     * התיאור שמלווה חיוב אחד — בכרטיס, בחשבונית ובמסך החיובים.
+     *
+     * במנוי רגיל זו התקופה שנגבתה ("01/09/2026 עד 01/10/2026"), כי זה בדיוק מה
+     * שהלקוח קנה. בפריסת חוב זו אמירה שגויה: התשלום אינו עבור חודש כלשהו אלא
+     * חלק מסכום שסוכם, ותאריכים על החיוב קוראים כאילו נגבה כאן שירות חודשי.
+     * שם הספירה היא מה שאומר משהו — "תשלום 3 מתוך 14".
+     *
+     * מספר התשלום נגזר ממה שכבר נגבה, ולכן ניסיון חוזר על אותה תקופה שנכשלה
+     * נושא את אותו מספר ולא מקדם אותו.
+     */
+    public function chargeDescription(Carbon $periodStart, Carbon $periodEnd): string
+    {
+        if ($this->isInstallmentPlan()) {
+            $number = min($this->installmentsPaid() + 1, (int) $this->installments_total);
+
+            return sprintf('%s — תשלום %d מתוך %d', $this->chargeLabel(), $number, $this->installments_total);
+        }
+
+        return sprintf('%s — %s עד %s', $this->chargeLabel(), $periodStart->format('d/m/Y'), $periodEnd->format('d/m/Y'));
+    }
+
     /** "תשלום 5 מתוך 14 · נותרו 4,500 ₪" — או null למנוי רגיל. */
     public function installmentSummary(): ?string
     {

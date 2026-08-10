@@ -92,7 +92,7 @@ class ChargeSubscriptionJob implements ShouldQueue
             $result = $cardcom->chargeToken(
                 $subscription->token,
                 $charge->total_agorot,
-                sprintf('%s — %s עד %s', $subscription->planName(), $charge->period_start->format('d/m/Y'), $charge->period_end->format('d/m/Y')),
+                $subscription->chargeDescription($charge->period_start, $charge->period_end),
                 sprintf('sub-%d-%s-a%d', $subscription->id, $charge->period_start->format('Ymd'), $charge->attempt_number),
             );
 

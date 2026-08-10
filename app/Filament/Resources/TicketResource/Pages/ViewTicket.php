@@ -270,7 +270,7 @@ class ViewTicket extends ViewRecord
             // intermediate "ממתין ללקוח" status and stamp the first response time.
             // Terminal states (resolved/closed) are left as the agent set them.
             $updates = [];
-            if (in_array($this->record->status, [TicketStatus::Open, TicketStatus::Pending, TicketStatus::OnHold], true)) {
+            if (in_array($this->record->status, [TicketStatus::Open, TicketStatus::InProgress, TicketStatus::Pending, TicketStatus::OnHold], true)) {
                 $updates['status'] = TicketStatus::Pending;
             }
             if ($this->record->first_response_at === null) {
@@ -414,6 +414,22 @@ class ViewTicket extends ViewRecord
                         ->body('הבדיקה רצה ברקע; הערת מערכת עם ההמלצה תופיע בשיחה, וכל תיקון יומתן לאישור.')
                         ->success()
                         ->send();
+                }),
+            // "בטיפול": הפנייה נלקחה לעבודה, והלקוח נאמר לו שכך. היא יוצאת
+            // ממוני הפניות שממתינות למענה — היא כבר נענתה — ונשארת בתור העבודה
+            // של הצוות עד שתטופל.
+            Actions\Action::make('startWork')
+                ->label('סמן: בטיפול')
+                ->icon('heroicon-o-wrench-screwdriver')
+                ->color('primary')
+                ->visible(fn (): bool => ! in_array($this->record->status, [
+                    TicketStatus::InProgress, TicketStatus::Resolved, TicketStatus::Closed,
+                ], true))
+                ->requiresConfirmation()
+                ->modalDescription('הלקוח יקבל עדכון שהפנייה נמצאת בטיפול, בערוץ שממנו פנה. הפנייה תרד ממוני ההמתנה למענה ותישאר בתור העבודה.')
+                ->action(function (): void {
+                    $this->record->update(['status' => TicketStatus::InProgress]);
+                    Notification::make()->title('הפנייה סומנה בטיפול — הלקוח עודכן')->success()->send();
                 }),
             Actions\Action::make('resolve')
                 ->label('סמן כטופלה')
