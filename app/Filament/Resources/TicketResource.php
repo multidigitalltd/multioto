@@ -11,6 +11,7 @@ use App\Models\AuditLog;
 use App\Models\Ticket;
 use Filament\Forms;
 use Filament\Forms\Form;
+use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
@@ -281,7 +282,6 @@ class TicketResource extends Resource
                         ->requiresConfirmation()
                         ->modalHeading('סימון פניות כבטיפול')
                         ->modalDescription('כל לקוח יקבל עדכון שהפנייה שלו נמצאת בטיפול, בערוץ שממנו פנה. פניות שכבר טופלו או נסגרו ידולגו.')
-                        ->successNotificationTitle('הפניות סומנו — הלקוחות עודכנו')
                         ->deselectRecordsAfterCompletion()
                         ->action(function (Collection $records): void {
                             $changed = $records
@@ -290,9 +290,25 @@ class TicketResource extends Resource
                                 ], true))
                                 ->each(fn (Ticket $ticket) => $ticket->update(['status' => TicketStatus::InProgress]));
 
-                            if ($changed->isNotEmpty()) {
-                                AuditLog::record('updated', 'סימון פניות כבטיפול ('.$changed->count().'): #'.implode(', #', $changed->modelKeys()));
+                            // ההודעה נכתבת כאן ולא כ-successNotificationTitle
+                            // קבוע: בבחירה שכולה פניות שכבר בטיפול (מצב שכיח —
+                            // הן בתור ברירת המחדל של הרשימה) לא נשלח דבר לאיש,
+                            // והודעת הצלחה קבועה הייתה מדווחת על עדכון לקוחות
+                            // שלא קרה.
+                            if ($changed->isEmpty()) {
+                                Notification::make()
+                                    ->title('לא בוצע שינוי')
+                                    ->body('כל הפניות שנבחרו כבר בטיפול, טופלו או נסגרו — לא נשלחה שום הודעה.')
+                                    ->warning()->send();
+
+                                return;
                             }
+
+                            AuditLog::record('updated', 'סימון פניות כבטיפול ('.$changed->count().'): #'.implode(', #', $changed->modelKeys()));
+
+                            Notification::make()
+                                ->title($changed->count().' פניות סומנו כבטיפול — הלקוחות עודכנו')
+                                ->success()->send();
                         }),
                     // Close tickets in bulk without ever notifying the customer.
                     // Only "טופל" (Resolved) triggers the resolved notification;
