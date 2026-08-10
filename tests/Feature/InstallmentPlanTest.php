@@ -421,6 +421,78 @@ class InstallmentPlanTest extends TestCase
             ->assertSee('חישוב מסכום כולל');
     }
 
+    /*
+    | ----------------------------------------------------------------
+    | תיאור החיוב
+    | ----------------------------------------------------------------
+    */
+
+    /**
+     * חיוב בפריסה מתואר כתשלום מספר X, ולא בתאריכים.
+     *
+     * תשלום בפריסה אינו עבור חודש כלשהו — הוא חלק מסכום שסוכם. "01/09 עד
+     * 01/10" על חשבונית כזו קורא ללקוח כאילו נגבה ממנו שירות חודשי שלא הזמין.
+     */
+    public function test_an_instalment_is_described_by_its_number(): void
+    {
+        Queue::fake([IssueInvoiceJob::class]);
+        $this->fakeCardcom(success: true);
+
+        $plan = $this->plan(14);
+
+        $this->assertSame(
+            'פריסת חוב — תשלום 1 מתוך 14',
+            $plan->chargeDescription(now(), now()->addMonth()),
+        );
+
+        ChargeSubscriptionJob::dispatchSync($plan->id);
+
+        // אותה תקופה, אחרי שנגבתה — עדיין "תשלום 1". החשבונית מונפקת אחרי
+        // שהחיוב סומן כמוצלח, וספירה של "כמה שולמו ועוד אחד" הייתה שולחת
+        // ללקוח חשבונית ראשונה שכתוב עליה "תשלום 2 מתוך 14".
+        $charge = $plan->charges()->latest('id')->sole();
+
+        $this->assertSame(
+            'פריסת חוב — תשלום 1 מתוך 14',
+            $plan->refresh()->chargeDescription($charge->period_start, $charge->period_end),
+        );
+
+        // והתקופה הבאה היא 2.
+        $this->assertSame(
+            'פריסת חוב — תשלום 2 מתוך 14',
+            $plan->chargeDescription($charge->period_end, $charge->period_end->copy()->addMonth()),
+        );
+    }
+
+    /** מנוי רגיל ממשיך להיות מתואר בתקופה שנגבתה — שם זה בדיוק מה שנקנה. */
+    public function test_an_ordinary_subscription_is_still_described_by_its_period(): void
+    {
+        $subscription = Subscription::factory()->create([
+            'plan_id' => null, 'name' => 'אחסון', 'price_agorot_override' => 10000,
+            'installments_total' => null,
+        ]);
+
+        $this->assertStringContainsString(
+            'עד',
+            $subscription->chargeDescription(now(), now()->addMonth()),
+        );
+    }
+
+    /** ומספר התשלום אינו עולה בגלל ניסיון חוזר שנכשל. */
+    public function test_a_failed_attempt_does_not_advance_the_number(): void
+    {
+        Queue::fake([IssueInvoiceJob::class, SendDunningNotificationJob::class]);
+        $this->fakeCardcom(success: false);
+
+        $plan = $this->plan(14);
+        ChargeSubscriptionJob::dispatchSync($plan->id);
+
+        $this->assertSame(
+            'פריסת חוב — תשלום 1 מתוך 14',
+            $plan->refresh()->chargeDescription(now(), now()->addMonth()),
+        );
+    }
+
     /** הטקסט שמופיע במסכים. */
     public function test_the_summary_reads_like_a_sentence(): void
     {

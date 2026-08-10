@@ -353,7 +353,7 @@ class ConsoleAgent
                 'input_schema' => $obj(['ticket_id' => $int, 'reply_text' => $str], ['ticket_id', 'reply_text'])],
             ['name' => 'propose_close_ticket', 'description' => 'הצע סגירת פנייה (סימון כסגורה, ללא הודעה ללקוח). ticket_id.',
                 'input_schema' => $obj(['ticket_id' => $int], ['ticket_id'])],
-            ['name' => 'propose_set_ticket_status', 'description' => 'הצע שינוי סטטוס פנייה. status: open (פתוח), pending (ממתין ללקוח), on_hold (בהמתנה), resolved (טופל — מודיע ללקוח), closed (סגור). ticket_id + status.',
+            ['name' => 'propose_set_ticket_status', 'description' => 'הצע שינוי סטטוס פנייה. status: open (פתוח), in_progress (בטיפול — מודיע ללקוח שהפנייה בעבודה), pending (ממתין ללקוח), on_hold (בהמתנה), resolved (טופל — מודיע ללקוח), closed (סגור). ticket_id + status.',
                 'input_schema' => $obj(['ticket_id' => $int, 'status' => $str], ['ticket_id', 'status'])],
             ['name' => 'propose_set_ticket_priority', 'description' => 'הצע שינוי עדיפות פנייה. priority: low, normal, high, urgent. ticket_id + priority.',
                 'input_schema' => $obj(['ticket_id' => $int, 'priority' => $str], ['ticket_id', 'priority'])],
@@ -491,7 +491,7 @@ class ConsoleAgent
         $subs = $customer->subscriptions->map(fn ($s): string => '- מנוי #'.$s->id.': '.($s->plan?->name ?? 'תוכנית').' · סטטוס '.
             (is_object($s->status) ? $s->status->value : $s->status).($s->next_charge_at ? ' · חיוב הבא '.$s->next_charge_at->format('d/m/Y') : ''))->implode("\n");
         $sites = $customer->sites->map(fn (Site $s): string => "- {$s->domain} (סטטוס: ".(is_object($s->status) ? $s->status->value : $s->status).')')->implode("\n");
-        $openTickets = $customer->tickets->filter(fn ($t) => in_array((is_object($t->status) ? $t->status->value : $t->status), ['open', 'pending', 'on_hold'], true))
+        $openTickets = $customer->tickets->filter(fn ($t) => in_array((is_object($t->status) ? $t->status->value : $t->status), ['open', 'in_progress', 'pending', 'on_hold'], true))
             ->map(fn ($t): string => "- פנייה #{$t->id}: {$t->subject}")->implode("\n");
 
         return ['content' => trim(implode("\n", array_filter([
@@ -507,7 +507,7 @@ class ConsoleAgent
         $name = trim((string) ($input['customer_name'] ?? ''));
 
         $tickets = Ticket::query()
-            ->whereIn('status', ['open', 'pending', 'on_hold'])
+            ->whereIn('status', ['open', 'in_progress', 'pending', 'on_hold'])
             ->when($name !== '', fn ($q) => $q->where(fn ($w) => $w
                 ->where('contact_name', 'like', "%{$name}%")
                 ->orWhereHas('customer', fn ($c) => $c->where('name', 'like', "%{$name}%"))))
@@ -613,7 +613,9 @@ class ConsoleAgent
     {
         $ticket = Ticket::find((int) ($input['ticket_id'] ?? 0));
         $status = strtolower(trim((string) ($input['status'] ?? '')));
-        $allowed = ['open', 'pending', 'on_hold', 'resolved', 'closed'];
+        // "בטיפול" הוא סטטוס פתוח לכל דבר, וסוכן שאינו מכיר אותו מדווח על לקוח
+        // כאילו אין לו פנייה פתוחה בזמן שעובדים עליה.
+        $allowed = ['open', 'in_progress', 'pending', 'on_hold', 'resolved', 'closed'];
         if (! $ticket || ! in_array($status, $allowed, true)) {
             return ['content' => 'פנייה או סטטוס חסרים/לא תקינים (open/pending/on_hold/resolved/closed).', 'is_error' => true];
         }

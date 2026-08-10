@@ -83,7 +83,7 @@ class AgentReply
         ]);
 
         $updates = [];
-        if (in_array($ticket->status, [TicketStatus::Open, TicketStatus::Pending, TicketStatus::OnHold], true)) {
+        if (in_array($ticket->status, [TicketStatus::Open, TicketStatus::InProgress, TicketStatus::Pending, TicketStatus::OnHold], true)) {
             $updates['status'] = TicketStatus::Pending;
         }
         if ($ticket->first_response_at === null) {

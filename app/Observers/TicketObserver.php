@@ -53,8 +53,24 @@ class TicketObserver
 
     public function updated(Ticket $ticket): void
     {
-        if ($ticket->wasChanged('status') && $ticket->status === TicketStatus::Resolved) {
+        if (! $ticket->wasChanged('status')) {
+            return;
+        }
+
+        if ($ticket->status === TicketStatus::Resolved) {
             SendTicketNotificationJob::dispatch($ticket->id, 'ticket.resolved');
+        }
+
+        // "בטיפול" הוא בראש ובראשונה הבטחה ללקוח: אמרנו לו שאנחנו עליה. בלי
+        // ההודעה הזו הסטטוס הוא סימון פנימי בלבד — והלקוח, שממתין בשקט, אינו
+        // יודע דבר. ה-dedupeTag מאפשר עדכון נוסף אם הפנייה נפתחה מחדש וחזרה
+        // לטיפול, בלי לשלוח פעמיים באותה סבב.
+        if ($ticket->status === TicketStatus::InProgress) {
+            SendTicketNotificationJob::dispatch(
+                $ticket->id,
+                'ticket.in_progress',
+                'r'.$ticket->messages()->count(),
+            );
         }
     }
 }

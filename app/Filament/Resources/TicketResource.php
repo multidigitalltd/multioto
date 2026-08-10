@@ -160,6 +160,7 @@ class TicketResource extends Resource
                     ->badge()
                     ->color(fn (TicketStatus $state): string => match ($state) {
                         TicketStatus::Open => 'warning',
+                        TicketStatus::InProgress => 'primary',
                         TicketStatus::Pending => 'info',
                         TicketStatus::OnHold => 'gray',
                         TicketStatus::Resolved => 'success',
@@ -220,7 +221,10 @@ class TicketResource extends Resource
                     // Multi-select (choose several at once); defaults to the open
                     // queue. Clear the filter to see resolved/closed tickets too.
                     ->multiple()
-                    ->default([TicketStatus::Open->value]),
+                    // תור העבודה של הצוות: מה שפתוח ומה שבטיפול. פנייה
+                    // בטיפול יצאה ממוני ההמתנה, אבל היא עדיין עבודה פתוחה
+                    // ואסור שתיעלם מהרשימה שעובדים לפיה.
+                    ->default([TicketStatus::Open->value, TicketStatus::InProgress->value]),
                 Tables\Filters\SelectFilter::make('priority')
                     ->label('עדיפות')
                     ->options(TicketPriority::class)

@@ -89,7 +89,7 @@ class SubscriptionCollectionService
                     'currency' => config('billing.currency'),
                     'status' => ChargeStatus::Succeeded,
                     'attempt_number' => $attempt,
-                    'description' => sprintf('%s — %s עד %s', $subscription->planName(), $periodStart->format('d/m/Y'), $periodEnd->format('d/m/Y')),
+                    'description' => $subscription->chargeDescription($periodStart, $periodEnd),
                     'invoice_notes' => filled($notes) ? $notes : null,
                     'period_start' => $periodStart,
                     'period_end' => $periodEnd,

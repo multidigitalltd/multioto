@@ -498,7 +498,7 @@ class ManagementCommands
     private function listOpen(): string
     {
         $open = Ticket::query()
-            ->whereIn('status', [TicketStatus::Open, TicketStatus::Pending, TicketStatus::OnHold])
+            ->whereIn('status', [TicketStatus::Open, TicketStatus::InProgress, TicketStatus::Pending, TicketStatus::OnHold])
             ->with('customer')
             ->latest('updated_at')
             ->limit(15)

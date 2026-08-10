@@ -177,6 +177,7 @@ class SendTicketNotificationJob implements ShouldQueue
 
         $label = match ($this->templateKey) {
             'ticket.received' => 'אישור קבלה',
+            'ticket.in_progress' => 'עדכון: בטיפול',
             'ticket.resolved' => 'הודעת סגירה',
             default => 'הודעה אוטומטית',
         };
@@ -307,6 +308,10 @@ class SendTicketNotificationJob implements ShouldQueue
             $instruction = implode("\n", [
                 'כתוב הודעת סיום אישית וחמה — הפנייה של הלקוח טופלה ונסגרה.',
                 'פנה ללקוח בשמו והזכר בקצרה, במילים שלך, את הנושא הספציפי שטופל (לא נוסח כללי).',
+                // אישור קבלה בהודעת סגירה קורא ללקוח כאילו רק עכשיו פתחנו את
+                // הפנייה — אחרי שכבר טופלה. זה נשמע כאילו לא באמת עקבנו.
+                'אסור בהחלט לפתוח באישור קבלה ("קיבלתי/קיבלנו את פנייתך", "פנייתך התקבלה" וכדומה) — הפנייה כבר טופלה, ופתיחה כזו נשמעת כאילו רק עכשיו קראנו אותה.',
+                'פתח מהעדכון עצמו: מה טופל והושלם.',
                 'הודה לו והזמן אותו לפנות שוב אם צריך. 2–3 משפטים, בשפת הלקוח.',
             ]);
         }
@@ -348,12 +353,40 @@ class SendTicketNotificationJob implements ShouldQueue
             return null;
         }
 
+        // ההוראה למעלה אינה ערובה — מודל יכול להתחיל בכל זאת ב"קיבלנו את
+        // פנייתך", וזה קורא ללקוח כאילו רק עכשיו פתחנו פנייה שכבר נסגרה. אם זה
+        // קרה, עדיף נוסח התבנית הקבוע על נוסח אישי שפותח בשורה הלא נכונה.
+        if ($isResolved && self::opensWithReceipt($message)) {
+            return null;
+        }
+
         // Guarantee the ticket number is present even if the model omitted it.
         if (! str_contains($message, (string) $ticket->id)) {
             $message .= "\n\nמספר פנייה: #{$ticket->id}";
         }
 
         return $message;
+    }
+
+    /**
+     * האם ההודעה נפתחת באישור קבלה.
+     *
+     * נבדקת רק תחילת ההודעה: "תודה שפנית אלינו, טיפלנו ב…" הוא פתיח לגיטימי
+     * לסגירה, ואילו "קיבלנו את פנייתך" כמשפט ראשון הוא הודעה שנשלחה בטעות
+     * בשלב הלא נכון.
+     */
+    public static function opensWithReceipt(string $message): bool
+    {
+        $head = mb_substr(trim(preg_replace('/\s+/u', ' ', $message)), 0, 80);
+
+        foreach (['קיבלנו את פניית', 'קיבלתי את פניית', 'קיבלנו את הפניי', 'קיבלתי את הפניי',
+            'פנייתך התקבלה', 'פנייתך נקלטה', 'הפנייה שלך התקבלה'] as $phrase) {
+            if (str_contains($head, $phrase)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

@@ -78,13 +78,12 @@ class InvoiceIssuer
         }
 
         // Subscription charges describe the plan + period; one-off (manual)
-        // charges carry their own free-text description.
+        // charges carry their own free-text description. A payment plan is
+        // described by its instalment number instead of by dates — the payment
+        // is a share of an agreed debt, not a month of service, and dates on it
+        // read to the customer as a monthly charge they never signed up for.
         $description = $charge->subscription
-            ? sprintf('%s — %s עד %s',
-                $charge->subscription->chargeLabel(),
-                $charge->period_start->format('d/m/Y'),
-                $charge->period_end->format('d/m/Y'),
-            )
+            ? $charge->subscription->chargeDescription($charge->period_start, $charge->period_end)
             : ($charge->description ?: 'חיוב');
 
         // Serialise issuance per charge: only one caller may talk to Linet at a

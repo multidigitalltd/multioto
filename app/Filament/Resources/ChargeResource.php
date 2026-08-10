@@ -141,7 +141,7 @@ class ChargeResource extends Resource
                     // A subscription charge shows the plan and, when tied to a site,
                     // "עבור אתר <domain>"; a one-off charge shows its own description.
                     ->getStateUsing(fn (Charge $record): string => $record->subscription
-                        ? $record->subscription->chargeLabel()
+                        ? $record->subscription->chargeDescription($record->period_start, $record->period_end)
                         : ($record->description ?: '—'))
                     ->wrap()->toggleable(),
                 Tables\Columns\TextColumn::make('total_agorot')
