@@ -32,7 +32,9 @@ class TeamNotifier
     /** A brand-new ticket landed. */
     public function newTicket(Ticket $ticket): void
     {
-        $who = $ticket->senderName();
+        // מי כתב, ומאיזה עסק — ההתראה הזו נקראת בטלפון, ושם שם העסק לבדו
+        // אינו אומר עם מי מדברים.
+        $who = $ticket->senderDescription();
         $title = "🆕 פנייה חדשה #{$ticket->id} ({$ticket->channel->getLabel()})";
         $body = "מ: {$who}\nנושא: {$ticket->subject}";
 
@@ -79,7 +81,9 @@ class TeamNotifier
     /** A customer replied on an existing ticket. */
     public function newReply(Ticket $ticket, TicketMessage $message): void
     {
-        $who = $ticket->senderName();
+        // תגובה בפנייה קיימת יכולה להגיע מאיש קשר אחר מזה שפתח אותה — ואם
+        // ההודעה עצמה יודעת מי כתב אותה, היא הסמכות.
+        $who = $message->sender_label ?: $ticket->senderDescription();
         $title = "💬 תגובה חדשה בפנייה #{$ticket->id}";
         $body = "מ: {$who}\nנושא: {$ticket->subject}\n\nתוכן:\n".Str::limit($message->body, 600);
 

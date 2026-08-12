@@ -29,6 +29,9 @@
     {{-- Context strip: who + channel + status at a glance. --}}
     <div class="flex flex-wrap items-center gap-3 text-sm">
         <span class="font-semibold">{{ $ticket->senderName() }}</span>
+        @if ($ticket->senderContext())
+            <span class="text-gray-500 dark:text-gray-400">{{ $ticket->senderContext() }}</span>
+        @endif
         <x-filament::badge>{{ $ticket->channel->getLabel() }}</x-filament::badge>
         <x-filament::badge>{{ $ticket->status->getLabel() }}</x-filament::badge>
         @if ($ticket->customer)

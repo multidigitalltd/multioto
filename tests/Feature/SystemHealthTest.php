@@ -830,7 +830,9 @@ class SystemHealthTest extends TestCase
 
         $this->assertSame(HealthReport::DEGRADED, $check['status']);
         $this->assertStringContainsString('1 עבודות שנכשלו ממתינות', $check['detail']);
-        $this->assertStringContainsString('/horizon/failed', $check['detail']);
+        // המסך שלנו ולא של Horizon: שם ההודעה נקראת בעברית ואפשר להכריע בה.
+        $this->assertStringContainsString('עבודות שנכשלו', $check['detail']);
+        $this->assertStringNotContainsString('/horizon/failed', $check['detail']);
     }
 
     /** ובלי כשלים כלל — שקט. */

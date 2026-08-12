@@ -254,6 +254,11 @@ class TicketIntake
         if ($threadTicketId !== null && ($tagged = Ticket::find($threadTicketId)) !== null) {
             // Fill an unidentified ticket's empty sender fields from this reply,
             // so a manually-opened ticket stops showing as unidentified.
+            // רק פנייה שאין לה זהות כלל מתמלאת מתשובה. השדות האלה מתארים מי
+            // פתח את הפנייה, ותשובה של צד שלישי (רו״ח שהתווסף לשרשור) אינה
+            // הופכת אותו לפונה — היא נרשמת כשולח של ההודעה שלה בלבד. בלי
+            // ההגבלה הזו הוא היה נבלע כ"בעל הפנייה" ותשובתו הייתה מאבדת את
+            // שורת ה"מאת" שמסגירה שהיא לא מהלקוח.
             if ($tagged->customer_id === null) {
                 $fill = [];
                 if (blank($tagged->contact_name) && filled($contactName)) {
@@ -283,10 +288,15 @@ class TicketIntake
 
         return Ticket::create([
             'customer_id' => $customer?->id,
-            // Remember who an unidentified enquiry is from so it still shows a
-            // name/handle rather than "פונה לא מזוהה".
-            'contact_name' => $customer ? null : ($contactName ?: null),
-            'contact_handle' => $customer ? null : ($contactHandle ?: null),
+            // מי שכתב, תמיד — גם כשהלקוח זוהה.
+            //
+            // קודם השדות האלה נמחקו ברגע שהתאמנו את הפנייה ללקוח, ומאז כל
+            // פנייה נראתה כאילו הגיעה מ"מספרת דוד". אבל עסק אינו כותב הודעות:
+            // כותבת אותן יוסי מהמשרד, או רו״ח חיצוני, או הבעלים בעצמו — ולכל
+            // אחד מהם עונים אחרת. השם של מי ששלח הוא בדיוק המידע שנמחק, והוא
+            // גם היחיד שאי אפשר לשחזר אחר כך.
+            'contact_name' => $contactName ?: null,
+            'contact_handle' => $contactHandle ?: null,
             'channel' => $channel,
             'subject' => $this->buildSubject($customer, $subject, $body),
             'status' => TicketStatus::Open,

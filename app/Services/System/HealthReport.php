@@ -561,7 +561,9 @@ class HealthReport
         $older = $counts['total'] - $counts['recent'];
         $detail = "{$counts['total']} עבודות שנכשלו ממתינות";
         $detail .= $counts['recent'] > 0 ? " ({$counts['recent']} ביממה האחרונה)." : ' (הישנה מביניהן לפני יותר מיממה).';
-        $detail .= ' לצפייה, ניסיון חוזר או מחיקה: /horizon/failed';
+        // המסך שלנו ולא של Horizon: שם זה שם מחלקה, payload מקודד ו-stack
+        // trace באנגלית — לא שפה שמחליטים בה, ובפועל לא החליטו.
+        $detail .= ' לצפייה, ניסיון חוזר או מחיקה: ניהול ← עבודות שנכשלו.';
 
         return $this->check(
             'failed_jobs',

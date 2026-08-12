@@ -24,24 +24,64 @@ class Ticket extends Model
     ];
 
     /**
-     * Who the ticket is from, for display: the matched customer's name, or —
-     * for an unidentified enquiry — the captured sender identity (name + email
-     * for email, pushname + phone for WhatsApp), falling back to a generic label.
+     * מי כתב את הפנייה — האדם, לא העסק.
+     *
+     * עסק אינו כותב הודעות. כותבת אותן יוסי מהמשרד, או רו״ח חיצוני, או הבעלים
+     * בעצמו — ולכל אחד מהם עונים אחרת. עד עכשיו כל פנייה מלקוח מזוהה הוצגה בשם
+     * העסק, ולכן חמישה אנשי קשר שונים נראו על המסך כאותו פונה אחד.
+     *
+     * שם הלקוח לא נעלם — הוא מוצג לצידו (senderContext), כי מי ששלח בלי לאיזה
+     * עסק הוא שייך הוא חצי תשובה.
      */
     public function senderName(): string
     {
+        $name = trim((string) $this->contact_name);
+        $handle = trim((string) $this->contact_handle);
+
+        if ($name !== '') {
+            return $name;
+        }
+
+        // לקוח מזוהה בלי שם פרטי של שולח — שם העסק הוא הזיהוי הטוב ביותר שיש.
         if ($this->customer) {
             return $this->customer->name;
         }
 
+        return $handle !== '' ? $handle : 'פונה לא מזוהה';
+    }
+
+    /**
+     * השורה שמתחת לשם: לאיזה עסק הוא שייך, או שהוא אינו מזוהה.
+     *
+     * מוחזר null כשאין מה להוסיף — כשהשם שמוצג הוא כבר שם העסק עצמו.
+     */
+    public function senderContext(): ?string
+    {
         $name = trim((string) $this->contact_name);
         $handle = trim((string) $this->contact_handle);
 
-        if ($name !== '' && $handle !== '') {
-            return "{$name} · {$handle}";
+        if ($this->customer === null) {
+            // פונה לא מזוהה: הכתובת/הטלפון הם כל מה שידוע עליו, ולכן הם
+            // ההקשר — אלא אם הם כבר מוצגים כשם.
+            return $name !== '' && $handle !== '' ? $handle.' · לא מזוהה' : 'לא מזוהה';
         }
 
-        return $name !== '' ? $name : ($handle !== '' ? $handle : 'פונה לא מזוהה');
+        // השם המוצג הוא שם העסק — אין מה להוסיף.
+        if ($name === '') {
+            return null;
+        }
+
+        return $handle !== ''
+            ? $this->customer->name.' · '.$handle
+            : $this->customer->name;
+    }
+
+    /** מי כתב ולאיזה עסק, בשורה אחת — לטקסט חופשי (התראות, הודעות לצוות). */
+    public function senderDescription(): string
+    {
+        $context = $this->senderContext();
+
+        return $context === null ? $this->senderName() : $this->senderName().' ('.$context.')';
     }
 
     /**
