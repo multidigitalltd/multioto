@@ -16,7 +16,9 @@ use App\Services\Audit\SiteAuditor;
 use App\Services\Security\DnsLookup;
 use Filament\Forms\Components\Actions\Action as FormAction;
 use Filament\Forms\Components\CheckboxList;
+use Filament\Forms\Components\Repeater;
 use Filament\Forms\Components\Section;
+use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Concerns\InteractsWithForms;
 use Filament\Forms\Contracts\HasForms;
@@ -229,6 +231,71 @@ class SiteAudits extends Page implements HasForms, HasTable
         return $options;
     }
 
+    /**
+     * כל הממצאים, לפי מיקומם האמיתי במערך — כולל אלה שעברו.
+     *
+     * המפתח הוא האינדקס במערך findings, שאינו משתנה לעולם (הבדיקה היא צילום
+     * מצב), ולכן הוא מזהה יציב לאורך זמן. choices() שמעליו סופר אחרת — הוא
+     * מונה רק בעיות, בסדר החומרה — ושתי הרשימות לא היו סופרות אותו דבר.
+     *
+     * @return array<int, string>
+     */
+    private static function everyFinding(SiteAudit $audit): array
+    {
+        $options = [];
+
+        foreach ((array) $audit->findings as $index => $finding) {
+            $label = ($finding['severity'] ?? '') === 'ok'
+                ? '[תקין]'
+                : self::mark($finding);
+
+            $options[$index] = $label.' '.($finding['title'] ?? '')
+                .(filled($finding['area'] ?? null) ? ' — '.$finding['area'] : '');
+        }
+
+        return $options;
+    }
+
+    /**
+     * שמירת מה ייכלל במסמך ומה נוסף לו.
+     *
+     * הממצאים עצמם אינם נגעים: נשמרת רק ההחלטה מה להדפיס. ממצא שהוסר נשאר
+     * בבדיקה, נספר בפאנל, וניתן להחזרה — כך שאין מצב שבו מידע נעלם בלי שאיש
+     * יידע שהיה שם.
+     *
+     * @param  array<string, mixed>  $data
+     */
+    private function saveReportChoices(SiteAudit $audit, array $data): void
+    {
+        $included = array_map('intval', (array) ($data['included'] ?? []));
+
+        $hidden = array_values(array_diff(
+            array_keys(self::everyFinding($audit)),
+            $included,
+        ));
+
+        $sections = collect($data['sections'] ?? [])
+            ->map(fn (array $row): array => [
+                'title' => trim((string) ($row['title'] ?? '')),
+                'body' => trim((string) ($row['body'] ?? '')),
+            ])
+            ->filter(fn (array $row): bool => $row['body'] !== '')
+            ->values()
+            ->all();
+
+        $audit->update([
+            'hidden_findings' => $hidden,
+            'extra_sections' => $sections,
+        ]);
+
+        Notification::make()
+            ->title('הדוח עודכן')
+            ->body($hidden === []
+                ? 'כל הממצאים ייכללו ב-PDF.'
+                : count($hidden).' ממצאים לא ייכללו ב-PDF (הם נשארים בבדיקה).')
+            ->success()->send();
+    }
+
     /** Validate the address and put one audit of it on the queue. */
     private function queue(string $address): bool
     {
@@ -276,7 +343,16 @@ class SiteAudits extends Page implements HasForms, HasTable
                     ->label('מתי')->dateTime('d/m/Y H:i')->sortable(),
                 Tables\Columns\TextColumn::make('url')
                     ->label('אתר')->wrap()->searchable()
-                    ->url(fn (SiteAudit $record): string => $record->url, shouldOpenInNewTab: true),
+                    ->url(fn (SiteAudit $record): string => $record->url, shouldOpenInNewTab: true)
+                    // מסמך שנשלח ללקוח ואינו כולל את כל מה שנמצא — הצוות חייב
+                    // לדעת את זה בלי לפתוח אותו. ההסתרה היא החלטה לגיטימית,
+                    // אבל היא לא צריכה להיות שקטה.
+                    ->description(fn (SiteAudit $record): ?string => match (true) {
+                        $record->hiddenCount() > 0 && $record->sections() !== [] => $record->hiddenCount().' ממצאים לא ב-PDF · '.count($record->sections()).' מקטעים נוספו',
+                        $record->hiddenCount() > 0 => $record->hiddenCount().' ממצאים לא ייכללו ב-PDF',
+                        $record->sections() !== [] => count($record->sections()).' מקטעים נוספו לדוח',
+                        default => null,
+                    }),
                 Tables\Columns\TextColumn::make('status')
                     ->label('סטטוס')
                     ->badge()
@@ -369,6 +445,46 @@ class SiteAudits extends Page implements HasForms, HasTable
                     ->modalDescription('הבדיקה תרוץ מחדש על אותה כתובת ותתווסף כשורה חדשה. הבדיקה הנוכחית נשמרת כפי שהיא.')
                     ->modalSubmitActionLabel('בדוק שוב')
                     ->action(fn (SiteAudit $record) => $this->recheck($record)),
+
+                // עריכת המסמך שנשלח ללקוח — מה מתוך הממצאים ייכלל, ומה להוסיף
+                // בטקסט חופשי. הבדיקה עצמה אינה משתנה.
+                Tables\Actions\Action::make('editReport')
+                    ->label('עריכת הדוח')
+                    ->icon('heroicon-o-adjustments-horizontal')
+                    ->color('gray')
+                    ->visible(fn (SiteAudit $record): bool => $record->status === SiteAudit::STATUS_COMPLETED)
+                    ->modalHeading('מה ייכלל ב-PDF')
+                    ->modalDescription('הסרת ממצא משפיעה על המסמך בלבד — הוא נשאר בבדיקה וניתן להחזרה בכל רגע. אפשר גם להוסיף מקטעים משלכם, שיופיעו בסוף הדוח.')
+                    ->modalSubmitActionLabel('שמור')
+                    ->modalWidth('3xl')
+                    ->fillForm(fn (SiteAudit $record): array => [
+                        'included' => array_values(array_diff(
+                            array_keys(self::everyFinding($record)),
+                            $record->hiddenIndexes(),
+                        )),
+                        'sections' => $record->sections(),
+                    ])
+                    ->form(fn (SiteAudit $record): array => [
+                        CheckboxList::make('included')
+                            ->label('ממצאים שייכללו ב-PDF')
+                            ->options(self::everyFinding($record))
+                            ->bulkToggleable()
+                            ->columns(1)
+                            ->helperText('מה שלא מסומן לא יודפס. הספירה בראש הדוח מתעדכנת לפי מה שנשאר, כדי שהמספרים והרשימה יסכימו זה עם זה.'),
+                        Repeater::make('sections')
+                            ->label('מקטעים נוספים')
+                            ->schema([
+                                TextInput::make('title')->label('כותרת')->maxLength(120),
+                                Textarea::make('body')->label('תוכן')->rows(4)->maxLength(4000),
+                            ])
+                            ->addActionLabel('הוסף מקטע')
+                            ->defaultItems(0)
+                            ->reorderable()
+                            ->collapsible()
+                            ->itemLabel(fn (array $state): ?string => $state['title'] ?? null)
+                            ->helperText('טקסט חופשי שיופיע בסוף הדוח — הצעת מחיר, סיכום שיחה, כל מה שהבדיקה האוטומטית אינה יודעת לומר. מקטע בלי תוכן אינו נשמר.'),
+                    ])
+                    ->action(fn (SiteAudit $record, array $data) => $this->saveReportChoices($record, $data)),
 
                 Tables\Actions\Action::make('pdf')
                     ->label('הורדת PDF')

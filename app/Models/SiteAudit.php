@@ -28,6 +28,7 @@ class SiteAudit extends Model
 
     protected $fillable = [
         'url', 'host', 'site_id', 'user_id', 'status', 'error', 'findings', 'summary', 'finished_at',
+        'hidden_findings', 'extra_sections',
     ];
 
     protected function casts(): array
@@ -35,6 +36,8 @@ class SiteAudit extends Model
         return [
             'findings' => 'array',
             'summary' => 'array',
+            'hidden_findings' => 'array',
+            'extra_sections' => 'array',
             'finished_at' => 'datetime',
         ];
     }
@@ -148,5 +151,114 @@ class SiteAudit extends Model
     public function problems(): array
     {
         return array_merge($this->of('critical'), $this->of('warning'), $this->of('notice'));
+    }
+
+    /*
+    | ----------------------------------------------------------------
+    | מה נכנס למסמך שנשלח ללקוח
+    | ----------------------------------------------------------------
+    |
+    | הבדיקה עצמה אינה משתנה לעולם — היא צילום מצב, וזה מה שהופך אותה לשווה
+    | משהו. מה שכן ניתן לבחירה הוא מה מתוכה מודפס: ממצא נכון אינו תמיד שייך
+    | לשיחה הזו. הממצא המוסתר נשאר כאן, נראה בפאנל, וניתן להחזרה בלחיצה.
+    */
+
+    /** מיקומי הממצאים שסומנו כלא-להדפסה. */
+    public function hiddenIndexes(): array
+    {
+        return array_values(array_map('intval', (array) $this->hidden_findings));
+    }
+
+    public function isHidden(int $index): bool
+    {
+        return in_array($index, $this->hiddenIndexes(), true);
+    }
+
+    /** כמה ממצאים לא ייכללו במסמך. */
+    public function hiddenCount(): int
+    {
+        return count($this->hiddenIndexes());
+    }
+
+    /**
+     * הממצאים שייכללו במסמך.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function visibleFindings(): array
+    {
+        $hidden = array_flip($this->hiddenIndexes());
+
+        return array_values(array_filter(
+            (array) $this->findings,
+            fn (int $index): bool => ! isset($hidden[$index]),
+            ARRAY_FILTER_USE_KEY,
+        ));
+    }
+
+    /**
+     * הממצאים שייכללו במסמך, לפי חומרה.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function visibleOf(string $severity): array
+    {
+        return array_values(array_filter(
+            $this->visibleFindings(),
+            fn (array $finding): bool => ($finding['severity'] ?? '') === $severity,
+        ));
+    }
+
+    /** @return array<string, list<array<string, mixed>>> */
+    public function visibleByArea(string $severity): array
+    {
+        $grouped = [];
+
+        foreach ($this->visibleOf($severity) as $finding) {
+            $grouped[(string) ($finding['area'] ?? 'כללי')][] = $finding;
+        }
+
+        return $grouped;
+    }
+
+    /**
+     * הספירה לפי מה שמודפס בפועל.
+     *
+     * מסמך שכותרתו "3 דורשים טיפול מיידי" ומפרט שניים הוא מסמך שסופרים בו
+     * ומגלים שהמספר אינו נכון — וזה מטיל ספק בכל השאר.
+     *
+     * @return array<string, int>
+     */
+    public function visibleCounts(): array
+    {
+        $counts = [];
+
+        foreach (self::SEVERITIES as $severity) {
+            $counts[$severity] = count($this->visibleOf($severity));
+        }
+
+        return $counts;
+    }
+
+    /**
+     * מקטעי הטקסט החופשי שנוספו לדוח.
+     *
+     * @return list<array{title: string, body: string}>
+     */
+    public function sections(): array
+    {
+        $sections = [];
+
+        foreach ((array) $this->extra_sections as $section) {
+            $title = trim((string) ($section['title'] ?? ''));
+            $body = trim((string) ($section['body'] ?? ''));
+
+            // מקטע בלי תוכן אינו מקטע; כותרת ריחפת במסמך נראית כמו תקלה.
+            if ($body !== '') {
+                $sections[] = ['title' => $title, 'body' => $body];
+            }
+        }
+
+        return $sections;
     }
 }
