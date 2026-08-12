@@ -133,6 +133,75 @@ class FailedJobsScreenTest extends TestCase
         $this->assertSame(0, FailedJob::query()->count());
     }
 
+    /*
+    | ----------------------------------------------------------------
+    | מה שאסור להריץ שוב
+    | ----------------------------------------------------------------
+    */
+
+    /**
+     * עבודה שהרצה חוזרת שלה מכפילה פעולה — אינה ניתנת להרצה מכאן.
+     *
+     * הסוכן הוגדר במפורש כ"ניסיון אחד" כי הרצה שנייה מגישה את אותן הצעות שוב.
+     * כפתור "ניסיון חוזר להכול" היה עוקף את ההחלטה הזו בלחיצה אחת.
+     */
+    public function test_a_job_that_would_duplicate_work_is_not_retryable(): void
+    {
+        $agent = $this->failure(job: 'App\\Jobs\\RunAgentInstructionJob');
+
+        $this->assertFalse($agent->retryable());
+        $this->assertStringContainsString('פעם שנייה', (string) $agent->retryNote());
+    }
+
+    /**
+     * ועבודה שהרצה חוזרת שלה לא תעשה כלום — גם לא.
+     *
+     * בדיקת אתר שנכשלה כבר סומנה ככושלת, והעבודה בודקת בכניסה שהיא עדיין
+     * "רצה". הרצה חוזרת הייתה חוזרת מיד, המסך היה מוחק את שורת הכישלון ומודיע
+     * שהכל בסדר — בדיוק השתיקה שהמסך הזה נבנה כדי לסלק.
+     */
+    public function test_a_job_whose_retry_would_do_nothing_is_not_retryable(): void
+    {
+        $audit = $this->failure(job: 'App\\Jobs\\RunSiteAuditJob');
+
+        $this->assertFalse($audit->retryable());
+        $this->assertStringContainsString('בדיקה חוזרת', (string) $audit->retryNote());
+    }
+
+    /** ומה שכן ניתן להרצה — ניתן. */
+    public function test_an_ordinary_job_is_retryable(): void
+    {
+        $this->assertTrue($this->failure()->retryable());
+        $this->assertNull($this->failure()->retryNote());
+    }
+
+    /**
+     * "ניסיון חוזר להכול" מדלג עליהן — ואומר שדילג.
+     *
+     * הסינון חייב לחזור בשרת ולא רק בהסתרת הכפתור: הפעולה הקבוצתית מקבלת את
+     * כל הרשימה.
+     */
+    public function test_retry_all_skips_them_and_says_so(): void
+    {
+        $this->failure(job: 'App\\Jobs\\RunAgentInstructionJob');
+
+        Livewire::test(FailedJobs::class)
+            ->callAction('retryAll');
+
+        // שום דבר לא הוחזר לתור, ולכן שורת הכישלון נשארה — היא עדיין משהו
+        // שצריך להחליט עליו.
+        $this->assertSame(1, FailedJob::query()->count());
+    }
+
+    /** הכפתור עצמו אינו מוצג על שורה כזו. */
+    public function test_the_retry_button_is_hidden_for_them(): void
+    {
+        $agent = $this->failure(job: 'App\\Jobs\\RunAgentInstructionJob');
+
+        Livewire::test(FailedJobs::class)
+            ->assertTableActionHidden('retry', $agent);
+    }
+
     /** התג בתפריט סופר את מה שממתין. */
     public function test_the_badge_counts_what_is_waiting(): void
     {

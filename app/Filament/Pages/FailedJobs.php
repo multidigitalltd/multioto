@@ -82,15 +82,24 @@ class FailedJobs extends Page implements HasTable
                 Tables\Columns\TextColumn::make('error')
                     ->label('מה נשבר')
                     ->wrap()
-                    ->state(fn (FailedJob $record): string => $record->shortError()),
+                    ->state(fn (FailedJob $record): string => $record->shortError())
+                    ->description(fn (FailedJob $record): ?string => $record->retryNote()),
                 // ההבחנה הזו היא כל ההבדל בין "לחץ נסה שוב" ל"אל תטרח": כשל
                 // רשת חולף מצליח בניסיון השני, ושגיאת קוד או נתונים תיכשל שוב
                 // בדיוק באותו מקום.
                 Tables\Columns\TextColumn::make('kind')
                     ->label('סוג')
                     ->badge()
-                    ->state(fn (FailedJob $record): string => $record->looksTransient() ? 'תקלה זמנית' : 'דורש בדיקה')
-                    ->color(fn (FailedJob $record): string => $record->looksTransient() ? 'warning' : 'danger'),
+                    ->state(fn (FailedJob $record): string => match (true) {
+                        ! $record->retryable() => 'לא להריץ מכאן',
+                        $record->looksTransient() => 'תקלה זמנית',
+                        default => 'דורש בדיקה',
+                    })
+                    ->color(fn (FailedJob $record): string => match (true) {
+                        ! $record->retryable() => 'gray',
+                        $record->looksTransient() => 'warning',
+                        default => 'danger',
+                    }),
                 Tables\Columns\TextColumn::make('queue')->label('תור')->toggleable(isToggledHiddenByDefault: true),
             ])
             ->actions([
@@ -98,6 +107,9 @@ class FailedJobs extends Page implements HasTable
                     ->label('נסה שוב')
                     ->icon('heroicon-o-arrow-path')
                     ->color('success')
+                    // מוסתר לגמרי ולא רק מושבת: יש עבודות שהרצה חוזרת שלהן
+                    // מכפילה פעולה שכבר קרתה, והסבר למה נמצא בעמודה "מה נשבר".
+                    ->visible(fn (FailedJob $record): bool => $record->retryable())
                     ->requiresConfirmation()
                     ->modalHeading('להריץ את העבודה שוב?')
                     ->modalDescription('העבודה תרוץ מחדש מההתחלה. אם הסיבה לכישלון עדיין קיימת — היא תיכשל שוב ותחזור לרשימה.')
@@ -176,16 +188,35 @@ class FailedJobs extends Page implements HasTable
             return;
         }
 
-        foreach ($uuids as $uuid) {
-            Artisan::call('queue:retry', ['id' => [$uuid]]);
+        // הסינון חוזר גם כאן ולא רק בכפתור. "ניסיון חוזר להכול" מקבל את כל
+        // הרשימה, ובלי השורה הזו הוא היה עוקף החלטה מפורשת של עבודות שהוגדרו
+        // כ"ניסיון אחד" — ומפעיל את הסוכן פעם שנייה על אותה בקשה, או שולח
+        // דיוור שוב למי שכבר קיבל אותו.
+        $jobs = FailedJob::query()->whereIn('uuid', $uuids)->get();
+        $allowed = $jobs->filter(fn (FailedJob $job): bool => $job->retryable());
+        $skipped = $jobs->count() - $allowed->count();
+
+        foreach ($allowed as $job) {
+            Artisan::call('queue:retry', ['id' => [$job->uuid]]);
         }
 
-        AuditLog::record('updated', 'ניסיון חוזר לעבודות שנכשלו: '.count($uuids));
+        if ($allowed->isNotEmpty()) {
+            AuditLog::record('updated', 'ניסיון חוזר לעבודות שנכשלו: '.$allowed->count());
+        }
 
+        // גם כשלא הוחזר דבר נאמר מה קרה: הודעת הצלחה על אפס עבודות היא בדיוק
+        // סוג הדיווח שגורם למישהו לחשוב שטיפלנו.
         Notification::make()
-            ->title(count($uuids).' עבודות הוחזרו לתור')
-            ->body('הן ירוצו מחדש בדקות הקרובות. מה שייכשל שוב יחזור לרשימה הזו.')
-            ->success()->send();
+            ->title($allowed->isEmpty()
+                ? 'לא הוחזרה לתור אף עבודה'
+                : $allowed->count().' עבודות הוחזרו לתור')
+            ->body(trim(
+                ($allowed->isNotEmpty() ? 'הן ירוצו מחדש בדקות הקרובות. מה שייכשל שוב יחזור לרשימה הזו. ' : '')
+                .($skipped > 0 ? $skipped.' דולגו — הרצה חוזרת שלהן הייתה מכפילה פעולה שכבר קרתה, או שלא הייתה עושה דבר. ההסבר מה לעשות במקום מופיע בשורה שלהן.' : '')
+            ))
+            ->{$allowed->isEmpty() ? 'warning' : 'success'}()
+            ->persistent()
+            ->send();
     }
 
     /** @param  list<string>  $uuids */
