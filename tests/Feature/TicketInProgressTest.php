@@ -183,6 +183,29 @@ class TicketInProgressTest extends TestCase
             ->count());
     }
 
+    /**
+     * בחירה שכולה פניות שכבר בטיפול אינה מדווחת שלקוחות עודכנו.
+     *
+     * זה מצב שכיח דווקא — פניות בטיפול נמצאות בתור ברירת המחדל של הרשימה —
+     * והודעת הצלחה קבועה הייתה מבטיחה עדכון ללקוחות שלא נשלח לאיש.
+     */
+    public function test_a_selection_with_nothing_to_change_says_so(): void
+    {
+        Queue::fake([SendTicketNotificationJob::class]);
+        $this->actingAs(User::factory()->create());
+
+        $already = $this->ticket();
+        $already->update(['status' => TicketStatus::InProgress]);
+
+        Livewire::test(ListTickets::class)
+            ->callTableBulkAction('startWork', [$already]);
+
+        // הודעה אחת בלבד — זו שנשלחה בהכנת הבדיקה, ולא עוד אחת מהפעולה.
+        $this->assertSame(1, Queue::pushed(SendTicketNotificationJob::class)
+            ->filter(fn (SendTicketNotificationJob $job): bool => $job->templateKey === 'ticket.in_progress')
+            ->count());
+    }
+
     /*
     | ----------------------------------------------------------------
     | הודעת הסגירה

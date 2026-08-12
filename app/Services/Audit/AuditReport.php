@@ -86,10 +86,21 @@ class AuditReport
 
         $previous = $comparison->previous;
 
+        // ממצא שהוסתר מהמסמך אינו מופיע גם ברשימת "חדשים": הקורא היה מחפש
+        // אותו בהמשך ולא מוצא, וסתירה בתוך אותו עמוד היא הדבר שהכי מהר מאבד
+        // אמון במסמך שלם.
+        $shown = array_flip(array_map(
+            fn (array $finding): string => (string) ($finding['title'] ?? ''),
+            $audit->visibleFindings(),
+        ));
+
         return [
             'at' => $previous->finished_at?->format('d/m/Y') ?? $previous->created_at->format('d/m/Y'),
             'fixed' => $comparison->fixed(),
-            'appeared' => $comparison->appeared(),
+            'appeared' => array_values(array_filter(
+                $comparison->appeared(),
+                fn (array $finding): bool => isset($shown[(string) ($finding['title'] ?? '')]),
+            )),
         ];
     }
 
@@ -98,9 +109,17 @@ class AuditReport
     {
         $groups = [];
 
+        // מה שנבחר להדפסה, לא כל מה שנמצא. הבדיקה עצמה נשארת שלמה — ההסתרה
+        // היא החלטה על המסמך הזה בלבד, וניתנת להחזרה.
         foreach (self::GROUPS as $severity => $label) {
-            $groups[$label] = $audit->of($severity);
+            $groups[$label] = $audit->visibleOf($severity);
         }
+
+        $visibleProblems = array_merge(
+            $audit->visibleOf('critical'),
+            $audit->visibleOf('warning'),
+            $audit->visibleOf('notice'),
+        );
 
         return [
             'audit' => $audit,
@@ -112,16 +131,21 @@ class AuditReport
             // fixed. Telling a customer their site improved when it did not is
             // the one mistake this document cannot afford.
             'comparison' => $this->since($audit),
-            'problems' => $audit->problems(),
+            'problems' => $visibleProblems,
             // Grouped by area rather than listed flat: "we checked this and it
             // is in order" is worth as much as any fault to somebody deciding
             // whether to hand over their site, and a run of unlabelled ticks
             // reads as filler while the same items under their headings read as
             // a survey that was actually carried out.
-            'passed' => $audit->byArea('ok'),
-            'passedCount' => $audit->count('ok'),
+            'passed' => $audit->visibleByArea('ok'),
+            'passedCount' => count($audit->visibleOf('ok')),
             'areas' => $audit->areas(),
-            'counts' => (array) ($audit->summary['counts'] ?? []),
+            // נספר ממה שמודפס, ולא מהסיכום השמור: כותרת שמכריזה על שלושה
+            // ממצאים מעל רשימה של שניים היא מסמך שסופרים בו ומגלים שהמספר
+            // אינו נכון, וזה מטיל ספק בכל השאר.
+            'counts' => $audit->visibleCounts(),
+            // מקטעי הטקסט החופשי שנוספו לדוח, בסופו.
+            'sections' => $audit->sections(),
             'logo' => Branding::logoDataUri(),
             'company' => (string) config('billing.company.name', 'מולטי דיגיטל'),
             'generatedAt' => now()->format('d/m/Y'),

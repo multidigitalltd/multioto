@@ -46,6 +46,10 @@
         .since .fixed-head { font-weight: bold; color: #166534; margin-top: 6px; }
         .since .new-head { font-weight: bold; color: #991b1b; margin-top: 6px; }
 
+        .extra { margin-top: 20px; }
+        .extra h2 { margin-bottom: 6px; }
+        .extra .body { white-space: pre-wrap; }
+
         .foot { margin-top: 24px; color: #55606e; font-size: 10px; border-top: 1px solid #e2e8f0; padding-top: 10px; }
     </style>
 </head>
@@ -148,6 +152,17 @@
             @endforeach
         @endforeach
     @endif
+
+    {{-- מקטעים שנכתבו ביד לדוח הזה: הצעת מחיר, סיכום שיחה, כל דבר שהבדיקה
+         האוטומטית אינה יודעת לומר. מופיעים אחרי הממצאים ולפני ההערה המסכמת. --}}
+    @foreach ($sections as $section)
+        <div class="extra">
+            @if ($section['title'] !== '')
+                <h2>{{ $section['title'] }}</h2>
+            @endif
+            <div class="body">{{ $section['body'] }}</div>
+        </div>
+    @endforeach
 
     <div class="foot">
         הבדיקה בוצעה מבחוץ, ללא גישה לניהול האתר, בתאריך {{ $checkedAt }} — בדיוק כפי שהאתר נראה למבקר ולמנועי החיפוש.
