@@ -50,7 +50,8 @@ class SlaWatch extends BaseWidget
             ->columns([
                 Tables\Columns\TextColumn::make('id')->label('#')->prefix('#'),
                 Tables\Columns\TextColumn::make('sender')->label('פונה')->weight('bold')
-                    ->getStateUsing(fn (Ticket $r): string => $r->senderName()),
+                    ->getStateUsing(fn (Ticket $r): string => $r->senderName())
+                    ->description(fn (Ticket $r): ?string => $r->senderContext()),
                 Tables\Columns\TextColumn::make('subject')->label('נושא')->limit(40)->wrap(),
                 Tables\Columns\TextColumn::make('priority')->label('עדיפות')->badge(),
                 Tables\Columns\TextColumn::make('sla')->label('SLA תגובה')->badge()

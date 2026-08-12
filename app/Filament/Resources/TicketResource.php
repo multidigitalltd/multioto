@@ -135,10 +135,10 @@ class TicketResource extends Resource
                     ->toggleable(),
                 Tables\Columns\TextColumn::make('customer.name')
                     ->label('מאת')
-                    // Fall back to the captured sender identity (name + email /
-                    // pushname + phone) for an unidentified enquiry.
+                    // מי כתב למעלה, ולאיזה עסק הוא שייך מתחת. עסק אינו כותב
+                    // הודעות — אנשים כותבים, ולכל אחד מהם עונים אחרת.
                     ->state(fn (Ticket $record): string => $record->senderName())
-                    ->description(fn (Ticket $record): ?string => $record->customer_id === null ? 'לא מזוהה' : null)
+                    ->description(fn (Ticket $record): ?string => $record->senderContext())
                     ->searchable(query: fn ($query, string $search) => $query->where(
                         fn ($q) => $q->whereHas('customer', fn ($c) => $c->where('name', 'like', "%{$search}%"))
                             ->orWhere('contact_name', 'like', "%{$search}%")

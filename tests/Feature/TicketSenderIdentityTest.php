@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Enums\TicketChannel;
 use App\Enums\TicketStatus;
 use App\Enums\WebhookSource;
 use App\Jobs\IngestEmailMessageJob;
@@ -39,8 +40,9 @@ class TicketSenderIdentityTest extends TestCase
         $this->assertNull($ticket->customer_id);
         $this->assertSame('ישראל ישראלי', $ticket->contact_name);
         $this->assertSame('israel@nowhere.test', $ticket->contact_handle);
-        // The "from" shown to the team combines both.
-        $this->assertSame('ישראל ישראלי · israel@nowhere.test', $ticket->senderName());
+        // מי כתב מוצג כשם, והכתובת יורדת לשורת ההקשר מתחתיו.
+        $this->assertSame('ישראל ישראלי', $ticket->senderName());
+        $this->assertSame('israel@nowhere.test · לא מזוהה', $ticket->senderContext());
     }
 
     public function test_unidentified_whatsapp_keeps_the_pushname_and_phone(): void
@@ -61,10 +63,18 @@ class TicketSenderIdentityTest extends TestCase
         $this->assertNull($ticket->customer_id);
         $this->assertSame('משה כהן', $ticket->contact_name);
         $this->assertSame('+972521234567', $ticket->contact_handle);
-        $this->assertSame('משה כהן · +972521234567', $ticket->senderName());
+        $this->assertSame('משה כהן', $ticket->senderName());
+        $this->assertSame('+972521234567 · לא מזוהה', $ticket->senderContext());
     }
 
-    public function test_a_matched_customer_wins_over_the_captured_identity(): void
+    /**
+     * לקוח מזוהה — ובכל זאת רואים מי כתב.
+     *
+     * קודם שם השולח נמחק ברגע שהפנייה הותאמה ללקוח, וכל פנייה נראתה כאילו
+     * הגיעה מהעסק. אבל עסק אינו כותב הודעות: כותבים אותן אנשים, ולכל אחד מהם
+     * עונים אחרת. שם העסק לא נעלם — הוא יורד לשורת ההקשר.
+     */
+    public function test_the_person_who_wrote_is_kept_alongside_the_customer(): void
     {
         Customer::factory()->create(['name' => 'לקוח ותיק', 'email' => 'known@corp.test']);
 
@@ -78,8 +88,60 @@ class TicketSenderIdentityTest extends TestCase
 
         $ticket = Ticket::sole();
         $this->assertNotNull($ticket->customer_id);
-        $this->assertNull($ticket->contact_name); // not stored for a matched customer
-        $this->assertSame('לקוח ותיק', $ticket->senderName());
+        $this->assertSame('Someone Else', $ticket->contact_name);
+        $this->assertSame('Someone Else', $ticket->senderName());
+        $this->assertSame('לקוח ותיק · known@corp.test', $ticket->senderContext());
+    }
+
+    /**
+     * וגם בוואטסאפ: השם של מי ששלח, לא של העסק.
+     *
+     * זה המקרה שדווח — חמישה אנשי קשר של אותו לקוח נראו על המסך כאותו פונה
+     * אחד, כי השם היחיד שהוצג היה שם העסק.
+     */
+    public function test_a_whatsapp_contact_is_named_even_when_the_customer_is_known(): void
+    {
+        Customer::factory()->create([
+            'name' => 'מספרת דוד',
+            'phone' => '+972521234567',
+            'whatsapp_jid' => '972521234567@c.us',
+        ]);
+
+        [$event] = WebhookEvent::record(WebhookSource::Waha, 'message', 'w-9', [
+            'event' => 'message',
+            'payload' => [
+                'id' => 'w-9',
+                'from' => '972521234567@c.us',
+                'notifyName' => 'יוסי מהמשרד',
+                'body' => 'האתר לא עולה',
+            ],
+        ]);
+        IngestWhatsappMessageJob::dispatchSync($event->id);
+
+        $ticket = Ticket::sole();
+
+        $this->assertNotNull($ticket->customer_id);
+        $this->assertSame('יוסי מהמשרד', $ticket->senderName());
+        $this->assertStringContainsString('מספרת דוד', (string) $ticket->senderContext());
+        // ולשורה אחת, להתראות ולהודעות לצוות.
+        $this->assertStringContainsString('יוסי מהמשרד', $ticket->senderDescription());
+        $this->assertStringContainsString('מספרת דוד', $ticket->senderDescription());
+    }
+
+    /** בלי שם שולח כלל — שם העסק הוא הזיהוי הטוב ביותר, ואין שורת הקשר מיותרת. */
+    public function test_without_a_sender_name_the_business_name_stands_alone(): void
+    {
+        $customer = Customer::factory()->create(['name' => 'מספרת דוד']);
+        $ticket = Ticket::create([
+            'customer_id' => $customer->id,
+            'channel' => TicketChannel::Manual,
+            'subject' => 'פנייה',
+            'status' => TicketStatus::Open,
+        ]);
+
+        $this->assertSame('מספרת דוד', $ticket->senderName());
+        $this->assertNull($ticket->senderContext());
+        $this->assertSame('מספרת דוד', $ticket->senderDescription());
     }
 
     public function test_whatsapp_after_a_done_ticket_opens_a_new_one(): void
