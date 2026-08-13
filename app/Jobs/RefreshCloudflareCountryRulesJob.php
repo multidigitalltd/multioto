@@ -4,7 +4,7 @@ namespace App\Jobs;
 
 use App\Services\Cloudflare\CloudflareClient;
 use App\Services\Cloudflare\CountryRulesSnapshot;
-use Illuminate\Contracts\Queue\ShouldBeUnique;
+use Illuminate\Contracts\Queue\ShouldBeUniqueUntilProcessing;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 
@@ -16,11 +16,13 @@ use Illuminate\Foundation\Queue\Queueable;
  * operator watched a spinner that eventually gave up. It belongs in a queue —
  * the panel now shows the last reading immediately and this refreshes it.
  *
- * Unique while queued or running, because the refresh button and the hourly
- * schedule can both ask for one: two identical readings would double the calls
- * to Cloudflare and produce the same answer.
+ * Unique only until it STARTS, because the refresh button and the hourly
+ * schedule can both ask for one and two identical readings waiting in the queue
+ * would produce the same answer twice. Once a reading is under way it no longer
+ * blocks a new request — a change made from the panel needs a reading that began
+ * after it, and the one in flight began before.
  */
-class RefreshCloudflareCountryRulesJob implements ShouldBeUnique, ShouldQueue
+class RefreshCloudflareCountryRulesJob implements ShouldBeUniqueUntilProcessing, ShouldQueue
 {
     use Queueable;
 
@@ -45,6 +47,11 @@ class RefreshCloudflareCountryRulesJob implements ShouldBeUnique, ShouldQueue
 
         CountryRulesSnapshot::markRefreshing();
 
+        // Taken BEFORE the reading starts. A change made while this runs bumps
+        // the revision, and the reading is then stored for what it is: the state
+        // as of before that change.
+        $revision = CountryRulesSnapshot::revision();
+
         try {
             $snapshot = $client->countrySnapshot($token);
         } catch (\Throwable $e) {
@@ -55,7 +62,7 @@ class RefreshCloudflareCountryRulesJob implements ShouldBeUnique, ShouldQueue
         }
 
         $snapshot['ok']
-            ? CountryRulesSnapshot::store($snapshot)
+            ? CountryRulesSnapshot::store($snapshot, $revision)
             : CountryRulesSnapshot::storeFailure($snapshot['message']);
 
         CountryRulesSnapshot::finishedRefreshing();

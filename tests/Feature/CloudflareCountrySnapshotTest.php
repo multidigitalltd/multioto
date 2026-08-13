@@ -168,6 +168,78 @@ class CloudflareCountrySnapshotTest extends TestCase
     }
 
     /**
+     * וכישלון שקדם לכל קריאה מוצלחת מוצג גם הוא.
+     *
+     * טוקן שגוי נכשל לפני שיש מה להראות, ואז הכישלון הוא כל מה שיש לומר. אם הוא
+     * נבלע, המסך מודיע "עדיין לא נקרא" — כאילו אף אחד לא ניסה — והסיבה האמיתית
+     * נעלמת.
+     */
+    public function test_a_failure_before_any_reading_is_shown_and_not_swallowed(): void
+    {
+        $this->actingAs($this->admin());
+        $this->fakeAccount(['z1']);
+        $this->cloudflareIsDown = true;
+
+        (new RefreshCloudflareCountryRulesJob)->handle(app(CloudflareClient::class));
+
+        $reading = CountryRulesSnapshot::read();
+
+        $this->assertNotNull($reading);
+        $this->assertNull($reading['data']);
+        $this->assertNotNull($reading['error']);
+
+        Livewire::test(ListSites::class)
+            ->mountAction('countryRule')
+            ->assertSee('הקריאה האחרונה')
+            ->assertDontSee('עדיין לא נקראו מ-Cloudflare');
+    }
+
+    /**
+     * קריאה שהתחילה לפני שינוי לא תוצג כמצב שאחריו.
+     *
+     * הקריאה השעתית עשויה להיות באוויר בדיוק כשמשנים כללים מהמסך. היא קראה את
+     * המצב הישן ותסתיים אחרי השינוי — ובלי הבחנה הייתה נשמרת כתמונה טרייה
+     * ומדויקת של מה שכבר לא נכון.
+     */
+    public function test_a_reading_that_began_before_a_change_is_not_stored_as_the_state_after_it(): void
+    {
+        $this->fakeAccount(['z1']);
+
+        // הקריאה מתחילה...
+        $revision = CountryRulesSnapshot::revision();
+        $snapshot = app(CloudflareClient::class)->countrySnapshot('saved-token');
+
+        // ...ובאמצע מישהו משנה את הכללים מהמסך...
+        CountryRulesSnapshot::markStale();
+
+        // ...ורק אז היא מסתיימת ונשמרת.
+        CountryRulesSnapshot::store($snapshot, $revision);
+
+        $this->assertTrue(CountryRulesSnapshot::read()['stale']);
+    }
+
+    /** וקריאה ישנה שהסתיימה מאוחר לא תדרוס קריאה חדשה ממנה. */
+    public function test_a_late_finishing_older_reading_does_not_displace_a_newer_one(): void
+    {
+        $this->fakeAccount(['z1']);
+        $stale = app(CloudflareClient::class)->countrySnapshot('saved-token');
+        $staleRevision = CountryRulesSnapshot::revision();
+
+        CountryRulesSnapshot::markStale();
+
+        // הקריאה שאחרי השינוי נשמרת ראשונה.
+        CountryRulesSnapshot::store(['ok' => true, 'actions' => ['block' => ['countries' => ['HK'], 'zones' => 1, 'consistent' => true]], 'legacy' => [], 'unreadable' => 0, 'total_zones' => 1]);
+
+        // והישנה מסתיימת אחריה.
+        CountryRulesSnapshot::store($stale, $staleRevision);
+
+        $reading = CountryRulesSnapshot::read();
+
+        $this->assertSame(['HK'], $reading['data']['actions']['block']['countries']);
+        $this->assertFalse($reading['stale']);
+    }
+
+    /**
      * אתר שלא הצלחנו לקרוא נספר ונאמר — ואינו נחשב "אתר בלי כלל".
      *
      * ההבדל הזה הוא הכול: אתר שלא נקרא עלול להחזיק רשימה אחרת, ו"החלפת הרשימה

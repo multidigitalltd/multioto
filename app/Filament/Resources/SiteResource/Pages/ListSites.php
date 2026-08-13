@@ -284,11 +284,13 @@ class ListSites extends ListRecords
      * Cloudflare. It is a reading, and each of the ways it can be out of date is
      * worth more than the list itself.
      *
-     * @param  array{at: Carbon, error: ?string, error_at: ?Carbon, stale: bool}  $reading
+     * @param  array{at: ?Carbon, error: ?string, error_at: ?Carbon, stale: bool}  $reading
      */
     private function readingAgeLine(array $reading, string $muted): string
     {
-        $lines = ['<div style="'.$muted.';margin-top:.5rem">נקרא מ-Cloudflare '.e($reading['at']->diffForHumans()).'.</div>'];
+        $lines = ['<div style="'.$muted.';margin-top:.5rem">'.($reading['at'] === null
+            ? 'מעולם לא הושלמה קריאה מ-Cloudflare.'
+            : 'נקרא מ-Cloudflare '.e($reading['at']->diffForHumans()).'.').'</div>'];
 
         if ($reading['stale']) {
             $lines[] = '<div style="font-size:.85rem;color:rgb(180 83 9)">הכללים שונו מהמסך הזה אחרי הקריאה — מה שמוצג למעלה הוא המצב שלפני השינוי. קריאה מעודכנת רצה ברקע.</div>';
