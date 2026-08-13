@@ -319,6 +319,26 @@ class MarketingEngagementTest extends TestCase
     }
 
     /**
+     * מדידה שעבדה פעם ונשברה — האבחון עדיין מוצג.
+     *
+     * "האם אי פעם נרשמה פתיחה" הוא זיכרון היסטורי, והמספרים על המסך הם חלון.
+     * פתיחה אחת ישנה הייתה משתיקה את האבחון לתמיד — בדיוק כשהוא נחוץ, אחרי
+     * שהמדידה הפסיקה לעבוד.
+     */
+    public function test_the_diagnosis_still_appears_after_tracking_breaks(): void
+    {
+        $this->actingAs(User::factory()->create());
+
+        // פתיחה מלפני שנה: היסטורית קיימת, אך מחוץ לחלון שהמסך מציג.
+        $old = now()->subDays(400);
+        $this->log(Customer::factory()->create(), openedAt: $old, sentAt: $old);
+
+        $this->get(BroadcastStats::getUrl())
+            ->assertOk()
+            ->assertSee('אבחון: איפה זה נעצר');
+    }
+
+    /**
      * לקוח שקורא ולקוח ששותק — עם אירוע פתיחה אחד לפחות במערכת, כדי שהמדידה
      * תהיה קיימת.
      *

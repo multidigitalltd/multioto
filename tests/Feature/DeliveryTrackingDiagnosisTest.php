@@ -50,6 +50,15 @@ class DeliveryTrackingDiagnosisTest extends TestCase
         return Broadcast::create(['subject' => 'עדכון', 'body' => 'שלום', 'channel' => 'email', 'status' => 'sent']);
     }
 
+    private function sentBroadcastMessage(?string $providerId = null): NotificationLog
+    {
+        return NotificationLog::factory()->create([
+            'channel' => 'email',
+            'broadcast_id' => $this->broadcast()->id,
+            'provider_message_id' => $providerId,
+        ]);
+    }
+
     private function event(string $type, array $payload = []): WebhookEvent
     {
         [$event] = WebhookEvent::record(
@@ -99,6 +108,7 @@ class DeliveryTrackingDiagnosisTest extends TestCase
      */
     public function test_events_arriving_without_a_single_open_is_named_as_the_fault(): void
     {
+        $this->sentBroadcastMessage();
         $this->event('Delivery');
         $this->event('Bounce');
 
@@ -116,11 +126,7 @@ class DeliveryTrackingDiagnosisTest extends TestCase
         $this->event('Open', ['MessageID' => 'postmark-uuid-1']);
         $this->event('Open', ['MessageID' => 'postmark-uuid-2']);
 
-        NotificationLog::factory()->create([
-            'channel' => 'email',
-            'broadcast_id' => $this->broadcast()->id,
-            'provider_message_id' => null,
-        ]);
+        $this->sentBroadcastMessage();
 
         $diagnosis = $this->diagnose();
 
@@ -137,11 +143,7 @@ class DeliveryTrackingDiagnosisTest extends TestCase
     {
         $this->event('Open', ['MessageID' => 'postmark-uuid-1']);
 
-        NotificationLog::factory()->create([
-            'channel' => 'email',
-            'broadcast_id' => $this->broadcast()->id,
-            'provider_message_id' => 'postmark-uuid-1',
-        ]);
+        $this->sentBroadcastMessage('postmark-uuid-1');
 
         $diagnosis = $this->diagnose();
 
@@ -152,6 +154,7 @@ class DeliveryTrackingDiagnosisTest extends TestCase
     /** האירועים נספרים לפי סוג, בשמות ש-Postmark משתמש בהם. */
     public function test_events_are_counted_by_the_names_postmark_uses(): void
     {
+        $this->sentBroadcastMessage();
         $this->event('Delivery');
         $this->event('Delivery');
         $this->event('SpamComplaint');
@@ -160,6 +163,24 @@ class DeliveryTrackingDiagnosisTest extends TestCase
 
         $this->assertSame(2, $events['Delivery']);
         $this->assertSame(1, $events['SpamComplaint']);
+    }
+
+    /**
+     * בלי דיוור בתקופה אין ממה שתהיינה פתיחות — ולא מאשימים את ההגדרות.
+     *
+     * ספירת האירועים מכסה את כל המייל שלנו, ומייל תפעולי אינו מבקש מדידה
+     * בכוונה. מסירה של חשבונית אחת הייתה מספיקה כדי לשלוח מישהו לתקן הגדרה
+     * תקינה.
+     */
+    public function test_it_does_not_blame_tracking_when_no_broadcast_was_sent(): void
+    {
+        $this->event('Delivery');
+
+        $diagnosis = $this->diagnose();
+
+        $this->assertSame(0, $diagnosis['sent']);
+        $this->assertStringContainsString('לא נשלח אף דיוור', $diagnosis['verdict']);
+        $this->assertStringNotContainsString('Open Tracking', $diagnosis['fix']);
     }
 
     /*

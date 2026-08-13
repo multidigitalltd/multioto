@@ -48,12 +48,13 @@ class BroadcastStats extends Page
 
         $byHour = $engagement->opensByHour();
         $byWeekday = $engagement->opensByWeekday();
+        $totals = $engagement->totals();
 
         return [
             'days' => $engagement->windowDays(),
             'hasData' => $engagement->hasOpenData(),
             'rejectedAt' => WebhookRejections::lastAt('email.delivery'),
-            'totals' => $engagement->totals(),
+            'totals' => $totals,
             'byHour' => $byHour,
             'peakHour' => max(1, max($byHour)),
             'byWeekday' => $byWeekday,
@@ -61,10 +62,14 @@ class BroadcastStats extends Page
             'best' => $engagement->bestWindow(),
             'skipping' => $engagement->skipsNonOpeners(),
             'nonOpeners' => $this->nonOpeners($engagement),
-            // Only when there is nothing to show. With numbers on screen the
-            // measurement is demonstrably working, and a diagnosis of a
-            // working thing is noise.
-            'diagnosis' => $engagement->hasOpenData() ? null : app(DeliveryTrackingDiagnosis::class)->run(),
+            // Shown whenever the figures ON THIS SCREEN are empty — not merely
+            // when an open was never recorded in the system's history. Tracking
+            // that worked once and broke afterwards leaves the numbers blank
+            // while the history still holds an old open, and gating on that
+            // history would silence the diagnosis for good exactly when it is
+            // needed. A diagnosis of a working thing is noise, so any open
+            // inside the window suppresses it.
+            'diagnosis' => $totals['opened'] > 0 ? null : app(DeliveryTrackingDiagnosis::class)->run(),
         ];
     }
 

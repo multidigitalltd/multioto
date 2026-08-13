@@ -99,6 +99,21 @@ class DeliveryTrackingDiagnosis
             ];
         }
 
+        // Events counted here cover ALL our mail, and transactional mail never
+        // asks to be measured. Without a broadcast in the window there is
+        // nothing that could have produced an open, and blaming the provider's
+        // settings would send somebody to fix a thing that is not broken.
+        if ($report['sent'] === 0) {
+            return [
+                'verdict' => 'לא נשלח אף דיוור בתקופה, ולכן אין ממה שתהיינה פתיחות. '
+                    .($report['total'] > 0
+                        ? 'אירועים מ-Postmark כן מגיעים ('.$report['total'].'), כלומר הוובהוק עצמו עובד.'
+                        : ''),
+                'fix' => 'שלחו דיוור, ובדקו כאן שוב אחרי שהוא יצא. מיילים תפעוליים (חשבוניות, תשובות לפניות) '
+                    .'אינם נמדדים בכוונה ואינם מופיעים במספרים כאן.',
+            ];
+        }
+
         if (($report['events']['Open'] ?? 0) === 0) {
             return [
                 'verdict' => 'אירועים מ-Postmark כן מגיעים ('.$report['total'].' בתקופה), אבל אין ביניהם אף פתיחה. '
