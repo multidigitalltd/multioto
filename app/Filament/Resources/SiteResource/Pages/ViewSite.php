@@ -11,12 +11,15 @@ use App\Jobs\CheckSiteLayoutJob;
 use App\Jobs\CheckSiteReputationJob;
 use App\Jobs\DetectSiteTypeJob;
 use App\Jobs\InvestigateSiteJob;
+use App\Jobs\RunSiteOperationJob;
 use App\Jobs\ScanSiteComplianceJob;
 use App\Jobs\ScanSiteVulnerabilitiesJob;
 use App\Jobs\SendDomainRenewalReminderJob;
+use App\Models\AuditLog;
 use App\Models\MonitorCheck;
 use App\Models\SystemLog;
 use App\Services\Agent\SiteConnector;
+use App\Services\Agent\SiteOperations;
 use App\Services\Agent\SiteToolCatalog;
 use App\Services\Automation\ApprovalGate;
 use App\Services\Cloudflare\CloudflareClient;
@@ -410,6 +413,7 @@ class ViewSite extends ViewRecord
                             ->body('פתחו "קודי חיבור לתוסף", העתיקו את המפתח החדש והדביקו אותו בתוסף באתר.')
                             ->success()->send();
                     }),
+                ...$this->siteOperationActions(),
                 Actions\Action::make('downloadPlugin')
                     ->label('הורד תוסף (גרסה אחרונה)')
                     ->icon('heroicon-o-arrow-down-tray')
@@ -595,6 +599,46 @@ class ViewSite extends ViewRecord
                     ->{$result['ok'] ? 'success' : 'danger'}()
                     ->send();
             });
+    }
+
+    /**
+     * The operations a manager runs on the site itself (page version).
+     *
+     * One button per entry in `SiteOperations`, so adding the next operation the
+     * team wants to run from the panel is one entry there — not a new button,
+     * a new job and a new screen.
+     *
+     * @return array<int, Actions\Action>
+     */
+    protected function siteOperationActions(): array
+    {
+        return collect(SiteOperations::all())
+            ->map(fn (array $operation, string $key): Actions\Action => Actions\Action::make('siteOperation_'.$key)
+                ->label($operation['label'])
+                ->icon($operation['icon'])
+                ->color($operation['color'])
+                ->visible(fn (): bool => auth()->user()?->isAdmin() ?? false)
+                // Disabled rather than hidden, with the reason: a button that
+                // disappears reads as a feature the panel does not have.
+                ->disabled(fn (): bool => SiteActions::operationBlockedBy($this->record, $key) !== null)
+                ->tooltip(fn (): ?string => SiteActions::operationBlockedBy($this->record, $key))
+                ->requiresConfirmation()
+                ->modalHeading($operation['heading'].' — '.$this->record->domain)
+                // What it does and what it costs, both before the click.
+                ->modalDescription($operation['what']."\n\n".$operation['cost'])
+                ->modalSubmitActionLabel($operation['submit'])
+                ->action(function () use ($key, $operation): void {
+                    RunSiteOperationJob::dispatch($this->record->id, $key, auth()->id());
+
+                    AuditLog::record('updated', $operation['label'].' — '.$this->record->domain);
+
+                    Notification::make()
+                        ->title($operation['label'].' — יצאה לביצוע')
+                        ->body('הפעולה רצה ברקע מול האתר. התוצאה — הצלחה או כישלון — תגיע בפעמון ההתראות ותירשם ביומן השינויים של האתר.')
+                        ->success()->send();
+                }))
+            ->values()
+            ->all();
     }
 
     /** Re-classify the site (store/brochure) from its installed plugins now. */
