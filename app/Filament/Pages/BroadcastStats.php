@@ -4,6 +4,7 @@ namespace App\Filament\Pages;
 
 use App\Filament\Concerns\RespectsModuleAccess;
 use App\Models\Customer;
+use App\Services\Support\DeliveryTrackingDiagnosis;
 use App\Services\Support\MarketingEngagement;
 use App\Support\WebhookRejections;
 use Filament\Pages\Page;
@@ -60,6 +61,10 @@ class BroadcastStats extends Page
             'best' => $engagement->bestWindow(),
             'skipping' => $engagement->skipsNonOpeners(),
             'nonOpeners' => $this->nonOpeners($engagement),
+            // Only when there is nothing to show. With numbers on screen the
+            // measurement is demonstrably working, and a diagnosis of a
+            // working thing is noise.
+            'diagnosis' => $engagement->hasOpenData() ? null : app(DeliveryTrackingDiagnosis::class)->run(),
         ];
     }
 
