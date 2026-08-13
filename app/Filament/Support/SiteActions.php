@@ -3,8 +3,11 @@
 namespace App\Filament\Support;
 
 use App\Jobs\InvestigateSiteJob;
+use App\Jobs\RunSiteOperationJob;
+use App\Models\AuditLog;
 use App\Models\Site;
 use App\Services\Agent\SiteConnector;
+use App\Services\Agent\SiteOperations;
 use App\Services\Agent\SiteToolCatalog;
 use App\Services\Ai\ClaudeClient;
 use App\Services\Automation\ApprovalGate;
@@ -369,6 +372,70 @@ class SiteActions
             ->visible(fn (): bool => self::isAdmin())
             ->url(fn (): string => route('agent.plugin.latest'))
             ->openUrlInNewTab();
+    }
+
+    /**
+     * One button per operation in the registry — the things a manager decides to
+     * do to a managed site and the plugin carries out.
+     *
+     * Built from `SiteOperations` rather than written out one by one, so the next
+     * operation is an entry in that list and nothing else. Each button says what
+     * it does AND what it costs before it can be pressed; a site that cannot run
+     * it stays visible and disabled with the reason, because a button that
+     * quietly vanishes reads as a feature that does not exist.
+     *
+     * @return array<int, Action>
+     */
+    public static function operations(): array
+    {
+        return collect(SiteOperations::all())
+            ->map(fn (array $operation, string $key): Action => Action::make('siteOperation_'.$key)
+                ->label($operation['label'])
+                ->icon($operation['icon'])
+                ->color($operation['color'])
+                ->visible(fn (): bool => self::isAdmin())
+                ->disabled(fn (Site $record): bool => self::operationBlockedBy($record, $key) !== null)
+                ->tooltip(fn (Site $record): ?string => self::operationBlockedBy($record, $key))
+                ->requiresConfirmation()
+                ->modalHeading(fn (Site $record): string => $operation['heading'].' — '.$record->domain)
+                ->modalDescription($operation['what']."\n\n".$operation['cost'])
+                ->modalSubmitActionLabel($operation['submit'])
+                ->action(function (Site $record) use ($key, $operation): void {
+                    RunSiteOperationJob::dispatch($record->id, $key, auth()->id());
+
+                    AuditLog::record('updated', $operation['label'].' — '.$record->domain);
+
+                    Notification::make()
+                        ->title($operation['label'].' — יצאה לביצוע')
+                        ->body('הפעולה רצה ברקע מול האתר. התוצאה — הצלחה או כישלון — תגיע בפעמון ההתראות ותירשם ביומן השינויים של האתר.')
+                        ->success()->send();
+                }))
+            ->values()
+            ->all();
+    }
+
+    /**
+     * Why this operation cannot run on this site right now, or null when it can.
+     *
+     * The same three conditions the job enforces before touching anything. Said
+     * here too so the answer arrives before the click rather than as a failure
+     * notification a minute later.
+     */
+    public static function operationBlockedBy(Site $site, string $key): ?string
+    {
+        if (! config('agent.actions_enabled')) {
+            return 'מנגנון הפעולות על אתרים כבוי — יש להפעיל אותו בהגדרות הסוכן.';
+        }
+
+        if (! $site->mcp_enabled || blank($site->mcp_endpoint)) {
+            return 'חיבור ה-AI לאתר כבוי או לא מוגדר.';
+        }
+
+        if (! SiteOperations::supportedOn($site, $key)) {
+            return 'התוסף באתר ישן מכדי לבצע את הפעולה — עדכנו אותו ואז "בדוק חיבור AI".';
+        }
+
+        return null;
     }
 
     /** Rotate the site's connection token — revokes the previous one. */

@@ -4,12 +4,14 @@ namespace App\Filament\Resources\SiteResource\Pages;
 
 use App\Filament\Resources\SiteResource;
 use App\Filament\Support\SiteActions;
+use App\Jobs\RefreshCloudflareCountryRulesJob;
 use App\Services\Cloudflare\CloudflareClient;
+use App\Services\Cloudflare\CountryRulesSnapshot;
 use Filament\Actions;
 use Filament\Forms;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ListRecords;
-use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\HtmlString;
 
 class ListSites extends ListRecords
@@ -17,32 +19,22 @@ class ListSites extends ListRecords
     protected static string $resource = SiteResource::class;
 
     /**
-     * Cache key for the account-wide country-rules overview (N zones = N API
-     * calls). Bound to the token's hash: replacing the saved token — possibly
-     * for a DIFFERENT Cloudflare account — must never serve the previous
-     * account's zones from cache.
-     */
-    private function countryOverviewCacheKey(string $token, string $kind = 'legacy'): string
-    {
-        return 'cloudflare.country_rules_overview.'.$kind.'.'.sha1($token);
-    }
-
-    /**
-     * The combined country rule as it stands, cached: reading it costs one API
-     * call per zone. Uses the saved token only, never one typed into the modal.
+     * The last reading of the country rules — from the cache, never from
+     * Cloudflare.
+     *
+     * Reading them live costs two API calls per zone, and doing that while the
+     * modal opens is what made the window take forever and then fail to load at
+     * all: a few dozen zones outlast whatever the web server allows a request to
+     * take, and a request that dies caches nothing, so every attempt paid the
+     * full price again. A queued job does the reading now.
      *
      * @return array<string, mixed>
      */
     private function countryOverview(): array
     {
-        $token = trim((string) config('billing.cloudflare.api_token'));
+        $reading = CountryRulesSnapshot::read();
 
-        if ($token === '') {
-            return ['ok' => false, 'countries' => [], 'mode' => null, 'zones' => 0, 'total_zones' => 0];
-        }
-
-        return Cache::remember($this->countryOverviewCacheKey($token, 'list'), now()->addMinutes(5),
-            fn (): array => app(CloudflareClient::class)->countryListOverview($token));
+        return $reading['data'] ?? ['ok' => false, 'actions' => [], 'legacy' => [], 'unreadable' => 0, 'total_zones' => 0];
     }
 
     protected function getHeaderActions(): array
@@ -80,8 +72,19 @@ class ListSites extends ListRecords
                 'countries' => [], 'remove_legacy' => false])
             ->form([
                 Forms\Components\Placeholder::make('current_rules')
+                    // Required for the hint action below: Filament addresses a
+                    // form component's actions by this key.
+                    ->key('current_rules')
                     ->label('מה קיים היום')
-                    ->content(fn (): HtmlString => $this->currentCountryRules()),
+                    ->content(fn (): HtmlString => $this->currentCountryRules())
+                    // The reading runs in the background, so it cannot be waited
+                    // for here; the button starts it and says so.
+                    ->hintAction(
+                        Forms\Components\Actions\Action::make('refreshCountryRules')
+                            ->label('קריאה מחדש מ-Cloudflare')
+                            ->icon('heroicon-o-arrow-path')
+                            ->action(fn () => $this->refreshCountryRules())
+                    ),
                 Forms\Components\Select::make('mode')
                     ->label('פעולה')->required()->native(false)->default('managed_challenge')->live()
                     ->options([
@@ -182,10 +185,14 @@ class ListSites extends ListRecords
                     $message .= ' '.$cleanup['message'];
                 }
 
-                // Both overviews must reflect the change the next time they open.
-                $saved = trim((string) config('billing.cloudflare.api_token'));
-                Cache::forget($this->countryOverviewCacheKey($saved));
-                Cache::forget($this->countryOverviewCacheKey($saved, 'list'));
+                // What is stored now describes the state BEFORE this change.
+                // Marked rather than deleted — the list stays on screen, labelled
+                // as predating the change — and re-read in the background. Marked
+                // even when the run failed: a run that stopped halfway changed
+                // some zones and not others, which is exactly when the stored
+                // picture is worth least.
+                CountryRulesSnapshot::markStale();
+                RefreshCloudflareCountryRulesJob::dispatch();
 
                 Notification::make()
                     ->title('כללי מדינה ב-Cloudflare')
@@ -193,6 +200,23 @@ class ListSites extends ListRecords
                     ->{$ok ? 'success' : 'danger'}()
                     ->send();
             });
+    }
+
+    /**
+     * Ask for a fresh reading of the country rules.
+     *
+     * Queued, and the answer is not waited for — that wait is the whole reason
+     * this window used to die. Whoever pressed the button is told where the
+     * answer will appear instead of being left in front of an unchanged screen.
+     */
+    public function refreshCountryRules(): void
+    {
+        RefreshCloudflareCountryRulesJob::dispatch();
+
+        Notification::make()
+            ->title('הקריאה מ-Cloudflare יצאה לדרך')
+            ->body('היא רצה ברקע ולוקחת כמה שניות — קריאה לכל אתר בחשבון. סגרו את החלון ופתחו אותו שוב כדי לראות את התוצאה.')
+            ->info()->send();
     }
 
     /**
@@ -219,22 +243,70 @@ class ListSites extends ListRecords
     /**
      * "What exists today" — the combined rule first, then any leftover per-country
      * rules from the old mechanism, so the operator both edits the real list and
-     * sees what is still taking up the per-zone rule budget. Reads the saved token
-     * only (never a typed one) and caches for a few minutes: each overview costs
-     * one API call per zone.
+     * sees what is still taking up the per-zone rule budget.
+     *
+     * Entirely from the stored reading; nothing here talks to Cloudflare, so the
+     * window opens at once. What the reading cannot vouch for is stated instead
+     * of left blank — a box showing nothing must never be read as "no rules".
      */
     private function currentCountryRules(): HtmlString
     {
-        $token = trim((string) config('billing.cloudflare.api_token'));
         $muted = 'font-size:.85rem;color:rgb(107 114 128)';
 
-        if ($token === '') {
+        if (CountryRulesSnapshot::token() === '') {
             return new HtmlString('<span style="'.$muted.'">אין טוקן Cloudflare שמור — שמרו טוקן בהגדרות ← אינטגרציות כדי לראות כאן את הכללים הקיימים.</span>');
         }
 
-        $sections = [$this->combinedRuleLine($muted), $this->legacyRulesLine($token, $muted)];
+        $reading = CountryRulesSnapshot::read();
+
+        // Never read, or read and failed before anything was stored. Said
+        // plainly: an empty box here must not be mistaken for "no rules".
+        if ($reading === null) {
+            return new HtmlString('<div style="'.$muted.'">'.(CountryRulesSnapshot::isRefreshing()
+                ? 'הכללים נקראים כרגע מ-Cloudflare ברקע. סגרו את החלון ופתחו אותו שוב בעוד כמה שניות.'
+                : 'הכללים הקיימים עדיין לא נקראו מ-Cloudflare. לחצו "קריאה מחדש מ-Cloudflare" למעלה — הקריאה רצה ברקע ולוקחת כמה שניות.')
+                .'</div>');
+        }
+
+        $sections = [
+            $this->combinedRuleLine($muted),
+            $this->legacyRulesLine($muted),
+            $this->readingAgeLine($reading, $muted),
+        ];
 
         return new HtmlString(implode('', array_filter($sections)));
+    }
+
+    /**
+     * When this picture was read, and every reason it might no longer be true.
+     *
+     * A list on screen with no date beside it reads as the current state of
+     * Cloudflare. It is a reading, and each of the ways it can be out of date is
+     * worth more than the list itself.
+     *
+     * @param  array{at: ?Carbon, error: ?string, error_at: ?Carbon, stale: bool}  $reading
+     */
+    private function readingAgeLine(array $reading, string $muted): string
+    {
+        $lines = ['<div style="'.$muted.';margin-top:.5rem">'.($reading['at'] === null
+            ? 'מעולם לא הושלמה קריאה מ-Cloudflare.'
+            : 'נקרא מ-Cloudflare '.e($reading['at']->diffForHumans()).'.').'</div>'];
+
+        if ($reading['stale']) {
+            $lines[] = '<div style="font-size:.85rem;color:rgb(180 83 9)">הכללים שונו מהמסך הזה אחרי הקריאה — מה שמוצג למעלה הוא המצב שלפני השינוי. קריאה מעודכנת רצה ברקע.</div>';
+        }
+
+        if ($reading['error'] !== null) {
+            $lines[] = '<div style="font-size:.85rem;color:rgb(180 83 9)">הקריאה האחרונה ('
+                .e($reading['error_at']?->diffForHumans() ?? '').') נכשלה: '.e($reading['error'])
+                .' — ייתכן שהמצב בפועל שונה ממה שמוצג.</div>';
+        }
+
+        if (CountryRulesSnapshot::isRefreshing()) {
+            $lines[] = '<div style="'.$muted.'">קריאה חדשה רצה כרגע ברקע.</div>';
+        }
+
+        return implode('', $lines);
     }
 
     /** Every action's list side by side — they coexist, so they are shown together. */
@@ -246,11 +318,19 @@ class ListSites extends ListRecords
             return '<div style="'.$muted.'">'.e($overview['message'] ?? 'לא ניתן לקרוא את הכללים הקיימים.').'</div>';
         }
 
-        if (($overview['actions'] ?? []) === []) {
-            return '<div style="'.$muted.'">אין כרגע כללי מדינות ('.$overview['total_zones'].' זונים בחשבון).</div>';
+        $lines = [];
+
+        // Zones the reading could not cover. Counted and said, because a zone
+        // nobody managed to read looks exactly like a zone with no rule.
+        if (($overview['unreadable'] ?? 0) > 0) {
+            $lines[] = '<div style="font-size:.875rem;color:rgb(180 83 9)">'.$overview['unreadable']
+                .' מתוך '.$overview['total_zones'].' אתרים לא נקראו — התמונה כאן חלקית, ולא ניתן להציע ממנה רשימה להחלפה.</div>';
         }
 
-        $lines = [];
+        if (($overview['actions'] ?? []) === []) {
+            return implode('', $lines)
+                .'<div style="'.$muted.'">אין כרגע כללי מדינות ('.$overview['total_zones'].' זונים בחשבון).</div>';
+        }
 
         foreach ($overview['actions'] as $mode => $entry) {
             $label = e(CloudflareClient::COUNTRY_MODE_LABELS[$mode] ?? $mode);
@@ -274,20 +354,24 @@ class ListSites extends ListRecords
         return implode('', $lines);
     }
 
-    /** Leftovers from the rule-per-country era, if any are still in place. */
-    private function legacyRulesLine(string $token, string $muted): string
+    /**
+     * Leftovers from the rule-per-country era, if any are still in place. Out of
+     * the same reading as the combined rules — they come from the same responses,
+     * and asking Cloudflare twice for them was half the cost of opening this
+     * window.
+     */
+    private function legacyRulesLine(string $muted): string
     {
-        $overview = Cache::remember($this->countryOverviewCacheKey($token), now()->addMinutes(5),
-            fn (): array => app(CloudflareClient::class)->countryRulesOverview($token));
+        $legacy = $this->countryOverview()['legacy'] ?? [];
 
-        if (! $overview['ok'] || $overview['countries'] === []) {
+        if ($legacy === []) {
             return '';
         }
 
-        $countries = collect($overview['countries'])->pluck('country')->implode(', ');
+        $countries = collect($legacy)->pluck('country')->implode(', ');
 
         return '<div style="'.$muted.';margin-top:.5rem">כללים ישנים (כלל נפרד לכל מדינה) עדיין קיימים על '
-            .count($overview['countries']).' מדינות: '.e($countries)
+            .count($legacy).' מדינות: '.e($countries)
             .'. אפשר לנקות אותם למטה כדי לפנות מקום במכסת הכללים.</div>';
     }
 }

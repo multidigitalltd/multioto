@@ -3,6 +3,7 @@
 namespace App\Services\Cloudflare;
 
 use Illuminate\Http\Client\PendingRequest;
+use Illuminate\Http\Client\Pool;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 
@@ -512,22 +513,43 @@ class CloudflareClient
      *
      * @return list<array<string, mixed>>
      */
-    private function countryAccessRules(string $token, string $zoneId, int $page = 1): array
+    private function countryAccessRules(string $token, string $zoneId): array
     {
-        $body = $this->request($token)->get(self::BASE."/zones/{$zoneId}/firewall/access_rules/rules", [
-            'configuration.target' => 'country',
-            'per_page' => 100,
-            'page' => $page,
-        ])->throw()->json();
+        $rules = [];
+        $page = 1;
 
-        $rules = (array) data_get($body, 'result', []);
-        $totalPages = (int) data_get($body, 'result_info.total_pages', 1);
-
-        if ($page < $totalPages) {
-            $rules = array_merge($rules, $this->countryAccessRules($token, $zoneId, $page + 1));
-        }
+        do {
+            $body = $this->countryAccessRulesPage($token, $zoneId, $page);
+            $rules = array_merge($rules, $body['rules']);
+            $totalPages = $body['total_pages'];
+            $page++;
+        } while ($totalPages > 0 && $page <= $totalPages);
 
         return array_values($rules);
+    }
+
+    /**
+     * One page of them. Separate from the loop above because the account-wide
+     * snapshot fetches every zone's first page in parallel and only comes back
+     * here for the rare zone that has more than one.
+     *
+     * @return array{rules: list<array<string, mixed>>, total_pages: int}
+     */
+    private function countryAccessRulesPage(string $token, string $zoneId, int $page): array
+    {
+        $body = $this->request($token)->get(self::BASE."/zones/{$zoneId}/firewall/access_rules/rules",
+            $this->countryAccessRulesQuery($page))->throw()->json();
+
+        return [
+            'rules' => array_values((array) data_get($body, 'result', [])),
+            'total_pages' => (int) data_get($body, 'result_info.total_pages', 1),
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    private function countryAccessRulesQuery(int $page): array
+    {
+        return ['configuration.target' => 'country', 'per_page' => 100, 'page' => $page];
     }
 
     /**
@@ -765,8 +787,37 @@ class CloudflareClient
      */
     public function countryListOverview(string $token): array
     {
+        $snapshot = $this->countrySnapshot($token);
+
+        unset($snapshot['legacy']);
+
+        return $snapshot;
+    }
+
+    /**
+     * The whole country picture in ONE pass over the account.
+     *
+     * Reading it costs a request per zone for the WAF ruleset and a request per
+     * zone for the country access rules, and both views the panel shows — the
+     * combined rules and the leftover per-country ones — come out of exactly
+     * those responses. Asking for them separately meant reading every zone twice
+     * for the same bytes.
+     *
+     * The per-zone reads go out in parallel (bounded, so a large account does not
+     * arrive at Cloudflare as a burst): sequentially they were the whole cost,
+     * one round trip after another, and forty zones took longer than any request
+     * is allowed to live.
+     *
+     * A zone that could not be read is counted and reported rather than dropped.
+     * Dropping it would silently turn "we did not look" into "the rule is not
+     * there", which is the one conclusion that must never be drawn here.
+     *
+     * @return array{ok: bool, message: string, total_zones: int, unreadable: int, actions: array<string, array{countries: list<string>, zones: int, consistent: bool}>, legacy: list<array{country: string, modes: array<string, int>}>}
+     */
+    public function countrySnapshot(string $token): array
+    {
         $token = trim($token);
-        $empty = ['total_zones' => 0, 'actions' => []];
+        $empty = ['total_zones' => 0, 'unreadable' => 0, 'actions' => [], 'legacy' => []];
 
         if ($token === '') {
             return $this->fail('חסר טוקן API של Cloudflare.') + $empty;
@@ -774,56 +825,163 @@ class CloudflareClient
 
         try {
             $zones = $this->listZones($token);
-            $seen = [];
-
-            foreach ($zones as $zone) {
-                foreach ($this->customRuleset($token, (string) $zone['id'])['rules'] ?? [] as $rule) {
-                    $action = (string) ($rule['action'] ?? '');
-
-                    if (! in_array((string) ($rule['description'] ?? ''), [
-                        $this->ruleDescription($action), self::COUNTRY_RULE_DESCRIPTION,
-                    ], true)) {
-                        continue;
-                    }
-
-                    $countries = $this->countriesIn((string) ($rule['expression'] ?? ''));
-                    sort($countries);
-
-                    $seen[$action]['zones'] = ($seen[$action]['zones'] ?? 0) + 1;
-                    // Keyed by content, so zones that agree collapse to one
-                    // variant and zones that disagree do not.
-                    $seen[$action]['variants'][implode(',', $countries)] = $countries;
-                }
-            }
-
-            // The allow list lives in access rules, not in the ruleset, but it is
-            // the same setting to the operator and belongs in the same picture.
-            foreach ($zones as $zone) {
-                $allowed = [];
-
-                foreach ($this->countryAccessRules($token, (string) $zone['id']) as $rule) {
-                    if ((string) data_get($rule, 'mode') === 'whitelist'
-                        && str_contains((string) data_get($rule, 'notes'), 'Multi Digital')) {
-                        $allowed[] = strtoupper((string) data_get($rule, 'configuration.value'));
-                    }
-                }
-
-                if ($allowed !== []) {
-                    sort($allowed);
-                    $seen['whitelist']['zones'] = ($seen['whitelist']['zones'] ?? 0) + 1;
-                    $seen['whitelist']['variants'][implode(',', $allowed)] = $allowed;
-                }
-            }
         } catch (\Throwable) {
             return $this->fail('הפנייה ל-Cloudflare נכשלה — בדקו את הטוקן והחיבור לרשת.') + $empty;
+        }
+
+        $requests = [];
+
+        foreach ($zones as $zone) {
+            $id = $zone['id'];
+            $requests['rules:'.$id] = [self::BASE."/zones/{$id}/rulesets/phases/".self::CUSTOM_PHASE.'/entrypoint', []];
+            $requests['access:'.$id] = [self::BASE."/zones/{$id}/firewall/access_rules/rules", $this->countryAccessRulesQuery(1)];
+        }
+
+        $responses = $this->getConcurrently($token, $requests);
+
+        $customRules = [];
+        $accessRules = [];
+        $unreadable = 0;
+
+        foreach ($zones as $zone) {
+            $id = $zone['id'];
+
+            $rules = $this->rulesetRulesFrom($responses['rules:'.$id] ?? null);
+            $access = $this->accessRulesFrom($token, $id, $responses['access:'.$id] ?? null);
+
+            if ($rules === null || $access === null) {
+                $unreadable++;
+
+                continue;
+            }
+
+            $customRules[$id] = $rules;
+            $accessRules[$id] = $access;
+        }
+
+        return $this->summariseCountryRules($zones, $customRules, $accessRules, $unreadable);
+    }
+
+    /**
+     * A zone's custom rules out of its pooled response, or null when the zone
+     * could not be read. A 404 is not a failure — it is a zone that has never had
+     * a custom rule, and its answer is "none".
+     *
+     * @return list<array<string, mixed>>|null
+     */
+    private function rulesetRulesFrom(mixed $response): ?array
+    {
+        if (! $response instanceof Response) {
+            return null;
+        }
+
+        if ($response->status() === 404) {
+            return [];
+        }
+
+        return $response->successful()
+            ? array_values((array) data_get($response->json(), 'result.rules', []))
+            : null;
+    }
+
+    /**
+     * A zone's country access rules out of its pooled response. The pool asks for
+     * the first page only; a zone holding more than a hundred country rules is
+     * rare enough that the rest are read here, in order.
+     *
+     * @return list<array<string, mixed>>|null
+     */
+    private function accessRulesFrom(string $token, string $zoneId, mixed $response): ?array
+    {
+        if (! $response instanceof Response || ! $response->successful()) {
+            return null;
+        }
+
+        $rules = array_values((array) data_get($response->json(), 'result', []));
+        $totalPages = (int) data_get($response->json(), 'result_info.total_pages', 1);
+
+        try {
+            for ($page = 2; $page <= $totalPages; $page++) {
+                $rules = array_merge($rules, $this->countryAccessRulesPage($token, $zoneId, $page)['rules']);
+            }
+        } catch (\Throwable) {
+            return null;
+        }
+
+        return $rules;
+    }
+
+    /**
+     * The account-wide picture out of what every zone holds.
+     *
+     * @param  list<array{id: string, name: string}>  $zones
+     * @param  array<string, list<array<string, mixed>>>  $customRules
+     * @param  array<string, list<array<string, mixed>>>  $accessRules
+     * @return array{ok: bool, message: string, total_zones: int, unreadable: int, actions: array<string, array{countries: list<string>, zones: int, consistent: bool}>, legacy: list<array{country: string, modes: array<string, int>}>}
+     */
+    private function summariseCountryRules(array $zones, array $customRules, array $accessRules, int $unreadable): array
+    {
+        $seen = [];
+        $byCountry = [];
+
+        foreach ($customRules as $rules) {
+            foreach ($rules as $rule) {
+                $action = (string) ($rule['action'] ?? '');
+
+                if (! in_array((string) ($rule['description'] ?? ''), [
+                    $this->ruleDescription($action), self::COUNTRY_RULE_DESCRIPTION,
+                ], true)) {
+                    continue;
+                }
+
+                $countries = $this->countriesIn((string) ($rule['expression'] ?? ''));
+                sort($countries);
+
+                $seen[$action]['zones'] = ($seen[$action]['zones'] ?? 0) + 1;
+                // Keyed by content, so zones that agree collapse to one variant
+                // and zones that disagree do not.
+                $seen[$action]['variants'][implode(',', $countries)] = $countries;
+            }
+        }
+
+        foreach ($accessRules as $rules) {
+            $allowed = [];
+
+            foreach ($rules as $rule) {
+                $country = strtoupper((string) data_get($rule, 'configuration.value'));
+
+                if ($country === '') {
+                    continue;
+                }
+
+                $mode = (string) data_get($rule, 'mode');
+                $byCountry[$country][$mode] = ($byCountry[$country][$mode] ?? 0) + 1;
+
+                // The allow list lives in access rules, not in the ruleset, but
+                // it is the same setting to the operator and belongs in the same
+                // picture.
+                if ($mode === 'whitelist' && str_contains((string) data_get($rule, 'notes'), 'Multi Digital')) {
+                    $allowed[] = $country;
+                }
+            }
+
+            if ($allowed !== []) {
+                sort($allowed);
+                $seen['whitelist']['zones'] = ($seen['whitelist']['zones'] ?? 0) + 1;
+                $seen['whitelist']['variants'][implode(',', $allowed)] = $allowed;
+            }
         }
 
         $actions = [];
 
         foreach ($seen as $action => $entry) {
             // A zone MISSING the rule is a disagreement too — that is what a
-            // partial removal leaves behind.
-            $consistent = count($entry['variants']) === 1 && $entry['zones'] === count($zones);
+            // partial removal leaves behind. So is a zone we could not read: its
+            // list may differ, and a re-save built on the others would overwrite
+            // it sight unseen.
+            $consistent = count($entry['variants']) === 1
+                && $entry['zones'] === count($customRules)
+                && $unreadable === 0;
 
             $actions[$action] = [
                 'countries' => $consistent ? reset($entry['variants']) : [],
@@ -833,13 +991,47 @@ class CloudflareClient
         }
 
         ksort($actions);
+        ksort($byCountry);
 
         return [
             'ok' => true,
             'message' => count($actions).' כללי מדינות פעילים',
             'total_zones' => count($zones),
+            'unreadable' => $unreadable,
             'actions' => $actions,
+            'legacy' => collect($byCountry)
+                ->map(fn (array $modes, string $country): array => ['country' => $country, 'modes' => $modes])
+                ->values()->all(),
         ];
+    }
+
+    /**
+     * Read many URLs at once.
+     *
+     * Bounded on purpose: an account with dozens of zones must not arrive at
+     * Cloudflare as one burst, and the API's rate limit is shared with every
+     * other thing we do there. A request that never completed comes back as the
+     * failure itself rather than throwing, so one bad zone does not lose the
+     * responses that did arrive.
+     *
+     * @param  array<string, array{0: string, 1: array<string, mixed>}>  $requests
+     * @return array<string, Response|\Throwable>
+     */
+    private function getConcurrently(string $token, array $requests, int $concurrency = 8): array
+    {
+        if ($requests === []) {
+            return [];
+        }
+
+        return Http::pool(function (Pool $pool) use ($requests, $token): array {
+            $calls = [];
+
+            foreach ($requests as $key => [$url, $query]) {
+                $calls[] = $pool->as($key)->withToken($token)->acceptJson()->timeout(15)->get($url, $query);
+            }
+
+            return $calls;
+        }, concurrency: $concurrency);
     }
 
     /**
@@ -872,52 +1064,13 @@ class CloudflareClient
      */
     public function countryRulesOverview(string $token): array
     {
-        $token = trim($token);
-
-        if ($token === '') {
-            return $this->fail('חסר טוקן API של Cloudflare.') + ['total_zones' => 0, 'countries' => []];
-        }
-
-        try {
-            $zones = $this->listZones($token);
-            $byCountry = [];
-
-            foreach ($zones as $zone) {
-                $page = 1;
-
-                do {
-                    $body = $this->request($token)->get(self::BASE."/zones/{$zone['id']}/firewall/access_rules/rules", [
-                        'configuration.target' => 'country',
-                        'per_page' => 100,
-                        'page' => $page,
-                    ])->throw()->json();
-
-                    foreach ((array) data_get($body, 'result', []) as $rule) {
-                        $country = strtoupper((string) data_get($rule, 'configuration.value'));
-
-                        if ($country !== '') {
-                            $mode = (string) data_get($rule, 'mode');
-                            $byCountry[$country][$mode] = ($byCountry[$country][$mode] ?? 0) + 1;
-                        }
-                    }
-
-                    $totalPages = (int) data_get($body, 'result_info.total_pages', 1);
-                    $page++;
-                } while ($totalPages > 0 && $page <= $totalPages);
-            }
-        } catch (\Throwable) {
-            return $this->fail('הפנייה ל-Cloudflare נכשלה — בדקו את הטוקן והחיבור לרשת.') + ['total_zones' => 0, 'countries' => []];
-        }
-
-        ksort($byCountry);
+        $snapshot = $this->countrySnapshot($token);
 
         return [
-            'ok' => true,
-            'message' => count($byCountry).' כללי מדינה קיימים',
-            'total_zones' => count($zones),
-            'countries' => collect($byCountry)
-                ->map(fn (array $modes, string $country): array => ['country' => $country, 'modes' => $modes])
-                ->values()->all(),
+            'ok' => $snapshot['ok'],
+            'message' => $snapshot['ok'] ? count($snapshot['legacy']).' כללי מדינה קיימים' : $snapshot['message'],
+            'total_zones' => $snapshot['total_zones'],
+            'countries' => $snapshot['legacy'],
         ];
     }
 

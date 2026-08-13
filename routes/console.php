@@ -20,6 +20,7 @@ use App\Jobs\FollowUpPendingTicketsJob;
 use App\Jobs\HeartbeatJob;
 use App\Jobs\MonitorSiteJob;
 use App\Jobs\ReconcileChargeJob;
+use App\Jobs\RefreshCloudflareCountryRulesJob;
 use App\Jobs\RequestMissingCardJob;
 use App\Jobs\RunBackupJob;
 use App\Jobs\ScanSiteComplianceJob;
@@ -299,6 +300,14 @@ Schedule::call(function () {
         ->pluck('id')
         ->each(fn (int $id) => CheckSiteContentJob::dispatch($id));
 })->dailyAt('08:05')->name('monitoring:defacement-watch')->onOneServer();
+
+// Read the Cloudflare country rules into the panel's snapshot. Two API calls per
+// zone is far too much for the request that opens the window — it used to spin
+// and then die — so the reading happens here, and the window shows the last one
+// with its age. Hourly: the rules change by hand, rarely, and every change from
+// the panel refreshes this itself.
+Schedule::job(new RefreshCloudflareCountryRulesJob)
+    ->hourly()->name('cloudflare:country-rules-snapshot')->onOneServer();
 
 // Proactive reminders: a once-a-day internal digest (renewals due, cards
 // expiring, open debt) so the owner can act before anything slips.

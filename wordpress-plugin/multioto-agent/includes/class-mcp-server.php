@@ -151,6 +151,7 @@ class Multioto_Agent_Mcp_Server
             ['name' => 'wp_option_get', 'description' => 'קריאת הגדרה בטוחה מרשימה מוגדרת מראש.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['name' => ['type' => 'string']], 'required' => ['name']]],
             ['name' => 'wp_error_log_tail', 'description' => 'שורות אחרונות מיומן השגיאות (אם מופעל).', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['lines' => ['type' => 'integer']]]],
             ['name' => 'wp_cache_flush', 'description' => 'ניקוי מטמון אובייקטים ו-OPcache.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => (object) []]],
+            ['name' => 'wp_salts_rotate', 'description' => 'החלפת שמונת מפתחות ההצפנה (Secret Keys / Salts) ב-wp-config.php במפתחות אקראיים חדשים. התוצאה: כל המשתמשים באתר מנותקים ונדרשים להתחבר מחדש, וכל עוגיית התחברות ישנה מפסיקה להיות תקפה. אינו נוגע בסיסמאות, בתוכן או במסד הנתונים. מפתחות המוגדרים מחוץ ל-wp-config.php אינם מוחלפים והפעולה נכשלת במפורש.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => (object) []]],
             ['name' => 'wp_plugin_update', 'description' => 'עדכון תוסף לגרסה האחרונה לפי slug.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['plugin' => ['type' => 'string']], 'required' => ['plugin']]],
             ['name' => 'wp_core_update', 'description' => 'עדכון ליבת וורדפרס (WordPress core) לגרסה היציבה האחרונה. מחזיר את הגרסה לפני ואחרי. אם כבר מעודכן — לא מבצע דבר. לפני העדכון נשמרת נקודת שחזור (הגרסה הקודמת) לצורך Rollback.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => (object) []]],
             ['name' => 'wp_core_rollback', 'description' => 'שחזור ליבת וורדפרס לגרסה שנשמרה בנקודת השחזור לפני העדכון האחרון (או לגרסה שצוינה ב-version). מתקין מחדש את קבצי הגרסה מ-wordpress.org. שים לב: שדרוג מסד הנתונים אינו הפיך — שחזור בטוח בעיקר לעדכוני תחזוקה (minor/patch).', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['version' => ['type' => 'string']]]],
@@ -196,6 +197,7 @@ class Multioto_Agent_Mcp_Server
             'wp_option_get' => 'optionGet',
             'wp_error_log_tail' => 'errorLogTail',
             'wp_cache_flush' => 'cacheFlush',
+            'wp_salts_rotate' => 'saltsRotate',
             'wp_plugin_update' => 'pluginUpdate',
             'wp_core_update' => 'coreUpdate',
             'wp_core_rollback' => 'coreRollback',
@@ -217,7 +219,7 @@ class Multioto_Agent_Mcp_Server
         ];
 
         // Tools whose signature takes no arguments, or a second flag.
-        $noArgs = ['wp_health', 'wp_plugin_list', 'wp_theme_list', 'wp_admin_list', 'wp_cache_flush', 'wp_core_update', 'wp_menu_list', 'wc_shipping_zones_list'];
+        $noArgs = ['wp_health', 'wp_plugin_list', 'wp_theme_list', 'wp_admin_list', 'wp_cache_flush', 'wp_salts_rotate', 'wp_core_update', 'wp_menu_list', 'wc_shipping_zones_list'];
 
         if ($name === 'wp_plugin_activate') {
             $text = $this->setPluginState($args, true);
@@ -355,6 +357,241 @@ class Multioto_Agent_Mcp_Server
         }
 
         return 'המטמון נוקה.';
+    }
+
+    /**
+     * The eight constants WordPress signs cookies and nonces with. Replacing
+     * them is the standard way to end every session on a site at once — the
+     * cleanup step after a compromise, a shared password, or a departing
+     * employee.
+     */
+    private const SALT_CONSTANTS = [
+        'AUTH_KEY', 'SECURE_AUTH_KEY', 'LOGGED_IN_KEY', 'NONCE_KEY',
+        'AUTH_SALT', 'SECURE_AUTH_SALT', 'LOGGED_IN_SALT', 'NONCE_SALT',
+    ];
+
+    /**
+     * Give wp-config.php a fresh set of secret keys.
+     *
+     * Everyone logged into the site is logged out, this one included — that is
+     * the point of the operation, not a side effect.
+     *
+     * Two things are refused rather than done badly:
+     *
+     *  · **Keys defined outside wp-config.php.** Some hosts keep them in an
+     *    included file or in the environment. Appending new defines there would
+     *    change nothing (PHP keeps the first definition) while reporting
+     *    success — the site would look rotated and every old cookie would still
+     *    work. Detected by asking whether the constant is already defined at
+     *    runtime while absent from the file, and refused outright.
+     *
+     *  · **A write that might land half-done.** The new file is built in full,
+     *    written beside the original and moved over it in one step. Nothing
+     *    truncates wp-config.php, so a failure at any point leaves the site
+     *    exactly as it was — the one file that must never be half-written.
+     */
+    private function saltsRotate(): string
+    {
+        $file = $this->configFile();
+
+        if ($file === null) {
+            throw new Multioto_Agent_Rpc_Error(-32000, 'לא נמצא הקובץ wp-config.php.');
+        }
+
+        if (! is_writable($file)) {
+            throw new Multioto_Agent_Rpc_Error(-32000, 'הקובץ wp-config.php אינו ניתן לכתיבה — יש לתקן הרשאות בשרת ולנסות שוב.');
+        }
+
+        $contents = file_get_contents($file);
+
+        if ($contents === false || $contents === '') {
+            throw new Multioto_Agent_Rpc_Error(-32000, 'קריאת wp-config.php נכשלה.');
+        }
+
+        $replaced = [];
+        $appended = [];
+        $elsewhere = [];
+
+        foreach (self::SALT_CONSTANTS as $name) {
+            // The line as WordPress writes it, tolerant of spacing, quote style
+            // and define() vs const.
+            $pattern = "/^([ \t]*(?:define\\s*\\(\\s*(['\"])".$name."\\2\\s*,\\s*)(['\"]))(?:\\\\.|[^'\"\\\\])*(\\3\\s*\\)\\s*;.*)$/m";
+
+            if (preg_match($pattern, $contents) === 1) {
+                $replaced[] = $name;
+
+                continue;
+            }
+
+            // Present at runtime but not in this file: it comes from somewhere
+            // we are not editing, and writing here would be theatre.
+            if (defined($name)) {
+                $elsewhere[] = $name;
+
+                continue;
+            }
+
+            $appended[] = $name;
+        }
+
+        if ($elsewhere !== []) {
+            throw new Multioto_Agent_Rpc_Error(-32000,
+                'המפתחות '.implode(', ', $elsewhere).' מוגדרים מחוץ ל-wp-config.php (קובץ נכלל או משתני סביבה), '
+                .'ולכן החלפה מכאן לא הייתה משנה דבר. יש להחליף אותם במקום שבו הם מוגדרים.');
+        }
+
+        $updated = $contents;
+
+        foreach ($replaced as $name) {
+            $pattern = "/^([ \t]*(?:define\\s*\\(\\s*(['\"])".$name."\\2\\s*,\\s*)(['\"]))(?:\\\\.|[^'\"\\\\])*(\\3\\s*\\)\\s*;.*)$/m";
+            $updated = preg_replace_callback($pattern, function ($match) {
+                return $match[1].$this->newSalt().$match[4];
+            }, $updated, 1);
+
+            if ($updated === null) {
+                throw new Multioto_Agent_Rpc_Error(-32000, 'עריכת wp-config.php נכשלה — הקובץ לא שונה.');
+            }
+        }
+
+        if ($appended !== []) {
+            $lines = '';
+
+            foreach ($appended as $name) {
+                $lines .= "define('".$name."', '".$this->newSalt()."');\n";
+            }
+
+            $updated = $this->appendDefines($updated, $lines);
+        }
+
+        $this->writeAtomically($file, $updated);
+
+        return wp_json_encode([
+            'rotated' => $replaced,
+            'added' => $appended,
+            'note' => 'כל המשתמשים באתר נותקו וצריכים להתחבר מחדש. טפסים שהיו פתוחים בדפדפן יבקשו רענון.',
+        ], JSON_UNESCAPED_UNICODE);
+    }
+
+    /**
+     * A fresh secret. 64 characters from an alphabet with no quote and no
+     * backslash in it, so the value can never break out of the single-quoted
+     * string it is written into — the file being edited is the one that must
+     * never fail to parse.
+     */
+    private function newSalt(): string
+    {
+        $alphabet = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()-_=+[]{}<>~,.?/|:;';
+        $last = strlen($alphabet) - 1;
+        $salt = '';
+
+        for ($i = 0; $i < 64; $i++) {
+            $salt .= $alphabet[random_int(0, $last)];
+        }
+
+        return $salt;
+    }
+
+    /**
+     * Put new defines where WordPress itself expects them: above the "stop
+     * editing" marker, which is followed by wp-settings.php. A define written
+     * after that line runs too late to sign anything.
+     */
+    private function appendDefines(string $contents, string $lines): string
+    {
+        $marker = "/^[ \t]*\\/\\*.*stop editing.*\\*\\/[ \t]*$/mi";
+
+        if (preg_match($marker, $contents, $match, PREG_OFFSET_CAPTURE) === 1) {
+            $at = $match[0][1];
+
+            return substr($contents, 0, $at).$lines.substr($contents, $at);
+        }
+
+        // No marker (a hand-written config): before the require of
+        // wp-settings.php, which is the real deadline.
+        $require = "/^[ \t]*require(?:_once)?[ \t]*[\\(\\s].*wp-settings\\.php.*$/mi";
+
+        if (preg_match($require, $contents, $match, PREG_OFFSET_CAPTURE) === 1) {
+            $at = $match[0][1];
+
+            return substr($contents, 0, $at).$lines.substr($contents, $at);
+        }
+
+        throw new Multioto_Agent_Rpc_Error(-32000,
+            'מבנה wp-config.php אינו מוכר ולא ניתן להוסיף בו מפתחות בבטחה. יש להחליף אותם ידנית.');
+    }
+
+    /**
+     * Replace a file's contents in one step.
+     *
+     * Written beside the original and moved over it, so the original is never
+     * truncated: a failure at any point leaves the site running on the file it
+     * already had. The temporary file is created private (0600) and given the
+     * original's permissions and owner before the move, so the site does not
+     * come back with a wp-config.php the web server cannot read.
+     */
+    private function writeAtomically(string $file, string $contents): void
+    {
+        $directory = dirname($file);
+        $temporary = tempnam($directory, '.multioto-cfg');
+
+        if ($temporary === false) {
+            throw new Multioto_Agent_Rpc_Error(-32000, 'לא ניתן ליצור קובץ זמני לצד wp-config.php — בדקו הרשאות כתיבה בתיקייה.');
+        }
+
+        $bytes = file_put_contents($temporary, $contents);
+
+        if ($bytes === false || $bytes !== strlen($contents)) {
+            @unlink($temporary);
+
+            throw new Multioto_Agent_Rpc_Error(-32000, 'כתיבת הקובץ הזמני נכשלה — wp-config.php לא שונה.');
+        }
+
+        $permissions = fileperms($file);
+
+        if ($permissions !== false) {
+            @chmod($temporary, $permissions & 0777);
+        }
+
+        $owner = @fileowner($file);
+        $group = @filegroup($file);
+
+        if ($owner !== false) {
+            @chown($temporary, $owner);
+        }
+        if ($group !== false) {
+            @chgrp($temporary, $group);
+        }
+
+        if (! @rename($temporary, $file)) {
+            @unlink($temporary);
+
+            throw new Multioto_Agent_Rpc_Error(-32000, 'החלפת wp-config.php נכשלה — הקובץ המקורי נשאר כפי שהיה.');
+        }
+
+        if (function_exists('opcache_invalidate')) {
+            @opcache_invalidate($file, true);
+        }
+    }
+
+    /**
+     * Where wp-config.php lives — beside WordPress, or one directory up when
+     * the install is nested. Mirrors WordPress's own lookup in wp-load.php,
+     * including its refusal to climb into a directory that holds another
+     * WordPress install.
+     */
+    private function configFile(): ?string
+    {
+        if (file_exists(ABSPATH.'wp-config.php')) {
+            return ABSPATH.'wp-config.php';
+        }
+
+        $parent = dirname(rtrim(ABSPATH, '/\\'));
+
+        if (@file_exists($parent.'/wp-config.php') && ! @file_exists($parent.'/wp-settings.php')) {
+            return $parent.'/wp-config.php';
+        }
+
+        return null;
     }
 
     private function pluginUpdate(array $args): string
