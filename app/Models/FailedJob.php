@@ -52,6 +52,7 @@ class FailedJob extends Model
         'CheckSiteDnsJob' => ['בדיקת DNS', 'שינוי ב-DNS לא היה מזוהה בהרצה הזו.'],
         'CheckDomainExpiryJob' => ['בדיקת תוקף דומיין', 'תוקף הדומיין לא עודכן בהרצה הזו.'],
         'CheckSitePluginChangesJob' => ['מעקב תוספים ומנהלים', 'שינוי באתר לא היה מזוהה בהרצה הזו.'],
+        'RefreshCloudflareCountryRulesJob' => ['קריאת כללי המדינות מ-Cloudflare', 'מסך כללי המדינות מציג קריאה ישנה יותר. הכללים עצמם לא הושפעו.'],
     ];
 
     /** שם המחלקה הקצר של העבודה. */

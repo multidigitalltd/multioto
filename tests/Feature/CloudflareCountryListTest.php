@@ -6,6 +6,7 @@ use App\Enums\UserRole;
 use App\Filament\Resources\SiteResource\Pages\ListSites;
 use App\Models\User;
 use App\Services\Cloudflare\CloudflareClient;
+use App\Services\Cloudflare\CountryRulesSnapshot;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
@@ -567,6 +568,8 @@ class CloudflareCountryListTest extends TestCase
             'expression' => '(ip.src.country in {"MX" "HK"})',
             'action' => 'managed_challenge',
         ]]);
+
+        CountryRulesSnapshot::store($this->client()->countrySnapshot('saved-token'));
 
         $component = Livewire::test(ListSites::class)->mountAction('countryRule');
 
