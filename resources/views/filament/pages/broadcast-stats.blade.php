@@ -27,6 +27,57 @@
         </div>
     @endunless
 
+    {{-- איפה בדיוק נשברה השרשרת. "אין פתיחות" הוא אותו מסך בשביל חמש תקלות
+         שונות, ולכל אחת מהן תיקון אחר — כאן כתוב איזו מהן זו.
+
+         הכפתור "Check" של Postmark אינו מבחין ביניהן: הוא שולח אירוע לדוגמה
+         ומסתפק בכל תשובת 200. גם אנחנו מחזירים 200 לאירוע שלא התאים לשום
+         הודעה, כי סירוב היה גורם לספק לנסות שוב אירוע שאין מה לעשות איתו. --}}
+    @if ($diagnosis)
+        <div class="rounded-xl border border-gray-200 bg-white p-4 text-sm dark:border-white/10 dark:bg-gray-900">
+            <p class="font-semibold text-gray-900 dark:text-gray-100">אבחון: איפה זה נעצר</p>
+
+            <p class="mt-2 text-gray-800 dark:text-gray-200">{{ $diagnosis['verdict'] }}</p>
+            <p class="mt-1 text-gray-600 dark:text-gray-400">{{ $diagnosis['fix'] }}</p>
+
+            <dl class="mt-3 grid grid-cols-2 gap-x-6 gap-y-1 text-xs text-gray-600 dark:text-gray-400 sm:grid-cols-3">
+                <div>
+                    <dt class="inline">אירועים שהתקבלו מ-Postmark:</dt>
+                    <dd class="inline font-medium text-gray-900 dark:text-gray-100">{{ $diagnosis['total'] }}</dd>
+                </div>
+                <div>
+                    <dt class="inline">מתוכם פתיחות:</dt>
+                    <dd class="inline font-medium text-gray-900 dark:text-gray-100">{{ $diagnosis['events']['Open'] ?? 0 }}</dd>
+                </div>
+                <div>
+                    <dt class="inline">פתיחות ששויכו להודעה שלנו:</dt>
+                    <dd class="inline font-medium text-gray-900 dark:text-gray-100">{{ $diagnosis['openMatched'] }}</dd>
+                </div>
+                <div>
+                    <dt class="inline">הודעות דיוור שנשלחו:</dt>
+                    <dd class="inline font-medium text-gray-900 dark:text-gray-100">{{ $diagnosis['sent'] }}</dd>
+                </div>
+                <div>
+                    <dt class="inline">מתוכן ניתנות לשיוך:</dt>
+                    <dd class="inline font-medium text-gray-900 dark:text-gray-100">{{ $diagnosis['tracked'] }}</dd>
+                </div>
+                <div>
+                    <dt class="inline">אירוע אחרון:</dt>
+                    <dd class="inline font-medium text-gray-900 dark:text-gray-100">
+                        {{ $diagnosis['lastEventAt']?->format('d/m/Y H:i') ?? 'מעולם' }}
+                    </dd>
+                </div>
+            </dl>
+
+            @if ($diagnosis['events'] !== [])
+                <p class="mt-2 text-xs text-gray-500 dark:text-gray-500">
+                    לפי סוג ({{ $diagnosis['since']->format('d/m/Y') }} ואילך):
+                    @foreach ($diagnosis['events'] as $type => $count){{ $type }} — {{ $count }}@if (! $loop->last) · @endif @endforeach
+                </p>
+            @endif
+            </div>
+        @endif
+
     {{-- מספרי התקופה. --}}
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(11rem,1fr));gap:.75rem">
         @foreach ([

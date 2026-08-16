@@ -10,12 +10,18 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 
 /**
- * Proactive weekly maintenance for one connected site: list the plugins with
- * a pending update and PROPOSE the batch through the approval gate. With a
- * standing approval ("אשר תמיד" on תחזוקה שבועית) the batch runs immediately
- * and the owner just gets the report; otherwise it waits like any proposal.
- * The runner health-checks the homepage after every single update and stops
- * on the first sign of breakage.
+ * Proactive weekly maintenance for one connected site: list the plugins with a
+ * pending update and PROPOSE the batch through the approval gate.
+ *
+ * Nothing is updated until the owner approves that specific batch. This kind of
+ * action cannot be granted a standing "always approve": the list of updates is
+ * different every week and unknown at the moment such a grant would be given,
+ * so approving it once would be approving next month's updates too — on
+ * customers' live sites. The proposal names every plugin, and approving it runs
+ * the whole batch in one click.
+ *
+ * The runner health-checks the homepage after every single update and stops on
+ * the first sign of breakage.
  */
 class WeeklyMaintenanceJob implements ShouldQueue
 {

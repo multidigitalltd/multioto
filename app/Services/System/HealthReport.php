@@ -4,6 +4,7 @@ namespace App\Services\System;
 
 use App\Models\Backup;
 use App\Models\HealthHeartbeat;
+use App\Models\License;
 use App\Providers\SettingsServiceProvider;
 use App\Services\Backup\BackupRunner;
 use Illuminate\Support\Carbon;
@@ -93,6 +94,7 @@ class HealthReport
             $this->diskSpace(),
             $this->backup(),
             $this->drill(),
+            $this->licenseSecret(),
         ];
 
         return [
@@ -669,6 +671,38 @@ class HealthReport
             $last->lt(now()->subDays($days)) ? self::DEGRADED : self::OK,
             'נבדק לאחרונה '.$last->diffForHumans().'.',
         );
+    }
+
+    /**
+     * Are licence keys hashed with a secret of their own?
+     *
+     * Without LICENSE_SERVER_SECRET they fall back to APP_KEY, which works —
+     * but the day somebody sets the dedicated secret, every key ever issued
+     * stops matching and every customer's plugin reports "unknown key" at once.
+     * There is no error to read afterwards and no way back, so the warning has
+     * to arrive BEFORE any licence exists.
+     *
+     * Silent while nothing has been sold: there is nothing to invalidate yet.
+     */
+    private function licenseSecret(): array
+    {
+        $label = 'סוד שרת הרישיונות';
+
+        if (filled(env('LICENSE_SERVER_SECRET'))) {
+            return $this->check('license_secret', $label, self::OK, 'מוגדר.');
+        }
+
+        $issued = rescue(fn (): int => License::query()->count(), 0, report: false);
+
+        if ($issued === 0) {
+            return $this->check('license_secret', $label, self::OK,
+                'לא הוגדר, אך טרם הונפקו רישיונות. הגדירו LICENSE_SERVER_SECRET לפני הרישיון הראשון.');
+        }
+
+        return $this->check('license_secret', $label, self::WARN,
+            "לא הוגדר LICENSE_SERVER_SECRET — {$issued} המפתחות שהונפקו מגובבים עם APP_KEY. "
+                .'הגדרתו עכשיו תבטל את כולם בבת אחת אצל כל הלקוחות, וגם החלפת APP_KEY תעשה זאת. '
+                .'לפני שינוי כזה יש להנפיק מחדש את כל המפתחות.');
     }
 
     private function check(string $key, string $label, string $status, string $detail): array

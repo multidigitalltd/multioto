@@ -56,7 +56,13 @@ class ApprovalGate
      * when the kind is not eligible for "always approve":
      * - ticket replies — unique customer-facing content, reviewed every time;
      * - destructive site tools (tier 3) — never pre-approved;
-     * - money-moving system operations — never pre-approved.
+     * - money-moving system operations — never pre-approved;
+     * - weekly maintenance — plugin updates on customers' live sites. The set
+     *   of updates is different every week and is not known when the grant is
+     *   given, so "always approve" here would be approving next month's update
+     *   too. The owner asked to see each batch and check the sites afterwards,
+     *   and a weekly proposal is a small price for that; the batch itself is
+     *   ready to run in one click once approved.
      */
     public static function standingKeyFor(string $type, array $payload): ?string
     {
@@ -68,7 +74,7 @@ class ApprovalGate
                     ? "system_action:{$op}"
                     : null,
             'monitoring_report' => 'monitoring_report',
-            'maintenance_update' => 'maintenance_update',
+            // 'maintenance_update' is deliberately absent — see below.
             default => null,
         };
     }
@@ -186,7 +192,13 @@ class ApprovalGate
         $key = self::standingKeyFor($action->type, (array) $action->payload);
 
         if ($key === null) {
-            return "לפעולה מסוג זה אי אפשר לקבוע אישור קבוע (תוכן ללקוח / פעולה הרסנית / כספים). אפשר לאשר חד-פעמית: אשר {$action->id}";
+            // The reason matters: "you cannot" without "because" reads as a
+            // limitation to work around rather than a decision that was made.
+            $why = $action->type === 'maintenance_update'
+                ? 'עדכוני תוספים באתרים חיים נבדקים בכל פעם — רשימת העדכונים שונה בכל שבוע, ואישור קבוע היה מאשר גם את זו של החודש הבא'
+                : 'תוכן ללקוח / פעולה הרסנית / כספים';
+
+            return "לפעולה מסוג זה אי אפשר לקבוע אישור קבוע ({$why}). אפשר לאשר חד-פעמית: אשר {$action->id}";
         }
 
         // Claim (and run) the concrete action FIRST — if another request

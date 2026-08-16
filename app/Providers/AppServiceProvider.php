@@ -15,11 +15,13 @@ use App\Models\Task;
 use App\Models\Ticket;
 use App\Models\User;
 use App\Observers\AuditObserver;
+use App\Observers\ChargeLicenseObserver;
 use App\Observers\TaskObserver;
 use App\Observers\TicketObserver;
 use App\Services\Hosting\FlyWpHostingClient;
 use App\Services\Hosting\HostingClient;
 use App\Services\Hosting\LogHostingClient;
+use App\Services\Mail\PostmarkTracking;
 use Filament\Forms\Components\DatePicker;
 use Filament\Forms\Components\DateTimePicker;
 use Illuminate\Auth\Events\Login;
@@ -27,8 +29,12 @@ use Illuminate\Auth\Events\Logout;
 use Illuminate\Mail\Events\MessageSent;
 use Illuminate\Queue\Events\JobProcessed;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\URL;
 use Illuminate\Support\ServiceProvider;
+use Symfony\Component\Mailer\Bridge\Postmark\Transport\PostmarkTransportFactory;
+use Symfony\Component\Mailer\Transport\Dsn;
+use Symfony\Component\Mailer\Transport\TransportInterface;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -68,6 +74,12 @@ class AppServiceProvider extends ServiceProvider
         DateTimePicker::configureUsing(fn (DateTimePicker $picker) => $picker->native(false)->weekStartsOnSunday()->locale('he'));
         DatePicker::configureUsing(fn (DatePicker $picker) => $picker->native(false)->weekStartsOnSunday()->locale('he'));
 
+        // A successful charge moves the expiry of every licence it renews. On
+        // the model rather than in the charging job: a charge reaches
+        // "succeeded" from the scheduler, from a manual charge and from
+        // reconciliation, and this is the only place all three meet.
+        Charge::observe(ChargeLicenseObserver::class);
+
         // Lifecycle notifications (e.g. "your ticket was resolved").
         Ticket::observe(TicketObserver::class);
         Task::observe(TaskObserver::class);
@@ -106,6 +118,21 @@ class AppServiceProvider extends ServiceProvider
         // Pair our notification-log row with the provider's message id, so the
         // delivery/open/bounce webhook can find the row it belongs to.
         Event::listen(MessageSent::class, RecordProviderMessageId::class);
+
+        // Same mailer Laravel builds, with the Postmark request passed through a
+        // client that turns our X-PM-TrackOpens header into the API's TrackOpens
+        // field. Without it the header is copied into the message as plain text
+        // and the request to measure opens quietly does nothing — see
+        // PostmarkTracking.
+        Mail::extend('postmark', fn (array $config): TransportInterface => (new PostmarkTransportFactory(
+            client: PostmarkTracking::client($config['client'] ?? []),
+        ))->create(
+            new Dsn('postmark+api', 'default',
+                $config['token'] ?? $config['key'] ?? config('services.postmark.token') ?? '',
+                null, null,
+                filled($config['message_stream_id'] ?? null) ? ['message_stream' => $config['message_stream_id']] : [],
+            ),
+        ));
 
         // Proof that the worker doing the REAL work is still finishing jobs.
         // Its own heartbeat rides that same queue, so a long batch leaves the

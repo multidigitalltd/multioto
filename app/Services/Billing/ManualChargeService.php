@@ -53,7 +53,7 @@ class ManualChargeService
     /**
      * @param  array<int, array{name: string, qty: int, unit_price_agorot: int}>  $lines
      */
-    public function createHostedPage(Customer $customer, int $totalAgorot, string $description, ?string $notes = null, array $lines = [], ?bool $vatExempt = null): array
+    public function createHostedPage(Customer $customer, int $totalAgorot, string $description, ?string $notes = null, array $lines = [], ?bool $vatExempt = null, bool $withToken = false, ?string $successUrl = null, ?string $failureUrl = null): array
     {
         // A payment page is payable the moment it exists, and the row that says
         // which charge it belongs to is what a restore would replace — leaving
@@ -74,9 +74,14 @@ class ManualChargeService
                 $customer->name,
                 $customer->email,
                 $customer->phone,
-                route('billing.update-card.done', ['result' => 'success']),
-                route('billing.update-card.done', ['result' => 'failed']),
+                // Where the payer lands afterwards. The default is the team's
+                // generic notice; a self-service purchase sends them back to
+                // their own order instead, which is the only page that can tell
+                // them what they now own.
+                $successUrl ?? route('billing.update-card.done', ['result' => 'success']),
+                $failureUrl ?? route('billing.update-card.done', ['result' => 'failed']),
                 CardcomWebhook::url(),
+                $withToken,
             );
         } catch (\Throwable $e) {
             $charge->update(['status' => ChargeStatus::Failed, 'failure_reason' => 'יצירת עמוד תשלום נכשלה']);
@@ -105,6 +110,83 @@ class ManualChargeService
             'url' => $lowProfile['url'],           // the raw Cardcom page (team "open now")
             'pay_url' => PaymentLink::for($charge->id), // the cancelable link we hand the customer
         ];
+    }
+
+    /**
+     * Try a failed one-off charge again.
+     *
+     * A card declines for reasons that pass: no funds this morning, a bank's
+     * fraud rule, an expired card the customer has since replaced. Until now the
+     * only way past that was to retype the whole charge from memory, which is
+     * how a failed charge quietly turns into money nobody collected.
+     *
+     * A NEW charge row is created rather than the old one revived. The failed
+     * attempt is what Cardcom answered and stays exactly as it is — the rule
+     * that every response is recorded is worth more than a tidy list — and the
+     * new row carries the next attempt number, so the history reads as what it
+     * was: a second try.
+     *
+     * How it is collected depends on what the customer has now, not on how it
+     * was tried before: a card saved since the failure is used, and without one
+     * a fresh payment page is created.
+     *
+     * @return array{charge: Charge, method: string, pay_url: ?string}
+     */
+    public function retry(Charge $failed): array
+    {
+        if ($failed->status !== ChargeStatus::Failed) {
+            throw new \RuntimeException('אפשר לחייב שוב רק חיוב שנכשל.');
+        }
+
+        if ($failed->subscription_id !== null) {
+            // A subscription's failed charge belongs to the dunning ladder,
+            // which retries it on its own schedule and tells the customer what
+            // is happening. A second charge from here would collect twice on a
+            // day the ladder also fires.
+            throw new \RuntimeException('זהו חיוב של מנוי — הניסיון החוזר שלו מנוהל על ידי מנגנון הגבייה, לא מכאן.');
+        }
+
+        $customer = $failed->customer;
+
+        if ($customer === null) {
+            throw new \RuntimeException('לחיוב הזה אין לקוח, ולכן אי אפשר לחייב שוב.');
+        }
+
+        $lines = is_array($failed->lines) ? $failed->lines : [];
+        $attempt = (int) $failed->attempt_number + 1;
+
+        if ($this->hasActiveToken($customer)) {
+            $charge = $this->createPendingCharge(
+                $customer, (int) $failed->total_agorot, (string) $failed->description,
+                $failed->invoice_notes, $lines, $this->wasVatExempt($failed),
+            );
+            $charge->update(['attempt_number' => $attempt]);
+
+            ProcessManualChargeJob::dispatch($charge->id);
+
+            return ['charge' => $charge, 'method' => 'token', 'pay_url' => null];
+        }
+
+        $page = $this->createHostedPage(
+            $customer, (int) $failed->total_agorot, (string) $failed->description,
+            $failed->invoice_notes, $lines, $this->wasVatExempt($failed),
+        );
+
+        $page['charge']->update(['attempt_number' => $attempt]);
+
+        return ['charge' => $page['charge'], 'method' => 'link', 'pay_url' => $page['pay_url']];
+    }
+
+    /**
+     * Whether the original charge was billed VAT-free.
+     *
+     * Read off the charge itself rather than off the customer: an exemption can
+     * be set per charge, and the customer's flag may have changed since. The
+     * retry must bill what was billed, not what would be billed today.
+     */
+    private function wasVatExempt(Charge $charge): bool
+    {
+        return (int) $charge->vat_agorot === 0;
     }
 
     /**

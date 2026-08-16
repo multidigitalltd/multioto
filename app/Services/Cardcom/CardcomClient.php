@@ -148,12 +148,16 @@ class CardcomClient
      *
      * @return array{url: string, bit_url: string, low_profile_id: string}
      */
-    public function createChargeLowProfile(int $chargeId, int $totalAgorot, string $description, ?string $name, ?string $email, ?string $phone, string $successUrl, string $failureUrl, string $webhookUrl): array
+    public function createChargeLowProfile(int $chargeId, int $totalAgorot, string $description, ?string $name, ?string $email, ?string $phone, string $successUrl, string $failureUrl, string $webhookUrl, bool $withToken = false): array
     {
         $amountNis = round($totalAgorot / 100, 2);
 
         $response = $this->request('LowProfile/Create', array_filter([
-            'Operation' => 'ChargeOnly',
+            // Charging and keeping the card are one decision made here: a
+            // purchase that renews needs the token, and asking for the card
+            // again next year is not a renewal, it is a second sale. A one-off
+            // charge keeps nothing.
+            'Operation' => $withToken ? 'ChargeAndCreateToken' : 'ChargeOnly',
             'Amount' => $amountNis,
             'ISOCoinId' => 1, // ILS
             'Language' => 'he',

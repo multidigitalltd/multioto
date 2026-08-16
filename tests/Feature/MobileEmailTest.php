@@ -5,10 +5,13 @@ namespace Tests\Feature;
 use App\Mail\BroadcastMail;
 use App\Mail\CustomerCardMail;
 use App\Mail\DunningNotificationMail;
+use App\Mail\LicenseKeyMail;
 use App\Mail\MonitoringReportMail;
 use App\Mail\NotificationMail;
 use App\Mail\TicketReplyMail;
 use App\Models\Customer;
+use App\Models\License;
+use App\Models\PluginProduct;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
@@ -42,6 +45,7 @@ class MobileEmailTest extends TestCase
             'דיוור' => ['BroadcastMail'],
             'דוח ניטור' => ['MonitoringReportMail'],
             'כרטיס לקוח' => ['CustomerCardMail'],
+            'מפתח רישיון' => ['LicenseKeyMail'],
         ];
     }
 
@@ -64,6 +68,17 @@ class MobileEmailTest extends TestCase
                 ]]],
             ))->render(),
             'CustomerCardMail' => (new CustomerCardMail('לקוח', base64_encode('%PDF-1.4')))->render(),
+            'LicenseKeyMail' => (function (): string {
+                // firstOrCreate: the viewport test renders twice in one run.
+                $product = PluginProduct::firstOrCreate(['slug' => 'enhancer'], ['name' => 'משפר חנויות']);
+                [$license, $key] = License::issue([
+                    'plugin_product_id' => $product->id,
+                    'sites_limit' => 2,
+                    'expires_at' => now()->addYear(),
+                ]);
+
+                return (new LicenseKeyMail($license, $key))->render();
+            })(),
         };
     }
 

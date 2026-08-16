@@ -101,8 +101,16 @@ class ManualCharge extends Page implements HasForms
                             ->visible(fn (Get $get): bool => blank($get('lines')))
                             ->schema([
                                 TextInput::make('amount')
-                                    ->label('סכום לחיוב (₪, כולל מע״מ)')
+                                    // The label follows the toggle below, because
+                                    // "500 plus VAT" and "500 all in" are the two
+                                    // ways a price is agreed on the phone, and a
+                                    // fixed label makes one of them arithmetic the
+                                    // operator has to do in their head.
+                                    ->label(fn (Get $get): string => $get('amount_excludes_vat')
+                                        ? 'סכום לחיוב (₪, לפני מע״מ)'
+                                        : 'סכום לחיוב (₪, כולל מע״מ)')
                                     ->numeric()->prefix('₪')->step('0.01')->minValue(0.1)->inputMode('decimal')
+                                    ->live(onBlur: true)
                                     ->required(fn (Get $get): bool => blank($get('lines'))),
                                 TextInput::make('description')
                                     ->label('תיאור (יופיע בחשבונית)')
@@ -121,7 +129,9 @@ class ManualCharge extends Page implements HasForms
                                 TextInput::make('qty')
                                     ->label('כמות')->numeric()->default(1)->minValue(1)->step(1)->required(),
                                 TextInput::make('unit_price')
-                                    ->label('מחיר ליחידה (₪, כולל מע״מ)')
+                                    ->label(fn (Get $get): string => $get('../../amount_excludes_vat')
+                                        ? 'מחיר ליחידה (₪, לפני מע״מ)'
+                                        : 'מחיר ליחידה (₪, כולל מע״מ)')
                                     ->numeric()->prefix('₪')->step('0.01')->minValue(0.01)->inputMode('decimal')->required(),
                             ])
                             ->columns(4)
@@ -134,6 +144,22 @@ class ManualCharge extends Page implements HasForms
                             ->label('הערות לחשבונית (אופציונלי)')
                             ->helperText('טקסט חופשי שיודפס מתחת לשורה בחשבונית — למשל פירוט השירות או תקופה.')
                             ->rows(2)->maxLength(500)
+                            ->columnSpanFull(),
+
+                        Toggle::make('amount_excludes_vat')
+                            ->label('הסכומים שהזנתי הם לפני מע״מ')
+                            ->helperText('סמנו כשסיכמתם עם הלקוח מחיר "פלוס מע״מ" — המערכת תוסיף אותו. חל גם על שורות הפירוט.')
+                            ->live()
+                            ->visible(fn (Get $get): bool => ! $get('vat_exempt'))
+                            ->columnSpanFull(),
+
+                        // The three numbers, always visible: what the invoice
+                        // shows, what the tax authority gets, and what actually
+                        // leaves the card. Guessing which of the three the field
+                        // meant is the whole confusion this replaces.
+                        Placeholder::make('vat_breakdown')
+                            ->label('פירוט החיוב')
+                            ->content(fn (Get $get): string => $this->vatBreakdown($get))
                             ->columnSpanFull(),
 
                         Toggle::make('vat_exempt')
@@ -198,6 +224,12 @@ class ManualCharge extends Page implements HasForms
             return;
         }
 
+        // Everything downstream — the charge, the payment page, the invoice —
+        // works in VAT-inclusive totals. Prices agreed as "plus VAT" are turned
+        // into one here, at the single point where the operator's intent is
+        // still known.
+        $totalAgorot = $this->grossFromForm($totalAgorot, $data);
+
         $notes = filled($data['invoice_notes'] ?? null) ? trim((string) $data['invoice_notes']) : null;
 
         $customer = $this->resolveCustomer($data);
@@ -233,6 +265,56 @@ class ManualCharge extends Page implements HasForms
         } else {
             $this->openPaymentPage($customer, $totalAgorot, $description, $notes, $lines, $vatExempt);
         }
+    }
+
+    /**
+     * The amount that will actually be taken, from what was typed.
+     *
+     * @param  array<string, mixed>  $data
+     */
+    private function grossFromForm(int $agorot, array $data): int
+    {
+        $exempt = (bool) ($data['vat_exempt'] ?? false);
+        $excludesVat = (bool) ($data['amount_excludes_vat'] ?? false);
+
+        if ($exempt || ! $excludesVat) {
+            return $agorot;
+        }
+
+        return (int) round($agorot * (1 + (float) config('billing.vat_rate')));
+    }
+
+    /**
+     * The three numbers behind one field: net, VAT, and what leaves the card.
+     *
+     * Shown always, not only when something looks odd. "Which of the three did
+     * that box mean" is the question this screen kept producing, and a number
+     * somebody has to reverse-engineer is a number they will eventually get
+     * wrong on an invoice.
+     */
+    private function vatBreakdown(Get $get): string
+    {
+        $lines = $this->normalizeLines($get('lines') ?? []);
+
+        $typed = $lines !== []
+            ? array_sum(array_map(fn (array $l): int => $l['qty'] * $l['unit_price_agorot'], $lines))
+            : (int) round(((float) ($get('amount') ?? 0)) * 100);
+
+        if ($typed <= 0) {
+            return 'הזינו סכום כדי לראות את הפירוט.';
+        }
+
+        if ((bool) $get('vat_exempt')) {
+            return 'פטור ממע״מ · לתשלום '.Money::ils($typed);
+        }
+
+        $rate = (float) config('billing.vat_rate');
+        $gross = (bool) $get('amount_excludes_vat') ? (int) round($typed * (1 + $rate)) : $typed;
+        $net = (int) round($gross / (1 + $rate));
+
+        return 'לפני מע״מ '.Money::ils($net)
+            .' · מע״מ '.Money::ils($gross - $net)
+            .' · לתשלום בפועל '.Money::ils($gross);
     }
 
     /**
@@ -308,7 +390,12 @@ class ManualCharge extends Page implements HasForms
     private function installmentsPreview(Get $get): string
     {
         $count = (int) $get('installments');
-        $totalAgorot = (int) round(((float) $get('amount')) * 100);
+        // The same conversion the submit does, so the preview and the charge
+        // can never quote two different numbers.
+        $totalAgorot = $this->grossFromForm((int) round(((float) $get('amount')) * 100), [
+            'vat_exempt' => (bool) $get('vat_exempt'),
+            'amount_excludes_vat' => (bool) $get('amount_excludes_vat'),
+        ]);
 
         if ($count < 2 || $totalAgorot < 1) {
             return '—';
