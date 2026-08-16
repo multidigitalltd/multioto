@@ -15,6 +15,7 @@ use App\Models\Task;
 use App\Models\Ticket;
 use App\Models\User;
 use App\Observers\AuditObserver;
+use App\Observers\ChargeLicenseObserver;
 use App\Observers\TaskObserver;
 use App\Observers\TicketObserver;
 use App\Services\Hosting\FlyWpHostingClient;
@@ -72,6 +73,12 @@ class AppServiceProvider extends ServiceProvider
         // DateTimePicker but their configureUsing hooks are per-class → configure both.
         DateTimePicker::configureUsing(fn (DateTimePicker $picker) => $picker->native(false)->weekStartsOnSunday()->locale('he'));
         DatePicker::configureUsing(fn (DatePicker $picker) => $picker->native(false)->weekStartsOnSunday()->locale('he'));
+
+        // A successful charge moves the expiry of every licence it renews. On
+        // the model rather than in the charging job: a charge reaches
+        // "succeeded" from the scheduler, from a manual charge and from
+        // reconciliation, and this is the only place all three meet.
+        Charge::observe(ChargeLicenseObserver::class);
 
         // Lifecycle notifications (e.g. "your ticket was resolved").
         Ticket::observe(TicketObserver::class);

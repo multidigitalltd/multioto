@@ -21,6 +21,7 @@ use App\Jobs\HeartbeatJob;
 use App\Jobs\MonitorSiteJob;
 use App\Jobs\ReconcileChargeJob;
 use App\Jobs\RefreshCloudflareCountryRulesJob;
+use App\Jobs\RemindExpiringLicensesJob;
 use App\Jobs\RequestMissingCardJob;
 use App\Jobs\RunBackupJob;
 use App\Jobs\ScanSiteComplianceJob;
@@ -311,6 +312,15 @@ Schedule::call(function () {
 // the panel refreshes this itself.
 Schedule::job(new RefreshCloudflareCountryRulesJob)
     ->hourly()->name('cloudflare:country-rules-snapshot')->onOneServer();
+
+// Plugin licences approaching their expiry date. A licence that lapses quietly
+// does not look like an expiry to the customer — it looks like the plugin
+// stopped updating, and the support ticket arrives instead of the renewal.
+// Only licences with no subscription behind them: the rest are chased by the
+// billing machine already, and two alerts for one problem train people to read
+// neither.
+Schedule::job(new RemindExpiringLicensesJob)
+    ->dailyAt('08:20')->name('licensing:expiry-reminders')->when($awake)->onOneServer();
 
 // Proactive reminders: a once-a-day internal digest (renewals due, cards
 // expiring, open debt) so the owner can act before anything slips.
