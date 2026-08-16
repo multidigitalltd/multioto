@@ -37,7 +37,7 @@ class LicenseResource extends Resource
 
     protected static ?string $navigationIcon = 'heroicon-o-key';
 
-    protected static ?string $navigationGroup = 'כספים';
+    protected static ?string $navigationGroup = 'כלים';
 
     protected static ?string $navigationLabel = 'רישיונות תוספים';
 
@@ -45,7 +45,7 @@ class LicenseResource extends Resource
 
     protected static ?string $pluralModelLabel = 'רישיונות תוספים';
 
-    protected static ?int $navigationSort = 61;
+    protected static ?int $navigationSort = 21;
 
     public static function form(Form $form): Form
     {

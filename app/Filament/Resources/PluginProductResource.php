@@ -30,7 +30,7 @@ class PluginProductResource extends Resource
 
     protected static ?string $navigationIcon = 'heroicon-o-puzzle-piece';
 
-    protected static ?string $navigationGroup = 'כספים';
+    protected static ?string $navigationGroup = 'כלים';
 
     protected static ?string $navigationLabel = 'תוספים שאנחנו מוכרים';
 
@@ -38,7 +38,7 @@ class PluginProductResource extends Resource
 
     protected static ?string $pluralModelLabel = 'תוספים שאנחנו מוכרים';
 
-    protected static ?int $navigationSort = 60;
+    protected static ?int $navigationSort = 20;
 
     public static function form(Form $form): Form
     {
