@@ -7,6 +7,7 @@ use App\Filament\Concerns\RespectsModuleAccess;
 use App\Filament\Resources\ChargeResource\Pages;
 use App\Filament\Support\MoneyField;
 use App\Models\Charge;
+use App\Services\Billing\ManualChargeService;
 use App\Services\Cardcom\ChargeReconciler;
 use App\Services\Linet\InvoiceIssuer;
 use App\Services\Linet\LinetClient;
@@ -236,6 +237,40 @@ class ChargeResource extends Resource
                             'failed' => Notification::make()->title('החיוב סומן ככשל')->warning()->send(),
                             default => Notification::make()->title('קארדקום עדיין לא מדווחת על חיוב')->body('ייתכן שהתשלום לא הושלם. נסו שוב בעוד כמה רגעים.')->warning()->send(),
                         };
+                    }),
+
+                // A one-off charge that failed. Until this existed there was no
+                // way past a decline except retyping the whole charge from
+                // memory — which is how a failed charge becomes money nobody
+                // collected.
+                Tables\Actions\Action::make('chargeAgain')
+                    ->label('חייב שוב')
+                    ->icon('heroicon-o-credit-card')
+                    ->color('warning')
+                    ->visible(fn (Charge $record): bool => $record->status === ChargeStatus::Failed
+                        && $record->subscription_id === null)
+                    ->requiresConfirmation()
+                    ->modalHeading('חיוב חוזר')
+                    ->modalDescription(fn (Charge $record): string => app(ManualChargeService::class)->hasActiveToken($record->customer)
+                        ? 'ייווצר חיוב חדש באותו סכום, והכרטיס השמור של הלקוח יחויב מיד. הניסיון הקודם יישאר רשום ככישלון — זו ההיסטוריה, ולא רשימה שצריך לסדר.'
+                        : 'אין ללקוח כרטיס שמור, ולכן ייווצר עמוד תשלום חדש באותו סכום ותקבלו קישור לשליחה. הניסיון הקודם יישאר רשום ככישלון.')
+                    ->modalSubmitActionLabel('צור חיוב חוזר')
+                    ->action(function (Charge $record): void {
+                        try {
+                            $retry = app(ManualChargeService::class)->retry($record->fresh());
+                        } catch (\Throwable $e) {
+                            Notification::make()->title('החיוב החוזר לא נוצר')
+                                ->body(Str::limit($e->getMessage(), 200))->danger()->send();
+
+                            return;
+                        }
+
+                        Notification::make()
+                            ->title($retry['method'] === 'token' ? 'החיוב החוזר יצא לביצוע' : 'נוצר עמוד תשלום חדש')
+                            ->body($retry['method'] === 'token'
+                                ? 'הכרטיס השמור מחויב ברקע. התוצאה תופיע בשורה החדשה תוך כמה שניות — רעננו את המסך.'
+                                : "שלחו ללקוח את הקישור:\n".$retry['pay_url'])
+                            ->success()->persistent()->send();
                     }),
 
                 // Void a pending payment demand: its link stops working (our
