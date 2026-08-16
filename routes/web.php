@@ -10,6 +10,7 @@ use App\Http\Controllers\CustomerCardPdfController;
 use App\Http\Controllers\HealthController;
 use App\Http\Controllers\IntegrationKeysFallbackController;
 use App\Http\Controllers\MarketingPreferencesController;
+use App\Http\Controllers\PluginStoreController;
 use App\Http\Controllers\Portal\PortalAuthController;
 use App\Http\Controllers\Portal\PortalController;
 use App\Http\Controllers\PushSubscriptionController;
@@ -267,6 +268,21 @@ Route::prefix('agent')->group(function () {
     Route::get('/plugin/latest', [AgentPluginController::class, 'latest'])
         ->middleware(['web', 'auth', 'throttle:30,1'])
         ->name('agent.plugin.latest');
+});
+
+/*
+ | The plugin store: a customer buys a licence without us being involved, pays on
+ | Cardcom's page, and the key reaches their inbox by itself. Public and
+ | unauthenticated by nature — the throttle is what stands between the checkout
+ | and somebody hammering it.
+ */
+Route::middleware('throttle:30,1')->group(function () {
+    Route::get('/buy/{slug}', [PluginStoreController::class, 'show'])->name('store.plugin');
+    Route::post('/buy/{slug}', [PluginStoreController::class, 'buy'])->name('store.buy');
+    // Addressed by a random reference, not a row id: this page shows what
+    // somebody bought, and a sequential number invites reading the neighbours'.
+    Route::get('/buy/order/{reference}', [PluginStoreController::class, 'done'])->name('store.done');
+    Route::get('/buy/order/{reference}/download', [PluginStoreController::class, 'download'])->name('store.download');
 });
 
 /*

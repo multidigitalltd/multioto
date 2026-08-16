@@ -43,9 +43,11 @@ class GithubReleases
     /**
      * Bring the product's releases up to date.
      *
-     * Imported releases are NOT distributed. Publishing to every customer stays
-     * a decision somebody makes on purpose, in front of a screen that says what
-     * it costs — the same rule that governs plugin updates on managed sites.
+     * The newest imported release is published unless the product says
+     * otherwise — that is the point of connecting the repository at all. This is
+     * OUR plugin and our own release, deliberately tagged; it is not the same
+     * decision as pushing somebody else's plugin update onto a customer's
+     * managed site, which stays manual.
      *
      * @return array{ok: bool, imported: list<string>, skipped: array<string, string>, message: string}
      */
@@ -100,7 +102,9 @@ class GithubReleases
                 'version' => $version,
                 'zip_path' => $path,
                 'changelog' => $this->changelog((string) ($release['body'] ?? '')),
-                // Never distributed on arrival — see the note on sync().
+                // Distributed on arrival, unless this product opted out. Only
+                // the newest of a batch: importing three old releases at once
+                // must not leave customers being offered the oldest.
                 'is_current' => false,
                 'released_at' => ($release['published_at'] ?? null) ? Carbon::parse($release['published_at']) : now(),
                 'source' => 'github',
@@ -110,9 +114,21 @@ class GithubReleases
             $imported[] = $version;
         }
 
+        // Publishing happens after the loop, on the highest version imported —
+        // GitHub returns newest first, but nothing here should depend on that.
+        $published = null;
+
+        if ($product->auto_publish && $imported !== []) {
+            $published = $this->newest($imported);
+
+            $product->releases()->where('version', $published)->first()?->update(['is_current' => true]);
+        }
+
         $message = match (true) {
-            $imported !== [] => count($imported).' גרסאות חדשות נקלטו: '.implode(', ', $imported)
-                .'. הן אינן מופצות עדיין — לחצו "הפץ גרסה זו" על מה שרוצים לשלוח ללקוחות.',
+            $imported !== [] => count($imported).' גרסאות חדשות נקלטו: '.implode(', ', $imported).'. '
+                .($published !== null
+                    ? "גרסה {$published} מופצת מעכשיו — כל חנות עם רישיון בתוקף תראה את העדכון תוך שש שעות."
+                    : 'הפצה אוטומטית כבויה לתוסף הזה — לחצו "הפץ גרסה זו" על מה שרוצים לשלוח ללקוחות.'),
             $skipped !== [] => 'לא נקלטה אף גרסה חדשה.',
             default => 'הכל מסונכרן — אין גרסאות חדשות ב-GitHub.',
         };
@@ -270,6 +286,19 @@ class GithubReleases
         $slash = strpos($first, '/');
 
         return $slash === false ? '' : substr($first, 0, $slash + 1);
+    }
+
+    /**
+     * The highest of the imported versions, compared as versions and not as
+     * text — "1.10.0" is newer than "1.9.0" and sorts before it as a string.
+     *
+     * @param  list<string>  $versions
+     */
+    private function newest(array $versions): string
+    {
+        usort($versions, static fn (string $a, string $b): int => version_compare($a, $b));
+
+        return end($versions);
     }
 
     /** `v1.2.3` and `1.2.3` are the same version; anything else is not one. */

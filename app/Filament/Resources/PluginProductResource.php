@@ -77,6 +77,11 @@ class PluginProductResource extends Resource
                         ->password()->revealable()
                         ->dehydrated(fn (?string $state): bool => filled($state))
                         ->helperText('Fine-grained token עם הרשאת Contents: Read בלבד. נשמר מוצפן. למאגר ציבורי אין צורך.'),
+                    Forms\Components\Toggle::make('auto_publish')
+                        ->label('הפץ גרסה חדשה ללקוחות אוטומטית')
+                        ->default(true)
+                        ->helperText('דלוק = גרסה שמתויגת ב-GitHub מגיעה לחנויות תוך שש שעות, בלי מגע יד. זהו התוסף שלנו והשחרור שלנו — להבדיל מעדכון של תוסף צד ג׳ באתר מנוהל, שנשאר ידני.')
+                        ->columnSpanFull(),
                     Forms\Components\Toggle::make('pack_from_source')
                         ->label('אם אין קובץ מצורף — ארוז מקוד המקור')
                         // The default is off, and the reason is on screen: this

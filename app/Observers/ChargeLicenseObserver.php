@@ -5,6 +5,7 @@ namespace App\Observers;
 use App\Enums\ChargeStatus;
 use App\Models\Charge;
 use App\Services\Licensing\LicenseRenewal;
+use App\Services\Licensing\PluginCheckout;
 
 /**
  * Move a licence's expiry the moment its charge succeeds.
@@ -21,7 +22,10 @@ use App\Services\Licensing\LicenseRenewal;
  */
 class ChargeLicenseObserver
 {
-    public function __construct(private LicenseRenewal $renewal) {}
+    public function __construct(
+        private LicenseRenewal $renewal,
+        private PluginCheckout $checkout,
+    ) {}
 
     public function created(Charge $charge): void
     {
@@ -35,7 +39,7 @@ class ChargeLicenseObserver
 
     private function renew(Charge $charge): void
     {
-        if ($charge->status !== ChargeStatus::Succeeded || $charge->subscription_id === null) {
+        if ($charge->status !== ChargeStatus::Succeeded) {
             return;
         }
 
@@ -43,7 +47,16 @@ class ChargeLicenseObserver
         // is briefly unavailable is a problem to look at, not a reason to fail
         // the charge that has already left the customer's card.
         try {
-            $this->renewal->applyTo($charge);
+            if ($charge->subscription_id !== null) {
+                $this->renewal->applyTo($charge);
+            }
+
+            // A self-service purchase: the money has arrived, so the licence is
+            // issued and emailed. Here rather than in the webhook, because a
+            // payment is also confirmed by the reconciliation that finishes a
+            // charge whose webhook was lost — and somebody who paid must not
+            // depend on which of the two happened.
+            $this->checkout->fulfil($charge);
         } catch (\Throwable $e) {
             report($e);
         }

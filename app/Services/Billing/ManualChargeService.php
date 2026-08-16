@@ -53,7 +53,7 @@ class ManualChargeService
     /**
      * @param  array<int, array{name: string, qty: int, unit_price_agorot: int}>  $lines
      */
-    public function createHostedPage(Customer $customer, int $totalAgorot, string $description, ?string $notes = null, array $lines = [], ?bool $vatExempt = null): array
+    public function createHostedPage(Customer $customer, int $totalAgorot, string $description, ?string $notes = null, array $lines = [], ?bool $vatExempt = null, bool $withToken = false, ?string $successUrl = null, ?string $failureUrl = null): array
     {
         // A payment page is payable the moment it exists, and the row that says
         // which charge it belongs to is what a restore would replace — leaving
@@ -74,9 +74,14 @@ class ManualChargeService
                 $customer->name,
                 $customer->email,
                 $customer->phone,
-                route('billing.update-card.done', ['result' => 'success']),
-                route('billing.update-card.done', ['result' => 'failed']),
+                // Where the payer lands afterwards. The default is the team's
+                // generic notice; a self-service purchase sends them back to
+                // their own order instead, which is the only page that can tell
+                // them what they now own.
+                $successUrl ?? route('billing.update-card.done', ['result' => 'success']),
+                $failureUrl ?? route('billing.update-card.done', ['result' => 'failed']),
                 CardcomWebhook::url(),
+                $withToken,
             );
         } catch (\Throwable $e) {
             $charge->update(['status' => ChargeStatus::Failed, 'failure_reason' => 'יצירת עמוד תשלום נכשלה']);
