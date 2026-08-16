@@ -81,7 +81,12 @@ class LicenseController extends Controller
 
         // A product with nothing published is not an error — there is simply no
         // update. Saying so with a 403 would be a lie about the licence.
-        if ($product === null || $release === null) {
+        //
+        // Neither is a licence bought outright WITHOUT updates: it is valid, the
+        // customer owns the plugin, and there is simply never a newer version for
+        // them. A 403 here would make the plugin report a licence problem for a
+        // product that is working exactly as sold.
+        if ($product === null || $release === null || ! $license->includesUpdates()) {
             return response()->json([
                 'status' => LicenseService::VALID,
                 'message' => '',

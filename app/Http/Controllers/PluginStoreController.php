@@ -3,11 +3,13 @@
 namespace App\Http\Controllers;
 
 use App\Models\PluginOrder;
+use App\Models\PluginPlan;
 use App\Models\PluginProduct;
 use App\Services\Licensing\PluginCheckout;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
 
@@ -20,33 +22,34 @@ use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
  */
 class PluginStoreController extends Controller
 {
-    /** The sales page. */
+    /** The sales page: the plugin, and every way it is sold. */
     public function show(string $slug): View
     {
-        $product = PluginProduct::query()
-            ->where('slug', $slug)
-            ->where('is_active', true)
-            ->firstOrFail();
+        $product = $this->sellable($slug);
 
-        abort_if(blank($product->price_agorot), 404);
-
-        return view('store.plugin', ['product' => $product]);
+        return view('store.plugin', [
+            'product' => $product,
+            'plans' => $product->sellablePlans(),
+        ]);
     }
 
     /** Take the details and send them to the payment page. */
     public function buy(Request $request, string $slug): RedirectResponse
     {
-        $product = PluginProduct::query()
-            ->where('slug', $slug)
-            ->where('is_active', true)
-            ->firstOrFail();
+        $product = $this->sellable($slug);
 
         $data = $request->validate([
+            // The plan has to belong to THIS product and be on sale. Without
+            // that, a posted id could buy any plan of any plugin at its price.
+            'plan' => ['required', Rule::exists('plugin_plans', 'id')
+                ->where('plugin_product_id', $product->id)
+                ->where('is_active', true)],
             'name' => ['required', 'string', 'max:120'],
             'email' => ['required', 'email:rfc', 'max:150'],
             'phone' => ['nullable', 'string', 'max:30'],
             'terms' => ['accepted'],
         ], [], [
+            'plan' => 'המסלול',
             'name' => 'שם מלא',
             'email' => 'אימייל',
             'phone' => 'טלפון',
@@ -55,7 +58,7 @@ class PluginStoreController extends Controller
 
         try {
             $purchase = app(PluginCheckout::class)->start(
-                $product,
+                PluginPlan::findOrFail($data['plan']),
                 trim($data['name']),
                 trim($data['email']),
                 filled($data['phone'] ?? null) ? trim($data['phone']) : null,
@@ -72,6 +75,18 @@ class PluginStoreController extends Controller
         }
 
         return redirect()->away($purchase['url']);
+    }
+
+    /** The product, if it is on sale at all. */
+    private function sellable(string $slug): PluginProduct
+    {
+        $product = PluginProduct::query()->where('slug', $slug)->firstOrFail();
+
+        // A plugin with no active plan has no price, and a sales page without a
+        // price is a page that generates emails asking what it costs.
+        abort_unless($product->isSellable(), 404);
+
+        return $product;
     }
 
     /**

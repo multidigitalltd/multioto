@@ -23,10 +23,6 @@
                padding: clamp(1.25rem, 4vw, 2.5rem); box-shadow: 0 8px 32px rgb(0 0 0 / .3); }
         h1 { font-size: clamp(1.5rem, 5vw, 2rem); margin: 0 0 .25rem; }
         p.lead { color: var(--muted); margin: 0 0 1.25rem; }
-        .price { font-size: 2rem; font-weight: 800; }
-        .price small { font-size: .95rem; font-weight: 400; color: var(--muted); }
-        ul.what { margin: 1.25rem 0; padding-inline-start: 1.1rem; }
-        ul.what li { margin: .35rem 0; }
         label { display: block; font-weight: 600; margin: 1rem 0 .35rem; }
         .req { color: var(--brand); }
         input[type=text], input[type=email], input[type=tel] {
@@ -49,6 +45,19 @@
         .errors ul { margin: .25rem 0 0; padding-inline-start: 1.1rem; }
         .error { color: var(--error); font-size: .9rem; margin-top: .3rem; }
         .foot { color: var(--muted); font-size: .9rem; margin-top: 1.25rem; text-align: center; }
+        fieldset.plans { border: 0; margin: 0 0 .5rem; padding: 0; }
+        fieldset.plans legend { font-weight: 700; margin-bottom: .5rem; padding: 0; }
+        .plan { display: flex; gap: .7rem; align-items: flex-start; border: 1px solid var(--border);
+                border-radius: 12px; padding: .9rem 1rem; margin-bottom: .6rem; cursor: pointer;
+                font-weight: 400; }
+        .plan:hover { border-color: var(--brand); }
+        .plan input { margin-top: .35rem; width: 1.15rem; height: 1.15rem; flex: none; }
+        .plan:has(input:checked) { border-color: var(--brand); background: rgb(236 72 153 / .08); }
+        .plan .body { display: flex; flex-direction: column; gap: .15rem; }
+        .plan .title { font-weight: 700; }
+        .plan .price { font-size: 1.25rem; font-weight: 800; }
+        .plan .meta { color: var(--muted); font-size: .9rem; }
+        .allplans { color: var(--muted); font-size: .92rem; margin: 0 0 1.25rem; }
         @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
     </style>
 </head>
@@ -60,34 +69,32 @@
         <p class="lead">{{ $product->description }}</p>
     @endif
 
-    @php
-        $vat = (float) config('billing.vat_rate');
-        $gross = (int) round($product->price_agorot * (1 + $vat));
-        $term = match ($product->billing_interval) {
-            'yearly' => 'לשנה',
-            'monthly' => 'לחודש',
-            default => null,
-        };
-    @endphp
+    <fieldset class="plans">
+        <legend>בחרו מסלול</legend>
+        @foreach ($plans as $plan)
+            <label class="plan" for="plan-{{ $plan->id }}">
+                <input type="radio" name="plan" id="plan-{{ $plan->id }}" value="{{ $plan->id }}"
+                       form="buy" required @checked(old('plan', $plans->first()->id) == $plan->id)>
+                <span class="body">
+                    <span class="title">{{ $plan->name }}</span>
+                    <span class="price">{{ $plan->priceLabel() }}</span>
+                    {{-- The two facts that decide whether the purchase becomes a
+                         dispute: how many sites it covers, and what happens to
+                         updates afterwards. Both on the button, not in the small
+                         print underneath. --}}
+                    <span class="meta">{{ $plan->sitesLabel() }} · {{ $plan->updatesLabel() }}</span>
+                    @if (filled($plan->description))
+                        <span class="meta">{{ $plan->description }}</span>
+                    @endif
+                    @if ($plan->renews())
+                        <span class="meta">מתחדש אוטומטית. אפשר לבטל בכל עת ולא תחויבו לתקופה הבאה.</span>
+                    @endif
+                </span>
+            </label>
+        @endforeach
+    </fieldset>
 
-    <p class="price">
-        {{ number_format($gross / 100, 2) }} ₪
-        <small>כולל מע״מ{{ $term ? ' · '.$term : ' · תשלום חד-פעמי' }}</small>
-    </p>
-
-    <ul class="what">
-        <li>רישיון ל־<strong>{{ $product->default_sites_limit == 0 ? 'אתרים ללא הגבלה' : $product->default_sites_limit.' '.($product->default_sites_limit == 1 ? 'אתר' : 'אתרים') }}</strong>.</li>
-        <li>מפתח הרישיון יישלח למייל <strong>מיד עם השלמת התשלום</strong>.</li>
-        <li>עדכוני גרסה אוטומטיים ישירות מלוח הבקרה של וורדפרס, כל עוד הרישיון בתוקף.</li>
-        @if ($term)
-            {{-- The two sentences that decide whether a renewal becomes a
-                 chargeback: it renews by itself, and stopping it is one email. --}}
-            <li>הרישיון מתחדש אוטומטית {{ $term }}. אפשר לבטל בכל עת בפנייה אלינו, ולא תחויבו לתקופה הבאה.</li>
-            <li>גם אם הרישיון יפוג — <strong>התוסף ימשיך לעבוד באתר</strong>. רק העדכונים ייעצרו.</li>
-        @else
-            <li>גם אם לא תחדשו — <strong>התוסף ימשיך לעבוד באתר</strong>. רק העדכונים ייעצרו.</li>
-        @endif
-    </ul>
+    <p class="allplans">בכל המסלולים: <strong>התוסף ממשיך לעבוד באתר תמיד</strong> — גם אם העדכונים נעצרים. המחירים כוללים מע״מ.</p>
 
     @if ($errors->any())
         <div class="errors" role="alert">
@@ -98,7 +105,7 @@
         </div>
     @endif
 
-    <form method="POST" action="{{ route('store.buy', ['slug' => $product->slug]) }}" novalidate>
+    <form id="buy" method="POST" action="{{ route('store.buy', ['slug' => $product->slug]) }}" novalidate>
         @csrf
 
         <label for="name">שם מלא <span class="req" aria-hidden="true">*</span></label>
@@ -125,7 +132,7 @@
                    @checked(old('terms'))
                    @error('terms') aria-invalid="true" aria-describedby="terms-error" @enderror>
             <label for="terms" style="margin:0;font-weight:400">
-                קראתי ואני מאשר/ת את תנאי השימוש ומדיניות הפרטיות{{ $term ? ', ואת חידוש הרישיון האוטומטי '.$term : '' }}.
+                קראתי ואני מאשר/ת את תנאי השימוש ומדיניות הפרטיות, ובמסלול מתחדש — גם את החידוש האוטומטי.
             </label>
         </div>
         @error('terms')<p class="error" id="terms-error">{{ $message }}</p>@enderror

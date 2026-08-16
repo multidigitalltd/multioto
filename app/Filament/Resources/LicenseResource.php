@@ -72,8 +72,11 @@ class LicenseResource extends Resource
                         ->numeric()->minValue(0)->default(1)->required()
                         ->helperText('0 = ללא הגבלה.'),
                     Forms\Components\DatePicker::make('expires_at')
-                        ->label('בתוקף עד')
-                        ->helperText('ריק = ללא תפוגה. פקיעה עוצרת עדכונים בלבד — התוסף ממשיך לעבוד באתר.'),
+                        ->label('עדכונים עד')
+                        ->helperText('ריק = ללא הגבלת זמן. פקיעה עוצרת עדכונים בלבד — התוסף ממשיך לעבוד באתר.'),
+                    Forms\Components\Toggle::make('includes_updates')
+                        ->label('כולל עדכונים')
+                        ->helperText('כבוי = רישיון לתמיד בגרסה הנוכחית, בלי גרסאות חדשות ובלי תאריך פקיעה.'),
                     Forms\Components\Select::make('subscription_id')
                         ->label('מנוי שמחדש אוטומטית')
                         ->relationship('subscription', 'name')
@@ -96,7 +99,8 @@ class LicenseResource extends Resource
                     ->fontFamily('mono')
                     ->formatStateUsing(fn (?string $state): string => $state.'-••••-••••-••••')
                     ->description('המפתח המלא אינו נשמר'),
-                Tables\Columns\TextColumn::make('product.name')->label('תוסף')->searchable()->sortable(),
+                Tables\Columns\TextColumn::make('product.name')->label('תוסף')->searchable()->sortable()
+                    ->description(fn (License $record): ?string => $record->plan?->name),
                 Tables\Columns\TextColumn::make('customer.name')->label('לקוח')->searchable()->placeholder('—'),
                 Tables\Columns\TextColumn::make('status_label')
                     ->label('מצב')
@@ -104,8 +108,11 @@ class LicenseResource extends Resource
                     ->state(fn (License $record): string => $record->statusLabel())
                     ->color(fn (License $record): string => $record->statusColor()),
                 Tables\Columns\TextColumn::make('expires_at')
-                    ->label('בתוקף עד')->date('d/m/Y')->sortable()
-                    ->placeholder('ללא תפוגה')
+                    ->label('עדכונים עד')->date('d/m/Y')->sortable()
+                    // Two different "no date", and they mean opposite things:
+                    // a licence sold without updates never expires, and one
+                    // sold with them and no end date runs forever.
+                    ->placeholder(fn (License $record): string => $record->includesUpdates() ? 'ללא הגבלה' : 'ללא עדכונים')
                     ->description(fn (License $record): ?string => $record->subscription_id ? 'מתחדש אוטומטית' : null),
                 Tables\Columns\TextColumn::make('seats')
                     ->label('אתרים')

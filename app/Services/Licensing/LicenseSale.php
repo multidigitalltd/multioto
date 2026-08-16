@@ -2,14 +2,12 @@
 
 namespace App\Services\Licensing;
 
-use App\Enums\BillingInterval;
 use App\Enums\SubscriptionStatus;
 use App\Models\Customer;
 use App\Models\License;
-use App\Models\PluginProduct;
+use App\Models\PluginPlan;
 use App\Models\Subscription;
 use App\Models\SystemLog;
-use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -42,23 +40,27 @@ class LicenseSale
      * @return array{license: License, key: string, emailed: bool, subscription: ?Subscription}
      */
     public function sell(
-        PluginProduct $product,
+        PluginPlan $plan,
         Customer $customer,
-        int $sitesLimit,
-        ?BillingInterval $interval,
+        ?int $sitesLimit = null,
         ?int $priceAgorot = null,
         ?string $email = null,
         ?string $notes = null,
     ): array {
-        $price = $priceAgorot ?? $product->price_agorot;
-        $term = $interval !== null ? $this->termEnd($interval) : null;
+        $product = $plan->product;
+        $price = $priceAgorot ?? $plan->price_agorot;
+        $sitesLimit ??= $plan->sites_limit;
+        $interval = $plan->billingInterval();
+        // End of the paid term, end of the included updates, or null when the
+        // plan sells the plugin outright with none.
+        $term = $plan->updatesUntil();
 
         // One transaction: a subscription created without the licence it pays
         // for would charge the customer every year for nothing, and a licence
         // created without the subscription would never renew. Neither half is
         // worth having on its own.
         [$license, $key, $emailed, $subscription] = DB::transaction(function () use (
-            $product, $customer, $sitesLimit, $interval, $price, $term, $email, $notes
+            $product, $plan, $customer, $sitesLimit, $interval, $price, $term, $email, $notes
         ): array {
             $subscription = $interval !== null
                 ? Subscription::create([
@@ -77,10 +79,12 @@ class LicenseSale
 
             [$license, $key, $sent] = $this->issuer->issue([
                 'plugin_product_id' => $product->id,
+                'plugin_plan_id' => $plan->id,
                 'customer_id' => $customer->id,
                 'subscription_id' => $subscription?->id,
                 'sites_limit' => $sitesLimit,
                 'expires_at' => $term?->toDateString(),
+                'includes_updates' => $plan->includesUpdates(),
                 'email' => $email ?: $customer->email,
                 'notes' => $notes,
             ]);
@@ -89,20 +93,12 @@ class LicenseSale
         });
 
         SystemLog::record('info', 'licensing',
-            "נמכר רישיון ל{$product->name} ללקוח {$customer->name}"
+            "נמכר רישיון ל{$product->name} ({$plan->name}) ללקוח {$customer->name}"
                 .($subscription !== null
                     ? " — מנוי {$interval->getLabel()} שייגבה בהרצת הגבייה הקרובה."
                     : ' — מכירה חד-פעמית; החיוב נעשה ידנית.'),
             ['license_id' => $license->id, 'customer_id' => $customer->id, 'subscription_id' => $subscription?->id]);
 
         return ['license' => $license, 'key' => $key, 'emailed' => $emailed, 'subscription' => $subscription];
-    }
-
-    private function termEnd(BillingInterval $interval): Carbon
-    {
-        return match ($interval) {
-            BillingInterval::Yearly => now()->addYear(),
-            BillingInterval::Monthly => now()->addMonth(),
-        };
     }
 }

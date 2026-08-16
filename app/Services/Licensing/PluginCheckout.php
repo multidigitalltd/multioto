@@ -2,12 +2,11 @@
 
 namespace App\Services\Licensing;
 
-use App\Enums\BillingInterval;
 use App\Enums\SubscriptionStatus;
 use App\Models\Charge;
 use App\Models\Customer;
 use App\Models\PluginOrder;
-use App\Models\PluginProduct;
+use App\Models\PluginPlan;
 use App\Models\Subscription;
 use App\Models\SystemLog;
 use App\Services\Billing\ManualChargeService;
@@ -41,28 +40,29 @@ class PluginCheckout
      *
      * @return array{order: PluginOrder, url: string}
      */
-    public function start(PluginProduct $product, string $name, string $email, ?string $phone): array
+    public function start(PluginPlan $plan, string $name, string $email, ?string $phone): array
     {
-        $price = (int) ($product->price_agorot ?? 0);
+        $product = $plan->product;
 
-        if ($price <= 0) {
-            throw new \RuntimeException('לתוסף הזה לא נקבע מחיר, ולכן לא ניתן לרכוש אותו כרגע.');
+        if ($product === null || ! $plan->is_active || ! $product->is_active) {
+            throw new \RuntimeException('המסלול הזה אינו זמין לרכישה כרגע.');
         }
 
         // The customer record is created now, not at payment: the invoice, the
         // renewal and every later support conversation all hang off it, and the
         // webhook has no form to build one from.
         $customer = $this->customer($name, $email, $phone);
-        $total = $this->withVat($price, (bool) $customer->vat_exempt);
+        $total = $plan->grossAgorot((bool) $customer->vat_exempt);
 
         $order = PluginOrder::create([
             'plugin_product_id' => $product->id,
+            'plugin_plan_id' => $plan->id,
             'customer_id' => $customer->id,
             'buyer_name' => $name,
             'buyer_email' => $email,
             'buyer_phone' => $phone,
-            'sites_limit' => (int) ($product->default_sites_limit ?? 1),
-            'billing_interval' => $product->billing_interval,
+            'sites_limit' => $plan->sites_limit,
+            'billing_interval' => $plan->billing_interval,
             'total_agorot' => $total,
             'status' => PluginOrder::PENDING,
             'reference' => PluginOrder::newReference(),
@@ -72,9 +72,9 @@ class PluginCheckout
             $page = $this->charges->createHostedPage(
                 customer: $customer,
                 totalAgorot: $total,
-                description: $product->name.' — רישיון'.$this->termLabel($product),
+                description: $product->name.' — '.$plan->name,
                 notes: 'רכישה עצמית באתר',
-                withToken: $product->billingInterval() !== null,
+                withToken: $plan->renews(),
                 successUrl: route('store.done', ['reference' => $order->reference]),
                 failureUrl: route('store.done', ['reference' => $order->reference]),
             );
@@ -112,10 +112,20 @@ class PluginCheckout
             return $order;
         }
 
-        $interval = $order->billing_interval !== null ? BillingInterval::tryFrom($order->billing_interval) : null;
-        $term = $interval !== null ? $product->termEnd(now()) : null;
+        $plan = $order->plan;
 
-        DB::transaction(function () use ($order, $product, $customer, $interval, $term): void {
+        if ($plan === null) {
+            return $order;
+        }
+
+        $interval = $plan->billingInterval();
+        // For a renewing plan this is the end of the term just paid for; for a
+        // one-off with updates it is when updates stop; and for a plan with no
+        // updates at all it is null — the licence never expires, because the
+        // customer owns it.
+        $until = $plan->updatesUntil();
+
+        DB::transaction(function () use ($order, $product, $customer, $plan, $interval, $until): void {
             // Renewal rides the ordinary subscription machinery — the same
             // charging, invoicing, retrying and dunning as everything else we
             // sell. The first period is the one just paid for, so the next
@@ -125,22 +135,24 @@ class PluginCheckout
                     'customer_id' => $customer->id,
                     'name' => $product->name.' — רישיון',
                     'billing_interval' => $interval,
-                    'price_agorot_override' => $product->price_agorot,
+                    'price_agorot_override' => $plan->price_agorot,
                     'vat_applies' => true,
                     'status' => SubscriptionStatus::Active,
                     'token_id' => $customer->paymentTokens()->latest('id')->value('id'),
                     'current_period_start' => now()->toDateString(),
-                    'current_period_end' => $term?->toDateString(),
-                    'next_charge_at' => $term,
+                    'current_period_end' => $until?->toDateString(),
+                    'next_charge_at' => $until,
                 ])
                 : null;
 
             [$license, , $emailed] = $this->issuer->issue([
                 'plugin_product_id' => $product->id,
+                'plugin_plan_id' => $plan->id,
                 'customer_id' => $customer->id,
                 'subscription_id' => $subscription?->id,
                 'sites_limit' => $order->sites_limit,
-                'expires_at' => $term?->toDateString(),
+                'expires_at' => $until?->toDateString(),
+                'includes_updates' => $plan->includesUpdates(),
                 'email' => $order->buyer_email,
             ]);
 
@@ -186,29 +198,5 @@ class PluginCheckout
             'email' => $email,
             'phone' => $phone,
         ]);
-    }
-
-    /**
-     * The price the buyer is charged. Prices are quoted before VAT, and the
-     * payment page takes what will actually be taken off the card — so the
-     * addition happens here, once, and the charge splits it back out for the
-     * invoice.
-     */
-    private function withVat(int $netAgorot, bool $exempt): int
-    {
-        if ($exempt) {
-            return $netAgorot;
-        }
-
-        return (int) round($netAgorot * (1 + (float) config('billing.vat_rate')));
-    }
-
-    private function termLabel(PluginProduct $product): string
-    {
-        return match ($product->billingInterval()) {
-            BillingInterval::Yearly => ' לשנה',
-            BillingInterval::Monthly => ' לחודש',
-            default => '',
-        };
     }
 }

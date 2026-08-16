@@ -28,7 +28,7 @@ class PluginOrder extends Model
     public const FAILED = 'failed';
 
     protected $fillable = [
-        'plugin_product_id', 'customer_id', 'charge_id', 'license_id',
+        'plugin_product_id', 'plugin_plan_id', 'customer_id', 'charge_id', 'license_id',
         'buyer_name', 'buyer_email', 'buyer_phone',
         'sites_limit', 'billing_interval', 'total_agorot',
         'status', 'reference', 'fulfilled_at',
@@ -46,6 +46,11 @@ class PluginOrder extends Model
     public function product(): BelongsTo
     {
         return $this->belongsTo(PluginProduct::class, 'plugin_product_id');
+    }
+
+    public function plan(): BelongsTo
+    {
+        return $this->belongsTo(PluginPlan::class, 'plugin_plan_id');
     }
 
     public function customer(): BelongsTo
