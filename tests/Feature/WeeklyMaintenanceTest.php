@@ -85,7 +85,53 @@ class WeeklyMaintenanceTest extends TestCase
         $this->assertSame(0, PendingAction::count());
     }
 
-    public function test_a_standing_approval_runs_the_whole_batch_automatically(): void
+    /**
+     * שום אישור קבוע אינו יכול לגרום לעדכון תוספים לרוץ מעצמו.
+     *
+     * רשימת העדכונים שונה בכל שבוע ואינה ידועה ברגע שנותנים אישור כזה — אישור
+     * "תמיד" היה מאשר גם את העדכונים של החודש הבא, על אתרים חיים של לקוחות.
+     * גם רשומה ישנה שנשארה במסד אינה מפעילה דבר.
+     */
+    public function test_no_standing_approval_can_make_maintenance_run_by_itself(): void
+    {
+        $site = $this->connectedSite();
+        Http::fake(['*' => Http::response('<html>בית</html>')]);
+
+        $mcp = $this->mcpWithPluginList([
+            ['plugin' => 'akismet/akismet.php', 'name' => 'Akismet', 'version' => '5.0', 'update_available' => true],
+        ]);
+        // ולא נקרא אף עדכון.
+        $mcp->shouldNotReceive('callTool')
+            ->with(Mockery::type(Site::class), 'wp_plugin_update', Mockery::any(), Mockery::any());
+
+        StandingApproval::create(['action_key' => 'maintenance_update', 'label' => 'תחזוקה שבועית']);
+
+        (new WeeklyMaintenanceJob($site->id))->handle(app(MaintenanceRunner::class), app(ApprovalGate::class));
+
+        $action = PendingAction::sole();
+        $this->assertSame(ActionStatus::Pending, $action->status);
+        $this->assertNull($action->standing_approval_id);
+    }
+
+    /** ו"אשר תמיד" על הצעה כזו נענה בסירוב שמסביר למה, ומציע אישור חד-פעמי. */
+    public function test_always_approve_is_refused_with_the_reason(): void
+    {
+        $site = $this->connectedSite();
+        $this->mcpWithPluginList([
+            ['plugin' => 'a/a.php', 'name' => 'A', 'version' => '1.0', 'update_available' => true],
+        ]);
+
+        (new WeeklyMaintenanceJob($site->id))->handle(app(MaintenanceRunner::class), app(ApprovalGate::class));
+
+        $reply = app(ApprovalGate::class)->approveAlways(PendingAction::sole());
+
+        $this->assertStringContainsString('שונה בכל שבוע', $reply);
+        $this->assertSame(ActionStatus::Pending, PendingAction::sole()->status);
+        $this->assertSame(0, StandingApproval::count());
+    }
+
+    /** אישור מפורש של ההצעה מריץ את כל האצווה. */
+    public function test_an_explicit_approval_runs_the_whole_batch(): void
     {
         $site = $this->connectedSite();
         Http::fake(['*' => Http::response('<html>בית</html>')]); // homepage healthy
@@ -99,13 +145,11 @@ class WeeklyMaintenanceTest extends TestCase
             ->twice()
             ->andReturn(['content' => [['type' => 'text', 'text' => 'updated']]]);
 
-        StandingApproval::create(['action_key' => 'maintenance_update', 'label' => 'תחזוקה שבועית']);
-
         (new WeeklyMaintenanceJob($site->id))->handle(app(MaintenanceRunner::class), app(ApprovalGate::class));
 
-        $action = PendingAction::sole();
-        $this->assertSame(ActionStatus::Executed, $action->status);
-        $this->assertNotNull($action->standing_approval_id);
+        app(ApprovalGate::class)->approve(PendingAction::sole());
+
+        $this->assertSame(ActionStatus::Executed, PendingAction::sole()->status);
         $this->assertTrue(SystemLog::query()->where('message', 'like', '%תחזוקה שבועית לאתר maintained.co.il הושלמה%')->exists());
     }
 
@@ -124,9 +168,9 @@ class WeeklyMaintenanceTest extends TestCase
             ->once()
             ->andReturn(['content' => [['type' => 'text', 'text' => 'updated']]]);
 
-        StandingApproval::create(['action_key' => 'maintenance_update', 'label' => 'תחזוקה שבועית']);
-
         (new WeeklyMaintenanceJob($site->id))->handle(app(MaintenanceRunner::class), app(ApprovalGate::class));
+
+        app(ApprovalGate::class)->approve(PendingAction::sole());
 
         $action = PendingAction::sole();
         $this->assertSame(ActionStatus::Failed, $action->status);
