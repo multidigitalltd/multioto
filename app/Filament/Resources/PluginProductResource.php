@@ -6,8 +6,10 @@ use App\Filament\Concerns\AdminOnly;
 use App\Filament\Resources\PluginProductResource\Pages;
 use App\Filament\Resources\PluginProductResource\RelationManagers\ReleasesRelationManager;
 use App\Models\PluginProduct;
+use App\Services\Licensing\GithubReleases;
 use Filament\Forms;
 use Filament\Forms\Form;
+use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
@@ -62,6 +64,59 @@ class PluginProductResource extends Resource
                     Forms\Components\Toggle::make('is_active')->label('פעיל למכירה')->default(true),
                 ])->columns(2),
 
+            Forms\Components\Section::make('מאיפה מגיעות הגרסאות')
+                ->description('גרסה שמפורסמת כ-Release ב-GitHub נקלטת לכאן מעצמה, אחת לשעה. היא לא מופצת ללקוחות עד שלוחצים "הפץ גרסה זו" — פרסום גרסה לכל החנויות נשאר החלטה שמישהו מקבל.')
+                ->schema([
+                    Forms\Components\TextInput::make('github_repo')
+                        ->label('מאגר GitHub')
+                        ->placeholder('multidigitalltd/wc-store-enhancer')
+                        ->rule('regex:/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/')
+                        ->helperText('בפורמט owner/repo. השאירו ריק כדי להעלות קבצים ידנית.'),
+                    Forms\Components\TextInput::make('github_token')
+                        ->label('טוקן GitHub (למאגר פרטי)')
+                        ->password()->revealable()
+                        ->dehydrated(fn (?string $state): bool => filled($state))
+                        ->helperText('Fine-grained token עם הרשאת Contents: Read בלבד. נשמר מוצפן. למאגר ציבורי אין צורך.'),
+                    Forms\Components\Toggle::make('pack_from_source')
+                        ->label('אם אין קובץ מצורף — ארוז מקוד המקור')
+                        // The default is off, and the reason is on screen: this
+                        // is the difference between shipping a build and
+                        // shipping a working directory.
+                        ->helperText('כבוי = נדרש קובץ ZIP בנוי מצורף ל-Release (למשל מ-GitHub Action), וזו הדרך הנכונה. דלוק = ייארז כל מה שיש במאגר — כולל בדיקות וקובצי בנייה — וזה מה שיותקן אצל הלקוחות.')
+                        ->columnSpanFull(),
+                    Forms\Components\Placeholder::make('github_state')
+                        ->label('סנכרון אחרון')
+                        ->columnSpanFull()
+                        ->content(fn (?PluginProduct $record): string => match (true) {
+                            $record === null || $record->github_synced_at === null => 'טרם סונכרן.',
+                            filled($record->github_error) => 'נבדק '.$record->github_synced_at->diffForHumans().' — '.$record->github_error,
+                            default => 'נבדק '.$record->github_synced_at->diffForHumans().'.',
+                        }),
+                ])->columns(2),
+
+            Forms\Components\Section::make('מחיר')
+                ->description('ברירות המחדל שמופיעות במסך המכירה. אפשר לשנות אותן בכל מכירה בנפרד.')
+                ->schema([
+                    Forms\Components\TextInput::make('price_agorot')
+                        ->label('מחיר')
+                        ->numeric()->minValue(0)
+                        ->prefix('אגורות')
+                        ->helperText('באגורות, לפני מע״מ. 10000 = ₪100.'),
+                    Forms\Components\Select::make('billing_interval')
+                        ->label('סוג הרישיון')
+                        ->native(false)
+                        ->options([
+                            'yearly' => 'שנתי (מתחדש)',
+                            'monthly' => 'חודשי (מתחדש)',
+                        ])
+                        ->placeholder('חד-פעמי (ללא חידוש)')
+                        ->helperText('רישיון מתחדש פותח מנוי בעת המכירה — הגבייה, החשבונית והדאנינג הם אותם אלה של כל מנוי אחר.'),
+                    Forms\Components\TextInput::make('default_sites_limit')
+                        ->label('מספר אתרים כברירת מחדל')
+                        ->numeric()->minValue(0)->default(1)
+                        ->helperText('0 = ללא הגבלה.'),
+                ])->columns(3),
+
             Forms\Components\Section::make('תאימות שמדווחת לוורדפרס')
                 ->description('מה שיוצג בעמוד התוספים באתר הלקוח. ריק = ברירת המחדל של המערכת.')
                 ->schema([
@@ -94,6 +149,21 @@ class PluginProductResource extends Resource
             ])
             ->defaultSort('name')
             ->actions([
+                Tables\Actions\Action::make('sync')
+                    ->label('סנכרון מ-GitHub')
+                    ->icon('heroicon-o-arrow-down-on-square')
+                    ->color('gray')
+                    ->visible(fn (PluginProduct $record): bool => filled($record->github_repo))
+                    ->action(function (PluginProduct $record): void {
+                        $result = app(GithubReleases::class)->sync($record);
+
+                        Notification::make()
+                            ->title($record->name.' — סנכרון גרסאות')
+                            ->body($result['message'])
+                            ->{$result['ok'] ? 'success' : 'danger'}()
+                            ->persistent()
+                            ->send();
+                    }),
                 Tables\Actions\EditAction::make()->label('עריכה'),
             ])
             ->emptyStateHeading('אין עדיין תוספים')

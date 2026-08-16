@@ -31,6 +31,7 @@ use App\Jobs\SendBroadcastJob;
 use App\Jobs\SendDemandRemindersJob;
 use App\Jobs\SendProactiveRemindersJob;
 use App\Jobs\SendTaskRemindersJob;
+use App\Jobs\SyncPluginReleasesJob;
 use App\Jobs\WeeklyMaintenanceJob;
 use App\Models\AuditLog;
 use App\Models\Broadcast;
@@ -312,6 +313,13 @@ Schedule::call(function () {
 // the panel refreshes this itself.
 Schedule::job(new RefreshCloudflareCountryRulesJob)
     ->hourly()->name('cloudflare:country-rules-snapshot')->onOneServer();
+
+// New releases published on our plugins' development repositories. Hourly, so a
+// tagged release is available to publish within the hour — but never published
+// by itself: sending a build to every customer's shop stays a decision somebody
+// makes in front of a screen that says what it costs.
+Schedule::job(new SyncPluginReleasesJob)
+    ->hourly()->name('licensing:sync-releases')->onOneServer();
 
 // Plugin licences approaching their expiry date. A licence that lapses quietly
 // does not look like an expiry to the customer — it looks like the plugin

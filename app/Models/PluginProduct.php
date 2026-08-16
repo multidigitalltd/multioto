@@ -2,8 +2,10 @@
 
 namespace App\Models;
 
+use App\Enums\BillingInterval;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Carbon;
 
 /**
  * A WordPress plugin we sell.
@@ -17,11 +19,40 @@ class PluginProduct extends Model
     protected $fillable = [
         'slug', 'name', 'homepage', 'description',
         'requires', 'requires_php', 'tested', 'is_active',
+        'github_repo', 'github_token', 'pack_from_source', 'github_synced_at', 'github_error',
+        'price_agorot', 'billing_interval', 'default_sites_limit',
     ];
 
     protected function casts(): array
     {
-        return ['is_active' => 'boolean'];
+        return [
+            'is_active' => 'boolean',
+            'pack_from_source' => 'boolean',
+            'github_synced_at' => 'datetime',
+            // A token that can read a private repository is a credential, and
+            // credentials are not readable from a stolen database dump.
+            'github_token' => 'encrypted',
+            'price_agorot' => 'integer',
+            'default_sites_limit' => 'integer',
+        ];
+    }
+
+    /** Does a sale of this plugin renew itself, and how often. */
+    public function billingInterval(): ?BillingInterval
+    {
+        return $this->billing_interval !== null
+            ? BillingInterval::tryFrom((string) $this->billing_interval)
+            : null;
+    }
+
+    /** How long one paid term lasts, from $from. Null for a one-off sale. */
+    public function termEnd(Carbon $from): ?Carbon
+    {
+        return match ($this->billingInterval()) {
+            BillingInterval::Yearly => $from->copy()->addYear(),
+            BillingInterval::Monthly => $from->copy()->addMonth(),
+            default => null,
+        };
     }
 
     public function releases(): HasMany

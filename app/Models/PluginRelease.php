@@ -17,7 +17,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 class PluginRelease extends Model
 {
     protected $fillable = [
-        'plugin_product_id', 'version', 'zip_path', 'changelog', 'is_current', 'released_at',
+        'plugin_product_id', 'version', 'zip_path', 'changelog', 'is_current', 'released_at', 'source', 'source_ref',
     ];
 
     protected function casts(): array
