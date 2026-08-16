@@ -2,9 +2,9 @@
 
 namespace Tests\Feature;
 
-use App\Enums\BillingInterval;
 use App\Models\Customer;
 use App\Models\License;
+use App\Models\PluginPlan;
 use App\Models\PluginProduct;
 use App\Models\Subscription;
 use App\Services\Licensing\GithubReleases;
@@ -229,14 +229,13 @@ class PluginReleaseSyncTest extends TestCase
     public function test_selling_a_yearly_licence_opens_the_subscription_that_will_renew_it(): void
     {
         $customer = Customer::factory()->create(['email' => 'shop@example.co.il']);
-        $this->product->update(['price_agorot' => 24000, 'billing_interval' => 'yearly']);
+        $plan = PluginPlan::create([
+            'plugin_product_id' => $this->product->id,
+            'name' => 'מנוי שנתי', 'price_agorot' => 24000, 'sites_limit' => 3,
+            'billing_interval' => 'yearly', 'is_active' => true,
+        ]);
 
-        $sale = app(LicenseSale::class)->sell(
-            product: $this->product,
-            customer: $customer,
-            sitesLimit: 3,
-            interval: BillingInterval::Yearly,
-        );
+        $sale = app(LicenseSale::class)->sell(plan: $plan, customer: $customer);
 
         $subscription = $sale['subscription'];
 
@@ -257,18 +256,19 @@ class PluginReleaseSyncTest extends TestCase
     public function test_a_one_off_sale_opens_no_subscription(): void
     {
         $customer = Customer::factory()->create();
+        $plan = PluginPlan::create([
+            'plugin_product_id' => $this->product->id,
+            'name' => 'רכישה לתמיד', 'price_agorot' => 50000, 'sites_limit' => 1,
+            'billing_interval' => null, 'updates_months' => null, 'is_active' => true,
+        ]);
 
-        $sale = app(LicenseSale::class)->sell(
-            product: $this->product,
-            customer: $customer,
-            sitesLimit: 1,
-            interval: null,
-            priceAgorot: 50000,
-        );
+        $sale = app(LicenseSale::class)->sell(plan: $plan, customer: $customer);
 
         $this->assertNull($sale['subscription']);
         $this->assertSame(0, Subscription::count());
+        // בלי עדכונים ובלי תפוגה: הלקוח קנה את התוסף, והוא שלו.
         $this->assertNull($sale['license']->expires_at);
+        $this->assertFalse($sale['license']->includesUpdates());
         $this->assertSame(1, License::count());
     }
 }

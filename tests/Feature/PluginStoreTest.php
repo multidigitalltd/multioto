@@ -8,6 +8,7 @@ use App\Models\Charge;
 use App\Models\Customer;
 use App\Models\License;
 use App\Models\PluginOrder;
+use App\Models\PluginPlan;
 use App\Models\PluginProduct;
 use App\Models\PluginRelease;
 use App\Models\Subscription;
@@ -34,6 +35,8 @@ class PluginStoreTest extends TestCase
 
     private PluginProduct $product;
 
+    private PluginPlan $plan;
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -46,9 +49,19 @@ class PluginStoreTest extends TestCase
             'slug' => 'wc-store-enhancer',
             'name' => 'משפר חנויות',
             'description' => 'משפר את החנות',
+            'is_active' => true,
+        ]);
+
+        $this->plan = $this->plan(['name' => 'מנוי שנתי', 'price_agorot' => 20000, 'billing_interval' => 'yearly', 'sites_limit' => 2]);
+    }
+
+    private function plan(array $attributes = []): PluginPlan
+    {
+        return PluginPlan::create($attributes + [
+            'plugin_product_id' => $this->product->id,
+            'name' => 'מסלול',
             'price_agorot' => 20000,
-            'billing_interval' => 'yearly',
-            'default_sites_limit' => 2,
+            'sites_limit' => 1,
             'is_active' => true,
         ]);
     }
@@ -75,8 +88,26 @@ class PluginStoreTest extends TestCase
         $this->get(route('store.plugin', ['slug' => 'wc-store-enhancer']))
             ->assertOk()
             ->assertSee('236.00')          // 200 ₪ + מע״מ
-            ->assertSee('כולל מע״מ')
+            ->assertSee('המחירים כוללים מע״מ')
             ->assertSee('2 אתרים');
+    }
+
+    /**
+     * וכל מסלול מוצג עם מה שקורה אחרי המכירה.
+     *
+     * "חד-פעמי בלי עדכונים" אינו מחיר אחר — הוא מוצר אחר, והלקוח צריך לדעת
+     * לפני התשלום שלא יקבל גרסאות חדשות.
+     */
+    public function test_every_plan_shows_what_happens_to_updates(): void
+    {
+        $this->plan(['name' => 'רכישה לתמיד', 'price_agorot' => 60000, 'updates_months' => null]);
+        $this->plan(['name' => 'לתמיד + שנה עדכונים', 'price_agorot' => 80000, 'updates_months' => 12]);
+
+        $this->get(route('store.plugin', ['slug' => 'wc-store-enhancer']))
+            ->assertOk()
+            ->assertSee('עדכונים כל עוד המנוי פעיל')
+            ->assertSee('ללא עדכונים — התוסף שלכם לתמיד, בגרסה הנוכחית')
+            ->assertSee('כולל עדכונים ל-12 חודשים');
     }
 
     /**
@@ -89,7 +120,7 @@ class PluginStoreTest extends TestCase
     {
         $this->get(route('store.plugin', ['slug' => 'wc-store-enhancer']))
             ->assertSee('מתחדש אוטומטית')
-            ->assertSee('התוסף ימשיך לעבוד באתר');
+            ->assertSee('התוסף ממשיך לעבוד באתר תמיד');
     }
 
     /** תוסף שאינו פעיל או בלי מחיר אינו נמכר. */
@@ -98,7 +129,9 @@ class PluginStoreTest extends TestCase
         $this->product->update(['is_active' => false]);
         $this->get(route('store.plugin', ['slug' => 'wc-store-enhancer']))->assertNotFound();
 
-        $this->product->update(['is_active' => true, 'price_agorot' => null]);
+        // ובלי מסלול פעיל אין מחיר, ולכן אין עמוד מכירה.
+        $this->product->update(['is_active' => true]);
+        $this->product->plans()->update(['is_active' => false]);
         $this->get(route('store.plugin', ['slug' => 'wc-store-enhancer']))->assertNotFound();
     }
 
@@ -114,6 +147,7 @@ class PluginStoreTest extends TestCase
         $this->fakeCardcom();
 
         $this->post(route('store.buy', ['slug' => 'wc-store-enhancer']), [
+            'plan' => $this->plan->id,
             'name' => 'יוסי כהן',
             'email' => 'yossi@example.co.il',
             'phone' => '0501234567',
@@ -134,7 +168,7 @@ class PluginStoreTest extends TestCase
         $this->fakeCardcom();
 
         $this->post(route('store.buy', ['slug' => 'wc-store-enhancer']), [
-            'name' => 'יוסי', 'email' => 'y@example.co.il', 'terms' => '1',
+            'plan' => $this->plan->id, 'name' => 'יוסי', 'email' => 'y@example.co.il', 'terms' => '1',
         ]);
 
         $this->assertSame(0, License::count());
@@ -148,7 +182,7 @@ class PluginStoreTest extends TestCase
         $existing = Customer::factory()->create(['email' => 'shop@example.co.il']);
 
         $this->post(route('store.buy', ['slug' => 'wc-store-enhancer']), [
-            'name' => 'שם אחר', 'email' => 'SHOP@example.co.il', 'terms' => '1',
+            'plan' => $this->plan->id, 'name' => 'שם אחר', 'email' => 'SHOP@example.co.il', 'terms' => '1',
         ]);
 
         $this->assertSame(1, Customer::count());
@@ -161,7 +195,7 @@ class PluginStoreTest extends TestCase
         Http::fake();
 
         $this->post(route('store.buy', ['slug' => 'wc-store-enhancer']), [
-            'name' => 'יוסי', 'email' => 'not-an-email', 'terms' => '',
+            'plan' => $this->plan->id, 'name' => 'יוסי', 'email' => 'not-an-email', 'terms' => '',
         ])->assertSessionHasErrors(['email', 'terms']);
 
         $this->assertSame(0, PluginOrder::count());
@@ -179,7 +213,7 @@ class PluginStoreTest extends TestCase
         $this->fakeCardcom();
 
         $this->post(route('store.buy', ['slug' => 'wc-store-enhancer']), [
-            'name' => 'יוסי כהן', 'email' => 'yossi@example.co.il', 'terms' => '1',
+            'plan' => $this->plan->id, 'name' => 'יוסי כהן', 'email' => 'yossi@example.co.il', 'terms' => '1',
         ]);
 
         $order = PluginOrder::sole();
@@ -233,7 +267,7 @@ class PluginStoreTest extends TestCase
     {
         $this->fakeCardcom();
         $this->post(route('store.buy', ['slug' => 'wc-store-enhancer']), [
-            'name' => 'יוסי', 'email' => 'y@example.co.il', 'terms' => '1',
+            'plan' => $this->plan->id, 'name' => 'יוסי', 'email' => 'y@example.co.il', 'terms' => '1',
         ]);
 
         $this->get(route('store.done', ['reference' => PluginOrder::sole()->reference]))
@@ -274,11 +308,85 @@ class PluginStoreTest extends TestCase
     {
         $this->fakeCardcom();
         $this->post(route('store.buy', ['slug' => 'wc-store-enhancer']), [
-            'name' => 'יוסי', 'email' => 'y@example.co.il', 'terms' => '1',
+            'plan' => $this->plan->id, 'name' => 'יוסי', 'email' => 'y@example.co.il', 'terms' => '1',
         ]);
 
         $this->get(route('store.download', ['reference' => PluginOrder::sole()->reference]))
             ->assertStatus(403);
+    }
+
+    /**
+     * רכישת מסלול "לתמיד בלי עדכונים" — רישיון בלי תפוגה ובלי מנוי.
+     *
+     * זה מוצר שלישי, לא הנחה: הלקוח משלם פעם אחת, מקבל את התוסף לתמיד, ואינו
+     * מקבל גרסאות חדשות. רישיון שהיה פג מיד היה מדווח לו שהתוסף שקנה שבור.
+     */
+    public function test_buying_a_perpetual_plan_without_updates_issues_a_licence_that_never_expires(): void
+    {
+        Mail::fake();
+
+        $perpetual = $this->plan([
+            'name' => 'רכישה לתמיד', 'price_agorot' => 60000,
+            'billing_interval' => null, 'updates_months' => null, 'sites_limit' => 1,
+        ]);
+
+        $this->fakeCardcom();
+        $this->post(route('store.buy', ['slug' => 'wc-store-enhancer']), [
+            'plan' => $perpetual->id, 'name' => 'יוסי', 'email' => 'y@example.co.il', 'terms' => '1',
+        ]);
+
+        $order = PluginOrder::sole();
+        $order->charge->update(['status' => ChargeStatus::Succeeded, 'charged_at' => now()]);
+
+        $license = $order->fresh()->license;
+
+        $this->assertNull($license->expires_at);
+        $this->assertFalse($license->includesUpdates());
+        $this->assertNull($license->subscription_id);
+        $this->assertSame(0, Subscription::count());
+    }
+
+    /** ומסלול "לתמיד + שנה עדכונים" — תפוגה בעוד שנה, ועדיין בלי מנוי. */
+    public function test_a_one_off_plan_with_a_year_of_updates_expires_in_a_year_without_a_subscription(): void
+    {
+        Mail::fake();
+
+        $plan = $this->plan([
+            'name' => 'לתמיד + שנה עדכונים', 'price_agorot' => 80000,
+            'billing_interval' => null, 'updates_months' => 12,
+        ]);
+
+        $this->fakeCardcom();
+        $this->post(route('store.buy', ['slug' => 'wc-store-enhancer']), [
+            'plan' => $plan->id, 'name' => 'יוסי', 'email' => 'y@example.co.il', 'terms' => '1',
+        ]);
+
+        $order = PluginOrder::sole();
+        $order->charge->update(['status' => ChargeStatus::Succeeded, 'charged_at' => now()]);
+
+        $license = $order->fresh()->license;
+
+        $this->assertSame(now()->addYear()->toDateString(), $license->expires_at->toDateString());
+        $this->assertTrue($license->includesUpdates());
+        $this->assertSame(0, Subscription::count());
+    }
+
+    /** מסלול של תוסף אחר אינו נקנה דרך העמוד הזה. */
+    public function test_a_plan_belonging_to_another_plugin_cannot_be_bought_here(): void
+    {
+        Http::fake();
+
+        $other = PluginProduct::create(['slug' => 'other', 'name' => 'אחר', 'is_active' => true]);
+        $otherPlan = PluginPlan::create([
+            'plugin_product_id' => $other->id, 'name' => 'זול', 'price_agorot' => 100,
+            'sites_limit' => 1, 'is_active' => true,
+        ]);
+
+        $this->post(route('store.buy', ['slug' => 'wc-store-enhancer']), [
+            'plan' => $otherPlan->id, 'name' => 'יוסי', 'email' => 'y@example.co.il', 'terms' => '1',
+        ])->assertSessionHasErrors('plan');
+
+        $this->assertSame(0, PluginOrder::count());
     }
 
     /** ומספר הזמנה שאינו קיים אינו מגלה דבר. */

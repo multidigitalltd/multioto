@@ -2,10 +2,9 @@
 
 namespace App\Models;
 
-use App\Enums\BillingInterval;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
-use Illuminate\Support\Carbon;
 
 /**
  * A WordPress plugin we sell.
@@ -19,8 +18,8 @@ class PluginProduct extends Model
     protected $fillable = [
         'slug', 'name', 'homepage', 'description',
         'requires', 'requires_php', 'tested', 'is_active',
-        'github_repo', 'github_token', 'pack_from_source', 'github_synced_at', 'github_error',
-        'price_agorot', 'billing_interval', 'default_sites_limit',
+        'github_repo', 'github_token', 'pack_from_source', 'auto_publish',
+        'github_synced_at', 'github_error',
     ];
 
     protected function casts(): array
@@ -32,27 +31,26 @@ class PluginProduct extends Model
             // A token that can read a private repository is a credential, and
             // credentials are not readable from a stolen database dump.
             'github_token' => 'encrypted',
-            'price_agorot' => 'integer',
-            'default_sites_limit' => 'integer',
+            'auto_publish' => 'boolean',
         ];
     }
 
-    /** Does a sale of this plugin renew itself, and how often. */
-    public function billingInterval(): ?BillingInterval
+    /** The ways it is sold, in the order they are shown. */
+    public function plans(): HasMany
     {
-        return $this->billing_interval !== null
-            ? BillingInterval::tryFrom((string) $this->billing_interval)
-            : null;
+        return $this->hasMany(PluginPlan::class)->orderBy('position')->orderBy('price_agorot');
     }
 
-    /** How long one paid term lasts, from $from. Null for a one-off sale. */
-    public function termEnd(Carbon $from): ?Carbon
+    /** @return Collection<int, PluginPlan> */
+    public function sellablePlans()
     {
-        return match ($this->billingInterval()) {
-            BillingInterval::Yearly => $from->copy()->addYear(),
-            BillingInterval::Monthly => $from->copy()->addMonth(),
-            default => null,
-        };
+        return $this->plans()->where('is_active', true)->get();
+    }
+
+    /** Whether anybody can buy this at all. */
+    public function isSellable(): bool
+    {
+        return $this->is_active && $this->plans()->where('is_active', true)->exists();
     }
 
     public function releases(): HasMany

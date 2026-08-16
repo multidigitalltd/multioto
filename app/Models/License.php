@@ -27,8 +27,8 @@ class License extends Model
     public const REVOKED = 'revoked';
 
     protected $fillable = [
-        'plugin_product_id', 'customer_id', 'subscription_id', 'key_hash', 'key_prefix',
-        'email', 'sites_limit', 'expires_at', 'status', 'notes', 'issued_at', 'last_checked_at',
+        'plugin_product_id', 'plugin_plan_id', 'customer_id', 'subscription_id', 'key_hash', 'key_prefix',
+        'email', 'sites_limit', 'expires_at', 'includes_updates', 'status', 'notes', 'issued_at', 'last_checked_at',
     ];
 
     protected function casts(): array
@@ -38,12 +38,30 @@ class License extends Model
             'issued_at' => 'datetime',
             'last_checked_at' => 'datetime',
             'sites_limit' => 'integer',
+            'includes_updates' => 'boolean',
         ];
     }
 
     public function product(): BelongsTo
     {
         return $this->belongsTo(PluginProduct::class, 'plugin_product_id');
+    }
+
+    public function plan(): BelongsTo
+    {
+        return $this->belongsTo(PluginPlan::class, 'plugin_plan_id');
+    }
+
+    /**
+     * Whether this licence is ever offered a newer version.
+     *
+     * A licence bought outright without updates is valid forever and never
+     * updated — the two are separate facts, and collapsing them into an expiry
+     * date would tell a customer who owns the plugin that it has expired.
+     */
+    public function includesUpdates(): bool
+    {
+        return (bool) $this->includes_updates;
     }
 
     public function customer(): BelongsTo
@@ -167,6 +185,7 @@ class License extends Model
         return match (true) {
             $this->isRevoked() => 'מבוטל',
             $this->hasExpired() => 'פג תוקף',
+            ! $this->includesUpdates() => 'פעיל — ללא עדכונים',
             default => 'פעיל',
         };
     }

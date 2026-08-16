@@ -4,6 +4,7 @@ namespace App\Filament\Resources;
 
 use App\Filament\Concerns\AdminOnly;
 use App\Filament\Resources\PluginProductResource\Pages;
+use App\Filament\Resources\PluginProductResource\RelationManagers\PlansRelationManager;
 use App\Filament\Resources\PluginProductResource\RelationManagers\ReleasesRelationManager;
 use App\Models\PluginProduct;
 use App\Services\Licensing\GithubReleases;
@@ -30,7 +31,7 @@ class PluginProductResource extends Resource
 
     protected static ?string $navigationIcon = 'heroicon-o-puzzle-piece';
 
-    protected static ?string $navigationGroup = 'כספים';
+    protected static ?string $navigationGroup = 'כלים';
 
     protected static ?string $navigationLabel = 'תוספים שאנחנו מוכרים';
 
@@ -38,7 +39,7 @@ class PluginProductResource extends Resource
 
     protected static ?string $pluralModelLabel = 'תוספים שאנחנו מוכרים';
 
-    protected static ?int $navigationSort = 60;
+    protected static ?int $navigationSort = 20;
 
     public static function form(Form $form): Form
     {
@@ -99,29 +100,6 @@ class PluginProductResource extends Resource
                         }),
                 ])->columns(2),
 
-            Forms\Components\Section::make('מחיר')
-                ->description('ברירות המחדל שמופיעות במסך המכירה. אפשר לשנות אותן בכל מכירה בנפרד.')
-                ->schema([
-                    Forms\Components\TextInput::make('price_agorot')
-                        ->label('מחיר')
-                        ->numeric()->minValue(0)
-                        ->prefix('אגורות')
-                        ->helperText('באגורות, לפני מע״מ. 10000 = ₪100.'),
-                    Forms\Components\Select::make('billing_interval')
-                        ->label('סוג הרישיון')
-                        ->native(false)
-                        ->options([
-                            'yearly' => 'שנתי (מתחדש)',
-                            'monthly' => 'חודשי (מתחדש)',
-                        ])
-                        ->placeholder('חד-פעמי (ללא חידוש)')
-                        ->helperText('רישיון מתחדש פותח מנוי בעת המכירה — הגבייה, החשבונית והדאנינג הם אותם אלה של כל מנוי אחר.'),
-                    Forms\Components\TextInput::make('default_sites_limit')
-                        ->label('מספר אתרים כברירת מחדל')
-                        ->numeric()->minValue(0)->default(1)
-                        ->helperText('0 = ללא הגבלה.'),
-                ])->columns(3),
-
             Forms\Components\Section::make('תאימות שמדווחת לוורדפרס')
                 ->description('מה שיוצג בעמוד התוספים באתר הלקוח. ריק = ברירת המחדל של המערכת.')
                 ->schema([
@@ -149,6 +127,17 @@ class PluginProductResource extends Resource
                     ->badge()
                     ->state(fn (PluginProduct $record): string => $record->currentRelease()?->number() ?? 'אין גרסה')
                     ->color(fn (PluginProduct $record): string => $record->currentRelease() === null ? 'gray' : 'success'),
+                Tables\Columns\TextColumn::make('plans_count')
+                    ->label('מסלולי מכירה')
+                    ->counts('plans')
+                    // Zero plans means no price, which means the sales page is
+                    // not reachable — worth seeing from the list rather than
+                    // discovering from a 404.
+                    ->badge()
+                    ->color(fn (PluginProduct $record): string => $record->isSellable() ? 'success' : 'gray')
+                    ->formatStateUsing(fn ($state, PluginProduct $record): string => $record->isSellable()
+                        ? $state.' מסלולים'
+                        : 'אין מחיר'),
                 Tables\Columns\TextColumn::make('licenses_count')->label('רישיונות')->counts('licenses')->sortable(),
                 Tables\Columns\IconColumn::make('is_active')->label('פעיל')->boolean(),
             ])
@@ -177,7 +166,7 @@ class PluginProductResource extends Resource
 
     public static function getRelations(): array
     {
-        return [ReleasesRelationManager::class];
+        return [PlansRelationManager::class, ReleasesRelationManager::class];
     }
 
     public static function getPages(): array

@@ -400,6 +400,31 @@ class LicenseApiTest extends TestCase
             ->assertOk()->assertJson(['status' => 'valid']);
     }
 
+    /**
+     * רישיון שנקנה לתמיד בלי עדכונים — פעיל, ולעולם לא מקבל גרסה חדשה.
+     *
+     * זה מוצר, לא תקלה. הלקוח קנה את התוסף והוא שלו; לכן הרישיון מדווח valid
+     * ואינו פג לעולם, ופשוט אין עבורו עדכון. תשובת 403 הייתה גורמת לתוסף להציג
+     * בעיית רישיון על משהו שעובד בדיוק כפי שנמכר.
+     */
+    public function test_a_licence_bought_without_updates_stays_valid_and_is_never_offered_one(): void
+    {
+        [$license, $key] = $this->license(['expires_at' => null, 'includes_updates' => false]);
+        $this->call_('activate', ['key' => $key, 'site' => 'https://shop.co.il']);
+        $this->release();
+
+        $this->call_('check', ['key' => $key, 'site' => 'https://shop.co.il'])
+            ->assertOk()
+            ->assertJson(['status' => 'valid', 'expires' => '']);
+
+        $this->call_('update', ['key' => $key, 'site' => 'https://shop.co.il'])
+            ->assertOk()
+            ->assertJson(['status' => 'valid'])
+            ->assertJsonMissing(['version' => '1.23.0']);
+
+        $this->assertFalse($license->fresh()->includesUpdates());
+    }
+
     /** רישיון ללא תאריך תפוגה מדווח מחרוזת ריקה — כך החוזה מגדיר "ללא תפוגה". */
     public function test_a_licence_without_an_expiry_reports_an_empty_string(): void
     {

@@ -2,9 +2,9 @@
 
 namespace App\Filament\Resources\LicenseResource\Pages;
 
-use App\Enums\BillingInterval;
 use App\Filament\Resources\LicenseResource;
 use App\Models\Customer;
+use App\Models\PluginPlan;
 use App\Models\PluginProduct;
 use App\Models\Subscription;
 use App\Services\Licensing\LicenseIssuer;
@@ -39,6 +39,13 @@ class ListLicenses extends ListRecords
                         ->label('תוסף')
                         ->options(fn (): array => PluginProduct::query()->where('is_active', true)->pluck('name', 'id')->all())
                         ->required()->native(false),
+                    Forms\Components\Toggle::make('includes_updates')
+                        ->label('כולל עדכונים')
+                        ->default(true)
+                        // The one thing a date cannot express: a licence bought
+                        // outright without updates is valid forever and never
+                        // offered a newer version.
+                        ->helperText('כבוי = הלקוח מקבל את התוסף בגרסה הנוכחית לתמיד, בלי גרסאות חדשות. הרישיון יישאר "פעיל" ולא יפוג.'),
                     Forms\Components\Select::make('customer_id')
                         ->label('לקוח')
                         ->options(fn (): array => Customer::query()->orderBy('name')->pluck('name', 'id')->all())
@@ -112,45 +119,45 @@ class ListLicenses extends ListRecords
                     ->label('תוסף')
                     ->options(fn (): array => PluginProduct::query()->where('is_active', true)->pluck('name', 'id')->all())
                     ->required()->native(false)->live()
-                    // The product's own price and term are the starting point,
-                    // so the common sale is three clicks and no typing.
-                    ->afterStateUpdated(function (Forms\Set $set, $state): void {
-                        $product = PluginProduct::find($state);
-
-                        $set('price_agorot', $product?->price_agorot);
-                        $set('billing_interval', $product?->billing_interval);
-                        $set('sites_limit', $product?->default_sites_limit ?? 1);
-                    }),
+                    ->afterStateUpdated(fn (Forms\Set $set) => $set('plugin_plan_id', null)),
+                Forms\Components\Select::make('plugin_plan_id')
+                    ->label('מסלול')
+                    ->required()->native(false)->live()
+                    // Named with its price and what happens to updates, because
+                    // those are the two things being decided here — a list of
+                    // bare plan names would make this a guess.
+                    ->options(fn (Forms\Get $get): array => PluginPlan::query()
+                        ->where('plugin_product_id', $get('plugin_product_id'))
+                        ->where('is_active', true)
+                        ->orderBy('position')
+                        ->get()
+                        ->mapWithKeys(fn (PluginPlan $plan): array => [
+                            $plan->id => $plan->name.' — '.$plan->priceLabel().' · '.$plan->sitesLabel().' · '.$plan->updatesLabel(),
+                        ])
+                        ->all())
+                    ->helperText('המחיר, מספר האתרים והעדכונים נגזרים מהמסלול. אפשר לשנות אותם למכירה הזו בלבד למטה.'),
                 Forms\Components\Select::make('customer_id')
                     ->label('לקוח')
                     ->options(fn (): array => Customer::query()->orderBy('name')->pluck('name', 'id')->all())
                     ->required()->searchable()->native(false),
-                Forms\Components\Select::make('billing_interval')
-                    ->label('סוג הרישיון')
-                    ->native(false)
-                    ->options(['yearly' => 'שנתי (מתחדש)', 'monthly' => 'חודשי (מתחדש)'])
-                    ->placeholder('חד-פעמי (ללא חידוש)')
-                    ->helperText('מתחדש = נפתח מנוי, והחידוש והגבייה מתנהלים כמו כל מנוי אחר. חד-פעמי = לא נפתח מנוי, והחיוב נעשה ממסך החיוב הידני.'),
                 Forms\Components\TextInput::make('price_agorot')
-                    ->label('מחיר לתקופה')->numeric()->minValue(0)->prefix('אגורות')
-                    ->helperText('באגורות, לפני מע״מ.'),
+                    ->label('מחיר לתקופה (אופציונלי)')->numeric()->minValue(0)->prefix('אגורות')
+                    ->placeholder(fn (Forms\Get $get): ?string => (string) (PluginPlan::find($get('plugin_plan_id'))?->price_agorot ?? ''))
+                    ->helperText('ריק = מחיר המסלול. מלאו רק כשסוכם מחיר אחר עם הלקוח הזה.'),
                 Forms\Components\TextInput::make('sites_limit')
-                    ->label('מספר אתרים')->numeric()->minValue(0)->default(1)->required()
-                    ->helperText('0 = ללא הגבלה.'),
+                    ->label('מספר אתרים (אופציונלי)')->numeric()->minValue(0)
+                    ->placeholder(fn (Forms\Get $get): ?string => (string) (PluginPlan::find($get('plugin_plan_id'))?->sites_limit ?? ''))
+                    ->helperText('ריק = כמו במסלול. 0 = ללא הגבלה.'),
                 Forms\Components\Textarea::make('notes')->label('הערות פנימיות')->rows(2),
             ])
             ->action(function (array $data): void {
-                $product = PluginProduct::findOrFail($data['plugin_product_id']);
+                $plan = PluginPlan::findOrFail($data['plugin_plan_id']);
                 $customer = Customer::findOrFail($data['customer_id']);
-                $interval = filled($data['billing_interval'] ?? null)
-                    ? BillingInterval::from($data['billing_interval'])
-                    : null;
 
                 $sale = app(LicenseSale::class)->sell(
-                    product: $product,
+                    plan: $plan,
                     customer: $customer,
-                    sitesLimit: (int) $data['sites_limit'],
-                    interval: $interval,
+                    sitesLimit: filled($data['sites_limit'] ?? null) ? (int) $data['sites_limit'] : null,
                     priceAgorot: filled($data['price_agorot'] ?? null) ? (int) $data['price_agorot'] : null,
                     notes: $data['notes'] ?? null,
                 );

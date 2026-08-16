@@ -100,7 +100,7 @@ class AdminPanelProvider extends PanelProvider
             // configured, so an install that never set it up is unaffected.
             ->renderHook(PanelsRenderHook::AUTH_LOGIN_FORM_BEFORE, fn (): string => view('auth.google-button')->render())
             ->sidebarCollapsibleOnDesktop()
-            ->navigationGroups(['תמיכה', 'כספים', 'ניהול'])
+            ->navigationGroups(['תמיכה', 'כספים', 'ניהול', 'כלים'])
             ->discoverResources(in: app_path('Filament/Resources'), for: 'App\\Filament\\Resources')
             ->discoverPages(in: app_path('Filament/Pages'), for: 'App\\Filament\\Pages')
             ->discoverClusters(in: app_path('Filament/Clusters'), for: 'App\\Filament\\Clusters')
