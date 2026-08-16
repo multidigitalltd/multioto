@@ -198,8 +198,8 @@ Schedule::call(function () {
 })->dailyAt('08:25')->name('monitoring:layout-watch')->onOneServer();
 
 // Weekly accessibility + legal-documents audit for every site with a domain.
-// Sunday morning, so the week starts with a current picture of what each
-// customer is missing (and what we can offer to fix).
+// Thursday morning, with the other two site sweeps — the three read each other's
+// findings and are kept on the same morning deliberately.
 Schedule::call(function () {
     if (! config('security.compliance.enabled', true)) {
         return;
@@ -209,12 +209,12 @@ Schedule::call(function () {
         ->whereNotNull('domain')
         ->pluck('id')
         ->each(fn (int $id) => ScanSiteComplianceJob::dispatch($id));
-})->weeklyOn(0, '05:40')->name('monitoring:compliance-scan')->onOneServer();
+})->weeklyOn(4, '05:40')->name('monitoring:compliance-scan')->onOneServer();
 
 // Weekly opportunity sweep: turn what we already know about every site into a
 // priced list of work worth offering (accessibility, legal docs, speed, broken
-// links, SEO basics, old PHP). Runs after the compliance scan so it sees fresh
-// findings.
+// links, SEO basics, old PHP). Runs half an hour after the compliance scan, on
+// the same morning, so it reads findings taken today rather than last week's.
 Schedule::call(function () {
     if (! config('growth.opportunities.enabled', true)) {
         return;
@@ -224,12 +224,15 @@ Schedule::call(function () {
         ->whereNotNull('domain')
         ->pluck('id')
         ->each(fn (int $id) => ScanSiteOpportunitiesJob::dispatch($id));
-})->weeklyOn(0, '06:10')->name('growth:opportunity-radar')->onOneServer();
+})->weeklyOn(4, '06:10')->name('growth:opportunity-radar')->onOneServer();
 
 // Weekly proactive maintenance: propose (or auto-run under a standing
 // approval) plugin updates for every connected site, with a homepage health
-// check after each update. Sunday morning — right after the weekend, before
-// the busy week. Internal proposal, not a customer message — no Shabbat gate.
+// check after each update. Thursday morning, with the other two site sweeps.
+// Note the trade-off of that day: an update that breaks a site is found with
+// the weekend ahead, so the homepage check after each update is what stands
+// between a bad update and two quiet days. Internal proposal, not a customer
+// message — no Shabbat gate.
 Schedule::call(function () {
     if (! config('agent.weekly_maintenance', true)) {
         return;
@@ -240,7 +243,7 @@ Schedule::call(function () {
         ->whereNotNull('mcp_endpoint')
         ->pluck('id')
         ->each(fn (int $id) => WeeklyMaintenanceJob::dispatch($id));
-})->weeklyOn(0, '06:30')->name('maintenance:weekly-plugin-updates')->onOneServer();
+})->weeklyOn(4, '06:30')->name('maintenance:weekly-plugin-updates')->onOneServer();
 
 // Daily security scan for every connected site: match installed plugins/themes/
 // core against the vulnerability feed and alert on newly-found issues. Gated on
