@@ -996,14 +996,23 @@ class Multioto_Agent_Mcp_Server
             'no_found_rows' => true,
         ]);
 
-        $out = array_map(static fn (WP_Post $post): array => [
-            'id' => $post->ID,
-            'title' => $post->post_title,
-            'type' => $post->post_type,
-            'status' => $post->post_status,
-            'modified' => $post->post_modified_gmt,
-            'url' => get_permalink($post),
-        ], $query->posts);
+        $elementorActive = Multioto_Agent_Elementor::active();
+
+        $out = array_map(static function (WP_Post $post) use ($elementorActive): array {
+            return [
+                'id' => $post->ID,
+                'title' => $post->post_title,
+                'type' => $post->post_type,
+                'status' => $post->post_status,
+                // On the list and not only on the single read: a caller that has
+                // to fetch each page to find out how it is built either makes
+                // forty calls or guesses, and guessing here means editing a copy
+                // of the page nobody sees.
+                'built_with_elementor' => $elementorActive && Multioto_Agent_Elementor::builtWithElementor($post->ID),
+                'modified' => $post->post_modified_gmt,
+                'url' => get_permalink($post),
+            ];
+        }, $query->posts);
 
         return wp_json_encode($out, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
     }

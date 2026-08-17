@@ -222,4 +222,82 @@ class ContentChangeRequestTest extends TestCase
         // Customer-visible content must be reviewed every single time.
         $this->assertNull(ApprovalGate::standingKeyFor('content_change', ['site_id' => 1, 'page_id' => 2]));
     }
+
+    /**
+     * עמוד אלמנטור אינו מוצע לעריכה מלכתחילה.
+     *
+     * פסקה שמתווספת ל-content של עמוד אלמנטור אינה נראית באתר החי. הצעה כזו
+     * הייתה שולחת לבעלים אישור לשינוי שאינו יכול לעבוד, ואז מודיעה ללקוח שהוא
+     * בוצע. עדיף שהפנייה תגיע לאדם.
+     */
+    public function test_an_elementor_page_is_never_offered_for_a_content_request(): void
+    {
+        $ticket = $this->ticketWithSite();
+
+        $planner = $this->planner(
+            ['can_do' => true, 'page_id' => 12, 'addition' => 'פתוחים בשישי', 'summary' => 'שעות'],
+            [['id' => 12, 'title' => 'דף הבית', 'built_with_elementor' => true]],
+        );
+
+        // The only page on the site is an Elementor page, so there is nothing
+        // the model may choose from and the request is left to a human.
+        $this->assertNull($planner->plan($ticket, $ticket->customer->sites->first(), 'תוסיפו שאנחנו פתוחים בשישי'));
+    }
+
+    /** ועמוד רגיל באותו אתר עדיין מוצע. */
+    public function test_a_regular_page_beside_an_elementor_one_is_still_offered(): void
+    {
+        $ticket = $this->ticketWithSite();
+
+        $planner = $this->planner(
+            ['can_do' => true, 'page_id' => 13, 'addition' => 'פתוחים בשישי', 'summary' => 'שעות'],
+            [
+                ['id' => 12, 'title' => 'דף הבית', 'built_with_elementor' => true],
+                ['id' => 13, 'title' => 'צור קשר', 'built_with_elementor' => false],
+            ],
+        );
+
+        $plan = $planner->plan($ticket, $ticket->customer->sites->first(), 'תוסיפו שאנחנו פתוחים בשישי');
+
+        $this->assertSame(13, $plan['page_id']);
+    }
+
+    /**
+     * ואם העמוד נבנה מחדש באלמנטור בין ההצעה לאישור — הביצוע נעצר.
+     *
+     * זו רשת הביטחון האמיתית: כתיבה שהייתה "מצליחה", לא משנה דבר שנראה באתר,
+     * ואז מודיעה ללקוח שהטקסט עלה. הוא היה הולך לבדוק, וזה לא היה שם.
+     */
+    public function test_a_page_rebuilt_in_elementor_is_never_silently_edited(): void
+    {
+        $site = Site::factory()->create([
+            'mcp_enabled' => true,
+            'mcp_endpoint' => 'https://site1.co.il/wp-json/md-agent/v1/mcp',
+        ]);
+
+        $action = PendingAction::create([
+            'type' => 'content_change',
+            'status' => ActionStatus::Approved,
+            'summary' => 'הוספת שעות פתיחה',
+            'payload' => ['site_id' => $site->id, 'page_id' => 12, 'page_title' => 'דף הבית', 'addition' => 'פתוחים בשישי'],
+            'proposed_by' => 'ai',
+        ]);
+
+        $mcp = Mockery::mock(McpClient::class);
+        $mcp->shouldReceive('callTool')->with(Mockery::any(), 'wp_content_get', Mockery::any())->andReturn(['content' => []]);
+        $mcp->shouldReceive('textContent')->andReturn((string) json_encode([
+            'id' => 12, 'title' => 'דף הבית', 'content' => '<p>x</p>',
+            'status' => 'publish', 'type' => 'page', 'built_with_elementor' => true,
+        ]));
+        $mcp->shouldNotReceive('callTool')->with(Mockery::any(), 'wp_content_update', Mockery::any());
+
+        $reply = Mockery::mock(AgentReply::class);
+        // Nothing changed, so the customer is not told that anything did.
+        $reply->shouldNotReceive('send');
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessageMatches('/אלמנטור/');
+
+        (new ContentChangeRunner($mcp, $reply))->run($action);
+    }
 }

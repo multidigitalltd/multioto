@@ -5,6 +5,7 @@ namespace App\Services\Agent;
 use App\Models\Site;
 use App\Models\Ticket;
 use App\Services\Ai\ClaudeClient;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 /**
@@ -110,7 +111,7 @@ class ChangeRequestPlanner
             return [];
         }
 
-        return collect($decoded)
+        $pages = collect($decoded)
             ->map(function ($row): ?array {
                 if (! is_array($row)) {
                     return null;
@@ -119,10 +120,32 @@ class ChangeRequestPlanner
                 $id = (int) ($row['id'] ?? 0);
                 $title = trim((string) ($row['title'] ?? ''));
 
-                return $id > 0 && $title !== '' ? ['id' => $id, 'title' => $title] : null;
+                return $id > 0 && $title !== ''
+                    ? ['id' => $id, 'title' => $title, 'elementor' => ($row['built_with_elementor'] ?? false) === true]
+                    : null;
             })
             ->filter()
-            ->values()
+            ->values();
+
+        // Pages built with Elementor are never offered to the model.
+        //
+        // Not a limitation we are hiding — one we are refusing to pretend past.
+        // A paragraph appended to an Elementor page's content is invisible on
+        // the live site, so proposing it would send the owner an approval for a
+        // change that cannot work, and then tell the customer it was made. It is
+        // better for the ticket to reach a person.
+        $editable = $pages->reject(fn (array $page): bool => $page['elementor'])->values();
+
+        if ($editable->count() < $pages->count()) {
+            Log::info('ChangeRequestPlanner: Elementor pages excluded from a content request', [
+                'site' => $site->id,
+                'excluded' => $pages->count() - $editable->count(),
+                'remaining' => $editable->count(),
+            ]);
+        }
+
+        return $editable
+            ->map(fn (array $page): array => ['id' => $page['id'], 'title' => $page['title']])
             ->all();
     }
 }

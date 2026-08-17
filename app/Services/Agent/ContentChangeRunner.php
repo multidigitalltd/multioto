@@ -59,6 +59,23 @@ class ContentChangeRunner
             );
         }
 
+        // An Elementor page keeps nothing in `content` — the whole layout lives
+        // in the builder's own data. Appending a paragraph here would succeed,
+        // change a copy of the page nobody sees, and then tell the customer
+        // their text is live on the site. They would go and look, and it would
+        // not be there.
+        //
+        // Adding a NEW block to an Elementor layout is deliberately outside what
+        // the agent can do (see the plugin's Elementor class: text only, never
+        // structure), so this refuses and leaves it to a person — the honest
+        // outcome, and the loud one.
+        if (($current['built_with_elementor'] ?? false) === true) {
+            throw new \RuntimeException(
+                'העמוד בנוי באלמנטור, ותוכן שמתווסף בדרך הרגילה לא יופיע בו. '
+                .'הוספת טקסט חדש לעמוד אלמנטור נעשית ידנית — השינוי לא בוצע.'
+            );
+        }
+
         $before = (string) $current['content'];
         $paragraph = '<p>'.e($addition).'</p>';
 
