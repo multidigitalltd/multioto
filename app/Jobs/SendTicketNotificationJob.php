@@ -122,7 +122,10 @@ class SendTicketNotificationJob implements ShouldQueue
             return;
         }
 
-        $email = $ticket->customer?->email;
+        // The acknowledgement goes to whoever opened the ticket. "קיבלנו את
+        // פנייתך" delivered to a colleague who did not write is worse than
+        // silence: the person waiting concludes their message never arrived.
+        $email = $ticket->replyToEmail();
 
         // Render first so a disabled template still opts the customer out.
         $rendered = $templates->render($this->templateKey, 'email', $data);

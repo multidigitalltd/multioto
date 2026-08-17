@@ -199,6 +199,57 @@ class Ticket extends Model
     }
 
     /**
+     * The address an answer to this ticket goes TO.
+     *
+     * The person who wrote — not the business.
+     *
+     * A business does not open tickets. יוסי from the office opens them, or an
+     * external accountant, or an employee who noticed the site was down. Sending
+     * the answer to the company's primary mailbox delivers it to somebody who
+     * never asked the question, and leaves the person who did waiting for a
+     * reply that has already been sent. From their side the support desk simply
+     * did not answer — and they are right.
+     *
+     * `contact_handle` is the sender of the message that opened the ticket, so
+     * on an email ticket it is exactly the address that expects the answer. A
+     * ticket opened by phone, by WhatsApp or from the panel has no email handle,
+     * and there the customer's own address is the best there is.
+     */
+    public function replyToEmail(): ?string
+    {
+        $handle = mb_strtolower(trim((string) $this->contact_handle));
+
+        if (filter_var($handle, FILTER_VALIDATE_EMAIL) !== false) {
+            return $handle;
+        }
+
+        $primary = mb_strtolower(trim((string) $this->customer?->email));
+
+        return $primary !== '' ? $primary : null;
+    }
+
+    /**
+     * Everyone else who gets a copy: the business, and this ticket's watchers.
+     *
+     * The customer's primary address stays on every reply as a copy. It used to
+     * be the sole recipient, and a business that has always seen its own support
+     * thread must not stop seeing it because we corrected who the answer is
+     * addressed to — a fix that quietly hides a conversation from the account
+     * holder trades one silent failure for another.
+     *
+     * @return list<string>
+     */
+    public function replyCcEmails(): array
+    {
+        $to = $this->replyToEmail();
+        $primary = mb_strtolower(trim((string) $this->customer?->email));
+
+        $cc = $primary !== '' && $primary !== $to ? [$primary] : [];
+
+        return array_values(array_unique([...$cc, ...$this->watcherEmails($to)]));
+    }
+
+    /**
      * The watcher addresses to copy on an outbound message, minus the customer's
      * own address — a customer copied on their own reply gets it twice and reads
      * it as a system that lost track of who it is talking to.

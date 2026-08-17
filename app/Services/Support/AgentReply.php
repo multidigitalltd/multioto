@@ -140,6 +140,10 @@ class AgentReply
                 || filled($customer?->phone);
         }
 
-        return filled($customer?->email);
+        // Reachable when we have any address for this ticket — the writer's or
+        // the business's. Asking only about the customer's primary address
+        // declared a ticket unanswerable while its author's address sat on the
+        // row, which is how a real question gets closed as "no way to reply".
+        return $ticket->replyToEmail() !== null;
     }
 }
