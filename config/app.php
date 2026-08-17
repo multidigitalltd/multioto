@@ -81,9 +81,23 @@ return [
     |
     */
 
-    'locale' => env('APP_LOCALE', 'he'),
+    /*
+     | Hebrew, and not overridable from the environment.
+     |
+     | lang/ holds exactly one language, and the strings in it go to customers:
+     | the dunning ladder's WhatsApp and email texts. An APP_LOCALE of anything
+     | else does not translate them — there is nothing to translate them into —
+     | it makes __() return its own key, and a customer whose card failed
+     | receives a message whose entire body is "dunning.payment_failed.body".
+     |
+     | .env.example ships APP_LOCALE=en, so this is not a hypothetical: it is
+     | one copied line away on any install. Pinned here for the same reason the
+     | Cardcom and Linet endpoints are — a stale .env must not be able to point
+     | it somewhere that silently produces garbage.
+     */
+    'locale' => 'he',
 
-    'fallback_locale' => env('APP_FALLBACK_LOCALE', 'en'),
+    'fallback_locale' => 'he',
 
     'faker_locale' => env('APP_FAKER_LOCALE', 'en_US'),
 

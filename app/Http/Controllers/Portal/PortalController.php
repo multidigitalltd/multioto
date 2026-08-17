@@ -45,6 +45,7 @@ class PortalController extends Controller
                 ->whereNotIn('status', [TicketStatus::Resolved, TicketStatus::Closed])
                 ->count(),
             'invoiceCount' => $customer->invoices()->count(),
+            'licenseCount' => $customer->licenses()->count(),
             'openDebtCount' => $openDebt->count(),
             'openDebtAgorot' => (int) $openDebt->sum('total_agorot'),
         ]);

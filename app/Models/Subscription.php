@@ -11,6 +11,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Support\Carbon;
 
 class Subscription extends Model
@@ -94,6 +95,18 @@ class Subscription extends Model
     public function site(): BelongsTo
     {
         return $this->belongsTo(Site::class);
+    }
+
+    /**
+     * The plugin licence this subscription renews, when it renews one.
+     *
+     * What it changes is what the customer is told when the card fails: a
+     * subscription with a site can end in a suspended site, and one that renews
+     * a licence never can — the plugin keeps running either way.
+     */
+    public function license(): HasOne
+    {
+        return $this->hasOne(License::class);
     }
 
     public function token(): BelongsTo

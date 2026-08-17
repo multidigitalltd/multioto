@@ -71,6 +71,13 @@
             <li>אחרי ההפעלה: הגדרות התוסף ← רישיון, הדביקו את המפתח ולחצו "הפעלת רישיון".</li>
             <li>מכאן עדכוני גרסה יגיעו אליכם אוטומטית, כמו כל תוסף אחר.</li>
         </ol>
+
+        {{-- The address to keep, once this page is closed: it survives the
+             order reference, and it is where a seat gets freed when the site
+             it was activated on no longer exists to free it. --}}
+        <p>לניהול הרישיון בהמשך — האתרים שהוא פעיל בהם, שחרור אתר שהוחלף והורדה חוזרת —
+           <a href="{{ route('portal.licenses') }}">האזור האישי</a>. הכניסה בקישור חד-פעמי
+           לכתובת {{ $order->buyer_email }}.</p>
     @elseif ($order->status === \App\Models\PluginOrder::FAILED)
         <h1>הרכישה לא הושלמה</h1>
         <p>לא בוצע חיוב. אפשר לנסות שוב מעמוד המוצר, ואם משהו נתקע — כתבו לנו ונשלים ידנית.</p>

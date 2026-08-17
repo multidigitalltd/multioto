@@ -30,7 +30,7 @@ class SendDunningNotificationJob implements ShouldQueue
 
     public function handle(WahaClient $waha): void
     {
-        $event = DunningEvent::with(['subscription.customer', 'subscription.plan', 'charge'])
+        $event = DunningEvent::with(['subscription.customer', 'subscription.plan', 'subscription.license', 'charge'])
             ->find($this->dunningEventId);
 
         if (! $event || $event->status !== DunningStatus::Queued) {
@@ -44,6 +44,10 @@ class SendDunningNotificationJob implements ShouldQueue
             'plan' => $event->subscription->planName(),
             'amount' => number_format(($event->charge?->total_agorot ?? $event->subscription->totalChargeAgorot()) / 100, 2),
             'update_link' => CardLink::for($customer->id),
+            // Only the licence templates use this. Supplied unconditionally so a
+            // template that wants it never renders a bare ":until", and phrased
+            // rather than left blank when there is no date to give.
+            'until' => $event->subscription->license?->expires_at?->format('d/m/Y') ?? 'סוף התקופה ששולמה',
         ];
 
         $subject = __("dunning.{$event->template_key}.subject", $replacements);

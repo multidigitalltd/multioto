@@ -66,6 +66,18 @@ class ReleasesRelationManager extends RelationManager
                 Tables\Columns\TextColumn::make('version')->label('גרסה')->weight('bold')->sortable(),
                 Tables\Columns\IconColumn::make('is_current')->label('מופצת')->boolean(),
                 Tables\Columns\TextColumn::make('released_at')->label('פורסמה')->dateTime('d/m/Y H:i')->placeholder('—'),
+                // The reason the delete button is missing on some rows, said out
+                // loud. A build somebody bought outright is the only build they
+                // are entitled to, so it stays.
+                Tables\Columns\TextColumn::make('licenses_count')
+                    ->label('נמכרה ל')
+                    ->counts('licenses')
+                    ->badge()
+                    ->color('success')
+                    ->formatStateUsing(fn (int $state): string => $state === 0 ? '—' : $state.' רישיונות')
+                    ->tooltip(fn (PluginRelease $record): ?string => $record->licenses_count > 0
+                        ? 'גרסה שנמסרה ללקוח אינה נמחקת: מי שקנה חד-פעמית זכאי בדיוק לקובץ הזה.'
+                        : null),
                 Tables\Columns\TextColumn::make('created_at')->label('הועלתה')->dateTime('d/m/Y H:i')->toggleable(isToggledHiddenByDefault: true),
             ])
             ->defaultSort('id', 'desc')
@@ -99,10 +111,15 @@ class ReleasesRelationManager extends RelationManager
                 Tables\Actions\EditAction::make()->label('עריכה'),
                 Tables\Actions\DeleteAction::make()
                     ->label('מחיקה')
-                    // The distributed build is not deletable from here: removing
-                    // it would leave the product with no answer to "what do I
-                    // download" while shops keep asking every six hours.
-                    ->visible(fn (PluginRelease $record): bool => ! $record->is_current),
+                    // Two builds are not deletable from here. The distributed
+                    // one, because removing it would leave the product with no
+                    // answer to "what do I download" while shops keep asking
+                    // every six hours. And any build that was SOLD, because a
+                    // licence without updates is entitled to that exact file and
+                    // to nothing newer — deleting it would take away a download
+                    // somebody paid for. The foreign key refuses it too; this is
+                    // only so nobody meets that refusal as an error message.
+                    ->visible(fn (PluginRelease $record): bool => ! $record->is_current && ! $record->wasDelivered()),
             ])
             ->emptyStateHeading('אין גרסאות')
             ->emptyStateDescription('העלו קובץ ZIP וסמנו אותו כמופץ כדי שלקוחות יקבלו עדכון.');
