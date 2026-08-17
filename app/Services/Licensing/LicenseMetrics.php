@@ -9,6 +9,7 @@ use App\Models\LicenseSite;
 use App\Models\PluginOrder;
 use App\Models\PluginProduct;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 
 /**
@@ -110,36 +111,97 @@ class LicenseMetrics
     }
 
     /**
-     * Renewal collection in the window, measured on attempts rather than on
-     * licences — see the class note for why that distinction is the whole point.
+     * Renewal collection in the window, measured on BILLED PERIODS rather than
+     * on licences or on individual charges.
      *
-     * `rate` is null when nothing was attempted. A renewal rate of 0% and no
+     * Three things are deliberately not counted, and each of them would move the
+     * number in a flattering direction if it were:
+     *
+     *  · **Expiry dates**, for the reason in the class note — they move.
+     *
+     *  · **Retries.** A period that failed three times and then collected is one
+     *    renewal that succeeded, not four renewals at a 25% rate with triple the
+     *    money lost. Every attempt for one `(subscription, period_start)` folds
+     *    into a single outcome, and a period that ever succeeded counts as
+     *    collected however many attempts it took.
+     *
+     *  · **The first collection.** A licence subscription is created with its
+     *    first charge due immediately, so that charge is the purchase — the
+     *    moment somebody decided to buy, not the moment they decided to stay.
+     *    Counting it would report a renewal rate that rises with new sales.
+     *
+     * `rate` is null when no renewal came due. A renewal rate of 0% and no
      * renewals due are opposite situations and must not print the same.
      *
      * @return array{attempted: int, succeeded: int, failed: int, open: int, rate: ?float, lostAgorot: int}
      */
     public function renewals(): array
     {
+        $empty = ['attempted' => 0, 'succeeded' => 0, 'failed' => 0, 'open' => 0, 'rate' => null, 'lostAgorot' => 0];
+
+        $subscriptionIds = License::query()->whereNotNull('subscription_id')
+            ->distinct()->pluck('subscription_id');
+
+        if ($subscriptionIds->isEmpty()) {
+            return $empty;
+        }
+
+        // The purchase period, per subscription — over all time, because a
+        // subscription sold two years ago has its first period far outside the
+        // window and must still be recognised as the purchase.
+        $purchasePeriod = Charge::query()
+            ->whereIn('subscription_id', $subscriptionIds)
+            ->selectRaw('subscription_id, MIN(period_start) as first_period')
+            ->groupBy('subscription_id')
+            ->pluck('first_period', 'subscription_id')
+            // Normalised to a plain date: the drivers disagree on whether a date
+            // column comes back with a time on it, and comparing the two shapes
+            // as strings would silently never match — which would look exactly
+            // like the exclusion being off.
+            ->map(fn (string $period): string => Carbon::parse($period)->toDateString());
+
+        /*
+         * Attempts are read from slightly before the window: a period whose
+         * first attempt landed just before it may have collected on a retry
+         * inside it, and judging that period on the retry alone would call a
+         * collected renewal a failure.
+         */
+        $attempts = Charge::query()
+            ->whereIn('subscription_id', $subscriptionIds)
+            ->where('created_at', '>=', now()->subDays(self::WINDOW_DAYS + 60))
+            ->get(['subscription_id', 'period_start', 'status', 'total_agorot', 'created_at']);
+
         $start = now()->subDays(self::WINDOW_DAYS);
+        $key = fn (Charge $charge): string => $charge->subscription_id.'|'.$charge->period_start->toDateString();
 
-        $charges = Charge::query()
-            ->whereIn('subscription_id', License::query()->whereNotNull('subscription_id')->select('subscription_id'))
-            ->where('created_at', '>=', $start)
-            ->get(['status', 'total_agorot']);
+        $periods = $attempts
+            ->groupBy($key)
+            // Only periods this window is actually about, and never the purchase.
+            ->filter(fn (Collection $group): bool => $group->contains(fn (Charge $c): bool => $c->created_at >= $start)
+                && $group->first()->period_start->toDateString()
+                    !== (string) $purchasePeriod->get($group->first()->subscription_id));
 
-        $succeeded = $charges->where('status', ChargeStatus::Succeeded);
-        $failed = $charges->where('status', ChargeStatus::Failed);
+        $succeeded = $periods->filter(fn (Collection $g): bool => $g->contains('status', ChargeStatus::Succeeded));
+        $open = $periods->reject(fn (Collection $g): bool => $g->contains('status', ChargeStatus::Succeeded))
+            ->filter(fn (Collection $g): bool => $g->contains('status', ChargeStatus::Pending));
+        $failed = $periods
+            ->reject(fn (Collection $g): bool => $g->contains('status', ChargeStatus::Succeeded)
+                || $g->contains('status', ChargeStatus::Pending))
+            ->filter(fn (Collection $g): bool => $g->contains('status', ChargeStatus::Failed));
+
         $settled = $succeeded->count() + $failed->count();
 
         return [
-            'attempted' => $charges->count(),
+            'attempted' => $periods->count(),
             'succeeded' => $succeeded->count(),
             'failed' => $failed->count(),
-            // Still in flight — counted apart so they neither flatter the rate
-            // nor count against it.
-            'open' => $charges->where('status', ChargeStatus::Pending)->count(),
+            // Still in flight — apart, so they neither flatter the rate nor
+            // count against it.
+            'open' => $open->count(),
             'rate' => $settled > 0 ? round($succeeded->count() / $settled * 100) : null,
-            'lostAgorot' => (int) $failed->sum('total_agorot'),
+            // Once per period, not once per attempt: three failed tries at the
+            // same renewal are one renewal's worth of money not collected.
+            'lostAgorot' => (int) $failed->sum(fn (Collection $g): int => (int) $g->max('total_agorot')),
         ];
     }
 

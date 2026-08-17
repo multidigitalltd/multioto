@@ -17,6 +17,13 @@ use Illuminate\Support\Facades\Schema;
  * published build at the time. That is said on screen rather than guessed at —
  * "we don't have a record of which version you received" is a sentence somebody
  * can act on; silently serving the wrong zip is not.
+ *
+ * The key RESTRICTS rather than nulls, and that is the whole guarantee. A
+ * release stops being current the moment a newer one is published, and old
+ * builds are deletable from the panel — so nulling on delete would quietly
+ * erase the record for exactly the licences that depend on it, the perpetual
+ * ones, and leave a paying customer with no download at all. The database
+ * refuses; the panel explains before anybody gets that far.
  */
 return new class extends Migration
 {
@@ -24,7 +31,7 @@ return new class extends Migration
     {
         Schema::table('licenses', function (Blueprint $table): void {
             $table->foreignId('delivered_release_id')->nullable()->after('plugin_plan_id')
-                ->constrained('plugin_releases')->nullOnDelete();
+                ->constrained('plugin_releases')->restrictOnDelete();
         });
     }
 

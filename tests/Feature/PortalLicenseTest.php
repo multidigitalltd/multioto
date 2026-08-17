@@ -9,6 +9,7 @@ use App\Models\LicenseSite;
 use App\Models\PluginProduct;
 use App\Models\PluginRelease;
 use App\Services\Licensing\LicenseIssuer;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Storage;
@@ -283,6 +284,32 @@ class PortalLicenseTest extends TestCase
         ]);
 
         $this->assertSame($current->id, $license->delivered_release_id);
+    }
+
+    /**
+     * גרסה שנמכרה אינה נמחקת.
+     *
+     * גרסה חדלה להיות "מופצת" ברגע שפורסמה אחריה חדשה, וגרסאות ישנות ניתנות
+     * למחיקה מהפאנל. בלי המנעול הזה, מחיקה של גרסה ישנה הייתה מוחקת בשקט את
+     * הרישום עבור בדיוק הרישיונות שתלויים בו — אלה שנקנו לתמיד — ומשאירה לקוח
+     * משלם בלי שום הורדה.
+     */
+    public function test_a_build_that_was_sold_cannot_be_deleted(): void
+    {
+        $delivered = $this->release('1.0.0', 'releases/old.zip', current: false);
+        $license = $this->license(['delivered_release_id' => $delivered->id]);
+
+        $this->assertTrue($delivered->wasDelivered());
+
+        try {
+            $delivered->delete();
+            $this->fail('מחיקת גרסה שנמסרה ללקוח הייתה אמורה להידחות.');
+        } catch (QueryException) {
+            // מסד הנתונים מסרב — וזו הערובה, לא הכפתור בפאנל.
+        }
+
+        $this->assertNotNull($license->fresh()->delivered_release_id);
+        $this->assertNotNull($delivered->fresh());
     }
 
     private function release(string $version, string $path, bool $current): PluginRelease

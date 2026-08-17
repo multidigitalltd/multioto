@@ -15,6 +15,7 @@ use App\Models\Subscription;
 use App\Models\User;
 use App\Services\Licensing\LicenseMetrics;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
 use Tests\TestCase;
 
 /**
@@ -59,17 +60,30 @@ class LicenseMetricsTest extends TestCase
         return $license;
     }
 
-    private function subscriptionCharge(Subscription $subscription, ChargeStatus $status, int $attempt = 1): Charge
-    {
+    private function subscriptionCharge(
+        Subscription $subscription,
+        ChargeStatus $status,
+        int $attempt = 1,
+        ?string $periodStart = null,
+    ): Charge {
+        $periodStart ??= today()->toDateString();
+
         return Charge::create([
             'subscription_id' => $subscription->id,
             'amount_agorot' => 20000, 'vat_agorot' => 3600, 'total_agorot' => 23600,
             'status' => $status, 'attempt_number' => $attempt,
             'charged_at' => $status === ChargeStatus::Succeeded ? now() : null,
-            'period_start' => today()->toDateString(), 'period_end' => today()->addYear()->toDateString(),
+            'period_start' => $periodStart,
+            'period_end' => Carbon::parse($periodStart)->addYear()->toDateString(),
         ]);
     }
 
+    /**
+     * מנוי רישיון שכבר נקנה — כלומר עם תקופת הרכישה שלו כבר גבויה.
+     *
+     * המכירה הראשונה אינה חידוש, ולכן כל בדיקת חידוש חייבת להתחיל אחריה. בלי
+     * זה כל מכירה חדשה הייתה מטפסת בשיעור החידוש.
+     */
     private function licenseSubscription(): Subscription
     {
         $subscription = Subscription::factory()->create([
@@ -79,6 +93,9 @@ class LicenseMetricsTest extends TestCase
         ]);
 
         $this->license(['subscription_id' => $subscription->id, 'expires_at' => today()->addYear()->toDateString()]);
+
+        $this->subscriptionCharge($subscription, ChargeStatus::Succeeded,
+            periodStart: today()->subYear()->toDateString());
 
         return $subscription;
     }
@@ -148,14 +165,77 @@ class LicenseMetricsTest extends TestCase
     public function test_a_failed_renewal_is_counted_with_the_money_it_did_not_collect(): void
     {
         $subscription = $this->licenseSubscription();
-        $this->subscriptionCharge($subscription, ChargeStatus::Succeeded, attempt: 1);
-        $this->subscriptionCharge($subscription, ChargeStatus::Failed, attempt: 2);
+        $this->subscriptionCharge($subscription, ChargeStatus::Succeeded);
+
+        $other = $this->licenseSubscription();
+        $this->subscriptionCharge($other, ChargeStatus::Failed);
 
         $renewals = $this->metrics()->renewals();
 
         $this->assertSame(1, $renewals['failed']);
         $this->assertSame(23600, $renewals['lostAgorot']);
         $this->assertSame(50.0, (float) $renewals['rate']);
+    }
+
+    /**
+     * המכירה הראשונה אינה חידוש.
+     *
+     * מנוי רישיון נוצר עם חיוב ראשון לגבייה מיידית, ולכן החיוב הזה הוא הרכישה
+     * — הרגע שבו מישהו החליט לקנות, לא הרגע שבו החליט להישאר. ספירתו הייתה
+     * מייצרת שיעור חידוש שעולה ככל שמוכרים יותר.
+     */
+    public function test_the_first_collection_is_a_purchase_and_not_a_renewal(): void
+    {
+        $subscription = Subscription::factory()->create([
+            'customer_id' => $this->customer->id, 'site_id' => null,
+        ]);
+        $this->license(['subscription_id' => $subscription->id, 'expires_at' => today()->addYear()->toDateString()]);
+        $this->subscriptionCharge($subscription, ChargeStatus::Succeeded);
+
+        $renewals = $this->metrics()->renewals();
+
+        $this->assertSame(0, $renewals['attempted']);
+        $this->assertNull($renewals['rate']);
+    }
+
+    /**
+     * חידוש שנכשל שלוש פעמים ואז נגבה הוא חידוש אחד שהצליח.
+     *
+     * ‎ChargeSubscriptionJob‎ כותב שורה נפרדת לכל ניסיון חוזר של אותה תקופה.
+     * ספירה לפי שורות הייתה מדווחת ארבעה חידושים, 25% גבייה, ופי שלושה כסף
+     * שאבד — על כסף שנגבה במלואו.
+     */
+    public function test_retries_of_one_period_are_one_renewal(): void
+    {
+        $subscription = $this->licenseSubscription();
+        $period = today()->toDateString();
+
+        $this->subscriptionCharge($subscription, ChargeStatus::Failed, attempt: 1, periodStart: $period);
+        $this->subscriptionCharge($subscription, ChargeStatus::Failed, attempt: 2, periodStart: $period);
+        $this->subscriptionCharge($subscription, ChargeStatus::Succeeded, attempt: 3, periodStart: $period);
+
+        $renewals = $this->metrics()->renewals();
+
+        $this->assertSame(1, $renewals['attempted']);
+        $this->assertSame(1, $renewals['succeeded']);
+        $this->assertSame(0, $renewals['failed']);
+        $this->assertSame(0, $renewals['lostAgorot']);
+        $this->assertSame(100.0, (float) $renewals['rate']);
+    }
+
+    /** וכשכל הניסיונות נכשלו — חידוש אחד שנכשל, וסכום אחד שלא נגבה. */
+    public function test_a_period_that_never_collected_loses_its_amount_once(): void
+    {
+        $subscription = $this->licenseSubscription();
+        $period = today()->toDateString();
+
+        $this->subscriptionCharge($subscription, ChargeStatus::Failed, attempt: 1, periodStart: $period);
+        $this->subscriptionCharge($subscription, ChargeStatus::Failed, attempt: 2, periodStart: $period);
+
+        $renewals = $this->metrics()->renewals();
+
+        $this->assertSame(1, $renewals['failed']);
+        $this->assertSame(23600, $renewals['lostAgorot']);
     }
 
     /**
@@ -171,12 +251,14 @@ class LicenseMetricsTest extends TestCase
         $this->assertNull($this->metrics()->renewals()['rate']);
     }
 
-    /** חיוב שעדיין בתהליך אינו מיטיב עם השיעור ואינו פוגע בו. */
-    public function test_an_open_charge_is_kept_out_of_the_rate(): void
+    /** חידוש שעדיין בתהליך אינו מיטיב עם השיעור ואינו פוגע בו. */
+    public function test_an_open_renewal_is_kept_out_of_the_rate(): void
     {
         $subscription = $this->licenseSubscription();
-        $this->subscriptionCharge($subscription, ChargeStatus::Succeeded, attempt: 1);
-        $this->subscriptionCharge($subscription, ChargeStatus::Pending, attempt: 2);
+        $this->subscriptionCharge($subscription, ChargeStatus::Succeeded);
+
+        $other = $this->licenseSubscription();
+        $this->subscriptionCharge($other, ChargeStatus::Pending);
 
         $renewals = $this->metrics()->renewals();
 
@@ -206,7 +288,9 @@ class LicenseMetricsTest extends TestCase
             'status' => PluginOrder::PAID, 'reference' => PluginOrder::newReference(),
         ]);
 
-        $this->assertSame(47200, $this->metrics()->revenue()['agorot']);
+        // שלושה חיובים: הרכישה שפתחה את המנוי, החידוש שלו, וההזמנה מהחנות.
+        // הרכישה הראשונה אינה חידוש — אבל היא בהחלט הכנסה.
+        $this->assertSame(70800, $this->metrics()->revenue()['agorot']);
     }
 
     /** וחיוב של מנוי אחסון רגיל אינו נספר כהכנסה מתוספים. */
@@ -282,7 +366,7 @@ class LicenseMetricsTest extends TestCase
         $row = $this->metrics()->byProduct()->firstWhere('name', 'משפר חנויות');
 
         $this->assertSame(1, $row['active']);
-        $this->assertSame(23600, $row['agorot']);
+        $this->assertSame(47200, $row['agorot']);
         $this->assertSame(1, $this->metrics()->overview()['productsSellable']);
     }
 

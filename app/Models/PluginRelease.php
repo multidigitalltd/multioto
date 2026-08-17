@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 /**
  * One published build of a plugin.
@@ -43,6 +44,25 @@ class PluginRelease extends Model
     public function product(): BelongsTo
     {
         return $this->belongsTo(PluginProduct::class, 'plugin_product_id');
+    }
+
+    /** Licences that were sold this exact build. */
+    public function licenses(): HasMany
+    {
+        return $this->hasMany(License::class, 'delivered_release_id');
+    }
+
+    /**
+     * Whether this build is what somebody paid for.
+     *
+     * A licence bought without updates is entitled to this file and to no other,
+     * so deleting it takes away a download the customer owns. The database
+     * refuses the delete either way — this is what lets the panel say so first,
+     * instead of showing a foreign-key error.
+     */
+    public function wasDelivered(): bool
+    {
+        return $this->licenses()->exists();
     }
 
     /** The version without a leading "v", which is what WordPress compares. */
