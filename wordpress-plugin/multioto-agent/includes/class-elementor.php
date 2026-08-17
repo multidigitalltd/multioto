@@ -42,8 +42,28 @@ class Multioto_Agent_Elementor
         'testimonial' => ['testimonial_content', 'testimonial_name', 'testimonial_job'],
         'counter' => ['title', 'prefix', 'suffix'],
         'alert' => ['alert_title', 'alert_description'],
-        'toggle' => ['title', 'content'],
-        'accordion' => ['title', 'content'],
+    ];
+
+    /**
+     * Widgets whose text lives in repeater rows rather than in plain settings.
+     *
+     * An accordion does not have a `title` — it has a `tabs` array, one entry
+     * per section, each with its own `tab_title` and `tab_content`. Listing it
+     * among the plain widgets would advertise a widget type whose text is never
+     * returned and can never be addressed, which is worse than not supporting
+     * it: the tool would appear to work and find nothing.
+     *
+     * Rows are addressed as `tabs.0.tab_title`, so one widget id plus one
+     * setting path still identifies exactly one string.
+     *
+     * @var array<string, array{repeater: string, keys: list<string>}>
+     */
+    private const REPEATER_KEYS = [
+        'accordion' => ['repeater' => 'tabs', 'keys' => ['tab_title', 'tab_content']],
+        'toggle' => ['repeater' => 'tabs', 'keys' => ['tab_title', 'tab_content']],
+        'tabs' => ['repeater' => 'tabs', 'keys' => ['tab_title', 'tab_content']],
+        'price-list' => ['repeater' => 'price_list', 'keys' => ['title', 'item_description']],
+        'icon-list' => ['repeater' => 'icon_list', 'keys' => ['text']],
     ];
 
     public static function active(): bool
@@ -75,16 +95,12 @@ class Multioto_Agent_Elementor
             $type = (string) ($element['widgetType'] ?? '');
             $settings = (array) ($element['settings'] ?? []);
 
-            foreach (self::TEXT_KEYS[$type] ?? [] as $key) {
-                if (! isset($settings[$key]) || ! is_string($settings[$key]) || trim($settings[$key]) === '') {
-                    continue;
-                }
-
+            foreach (self::textPaths($type, $settings) as $path) {
                 $found[] = [
                     'widget_id' => (string) ($element['id'] ?? ''),
                     'widget' => $type,
-                    'setting' => $key,
-                    'text' => $settings[$key],
+                    'setting' => $path,
+                    'text' => self::read($settings, $path),
                 ];
             }
         });
@@ -117,32 +133,31 @@ class Multioto_Agent_Elementor
             }
 
             $type = (string) ($element['widgetType'] ?? '');
-            $keys = self::TEXT_KEYS[$type] ?? [];
+            $settings = (array) ($element['settings'] ?? []);
+            $paths = self::textPaths($type, $settings);
 
-            if ($keys === []) {
+            if ($paths === []) {
                 throw new Multioto_Agent_Rpc_Error(-32602,
                     "הרכיב {$widgetId} מסוג {$type} אינו רכיב טקסט שניתן לערוך דרך הסוכן.");
             }
 
-            // With several text slots on one widget (an icon box has a title and
-            // a description) the caller says which; with one, there is nothing
-            // to disambiguate.
-            $key = $setting !== null && $setting !== '' ? $setting : $keys[0];
+            // With several text slots on one widget — an icon box has a title
+            // and a description, an accordion has one pair per section — the
+            // caller says which; with one, there is nothing to disambiguate.
+            $path = $setting !== null && $setting !== '' ? $setting : $paths[0];
 
-            if (! in_array($key, $keys, true)) {
+            if (! in_array($path, $paths, true)) {
                 throw new Multioto_Agent_Rpc_Error(-32602,
-                    "השדה {$key} אינו שדה טקסט של רכיב {$type}. השדות האפשריים: ".implode(', ', $keys).'.');
+                    "השדה {$path} אינו שדה טקסט של רכיב {$type}. השדות האפשריים: ".implode(', ', $paths).'.');
             }
 
-            $settings = (array) ($element['settings'] ?? []);
-            $previous = (string) ($settings[$key] ?? '');
+            $previous = self::read($settings, $path);
             $widgetType = $type;
-            $usedSetting = $key;
+            $usedSetting = $path;
 
             // Same sanitiser the block editor uses: allowed markup survives,
             // scripts do not.
-            $settings[$key] = wp_kses_post($text);
-            $element['settings'] = $settings;
+            $element['settings'] = self::write($settings, $path, wp_kses_post($text));
 
             return $element;
         });
@@ -158,6 +173,99 @@ class Multioto_Agent_Elementor
         self::clearCache($postId);
 
         return ['previous' => $previous, 'widget' => $widgetType, 'setting' => $usedSetting];
+    }
+
+    /**
+     * Every addressable text slot on one widget, as setting paths.
+     *
+     * A plain widget yields its own keys; a repeater yields one path per row
+     * that actually holds text, so an accordion with four sections yields up to
+     * eight. Empty slots are skipped — an empty description is not something
+     * anybody asked to change, and listing it only makes the real texts harder
+     * to find.
+     *
+     * @param  array<string, mixed>  $settings
+     * @return list<string>
+     */
+    private static function textPaths(string $type, array $settings): array
+    {
+        $paths = [];
+
+        foreach (self::TEXT_KEYS[$type] ?? [] as $key) {
+            if (isset($settings[$key]) && is_string($settings[$key]) && trim($settings[$key]) !== '') {
+                $paths[] = $key;
+            }
+        }
+
+        $repeater = self::REPEATER_KEYS[$type] ?? null;
+
+        if ($repeater !== null && ! empty($settings[$repeater['repeater']]) && is_array($settings[$repeater['repeater']])) {
+            // The row's own key, not its position: read() and write() address
+            // rows by key, and the two must not be able to disagree.
+            foreach ($settings[$repeater['repeater']] as $index => $row) {
+                if (! is_array($row)) {
+                    continue;
+                }
+
+                foreach ($repeater['keys'] as $key) {
+                    if (isset($row[$key]) && is_string($row[$key]) && trim($row[$key]) !== '') {
+                        $paths[] = $repeater['repeater'].'.'.$index.'.'.$key;
+                    }
+                }
+            }
+        }
+
+        return $paths;
+    }
+
+    /** Read a value by dotted path ("tabs.0.tab_title"). */
+    private static function read(array $settings, string $path): string
+    {
+        $value = $settings;
+
+        foreach (explode('.', $path) as $segment) {
+            if (! is_array($value) || ! array_key_exists($segment, $value)) {
+                return '';
+            }
+
+            $value = $value[$segment];
+        }
+
+        return is_string($value) ? $value : '';
+    }
+
+    /**
+     * Write a value by dotted path, leaving everything else untouched.
+     *
+     * Rebuilt rather than assigned by reference: a repeater row carries styling
+     * and an item id alongside its text, and replacing the row wholesale would
+     * drop them.
+     *
+     * @param  array<string, mixed>  $settings
+     * @return array<string, mixed>
+     */
+    private static function write(array $settings, string $path, string $value): array
+    {
+        $segments = explode('.', $path);
+        $target = &$settings;
+
+        foreach ($segments as $depth => $segment) {
+            if ($depth === count($segments) - 1) {
+                $target[$segment] = $value;
+
+                break;
+            }
+
+            if (! isset($target[$segment]) || ! is_array($target[$segment])) {
+                throw new Multioto_Agent_Rpc_Error(-32602, "הנתיב {$path} אינו קיים ברכיב.");
+            }
+
+            $target = &$target[$segment];
+        }
+
+        unset($target);
+
+        return $settings;
     }
 
     /** The page's Elementor tree, or a refusal that says what to use instead. */

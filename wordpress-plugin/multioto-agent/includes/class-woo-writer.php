@@ -35,14 +35,30 @@ class Multioto_Agent_Woo_Writer
      */
     public static function search(string $term, int $limit = 10): array
     {
-        $products = wc_get_products([
+        $limit = min(50, max(1, $limit));
+        $found = [];
+
+        // SKU first, and separately: `s` searches post title and content, and a
+        // SKU lives in product data. An exact SKU would otherwise come back
+        // empty unless it happened to appear in the description — precisely the
+        // lookup somebody does before repricing, answered with "no such
+        // product" about a product that exists.
+        $bySku = wc_get_product_id_by_sku(trim($term));
+
+        if ($bySku > 0 && ($product = wc_get_product($bySku)) instanceof WC_Product) {
+            $found[$bySku] = self::summary($product);
+        }
+
+        foreach (wc_get_products([
             's' => $term,
-            'limit' => min(50, max(1, $limit)),
+            'limit' => $limit,
             'status' => ['publish', 'draft', 'private'],
             'orderby' => 'relevance',
-        ]);
+        ]) as $product) {
+            $found[$product->get_id()] = self::summary($product);
+        }
 
-        return array_map([self::class, 'summary'], $products);
+        return array_slice(array_values($found), 0, $limit);
     }
 
     /** @return array<string, mixed> */
@@ -318,15 +334,44 @@ class Multioto_Agent_Woo_Writer
         return wc_format_decimal($value);
     }
 
+    /**
+     * A date, read in the SHOP's timezone.
+     *
+     * strtotime() resolves a bare date against PHP's default timezone, which on
+     * most servers is UTC. A sale asked to end "on the 20th" would then end at
+     * 03:00 on the 20th Israel time — three hours of a promotion the owner
+     * believed was running, or three hours of a discount they believed had
+     * stopped. The date the customer says is the date in their own shop.
+     *
+     * The format is strict: `strtotime` would cheerfully read "yesterday" or a
+     * half-typed date and produce something, and a promotion is not a place for
+     * a lenient parser.
+     */
     private static function date(string $value, string $field): WC_DateTime
     {
-        $timestamp = strtotime($value);
+        $value = trim($value);
+        $local = date_create_immutable_from_format('Y-m-d|', $value, self::timezone());
 
-        if ($timestamp === false) {
-            throw new Multioto_Agent_Rpc_Error(-32602, "{$field} אינו תאריך תקין (YYYY-MM-DD).");
+        if ($local === false || $local->format('Y-m-d') !== $value) {
+            throw new Multioto_Agent_Rpc_Error(-32602, "{$field} אינו תאריך תקין בפורמט YYYY-MM-DD.");
         }
 
-        return new WC_DateTime('@'.$timestamp);
+        // Built from the absolute instant and then moved into the shop's zone —
+        // the same two steps WooCommerce itself uses when it stores a date.
+        $date = new WC_DateTime('@'.$local->getTimestamp());
+        $date->setTimezone(self::timezone());
+
+        return $date;
+    }
+
+    /** The shop's timezone, however this WordPress happens to express it. */
+    private static function timezone(): DateTimeZone
+    {
+        if (function_exists('wp_timezone')) {
+            return wp_timezone();
+        }
+
+        return new DateTimeZone(function_exists('wc_timezone_string') ? wc_timezone_string() : 'UTC');
     }
 
     private static function assertSaleBelowRegular(WC_Product $product): void

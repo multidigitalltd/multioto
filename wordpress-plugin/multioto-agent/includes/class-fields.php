@@ -128,17 +128,34 @@ class Multioto_Agent_Fields
      */
     public static function update(int $postId, array $fields): array
     {
+        if ($fields === []) {
+            throw new Multioto_Agent_Rpc_Error(-32602, 'לא צוין שום שדה לעדכון.');
+        }
+
+        /*
+         * Every key is checked before ANY key is written.
+         *
+         * Validating inside the write loop looks equivalent and is not: a
+         * request whose third key is protected would have committed the first
+         * two and then returned an error carrying no snapshot. The caller reads
+         * that as "nothing happened", the journal records nothing to undo, and
+         * two customer fields have quietly changed with no way back. A refusal
+         * has to mean the site was not touched.
+         */
+        foreach (array_keys($fields) as $key) {
+            $key = (string) $key;
+
+            if ($key === '' || self::hidden($key)) {
+                throw new Multioto_Agent_Rpc_Error(-32602,
+                    "השדה {$key} מוגן ואינו ניתן לעדכון דרך הסוכן. לא בוצע שום שינוי.");
+            }
+        }
+
         $previous = [];
         $updated = [];
 
         foreach ($fields as $key => $value) {
             $key = (string) $key;
-
-            if ($key === '' || self::hidden($key)) {
-                throw new Multioto_Agent_Rpc_Error(-32602,
-                    "השדה {$key} מוגן ואינו ניתן לעדכון דרך הסוכן.");
-            }
-
             $previous[$key] = self::single($postId, $key);
 
             if (self::acfActive()) {
@@ -148,10 +165,6 @@ class Multioto_Agent_Fields
             }
 
             $updated[] = $key;
-        }
-
-        if ($updated === []) {
-            throw new Multioto_Agent_Rpc_Error(-32602, 'לא צוין שום שדה לעדכון.');
         }
 
         return ['updated' => $updated, 'previous' => $previous];

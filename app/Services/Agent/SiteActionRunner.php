@@ -22,6 +22,7 @@ class SiteActionRunner
         private McpClient $mcp,
         private SiteToolCatalog $catalog,
         private SiteChangeJournal $journal,
+        private RevertRecipe $recipes,
     ) {}
 
     /** Run the approved action. Returns the tool's text output. */
@@ -87,7 +88,16 @@ class SiteActionRunner
         // (an inverse tool + arguments) is stored so the change can be rolled
         // back live later.
         if ($this->catalog->resolveTier($site, $tool) >= 1) {
+            // An explicitly proposed recipe wins — somebody who knows how to
+            // undo their own operation knows better than a general rule. When
+            // there is none, derive it from what the tool reported it replaced,
+            // which is the only source that reflects the site as it really was
+            // a moment ago rather than as anyone predicted.
             $revert = (array) data_get($action->payload, 'revert', []);
+
+            if (blank($revert['tool'] ?? null)) {
+                $revert = $this->recipes->for($tool, $arguments, $output) ?? [];
+            }
 
             $this->journal->record(
                 $site,
