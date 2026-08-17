@@ -31,7 +31,10 @@ class Multioto_Agent_Woo_Writer
      * Returning several candidates rather than a best guess is deliberate: the
      * caller asks which one instead of silently repricing the wrong shirt.
      *
-     * @return array<int, array<string, mixed>>
+     * Returns the total number of matches alongside the page of results, so a
+     * caller can tell "these are all of them" from "these are the first fifty".
+     *
+     * @return array{total: int, returned: int, products: array<int, array<string, mixed>>}
      */
     public static function search(string $term, int $limit = 10): array
     {
@@ -49,16 +52,29 @@ class Multioto_Agent_Woo_Writer
             $found[$bySku] = self::summary($product);
         }
 
-        foreach (wc_get_products([
+        // `paginate` so the answer can say how many matched, not only how many
+        // fit. Without the total, a caller acting on "all the shirts" in a shop
+        // with two hundred of them silently acts on the first fifty and every
+        // report it writes says "all".
+        $query = wc_get_products([
             's' => $term,
             'limit' => $limit,
             'status' => ['publish', 'draft', 'private'],
             'orderby' => 'relevance',
-        ]) as $product) {
+            'paginate' => true,
+        ]);
+
+        foreach ($query->products as $product) {
             $found[$product->get_id()] = self::summary($product);
         }
 
-        return array_slice(array_values($found), 0, $limit);
+        $products = array_slice(array_values($found), 0, $limit);
+
+        return [
+            'total' => (int) $query->total,
+            'returned' => count($products),
+            'products' => $products,
+        ];
     }
 
     /** @return array<string, mixed> */
