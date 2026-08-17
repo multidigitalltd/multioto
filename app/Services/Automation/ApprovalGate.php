@@ -19,6 +19,7 @@ use App\Models\Task;
 use App\Services\Agent\ContentChangeRunner;
 use App\Services\Agent\IncidentMemory;
 use App\Services\Agent\MaintenanceRunner;
+use App\Services\Agent\SiteActionBatchRunner;
 use App\Services\Agent\SiteActionRunner;
 use App\Services\Agent\SiteToolCatalog;
 use App\Services\Agent\SystemActionRunner;
@@ -344,6 +345,7 @@ class ApprovalGate
             'ticket_reply' => $this->executeTicketReply($action),
             'site_fix' => $this->executeSiteFix($action),
             'site_action' => $this->executeSiteAction($action),
+            'site_action_batch' => app(SiteActionBatchRunner::class)->run($action),
             'system_action' => app(SystemActionRunner::class)->run($action),
             'maintenance_update' => app(MaintenanceRunner::class)->run($action),
             'monitoring_report' => $this->executeMonitoringReport($action),

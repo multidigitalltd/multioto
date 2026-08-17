@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\SiteResource\RelationManagers;
 
 use App\Models\SiteChange;
+use App\Services\Agent\SiteActionBatchRunner;
 use App\Services\Automation\ApprovalGate;
 use Filament\Notifications\Notification;
 use Filament\Resources\RelationManagers\RelationManager;
@@ -64,6 +65,52 @@ class ChangesRelationManager extends RelationManager
                         );
 
                         Notification::make()->title('בקשת השחזור נשלחה לאישור')->success()->send();
+                    }),
+
+                // A change that arrived as part of a batch can be undone with
+                // the rest of it. Reverting a twenty-product sale one row at a
+                // time leaves the shop half on sale for as long as it takes,
+                // and leaves whoever is clicking to remember where they got to.
+                Tables\Actions\Action::make('revertBatch')
+                    ->label('שחזר את כל האצווה')
+                    ->icon('heroicon-o-arrow-uturn-left')
+                    ->color('danger')
+                    ->visible(fn (SiteChange $record): bool => $record->batchSize() > 1
+                        && $record->isRevertable()
+                        && (auth()->user()?->isAdmin() ?? false))
+                    ->requiresConfirmation()
+                    ->modalHeading('שחזור אצווה שלמה')
+                    ->modalDescription(fn (SiteChange $record): string => 'לשחזר את כל '.$record->batchSize()
+                        .' השינויים שבוצעו יחד בפעולה הזו? הבקשה תישלח לאישור מנהל לפני ביצוע.')
+                    ->modalSubmitActionLabel('שלח לאישור')
+                    ->action(function (SiteChange $record, ApprovalGate $gate, SiteActionBatchRunner $batches): void {
+                        $plan = $batches->revertPlan($record->pendingAction);
+
+                        if ($plan['calls'] === []) {
+                            Notification::make()
+                                ->title('אין מה לשחזר — לאף שינוי באצווה אין פעולה הפוכה שמורה')
+                                ->warning()->send();
+
+                            return;
+                        }
+
+                        // The skipped count is said out loud: "restore
+                        // everything" must never quietly mean "restore most of
+                        // it", or the shop is left in a state nobody described.
+                        $note = $plan['skipped'] > 0
+                            ? "\n(".$plan['skipped'].' שינויים באצווה ללא פעולה הפוכה שמורה — הם לא ישוחזרו.)'
+                            : '';
+
+                        $gate->propose(
+                            type: 'site_action_batch',
+                            summary: '↩️ שחזור אצווה באתר '.$record->site->domain."\n"
+                                .count($plan['calls'])." שינויים יבוטלו בסדר הפוך.{$note}",
+                            payload: ['site_id' => $record->site_id, 'calls' => $plan['calls']],
+                            customerId: $record->site->customer_id,
+                            proposedBy: 'team',
+                        );
+
+                        Notification::make()->title('בקשת שחזור האצווה נשלחה לאישור')->success()->send();
                     }),
             ])
             ->emptyStateHeading('עדיין לא בוצעו שינויים באתר הזה');
