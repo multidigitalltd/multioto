@@ -288,8 +288,9 @@ return [
         // off or fails. Off by default.
         'dynamic_ack' => env('AI_DYNAMIC_ACK', false),
 
-        // Provider: 'anthropic' (Claude) or 'openai' (any OpenAI-compatible
-        // endpoint — OpenAI, Azure OpenAI, OpenRouter, or a local model server).
+        // Provider: 'anthropic' (Claude), 'google' (Gemini), or 'openai' (any
+        // OpenAI-compatible endpoint — OpenAI, Azure OpenAI, OpenRouter, or a
+        // local model server).
         'provider' => env('AI_PROVIDER', 'anthropic'),
 
         // AI_API_KEY is the generic name; ANTHROPIC_API_KEY kept for back-compat.

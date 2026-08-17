@@ -161,15 +161,26 @@ class Multioto_Agent_Mcp_Server
             ['name' => 'wp_menu_item_add', 'description' => 'הוספת פריט לתפריט. menu = שם או מזהה התפריט, title = טקסט הפריט, ואחד מ: url (קישור חופשי) או page_id (עמוד קיים). אופציונלי: parent_id (פריט הורה), position (מיקום).', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['menu' => ['type' => 'string'], 'title' => ['type' => 'string'], 'url' => ['type' => 'string'], 'page_id' => ['type' => 'integer'], 'parent_id' => ['type' => 'integer'], 'position' => ['type' => 'integer']], 'required' => ['menu', 'title']]],
             ['name' => 'wp_menu_item_update', 'description' => 'עדכון פריט קיים בתפריט לפי item_id. אפשר לשנות title, url, parent_id, position (כל שדה אופציונלי).', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['item_id' => ['type' => 'integer'], 'title' => ['type' => 'string'], 'url' => ['type' => 'string'], 'parent_id' => ['type' => 'integer'], 'position' => ['type' => 'integer']], 'required' => ['item_id']]],
             ['name' => 'wp_menu_item_unlink', 'description' => 'הסרת פריט מהתפריט לפי item_id — מסיר רק את הקישור מהתפריט; העמוד/הפוסט עצמו נשאר.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['item_id' => ['type' => 'integer']], 'required' => ['item_id']]],
-            ['name' => 'wp_content_list', 'description' => 'רשימת עמודים/פוסטים. type = page או post (ברירת מחדל page), status (any/publish/draft), search (טקסט חיפוש), limit.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['type' => ['type' => 'string'], 'status' => ['type' => 'string'], 'search' => ['type' => 'string'], 'limit' => ['type' => 'integer']]]],
-            ['name' => 'wp_content_get', 'description' => 'קריאת עמוד/פוסט מלא לפי id: כותרת, תוכן, סטטוס, סוג.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['id' => ['type' => 'integer']], 'required' => ['id']]],
-            ['name' => 'wp_content_create', 'description' => 'יצירת עמוד/פוסט. title, content (HTML), type = page או post, status = draft או publish. אופציונלי: excerpt.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['title' => ['type' => 'string'], 'content' => ['type' => 'string'], 'type' => ['type' => 'string'], 'status' => ['type' => 'string'], 'excerpt' => ['type' => 'string']], 'required' => ['title']]],
-            ['name' => 'wp_content_update', 'description' => 'עדכון עמוד/פוסט קיים לפי id: title, content, status, excerpt (כל שדה אופציונלי; מה שלא צוין נשמר).', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['id' => ['type' => 'integer'], 'title' => ['type' => 'string'], 'content' => ['type' => 'string'], 'status' => ['type' => 'string'], 'excerpt' => ['type' => 'string']], 'required' => ['id']]],
+            ['name' => 'wp_post_types_list', 'description' => 'סוגי התוכן הקיימים באתר (עמודים, פוסטים וכל סוג מותאם — נכסים, פרויקטים, אירועים וכו\'): המזהה הטכני, השם בעברית, כמה פריטים יש, והאם יש לו שדות מותאמים. התחילו כאן כשהמשתמש מדבר על "נכסים" או "מוצרים" ואינכם יודעים באיזה סוג תוכן מדובר.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => (object) []]],
+            ['name' => 'wp_content_list', 'description' => 'רשימת פריטי תוכן. type = כל סוג תוכן רשום באתר (page, post, או סוג מותאם — ראו wp_post_types_list; ברירת מחדל page), status (any/publish/draft), search (טקסט חיפוש), limit.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['type' => ['type' => 'string'], 'status' => ['type' => 'string'], 'search' => ['type' => 'string'], 'limit' => ['type' => 'integer']]]],
+            ['name' => 'wp_content_get', 'description' => 'קריאת פריט תוכן מלא לפי id: כותרת, תוכן, סטטוס, סוג, השדות המותאמים שלו, והאם הוא בנוי באלמנטור (אם כן — לעריכת הטקסטים שבו יש להשתמש ב-wp_elementor_texts_get).', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['id' => ['type' => 'integer']], 'required' => ['id']]],
+            ['name' => 'wp_content_create', 'description' => 'יצירת פריט תוכן. title, content (HTML), type = כל סוג תוכן רשום (ברירת מחדל page), status = draft או publish. אופציונלי: excerpt.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['title' => ['type' => 'string'], 'content' => ['type' => 'string'], 'type' => ['type' => 'string'], 'status' => ['type' => 'string'], 'excerpt' => ['type' => 'string']], 'required' => ['title']]],
+            ['name' => 'wp_content_update', 'description' => 'עדכון פריט תוכן קיים לפי id: title, content, status, excerpt (כל שדה אופציונלי; מה שלא צוין נשמר). מחזיר את הערכים הקודמים לצורך ביטול. לעמוד שבנוי באלמנטור — שדה content לא ישפיע על מה שרואים; השתמשו ב-wp_elementor_text_update.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['id' => ['type' => 'integer'], 'title' => ['type' => 'string'], 'content' => ['type' => 'string'], 'status' => ['type' => 'string'], 'excerpt' => ['type' => 'string']], 'required' => ['id']]],
+            ['name' => 'wp_fields_schema', 'description' => 'השדות המותאמים (ACF) המוגדרים לסוג תוכן: מזהה השדה, התווית בעברית, הסוג והאפשרויות. קִראו את זה לפני עדכון שדה, כדי לכתוב למפתח הנכון — כתיבה למפתח שגוי יוצרת שדה חדש שאיש אינו קורא.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['type' => ['type' => 'string']], 'required' => ['type']]],
+            ['name' => 'wp_fields_get', 'description' => 'הערכים הנוכחיים של השדות המותאמים בפריט תוכן לפי id.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['id' => ['type' => 'integer']], 'required' => ['id']]],
+            ['name' => 'wp_fields_update', 'description' => 'עדכון שדות מותאמים בפריט תוכן. fields = אובייקט של מפתח→ערך. עובד דרך ACF כשהוא פעיל, אחרת דרך meta רגיל (JetEngine). מחזיר את הערכים הקודמים לצורך ביטול. שדות פנימיים (מתחילים בקו תחתון) חסומים.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['id' => ['type' => 'integer'], 'fields' => ['type' => 'object']], 'required' => ['id', 'fields']]],
             ['name' => 'wp_content_trash', 'description' => 'העברת עמוד/פוסט לפח לפי id (הפיך — ניתן לשחזר מהפח).', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['id' => ['type' => 'integer']], 'required' => ['id']]],
             ['name' => 'wp_file_list', 'description' => 'רשימת קבצים/תיקיות בתוך wp-content לפי path יחסי (ברירת מחדל: השורש של wp-content). לתיקון קוד — לאיתור הקובץ.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['path' => ['type' => 'string']]]],
             ['name' => 'wp_file_get', 'description' => 'קריאת תוכן קובץ בתוך wp-content לפי path יחסי (לבדיקת קוד לפני תיקון).', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['path' => ['type' => 'string']], 'required' => ['path']]],
             ['name' => 'wp_file_put', 'description' => 'כתיבת תוכן לקובץ לתיקון קוד. path יחסי בתוך wp-content ומוגבל ל-themes/plugins/mu-plugins. קובצי PHP נבדקים תחבירית לפני שמירה. תמיד קִראו קודם עם wp_file_get ושמרו גיבוי לביטול.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['path' => ['type' => 'string'], 'content' => ['type' => 'string']], 'required' => ['path', 'content']]],
         ];
+
+        // Elementor tools — advertised only where Elementor is running, so a
+        // site that never uses it is not offered a vocabulary it has no use for.
+        if (Multioto_Agent_Elementor::active()) {
+            $tools[] = ['name' => 'wp_elementor_texts_get', 'description' => 'כל הטקסטים הניתנים לעריכה בעמוד שבנוי באלמנטור, לפי id: לכל טקסט — מזהה הרכיב (widget_id), סוג הרכיב, שם השדה (setting) והטקסט הנוכחי. ברכיבים מרובי-שורות כמו אקורדיון, השדה הוא נתיב כגון tabs.0.tab_title. עמוד אלמנטור אינו שומר את התוכן שלו ב-content הרגיל, ולכן זו הדרך היחידה לראות ולערוך את מה שמופיע בו בפועל.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['id' => ['type' => 'integer']], 'required' => ['id']]];
+            $tools[] = ['name' => 'wp_elementor_text_update', 'description' => 'החלפת טקסט אחד בעמוד אלמנטור לפי widget_id ו-setting (שניהם מתוך wp_elementor_texts_get). setting אופציונלי כשלרכיב יש שדה טקסט אחד בלבד. מחזיר את הטקסט הקודם לצורך ביטול, ומרענן את ה-CSS של העמוד. שינוי מבנה, עיצוב או סדר רכיבים אינו נתמך בכוונה.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['id' => ['type' => 'integer'], 'widget_id' => ['type' => 'string'], 'text' => ['type' => 'string'], 'setting' => ['type' => 'string']], 'required' => ['id', 'widget_id', 'text']]];
+        }
 
         // WooCommerce read tools — advertised only on stores, so a brochure site
         // never lists them. Read-only (they never change the shop), for
@@ -178,6 +189,19 @@ class Multioto_Agent_Mcp_Server
             $tools[] = ['name' => 'wc_order_get', 'description' => 'קריאת הזמנת WooCommerce לפי מספר: סטטוס, תאריך, פריטים, כתובות, שיטת המשלוח שנבחרה וסכומיה, קופונים וסכום כולל.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['order_id' => ['type' => 'integer']], 'required' => ['order_id']]];
             $tools[] = ['name' => 'wc_shipping_zones_list', 'description' => 'רשימת אזורי המשלוח (Shipping Zones) של WooCommerce: לכל אזור — האזורים הגאוגרפיים, ושיטות המשלוח עם התנאים שלהן (עלות, סף למשלוח חינם, דרישות).', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => (object) []]];
             $tools[] = ['name' => 'wc_order_stats_get', 'description' => 'דופק המכירות: מספר ההזמנות שנוצרו בכל יום ב-N הימים האחרונים (ברירת מחדל 28), כמה מהן שולמו, ופירוט 24 השעות האחרונות לפי סטטוס. משמש לזיהוי כשל שקט — חנות שפתאום מפסיקה לקבל הזמנות.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['days' => ['type' => 'integer']]]];
+        }
+
+        // WooCommerce write tools. Separate from the read block above because
+        // they are a different kind of permission: every one of them changes
+        // what a customer is charged or what the shop says it has in stock.
+        if (Multioto_Agent_Woo_Writer::active()) {
+            $tools[] = ['name' => 'wc_product_search', 'description' => 'חיפוש מוצרים לפי טקסט חופשי (שם או מק"ט). מחזיר מזהה, שם, מק"ט, מחיר רגיל, מחיר מבצע ומלאי. השתמשו בזה כדי להפוך תיאור בדיבור ("החולצה השחורה") למזהה מוצר — וכשחוזרות כמה תוצאות, שאלו על איזה מהן מדובר במקום לנחש.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['search' => ['type' => 'string'], 'limit' => ['type' => 'integer']], 'required' => ['search']]];
+            $tools[] = ['name' => 'wc_product_get', 'description' => 'פרטי מוצר מלאים לפי מזהה: מחירים, מבצע ותאריכיו, מלאי, סטטוס וקישור.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['product_id' => ['type' => 'integer']], 'required' => ['product_id']]];
+            $tools[] = ['name' => 'wc_product_update', 'description' => 'עדכון מוצר לפי product_id. שדות אופציונליים: regular_price, sale_price (ריק = סיום המבצע), sale_from ו-sale_to (YYYY-MM-DD), stock_quantity, stock_status (instock/outofstock/onbackorder), status (publish/draft/private). מחזיר את המצב הקודם המלא לצורך ביטול. מחיר מבצע שאינו נמוך מהמחיר הרגיל נדחה.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['product_id' => ['type' => 'integer'], 'regular_price' => ['type' => 'string'], 'sale_price' => ['type' => 'string'], 'sale_from' => ['type' => 'string'], 'sale_to' => ['type' => 'string'], 'stock_quantity' => ['type' => 'integer'], 'stock_status' => ['type' => 'string'], 'status' => ['type' => 'string']], 'required' => ['product_id']]];
+            $tools[] = ['name' => 'wc_product_create', 'description' => 'יצירת מוצר חדש — תמיד כטיוטה, לעולם לא מפורסם. name חובה; אופציונלי description, short_description, regular_price, sku. הפרסום נעשה בנפרד על ידי אדם שרואה את העמוד.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['name' => ['type' => 'string'], 'description' => ['type' => 'string'], 'short_description' => ['type' => 'string'], 'regular_price' => ['type' => 'string'], 'sku' => ['type' => 'string']], 'required' => ['name']]];
+            $tools[] = ['name' => 'wc_coupon_list', 'description' => 'רשימת הקופונים בחנות: קוד, סוג ההנחה, גובהה, תאריך תפוגה ומספר השימושים.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['limit' => ['type' => 'integer']]]];
+            $tools[] = ['name' => 'wc_coupon_create', 'description' => 'יצירת קופון. code חובה; type = percent (ברירת מחדל) / fixed_cart / fixed_product; amount חובה; אופציונלי expires (YYYY-MM-DD), minimum_amount, usage_limit. קופון באחוזים מעל 100 או בסכום אפס נדחה.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['code' => ['type' => 'string'], 'type' => ['type' => 'string'], 'amount' => ['type' => 'number'], 'expires' => ['type' => 'string'], 'minimum_amount' => ['type' => 'string'], 'usage_limit' => ['type' => 'integer']], 'required' => ['code', 'amount']]];
+            $tools[] = ['name' => 'wc_coupon_expire', 'description' => 'סיום קופון מיידי לפי code — נקבע לו תאריך תפוגה של היום. הקופון אינו נמחק, כדי שהזמנות עבר שהשתמשו בו ימשיכו להציג את ההנחה שקיבלו.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['code' => ['type' => 'string']], 'required' => ['code']]];
         }
 
         return $tools;
@@ -205,11 +229,24 @@ class Multioto_Agent_Mcp_Server
             'wp_menu_item_add' => 'menuItemAdd',
             'wp_menu_item_update' => 'menuItemUpdate',
             'wp_menu_item_unlink' => 'menuItemUnlink',
+            'wp_post_types_list' => 'postTypesList',
             'wp_content_list' => 'contentList',
             'wp_content_get' => 'contentGet',
             'wp_content_create' => 'contentCreate',
             'wp_content_update' => 'contentUpdate',
             'wp_content_trash' => 'contentTrash',
+            'wp_fields_schema' => 'fieldsSchema',
+            'wp_fields_get' => 'fieldsGet',
+            'wp_fields_update' => 'fieldsUpdate',
+            'wp_elementor_texts_get' => 'elementorTexts',
+            'wp_elementor_text_update' => 'elementorTextUpdate',
+            'wc_product_search' => 'wcProductSearch',
+            'wc_product_get' => 'wcProductGet',
+            'wc_product_update' => 'wcProductUpdate',
+            'wc_product_create' => 'wcProductCreate',
+            'wc_coupon_list' => 'wcCouponList',
+            'wc_coupon_create' => 'wcCouponCreate',
+            'wc_coupon_expire' => 'wcCouponExpire',
             'wp_file_list' => 'fileList',
             'wp_file_get' => 'fileGet',
             'wp_file_put' => 'filePut',
@@ -219,7 +256,7 @@ class Multioto_Agent_Mcp_Server
         ];
 
         // Tools whose signature takes no arguments, or a second flag.
-        $noArgs = ['wp_health', 'wp_plugin_list', 'wp_theme_list', 'wp_admin_list', 'wp_cache_flush', 'wp_salts_rotate', 'wp_core_update', 'wp_menu_list', 'wc_shipping_zones_list'];
+        $noArgs = ['wp_health', 'wp_plugin_list', 'wp_theme_list', 'wp_admin_list', 'wp_cache_flush', 'wp_salts_rotate', 'wp_core_update', 'wp_menu_list', 'wc_shipping_zones_list', 'wp_post_types_list'];
 
         if ($name === 'wp_plugin_activate') {
             $text = $this->setPluginState($args, true);
@@ -959,14 +996,23 @@ class Multioto_Agent_Mcp_Server
             'no_found_rows' => true,
         ]);
 
-        $out = array_map(static fn (WP_Post $post): array => [
-            'id' => $post->ID,
-            'title' => $post->post_title,
-            'type' => $post->post_type,
-            'status' => $post->post_status,
-            'modified' => $post->post_modified_gmt,
-            'url' => get_permalink($post),
-        ], $query->posts);
+        $elementorActive = Multioto_Agent_Elementor::active();
+
+        $out = array_map(static function (WP_Post $post) use ($elementorActive): array {
+            return [
+                'id' => $post->ID,
+                'title' => $post->post_title,
+                'type' => $post->post_type,
+                'status' => $post->post_status,
+                // On the list and not only on the single read: a caller that has
+                // to fetch each page to find out how it is built either makes
+                // forty calls or guesses, and guessing here means editing a copy
+                // of the page nobody sees.
+                'built_with_elementor' => $elementorActive && Multioto_Agent_Elementor::builtWithElementor($post->ID),
+                'modified' => $post->post_modified_gmt,
+                'url' => get_permalink($post),
+            ];
+        }, $query->posts);
 
         return wp_json_encode($out, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
     }
@@ -974,6 +1020,8 @@ class Multioto_Agent_Mcp_Server
     private function contentGet(array $args): string
     {
         $post = $this->contentPost((int) ($args['id'] ?? 0));
+        $elementor = Multioto_Agent_Elementor::active()
+            && Multioto_Agent_Elementor::builtWithElementor($post->ID);
 
         return wp_json_encode([
             'id' => $post->ID,
@@ -982,8 +1030,194 @@ class Multioto_Agent_Mcp_Server
             'status' => $post->post_status,
             'excerpt' => $post->post_excerpt,
             'content' => $post->post_content,
+            // Said on every read, because it decides which tool edits this page.
+            // A page built with Elementor keeps its visible text elsewhere, and
+            // an agent that does not know that will "successfully" edit nothing.
+            'built_with_elementor' => $elementor,
+            'edit_note' => $elementor
+                ? 'העמוד בנוי באלמנטור — לעריכת הטקסטים שמופיעים בו יש להשתמש ב-wp_elementor_texts_get ו-wp_elementor_text_update. שדה content אינו מה שרואים.'
+                : null,
+            'fields' => Multioto_Agent_Fields::values($post->ID),
             'url' => get_permalink($post),
         ], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    }
+
+    /**
+     * The content types this site actually has.
+     *
+     * A customer says "properties" or "projects"; the site calls them
+     * `property` or `md_project`. Without this the agent guesses a type name,
+     * WP_Query returns nothing, and the honest answer "you have no properties"
+     * is wrong.
+     */
+    private function postTypesList(): string
+    {
+        $out = [];
+
+        foreach ($this->editableTypes() as $name) {
+            $object = get_post_type_object($name);
+            $counts = (array) wp_count_posts($name);
+
+            $out[] = [
+                'type' => $name,
+                'label' => $object->labels->name ?? $name,
+                'published' => (int) ($counts['publish'] ?? 0),
+                'drafts' => (int) ($counts['draft'] ?? 0),
+                'has_custom_fields' => Multioto_Agent_Fields::schema($name) !== [],
+                'builtin' => (bool) $object->_builtin,
+            ];
+        }
+
+        return wp_json_encode($out, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    }
+
+    // --- Custom fields (ACF / JetEngine) --------------------------------------
+
+    private function fieldsSchema(array $args): string
+    {
+        $type = $this->contentType($args);
+        $schema = Multioto_Agent_Fields::schema($type);
+
+        // An empty schema has two very different causes, and the caller needs
+        // to know which: no ACF on the site at all, or ACF with nothing mapped
+        // to this type. The first means "read the fields with wp_fields_get and
+        // work from the keys"; the second means "this type really has none".
+        return wp_json_encode([
+            'type' => $type,
+            'acf_active' => Multioto_Agent_Fields::acfActive(),
+            'fields' => $schema,
+            'note' => $schema === [] && ! Multioto_Agent_Fields::acfActive()
+                ? 'ACF אינו פעיל באתר. אפשר לקרוא את השדות בפועל עם wp_fields_get ולעדכן לפי המפתחות שיחזרו.'
+                : null,
+        ], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    }
+
+    private function fieldsGet(array $args): string
+    {
+        $post = $this->contentPost((int) ($args['id'] ?? 0));
+
+        return wp_json_encode([
+            'id' => $post->ID,
+            'type' => $post->post_type,
+            'fields' => Multioto_Agent_Fields::values($post->ID),
+        ], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    }
+
+    private function fieldsUpdate(array $args): string
+    {
+        $post = $this->contentPost((int) ($args['id'] ?? 0));
+        $fields = $args['fields'] ?? null;
+
+        if (! is_array($fields) || $fields === []) {
+            throw new Multioto_Agent_Rpc_Error(-32602, 'חסר fields — אובייקט של מפתח→ערך.');
+        }
+
+        $result = Multioto_Agent_Fields::update($post->ID, $fields);
+
+        return wp_json_encode([
+            'updated_id' => $post->ID,
+            'updated' => $result['updated'],
+            'previous' => $result['previous'],
+        ], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    }
+
+    // --- Elementor (text only) ------------------------------------------------
+
+    private function elementorTexts(array $args): string
+    {
+        $post = $this->contentPost((int) ($args['id'] ?? 0));
+
+        return wp_json_encode([
+            'id' => $post->ID,
+            'texts' => Multioto_Agent_Elementor::texts($post->ID),
+        ], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    }
+
+    private function elementorTextUpdate(array $args): string
+    {
+        $post = $this->contentPost((int) ($args['id'] ?? 0));
+        $widgetId = trim((string) ($args['widget_id'] ?? ''));
+
+        if ($widgetId === '') {
+            throw new Multioto_Agent_Rpc_Error(-32602, 'חסר widget_id (מתוך wp_elementor_texts_get).');
+        }
+
+        if (! isset($args['text'])) {
+            throw new Multioto_Agent_Rpc_Error(-32602, 'חסר text.');
+        }
+
+        $result = Multioto_Agent_Elementor::updateText(
+            $post->ID,
+            $widgetId,
+            (string) $args['text'],
+            isset($args['setting']) ? (string) $args['setting'] : null
+        );
+
+        return wp_json_encode([
+            'updated_id' => $post->ID,
+            'widget_id' => $widgetId,
+            'widget' => $result['widget'],
+            'setting' => $result['setting'],
+            'previous' => $result['previous'],
+        ], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    }
+
+    // --- WooCommerce (write) --------------------------------------------------
+
+    private function wcProductSearch(array $args): string
+    {
+        $term = trim((string) ($args['search'] ?? ''));
+
+        if ($term === '') {
+            throw new Multioto_Agent_Rpc_Error(-32602, 'חסר טקסט חיפוש (search).');
+        }
+
+        return wp_json_encode(
+            Multioto_Agent_Woo_Writer::search($term, (int) ($args['limit'] ?? 10)),
+            JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT
+        );
+    }
+
+    private function wcProductGet(array $args): string
+    {
+        return wp_json_encode(
+            Multioto_Agent_Woo_Writer::get((int) ($args['product_id'] ?? 0)),
+            JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT
+        );
+    }
+
+    private function wcProductUpdate(array $args): string
+    {
+        return wp_json_encode(
+            Multioto_Agent_Woo_Writer::update((int) ($args['product_id'] ?? 0), $args),
+            JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT
+        );
+    }
+
+    private function wcProductCreate(array $args): string
+    {
+        return wp_json_encode(Multioto_Agent_Woo_Writer::create($args), JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    }
+
+    private function wcCouponList(array $args): string
+    {
+        return wp_json_encode(
+            Multioto_Agent_Woo_Writer::coupons((int) ($args['limit'] ?? 30)),
+            JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT
+        );
+    }
+
+    private function wcCouponCreate(array $args): string
+    {
+        return wp_json_encode(Multioto_Agent_Woo_Writer::createCoupon($args), JSON_UNESCAPED_UNICODE);
+    }
+
+    private function wcCouponExpire(array $args): string
+    {
+        return wp_json_encode(
+            Multioto_Agent_Woo_Writer::expireCoupon((string) ($args['code'] ?? '')),
+            JSON_UNESCAPED_UNICODE
+        );
     }
 
     private function contentCreate(array $args): string
@@ -1015,6 +1249,18 @@ class Multioto_Agent_Mcp_Server
     {
         $post = $this->contentPost((int) ($args['id'] ?? 0));
 
+        // Captured before anything is written: the platform stores it as the
+        // snapshot behind "undo", and only the fields actually being changed
+        // are included — restoring a title nobody touched would undo somebody
+        // else's edit.
+        $previous = [];
+
+        foreach (['title' => 'post_title', 'content' => 'post_content', 'excerpt' => 'post_excerpt', 'status' => 'post_status'] as $arg => $column) {
+            if (isset($args[$arg])) {
+                $previous[$arg] = $post->{$column};
+            }
+        }
+
         $data = ['ID' => $post->ID];
 
         if (isset($args['title'])) {
@@ -1040,7 +1286,10 @@ class Multioto_Agent_Mcp_Server
             throw new Multioto_Agent_Rpc_Error(-32000, $id->get_error_message());
         }
 
-        return wp_json_encode(['updated_id' => (int) $post->ID], JSON_UNESCAPED_UNICODE);
+        return wp_json_encode([
+            'updated_id' => (int) $post->ID,
+            'previous' => $previous,
+        ], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
     }
 
     private function contentTrash(array $args): string
@@ -1055,12 +1304,54 @@ class Multioto_Agent_Mcp_Server
         return wp_json_encode(['trashed_id' => (int) $post->ID], JSON_UNESCAPED_UNICODE);
     }
 
-    /** Resolve the requested content type, restricted to pages and posts. */
+    /**
+     * Resolve the requested content type against the ones this site really has.
+     *
+     * An unknown type is refused by name rather than quietly falling back to
+     * `page`: a request to list "properties" on a site with no such type must
+     * report that, not return the pages and let somebody conclude the property
+     * listings were deleted.
+     */
     private function contentType(array $args): string
     {
         $type = strtolower(trim((string) ($args['type'] ?? 'page')));
 
-        return in_array($type, ['page', 'post'], true) ? $type : 'page';
+        if ($type === '') {
+            return 'page';
+        }
+
+        $available = $this->editableTypes();
+
+        if (! in_array($type, $available, true)) {
+            throw new Multioto_Agent_Rpc_Error(-32602,
+                "סוג התוכן {$type} אינו קיים באתר. הסוגים הקיימים: ".implode(', ', $available).'.');
+        }
+
+        return $type;
+    }
+
+    /**
+     * Content types an agent may touch.
+     *
+     * Everything with an editing screen, minus the types that are plumbing:
+     * attachments (a media library edit is a file operation in disguise),
+     * revisions, menu items (they have their own tools) and Elementor's own
+     * template records. Products are excluded too — a product edited as a
+     * generic post bypasses the price validation in the WooCommerce tools.
+     *
+     * @return list<string>
+     */
+    private function editableTypes(): array
+    {
+        $excluded = [
+            'attachment', 'revision', 'nav_menu_item', 'custom_css', 'customize_changeset',
+            'oembed_cache', 'user_request', 'wp_block', 'wp_template', 'wp_template_part',
+            'wp_global_styles', 'wp_navigation', 'elementor_library', 'e-landing-page',
+            'product', 'product_variation', 'shop_order', 'shop_coupon',
+        ];
+
+        // get_post_types() returns name => name; the values are what we filter.
+        return array_values(array_diff(get_post_types(['show_ui' => true], 'names'), $excluded));
     }
 
     /** Validate a post status; blank/unknown falls back to draft (or any, for a query). */
@@ -1072,13 +1363,13 @@ class Multioto_Agent_Mcp_Server
         return in_array($status, $allowed, true) ? $status : ($forQuery ? 'any' : 'draft');
     }
 
-    /** Fetch a post/page (only those types) by id, or fail. */
+    /** Fetch an editable content item by id, or fail. */
     private function contentPost(int $id): WP_Post
     {
         $post = $id > 0 ? get_post($id) : null;
 
-        if (! $post || ! in_array($post->post_type, ['page', 'post'], true)) {
-            throw new Multioto_Agent_Rpc_Error(-32602, "העמוד/הפוסט {$id} לא נמצא.");
+        if (! $post || ! in_array($post->post_type, $this->editableTypes(), true)) {
+            throw new Multioto_Agent_Rpc_Error(-32602, "פריט התוכן {$id} לא נמצא.");
         }
 
         return $post;

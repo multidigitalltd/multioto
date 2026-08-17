@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\SiteResource\Pages;
 
+use App\Enums\SiteType;
 use App\Filament\Resources\SiteResource;
 use App\Filament\Support\SiteActions;
 use App\Jobs\CheckDomainExpiryJob;
@@ -18,6 +19,7 @@ use App\Jobs\SendDomainRenewalReminderJob;
 use App\Models\AuditLog;
 use App\Models\MonitorCheck;
 use App\Models\SystemLog;
+use App\Services\Agent\SaleBatchPlanner;
 use App\Services\Agent\SiteConnector;
 use App\Services\Agent\SiteOperations;
 use App\Services\Agent\SiteToolCatalog;
@@ -86,6 +88,62 @@ class ViewSite extends ViewRecord
                         ->{$result['healthy'] ? 'success' : 'warning'}()
                         ->persistent()
                         ->send();
+                }),
+
+            // Turn a sentence into a priced, checkable sale proposal.
+            //
+            // On stores only, and never applied from here: what comes back is a
+            // proposal listing every product with its price now and its price
+            // after, which goes through the same approval gate as everything
+            // else. "20% off the shirts" is not something anybody can check;
+            // "חולצה שחורה — 99 ₪ → 79.20 ₪" is.
+            Actions\Action::make('planSale')
+                ->label('הצע מבצע')
+                ->icon('heroicon-o-tag')
+                ->color('success')
+                ->visible(fn (): bool => $isAdmin() && $this->record->site_type === SiteType::Store)
+                ->disabled(fn (): bool => ! $this->record->mcp_enabled)
+                ->form([
+                    Textarea::make('instruction')
+                        ->label('מה המבצע?')
+                        ->helperText('לדוגמה: "תוריד 20% על כל החולצות עד 31/08". ההצעה תפרט כל מוצר עם המחיר הנוכחי והחדש, ותמתין לאישור.')
+                        ->required()
+                        ->rows(3)
+                        ->maxLength(1000),
+                ])
+                ->action(function (array $data, SaleBatchPlanner $planner, ApprovalGate $gate): void {
+                    try {
+                        $plan = $planner->plan($this->record, (string) $data['instruction']);
+                    } catch (\Throwable $e) {
+                        Notification::make()->title('תכנון המבצע נכשל')
+                            ->body(Str::limit($e->getMessage(), 150))->danger()->send();
+
+                        return;
+                    }
+
+                    // Declined rather than guessed: an instruction we could not
+                    // read into exact prices is one a person should answer.
+                    if ($plan === null) {
+                        Notification::make()
+                            ->title('לא הצלחתי להפוך את זה למבצע מדויק')
+                            ->body('צריך אחוז הנחה מפורש ומוצרים שאפשר לזהות. נסו לנסח מחדש, או קבעו את המחירים ידנית.')
+                            ->warning()->persistent()->send();
+
+                        return;
+                    }
+
+                    $gate->propose(
+                        type: 'site_action_batch',
+                        summary: "🏷️ {$this->record->domain}\n".$plan['summary'],
+                        payload: ['site_id' => $this->record->id, 'calls' => $plan['calls']],
+                        customerId: $this->record->customer_id,
+                        proposedBy: 'team',
+                    );
+
+                    Notification::make()
+                        ->title(count($plan['calls']).' שינויי מחיר נשלחו לאישור')
+                        ->body(Str::limit(implode("\n", $plan['lines']), 300))
+                        ->success()->persistent()->send();
                 }),
 
             // Run a security scan now: match the site's installed plugins/themes/

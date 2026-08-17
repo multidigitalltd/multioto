@@ -22,6 +22,7 @@ class SiteActionRunner
         private McpClient $mcp,
         private SiteToolCatalog $catalog,
         private SiteChangeJournal $journal,
+        private RevertRecipe $recipes,
     ) {}
 
     /** Run the approved action. Returns the tool's text output. */
@@ -35,6 +36,22 @@ class SiteActionRunner
             throw new \RuntimeException('האתר או הכלי חסרים בהצעה.');
         }
 
+        return $this->execute($action, $site, $tool, $arguments, Str::limit($action->summary, 250));
+    }
+
+    /**
+     * One tool call, policy-checked, executed and journalled against $action.
+     *
+     * Separate from run() so a batch — one approval covering many products —
+     * goes through exactly this path per call, rather than a parallel
+     * implementation that would eventually drift from it on the checks that
+     * matter. Every change it writes carries the batch's own pending_action_id,
+     * which is what makes the group recoverable as a group.
+     *
+     * @param  array<string, mixed>  $arguments
+     */
+    public function execute(PendingAction $action, Site $site, string $tool, array $arguments, string $summary, ?int $revertsChangeId = null): string
+    {
         // Master kill-switch — approved or not, nothing runs on any site while
         // the site agent is turned off.
         if (! config('agent.actions_enabled')) {
@@ -62,7 +79,7 @@ class SiteActionRunner
             // A failed attempt is part of the site's history too.
             $this->journal->record(
                 $site,
-                summary: Str::limit($action->summary, 250),
+                summary: $summary,
                 tool: $tool,
                 arguments: $arguments,
                 initiatedBy: $action->proposed_by,
@@ -75,8 +92,12 @@ class SiteActionRunner
 
         $output = $this->mcp->textContent($result);
 
-        // A successful revert closes the original change in the journal.
-        if (($revertsId = data_get($action->payload, 'reverts_change_id')) !== null) {
+        // A successful revert closes the original change in the journal. The
+        // caller may name it per call (a batch undoes many at once); otherwise
+        // it comes from the proposal, as it always has.
+        $revertsId = $revertsChangeId ?? data_get($action->payload, 'reverts_change_id');
+
+        if ($revertsId !== null) {
             if ($original = SiteChange::where('site_id', $site->id)->find((int) $revertsId)) {
                 $this->journal->markReverted($original);
             }
@@ -87,11 +108,20 @@ class SiteActionRunner
         // (an inverse tool + arguments) is stored so the change can be rolled
         // back live later.
         if ($this->catalog->resolveTier($site, $tool) >= 1) {
+            // An explicitly proposed recipe wins — somebody who knows how to
+            // undo their own operation knows better than a general rule. When
+            // there is none, derive it from what the tool reported it replaced,
+            // which is the only source that reflects the site as it really was
+            // a moment ago rather than as anyone predicted.
             $revert = (array) data_get($action->payload, 'revert', []);
+
+            if (blank($revert['tool'] ?? null)) {
+                $revert = $this->recipes->for($tool, $arguments, $output) ?? [];
+            }
 
             $this->journal->record(
                 $site,
-                summary: Str::limit($action->summary, 250),
+                summary: $summary,
                 tool: $tool,
                 arguments: $arguments,
                 beforeState: data_get($action->payload, 'before_state'),

@@ -10,6 +10,7 @@ use App\Models\Customer;
 use App\Models\Plan;
 use App\Models\Subscription;
 use App\Services\Agent\ConsoleAgent;
+use App\Services\Agent\McpClient;
 use App\Services\Ai\ClaudeClient;
 use App\Services\Automation\ApprovalGate;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -44,7 +45,7 @@ class ConsoleAgentBroadcastTest extends TestCase
             },
         );
 
-        $agent = new ConsoleAgent($ai, app(ApprovalGate::class));
+        $agent = new ConsoleAgent($ai, app(ApprovalGate::class), app(McpClient::class));
 
         return $agent->run('תודיע לכל הלקוחות על עדכון אבטחה');
     }
@@ -110,7 +111,7 @@ class ConsoleAgentBroadcastTest extends TestCase
         // The composer is resolved from the container inside the tool.
         $this->app->instance(ClaudeClient::class, $ai);
 
-        (new ConsoleAgent($ai, app(ApprovalGate::class)))
+        (new ConsoleAgent($ai, app(ApprovalGate::class), app(McpClient::class)))
             ->run('תודיע ללקוחות על התחזוקה');
 
         $broadcast = Broadcast::sole();
@@ -134,7 +135,7 @@ class ConsoleAgentBroadcastTest extends TestCase
 
         $this->app->instance(ClaudeClient::class, $ai);
 
-        (new ConsoleAgent($ai, app(ApprovalGate::class)))->run('תדוור');
+        (new ConsoleAgent($ai, app(ApprovalGate::class), app(McpClient::class)))->run('תדוור');
 
         $this->assertSame(0, Broadcast::count());
     }

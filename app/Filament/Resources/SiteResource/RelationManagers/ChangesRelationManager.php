@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\SiteResource\RelationManagers;
 
 use App\Models\SiteChange;
+use App\Services\Agent\SiteActionBatchRunner;
 use App\Services\Automation\ApprovalGate;
 use Filament\Notifications\Notification;
 use Filament\Resources\RelationManagers\RelationManager;
@@ -34,7 +35,29 @@ class ChangesRelationManager extends RelationManager
                 Tables\Columns\TextColumn::make('tool')->label('כלי')->placeholder('—')->toggleable(),
                 Tables\Columns\TextColumn::make('status')->label('סטטוס')->badge(),
                 Tables\Columns\TextColumn::make('initiated_by')->label('יזם')->placeholder('—')->toggleable(),
+
+                // Why this change happened, next to what it changed.
+                //
+                // "מה השתנה" without "בעקבות מה" is the question that gets asked
+                // the moment something looks wrong on a customer's site, and
+                // answering it by digging through approvals is how a two-minute
+                // check becomes an afternoon. The approval that authorised the
+                // change is already linked on the row — this just shows it.
+                Tables\Columns\TextColumn::make('pendingAction.summary')
+                    ->label('בעקבות')
+                    ->placeholder('—')
+                    ->wrap()
+                    ->limit(60)
+                    ->tooltip(fn (SiteChange $record): ?string => $record->pendingAction?->summary)
+                    ->description(fn (SiteChange $record): ?string => $record->pendingAction === null
+                        ? null
+                        : 'אישור #'.$record->pendingAction->id
+                            .($record->batchSize() > 1 ? " · אצווה של {$record->batchSize()} שינויים" : '')),
             ])
+            // The journal is read constantly during a rollout; without eager
+            // loading, a page of twenty changes asks the database for twenty
+            // approvals one at a time.
+            ->modifyQueryUsing(fn ($query) => $query->with('pendingAction'))
             ->actions([
                 // Propose the recorded inverse action through the same approval
                 // gate — a rollback is itself a manager-approved change. Shown
@@ -64,6 +87,52 @@ class ChangesRelationManager extends RelationManager
                         );
 
                         Notification::make()->title('בקשת השחזור נשלחה לאישור')->success()->send();
+                    }),
+
+                // A change that arrived as part of a batch can be undone with
+                // the rest of it. Reverting a twenty-product sale one row at a
+                // time leaves the shop half on sale for as long as it takes,
+                // and leaves whoever is clicking to remember where they got to.
+                Tables\Actions\Action::make('revertBatch')
+                    ->label('שחזר את כל האצווה')
+                    ->icon('heroicon-o-arrow-uturn-left')
+                    ->color('danger')
+                    ->visible(fn (SiteChange $record): bool => $record->batchSize() > 1
+                        && $record->isRevertable()
+                        && (auth()->user()?->isAdmin() ?? false))
+                    ->requiresConfirmation()
+                    ->modalHeading('שחזור אצווה שלמה')
+                    ->modalDescription(fn (SiteChange $record): string => 'לשחזר את כל '.$record->batchSize()
+                        .' השינויים שבוצעו יחד בפעולה הזו? הבקשה תישלח לאישור מנהל לפני ביצוע.')
+                    ->modalSubmitActionLabel('שלח לאישור')
+                    ->action(function (SiteChange $record, ApprovalGate $gate, SiteActionBatchRunner $batches): void {
+                        $plan = $batches->revertPlan($record->pendingAction);
+
+                        if ($plan['calls'] === []) {
+                            Notification::make()
+                                ->title('אין מה לשחזר — לאף שינוי באצווה אין פעולה הפוכה שמורה')
+                                ->warning()->send();
+
+                            return;
+                        }
+
+                        // The skipped count is said out loud: "restore
+                        // everything" must never quietly mean "restore most of
+                        // it", or the shop is left in a state nobody described.
+                        $note = $plan['skipped'] > 0
+                            ? "\n(".$plan['skipped'].' שינויים באצווה ללא פעולה הפוכה שמורה — הם לא ישוחזרו.)'
+                            : '';
+
+                        $gate->propose(
+                            type: 'site_action_batch',
+                            summary: '↩️ שחזור אצווה באתר '.$record->site->domain."\n"
+                                .count($plan['calls'])." שינויים יבוטלו בסדר הפוך.{$note}",
+                            payload: ['site_id' => $record->site_id, 'calls' => $plan['calls']],
+                            customerId: $record->site->customer_id,
+                            proposedBy: 'team',
+                        );
+
+                        Notification::make()->title('בקשת שחזור האצווה נשלחה לאישור')->success()->send();
                     }),
             ])
             ->emptyStateHeading('עדיין לא בוצעו שינויים באתר הזה');

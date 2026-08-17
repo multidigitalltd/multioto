@@ -48,4 +48,20 @@ class SiteChange extends Model
     {
         return $this->status === SiteChangeStatus::Applied && filled($this->revert_tool);
     }
+
+    /**
+     * How many changes were applied under the same approval as this one.
+     *
+     * A sale across twenty products is one decision that produced twenty rows;
+     * they share the approval that made them, so the group needs no column of
+     * its own. 1 means this change stood alone.
+     */
+    public function batchSize(): int
+    {
+        if ($this->pending_action_id === null) {
+            return 1;
+        }
+
+        return static::query()->where('pending_action_id', $this->pending_action_id)->count();
+    }
 }

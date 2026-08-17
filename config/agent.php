@@ -51,7 +51,7 @@ return [
         // The current version of the companion plugin we ship. A site reporting
         // an older version is told to update itself from the download channel —
         // so we never have to re-install the plugin by hand on every site.
-        'current_version' => env('AGENT_PLUGIN_VERSION', '1.1.0'),
+        'current_version' => env('AGENT_PLUGIN_VERSION', '1.2.0'),
 
         // Private disk + path prefix where release zips live: {path}/{version}.zip.
         'disk' => env('AGENT_PLUGIN_DISK', 'local'),
@@ -113,10 +113,21 @@ return [
     // Nothing is applied without the owner's explicit approval.
     'content_requests' => (bool) env('AGENT_CONTENT_REQUESTS', true),
 
+    /*
+     | Tool risk tiers, matched as name substrings, highest tier first.
+     |
+     | Only the READ vocabulary and the outright dangerous one are enumerated.
+     | Everything else — including every tool that changes a price, a field or a
+     | page — lands on the tier-2 default and therefore needs an approval. That
+     | asymmetry is deliberate: forgetting to classify a new write tool leaves it
+     | requiring approval, while forgetting to classify a new read tool only
+     | makes it ask needlessly. The failure mode of a missing entry has to be
+     | the harmless one.
+     */
     'risk' => [
         3 => ['exec', 'eval', 'sql', 'db_write', 'file_write', 'file_edit', 'delete', 'drop', 'remove'],
         1 => ['cache', 'restart', 'maintenance', 'transient'],
-        0 => ['list', 'get', 'read', 'health', 'status', 'log', 'info', 'check', 'search'],
+        0 => ['list', 'get', 'read', 'health', 'status', 'log', 'info', 'check', 'search', 'schema'],
     ],
 
 ];
