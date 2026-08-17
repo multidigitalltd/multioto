@@ -175,6 +175,29 @@ class SaleBatchPlannerTest extends TestCase
         $this->assertStringContainsString('210', $plan['summary']);
     }
 
+    /**
+     * ומוצר שסוננו אותו בעצמנו אינו נספר כ"מוצר שלא נראה".
+     *
+     * מוצר בלי מחיר רגיל נשקל ונדחה לגופו; מוצר שהחנות לא שלחה כלל לא נראה
+     * מעולם. שתי הסיבות מקטינות את הרשימה, ורק השנייה מצדיקה אזהרה — ספירת
+     * הראשונה כשנייה מייצרת "מבצע חלקי, מוצר אחד לא נכלל" בחנות עם שני מוצרים
+     * ששניהם נשקלו.
+     */
+    public function test_a_product_we_filtered_out_is_not_counted_as_unseen(): void
+    {
+        $plan = $this->planner(
+            ['can_do' => true, 'search' => 'חולצה', 'percent' => 20],
+            [1],
+            [
+                ['id' => 1, 'name' => 'חולצה שחורה', 'regular_price' => '99'],
+                ['id' => 4, 'name' => 'חולצה בהתאמה אישית', 'regular_price' => null],
+            ],
+            total: 2,
+        )->plan($this->site(), 'תוריד 20% על החולצות');
+
+        $this->assertStringNotContainsString('מבצע חלקי', $plan['summary']);
+    }
+
     /** וכשכל התואמים נכללו — אין אזהרה שתסיח את הדעת. */
     public function test_a_complete_sale_carries_no_warning(): void
     {

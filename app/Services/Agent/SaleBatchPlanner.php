@@ -65,11 +65,15 @@ class SaleBatchPlanner
         }
 
         // How many the search could not return at all, carried through so the
-        // approval can say it. Counted against what the shop matched, not
-        // against what the model picked — the model narrowing fifty candidates
-        // to forty is judgement; the shop having two hundred and sending fifty
-        // is a limit, and only the second one hides products.
-        $unseen = max(0, $found['total'] - count($found['products']));
+        // approval can say it.
+        //
+        // Against the page the shop sent, not against what survived our own
+        // filtering and not against what the model picked. All three numbers
+        // shrink, for three different reasons: the shop's limit hides products
+        // nobody saw, our filter drops products we considered and rejected, and
+        // the model narrowing candidates is judgement. Only the first is
+        // something the owner has to be warned about.
+        $unseen = max(0, $found['total'] - $found['returned']);
 
         return $this->build($chosen, $intent, $unseen);
     }
@@ -145,7 +149,14 @@ class SaleBatchPlanner
      * owner then believes the sale is running and it mostly is not — a failure
      * that surfaces in the takings, weeks later.
      *
-     * @return array{products: list<array<string, mixed>>, total: int}
+     * `returned` is the size of the page BEFORE our own filtering, because the
+     * two hide products for different reasons and must not be added together.
+     * A product dropped for having no regular price is excluded on purpose and
+     * on merit; a product the shop never sent is excluded by a limit. Counting
+     * the first as the second produces "this sale is partial, 1 product was not
+     * included" on a shop with two products, both of which were considered.
+     *
+     * @return array{products: list<array<string, mixed>>, returned: int, total: int}
      */
     private function search(Site $site, string $term): array
     {
@@ -155,13 +166,13 @@ class SaleBatchPlanner
                 'limit' => self::SEARCH_LIMIT,
             ]));
         } catch (\Throwable) {
-            return ['products' => [], 'total' => 0];
+            return ['products' => [], 'returned' => 0, 'total' => 0];
         }
 
         $decoded = json_decode(trim($text), true);
 
         if (! is_array($decoded)) {
-            return ['products' => [], 'total' => 0];
+            return ['products' => [], 'returned' => 0, 'total' => 0];
         }
 
         // A plain list is a plugin older than 1.2.1, which cannot report a
@@ -169,6 +180,7 @@ class SaleBatchPlanner
         // of an answer that does not know any better.
         $rows = array_is_list($decoded) ? $decoded : (array) ($decoded['products'] ?? []);
         $total = array_is_list($decoded) ? count($decoded) : (int) ($decoded['total'] ?? count($rows));
+        $returned = count($rows);
 
         $products = collect($rows)
             ->filter(fn ($row): bool => is_array($row)
@@ -179,7 +191,7 @@ class SaleBatchPlanner
             ->values()
             ->all();
 
-        return ['products' => $products, 'total' => max($total, count($products))];
+        return ['products' => $products, 'returned' => $returned, 'total' => max($total, $returned)];
     }
 
     /**

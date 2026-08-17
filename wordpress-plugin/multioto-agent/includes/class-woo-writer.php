@@ -47,9 +47,11 @@ class Multioto_Agent_Woo_Writer
         // lookup somebody does before repricing, answered with "no such
         // product" about a product that exists.
         $bySku = wc_get_product_id_by_sku(trim($term));
+        $skuMatched = false;
 
         if ($bySku > 0 && ($product = wc_get_product($bySku)) instanceof WC_Product) {
             $found[$bySku] = self::summary($product);
+            $skuMatched = true;
         }
 
         // `paginate` so the answer can say how many matched, not only how many
@@ -64,14 +66,26 @@ class Multioto_Agent_Woo_Writer
             'paginate' => true,
         ]);
 
+        $fromText = [];
+
         foreach ($query->products as $product) {
+            $fromText[] = $product->get_id();
             $found[$product->get_id()] = self::summary($product);
         }
 
         $products = array_slice(array_values($found), 0, $limit);
 
+        // The SKU hit counts toward the total only when the text query did not
+        // already contain it. Without this, a SKU that appears nowhere in the
+        // title or description answers "total 0, returned 1" — a pair of numbers
+        // that contradict each other, and that a caller reading the total would
+        // take as "no such product" about a product it is holding.
+        $total = (int) $query->total + ($skuMatched && ! in_array($bySku, $fromText, true) ? 1 : 0);
+
         return [
-            'total' => (int) $query->total,
+            // Never fewer than what is in the box: the page is proof those
+            // products matched, whatever the count says.
+            'total' => max($total, count($products)),
             'returned' => count($products),
             'products' => $products,
         ];
