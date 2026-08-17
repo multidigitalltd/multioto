@@ -116,10 +116,12 @@ class SendTicketReplyJob implements ShouldQueue
 
             NotificationLog::record('whatsapp', NotificationType::TicketReply, $chatId, null, $body, $ticket->customer?->id);
         } else {
-            $email = $ticket->customer?->email;
-            $cc = $ticket->watcherEmails();
+            // The person who wrote the ticket, with the business copied — not
+            // the business alone. See Ticket::replyToEmail().
+            $email = $ticket->replyToEmail();
+            $cc = $ticket->replyCcEmails();
 
-            // No customer address but someone IS copied — the conversation is
+            // No address of our own but someone IS copied — the conversation is
             // being held with them, so they become the recipient rather than a
             // copy of a message sent to nobody.
             if (! $email) {
