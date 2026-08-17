@@ -27,8 +27,9 @@ class License extends Model
     public const REVOKED = 'revoked';
 
     protected $fillable = [
-        'plugin_product_id', 'plugin_plan_id', 'customer_id', 'subscription_id', 'key_hash', 'key_prefix',
-        'email', 'sites_limit', 'expires_at', 'includes_updates', 'status', 'notes', 'issued_at', 'last_checked_at',
+        'plugin_product_id', 'plugin_plan_id', 'delivered_release_id', 'customer_id', 'subscription_id',
+        'key_hash', 'key_prefix', 'email', 'sites_limit', 'expires_at', 'includes_updates', 'status',
+        'notes', 'issued_at', 'last_checked_at',
     ];
 
     protected function casts(): array
@@ -62,6 +63,34 @@ class License extends Model
     public function includesUpdates(): bool
     {
         return (bool) $this->includes_updates;
+    }
+
+    /** The build this licence was sold with. Null when we have no record of one. */
+    public function deliveredRelease(): BelongsTo
+    {
+        return $this->belongsTo(PluginRelease::class, 'delivered_release_id');
+    }
+
+    /**
+     * The build this licence is entitled to right now, for a re-download.
+     *
+     * Two different questions get confused here, so they are answered
+     * separately. `/update` asks "is there something NEWER for this shop", and
+     * for a licence without updates the answer is no. This asks "what do I own",
+     * and the answer is never nothing: a customer who paid keeps the right to
+     * install what they paid for, whether or not they still get new versions.
+     *
+     * So: while updates are included, that is the current build. Once they end
+     * — expired, revoked, or bought outright — it is the build that was
+     * delivered, and only that one.
+     */
+    public function entitledRelease(): ?PluginRelease
+    {
+        if ($this->includesUpdates() && $this->isUsable()) {
+            return $this->product?->currentRelease() ?? $this->deliveredRelease;
+        }
+
+        return $this->deliveredRelease;
     }
 
     public function customer(): BelongsTo
@@ -187,6 +216,25 @@ class License extends Model
             $this->hasExpired() => 'פג תוקף',
             ! $this->includesUpdates() => 'פעיל — ללא עדכונים',
             default => 'פעיל',
+        };
+    }
+
+    /**
+     * What the customer is told about updates, in one sentence.
+     *
+     * Written for the person who paid, not for the panel: every branch says
+     * that the plugin keeps working, because the fear behind "my licence
+     * expired" is that a shop stopped selling — and here that never happens.
+     */
+    public function updatesSummary(): string
+    {
+        return match (true) {
+            $this->isRevoked() => 'הרישיון בוטל. התוסף ממשיך לעבוד באתרים שבהם הוא מותקן, אך אינו מקבל עדכונים חדשים.',
+            ! $this->includesUpdates() => 'רכישה חד-פעמית ללא עדכונים. התוסף שלכם לתמיד ואינו פג — פשוט לא יוצעו לו גרסאות חדשות.',
+            $this->expires_at === null => 'עדכונים ללא הגבלת זמן.',
+            $this->hasExpired() => 'העדכונים הסתיימו ב-'.$this->expires_at->format('d/m/Y')
+                .'. התוסף ממשיך לעבוד כרגיל; לחידוש העדכונים אפשר לפנות אלינו.',
+            default => 'עדכונים עד '.$this->expires_at->format('d/m/Y').'.',
         };
     }
 

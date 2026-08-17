@@ -67,6 +67,12 @@
         .stat { background: var(--chip); border-radius: 12px; padding: .8rem 1rem; }
         .stat b { display: block; font-size: 1.5rem; }
         .table-scroll { overflow-x: auto; }
+        /* Text a screen reader announces and a sighted reader does not need —
+           a column header with no visible label, or which row a button acts on. */
+        .visually-hidden {
+            position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+            overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+        }
         footer.site { color: var(--muted); font-size: .82rem; margin-top: 2rem; text-align: center; }
     </style>
 </head>
@@ -96,6 +102,12 @@
                 <a href="{{ route('portal.dashboard') }}" @if (request()->routeIs('portal.dashboard')) aria-current="page" @endif>סקירה</a>
                 <a href="{{ route('portal.debt') }}" @if (request()->routeIs('portal.debt')) aria-current="page" @endif>תשלומים פתוחים</a>
                 <a href="{{ route('portal.invoices') }}" @if (request()->routeIs('portal.invoices')) aria-current="page" @endif>חשבוניות</a>
+                {{-- Shown only to customers who own a licence: a hosting-only
+                     customer has nothing behind this tab, and a tab that always
+                     leads to an empty page teaches people to ignore the row. --}}
+                @if ($customer->licenses()->exists())
+                    <a href="{{ route('portal.licenses') }}" @if (request()->routeIs('portal.licenses')) aria-current="page" @endif>רישיונות</a>
+                @endif
                 <a href="{{ route('portal.tickets') }}" @if (request()->routeIs('portal.tickets')) aria-current="page" @endif>פניות</a>
             </nav>
         @endisset

@@ -10,6 +10,9 @@
             <div class="stat"><b>{{ $subscriptions->count() }}</b><span class="muted">מנויים פעילים</span></div>
             <div class="stat"><b>{{ $invoiceCount }}</b><span class="muted">חשבוניות</span></div>
             <div class="stat"><b>{{ $openTicketCount }}</b><span class="muted">פניות פתוחות</span></div>
+            @if ($licenseCount > 0)
+                <div class="stat"><b>{{ $licenseCount }}</b><span class="muted">רישיונות תוספים</span></div>
+            @endif
         </div>
     </div>
 

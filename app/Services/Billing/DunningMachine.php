@@ -37,11 +37,40 @@ class DunningMachine
                 : null,
         ]);
 
-        $this->notify($subscription, $charge, $stage, $config['template']);
+        $this->notify($subscription, $charge, $stage, $this->templateFor($subscription, $config['template']));
 
         if ($config['suspend'] && $subscription->site_id) {
             SuspendSiteJob::dispatch($subscription->site_id);
         }
+    }
+
+    /**
+     * The wording for this subscription, which is not always the stage's default.
+     *
+     * The ladder was written when every subscription was a hosted site, so its
+     * last two rungs threaten to suspend one. A subscription with no site — a
+     * plugin licence, a retainer — cannot have a site suspended, and telling a
+     * customer their website is about to go down when it is not is both untrue
+     * and the fastest way to teach people that our collection mail is noise.
+     *
+     * Resolution is by suffix, most specific first, falling back to the stage's
+     * own template when no variant is defined. That way adding a variant is
+     * adding a line to lang/he/dunning.php, and stages 1–2 — which never mention
+     * a site — need none at all.
+     */
+    protected function templateFor(Subscription $subscription, string $template): string
+    {
+        if ($subscription->site_id !== null) {
+            return $template;
+        }
+
+        $suffix = $subscription->license()->exists() ? '_license' : '_no_site';
+
+        // A missing key comes back from the translator as the key itself, which
+        // is exactly the check: no variant defined → keep the stage's wording.
+        return __("dunning.{$template}{$suffix}.subject") === "dunning.{$template}{$suffix}.subject"
+            ? $template
+            : $template.$suffix;
     }
 
     /**

@@ -25,6 +25,11 @@
 <p>הרישיון מכסה עד <strong>{{ $sites }}</strong> {{ $sites == 1 ? 'אתר' : 'אתרים' }}. אם העברתם אתר או סגרתם אותו — אפשר לשחרר אותו מתוך הגדרות התוסף באותו אתר, והמקום יתפנה.</p>
 @endif
 
+{{-- The way out when the shop is already gone: the plugin cannot release a seat
+     from a site that no longer exists, and that is exactly when somebody needs
+     the seat back. --}}
+<p>באזור האישי — <a href="{{ route('portal.licenses') }}">{{ route('portal.licenses') }}</a> — אפשר לראות באילו אתרים הרישיון פעיל, לשחרר אתר שנמחק או הוחלף, ולהוריד את התוסף שוב. הכניסה בקישור חד-פעמי לכתובת האימייל הזו.</p>
+
 @if ($expires)
 <p>הרישיון בתוקף עד <strong>{{ $expires }}</strong>. {{ $license->subscription_id ? 'החידוש אוטומטי — אין צורך לעשות דבר.' : 'נזכיר לכם לפני שהוא פג.' }}</p>
 <p style="font-size:13px;color:#52525b">גם אם התוקף יפוג, <strong>התוסף ימשיך לעבוד באתר כרגיל</strong> — רק העדכונים ייעצרו עד לחידוש.</p>

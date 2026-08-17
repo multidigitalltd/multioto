@@ -13,6 +13,7 @@ use App\Http\Controllers\MarketingPreferencesController;
 use App\Http\Controllers\PluginStoreController;
 use App\Http\Controllers\Portal\PortalAuthController;
 use App\Http\Controllers\Portal\PortalController;
+use App\Http\Controllers\Portal\PortalLicenseController;
 use App\Http\Controllers\PushSubscriptionController;
 use App\Http\Controllers\SignatureController;
 use App\Http\Controllers\SignupController;
@@ -244,6 +245,20 @@ Route::prefix('portal')->group(function () {
         Route::post('/tickets', [PortalController::class, 'storeTicket'])
             ->middleware('throttle:10,1')->name('portal.tickets.store');
         Route::get('/card', [PortalController::class, 'updateCard'])->name('portal.card');
+
+        /*
+         | Plugin licences. The two write actions are throttled because each one
+         | costs something real if repeated — a released seat and a mail with a
+         | brand new key — and neither is the kind of button worth pressing
+         | twenty times a minute.
+         */
+        Route::get('/licenses', [PortalLicenseController::class, 'index'])->name('portal.licenses');
+        Route::post('/licenses/{license}/sites/{site}/release', [PortalLicenseController::class, 'releaseSite'])
+            ->middleware('throttle:20,1')->name('portal.licenses.release');
+        Route::post('/licenses/{license}/key', [PortalLicenseController::class, 'regenerateKey'])
+            ->middleware('throttle:5,60')->name('portal.licenses.key');
+        Route::get('/licenses/{license}/download', [PortalLicenseController::class, 'download'])
+            ->middleware('throttle:20,1')->name('portal.licenses.download');
     });
 });
 

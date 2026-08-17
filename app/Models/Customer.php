@@ -145,4 +145,10 @@ class Customer extends Model
     {
         return $this->hasMany(Invoice::class);
     }
+
+    /** Plugin licences bought by this customer — what the portal's licences page lists. */
+    public function licenses(): HasMany
+    {
+        return $this->hasMany(License::class);
+    }
 }

@@ -4,6 +4,7 @@ namespace App\Services\Licensing;
 
 use App\Mail\LicenseKeyMail;
 use App\Models\License;
+use App\Models\PluginProduct;
 use App\Models\SystemLog;
 use Illuminate\Support\Facades\Mail;
 
@@ -29,6 +30,13 @@ class LicenseIssuer
      */
     public function issue(array $attributes): array
     {
+        // Remembered at the moment of sale, because it cannot be reconstructed
+        // afterwards: once a newer build is published, nothing in the data says
+        // which one this customer actually received. Without it, a licence sold
+        // without updates has no re-download that is both honest and useful.
+        $attributes['delivered_release_id'] ??= PluginProduct::find($attributes['plugin_product_id'] ?? null)
+            ?->currentRelease()?->id;
+
         [$license, $key] = License::issue($attributes);
 
         $sent = $this->send($license, $key, replacement: false);
