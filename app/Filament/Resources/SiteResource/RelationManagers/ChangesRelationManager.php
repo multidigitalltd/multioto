@@ -35,7 +35,29 @@ class ChangesRelationManager extends RelationManager
                 Tables\Columns\TextColumn::make('tool')->label('כלי')->placeholder('—')->toggleable(),
                 Tables\Columns\TextColumn::make('status')->label('סטטוס')->badge(),
                 Tables\Columns\TextColumn::make('initiated_by')->label('יזם')->placeholder('—')->toggleable(),
+
+                // Why this change happened, next to what it changed.
+                //
+                // "מה השתנה" without "בעקבות מה" is the question that gets asked
+                // the moment something looks wrong on a customer's site, and
+                // answering it by digging through approvals is how a two-minute
+                // check becomes an afternoon. The approval that authorised the
+                // change is already linked on the row — this just shows it.
+                Tables\Columns\TextColumn::make('pendingAction.summary')
+                    ->label('בעקבות')
+                    ->placeholder('—')
+                    ->wrap()
+                    ->limit(60)
+                    ->tooltip(fn (SiteChange $record): ?string => $record->pendingAction?->summary)
+                    ->description(fn (SiteChange $record): ?string => $record->pendingAction === null
+                        ? null
+                        : 'אישור #'.$record->pendingAction->id
+                            .($record->batchSize() > 1 ? " · אצווה של {$record->batchSize()} שינויים" : '')),
             ])
+            // The journal is read constantly during a rollout; without eager
+            // loading, a page of twenty changes asks the database for twenty
+            // approvals one at a time.
+            ->modifyQueryUsing(fn ($query) => $query->with('pendingAction'))
             ->actions([
                 // Propose the recorded inverse action through the same approval
                 // gate — a rollback is itself a manager-approved change. Shown
