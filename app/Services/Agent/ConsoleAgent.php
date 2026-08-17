@@ -200,6 +200,12 @@ class ConsoleAgent
             '- שינוי במוצר בודד → קרא קודם ב-read_shop_products, ואז propose_product_change. ציין ב-note את המחיר הנוכחי, כדי שהמנהל יאשר מספר ולא תיאור.',
             '- אם propose_sale מחזיר שלא ניתן — זה אומר שההוראה אינה מבצע מדויק (אין אחוז מפורש, או לא ברור על אילו מוצרים). שאל את המנהל עם need_clarification. לעולם אל תמציא אחוז הנחה או מחיר.',
             '',
+            'עבודה על תוכן באתרים:',
+            '- תמיד read_site_content לפני שאתה מציע שינוי. שם תראה מה כתוב עכשיו, ואם העמוד בנוי באלמנטור — גם את הטקסטים שבו עם מזהה רכיב לכל אחד.',
+            '- עמוד רגיל → propose_content_edit. עמוד אלמנטור → propose_elementor_text עם ה-widget_id שקראת, והעבר גם current_text כדי שההצעה תראה לפני/אחרי. אל תנסה לערוך עמוד אלמנטור דרך content — זה משנה עותק שאיש לא רואה.',
+            '- שדות מותאמים (מחיר נכס, תאריך אירוע) → propose_field_change, עם שמות המפתחות כפי שקראת אותם. מפתח שהמצאת יוצר שדה חדש שאיש אינו קורא, כלומר שינוי שנראה מוצלח ואינו עושה דבר.',
+            '- הוספת סקשן חדש, שינוי מבנה או עיצוב באלמנטור אינם נתמכים. פתח על זה משימה לאדם עם open_task — ואל תציע במקומם עריכת טקסט שלא ביקשו.',
+            '',
             $this->scheduleContext(),
             '',
             'עקרונות עבודה:',
@@ -395,6 +401,14 @@ class ConsoleAgent
                 'input_schema' => ['type' => 'object', 'properties' => ['site_id' => ['type' => 'integer'], 'instruction' => ['type' => 'string']], 'required' => ['site_id', 'instruction']]],
             ['name' => 'propose_product_change', 'description' => 'הצע שינוי במוצר בודד. site_id + product_id, ולפחות אחד מ: regular_price, sale_price (ריק = סיום מבצע), sale_from, sale_to (YYYY-MM-DD), stock_quantity, stock_status (instock/outofstock/onbackorder). קרא קודם ב-read_shop_products כדי לצטט בהצעה את המחיר הנוכחי.',
                 'input_schema' => ['type' => 'object', 'properties' => ['site_id' => ['type' => 'integer'], 'product_id' => ['type' => 'integer'], 'regular_price' => ['type' => 'string'], 'sale_price' => ['type' => 'string'], 'sale_from' => ['type' => 'string'], 'sale_to' => ['type' => 'string'], 'stock_quantity' => ['type' => 'integer'], 'stock_status' => ['type' => 'string'], 'note' => ['type' => 'string']], 'required' => ['site_id', 'product_id']]],
+            ['name' => 'read_site_content', 'description' => 'קרא תוכן מאתר מחובר. בלי id — רשימת פריטים (אופציונלי type = page/post/סוג מותאם, ו-search). עם id — הפריט המלא: כותרת, תוכן, סטטוס, השדות המותאמים שלו, והאם הוא בנוי באלמנטור; אם כן, גם כל הטקסטים שבו עם מזהה רכיב (widget_id) לכל אחד. קרא תמיד לפני שאתה מציע שינוי תוכן — כך תדע באיזה כלי להשתמש ותוכל לצטט בהצעה את הטקסט הנוכחי.',
+                'input_schema' => ['type' => 'object', 'properties' => ['site_id' => ['type' => 'integer'], 'id' => ['type' => 'integer'], 'type' => ['type' => 'string'], 'search' => ['type' => 'string']], 'required' => ['site_id']]],
+            ['name' => 'propose_content_edit', 'description' => 'הצע עריכת עמוד/פוסט רגיל (לא אלמנטור). site_id + id, ולפחות אחד מ: title, content (HTML), excerpt, status. אם העמוד בנוי באלמנטור הכלי יסרב ויפנה אותך ל-propose_elementor_text.',
+                'input_schema' => ['type' => 'object', 'properties' => ['site_id' => ['type' => 'integer'], 'id' => ['type' => 'integer'], 'title' => ['type' => 'string'], 'content' => ['type' => 'string'], 'excerpt' => ['type' => 'string'], 'status' => ['type' => 'string']], 'required' => ['site_id', 'id']]],
+            ['name' => 'propose_elementor_text', 'description' => 'הצע החלפת טקסט אחד בעמוד שבנוי באלמנטור. site_id + id + widget_id + text; אופציונלי setting (כשלרכיב כמה שדות טקסט) ו-current_text (הטקסט הנוכחי — העבר אותו כדי שההצעה תראה לפני/אחרי). את widget_id מקבלים מ-read_site_content. שינוי מבנה או עיצוב אינו נתמך — לזה פותחים משימה לאדם.',
+                'input_schema' => ['type' => 'object', 'properties' => ['site_id' => ['type' => 'integer'], 'id' => ['type' => 'integer'], 'widget_id' => ['type' => 'string'], 'text' => ['type' => 'string'], 'setting' => ['type' => 'string'], 'current_text' => ['type' => 'string']], 'required' => ['site_id', 'id', 'widget_id', 'text']]],
+            ['name' => 'propose_field_change', 'description' => 'הצע עדכון שדות מותאמים (ACF/JetEngine) בפריט תוכן — למשל מחיר של נכס, תאריך של אירוע. site_id + id + fields (אובייקט של מפתח→ערך). קרא קודם ב-read_site_content כדי לדעת את שמות המפתחות; מפתח שגוי יוצר שדה חדש שאיש אינו קורא.',
+                'input_schema' => ['type' => 'object', 'properties' => ['site_id' => ['type' => 'integer'], 'id' => ['type' => 'integer'], 'fields' => ['type' => 'object']], 'required' => ['site_id', 'id', 'fields']]],
             ['name' => 'investigate_site', 'description' => 'שלח את סוכן האתר לבדוק אתר מחובר (קריאה בלבד; תיקון יוצע לאישור). site_id + goal.',
                 'input_schema' => $obj(['site_id' => $int, 'goal' => $str], ['site_id'])],
             ['name' => 'draft_broadcast', 'description' => 'הכן טיוטת דיוור ללקוחות (תמיכה ← דיוורים). לא נשלח דבר — נוצרת טיוטה שהמנהל עורך ושולח בעצמו. brief: תיאור בשורה של מה רוצים להגיד, והסוכן ינסח. לחלופין אפשר להעביר subject ו-body מוכנים. is_marketing חובה: true לפרסומת (מבצע, הצעה, שירות חדש), false להודעת שירות (תחזוקה, אבטחה, שינוי בשירות) — קבע לפי התוכן, ובספק בחר true. קהל היעד: audience_status — active (ברירת מחדל) / suspended / churned / all; plan_names — לצמצום ללקוחות בחבילות מסוימות (שמות החבילות כפי שהם במערכת); customer_ids — לצמצום ללקוחות מסוימים. אם ביקשו קהל מצומצם, ציין אותו כאן ואל תשאיר את ברירת המחדל.',
@@ -464,6 +478,10 @@ class ConsoleAgent
                 'read_shop_products' => $this->readShopProducts($input),
                 'propose_sale' => $this->proposeSale($input),
                 'propose_product_change' => $this->proposeProductChange($input),
+                'read_site_content' => $this->readSiteContent($input),
+                'propose_content_edit' => $this->proposeContentEdit($input),
+                'propose_elementor_text' => $this->proposeElementorText($input),
+                'propose_field_change' => $this->proposeFieldChange($input),
                 'investigate_site' => $this->investigateSite($input),
                 'draft_broadcast' => $this->draftBroadcast($input),
                 // The old name still arrives from a model working off an
@@ -1161,7 +1179,7 @@ class ConsoleAgent
      *
      * @return Site|array{content: string, is_error: bool}
      */
-    private function connectedSite(array $input): Site|array
+    private function connectedSite(array $input, bool $requireStore = true): Site|array
     {
         $site = Site::find((int) ($input['site_id'] ?? 0));
 
@@ -1173,7 +1191,7 @@ class ConsoleAgent
             return ['content' => "האתר {$site->domain} אינו מחובר לסוכן (MCP כבוי).", 'is_error' => true];
         }
 
-        if ($site->site_type !== SiteType::Store) {
+        if ($requireStore && $site->site_type !== SiteType::Store) {
             return ['content' => "האתר {$site->domain} אינו חנות — אין בו מוצרים.", 'is_error' => true];
         }
 
@@ -1181,6 +1199,200 @@ class ConsoleAgent
         $this->customerId ??= $site->customer_id;
 
         return $site;
+    }
+
+    // ---- content (read, and propose) ---------------------------------------
+
+    /**
+     * Read the site's content: the list of items, or one item in full.
+     *
+     * With no `id` it lists (optionally of a given type); with an `id` it reads
+     * that item — including, when the page is built with Elementor, the texts
+     * that are actually on it. That last part is why this exists at all: on an
+     * Elementor site the visible words are not in `content`, so an agent
+     * reading only `content` would confidently quote a page nobody sees.
+     */
+    private function readSiteContent(array $input): array
+    {
+        $site = $this->connectedSite($input, requireStore: false);
+
+        if (! $site instanceof Site) {
+            return $site;
+        }
+
+        $id = (int) ($input['id'] ?? 0);
+
+        try {
+            if ($id <= 0) {
+                return ['content' => $this->mcp->textContent($this->mcp->callTool($site, 'wp_content_list', array_filter([
+                    'type' => trim((string) ($input['type'] ?? '')) ?: null,
+                    'search' => trim((string) ($input['search'] ?? '')) ?: null,
+                    'limit' => 40,
+                ])))];
+            }
+
+            $text = $this->mcp->textContent($this->mcp->callTool($site, 'wp_content_get', ['id' => $id]));
+            $page = json_decode(trim($text), true);
+
+            // Elementor pages get their real texts appended, so the agent has
+            // the widget ids it needs to propose a change in the same turn it
+            // read the page — rather than reading, guessing, and being wrong.
+            if (is_array($page) && ($page['built_with_elementor'] ?? false) === true) {
+                $text .= "\n\nהטקסטים בעמוד (אלמנטור):\n"
+                    .$this->mcp->textContent($this->mcp->callTool($site, 'wp_elementor_texts_get', ['id' => $id]));
+            }
+
+            return ['content' => $text];
+        } catch (\Throwable $e) {
+            return ['content' => 'לא ניתן לקרוא את התוכן: '.Str::limit($e->getMessage(), 150), 'is_error' => true];
+        }
+    }
+
+    /**
+     * Change text on a regular (non-Elementor) page.
+     *
+     * Refused on an Elementor page: writing `content` there succeeds, changes a
+     * copy nobody sees, and would let the agent report a change that never
+     * appeared. The refusal names the tool that does work.
+     */
+    private function proposeContentEdit(array $input): array
+    {
+        $site = $this->connectedSite($input, requireStore: false);
+
+        if (! $site instanceof Site) {
+            return $site;
+        }
+
+        $id = (int) ($input['id'] ?? 0);
+
+        if ($id <= 0) {
+            return ['content' => 'חסר מזהה העמוד (id).', 'is_error' => true];
+        }
+
+        $arguments = ['id' => $id];
+
+        foreach (['title', 'content', 'excerpt', 'status'] as $field) {
+            if (array_key_exists($field, $input) && trim((string) $input[$field]) !== '') {
+                $arguments[$field] = (string) $input[$field];
+            }
+        }
+
+        if (count($arguments) === 1) {
+            return ['content' => 'לא צוין שום שדה לעדכון.', 'is_error' => true];
+        }
+
+        try {
+            $page = json_decode(trim($this->mcp->textContent(
+                $this->mcp->callTool($site, 'wp_content_get', ['id' => $id])
+            )), true);
+        } catch (\Throwable $e) {
+            return ['content' => 'לא ניתן לקרוא את העמוד לפני השינוי: '.Str::limit($e->getMessage(), 150), 'is_error' => true];
+        }
+
+        if (is_array($page) && ($page['built_with_elementor'] ?? false) === true) {
+            return ['content' => "העמוד {$id} בנוי באלמנטור — עדכון content לא ישנה את מה שרואים באתר. "
+                .'קרא את הטקסטים עם read_site_content והצע שינוי עם propose_elementor_text.', 'is_error' => true];
+        }
+
+        $title = is_array($page) ? (string) ($page['title'] ?? "עמוד #{$id}") : "עמוד #{$id}";
+
+        $action = $this->gate->propose(
+            type: 'site_action',
+            summary: "📝 עריכת תוכן ב-{$site->domain} — \"{$title}\"\n"
+                .collect($arguments)->except('id')
+                    ->map(fn ($value, $field): string => "{$field}: ".Str::limit((string) $value, 200))
+                    ->implode("\n"),
+            payload: [
+                'site_id' => $site->id,
+                'tool' => 'wp_content_update',
+                'arguments' => $arguments,
+                'source' => 'console_agent',
+            ],
+            customerId: $site->customer_id,
+            proposedBy: 'console',
+            taskId: $this->delegatedTaskId,
+        );
+
+        return $this->proposedOk($action->id, "עריכת \"{$title}\" ב-{$site->domain}");
+    }
+
+    /** Replace one text on an Elementor page, by the widget id read beforehand. */
+    private function proposeElementorText(array $input): array
+    {
+        $site = $this->connectedSite($input, requireStore: false);
+
+        if (! $site instanceof Site) {
+            return $site;
+        }
+
+        $id = (int) ($input['id'] ?? 0);
+        $widgetId = trim((string) ($input['widget_id'] ?? ''));
+        $text = (string) ($input['text'] ?? '');
+
+        if ($id <= 0 || $widgetId === '' || trim($text) === '') {
+            return ['content' => 'חסר id, widget_id או text. קרא קודם את העמוד עם read_site_content כדי לקבל את מזהי הרכיבים.', 'is_error' => true];
+        }
+
+        $arguments = array_filter([
+            'id' => $id,
+            'widget_id' => $widgetId,
+            'text' => $text,
+            'setting' => trim((string) ($input['setting'] ?? '')) ?: null,
+        ], fn ($value): bool => $value !== null);
+
+        $previous = trim((string) ($input['current_text'] ?? ''));
+
+        $action = $this->gate->propose(
+            type: 'site_action',
+            summary: "📝 החלפת טקסט באלמנטור ב-{$site->domain} (עמוד {$id})\n"
+                .($previous !== '' ? 'לפני: '.Str::limit($previous, 200)."\n" : '')
+                .'אחרי: '.Str::limit($text, 200),
+            payload: [
+                'site_id' => $site->id,
+                'tool' => 'wp_elementor_text_update',
+                'arguments' => $arguments,
+                'source' => 'console_agent',
+            ],
+            customerId: $site->customer_id,
+            proposedBy: 'console',
+            taskId: $this->delegatedTaskId,
+        );
+
+        return $this->proposedOk($action->id, "החלפת טקסט בעמוד {$id} ב-{$site->domain}");
+    }
+
+    /** Change custom fields (ACF / JetEngine) on one content item. */
+    private function proposeFieldChange(array $input): array
+    {
+        $site = $this->connectedSite($input, requireStore: false);
+
+        if (! $site instanceof Site) {
+            return $site;
+        }
+
+        $id = (int) ($input['id'] ?? 0);
+        $fields = $input['fields'] ?? null;
+
+        if ($id <= 0 || ! is_array($fields) || $fields === []) {
+            return ['content' => 'חסר id או fields (אובייקט של מפתח→ערך). קרא קודם את השדות עם read_site_content.', 'is_error' => true];
+        }
+
+        $action = $this->gate->propose(
+            type: 'site_action',
+            summary: "📝 עדכון שדות ב-{$site->domain} (פריט {$id})\n"
+                .collect($fields)->map(fn ($value, $key): string => "{$key}: ".Str::limit((string) $value, 120))->implode("\n"),
+            payload: [
+                'site_id' => $site->id,
+                'tool' => 'wp_fields_update',
+                'arguments' => ['id' => $id, 'fields' => $fields],
+                'source' => 'console_agent',
+            ],
+            customerId: $site->customer_id,
+            proposedBy: 'console',
+            taskId: $this->delegatedTaskId,
+        );
+
+        return $this->proposedOk($action->id, "עדכון שדות בפריט {$id} ב-{$site->domain}");
     }
 
     private function investigateSite(array $input): array
