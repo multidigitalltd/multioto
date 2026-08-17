@@ -5,6 +5,7 @@ namespace App\Services\Agent;
 use App\Enums\BroadcastChannel;
 use App\Enums\BroadcastStatus;
 use App\Enums\CustomerStatus;
+use App\Enums\SiteType;
 use App\Enums\TaskStatus;
 use App\Enums\TicketStatus;
 use App\Jobs\InvestigateSiteJob;
@@ -124,6 +125,7 @@ class ConsoleAgent
     public function __construct(
         private ClaudeClient $ai,
         private ApprovalGate $gate,
+        private McpClient $mcp,
     ) {}
 
     /**
@@ -190,7 +192,13 @@ class ConsoleAgent
         return trim(implode("\n", array_filter([
             'אתה סוכן התפעול של Multi Digital, חברת אחסון ותחזוקת אתרים. אתה עוזר למנהל לבצע פעולות במערכת בשפה חופשית.',
             '',
-            'יש לך גישה מלאה לכל תחומי המערכת (דרך הצעה לאישור): פניות (מענה, סטטוס, עדיפות, שיוך, סגירה), לקוחות (עדכון פרטים), מנויים (מחיר/סטטוס/ביטול), אתרים (הוספה, השעיה, שחזור, בדיקה), גבייה ותשלומים (דרישת תשלום, סימון תשלום בוצע + חשבונית), דיוור ללקוחות (הכנת טיוטה) ומשימות (פתיחה, סימון כבוצעה). מה שאין לו כלי ישיר — הצע כמשימה לאדם.',
+            'יש לך גישה מלאה לכל תחומי המערכת (דרך הצעה לאישור): פניות (מענה, סטטוס, עדיפות, שיוך, סגירה), לקוחות (עדכון פרטים), מנויים (מחיר/סטטוס/ביטול), אתרים (הוספה, השעיה, שחזור, בדיקה), חנויות ווקומרס (מחירים, מבצעים, מלאי), גבייה ותשלומים (דרישת תשלום, סימון תשלום בוצע + חשבונית), דיוור ללקוחות (הכנת טיוטה) ומשימות (פתיחה, סימון כבוצעה). מה שאין לו כלי ישיר — הצע כמשימה לאדם.',
+            '',
+            'עבודה על חנויות — עשה כמה שיותר בעצמך:',
+            '- "תוריד 20% על כל החולצות עד סוף החודש" → propose_sale עם ההוראה כמו שהיא. הכלי מוצא את המוצרים לבד, קורא את המחירים הנוכחיים ומכין הצעה שמפרטת כל מוצר עם המחיר לפני ואחרי. אל תחפש מוצרים ידנית ואל תחשב מחירים בעצמך — חישוב שלך עלול לסטות באגורות, והכלי מחשב מדויק.',
+            '- שאלה על מחיר או מלאי ("כמה עולה X", "יש במלאי?") → read_shop_products, וענה. אל תציע שינוי כדי להסתכל.',
+            '- שינוי במוצר בודד → קרא קודם ב-read_shop_products, ואז propose_product_change. ציין ב-note את המחיר הנוכחי, כדי שהמנהל יאשר מספר ולא תיאור.',
+            '- אם propose_sale מחזיר שלא ניתן — זה אומר שההוראה אינה מבצע מדויק (אין אחוז מפורש, או לא ברור על אילו מוצרים). שאל את המנהל עם need_clarification. לעולם אל תמציא אחוז הנחה או מחיר.',
             '',
             $this->scheduleContext(),
             '',
@@ -381,6 +389,12 @@ class ConsoleAgent
                 'input_schema' => $obj(['countries' => $str, 'action' => $str, 'operation' => $str], ['action'])],
             ['name' => 'propose_update_wordpress', 'description' => 'הצע עדכון ליבת וורדפרס (WordPress core) לגרסה האחרונה. site_id לאתר בודד, או השמט אותו לעדכון כל האתרים המחוברים בבת אחת.',
                 'input_schema' => $obj(['site_id' => $int], [])],
+            ['name' => 'read_shop_products', 'description' => 'חפש מוצרים בחנות של אתר מחובר לפי טקסט חופשי או מק"ט. site_id + search. מחזיר לכל מוצר: מזהה, שם, מחיר רגיל, מחיר מבצע ומלאי. קריאה בלבד — השתמש בזה כדי לענות על "כמה עולה X" או "מה במלאי" בלי להציע שום שינוי.',
+                'input_schema' => ['type' => 'object', 'properties' => ['site_id' => ['type' => 'integer'], 'search' => ['type' => 'string']], 'required' => ['site_id', 'search']]],
+            ['name' => 'propose_sale', 'description' => 'הצע מבצע על מוצרים בחנות מהוראה בשפה חופשית. site_id + instruction (למשל "תוריד 20% על כל החולצות עד 31/08"). המערכת מוצאת בעצמה את המוצרים, קוראת את המחירים הנוכחיים ומכינה הצעה שמפרטת כל מוצר עם המחיר לפני ואחרי — הכל באישור אחד ובביטול אחד. אם ההוראה אינה מבצע ברור (אין אחוז מפורש, לא ברור אילו מוצרים) — הכלי מחזיר שלא ניתן, ואז שאל את המנהל במקום לנחש.',
+                'input_schema' => ['type' => 'object', 'properties' => ['site_id' => ['type' => 'integer'], 'instruction' => ['type' => 'string']], 'required' => ['site_id', 'instruction']]],
+            ['name' => 'propose_product_change', 'description' => 'הצע שינוי במוצר בודד. site_id + product_id, ולפחות אחד מ: regular_price, sale_price (ריק = סיום מבצע), sale_from, sale_to (YYYY-MM-DD), stock_quantity, stock_status (instock/outofstock/onbackorder). קרא קודם ב-read_shop_products כדי לצטט בהצעה את המחיר הנוכחי.',
+                'input_schema' => ['type' => 'object', 'properties' => ['site_id' => ['type' => 'integer'], 'product_id' => ['type' => 'integer'], 'regular_price' => ['type' => 'string'], 'sale_price' => ['type' => 'string'], 'sale_from' => ['type' => 'string'], 'sale_to' => ['type' => 'string'], 'stock_quantity' => ['type' => 'integer'], 'stock_status' => ['type' => 'string'], 'note' => ['type' => 'string']], 'required' => ['site_id', 'product_id']]],
             ['name' => 'investigate_site', 'description' => 'שלח את סוכן האתר לבדוק אתר מחובר (קריאה בלבד; תיקון יוצע לאישור). site_id + goal.',
                 'input_schema' => $obj(['site_id' => $int, 'goal' => $str], ['site_id'])],
             ['name' => 'draft_broadcast', 'description' => 'הכן טיוטת דיוור ללקוחות (תמיכה ← דיוורים). לא נשלח דבר — נוצרת טיוטה שהמנהל עורך ושולח בעצמו. brief: תיאור בשורה של מה רוצים להגיד, והסוכן ינסח. לחלופין אפשר להעביר subject ו-body מוכנים. is_marketing חובה: true לפרסומת (מבצע, הצעה, שירות חדש), false להודעת שירות (תחזוקה, אבטחה, שינוי בשירות) — קבע לפי התוכן, ובספק בחר true. קהל היעד: audience_status — active (ברירת מחדל) / suspended / churned / all; plan_names — לצמצום ללקוחות בחבילות מסוימות (שמות החבילות כפי שהם במערכת); customer_ids — לצמצום ללקוחות מסוימים. אם ביקשו קהל מצומצם, ציין אותו כאן ואל תשאיר את ברירת המחדל.',
@@ -447,6 +461,9 @@ class ConsoleAgent
                 'propose_purge_cloudflare_cache' => $this->proposeSite('purge_cloudflare_cache', $input, 'ניקוי קאש ב-Cloudflare'),
                 'propose_country_rule' => $this->proposeCountryRule($input),
                 'propose_update_wordpress' => $this->proposeUpdateWordpress($input),
+                'read_shop_products' => $this->readShopProducts($input),
+                'propose_sale' => $this->proposeSale($input),
+                'propose_product_change' => $this->proposeProductChange($input),
                 'investigate_site' => $this->investigateSite($input),
                 'draft_broadcast' => $this->draftBroadcast($input),
                 // The old name still arrives from a model working off an
@@ -1000,6 +1017,170 @@ class ConsoleAgent
         );
 
         return $this->proposedOk($action->id, $what);
+    }
+
+    // ---- shop (read, and propose) ------------------------------------------
+
+    /**
+     * Look up products so the agent can answer a price question — or quote a
+     * price before proposing to change it.
+     *
+     * A read tool and not a side effect of proposing: "כמה עולה החולצה השחורה"
+     * is a question, and an agent whose only way to look at the shop is to
+     * propose a change to it will propose changes in order to look.
+     */
+    private function readShopProducts(array $input): array
+    {
+        $site = $this->connectedSite($input);
+
+        if (! $site instanceof Site) {
+            return $site;
+        }
+
+        try {
+            $text = $this->mcp->textContent($this->mcp->callTool($site, 'wc_product_search', [
+                'search' => trim((string) ($input['search'] ?? '')),
+                'limit' => 25,
+            ]));
+        } catch (\Throwable $e) {
+            return ['content' => 'לא ניתן לקרוא את החנות: '.Str::limit($e->getMessage(), 150), 'is_error' => true];
+        }
+
+        $rows = json_decode(trim($text), true);
+
+        if (! is_array($rows) || $rows === []) {
+            // Said plainly, because "no results" and "the shop is unreachable"
+            // lead to very different next steps for the agent.
+            return ['content' => 'לא נמצאו מוצרים תואמים בחנות.'];
+        }
+
+        return ['content' => (string) json_encode(array_slice($rows, 0, 25), JSON_UNESCAPED_UNICODE)];
+    }
+
+    /**
+     * A whole sale from one sentence.
+     *
+     * The planner does the work the operator would otherwise do by hand: find
+     * the products, read what each costs now, compute the new price, and write
+     * an approval that quotes every before-and-after. What it will not do is
+     * guess — an instruction with no explicit percentage comes back refused,
+     * and the agent is told to ask rather than invent the number.
+     */
+    private function proposeSale(array $input): array
+    {
+        $site = $this->connectedSite($input);
+
+        if (! $site instanceof Site) {
+            return $site;
+        }
+
+        $instruction = trim((string) ($input['instruction'] ?? ''));
+
+        if ($instruction === '') {
+            return ['content' => 'חסרה ההוראה (instruction).', 'is_error' => true];
+        }
+
+        $plan = app(SaleBatchPlanner::class)->plan($site, $instruction);
+
+        if ($plan === null) {
+            return ['content' => 'לא ניתן להפוך את ההוראה למבצע מדויק — צריך אחוז הנחה מפורש ומוצרים שאפשר לזהות. '
+                .'שאל את המנהל מה בדיוק המבצע, ואל תנחש מחירים.', 'is_error' => true];
+        }
+
+        $action = $this->gate->propose(
+            type: 'site_action_batch',
+            summary: "🏷️ {$site->domain}\n".$plan['summary'],
+            payload: ['site_id' => $site->id, 'calls' => $plan['calls'], 'source' => 'console_agent'],
+            customerId: $site->customer_id,
+            proposedBy: 'console',
+            taskId: $this->delegatedTaskId,
+        );
+
+        return $this->proposedOk($action->id, count($plan['calls']).' שינויי מחיר ב-'.$site->domain);
+    }
+
+    /** One product: price, sale window, or stock. */
+    private function proposeProductChange(array $input): array
+    {
+        $site = $this->connectedSite($input);
+
+        if (! $site instanceof Site) {
+            return $site;
+        }
+
+        $productId = (int) ($input['product_id'] ?? 0);
+
+        if ($productId <= 0) {
+            return ['content' => 'חסר product_id.', 'is_error' => true];
+        }
+
+        $arguments = ['product_id' => $productId];
+
+        foreach (['regular_price', 'sale_price', 'sale_from', 'sale_to', 'stock_status'] as $field) {
+            if (array_key_exists($field, $input)) {
+                $arguments[$field] = (string) $input[$field];
+            }
+        }
+
+        if (array_key_exists('stock_quantity', $input)) {
+            $arguments['stock_quantity'] = (int) $input['stock_quantity'];
+        }
+
+        if (count($arguments) === 1) {
+            return ['content' => 'לא צוין שום שדה לשינוי במוצר.', 'is_error' => true];
+        }
+
+        $note = trim((string) ($input['note'] ?? ''));
+
+        $action = $this->gate->propose(
+            type: 'site_action',
+            summary: "🏷️ שינוי מוצר #{$productId} ב-{$site->domain}"
+                .($note !== '' ? "\n{$note}" : '')
+                ."\n".json_encode($arguments, JSON_UNESCAPED_UNICODE),
+            payload: [
+                'site_id' => $site->id,
+                'tool' => 'wc_product_update',
+                'arguments' => $arguments,
+                'source' => 'console_agent',
+            ],
+            customerId: $site->customer_id,
+            proposedBy: 'console',
+            taskId: $this->delegatedTaskId,
+        );
+
+        return $this->proposedOk($action->id, "שינוי מוצר #{$productId} ב-{$site->domain}");
+    }
+
+    /**
+     * The site named by the input, when it is actually reachable.
+     *
+     * Returns the tool-error array instead of the site when it is not, so every
+     * shop tool refuses the same way — and refuses BEFORE proposing anything.
+     * A proposal against a disconnected site is an approval the owner grants
+     * for a change that then cannot run.
+     *
+     * @return Site|array{content: string, is_error: bool}
+     */
+    private function connectedSite(array $input): Site|array
+    {
+        $site = Site::find((int) ($input['site_id'] ?? 0));
+
+        if (! $site) {
+            return ['content' => 'האתר לא נמצא.', 'is_error' => true];
+        }
+
+        if (! $site->mcp_enabled || blank($site->mcp_endpoint)) {
+            return ['content' => "האתר {$site->domain} אינו מחובר לסוכן (MCP כבוי).", 'is_error' => true];
+        }
+
+        if ($site->site_type !== SiteType::Store) {
+            return ['content' => "האתר {$site->domain} אינו חנות — אין בו מוצרים.", 'is_error' => true];
+        }
+
+        $this->siteId = $site->id;
+        $this->customerId ??= $site->customer_id;
+
+        return $site;
     }
 
     private function investigateSite(array $input): array
