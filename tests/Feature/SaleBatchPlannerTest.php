@@ -34,7 +34,7 @@ class SaleBatchPlannerTest extends TestCase
      * @param  list<int>  $chosenIds
      * @param  list<array<string, mixed>>  $found
      */
-    private function planner(?array $intent, array $chosenIds, array $found): SaleBatchPlanner
+    private function planner(?array $intent, array $chosenIds, array $found, ?int $total = null): SaleBatchPlanner
     {
         $ai = Mockery::mock(ClaudeClient::class);
         $ai->shouldReceive('isEnabled')->andReturn(true);
@@ -42,7 +42,13 @@ class SaleBatchPlannerTest extends TestCase
 
         $mcp = Mockery::mock(McpClient::class);
         $mcp->shouldReceive('callTool')->andReturn(['content' => []]);
-        $mcp->shouldReceive('textContent')->andReturn((string) json_encode($found));
+        // The shape the plugin really answers with: the page of results plus
+        // how many matched in total.
+        $mcp->shouldReceive('textContent')->andReturn((string) json_encode([
+            'total' => $total ?? count($found),
+            'returned' => count($found),
+            'products' => $found,
+        ]));
 
         return new SaleBatchPlanner($ai, $mcp);
     }
@@ -147,6 +153,61 @@ class SaleBatchPlannerTest extends TestCase
         )->plan($this->site(), 'תוריד 20% על החולצות');
 
         $this->assertCount(1, $plan['calls']);
+    }
+
+    /**
+     * מבצע שמכסה חלק מהמוצרים התואמים אומר זאת במפורש.
+     *
+     * חנות עם 213 חולצות מחזירה בחיפוש 50. הצעה שנבנתה מהן נקראת "כל החולצות",
+     * בזמן ש-163 נשארות במחיר מלא — הבעלים מאמין שהמבצע רץ, וזה מתגלה בקופה
+     * שבועות אחר כך.
+     */
+    public function test_a_partial_sale_says_that_it_is_partial(): void
+    {
+        $plan = $this->planner(
+            ['can_do' => true, 'search' => 'חולצה', 'percent' => 20],
+            [1, 2],
+            $this->shirts(),
+            total: 213,
+        )->plan($this->site(), 'תוריד 20% על כל החולצות');
+
+        $this->assertStringContainsString('מבצע חלקי', $plan['summary']);
+        $this->assertStringContainsString('210', $plan['summary']);
+    }
+
+    /**
+     * ומוצר שסוננו אותו בעצמנו אינו נספר כ"מוצר שלא נראה".
+     *
+     * מוצר בלי מחיר רגיל נשקל ונדחה לגופו; מוצר שהחנות לא שלחה כלל לא נראה
+     * מעולם. שתי הסיבות מקטינות את הרשימה, ורק השנייה מצדיקה אזהרה — ספירת
+     * הראשונה כשנייה מייצרת "מבצע חלקי, מוצר אחד לא נכלל" בחנות עם שני מוצרים
+     * ששניהם נשקלו.
+     */
+    public function test_a_product_we_filtered_out_is_not_counted_as_unseen(): void
+    {
+        $plan = $this->planner(
+            ['can_do' => true, 'search' => 'חולצה', 'percent' => 20],
+            [1],
+            [
+                ['id' => 1, 'name' => 'חולצה שחורה', 'regular_price' => '99'],
+                ['id' => 4, 'name' => 'חולצה בהתאמה אישית', 'regular_price' => null],
+            ],
+            total: 2,
+        )->plan($this->site(), 'תוריד 20% על החולצות');
+
+        $this->assertStringNotContainsString('מבצע חלקי', $plan['summary']);
+    }
+
+    /** וכשכל התואמים נכללו — אין אזהרה שתסיח את הדעת. */
+    public function test_a_complete_sale_carries_no_warning(): void
+    {
+        $plan = $this->planner(
+            ['can_do' => true, 'search' => 'חולצה', 'percent' => 20],
+            [1, 2],
+            $this->shirts(),
+        )->plan($this->site(), 'תוריד 20% על כל החולצות');
+
+        $this->assertStringNotContainsString('מבצע חלקי', $plan['summary']);
     }
 
     /** והחישוב נעשה באגורות — אחוז על float נסחף, ומחיר שסוטה באגורה הוא מחיר שלא אושר. */

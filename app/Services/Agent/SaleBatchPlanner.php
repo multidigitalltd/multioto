@@ -52,19 +52,30 @@ class SaleBatchPlanner
             return null;
         }
 
-        $candidates = $this->search($site, $intent['search']);
+        $found = $this->search($site, $intent['search']);
 
-        if ($candidates === []) {
+        if ($found['products'] === []) {
             return null;
         }
 
-        $chosen = $this->choose($candidates, $request);
+        $chosen = $this->choose($found['products'], $request);
 
         if ($chosen === []) {
             return null;
         }
 
-        return $this->build($chosen, $intent);
+        // How many the search could not return at all, carried through so the
+        // approval can say it.
+        //
+        // Against the page the shop sent, not against what survived our own
+        // filtering and not against what the model picked. All three numbers
+        // shrink, for three different reasons: the shop's limit hides products
+        // nobody saw, our filter drops products we considered and rejected, and
+        // the model narrowing candidates is judgement. Only the first is
+        // something the owner has to be warned about.
+        $unseen = max(0, $found['total'] - $found['returned']);
+
+        return $this->build($chosen, $intent, $unseen);
     }
 
     /**
@@ -129,9 +140,23 @@ class SaleBatchPlanner
     }
 
     /**
-     * Products matching the search term, with the prices they carry now.
+     * Products matching the search term, with the prices they carry now, and
+     * how many matched in total.
      *
-     * @return list<array<string, mixed>>
+     * The total is not decoration. A shop with two hundred shirts answers a
+     * search with the first fifty, and a proposal built from those fifty reads
+     * as "all the shirts" while a hundred and fifty stay at full price. The
+     * owner then believes the sale is running and it mostly is not — a failure
+     * that surfaces in the takings, weeks later.
+     *
+     * `returned` is the size of the page BEFORE our own filtering, because the
+     * two hide products for different reasons and must not be added together.
+     * A product dropped for having no regular price is excluded on purpose and
+     * on merit; a product the shop never sent is excluded by a limit. Counting
+     * the first as the second produces "this sale is partial, 1 product was not
+     * included" on a shop with two products, both of which were considered.
+     *
+     * @return array{products: list<array<string, mixed>>, returned: int, total: int}
      */
     private function search(Site $site, string $term): array
     {
@@ -141,16 +166,23 @@ class SaleBatchPlanner
                 'limit' => self::SEARCH_LIMIT,
             ]));
         } catch (\Throwable) {
-            return [];
+            return ['products' => [], 'returned' => 0, 'total' => 0];
         }
 
         $decoded = json_decode(trim($text), true);
 
         if (! is_array($decoded)) {
-            return [];
+            return ['products' => [], 'returned' => 0, 'total' => 0];
         }
 
-        return collect($decoded)
+        // A plain list is a plugin older than 1.2.1, which cannot report a
+        // total. Treated as "the total is what we can see" — the honest reading
+        // of an answer that does not know any better.
+        $rows = array_is_list($decoded) ? $decoded : (array) ($decoded['products'] ?? []);
+        $total = array_is_list($decoded) ? count($decoded) : (int) ($decoded['total'] ?? count($rows));
+        $returned = count($rows);
+
+        $products = collect($rows)
             ->filter(fn ($row): bool => is_array($row)
                 && (int) ($row['id'] ?? 0) > 0
                 // A product with no regular price has nothing to discount FROM,
@@ -158,6 +190,8 @@ class SaleBatchPlanner
                 && is_numeric($row['regular_price'] ?? null))
             ->values()
             ->all();
+
+        return ['products' => $products, 'returned' => $returned, 'total' => max($total, $returned)];
     }
 
     /**
@@ -207,9 +241,9 @@ class SaleBatchPlanner
      * @param  array{search: string, percent: int, from: ?string, to: ?string}  $intent
      * @return array{calls: list<array<string, mixed>>, summary: string, lines: list<string>}|null
      */
-    private function build(array $products, array $intent): ?array
+    private function build(array $products, array $intent, int $unseen = 0): ?array
     {
-        $truncated = max(0, count($products) - self::MAX_PRODUCTS);
+        $truncated = max(0, count($products) - self::MAX_PRODUCTS) + $unseen;
         $products = array_slice($products, 0, self::MAX_PRODUCTS);
 
         $calls = [];
@@ -254,11 +288,12 @@ class SaleBatchPlanner
 
         $summary = "מבצע {$intent['percent']}% על ".count($calls)." מוצרים ({$window}):\n".implode("\n", $lines);
 
-        // Never a silent cap: a proposal that quietly covered 50 of 63 products
-        // reads as "all of them" and leaves thirteen at full price.
+        // Never a silent cap: a proposal that quietly covered 50 of 213 products
+        // reads as "all of them" and leaves a hundred and sixty-three at full
+        // price, while the owner believes the sale is running.
         if ($truncated > 0) {
-            $summary .= "\n\n⚠️ נמצאו עוד {$truncated} מוצרים תואמים שלא נכללו (מגבלת "
-                .self::MAX_PRODUCTS.' מוצרים לאצווה) — יש לטפל בהם בנפרד.';
+            $summary .= "\n\n⚠️ שימו לב: יש עוד {$truncated} מוצרים תואמים שאינם כלולים במבצע הזה "
+                .'(מגבלת '.self::MAX_PRODUCTS.' מוצרים לאצווה). זהו מבצע חלקי — יש לטפל בשאר בנפרד.';
         }
 
         return ['calls' => $calls, 'summary' => $summary, 'lines' => $lines];

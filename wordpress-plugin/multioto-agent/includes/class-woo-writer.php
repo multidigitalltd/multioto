@@ -31,7 +31,10 @@ class Multioto_Agent_Woo_Writer
      * Returning several candidates rather than a best guess is deliberate: the
      * caller asks which one instead of silently repricing the wrong shirt.
      *
-     * @return array<int, array<string, mixed>>
+     * Returns the total number of matches alongside the page of results, so a
+     * caller can tell "these are all of them" from "these are the first fifty".
+     *
+     * @return array{total: int, returned: int, products: array<int, array<string, mixed>>}
      */
     public static function search(string $term, int $limit = 10): array
     {
@@ -44,21 +47,48 @@ class Multioto_Agent_Woo_Writer
         // lookup somebody does before repricing, answered with "no such
         // product" about a product that exists.
         $bySku = wc_get_product_id_by_sku(trim($term));
+        $skuMatched = false;
 
         if ($bySku > 0 && ($product = wc_get_product($bySku)) instanceof WC_Product) {
             $found[$bySku] = self::summary($product);
+            $skuMatched = true;
         }
 
-        foreach (wc_get_products([
+        // `paginate` so the answer can say how many matched, not only how many
+        // fit. Without the total, a caller acting on "all the shirts" in a shop
+        // with two hundred of them silently acts on the first fifty and every
+        // report it writes says "all".
+        $query = wc_get_products([
             's' => $term,
             'limit' => $limit,
             'status' => ['publish', 'draft', 'private'],
             'orderby' => 'relevance',
-        ]) as $product) {
+            'paginate' => true,
+        ]);
+
+        $fromText = [];
+
+        foreach ($query->products as $product) {
+            $fromText[] = $product->get_id();
             $found[$product->get_id()] = self::summary($product);
         }
 
-        return array_slice(array_values($found), 0, $limit);
+        $products = array_slice(array_values($found), 0, $limit);
+
+        // The SKU hit counts toward the total only when the text query did not
+        // already contain it. Without this, a SKU that appears nowhere in the
+        // title or description answers "total 0, returned 1" — a pair of numbers
+        // that contradict each other, and that a caller reading the total would
+        // take as "no such product" about a product it is holding.
+        $total = (int) $query->total + ($skuMatched && ! in_array($bySku, $fromText, true) ? 1 : 0);
+
+        return [
+            // Never fewer than what is in the box: the page is proof those
+            // products matched, whatever the count says.
+            'total' => max($total, count($products)),
+            'returned' => count($products),
+            'products' => $products,
+        ];
     }
 
     /** @return array<string, mixed> */
