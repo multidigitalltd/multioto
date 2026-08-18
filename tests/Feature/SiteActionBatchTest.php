@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Enums\ActionStatus;
+use App\Jobs\ContinueSiteActionBatchJob;
 use App\Models\PendingAction;
 use App\Models\Site;
 use App\Models\SiteChange;
@@ -11,6 +12,7 @@ use App\Services\Automation\ApprovalGate;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
 
 /**
@@ -80,6 +82,16 @@ class SiteActionBatchTest extends TestCase
             'payload' => ['site_id' => $site->id, 'calls' => $calls],
             'proposed_by' => 'ai',
         ]);
+    }
+
+    /** @param  list<int>  $ids  @return list<array<string, mixed>> */
+    private function products(array $ids): array
+    {
+        return collect($ids)->map(fn (int $id): array => [
+            'tool' => 'wc_product_update',
+            'label' => "מוצר {$id}",
+            'arguments' => ['product_id' => $id, 'sale_price' => '79'],
+        ])->all();
     }
 
     /** @return list<array<string, mixed>> */
@@ -190,6 +202,120 @@ class SiteActionBatchTest extends TestCase
         SiteChange::where('pending_action_id', $action->id)->orderBy('id')->first()->update(['reverted_at' => now()]);
 
         $this->assertCount(2, app(SiteActionBatchRunner::class)->revertPlan($action)['calls']);
+    }
+
+    /**
+     * אצווה גדולה מתבצעת במנות וממשיכה מעצמה עד הסוף.
+     *
+     * אישור נלחץ בבקשת דפדפן, וארבע מאות קריאות לחנות אינן נכנסות לתוכה. לכן
+     * הרצה עושה מנה ומבקשת את הבאה — האצווה אינה נקטעת, היא רק נפרשת.
+     */
+    public function test_a_large_batch_runs_in_slices_and_asks_for_the_next(): void
+    {
+        Queue::fake();
+        $site = $this->site();
+        $this->fakeSite(fn (array $args): array => $this->priceResponse($args));
+
+        $report = app(SiteActionBatchRunner::class)->run($this->batch($site, $this->products(range(1, 50))));
+
+        // One slice done, and the continuation queued.
+        $this->assertSame(20, SiteChange::where('site_id', $site->id)->count());
+        $this->assertStringContainsString('ממשיך ברקע', $report);
+        $this->assertStringContainsString('נותרו 30', $report);
+        Queue::assertPushed(ContinueSiteActionBatchJob::class);
+    }
+
+    /**
+     * ואצווה שרצה עדיין אינה מדווחת כבוצעה.
+     *
+     * בעלים ששומע "בוצע ✓" על מבצע של 213 מוצרים, בזמן שרק 20 שונו, הולך לחנות,
+     * רואה את רובה ללא שינוי, ומפסיק להאמין למילה. השאר עדיין בדרך — וזה מה
+     * שהסטטוס צריך לומר.
+     */
+    public function test_a_running_batch_is_not_reported_as_finished(): void
+    {
+        Queue::fake();
+        $site = $this->site();
+        $this->fakeSite(fn (array $args): array => $this->priceResponse($args));
+        $action = $this->batch($site, $this->products(range(1, 50)));
+
+        app(SiteActionBatchRunner::class)->run($action);
+
+        $this->assertSame(ActionStatus::Executing, $action->fresh()->status);
+    }
+
+    /** והמנה האחרונה היא שסוגרת אותה. */
+    public function test_the_final_slice_closes_the_action(): void
+    {
+        Queue::fake();
+        $site = $this->site();
+        $this->fakeSite(fn (array $args): array => $this->priceResponse($args));
+        $action = $this->batch($site, $this->products(range(1, 30)));
+
+        app(SiteActionBatchRunner::class)->run($action);
+        $this->assertSame(ActionStatus::Executing, $action->fresh()->status);
+
+        app(SiteActionBatchRunner::class)->run($action);
+
+        $this->assertSame(ActionStatus::Executed, $action->fresh()->status);
+        $this->assertNotNull($action->fresh()->executed_at);
+    }
+
+    /**
+     * וההמשך ממשיך מהמקום שבו נעצר — לפי היומן, לא לפי מונה שמישהו נושא.
+     *
+     * זה מה שהופך הרצה חוזרת לבטוחה: ריצה שמתה אחרי שתים-עשרה פעולות מתחילה
+     * מהשלוש-עשרה, כי זה מה שהיומן אומר.
+     */
+    public function test_the_next_slice_resumes_where_the_journal_says(): void
+    {
+        Queue::fake();
+        $site = $this->site();
+        $this->fakeSite(fn (array $args): array => $this->priceResponse($args));
+        $action = $this->batch($site, $this->products(range(1, 30)));
+
+        app(SiteActionBatchRunner::class)->run($action);
+        $report = app(SiteActionBatchRunner::class)->run($action);
+
+        $this->assertSame(30, SiteChange::where('site_id', $site->id)->count());
+        $this->assertStringContainsString('כל 30 הפעולות בוצעו', $report);
+        // Every product exactly once — no slice re-applied.
+        $this->assertSame(30, SiteChange::where('pending_action_id', $action->id)->distinct('arguments')->count('arguments'));
+    }
+
+    /** אצווה שהושלמה אינה רצה שוב. */
+    public function test_a_finished_batch_does_nothing_on_a_further_run(): void
+    {
+        Queue::fake();
+        $site = $this->site();
+        $this->fakeSite(fn (array $args): array => $this->priceResponse($args));
+        $action = $this->batch($site, $this->threeProducts());
+
+        app(SiteActionBatchRunner::class)->run($action);
+        $report = app(SiteActionBatchRunner::class)->run($action);
+
+        $this->assertSame(3, SiteChange::where('site_id', $site->id)->count());
+        $this->assertStringContainsString('כבר בוצעו', $report);
+    }
+
+    /**
+     * כלי קריאה באצווה נדחה לפני שנעשה דבר.
+     *
+     * ההתקדמות נספרת מהיומן, וכלי קריאה אינו נרשם בו — אותה מנה הייתה מחולקת
+     * שוב ושוב, והאצווה הייתה רצה במעגל ומחילה את אותם שינויים.
+     */
+    public function test_a_read_tool_inside_a_batch_is_refused_before_anything_runs(): void
+    {
+        $site = $this->site();
+        $this->fakeSite(fn (array $args): array => $this->priceResponse($args));
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessageMatches('/כלי קריאה/');
+
+        app(SiteActionBatchRunner::class)->run($this->batch($site, [
+            ['tool' => 'wc_product_update', 'arguments' => ['product_id' => 1, 'sale_price' => '79']],
+            ['tool' => 'wc_product_search', 'arguments' => ['search' => 'חולצה']],
+        ]));
     }
 
     /**

@@ -36,9 +36,15 @@ class Multioto_Agent_Woo_Writer
      *
      * @return array{total: int, returned: int, products: array<int, array<string, mixed>>}
      */
-    public static function search(string $term, int $limit = 10): array
+    public static function search(string $term, int $limit = 10, int $page = 1): array
     {
-        $limit = min(50, max(1, $limit));
+        // The per-call ceiling is about the size of ONE answer, not about how
+        // many products a caller may work through: pages beyond the first are
+        // fetched with `page`, so "all the shirts" in a shop with hundreds of
+        // them is a sequence of ordinary calls rather than a limit nobody can
+        // get past.
+        $limit = min(100, max(1, $limit));
+        $page = max(1, $page);
         $found = [];
 
         // SKU first, and separately: `s` searches post title and content, and a
@@ -49,7 +55,9 @@ class Multioto_Agent_Woo_Writer
         $bySku = wc_get_product_id_by_sku(trim($term));
         $skuMatched = false;
 
-        if ($bySku > 0 && ($product = wc_get_product($bySku)) instanceof WC_Product) {
+        // Only on the first page: prepending it to every page would repeat the
+        // same product all the way through a paged walk.
+        if ($page === 1 && $bySku > 0 && ($product = wc_get_product($bySku)) instanceof WC_Product) {
             $found[$bySku] = self::summary($product);
             $skuMatched = true;
         }
@@ -61,8 +69,13 @@ class Multioto_Agent_Woo_Writer
         $query = wc_get_products([
             's' => $term,
             'limit' => $limit,
+            'page' => $page,
             'status' => ['publish', 'draft', 'private'],
-            'orderby' => 'relevance',
+            // Stable across pages: relevance can reorder between calls, and a
+            // walk over shifting order silently skips products and repeats
+            // others — the caller then acts on "all of them" having missed some.
+            'orderby' => 'ID',
+            'order' => 'ASC',
             'paginate' => true,
         ]);
 
@@ -73,7 +86,16 @@ class Multioto_Agent_Woo_Writer
             $found[$product->get_id()] = self::summary($product);
         }
 
-        $products = array_slice(array_values($found), 0, $limit);
+        // The SKU hit rides ALONGSIDE the text page, never in place of one of
+        // its rows.
+        //
+        // Trimming back to $limit would drop the page's last product to make
+        // room — and `pages` is counted from the text query alone, so with a
+        // single full page that product would not appear on any page at all.
+        // A walk over "all the shirts" would then miss one, and nothing would
+        // say so. One extra row in a single answer is the cheaper problem.
+        $extra = $skuMatched && ! in_array($bySku, $fromText, true) ? 1 : 0;
+        $products = array_slice(array_values($found), 0, $limit + $extra);
 
         // The SKU hit counts toward the total only when the text query did not
         // already contain it. Without this, a SKU that appears nowhere in the
@@ -87,6 +109,8 @@ class Multioto_Agent_Woo_Writer
             // products matched, whatever the count says.
             'total' => max($total, count($products)),
             'returned' => count($products),
+            'page' => $page,
+            'pages' => max(1, (int) $query->max_num_pages),
             'products' => $products,
         ];
     }

@@ -2,6 +2,8 @@
 
 namespace App\Services\Agent;
 
+use App\Enums\ActionStatus;
+use App\Jobs\ContinueSiteActionBatchJob;
 use App\Models\PendingAction;
 use App\Models\Site;
 use App\Models\SiteChange;
@@ -29,15 +31,44 @@ use Illuminate\Support\Str;
 class SiteActionBatchRunner
 {
     /** Calls one approval may cover. */
-    private const MAX_CALLS = 100;
+    private const MAX_CALLS = 500;
 
-    public function __construct(private SiteActionRunner $runner) {}
+    /**
+     * Calls carried out per run, at most.
+     *
+     * An approval is clicked in a browser request, and four hundred shop calls
+     * do not fit in one. So a run does a slice and asks for the next, until
+     * there is none — the batch is never cut short, it is only spread out.
+     */
+    private const CHUNK = 20;
 
-    /** Run every call in order. Returns a per-item report. */
-    public function run(PendingAction $action): string
+    /**
+     * Seconds a run may spend before handing the rest to the next one.
+     *
+     * A count alone is not a safe slice: one shop call may wait up to the MCP
+     * timeout, so twenty of them against a slow shop can outlive both a browser
+     * request and the queue worker's own limit. A worker killed mid-slice never
+     * reaches the catch block, so nothing would be recorded and the batch would
+     * stall with no explanation. The clock is what keeps a slice inside the
+     * window it is allowed; the count only keeps it small when the shop is fast.
+     */
+    private const REQUEST_BUDGET_SECONDS = 20;
+
+    public function __construct(
+        private SiteActionRunner $runner,
+        private SiteToolCatalog $catalog,
+    ) {}
+
+    /**
+     * Carry out the next slice, and queue the one after it.
+     *
+     * Returns a report of what this run did and whether more is coming.
+     */
+    public function run(PendingAction $action, ?int $budgetSeconds = null): string
     {
+        $deadline = microtime(true) + ($budgetSeconds ?? self::REQUEST_BUDGET_SECONDS);
         $site = Site::find((int) data_get($action->payload, 'site_id'));
-        $calls = (array) data_get($action->payload, 'calls', []);
+        $calls = array_values((array) data_get($action->payload, 'calls', []));
 
         if (! $site || $calls === []) {
             throw new \RuntimeException('האתר או רשימת הפעולות חסרים בהצעה.');
@@ -49,9 +80,26 @@ class SiteActionBatchRunner
             );
         }
 
+        $this->assertEveryCallIsAChange($site, $calls);
+
+        /*
+         * Where to resume, read from the journal rather than carried along.
+         *
+         * Each call writes exactly one row as it lands, so the number of rows
+         * IS the number of calls already carried out — including on a run that
+         * died half-way. Nothing to keep in sync, and no state that can
+         * disagree with what actually happened to the shop.
+         */
+        $completed = SiteChange::where('pending_action_id', $action->id)->count();
+        $slice = array_slice($calls, $completed, self::CHUNK, preserve_keys: true);
+
+        if ($slice === []) {
+            return 'כל '.count($calls).' הפעולות כבר בוצעו.';
+        }
+
         $done = [];
 
-        foreach (array_values($calls) as $index => $call) {
+        foreach ($slice as $index => $call) {
             $tool = (string) data_get($call, 'tool');
 
             if ($tool === '') {
@@ -83,16 +131,72 @@ class SiteActionBatchRunner
                 throw new \RuntimeException(
                     'האצווה נעצרה על "'.$label.'" (פעולה '.($index + 1).' מתוך '.count($calls).'): '
                     .Str::limit($e->getMessage(), 300)
-                    .($done === [] ? ' לא בוצע שום שינוי.' : ' בוצעו '.count($done).' פעולות לפניה, וניתן לשחזר אותן ביומן השינויים.'),
+                    .($completed + count($done) === 0
+                        ? ' לא בוצע שום שינוי.'
+                        : ' בוצעו '.($completed + count($done)).' פעולות לפניה, וניתן לשחזר אותן ביומן השינויים.'),
                     0,
                     $e,
                 );
             }
 
             $done[] = $label;
+
+            // Out of time: the rest goes to the next run rather than to a
+            // worker that will be killed holding it.
+            if (microtime(true) >= $deadline) {
+                break;
+            }
         }
 
-        return count($done).' פעולות בוצעו על '.$site->domain.":\n· ".implode("\n· ", $done);
+        $completed += count($done);
+        $remaining = count($calls) - $completed;
+
+        // More to do: ask for the next slice and say so. An owner who was told
+        // "20 done" about a sale of 213 would go and look at the shop, find most
+        // of it unchanged, and conclude the whole thing had failed.
+        if ($remaining > 0) {
+            // Marked before the next slice is queued, so the approval never
+            // reads as finished while most of the shop is still unchanged.
+            $action->update(['status' => ActionStatus::Executing]);
+
+            ContinueSiteActionBatchJob::dispatch($action->id);
+
+            return "בוצעו {$completed} מתוך ".count($calls).' פעולות על '.$site->domain
+                .". הביצוע ממשיך ברקע — נותרו {$remaining}.";
+        }
+
+        // The last slice closes the action itself: the gate stamps Executed
+        // only on an action it still finds Approved, so a batch that went
+        // through the queue has to say for itself that it is done.
+        $action->update(['status' => ActionStatus::Executed, 'executed_at' => now()]);
+
+        return "כל {$completed} הפעולות בוצעו על ".$site->domain
+            .' ('.count($done)." בהרצה הזו):\n· ".implode("\n· ", $done);
+    }
+
+    /**
+     * Every call in a batch must be a change.
+     *
+     * Not a style rule — the resume depends on it. Progress is counted from the
+     * journal, and only a state-changing tool writes a journal row. A read
+     * mixed into the batch would leave the count standing still, the same slice
+     * would be handed out again, and the batch would run in a circle applying
+     * the same changes for as long as the queue allowed.
+     *
+     * @param  list<array<string, mixed>>  $calls
+     */
+    private function assertEveryCallIsAChange(Site $site, array $calls): void
+    {
+        foreach ($calls as $index => $call) {
+            $tool = (string) data_get($call, 'tool');
+
+            if ($tool !== '' && $this->catalog->resolveTier($site, $tool) < 1) {
+                throw new \RuntimeException(
+                    'פעולה '.($index + 1)." באצווה היא כלי קריאה ({$tool}). "
+                    .'אצווה מורכבת משינויים בלבד — כלי קריאה אינו נרשם ביומן, ולכן ההתקדמות לא הייתה מתקדמת.'
+                );
+            }
+        }
     }
 
     /**

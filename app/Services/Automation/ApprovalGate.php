@@ -306,9 +306,24 @@ class ApprovalGate
             return ['claimed' => true, 'message' => "פעולה #{$action->id} אושרה אך הביצוע נכשל: ".Str::limit($e->getMessage(), 120)];
         }
 
-        $action->update(['status' => ActionStatus::Executed, 'executed_at' => now()]);
+        // Work that carries on past this call sets its own status — a batch
+        // running through four hundred products in slices is Executing, and
+        // stamping Executed over it here would report a finished job while most
+        // of the shop is still at its old price. Only an action that is still
+        // exactly as we claimed it is closed out from here.
+        $action->refresh();
 
-        return ['claimed' => true, 'message' => "פעולה #{$action->id} אושרה ובוצעה ✓"];
+        if ($action->status === ActionStatus::Approved) {
+            $action->update(['status' => ActionStatus::Executed, 'executed_at' => now()]);
+
+            return ['claimed' => true, 'message' => "פעולה #{$action->id} אושרה ובוצעה ✓"];
+        }
+
+        if ($action->status === ActionStatus::Executing) {
+            return ['claimed' => true, 'message' => "פעולה #{$action->id} אושרה והביצוע התחיל — ממשיך ברקע."];
+        }
+
+        return ['claimed' => true, 'message' => "פעולה #{$action->id} אושרה. סטטוס: {$action->status->getLabel()}."];
     }
 
     /** Reject without executing. */

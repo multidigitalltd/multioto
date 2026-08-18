@@ -28,11 +28,23 @@ use Illuminate\Support\Str;
  */
 class SaleBatchPlanner
 {
-    /** Products one sale may cover; beyond this a person should look. */
-    private const MAX_PRODUCTS = 50;
+    /**
+     * Products one sale may cover.
+     *
+     * A ceiling on a single decision, not on the shop: "20% off the shirts" in
+     * a catalogue of four hundred shirts is still one decision, and the batch
+     * that carries it out works through them in small slices rather than
+     * stopping at an arbitrary number. What this guards is the size of a single
+     * approval a person has to read before saying yes — beyond it, somebody
+     * should be looking at the list rather than scrolling past it.
+     */
+    private const MAX_PRODUCTS = 400;
 
-    /** Candidates fetched from the shop before the model narrows them. */
-    private const SEARCH_LIMIT = 50;
+    /** Products per search call — the size of one answer, not of the walk. */
+    private const SEARCH_LIMIT = 100;
+
+    /** Pages to walk before giving up, so a broken `pages` cannot loop forever. */
+    private const MAX_PAGES = 20;
 
     public function __construct(private ClaudeClient $ai, private McpClient $mcp) {}
 
@@ -160,19 +172,51 @@ class SaleBatchPlanner
      */
     private function search(Site $site, string $term): array
     {
+        $products = [];
+        $returned = 0;
+        $total = 0;
+
+        // Walk the pages. The shop's first answer is a page, not the catalogue,
+        // and treating it as the catalogue is how "all the shirts" quietly
+        // becomes "the first hundred shirts".
+        for ($page = 1; $page <= self::MAX_PAGES; $page++) {
+            $chunk = $this->searchPage($site, $term, $page);
+
+            $products = [...$products, ...$chunk['products']];
+            $returned += $chunk['returned'];
+            $total = max($total, $chunk['total']);
+
+            if ($page >= $chunk['pages'] || $chunk['returned'] === 0 || count($products) >= self::MAX_PRODUCTS) {
+                break;
+            }
+        }
+
+        return ['products' => $products, 'returned' => $returned, 'total' => max($total, $returned)];
+    }
+
+    /**
+     * One page of results.
+     *
+     * @return array{products: list<array<string, mixed>>, returned: int, total: int, pages: int}
+     */
+    private function searchPage(Site $site, string $term, int $page): array
+    {
+        $empty = ['products' => [], 'returned' => 0, 'total' => 0, 'pages' => 1];
+
         try {
             $text = $this->mcp->textContent($this->mcp->callTool($site, 'wc_product_search', [
                 'search' => $term,
                 'limit' => self::SEARCH_LIMIT,
+                'page' => $page,
             ]));
         } catch (\Throwable) {
-            return ['products' => [], 'returned' => 0, 'total' => 0];
+            return $empty;
         }
 
         $decoded = json_decode(trim($text), true);
 
         if (! is_array($decoded)) {
-            return ['products' => [], 'returned' => 0, 'total' => 0];
+            return $empty;
         }
 
         // A plain list is a plugin older than 1.2.1, which cannot report a
@@ -191,7 +235,14 @@ class SaleBatchPlanner
             ->values()
             ->all();
 
-        return ['products' => $products, 'returned' => $returned, 'total' => max($total, $returned)];
+        return [
+            'products' => $products,
+            'returned' => $returned,
+            'total' => max($total, $returned),
+            // A plain list also means a plugin that cannot page: one page is
+            // all there is to ask for.
+            'pages' => array_is_list($decoded) ? 1 : max(1, (int) ($decoded['pages'] ?? 1)),
+        ];
     }
 
     /**
