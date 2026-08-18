@@ -86,7 +86,16 @@ class Multioto_Agent_Woo_Writer
             $found[$product->get_id()] = self::summary($product);
         }
 
-        $products = array_slice(array_values($found), 0, $limit);
+        // The SKU hit rides ALONGSIDE the text page, never in place of one of
+        // its rows.
+        //
+        // Trimming back to $limit would drop the page's last product to make
+        // room — and `pages` is counted from the text query alone, so with a
+        // single full page that product would not appear on any page at all.
+        // A walk over "all the shirts" would then miss one, and nothing would
+        // say so. One extra row in a single answer is the cheaper problem.
+        $extra = $skuMatched && ! in_array($bySku, $fromText, true) ? 1 : 0;
+        $products = array_slice(array_values($found), 0, $limit + $extra);
 
         // The SKU hit counts toward the total only when the text query did not
         // already contain it. Without this, a SKU that appears nowhere in the

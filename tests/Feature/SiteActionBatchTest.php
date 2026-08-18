@@ -226,6 +226,42 @@ class SiteActionBatchTest extends TestCase
     }
 
     /**
+     * ואצווה שרצה עדיין אינה מדווחת כבוצעה.
+     *
+     * בעלים ששומע "בוצע ✓" על מבצע של 213 מוצרים, בזמן שרק 20 שונו, הולך לחנות,
+     * רואה את רובה ללא שינוי, ומפסיק להאמין למילה. השאר עדיין בדרך — וזה מה
+     * שהסטטוס צריך לומר.
+     */
+    public function test_a_running_batch_is_not_reported_as_finished(): void
+    {
+        Queue::fake();
+        $site = $this->site();
+        $this->fakeSite(fn (array $args): array => $this->priceResponse($args));
+        $action = $this->batch($site, $this->products(range(1, 50)));
+
+        app(SiteActionBatchRunner::class)->run($action);
+
+        $this->assertSame(ActionStatus::Executing, $action->fresh()->status);
+    }
+
+    /** והמנה האחרונה היא שסוגרת אותה. */
+    public function test_the_final_slice_closes_the_action(): void
+    {
+        Queue::fake();
+        $site = $this->site();
+        $this->fakeSite(fn (array $args): array => $this->priceResponse($args));
+        $action = $this->batch($site, $this->products(range(1, 30)));
+
+        app(SiteActionBatchRunner::class)->run($action);
+        $this->assertSame(ActionStatus::Executing, $action->fresh()->status);
+
+        app(SiteActionBatchRunner::class)->run($action);
+
+        $this->assertSame(ActionStatus::Executed, $action->fresh()->status);
+        $this->assertNotNull($action->fresh()->executed_at);
+    }
+
+    /**
      * וההמשך ממשיך מהמקום שבו נעצר — לפי היומן, לא לפי מונה שמישהו נושא.
      *
      * זה מה שהופך הרצה חוזרת לבטוחה: ריצה שמתה אחרי שתים-עשרה פעולות מתחילה

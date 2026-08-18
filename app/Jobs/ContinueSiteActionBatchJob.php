@@ -39,6 +39,20 @@ class ContinueSiteActionBatchJob implements ShouldQueue
      */
     public int $tries = 1;
 
+    /**
+     * Must stay under the worker's own limit (Horizon: 60s).
+     *
+     * A job killed by the supervisor never reaches its catch block, so the
+     * failure would go unrecorded and the batch would stall silently with the
+     * action still saying it is running. This job stops itself first, and the
+     * slice it asks for is given a shorter budget still — so it hands the rest
+     * onward rather than being cut off holding it.
+     */
+    public int $timeout = 55;
+
+    /** Seconds of shop calls one slice may spend, inside the timeout above. */
+    private const SLICE_BUDGET_SECONDS = 40;
+
     public function __construct(public int $pendingActionId) {}
 
     public function handle(SiteActionBatchRunner $batches): void
@@ -51,7 +65,7 @@ class ContinueSiteActionBatchJob implements ShouldQueue
         }
 
         try {
-            $batches->run($action);
+            $batches->run($action, self::SLICE_BUDGET_SECONDS);
         } catch (\Throwable $e) {
             // The batch stopped part-way. Recorded on the action so the panel
             // shows where it got to instead of a proposal that looks done.
