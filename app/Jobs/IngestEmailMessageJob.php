@@ -13,6 +13,7 @@ use App\Services\Support\TicketIntake;
 use App\Support\EmailBody;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 /**
@@ -25,6 +26,14 @@ class IngestEmailMessageJob implements ShouldQueue
     use Queueable;
 
     public int $tries = 3;
+
+    /**
+     * Copied addresses one message may add to a ticket.
+     *
+     * A message sent to a distribution list would otherwise turn every future
+     * reply into a broadcast nobody chose to send.
+     */
+    private const MAX_COPIED_WATCHERS = 10;
 
     public array $backoff = [30, 120];
 
@@ -126,6 +135,13 @@ class IngestEmailMessageJob implements ShouldQueue
             }
         }
 
+        // Whoever the sender copied is part of this conversation. Outside the
+        // wasRecentlyCreated guard on purpose: somebody copied into the middle
+        // of a thread is precisely the person we must not keep missing.
+        if ($message?->ticket !== null) {
+            $this->registerCopiedWatchers($message->ticket, $payload, $from);
+        }
+
         $event->markProcessed();
     }
 
@@ -162,6 +178,116 @@ class IngestEmailMessageJob implements ShouldQueue
         }
 
         return $out;
+    }
+
+    /**
+     * Record everyone the sender copied as a watcher on the ticket.
+     *
+     * When somebody writes to support and copies their accountant, their
+     * partner, or a colleague, that person is part of the conversation from its
+     * first line. Until now we read only the From header, so the copied person
+     * existed nowhere: the team could not see they were on the thread, and every
+     * reply we sent left them out. From their side the correspondence simply
+     * stopped — and the sender, who put them there on purpose, had no way to
+     * know we had dropped them.
+     *
+     * Run on EVERY inbound message and not only the first, because somebody
+     * copied into the middle of a thread ("adding our lawyer") is exactly the
+     * case where being silently ignored matters most.
+     *
+     * @param  array<string, mixed>  $payload
+     */
+    protected function registerCopiedWatchers(Ticket $ticket, array $payload, string $from): void
+    {
+        $skip = $this->addressesWeNeverCopy($from);
+        $added = 0;
+
+        foreach ($this->copiedAddresses($payload) as $email => $name) {
+            if (in_array($email, $skip, true) || filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
+                continue;
+            }
+
+            // A cap, because a message copied to a distribution list would
+            // otherwise turn every future reply into a broadcast we never chose
+            // to send. What is dropped is logged rather than silently ignored.
+            if ($added >= self::MAX_COPIED_WATCHERS) {
+                Log::info('IngestEmailMessageJob: copied addresses beyond the cap were not added', [
+                    'ticket' => $ticket->id,
+                    'cap' => self::MAX_COPIED_WATCHERS,
+                ]);
+
+                break;
+            }
+
+            // firstOrCreate: a thread where the same people are copied on every
+            // reply must not accumulate duplicates, and an address the team
+            // added by hand keeps the attribution it already had.
+            $ticket->watchers()->firstOrCreate(
+                ['email' => $email],
+                ['name' => $name !== '' ? $name : null, 'added_by' => 'הפונה (מכותב במייל)'],
+            );
+
+            $added++;
+        }
+    }
+
+    /**
+     * The addresses copied on this message, as email => display name.
+     *
+     * Both shapes the provider sends: `CcFull` (structured, with names) and the
+     * plain `Cc` header. Bcc is deliberately absent — we only ever see it when
+     * it was addressed to us, and treating a blind copy as a visible
+     * participant would expose it to everyone else on the thread.
+     *
+     * @param  array<string, mixed>  $payload
+     * @return array<string, string>
+     */
+    protected function copiedAddresses(array $payload): array
+    {
+        $out = [];
+
+        foreach ((array) ($payload['CcFull'] ?? []) as $entry) {
+            $email = $this->normalizeEmail((string) ($entry['Email'] ?? ''));
+
+            if ($email !== '') {
+                $out[$email] = trim((string) ($entry['Name'] ?? ''));
+            }
+        }
+
+        foreach (explode(',', (string) ($payload['Cc'] ?? $payload['cc'] ?? '')) as $part) {
+            $email = $this->normalizeEmail($part);
+
+            if ($email !== '' && ! isset($out[$email])) {
+                $out[$email] = '';
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * Addresses that must never become watchers.
+     *
+     * Our own mailbox, because copying ourselves on our own replies is a loop.
+     * The team's own addresses, because they already receive the internal alert
+     * and would get every reply twice. And the sender, who is the recipient of
+     * the reply, not a copy of it.
+     *
+     * @return list<string>
+     */
+    protected function addressesWeNeverCopy(string $from): array
+    {
+        $ours = [
+            $from,
+            Str::lower(trim((string) config('mail.from.address'))),
+            Str::lower(trim((string) config('billing.notifications.reply_to', ''))),
+        ];
+
+        $team = User::query()->pluck('email')
+            ->map(fn (?string $email): string => Str::lower(trim((string) $email)))
+            ->all();
+
+        return array_values(array_filter(array_unique([...$ours, ...$team])));
     }
 
     /**

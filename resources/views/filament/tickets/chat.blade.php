@@ -40,6 +40,31 @@
         @endif
     </div>
 
+    {{-- Who else is on this thread.
+         On the page and not behind a button: everybody copied here receives
+         every reply we send, and a person answering a ticket has to know who is
+         reading before they write, not after. A count on a menu item is not
+         that — it is something you notice only if you already suspected. --}}
+    @php
+        // Block form, not @php(...): the inline directive cuts at the first
+        // closing parenthesis, so a call with nested parentheses silently
+        // produces broken PHP and the whole page stops rendering.
+        $watchers = $ticket->watchers()->orderBy('id')->get();
+    @endphp
+
+    @if ($watchers->isNotEmpty())
+        <div class="flex flex-wrap items-center gap-2 text-sm">
+            <span class="text-gray-500 dark:text-gray-400">מכותבים בשיחה:</span>
+            @foreach ($watchers as $watcher)
+                <span title="{{ $watcher->email }}{{ $watcher->added_by ? ' · נוסף: '.$watcher->added_by : '' }}"
+                      class="rounded-md bg-gray-100 px-2 py-1 text-gray-700 dark:bg-gray-800 dark:text-gray-200">
+                    {{ $watcher->name ?: $watcher->email }}
+                </span>
+            @endforeach
+            <span class="text-gray-500 dark:text-gray-400">— כולם מקבלים עותק של כל תשובה.</span>
+        </div>
+    @endif
+
     {{-- The conversation. Polls so live WhatsApp exchanges appear like a chat
          (browsers pause polling in a background tab; it resumes on focus). --}}
     <div wire:poll.10s role="log" aria-label="שיחה" aria-live="polite"
