@@ -222,12 +222,19 @@ class IngestEmailMessageJob implements ShouldQueue
             // firstOrCreate: a thread where the same people are copied on every
             // reply must not accumulate duplicates, and an address the team
             // added by hand keeps the attribution it already had.
-            $ticket->watchers()->firstOrCreate(
+            $watcher = $ticket->watchers()->firstOrCreate(
                 ['email' => $email],
                 ['name' => $name !== '' ? $name : null, 'added_by' => 'הפונה (מכותב במייל)'],
             );
 
-            $added++;
+            // Only somebody NEW counts against the cap. Every later message in
+            // a thread copies the people already on it, and counting them again
+            // would spend the whole allowance on names we already have — so the
+            // one person this message actually added, listed last, would be the
+            // one dropped.
+            if ($watcher->wasRecentlyCreated) {
+                $added++;
+            }
         }
     }
 
@@ -280,7 +287,12 @@ class IngestEmailMessageJob implements ShouldQueue
         $ours = [
             $from,
             Str::lower(trim((string) config('mail.from.address'))),
-            Str::lower(trim((string) config('billing.notifications.reply_to', ''))),
+            // The address customers write TO — the one this very webhook feeds.
+            // Registering it would CC our support inbox on every reply, each
+            // reply would be ingested as a new inbound message on the same
+            // ticket, and the thread would talk to itself for as long as
+            // anybody let it.
+            Str::lower(trim((string) config('billing.email.support_address'))),
         ];
 
         $team = User::query()->pluck('email')

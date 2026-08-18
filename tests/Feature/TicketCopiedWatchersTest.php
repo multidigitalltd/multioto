@@ -100,6 +100,21 @@ class TicketCopiedWatchersTest extends TestCase
         $this->assertSame(['accountant@external.co.il'], $ticket->watchers()->pluck('email')->all());
     }
 
+    /**
+     * וגם לא כתובת התמיכה שלנו — זו הכתובת שהמייל הנכנס מגיע אליה.
+     *
+     * רישום שלה היה מכתב את תיבת התמיכה בכל תשובה, כל תשובה הייתה נקלטת כהודעה
+     * נכנסת חדשה על אותה פנייה, והשרשור היה מדבר עם עצמו כל עוד מישהו נותן לו.
+     */
+    public function test_our_support_inbox_is_never_added(): void
+    {
+        config(['billing.email.support_address' => 'support@multi.digital']);
+
+        $ticket = $this->ingest(['Cc' => 'support@multi.digital, accountant@external.co.il']);
+
+        $this->assertSame(['accountant@external.co.il'], $ticket->watchers()->pluck('email')->all());
+    }
+
     /** וגם לא איש צוות — הוא כבר מקבל את התראת הצוות, והיה מקבל הכל פעמיים. */
     public function test_a_team_member_is_never_added(): void
     {
@@ -140,6 +155,28 @@ class TicketCopiedWatchersTest extends TestCase
         ]);
 
         $this->assertSame(1, $ticket->fresh()->watchers()->count());
+    }
+
+    /**
+     * התקרה סופרת רק מי שנוסף עכשיו, לא את מי שכבר רשום.
+     *
+     * כל הודעה בשרשור מכתבת מחדש את מי שכבר עליו. ספירה חוזרת שלהם הייתה מכלה
+     * את כל המכסה על שמות שכבר יש לנו — ודווקא האדם היחיד שההודעה הזו באמת
+     * הוסיפה, שמופיע אחרון, היה נופל.
+     */
+    public function test_the_cap_counts_only_newly_added_people(): void
+    {
+        $existing = collect(range(1, 10))->map(fn (int $i): string => "person{$i}@external.co.il");
+
+        $ticket = $this->ingest(['Cc' => $existing->implode(', ')]);
+        $this->assertSame(10, $ticket->watchers()->count());
+
+        $this->ingest([
+            'Subject' => 'Re: האתר לא עולה '.$ticket->emailTag(),
+            'Cc' => $existing->push('lawyer@external.co.il')->implode(', '),
+        ]);
+
+        $this->assertContains('lawyer@external.co.il', $ticket->fresh()->watchers()->pluck('email')->all());
     }
 
     /**
