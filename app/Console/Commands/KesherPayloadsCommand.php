@@ -5,7 +5,8 @@ namespace App\Console\Commands;
 use App\Enums\WebhookSource;
 use App\Models\WebhookEvent;
 use Illuminate\Console\Command;
-use Illuminate\Support\Collection;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Collection;
 
 /**
  * Print what Kesher has actually been sending us.
@@ -31,24 +32,28 @@ class KesherPayloadsCommand extends Command
 
     public function handle(): int
     {
-        $events = WebhookEvent::query()
-            ->where('source', WebhookSource::Kesher)
-            ->latest('id')
-            ->limit(max(1, (int) $this->option('limit')))
-            ->get();
+        $query = WebhookEvent::query()->where('source', WebhookSource::Kesher);
 
-        if ($events->isEmpty()) {
+        if ((clone $query)->doesntExist()) {
             $this->warn('קשר עדיין לא שלח שום דבר.');
             $this->line('בדקו שכתובת ה-webhook מוגדרת אצלם עם הסוד: '.route('webhooks.kesher').'?secret=…');
 
             return self::SUCCESS;
         }
 
+        // --keys reads EVERY delivery, not a recent page of them.
+        //
+        // The whole point of the mode is to learn which fields Kesher really
+        // sends, and a field that appeared only in an older callback is exactly
+        // the one worth knowing about — a limit here would hide it and make the
+        // counts read as complete when they are not.
         if ($this->option('keys')) {
-            $this->keys($events);
+            $this->keys($query);
 
             return self::SUCCESS;
         }
+
+        $events = (clone $query)->latest('id')->limit(max(1, (int) $this->option('limit')))->get();
 
         foreach ($events as $event) {
             $this->newLine();
@@ -64,22 +69,28 @@ class KesherPayloadsCommand extends Command
      * Every field path seen, with how often — so a field that appears on only
      * some deliveries is visible as such rather than assumed to be always there.
      *
-     * @param  Collection<int, WebhookEvent>  $events
+     * @param  Builder<WebhookEvent>  $query
      */
-    private function keys($events): void
+    private function keys(Builder $query): void
     {
         $counts = [];
+        $total = 0;
 
-        foreach ($events as $event) {
-            foreach ($this->paths((array) $event->payload) as $path) {
-                $counts[$path] = ($counts[$path] ?? 0) + 1;
+        // Chunked: the point is to read everything, and everything is not a
+        // size we get to assume.
+        (clone $query)->orderBy('id')->chunk(200, function (Collection $chunk) use (&$counts, &$total): void {
+            foreach ($chunk as $event) {
+                $total++;
+
+                foreach ($this->paths((array) $event->payload) as $path) {
+                    $counts[$path] = ($counts[$path] ?? 0) + 1;
+                }
             }
-        }
+        });
 
         ksort($counts);
-        $total = $events->count();
 
-        $this->info("שדות שנראו ב-{$total} המסירות האחרונות:");
+        $this->info("שדות שנראו בכל {$total} המסירות שהתקבלו:");
 
         foreach ($counts as $path => $seen) {
             $this->line(sprintf('  %-50s %d/%d', $path, $seen, $total));

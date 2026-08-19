@@ -103,6 +103,24 @@ class KesherWebhookTest extends TestCase
         $this->assertSame(2, WebhookEvent::count());
     }
 
+    /**
+     * אותה עסקה עם סטטוס שהשתנה היא אירוע חדש — לא כפילות.
+     *
+     * קשר מודיע על אותה עסקה יותר מפעם אחת בדרכה (ממתין, ואז נגבה). זהות
+     * שנבנית ממזהה העסקה בלבד הייתה מתייגת את ההודעה השנייה ככפילות וזורקת
+     * אותה — וזו בדיוק המעבר שהשלב הזה קיים כדי לתפוס.
+     */
+    public function test_the_same_transaction_with_a_changed_status_is_a_new_event(): void
+    {
+        $waiting = $this->collection();
+        $waiting['CrmTranObject']['KesherStatus'] = 8;
+
+        $this->send($waiting)->assertOk();
+        $this->send($this->collection())->assertOk();
+
+        $this->assertSame(2, WebhookEvent::count());
+    }
+
     /** בלי הסוד — נדחה, ושום דבר לא נרשם. */
     public function test_a_request_without_the_secret_is_refused(): void
     {
@@ -131,10 +149,31 @@ class KesherWebhookTest extends TestCase
         config(['billing.kesher.enabled' => true, 'billing.kesher.username' => null]);
         Http::fake();
 
-        $this->assertFalse(app(KesherClient::class)->enabled());
+        $this->assertFalse(app(KesherClient::class)->canCall());
         $this->assertNull(app(KesherClient::class)->call('GetObligations'));
 
         Http::assertNothingSent();
+    }
+
+    /**
+     * ומי שיש לו רק טוקן יכול להשתמש בשער השני.
+     *
+     * שני השערים מתאמתים אחרת, והתניית שער הטוקן בסיסמה של השער השני הייתה
+     * מחזירה null מכל קריאה בלי לומר למה.
+     */
+    public function test_a_token_only_setup_can_still_use_the_named_endpoints(): void
+    {
+        config([
+            'billing.kesher.enabled' => true,
+            'billing.kesher.username' => null,
+            'billing.kesher.password' => null,
+            'billing.kesher.token' => 'bearer-token',
+        ]);
+
+        $client = app(KesherClient::class);
+
+        $this->assertFalse($client->canCall());
+        $this->assertTrue($client->canUseEndpoints());
     }
 
     /** ותשובת קשר נקראת לפי Status, ולא לפי ניחוש על קודים. */

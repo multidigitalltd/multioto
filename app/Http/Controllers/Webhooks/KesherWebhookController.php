@@ -67,19 +67,31 @@ class KesherWebhookController extends Controller
     }
 
     /**
-     * A stable identity for this delivery.
+     * A stable identity for this delivery: what it is about, AND what it says.
      *
-     * Kesher's documented payloads carry no explicit delivery id, and until the
-     * real ones prove otherwise a hash of the body is the honest answer: an
-     * identical redelivery collapses onto the same row, while anything that
-     * differs by even one field is treated as a separate event. That is the
-     * right way round — recording the same collection twice is a duplicate
-     * charge, and dropping a genuine second one is money that never appears.
+     * The subject alone is not enough. Kesher notifies about the same
+     * transaction more than once as it moves — waiting, then collected — and an
+     * identity built from the transaction id alone would file the second
+     * notification as a duplicate of the first and throw it away. That is
+     * precisely the transition this listening phase exists to capture: the
+     * processing cannot be written correctly without seeing how a collection
+     * actually progresses.
+     *
+     * So the body's hash is always part of the identity. An identical
+     * redelivery collapses onto one row; anything that differs by a single
+     * field is a separate event. The subject is kept in front of it only so the
+     * rows read as something rather than as a wall of hashes.
+     *
+     * This is the right way round for money: recording the same collection
+     * twice is a duplicate charge, and dropping a genuine second notification
+     * is money that never appears.
      *
      * @param  array<string, mixed>  $payload
      */
     private function externalId(array $payload): string
     {
+        $hash = substr(hash('sha256', (string) json_encode($payload)), 0, 32);
+
         foreach ([
             ['CrmTranObject', 'TranId'],
             ['CrmTranObject', 'Id'],
@@ -91,10 +103,10 @@ class KesherWebhookController extends Controller
                 // Prefixed with the object, so a transaction id and an
                 // obligation reference that happen to share a number stay two
                 // different events.
-                return mb_strtolower($object).':'.$value;
+                return mb_strtolower($object).":{$value}:{$hash}";
             }
         }
 
-        return 'sha:'.hash('sha256', (string) json_encode($payload));
+        return "sha:{$hash}";
     }
 }

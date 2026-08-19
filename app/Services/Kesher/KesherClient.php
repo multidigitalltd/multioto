@@ -19,11 +19,36 @@ use Illuminate\Support\Facades\Log;
  */
 class KesherClient
 {
+    /**
+     * The master switch: is this integration turned on at all.
+     *
+     * Separate from having credentials, because the two gateways authenticate
+     * differently and one can be configured without the other.
+     */
     public function enabled(): bool
     {
-        return (bool) config('billing.kesher.enabled')
+        return (bool) config('billing.kesher.enabled');
+    }
+
+    /** Gateway 1 needs a username and password in the body. */
+    public function canCall(): bool
+    {
+        return $this->enabled()
             && filled(config('billing.kesher.username'))
             && filled(config('billing.kesher.password'));
+    }
+
+    /**
+     * Gateway 2 needs only its bearer token.
+     *
+     * Checked on its own rather than through the Gateway 1 credentials: an
+     * installation given a token and nothing else is a valid Kesher setup, and
+     * requiring the other gateway's password would make every named endpoint
+     * return null with no reason given.
+     */
+    public function canUseEndpoints(): bool
+    {
+        return $this->enabled() && filled(config('billing.kesher.token'));
     }
 
     /**
@@ -39,7 +64,7 @@ class KesherClient
      */
     public function call(string $func, array $params = []): ?array
     {
-        if (! $this->enabled()) {
+        if (! $this->canCall()) {
             return null;
         }
 
@@ -65,7 +90,7 @@ class KesherClient
      */
     public function endpoint(string $name, array $params = []): ?array
     {
-        if (! $this->enabled() || blank(config('billing.kesher.token'))) {
+        if (! $this->canUseEndpoints()) {
             return null;
         }
 
