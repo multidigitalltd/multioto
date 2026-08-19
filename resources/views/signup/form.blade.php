@@ -120,7 +120,9 @@
         <p class="lead small">מילוי הפרטים בטופס זה יחסוך חתימת מסמך ידני. שדות עם <span class="req">*</span> הם חובה.</p>
 
         @if ($errors->any())
-            <div class="error" role="alert" style="margin:.75rem 0">יש לתקן את השדות המסומנים.</div>
+            {{-- A submission handed back because the previous one was still in
+                 flight says so; anything else is a field to fix. --}}
+            <div class="error" role="alert" style="margin:.75rem 0">{{ $errors->first('signup') ?: 'יש לתקן את השדות המסומנים.' }}</div>
         @endif
 
         <div class="steps" aria-hidden="true">
@@ -279,8 +281,11 @@
 
                 <div class="actions">
                     <button type="button" class="ghost" data-prev="2">חזור</button>
-                    <button type="submit">אישור וסיום</button>
+                    <button type="submit" id="signup-submit">אישור וסיום</button>
                 </div>
+                {{-- Disabling the button moves focus off it; this says out loud
+                     what happened, for a screen reader and for everyone else. --}}
+                <p class="secure" id="submit-status" role="status" aria-live="polite"></p>
             </fieldset>
         </form>
 
@@ -382,10 +387,21 @@
             var ctx = canvas.getContext('2d');
             var drawing = false, dirty = false;
 
+            // A submission the server handed back (a validation error, or a
+            // send that was still in flight) keeps the drawn signature in the
+            // hidden field. It goes back onto the canvas the moment the canvas
+            // has a size — asking somebody to sign a second time because we
+            // could not accept the first send would be our mistake, not theirs.
+            var restored = String(input.value).indexOf('data:image/png') === 0 ? input.value : '';
+
             function resize() {
                 var ratio = Math.max(window.devicePixelRatio || 1, 1);
                 var rect = canvas.getBoundingClientRect();
+                // Still on an earlier step: the canvas is display:none and has
+                // no dimensions to size to yet.
+                if (!rect.width) { return; }
                 var data = dirty ? canvas.toDataURL() : null;
+                if (!data && restored) { data = restored; restored = ''; dirty = true; }
                 canvas.width = rect.width * ratio;
                 canvas.height = rect.height * ratio;
                 ctx.scale(ratio, ratio);
@@ -415,17 +431,47 @@
                 ctx.clearRect(0, 0, canvas.width, canvas.height); dirty = false; input.value = '';
             });
 
+            // ── One submission per filled form ──
+            //
+            // The signature travels as a PNG data URL, so the POST is large and
+            // can take a moment on a phone. Without this, a customer who sees
+            // nothing happen clicks again — and every click opened another
+            // customer, another site, another welcome message and another
+            // follow-up ticket.
+            var submitButton = document.getElementById('signup-submit');
+            var submitStatus = document.getElementById('submit-status');
+            var sending = false;
+
+            function sendingState(on) {
+                sending = on;
+                submitButton.disabled = on;
+                submitButton.textContent = on ? 'שולח…' : 'אישור וסיום';
+                submitStatus.textContent = on ? 'הטופס נשלח — אנא המתינו, אין צורך ללחוץ שוב.' : '';
+            }
+
             form.addEventListener('submit', function (e) {
+                if (sending) { e.preventDefault(); return; }
+
                 // Re-check every step's required fields, then the signature.
                 for (var s = 1; s <= 3; s++) {
                     if (!stepValid(s)) { e.preventDefault(); show(s); return; }
                 }
                 if (!dirty) { e.preventDefault(); show(3); sigError.hidden = false; canvas.focus(); return; }
                 input.value = canvas.toDataURL('image/png');
+                sendingState(true);
             });
 
+            // Coming back to this page (back button / restored from cache) must
+            // leave a working form behind, not a permanently dead button.
+            window.addEventListener('pageshow', function (e) { if (e.persisted) { sendingState(false); } });
+
             // On a server validation error, open the first step that has one.
-            @if ($errors->any())
+            @if ($errors->has('signup'))
+                // Nothing is wrong with the form — it came back because the
+                // previous send was still running. Land on the last step so
+                // pressing again is one click away.
+                show(3);
+            @elseif ($errors->any())
                 (function () {
                     for (var s = 1; s <= 3; s++) {
                         var panel = form.querySelector('.panel[data-step="' + s + '"]');

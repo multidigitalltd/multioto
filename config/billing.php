@@ -100,6 +100,19 @@ return [
             'https://taxinfo.taxes.gov.il/gmishurim/firstPage.aspx',
             'מספר התיק שלנו: 516171303 — מולטי דיגיטל בע״מ.',
         ])),
+
+        // How long an identical submission still counts as the same filing of
+        // the form rather than a new customer. A customer who clicks "אישור
+        // וסיום" again because nothing seemed to happen would otherwise open a
+        // second customer, a second site, a second welcome message and a second
+        // follow-up ticket on every click. 0 disables the check entirely.
+        'duplicate_window_minutes' => (int) env('SIGNUP_DUPLICATE_WINDOW_MINUTES', 30),
+
+        // How long a submission waits for one already being filed before it is
+        // handed back with "still sending, try again in a moment". It waits
+        // rather than proceeding, because two submissions inside the same
+        // section both read an empty table and both insert.
+        'lock_wait_seconds' => (int) env('SIGNUP_LOCK_WAIT_SECONDS', 10),
     ],
 
     /*

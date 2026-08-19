@@ -11,12 +11,14 @@ use App\Jobs\SendWelcomeMessageJob;
 use App\Mail\NotificationMail;
 use App\Models\Customer;
 use App\Models\Setting;
+use App\Models\Site;
 use App\Models\Subscription;
 use App\Models\Ticket;
 use App\Services\Notifications\TeamNotifier;
 use App\Services\Notifications\TemplateEngine;
 use App\Services\Waha\WahaClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Queue;
@@ -210,6 +212,136 @@ class SignupTest extends TestCase
         $this->assertSame(0, $ticket->messages()->where('author', MessageAuthor::System)->count());
 
         Queue::assertPushed(SendWelcomeMessageJob::class, 1);
+    }
+
+    /**
+     * לחיצה שנייה על "אישור וסיום" אינה לקוח שני.
+     *
+     * הטופס שולח את החתימה כתמונה, ולכן השליחה אורכת רגע. לקוח שלא ראה שקרה
+     * משהו לוחץ שוב — וכל לחיצה פתחה עד עכשיו לקוח נוסף, אתר נוסף בניטור,
+     * הודעת ברוכים־הבאים נוספת ופנייה נוספת בתור. זו הסיבה שאותה פנייה
+     * ("השלמת הסדר תשלום") הופיעה שש פעמים תוך דקה.
+     */
+    public function test_sending_the_same_form_again_does_not_open_a_second_customer(): void
+    {
+        Queue::fake([SendWelcomeMessageJob::class, GenerateCustomerCardPdfJob::class, NotifySignupJob::class]);
+
+        $payload = $this->validPayload(['payment_method' => 'standing_order']);
+
+        foreach (range(1, 6) as $ignored) {
+            $this->post(route('signup.store'), $payload)
+                ->assertRedirect(route('signup.thanks'))
+                ->assertSessionHas('payment_instructions');
+        }
+
+        // One customer, one site, one ticket, one welcome — from six clicks.
+        $this->assertSame(1, Customer::count());
+        $this->assertSame(1, Ticket::count());
+        $this->assertSame(1, Customer::sole()->sites()->count());
+        Queue::assertPushed(SendWelcomeMessageJob::class, 1);
+        Queue::assertPushed(NotifySignupJob::class, 1);
+        Queue::assertPushed(GenerateCustomerCardPdfJob::class, 1);
+    }
+
+    /** ובכרטיס אשראי — הלחיצה השנייה מחזירה לאותו לקוח, לא פותחת חדש. */
+    public function test_a_repeated_card_signup_returns_to_the_same_customers_card_page(): void
+    {
+        Queue::fake([SendWelcomeMessageJob::class, GenerateCustomerCardPdfJob::class, NotifySignupJob::class]);
+
+        $this->post(route('signup.store'), $this->validPayload())->assertRedirect();
+        $customer = Customer::sole();
+
+        $again = $this->post(route('signup.store'), $this->validPayload());
+
+        $this->assertSame(1, Customer::count());
+        $this->assertStringContainsString('/billing/update-card/', (string) $again->headers->get('Location'));
+        $this->assertSame($customer->id, Customer::sole()->id);
+    }
+
+    /**
+     * טופס שמולא אחרת הוא הרשמה אחרת — גם אם המייל זהה.
+     *
+     * הכיוון הזה חשוב: איחוד של שתי שליחות שנבדלות בשדה כלשהו היה מוחק בשקט
+     * את מה שהלקוח שינה, וזה גרוע מכפילות.
+     */
+    public function test_a_submission_that_differs_is_a_new_signup(): void
+    {
+        Queue::fake([SendWelcomeMessageJob::class, GenerateCustomerCardPdfJob::class, NotifySignupJob::class]);
+
+        $this->post(route('signup.store'), $this->validPayload())->assertRedirect();
+        $this->post(route('signup.store'), $this->validPayload(['phone' => '0521234567']))->assertRedirect();
+
+        $this->assertSame(2, Customer::count());
+    }
+
+    /**
+     * אותו עסק שממלא את הטופס שוב עבור אתר שני — הוא הרשמה שנייה.
+     *
+     * כל שאר השדות זהים, ולכן בדיקה שאינה מסתכלת על הדומיין הייתה מאחדת את
+     * השתיים ומשמיטה את האתר החדש מהניטור בלי לומר מילה.
+     */
+    public function test_a_second_domain_is_a_new_signup_and_reaches_monitoring(): void
+    {
+        Queue::fake([SendWelcomeMessageJob::class, GenerateCustomerCardPdfJob::class, NotifySignupJob::class]);
+
+        $this->post(route('signup.store'), $this->validPayload())->assertRedirect();
+        $this->post(route('signup.store'), $this->validPayload(['domain' => 'second-site.co.il']))->assertRedirect();
+
+        $this->assertSame(2, Customer::count());
+        $this->assertSame(
+            ['newbiz.co.il', 'second-site.co.il'],
+            Site::orderBy('id')->pluck('domain')->all(),
+        );
+    }
+
+    /** ומעבר לחלון הזמן, הרשמה חוזרת היא שוב הרשמה. */
+    public function test_the_same_details_after_the_window_open_a_new_signup(): void
+    {
+        Queue::fake([SendWelcomeMessageJob::class, GenerateCustomerCardPdfJob::class, NotifySignupJob::class]);
+        config(['billing.signup.duplicate_window_minutes' => 30]);
+
+        $this->post(route('signup.store'), $this->validPayload())->assertRedirect();
+
+        $this->travel(31)->minutes();
+        $this->post(route('signup.store'), $this->validPayload())->assertRedirect();
+
+        $this->assertSame(2, Customer::count());
+    }
+
+    /**
+     * שליחה שלא הצליחה לקבל את הנעילה מוחזרת — ולא נכנסת בכל זאת.
+     *
+     * המשך ריצה בלי הנעילה היה מכניס שתי בקשות בדיוק לקטע שהנעילה קיימת כדי
+     * להחזיק בו אחת בכל רגע: שתיהן קוראות טבלה ריקה ושתיהן פותחות לקוח. עדיף
+     * לבקש ללחוץ שוב מאשר לפתוח את הכפילות שבאנו למנוע.
+     */
+    public function test_a_submission_that_cannot_take_the_lock_is_handed_back(): void
+    {
+        Queue::fake([SendWelcomeMessageJob::class, GenerateCustomerCardPdfJob::class, NotifySignupJob::class]);
+        config(['billing.signup.lock_wait_seconds' => 0]);
+
+        // Mirrors SignupController::fingerprint(). If that changes, this lock
+        // stops being the one the controller takes and the test fails — which
+        // is the point: the guard is only worth having while it holds.
+        $lock = Cache::lock('signup:'.hash('sha256', implode('|', [
+            'new@example.co.il',
+            'עסק חדש',
+            'ישראל ישראלי',
+            '0501234567',
+            BusinessType::LicensedDealer->value,
+            'credit_card',
+            '',
+            'newbiz.co.il',
+        ])), 30);
+
+        $this->assertTrue($lock->get());
+
+        $this->post(route('signup.store'), $this->validPayload())
+            ->assertSessionHasErrors('signup');
+
+        $this->assertSame(0, Customer::count());
+
+        $lock->release();
     }
 
     public function test_exempt_dealer_signup_is_marked_vat_exempt(): void
