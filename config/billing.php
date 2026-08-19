@@ -252,6 +252,44 @@ return [
         'reply_signature_whatsapp' => env('REPLY_SIGNATURE_WHATSAPP'),
     ],
 
+    /*
+     | Kesher (קשר) — bank standing orders collected through Masav.
+     |
+     | Bank standing orders are a PUSH arrangement: an obligation is registered
+     | once, and Kesher's collection cycle drives everything after that. Our
+     | scheduler never charges these subscriptions — the webhook does.
+     |
+     | Note what Kesher does NOT tell us: a Masav collection that bounces days
+     | later is never reported back. A "collected" notification is therefore a
+     | statement that the money was SENT for collection, not that it arrived,
+     | which is why the reconciliation screen and the manual "returned" action
+     | exist rather than being treated as an edge case.
+     */
+    'kesher' => [
+        // Off until credentials are set: an integration that moves money must
+        // not become live merely because code was deployed.
+        'enabled' => (bool) env('KESHER_ENABLED', false),
+
+        // Gateway 1 — func/userName/password. Gateway 2 — Bearer token.
+        'gateway_url' => env('KESHER_GATEWAY_URL', 'https://kesherhk.info/ConnectToKesher/ConnectToKesher'),
+        'api_url' => env('KESHER_API_URL', 'https://kesherhk.info/KesherAPI'),
+
+        'username' => env('KESHER_USERNAME'),
+        'password' => env('KESHER_PASSWORD'),
+        'token' => env('KESHER_TOKEN'),
+
+        // Identifiers Kesher expects on most calls.
+        'project_number' => env('KESHER_PROJECT_NUMBER'),
+        'developer_mail' => env('KESHER_DEVELOPER_MAIL'),
+
+        // Shared secret on our callback URL. Kesher does not sign its webhooks,
+        // so this is the first gate; the second is that we verify every
+        // notification against Kesher's own API before acting on it.
+        'webhook_secret' => env('KESHER_WEBHOOK_SECRET'),
+
+        'timeout_seconds' => (int) env('KESHER_TIMEOUT', 30),
+    ],
+
     'email' => [
         // Shared secret the inbound-parse provider includes on its webhook URL.
         'webhook_secret' => env('EMAIL_WEBHOOK_SECRET'),
