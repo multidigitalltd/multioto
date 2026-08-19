@@ -212,6 +212,80 @@ class SignupTest extends TestCase
         Queue::assertPushed(SendWelcomeMessageJob::class, 1);
     }
 
+    /**
+     * לחיצה שנייה על "אישור וסיום" אינה לקוח שני.
+     *
+     * הטופס שולח את החתימה כתמונה, ולכן השליחה אורכת רגע. לקוח שלא ראה שקרה
+     * משהו לוחץ שוב — וכל לחיצה פתחה עד עכשיו לקוח נוסף, אתר נוסף בניטור,
+     * הודעת ברוכים־הבאים נוספת ופנייה נוספת בתור. זו הסיבה שאותה פנייה
+     * ("השלמת הסדר תשלום") הופיעה שש פעמים תוך דקה.
+     */
+    public function test_sending_the_same_form_again_does_not_open_a_second_customer(): void
+    {
+        Queue::fake([SendWelcomeMessageJob::class, GenerateCustomerCardPdfJob::class, NotifySignupJob::class]);
+
+        $payload = $this->validPayload(['payment_method' => 'standing_order']);
+
+        foreach (range(1, 6) as $ignored) {
+            $this->post(route('signup.store'), $payload)
+                ->assertRedirect(route('signup.thanks'))
+                ->assertSessionHas('payment_instructions');
+        }
+
+        // One customer, one site, one ticket, one welcome — from six clicks.
+        $this->assertSame(1, Customer::count());
+        $this->assertSame(1, Ticket::count());
+        $this->assertSame(1, Customer::sole()->sites()->count());
+        Queue::assertPushed(SendWelcomeMessageJob::class, 1);
+        Queue::assertPushed(NotifySignupJob::class, 1);
+        Queue::assertPushed(GenerateCustomerCardPdfJob::class, 1);
+    }
+
+    /** ובכרטיס אשראי — הלחיצה השנייה מחזירה לאותו לקוח, לא פותחת חדש. */
+    public function test_a_repeated_card_signup_returns_to_the_same_customers_card_page(): void
+    {
+        Queue::fake([SendWelcomeMessageJob::class, GenerateCustomerCardPdfJob::class, NotifySignupJob::class]);
+
+        $this->post(route('signup.store'), $this->validPayload())->assertRedirect();
+        $customer = Customer::sole();
+
+        $again = $this->post(route('signup.store'), $this->validPayload());
+
+        $this->assertSame(1, Customer::count());
+        $this->assertStringContainsString('/billing/update-card/', (string) $again->headers->get('Location'));
+        $this->assertSame($customer->id, Customer::sole()->id);
+    }
+
+    /**
+     * טופס שמולא אחרת הוא הרשמה אחרת — גם אם המייל זהה.
+     *
+     * הכיוון הזה חשוב: איחוד של שתי שליחות שנבדלות בשדה כלשהו היה מוחק בשקט
+     * את מה שהלקוח שינה, וזה גרוע מכפילות.
+     */
+    public function test_a_submission_that_differs_is_a_new_signup(): void
+    {
+        Queue::fake([SendWelcomeMessageJob::class, GenerateCustomerCardPdfJob::class, NotifySignupJob::class]);
+
+        $this->post(route('signup.store'), $this->validPayload())->assertRedirect();
+        $this->post(route('signup.store'), $this->validPayload(['phone' => '0521234567']))->assertRedirect();
+
+        $this->assertSame(2, Customer::count());
+    }
+
+    /** ומעבר לחלון הזמן, הרשמה חוזרת היא שוב הרשמה. */
+    public function test_the_same_details_after_the_window_open_a_new_signup(): void
+    {
+        Queue::fake([SendWelcomeMessageJob::class, GenerateCustomerCardPdfJob::class, NotifySignupJob::class]);
+        config(['billing.signup.duplicate_window_minutes' => 30]);
+
+        $this->post(route('signup.store'), $this->validPayload())->assertRedirect();
+
+        $this->travel(31)->minutes();
+        $this->post(route('signup.store'), $this->validPayload())->assertRedirect();
+
+        $this->assertSame(2, Customer::count());
+    }
+
     public function test_exempt_dealer_signup_is_marked_vat_exempt(): void
     {
         Queue::fake([SendWelcomeMessageJob::class, GenerateCustomerCardPdfJob::class, NotifySignupJob::class]);

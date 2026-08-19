@@ -279,8 +279,11 @@
 
                 <div class="actions">
                     <button type="button" class="ghost" data-prev="2">חזור</button>
-                    <button type="submit">אישור וסיום</button>
+                    <button type="submit" id="signup-submit">אישור וסיום</button>
                 </div>
+                {{-- Disabling the button moves focus off it; this says out loud
+                     what happened, for a screen reader and for everyone else. --}}
+                <p class="secure" id="submit-status" role="status" aria-live="polite"></p>
             </fieldset>
         </form>
 
@@ -415,14 +418,39 @@
                 ctx.clearRect(0, 0, canvas.width, canvas.height); dirty = false; input.value = '';
             });
 
+            // ── One submission per filled form ──
+            //
+            // The signature travels as a PNG data URL, so the POST is large and
+            // can take a moment on a phone. Without this, a customer who sees
+            // nothing happen clicks again — and every click opened another
+            // customer, another site, another welcome message and another
+            // follow-up ticket.
+            var submitButton = document.getElementById('signup-submit');
+            var submitStatus = document.getElementById('submit-status');
+            var sending = false;
+
+            function sendingState(on) {
+                sending = on;
+                submitButton.disabled = on;
+                submitButton.textContent = on ? 'שולח…' : 'אישור וסיום';
+                submitStatus.textContent = on ? 'הטופס נשלח — אנא המתינו, אין צורך ללחוץ שוב.' : '';
+            }
+
             form.addEventListener('submit', function (e) {
+                if (sending) { e.preventDefault(); return; }
+
                 // Re-check every step's required fields, then the signature.
                 for (var s = 1; s <= 3; s++) {
                     if (!stepValid(s)) { e.preventDefault(); show(s); return; }
                 }
                 if (!dirty) { e.preventDefault(); show(3); sigError.hidden = false; canvas.focus(); return; }
                 input.value = canvas.toDataURL('image/png');
+                sendingState(true);
             });
+
+            // Coming back to this page (back button / restored from cache) must
+            // leave a working form behind, not a permanently dead button.
+            window.addEventListener('pageshow', function (e) { if (e.persisted) { sendingState(false); } });
 
             // On a server validation error, open the first step that has one.
             @if ($errors->any())
