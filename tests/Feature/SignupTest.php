@@ -11,12 +11,14 @@ use App\Jobs\SendWelcomeMessageJob;
 use App\Mail\NotificationMail;
 use App\Models\Customer;
 use App\Models\Setting;
+use App\Models\Site;
 use App\Models\Subscription;
 use App\Models\Ticket;
 use App\Services\Notifications\TeamNotifier;
 use App\Services\Notifications\TemplateEngine;
 use App\Services\Waha\WahaClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Queue;
@@ -272,6 +274,26 @@ class SignupTest extends TestCase
         $this->assertSame(2, Customer::count());
     }
 
+    /**
+     * אותו עסק שממלא את הטופס שוב עבור אתר שני — הוא הרשמה שנייה.
+     *
+     * כל שאר השדות זהים, ולכן בדיקה שאינה מסתכלת על הדומיין הייתה מאחדת את
+     * השתיים ומשמיטה את האתר החדש מהניטור בלי לומר מילה.
+     */
+    public function test_a_second_domain_is_a_new_signup_and_reaches_monitoring(): void
+    {
+        Queue::fake([SendWelcomeMessageJob::class, GenerateCustomerCardPdfJob::class, NotifySignupJob::class]);
+
+        $this->post(route('signup.store'), $this->validPayload())->assertRedirect();
+        $this->post(route('signup.store'), $this->validPayload(['domain' => 'second-site.co.il']))->assertRedirect();
+
+        $this->assertSame(2, Customer::count());
+        $this->assertSame(
+            ['newbiz.co.il', 'second-site.co.il'],
+            Site::orderBy('id')->pluck('domain')->all(),
+        );
+    }
+
     /** ומעבר לחלון הזמן, הרשמה חוזרת היא שוב הרשמה. */
     public function test_the_same_details_after_the_window_open_a_new_signup(): void
     {
@@ -284,6 +306,42 @@ class SignupTest extends TestCase
         $this->post(route('signup.store'), $this->validPayload())->assertRedirect();
 
         $this->assertSame(2, Customer::count());
+    }
+
+    /**
+     * שליחה שלא הצליחה לקבל את הנעילה מוחזרת — ולא נכנסת בכל זאת.
+     *
+     * המשך ריצה בלי הנעילה היה מכניס שתי בקשות בדיוק לקטע שהנעילה קיימת כדי
+     * להחזיק בו אחת בכל רגע: שתיהן קוראות טבלה ריקה ושתיהן פותחות לקוח. עדיף
+     * לבקש ללחוץ שוב מאשר לפתוח את הכפילות שבאנו למנוע.
+     */
+    public function test_a_submission_that_cannot_take_the_lock_is_handed_back(): void
+    {
+        Queue::fake([SendWelcomeMessageJob::class, GenerateCustomerCardPdfJob::class, NotifySignupJob::class]);
+        config(['billing.signup.lock_wait_seconds' => 0]);
+
+        // Mirrors SignupController::fingerprint(). If that changes, this lock
+        // stops being the one the controller takes and the test fails — which
+        // is the point: the guard is only worth having while it holds.
+        $lock = Cache::lock('signup:'.hash('sha256', implode('|', [
+            'new@example.co.il',
+            'עסק חדש',
+            'ישראל ישראלי',
+            '0501234567',
+            BusinessType::LicensedDealer->value,
+            'credit_card',
+            '',
+            'newbiz.co.il',
+        ])), 30);
+
+        $this->assertTrue($lock->get());
+
+        $this->post(route('signup.store'), $this->validPayload())
+            ->assertSessionHasErrors('signup');
+
+        $this->assertSame(0, Customer::count());
+
+        $lock->release();
     }
 
     public function test_exempt_dealer_signup_is_marked_vat_exempt(): void

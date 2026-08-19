@@ -74,12 +74,25 @@ class SignupController extends Controller
         $lock = Cache::lock('signup:'.$this->fingerprint($data), 30);
 
         try {
-            return $lock->block(10, fn (): RedirectResponse => $this->file($data, $request->ip()));
+            $wait = max(0, (int) config('billing.signup.lock_wait_seconds', 10));
+
+            return $lock->block($wait, fn (): RedirectResponse => $this->file($data, $request->ip()));
         } catch (LockTimeoutException) {
-            // A busy lock is never a reason to refuse a signup — the duplicate
-            // check inside still runs, and by now the other request has almost
-            // certainly finished and will be found by it.
-            return $this->file($data, $request->ip());
+            // Waited and never got the lock. Running the body anyway would put
+            // two requests inside the very section this lock exists to hold one
+            // at a time — both would read an empty table and both would insert.
+            //
+            // So look once more (the other request may have committed while we
+            // waited), and otherwise say so and hand the form back with
+            // everything still in it. Asking someone to press again is a far
+            // smaller harm than opening the duplicate we came here to prevent.
+            if ($existing = $this->alreadyFiled($data)) {
+                return $this->redirectAfter($existing, $data['payment_method']);
+            }
+
+            return back()->withInput()->withErrors([
+                'signup' => 'השליחה הקודמת עדיין מתבצעת. המתינו רגע ונסו שוב — הפרטים נשמרו בטופס.',
+            ]);
         }
     }
 
@@ -121,8 +134,7 @@ class SignupController extends Controller
             ]);
 
             // Record the site (if given) so monitoring starts right away.
-            if (! empty($data['domain'])) {
-                $domain = preg_replace('#^https?://#', '', trim($data['domain']));
+            if (($domain = $this->domainFrom($data)) !== null) {
                 Site::create([
                     'customer_id' => $customer->id,
                     'domain' => $domain,
@@ -214,6 +226,7 @@ class SignupController extends Controller
         }
 
         $number = $data['business_number'] ?? null;
+        $domain = $this->domainFrom($data);
 
         return Customer::query()
             ->where('created_at', '>=', now()->subMinutes($window))
@@ -228,8 +241,31 @@ class SignupController extends Controller
                 fn ($q) => $q->whereNull('business_number'),
                 fn ($q) => $q->where('business_number', $number),
             )
+            // The site counts too. The same business filing again for a SECOND
+            // domain keeps every other field identical, and collapsing that
+            // would drop the new site out of monitoring without a word — the
+            // silent loss this whole check is shaped to avoid.
+            ->when(
+                $domain === null,
+                fn ($q) => $q->whereDoesntHave('sites'),
+                fn ($q) => $q->whereHas('sites', fn ($s) => $s->where('domain', $domain)),
+            )
             ->latest('id')
             ->first();
+    }
+
+    /**
+     * The domain as this form stores it — scheme stripped — or null when none
+     * was given. One place, so what gets written and what gets compared cannot
+     * drift apart.
+     *
+     * @param  array<string, mixed>  $data
+     */
+    private function domainFrom(array $data): ?string
+    {
+        $domain = trim((string) ($data['domain'] ?? ''));
+
+        return $domain === '' ? null : (string) preg_replace('#^https?://#', '', $domain);
     }
 
     /**
@@ -249,6 +285,7 @@ class SignupController extends Controller
             (string) $data['business_type'],
             (string) $data['payment_method'],
             (string) ($data['business_number'] ?? ''),
+            (string) $this->domainFrom($data),
         ]));
     }
 

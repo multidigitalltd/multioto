@@ -6,10 +6,12 @@ use App\Enums\BusinessType;
 use App\Enums\MessageAuthor;
 use App\Enums\MessageChannel;
 use App\Enums\MessageDirection;
+use App\Enums\SiteStatus;
 use App\Enums\TicketChannel;
 use App\Models\Customer;
 use App\Models\Ticket;
 use App\Services\Support\TicketIntake;
+use Carbon\CarbonInterface;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -24,22 +26,34 @@ class SignupDuplicatesTest extends TestCase
 {
     use RefreshDatabase;
 
-    /** Two identical filings of the form, a minute apart. */
-    private function pair(): array
+    /** One filing of the form, at a given moment. */
+    private function filing(CarbonInterface $at): Customer
     {
-        $details = [
+        $customer = Customer::create([
             'name' => 'גרנובים יחסי ציבור',
             'contact_name' => 'דנה גרנוב',
             'business_type' => BusinessType::Company,
             'email' => 'dana@example.co.il',
             'phone' => '0501234567',
             'payment_method' => 'standing_order',
-        ];
+        ]);
 
-        $first = Customer::create([...$details, 'created_at' => now()->subMinutes(2)]);
-        $second = Customer::create([...$details, 'created_at' => now()->subMinute()]);
+        // created_at is not fillable — passing it to create() is silently
+        // dropped and every row lands on "now", which would make a test about
+        // time windows pass without ever exercising one.
+        $customer->forceFill(['created_at' => $at])->save();
 
-        return [$first, $second];
+        return $customer;
+    }
+
+    /**
+     * Two identical filings, a minute apart — the double click.
+     *
+     * @return array{Customer, Customer}
+     */
+    private function pair(): array
+    {
+        return [$this->filing(now()->subMinutes(2)), $this->filing(now()->subMinute())];
     }
 
     private function followUpTicket(Customer $customer): Ticket
@@ -108,6 +122,60 @@ class SignupDuplicatesTest extends TestCase
             ->assertSuccessful();
 
         $this->assertSame(2, Customer::count());
+    }
+
+    /**
+     * כפילות שמישהו כתב עליה הערה — נשארת.
+     *
+     * הבדיקה היא הפוכה מרשימת שדות: כל שדה שההרשמה עצמה אינה כותבת ויש בו ערך,
+     * מישהו שם אותו. כך גם עמודה שתתווסף בעתיד מוגנת מעצמה.
+     */
+    public function test_a_duplicate_with_notes_on_its_card_is_kept(): void
+    {
+        [, $second] = $this->pair();
+        $second->update(['notes' => 'דיברתי איתה, מחכה לאישור מהבנק']);
+
+        $this->artisan('signup:duplicates --clean')
+            ->expectsOutputToContain('שדות שנערכו: notes')
+            ->assertSuccessful();
+
+        $this->assertSame(2, Customer::count());
+    }
+
+    /** וכפילות שיש לה אתר משלה — נשארת, כדי שהאתר לא ייעלם מהניטור. */
+    public function test_a_duplicate_with_its_own_site_is_kept(): void
+    {
+        [$first, $second] = $this->pair();
+        $first->sites()->create(['domain' => 'granov.co.il', 'status' => SiteStatus::Active]);
+        $second->sites()->create(['domain' => 'granov-pr.co.il', 'status' => SiteStatus::Active]);
+
+        $this->artisan('signup:duplicates --clean')
+            ->expectsOutputToContain('granov-pr.co.il')
+            ->assertSuccessful();
+
+        $this->assertSame(2, Customer::count());
+    }
+
+    /**
+     * כפילות של היום מזוהה גם כשקיימת הרשמה ישנה של אותו לקוח.
+     *
+     * מדידה מול הרשומה הכי ישנה הייתה מוציאה את שתי השורות של היום מהחלון —
+     * ומפספסת את הכפילות היחידה שבאמת קיימת.
+     */
+    public function test_a_duplicate_today_is_found_despite_an_old_signup(): void
+    {
+        $old = $this->filing(now()->subMonths(8));
+        [, $today] = $this->pair();
+
+        // The old filing is a cluster of its own; only today's pair is a
+        // duplicate, and only its second row is offered for deletion.
+        $this->artisan('signup:duplicates --clean')
+            ->expectsConfirmation('למחוק 1 לקוחות כפולים (כולל האתרים והפניות שנפתחו איתם)?', 'yes')
+            ->assertSuccessful();
+
+        $this->assertSame(2, Customer::count());
+        $this->assertNotNull($old->fresh());
+        $this->assertNull($today->fresh());
     }
 
     public function test_two_different_customers_are_not_a_duplicate(): void

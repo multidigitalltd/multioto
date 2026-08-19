@@ -107,6 +107,12 @@ return [
         // second customer, a second site, a second welcome message and a second
         // follow-up ticket on every click. 0 disables the check entirely.
         'duplicate_window_minutes' => (int) env('SIGNUP_DUPLICATE_WINDOW_MINUTES', 30),
+
+        // How long a submission waits for one already being filed before it is
+        // handed back with "still sending, try again in a moment". It waits
+        // rather than proceeding, because two submissions inside the same
+        // section both read an empty table and both insert.
+        'lock_wait_seconds' => (int) env('SIGNUP_LOCK_WAIT_SECONDS', 10),
     ],
 
     /*

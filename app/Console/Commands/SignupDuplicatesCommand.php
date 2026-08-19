@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Enums\CustomerStatus;
 use App\Models\Customer;
 use App\Models\Ticket;
 use Illuminate\Console\Command;
@@ -50,7 +51,7 @@ class SignupDuplicatesCommand extends Command
             $this->line("  נשמר: #{$keeper->id} · נפתח {$keeper->created_at?->format('d/m/Y H:i')}");
 
             foreach ($group as $duplicate) {
-                $blockers = $this->blockers($duplicate);
+                $blockers = $this->blockers($duplicate, $keeper);
                 $when = $duplicate->created_at?->format('d/m/Y H:i');
 
                 if ($blockers === []) {
@@ -136,20 +137,10 @@ class SignupDuplicatesCommand extends Command
         $out = [];
 
         foreach ($groups as $group) {
-            if (count($group) < 2) {
-                continue;
-            }
-
-            $first = $group[0];
-            $repeats = array_values(array_filter(
-                array_slice($group, 1),
-                fn (Customer $c): bool => $first->created_at !== null
-                    && $c->created_at !== null
-                    && abs($c->created_at->diffInMinutes($first->created_at)) <= $window,
-            ));
-
-            if ($repeats !== []) {
-                $out[] = [$first, ...$repeats];
+            foreach ($this->clusters($group, $window) as $cluster) {
+                if (count($cluster) > 1) {
+                    $out[] = $cluster;
+                }
             }
         }
 
@@ -157,12 +148,75 @@ class SignupDuplicatesCommand extends Command
     }
 
     /**
+     * Split one identity's rows into bursts — rows that landed within the window
+     * OF EACH OTHER, not of the oldest row ever.
+     *
+     * A customer who signed up properly a year ago and then double-clicked the
+     * form today produces two rows today, minutes apart and months away from the
+     * original. Measuring everything against the earliest record would put both
+     * of today's rows outside the window and report nothing — missing the only
+     * duplicate actually there.
+     *
+     * @param  list<Customer>  $group  ordered oldest first
+     * @return list<list<Customer>>
+     */
+    private function clusters(array $group, int $window): array
+    {
+        $clusters = [];
+        $current = [];
+
+        foreach ($group as $customer) {
+            $anchor = $current[0] ?? null;
+
+            $joins = $anchor !== null
+                && $anchor->created_at !== null
+                && $customer->created_at !== null
+                && abs($customer->created_at->diffInMinutes($anchor->created_at)) <= $window;
+
+            if ($joins) {
+                $current[] = $customer;
+
+                continue;
+            }
+
+            if ($current !== []) {
+                $clusters[] = $current;
+            }
+
+            $current = [$customer];
+        }
+
+        if ($current !== []) {
+            $clusters[] = $current;
+        }
+
+        return $clusters;
+    }
+
+    /**
+     * Every column signup itself writes — plus the ones its own jobs fill in
+     * moments later.
+     *
+     * The check below is deliberately the other way round: anything NOT on this
+     * list that carries a value was put there by a person. Listing what signup
+     * writes is a closed set that this file can be sure of; listing what a
+     * person might edit is not, and a column added next month would quietly
+     * stop being protected.
+     */
+    private const SIGNUP_WRITTEN = [
+        'id', 'name', 'contact_name', 'business_number', 'business_type', 'vat_exempt',
+        'email', 'phone', 'payment_method', 'terms_accepted_at', 'signature_path',
+        'signed_ip', 'signed_pdf_path', 'status', 'card_link_token',
+        'pending_card_lp_id', 'created_at', 'updated_at',
+    ];
+
+    /**
      * Why this duplicate must not be deleted — empty when nothing has attached
      * itself to it since.
      *
      * @return list<string>
      */
-    private function blockers(Customer $customer): array
+    private function blockers(Customer $customer, Customer $keeper): array
     {
         $blockers = [];
 
@@ -189,6 +243,33 @@ class SignupDuplicatesCommand extends Command
 
         if ($worked) {
             $blockers[] = 'פנייה עם התכתבות';
+        }
+
+        // A site the original does not have is not a duplicate of anything —
+        // it is a second domain this customer asked us to watch, and deleting
+        // the row would cascade it out of monitoring without a trace.
+        $extraSites = $customer->sites()->pluck('domain')
+            ->diff($keeper->sites()->pluck('domain'))
+            ->values();
+
+        if ($extraSites->isNotEmpty()) {
+            $blockers[] = 'אתר שאינו קיים במקורי: '.$extraSites->implode(', ');
+        }
+
+        // Anything a person typed onto the customer card itself — notes, a
+        // changed status, an onboarding checklist, an address. None of it is
+        // written by signup, so a value here means somebody worked on this row.
+        $edited = collect($customer->getAttributes())
+            ->except(self::SIGNUP_WRITTEN)
+            ->reject(fn ($value): bool => blank($value) || in_array($value, ['[]', '{}'], true))
+            ->keys();
+
+        if ($edited->isNotEmpty()) {
+            $blockers[] = 'שדות שנערכו: '.$edited->implode(', ');
+        }
+
+        if ($customer->status !== CustomerStatus::Active) {
+            $blockers[] = 'סטטוס שונה';
         }
 
         return $blockers;

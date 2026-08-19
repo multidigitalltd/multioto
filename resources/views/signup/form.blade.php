@@ -120,7 +120,9 @@
         <p class="lead small">מילוי הפרטים בטופס זה יחסוך חתימת מסמך ידני. שדות עם <span class="req">*</span> הם חובה.</p>
 
         @if ($errors->any())
-            <div class="error" role="alert" style="margin:.75rem 0">יש לתקן את השדות המסומנים.</div>
+            {{-- A submission handed back because the previous one was still in
+                 flight says so; anything else is a field to fix. --}}
+            <div class="error" role="alert" style="margin:.75rem 0">{{ $errors->first('signup') ?: 'יש לתקן את השדות המסומנים.' }}</div>
         @endif
 
         <div class="steps" aria-hidden="true">
@@ -385,10 +387,21 @@
             var ctx = canvas.getContext('2d');
             var drawing = false, dirty = false;
 
+            // A submission the server handed back (a validation error, or a
+            // send that was still in flight) keeps the drawn signature in the
+            // hidden field. It goes back onto the canvas the moment the canvas
+            // has a size — asking somebody to sign a second time because we
+            // could not accept the first send would be our mistake, not theirs.
+            var restored = String(input.value).indexOf('data:image/png') === 0 ? input.value : '';
+
             function resize() {
                 var ratio = Math.max(window.devicePixelRatio || 1, 1);
                 var rect = canvas.getBoundingClientRect();
+                // Still on an earlier step: the canvas is display:none and has
+                // no dimensions to size to yet.
+                if (!rect.width) { return; }
                 var data = dirty ? canvas.toDataURL() : null;
+                if (!data && restored) { data = restored; restored = ''; dirty = true; }
                 canvas.width = rect.width * ratio;
                 canvas.height = rect.height * ratio;
                 ctx.scale(ratio, ratio);
@@ -453,7 +466,12 @@
             window.addEventListener('pageshow', function (e) { if (e.persisted) { sendingState(false); } });
 
             // On a server validation error, open the first step that has one.
-            @if ($errors->any())
+            @if ($errors->has('signup'))
+                // Nothing is wrong with the form — it came back because the
+                // previous send was still running. Land on the last step so
+                // pressing again is one click away.
+                show(3);
+            @elseif ($errors->any())
                 (function () {
                     for (var s = 1; s <= 3; s++) {
                         var panel = form.querySelector('.panel[data-step="' + s + '"]');
