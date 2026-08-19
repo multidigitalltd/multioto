@@ -10,6 +10,7 @@ enum WebhookSource: string implements HasLabel
     case Waha = 'waha';
     case Linet = 'linet';
     case Email = 'email';
+    case Kesher = 'kesher';
 
     public function getLabel(): string
     {
@@ -18,6 +19,7 @@ enum WebhookSource: string implements HasLabel
             self::Waha => 'וואטסאפ',
             self::Linet => 'לינט',
             self::Email => 'אימייל',
+            self::Kesher => 'קשר',
         };
     }
 }
