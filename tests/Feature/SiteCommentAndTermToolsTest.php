@@ -35,14 +35,19 @@ class SiteCommentAndTermToolsTest extends TestCase
         ]);
     }
 
-    /** @param  array<string, mixed>  $input */
-    private function tool(string $tool, array $input): array
+    /**
+     * @param  array<string, mixed>  $input
+     * @param  array<string, mixed>|null  $reads  what the site answers to a read
+     */
+    private function tool(string $tool, array $input, ?array $reads = null): array
     {
-        $agent = new ConsoleAgent(
-            $this->createMock(ClaudeClient::class),
-            app(ApprovalGate::class),
-            $this->createMock(McpClient::class),
-        );
+        $mcp = $this->createMock(McpClient::class);
+
+        if ($reads !== null) {
+            $mcp->method('textContent')->willReturn((string) json_encode($reads));
+        }
+
+        $agent = new ConsoleAgent($this->createMock(ClaudeClient::class), app(ApprovalGate::class), $mcp);
 
         $method = new \ReflectionMethod($agent, 'handle');
         $method->setAccessible(true);
@@ -180,17 +185,17 @@ class SiteCommentAndTermToolsTest extends TestCase
 
     // ---- scheduling ---------------------------------------------------------
 
-    /** תזמון לאחור נדחה לפני שמישהו מתבקש לאשר אותו. */
-    public function test_scheduling_backwards_is_refused_before_it_is_proposed(): void
+    /** תאריך שכבר עבר בוודאות נדחה לפני שמישהו מתבקש לאשר אותו. */
+    public function test_a_date_that_is_definitely_past_is_refused_before_it_is_proposed(): void
     {
         $result = $this->tool('propose_content_edit', [
             'site_id' => $this->site()->id,
             'id' => 5,
-            'publish_at' => Carbon::now()->subDay()->format('Y-m-d H:i'),
+            'publish_at' => Carbon::now()->subWeek()->format('Y-m-d H:i'),
         ]);
 
         $this->assertTrue($result['is_error']);
-        $this->assertStringContainsString('בעתיד', $result['content']);
+        $this->assertStringContainsString('עבר', $result['content']);
         $this->assertSame(0, PendingAction::count());
     }
 
@@ -203,6 +208,74 @@ class SiteCommentAndTermToolsTest extends TestCase
 
         $this->assertTrue($result['is_error']);
         $this->assertSame(0, PendingAction::count());
+    }
+
+    /**
+     * ותאריך שנראה תקין אבל אינו קיים — נדחה, ולא מתגלגל ליום אחר.
+     *
+     * PHP מקבל 30 בפברואר ומזיז אותו ל-2 במרץ. המנהל היה מאשר תאריך אחד והאתר
+     * היה מפרסם באחר.
+     */
+    public function test_an_impossible_date_is_refused_rather_than_rolled_forward(): void
+    {
+        $year = Carbon::now()->addYear()->year;
+
+        $result = $this->tool('propose_content_edit', [
+            'site_id' => $this->site()->id, 'id' => 5, 'publish_at' => "{$year}-02-30 09:00",
+        ]);
+
+        $this->assertTrue($result['is_error']);
+        $this->assertStringContainsString('אינו קיים', $result['content']);
+        $this->assertSame(0, PendingAction::count());
+    }
+
+    /**
+     * תאריך של היום בלי שעה אינו נדחה כאן.
+     *
+     * הפאנל אינו יודע את אזור הזמן של האתר, והאתר קורא תאריך יחף כ-09:00.
+     * בדיקה שנעשית בשעון שלנו הייתה דוחה "היום ב-9" לכל מי שהבוקר שלו עוד לא
+     * הגיע — ולכן השאלה הזו נשארת אצל האתר.
+     */
+    public function test_todays_bare_date_is_left_for_the_site_to_judge(): void
+    {
+        $result = $this->tool('propose_content_edit', [
+            'site_id' => $this->site()->id, 'id' => 5, 'publish_at' => Carbon::now()->format('Y-m-d'),
+        ]);
+
+        $this->assertArrayNotHasKey('is_error', $result);
+        $this->assertSame(1, PendingAction::count());
+    }
+
+    /**
+     * ועמוד אלמנטור אפשר לתזמן — רק את הטקסט שבו אי אפשר לערוך כאן.
+     *
+     * החסימה קיימת כי post_content אינו מה שרואים בעמוד אלמנטור. כותרת,
+     * סטטוס ותאריך פרסום הם שדות רגילים לגמרי, וחסימה שלהם הייתה אומרת
+     * שאף עמוד אלמנטור אינו ניתן לתזמון — בזמן שהכלי מפרסם שהוא כן.
+     */
+    public function test_an_elementor_page_can_be_scheduled_but_not_rewritten(): void
+    {
+        $site = $this->site();
+        $page = ['title' => 'דף הבית', 'built_with_elementor' => true];
+
+        $scheduled = $this->tool('propose_content_edit', [
+            'site_id' => $site->id, 'id' => 5,
+            'publish_at' => Carbon::now()->addWeek()->format('Y-m-d H:i'),
+        ], $page);
+
+        $this->assertArrayNotHasKey('is_error', $scheduled);
+        $this->assertSame(1, PendingAction::count());
+
+        foreach (['content' => '<p>טקסט חדש</p>', 'title' => 'כותרת חדשה'] as $field => $value) {
+            $rewritten = $this->tool('propose_content_edit', [
+                'site_id' => $site->id, 'id' => 5, $field => $value,
+            ], $page);
+
+            $this->assertTrue($rewritten['is_error'], "{$field} should still be refused on an Elementor page");
+            $this->assertStringContainsString('אלמנטור', $rewritten['content']);
+        }
+
+        $this->assertSame(1, PendingAction::count());
     }
 
     // ---- risk tiers ---------------------------------------------------------

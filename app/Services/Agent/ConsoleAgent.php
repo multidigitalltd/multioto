@@ -1328,11 +1328,8 @@ class ConsoleAgent
             return ['content' => 'לא צוין שום שדה לעדכון.', 'is_error' => true];
         }
 
-        // Refused here rather than at the site, so nobody is asked to approve a
-        // schedule that cannot run. The site checks again in its own timezone,
-        // which is the one that decides.
-        if (isset($arguments['publish_at']) && ! $this->looksLikeAFutureDate($arguments['publish_at'])) {
-            return ['content' => 'תאריך הפרסום חייב להיות בעתיד ובפורמט YYYY-MM-DD HH:MM. תזמון לאחור פירושו פרסום מיידי.', 'is_error' => true];
+        if (isset($arguments['publish_at']) && ($why = $this->publishDateProblem($arguments['publish_at'])) !== null) {
+            return ['content' => $why, 'is_error' => true];
         }
 
         try {
@@ -1343,9 +1340,24 @@ class ConsoleAgent
             return ['content' => 'לא ניתן לקרוא את העמוד לפני השינוי: '.Str::limit($e->getMessage(), 150), 'is_error' => true];
         }
 
-        if (is_array($page) && ($page['built_with_elementor'] ?? false) === true) {
-            return ['content' => "העמוד {$id} בנוי באלמנטור — עדכון content לא ישנה את מה שרואים באתר. "
-                .'קרא את הטקסטים עם read_site_content והצע שינוי עם propose_elementor_text.', 'is_error' => true];
+        // Elementor blocks the fields whose visible result it overrides — and
+        // only those.
+        //
+        // `content` because an Elementor page keeps its words elsewhere, so
+        // writing there changes a copy nobody sees; `title` because most
+        // Elementor themes hide the post title and render a heading widget
+        // instead, which makes a rename another change that may never appear.
+        //
+        // Status, excerpt and publish date are ordinary workflow fields that
+        // behave exactly as they do anywhere else. Refusing those as well meant
+        // no Elementor page could ever be scheduled — while the tool said it
+        // could.
+        $overridden = array_intersect(['content', 'title'], array_keys($arguments));
+
+        if ($overridden !== [] && is_array($page) && ($page['built_with_elementor'] ?? false) === true) {
+            return ['content' => "העמוד {$id} בנוי באלמנטור — עדכון ".implode(' / ', $overridden).' לא ישנה בהכרח את מה שרואים באתר. '
+                .'קרא את הטקסטים עם read_site_content והצע שינוי עם propose_elementor_text. '
+                .'(סטטוס, תקציר ותזמון פרסום כן ניתנים לעדכון כאן.)', 'is_error' => true];
         }
 
         $title = is_array($page) ? (string) ($page['title'] ?? "עמוד #{$id}") : "עמוד #{$id}";
@@ -1450,19 +1462,43 @@ class ConsoleAgent
     }
 
     /**
-     * Whether a publish date parses and is still ahead of us.
+     * What is wrong with a publish date, or null when nothing is.
      *
-     * Deliberately lenient about the timezone — the site's clock is the one
-     * that decides, and it checks again. This only catches the obvious case
-     * before an approval is written.
+     * Two checks, and deliberately only two.
+     *
+     * The shape has to be right, and the day has to exist: `2026-02-30` is
+     * accepted by PHP's date parsing and quietly becomes March 2nd, so a
+     * manager would approve one date and the site would publish on another.
+     *
+     * Whether the moment is still ahead is checked ONLY once the whole calendar
+     * day has ended everywhere on earth. The site's own clock decides that
+     * question — this panel does not know the site's timezone, and a check made
+     * in ours would refuse a perfectly good "today at 09:00" for anyone whose
+     * morning has not arrived yet, or reject a bare date as midnight when the
+     * site reads it as nine. Catching "yesterday" is worth having; guessing at
+     * the boundary is not.
      */
-    private function looksLikeAFutureDate(string $value): bool
+    private function publishDateProblem(string $value): ?string
     {
-        try {
-            return Carbon::parse($value)->isFuture();
-        } catch (\Throwable) {
-            return false;
+        if (! preg_match('/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{1,2}):(\d{2}))?$/', trim($value), $parts)) {
+            return 'תאריך הפרסום חייב להיות בפורמט YYYY-MM-DD HH:MM.';
         }
+
+        [, $year, $month, $day] = $parts;
+
+        if (! checkdate((int) $month, (int) $day, (int) $year)) {
+            return "התאריך {$day}/{$month}/{$year} אינו קיים.";
+        }
+
+        // The named day is over even at UTC-12, the last place on earth to
+        // finish it.
+        $overEverywhere = Carbon::create((int) $year, (int) $month, (int) $day, 23, 59, 59, 'UTC')?->addHours(12);
+
+        if ($overEverywhere !== null && $overEverywhere->isPast()) {
+            return "תאריך הפרסום ({$day}/{$month}/{$year}) כבר עבר — תזמון לאחור פירושו פרסום מיידי.";
+        }
+
+        return null;
     }
 
     // ---- comments and taxonomies -------------------------------------------

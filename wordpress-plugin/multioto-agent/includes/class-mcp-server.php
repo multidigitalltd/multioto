@@ -1532,20 +1532,35 @@ class Multioto_Agent_Mcp_Server
             return null;
         }
 
-        $timezone = wp_timezone();
-        $date = date_create_immutable_from_format('Y-m-d H:i', $raw, $timezone);
-
-        if ($date === false) {
-            $date = date_create_immutable_from_format('Y-m-d', $raw, $timezone);
-            // A bare date means the morning of that day, not midnight — nobody
-            // asking to publish "on the 1st" means one minute past the start of
-            // it, and 00:00 is also the hour a mistake is least likely noticed.
-            $date = $date === false ? false : $date->setTime(9, 0);
-        }
-
-        if ($date === false) {
+        // Parsed by hand rather than with date_create_from_format(), which
+        // accepts an impossible day and silently rolls it forward:
+        // '2026-02-30 09:00' becomes March 2nd, so a manager would approve one
+        // date and the site would publish on another.
+        if (! preg_match('/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{1,2}):(\d{2}))?$/', $raw, $parts)) {
             throw new Multioto_Agent_Rpc_Error(-32602, "תאריך פרסום '{$raw}' אינו בפורמט YYYY-MM-DD HH:MM.");
         }
+
+        $year = (int) $parts[1];
+        $month = (int) $parts[2];
+        $day = (int) $parts[3];
+
+        if (! checkdate($month, $day, $year)) {
+            throw new Multioto_Agent_Rpc_Error(-32602, sprintf('התאריך %02d/%02d/%d אינו קיים.', $day, $month, $year));
+        }
+
+        // A bare date means the morning of that day, not midnight — nobody
+        // asking to publish "on the 1st" means one minute past the start of it,
+        // and 00:00 is also the hour a mistake is least likely to be noticed.
+        $hour = isset($parts[4]) && $parts[4] !== '' ? (int) $parts[4] : 9;
+        $minute = isset($parts[5]) && $parts[5] !== '' ? (int) $parts[5] : 0;
+
+        if ($hour > 23 || $minute > 59) {
+            throw new Multioto_Agent_Rpc_Error(-32602, sprintf('השעה %02d:%02d אינה קיימת.', $hour, $minute));
+        }
+
+        $date = date_create_immutable('now', wp_timezone())
+            ->setDate($year, $month, $day)
+            ->setTime($hour, $minute, 0);
 
         return [
             $date->format('Y-m-d H:i:s'),
