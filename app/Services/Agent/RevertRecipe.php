@@ -61,6 +61,16 @@ class RevertRecipe
                 ]]
                 : null,
             'wc_product_update' => $this->product($arguments, $decoded),
+            'wp_user_role_set' => $this->fromMap($tool, ['user_id' => $decoded['user_id'] ?? ($arguments['user_id'] ?? null)], $previous),
+            // 0 is a real previous value — "there was no featured image" — so
+            // this one cannot use fromMap, which reads an empty map as nothing
+            // to restore. Putting the thumbnail back to 0 IS the undo.
+            'wp_post_thumbnail_set' => is_array($previous) && array_key_exists('attachment_id', $previous)
+                ? ['tool' => $tool, 'arguments' => [
+                    'id' => $decoded['id'] ?? ($arguments['id'] ?? null),
+                    'attachment_id' => (int) $previous['attachment_id'],
+                ]]
+                : null,
             default => null,
         };
     }

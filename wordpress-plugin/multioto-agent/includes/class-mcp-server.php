@@ -175,6 +175,18 @@ class Multioto_Agent_Mcp_Server
             ['name' => 'wp_file_put', 'description' => 'כתיבת תוכן לקובץ לתיקון קוד. path יחסי בתוך wp-content ומוגבל ל-themes/plugins/mu-plugins. קובצי PHP נבדקים תחבירית לפני שמירה. תמיד קִראו קודם עם wp_file_get ושמרו גיבוי לביטול.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['path' => ['type' => 'string'], 'content' => ['type' => 'string']], 'required' => ['path', 'content']]],
         ];
 
+        // People on the site. The write half never reaches administrators —
+        // see Multioto_Agent_Users for why that boundary is absolute.
+        $tools[] = ['name' => 'wp_user_list', 'description' => 'המשתמשים באתר: מזהה, שם משתמש, אימייל, שם תצוגה, תפקידים ותאריך הרשמה. אופציונלי role (סינון לפי תפקיד), search, limit, page — יש total ו-pages, אז אל תתייחסו לעמוד הראשון כאילו הוא כולם. לכל משתמש editable אומר אם הסוכן רשאי לשנות אותו בכלל (מנהל אתר — לא), ו-status_meta_keys מראה שמות שדות שנראים כמו סימון אישור/מצב שהאתר משתמש בהם.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['role' => ['type' => 'string'], 'search' => ['type' => 'string'], 'limit' => ['type' => 'integer'], 'page' => ['type' => 'integer']]]];
+        $tools[] = ['name' => 'wp_user_create', 'description' => 'הוספת משתמש. email חובה; אופציונלי login, display_name, first_name, last_name, role (ברירת מחדל subscriber) ו-notify (ברירת מחדל true — וורדפרס שולח למשתמש קישור לקביעת סיסמה). **סיסמה אינה נקבעת כאן ואינה מוחזרת.** תפקיד administrator אינו ניתן להקצאה מכאן בשום מצב.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['email' => ['type' => 'string'], 'login' => ['type' => 'string'], 'display_name' => ['type' => 'string'], 'first_name' => ['type' => 'string'], 'last_name' => ['type' => 'string'], 'role' => ['type' => 'string'], 'notify' => ['type' => 'boolean']], 'required' => ['email']]];
+        $tools[] = ['name' => 'wp_user_role_set', 'description' => 'שינוי תפקיד של משתמש — וברוב האתרים זהו גם "אישור" של נרשם חדש. user_id + role. מחזיר את התפקיד הקודם לצורך ביטול. מסרב על מנהל אתר, על הקצאת תפקיד administrator, ועל משתמש שיש לו יותר מתפקיד אחד (שינוי כזה היה מוחק את השאר).', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['user_id' => ['type' => 'integer'], 'role' => ['type' => 'string']], 'required' => ['user_id', 'role']]];
+
+        // Media. Content work without pictures is half the job, so this is part
+        // of the content vocabulary and not an extra.
+        $tools[] = ['name' => 'wp_media_list', 'description' => 'קבצים בספריית המדיה: מזהה, כותרת, כתובת, סוג, טקסט חלופי ותאריך. אופציונלי search, mime_type, limit, page. קִראו את זה לפני העלאה — תמונה שכבר קיימת עדיף לשייך מאשר להעלות שוב.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['search' => ['type' => 'string'], 'mime_type' => ['type' => 'string'], 'limit' => ['type' => 'integer'], 'page' => ['type' => 'integer']]]];
+        $tools[] = ['name' => 'wp_media_upload', 'description' => 'העלאת קובץ לספריית המדיה. filename חובה (עם סיומת), ואחד מ: url (כתובת ציבורית) או data (base64). **לתמונה חובה alt** — תיאור קצר של מה שרואים בה. אופציונלי title ו-attach_to (מזהה פריט תוכן לשיוך). מותרים JPEG, PNG, GIF, WebP ו-PDF בלבד; הסוג נקבע מתוכן הקובץ ולא מהסיומת, ו-SVG נדחה. אין ביטול להעלאה.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['filename' => ['type' => 'string'], 'url' => ['type' => 'string'], 'data' => ['type' => 'string'], 'alt' => ['type' => 'string'], 'title' => ['type' => 'string'], 'attach_to' => ['type' => 'integer']], 'required' => ['filename']]];
+        $tools[] = ['name' => 'wp_post_thumbnail_set', 'description' => 'קביעת התמונה הראשית של עמוד/פוסט. id + attachment_id (0 מסיר את התמונה הראשית). מחזיר את הקודמת לצורך ביטול.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['id' => ['type' => 'integer'], 'attachment_id' => ['type' => 'integer']], 'required' => ['id', 'attachment_id']]];
+
         // Elementor tools — advertised only where Elementor is running, so a
         // site that never uses it is not offered a vocabulary it has no use for.
         if (Multioto_Agent_Elementor::active()) {
@@ -238,6 +250,12 @@ class Multioto_Agent_Mcp_Server
             'wp_fields_schema' => 'fieldsSchema',
             'wp_fields_get' => 'fieldsGet',
             'wp_fields_update' => 'fieldsUpdate',
+            'wp_user_list' => 'userList',
+            'wp_user_create' => 'userCreate',
+            'wp_user_role_set' => 'userRoleSet',
+            'wp_media_list' => 'mediaList',
+            'wp_media_upload' => 'mediaUpload',
+            'wp_post_thumbnail_set' => 'thumbnailSet',
             'wp_elementor_texts_get' => 'elementorTexts',
             'wp_elementor_text_update' => 'elementorTextUpdate',
             'wc_product_search' => 'wcProductSearch',
@@ -354,6 +372,42 @@ class Multioto_Agent_Mcp_Server
         }
 
         return wp_json_encode($out, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    }
+
+    // ---- people and media -------------------------------------------------
+    //
+    // Thin delegation on purpose: the rules that matter (which roles may ever
+    // be assigned, which file types may ever come in) belong in one place each,
+    // not spread between a dispatcher and a helper.
+
+    private function userList(array $args): string
+    {
+        return Multioto_Agent_Users::listUsers($args);
+    }
+
+    private function userCreate(array $args): string
+    {
+        return Multioto_Agent_Users::create($args);
+    }
+
+    private function userRoleSet(array $args): string
+    {
+        return Multioto_Agent_Users::setRole($args);
+    }
+
+    private function mediaList(array $args): string
+    {
+        return Multioto_Agent_Media::listMedia($args);
+    }
+
+    private function mediaUpload(array $args): string
+    {
+        return Multioto_Agent_Media::upload($args);
+    }
+
+    private function thumbnailSet(array $args): string
+    {
+        return Multioto_Agent_Media::setThumbnail($args);
     }
 
     private function optionGet(array $args): string
