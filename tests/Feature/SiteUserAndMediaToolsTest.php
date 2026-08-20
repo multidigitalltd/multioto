@@ -82,6 +82,33 @@ class SiteUserAndMediaToolsTest extends TestCase
         $this->assertSame(0, PendingAction::count());
     }
 
+    /**
+     * ותפקיד ריק אינו הופך בשקט ל"מנוי".
+     *
+     * תפקיד ריק פירושו "בלי תפקיד כלל" — מצב אמיתי, וזה הביטול של אישור. הוא
+     * מגיע מהיומן ולא משיחה, ולכן הסוכן מסרב לו כאן במקום להמציא ברירת מחדל
+     * ולתת למישהו הרשאה שלא ביקשו.
+     */
+    public function test_an_empty_role_is_refused_rather_than_defaulted(): void
+    {
+        $result = $this->tool('propose_set_user_role', [
+            'site_id' => $this->site()->id, 'user_id' => 4, 'role' => '',
+        ]);
+
+        $this->assertTrue($result['is_error']);
+        $this->assertSame(0, PendingAction::count());
+    }
+
+    /** אבל בהוספת משתמש, היעדר תפקיד הוא כן "מנוי" — כפי שכתוב בסכימה. */
+    public function test_adding_a_user_without_a_role_defaults_to_subscriber(): void
+    {
+        $this->tool('propose_add_user', [
+            'site_id' => $this->site()->id, 'email' => 'new@example.co.il',
+        ]);
+
+        $this->assertSame('subscriber', PendingAction::sole()->payload['arguments']['role']);
+    }
+
     /** וגם תפקיד שאינו ברשימה נדחה, ולא מוצע ונכשל אחר כך. */
     public function test_an_unknown_role_is_refused_before_it_is_proposed(): void
     {
@@ -242,6 +269,27 @@ class SiteUserAndMediaToolsTest extends TestCase
         $this->assertSame([
             'tool' => 'wp_user_role_set',
             'arguments' => ['user_id' => 12, 'role' => 'subscriber'],
+        ], $recipe);
+    }
+
+    /**
+     * ואישור של נרשם שלא היה לו תפקיד — גם הוא ניתן לביטול.
+     *
+     * זה בדיוק המקרה הנפוץ: נרשם שממתין לאישור אין לו תפקיד כלל. "אין תפקיד"
+     * שדווח כ-null היה נקרא כ"אין מה לשחזר", והאישור היחיד שבאמת רוצים לבטל
+     * היה נשאר בלי כפתור.
+     */
+    public function test_approving_a_user_who_had_no_role_can_be_undone(): void
+    {
+        $recipe = app(RevertRecipe::class)->for(
+            'wp_user_role_set',
+            ['user_id' => 7, 'role' => 'subscriber'],
+            (string) json_encode(['user_id' => 7, 'role' => 'subscriber', 'changed' => true, 'previous' => ['role' => '']]),
+        );
+
+        $this->assertSame([
+            'tool' => 'wp_user_role_set',
+            'arguments' => ['user_id' => 7, 'role' => ''],
         ], $recipe);
     }
 

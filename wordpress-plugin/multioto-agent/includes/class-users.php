@@ -172,7 +172,17 @@ class Multioto_Agent_Users
     public static function setRole(array $args): string
     {
         $user = self::user((int) ($args['user_id'] ?? 0));
-        $role = self::assignableRole((string) ($args['role'] ?? ''));
+
+        // Absent and empty are different instructions. Empty means "leave this
+        // person with no role", which is what undoing an approval has to do;
+        // absent is a malformed call, and reading it as empty would strip
+        // somebody's access because a field went missing.
+        if (! array_key_exists('role', $args)) {
+            throw new Multioto_Agent_Rpc_Error(-32602, 'חסר role.');
+        }
+
+        $requested = trim((string) $args['role']);
+        $role = $requested === '' ? '' : self::assignableRole($requested);
 
         if (in_array(self::PROTECTED_ROLE, (array) $user->roles, true)) {
             throw new Multioto_Agent_Rpc_Error(-32000, 'המשתמש הוא מנהל האתר — שינוי התפקיד שלו אינו נעשה מכאן.');
@@ -202,6 +212,9 @@ class Multioto_Agent_Users
             ], JSON_UNESCAPED_UNICODE);
         }
 
+        // An empty role is not a no-op: WP_User::set_role('') drops the old
+        // capabilities and leaves the roles list empty, which is exactly what
+        // undoing an approval means.
         $user->set_role($role);
 
         return wp_json_encode([
@@ -209,10 +222,11 @@ class Multioto_Agent_Users
             'login' => (string) $user->user_login,
             'role' => $role,
             'changed' => true,
-            // The snapshot behind "undo". Empty when the user had no role at
-            // all, in which case there is nothing to restore and the panel is
-            // told so rather than being handed a blank to write back.
-            'previous' => $previous !== '' ? ['role' => $previous] : null,
+            // The snapshot behind "undo" — always present, including when the
+            // previous state was "no role at all". That is the common case for
+            // approving a pending registration, and reporting it as nothing to
+            // restore would leave exactly that approval with no way back.
+            'previous' => ['role' => $previous],
         ], JSON_UNESCAPED_UNICODE);
     }
 
@@ -296,7 +310,12 @@ class Multioto_Agent_Users
         $login = $base;
         $suffix = 1;
 
-        while (username_exists($login) !== null) {
+        // Truthy, NOT `!== null`: username_exists() returns the user id or
+        // FALSE, so comparing against null is true for a free name as well as
+        // a taken one — the loop would never end and every approved user
+        // creation would hang until the request timed out, having created
+        // nobody.
+        while (username_exists($login)) {
             $login = $base.++$suffix;
         }
 

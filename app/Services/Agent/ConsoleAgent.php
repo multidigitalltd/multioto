@@ -1466,7 +1466,7 @@ class ConsoleAgent
             return ['content' => 'חסרה כתובת אימייל תקינה למשתמש החדש.', 'is_error' => true];
         }
 
-        $role = $this->assignableRole($input);
+        $role = $this->assignableRole($input, default: 'subscriber');
 
         if (! is_string($role)) {
             return $role;
@@ -1663,9 +1663,21 @@ class ConsoleAgent
      * @param  array<string, mixed>  $input
      * @return string|array<string, mixed>
      */
-    private function assignableRole(array $input): string|array
+    private function assignableRole(array $input, string $default = ''): string|array
     {
-        $role = Str::lower(trim((string) ($input['role'] ?? 'subscriber'))) ?: 'subscriber';
+        $role = Str::lower(trim((string) ($input['role'] ?? '')));
+
+        // An empty role means "no role at all" at the site. That is a valid
+        // state and it is how an approval is undone, but it is never something
+        // the agent proposes in conversation — a revert is built from the
+        // journal, not from a sentence.
+        if ($role === '') {
+            $role = $default;
+        }
+
+        if ($role === '') {
+            return ['content' => 'חסר תפקיד. אפשריים: '.implode(', ', self::ASSIGNABLE_ROLES).'.', 'is_error' => true];
+        }
 
         if ($role === 'administrator') {
             return ['content' => 'תפקיד מנהל אתר אינו ניתן להקצאה על ידי הסוכן — זו החלטה של בעל האתר. פתח משימה לאדם.', 'is_error' => true];
