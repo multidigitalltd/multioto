@@ -192,7 +192,7 @@ class ConsoleAgent
         return trim(implode("\n", array_filter([
             'אתה סוכן התפעול של Multi Digital, חברת אחסון ותחזוקת אתרים. אתה עוזר למנהל לבצע פעולות במערכת בשפה חופשית.',
             '',
-            'יש לך גישה מלאה לכל תחומי המערכת (דרך הצעה לאישור): פניות (מענה, סטטוס, עדיפות, שיוך, סגירה), לקוחות (עדכון פרטים), מנויים (מחיר/סטטוס/ביטול), אתרים (הוספה, השעיה, שחזור, בדיקה), חנויות ווקומרס (מחירים, מבצעים, מלאי), גבייה ותשלומים (דרישת תשלום, סימון תשלום בוצע + חשבונית), דיוור ללקוחות (הכנת טיוטה) ומשימות (פתיחה, סימון כבוצעה). מה שאין לו כלי ישיר — הצע כמשימה לאדם.',
+            'יש לך גישה מלאה לכל תחומי המערכת (דרך הצעה לאישור): פניות (מענה, סטטוס, עדיפות, שיוך, סגירה), לקוחות (עדכון פרטים), מנויים (מחיר/סטטוס/ביטול), אתרים (הוספה, השעיה, שחזור, בדיקה), תוכן באתרים (עמודים, פוסטים, סוגי תוכן מותאמים, טקסטים באלמנטור, שדות מותאמים), משתמשים באתרים (הוספה ושינוי תפקיד — למעט מנהל אתר), ספריית המדיה (העלאה, תמונה ראשית), חנויות ווקומרס (מחירים, מבצעים, מלאי), גבייה ותשלומים (דרישת תשלום, סימון תשלום בוצע + חשבונית), דיוור ללקוחות (הכנת טיוטה) ומשימות (פתיחה, סימון כבוצעה). מה שאין לו כלי ישיר — הצע כמשימה לאדם.',
             '',
             'עבודה על חנויות — עשה כמה שיותר בעצמך:',
             '- "תוריד 20% על כל החולצות עד סוף החודש" → propose_sale עם ההוראה כמו שהיא. הכלי מוצא את המוצרים לבד, קורא את המחירים הנוכחיים ומכין הצעה שמפרטת כל מוצר עם המחיר לפני ואחרי. אל תחפש מוצרים ידנית ואל תחשב מחירים בעצמך — חישוב שלך עלול לסטות באגורות, והכלי מחשב מדויק.',
@@ -205,6 +205,13 @@ class ConsoleAgent
             '- עמוד רגיל → propose_content_edit. עמוד אלמנטור → propose_elementor_text עם ה-widget_id שקראת, והעבר גם current_text כדי שההצעה תראה לפני/אחרי. אל תנסה לערוך עמוד אלמנטור דרך content — זה משנה עותק שאיש לא רואה.',
             '- שדות מותאמים (מחיר נכס, תאריך אירוע) → propose_field_change, עם שמות המפתחות כפי שקראת אותם. מפתח שהמצאת יוצר שדה חדש שאיש אינו קורא, כלומר שינוי שנראה מוצלח ואינו עושה דבר.',
             '- הוספת סקשן חדש, שינוי מבנה או עיצוב באלמנטור אינם נתמכים. פתח על זה משימה לאדם עם open_task — ואל תציע במקומם עריכת טקסט שלא ביקשו.',
+            '',
+            'משתמשים ומדיה באתרים:',
+            '- "תוסיף את X כעורך", "תאשר את הנרשם החדש" → read_site_users כדי למצוא אותו ולראות את תפקידו הנוכחי, ואז propose_add_user או propose_set_user_role. שינוי תפקיד הוא בדרך כלל גם ה"אישור" של נרשם חדש.',
+            '- **תפקיד מנהל אתר (administrator) אינו אפשרי דרכך בשום מצב** — לא בהוספה ולא בשינוי. אם ביקשו מנהל, פתח משימה לאדם והסבר בשורה למה.',
+            '- לפני העלאת תמונה — read_site_media. תמונה שכבר בספרייה עדיף לשייך מאשר להעלות שוב.',
+            '- **לכל תמונה חובה alt** — תיאור קצר וענייני של מה שרואים בה. זו דרישת נגישות ולא נוחות, וההעלאה תסורב בלעדיו. אל תכתוב "תמונה" או את שם הקובץ.',
+            '- העלאה אינה ניתנת לביטול. תמונה ראשית לעמוד → propose_set_featured_image (attachment_id=0 מסיר).',
             '',
             $this->scheduleContext(),
             '',
@@ -409,6 +416,18 @@ class ConsoleAgent
                 'input_schema' => ['type' => 'object', 'properties' => ['site_id' => ['type' => 'integer'], 'id' => ['type' => 'integer'], 'widget_id' => ['type' => 'string'], 'text' => ['type' => 'string'], 'setting' => ['type' => 'string'], 'current_text' => ['type' => 'string']], 'required' => ['site_id', 'id', 'widget_id', 'text']]],
             ['name' => 'propose_field_change', 'description' => 'הצע עדכון שדות מותאמים (ACF/JetEngine) בפריט תוכן — למשל מחיר של נכס, תאריך של אירוע. site_id + id + fields (אובייקט של מפתח→ערך). קרא קודם ב-read_site_content כדי לדעת את שמות המפתחות; מפתח שגוי יוצר שדה חדש שאיש אינו קורא.',
                 'input_schema' => ['type' => 'object', 'properties' => ['site_id' => ['type' => 'integer'], 'id' => ['type' => 'integer'], 'fields' => ['type' => 'object']], 'required' => ['site_id', 'id', 'fields']]],
+            ['name' => 'read_site_users', 'description' => 'המשתמשים באתר מחובר. site_id; אופציונלי role (סינון לפי תפקיד), search, page. מחזיר לכל משתמש מזהה, שם משתמש, אימייל, תפקידים, ואם הסוכן רשאי לשנות אותו (מנהל אתר — לא). קרא תמיד לפני שאתה מציע שינוי תפקיד, כדי לצטט בהצעה את התפקיד הנוכחי.',
+                'input_schema' => ['type' => 'object', 'properties' => ['site_id' => ['type' => 'integer'], 'role' => ['type' => 'string'], 'search' => ['type' => 'string'], 'page' => ['type' => 'integer']], 'required' => ['site_id']]],
+            ['name' => 'propose_add_user', 'description' => 'הצע הוספת משתמש לאתר. site_id + email; אופציונלי display_name, first_name, last_name, role (subscriber ברירת מחדל, ואפשר contributor / author / editor / customer / shop_manager). המשתמש מקבל מוורדפרס קישור לקביעת סיסמה — סיסמה אינה נקבעת ואינה מוצגת. **תפקיד מנהל אתר (administrator) אינו אפשרי מכאן** — אם ביקשו מנהל, פתח משימה לאדם במקום.',
+                'input_schema' => ['type' => 'object', 'properties' => ['site_id' => ['type' => 'integer'], 'email' => ['type' => 'string'], 'display_name' => ['type' => 'string'], 'first_name' => ['type' => 'string'], 'last_name' => ['type' => 'string'], 'role' => ['type' => 'string']], 'required' => ['site_id', 'email']]],
+            ['name' => 'propose_set_user_role', 'description' => 'הצע שינוי תפקיד של משתמש — וזה גם האופן שבו מאשרים נרשם חדש ברוב האתרים. site_id + user_id + role. קרא קודם ב-read_site_users; מנהל אתר אינו ניתן לשינוי מכאן.',
+                'input_schema' => ['type' => 'object', 'properties' => ['site_id' => ['type' => 'integer'], 'user_id' => ['type' => 'integer'], 'role' => ['type' => 'string'], 'current_role' => ['type' => 'string']], 'required' => ['site_id', 'user_id', 'role']]],
+            ['name' => 'read_site_media', 'description' => 'קבצים בספריית המדיה של אתר מחובר. site_id; אופציונלי search, page. קרא את זה לפני שאתה מציע העלאה — תמונה שכבר קיימת עדיף לשייך מאשר להעלות שוב.',
+                'input_schema' => ['type' => 'object', 'properties' => ['site_id' => ['type' => 'integer'], 'search' => ['type' => 'string'], 'page' => ['type' => 'integer']], 'required' => ['site_id']]],
+            ['name' => 'propose_upload_media', 'description' => 'הצע העלאת תמונה/קובץ לספריית המדיה מכתובת אינטרנט. site_id + filename (עם סיומת) + url, ולתמונה **חובה alt** — תיאור קצר של מה שרואים בה. אופציונלי title ו-attach_to. מותרים JPEG, PNG, GIF, WebP ו-PDF בלבד. שים לב: להעלאה אין ביטול.',
+                'input_schema' => ['type' => 'object', 'properties' => ['site_id' => ['type' => 'integer'], 'filename' => ['type' => 'string'], 'url' => ['type' => 'string'], 'alt' => ['type' => 'string'], 'title' => ['type' => 'string'], 'attach_to' => ['type' => 'integer']], 'required' => ['site_id', 'filename', 'url']]],
+            ['name' => 'propose_set_featured_image', 'description' => 'הצע קביעת תמונה ראשית לעמוד/פוסט. site_id + id + attachment_id (0 מסיר). את attachment_id מקבלים מ-read_site_media או מהעלאה שאושרה.',
+                'input_schema' => ['type' => 'object', 'properties' => ['site_id' => ['type' => 'integer'], 'id' => ['type' => 'integer'], 'attachment_id' => ['type' => 'integer']], 'required' => ['site_id', 'id', 'attachment_id']]],
             ['name' => 'investigate_site', 'description' => 'שלח את סוכן האתר לבדוק אתר מחובר (קריאה בלבד; תיקון יוצע לאישור). site_id + goal.',
                 'input_schema' => $obj(['site_id' => $int, 'goal' => $str], ['site_id'])],
             ['name' => 'draft_broadcast', 'description' => 'הכן טיוטת דיוור ללקוחות (תמיכה ← דיוורים). לא נשלח דבר — נוצרת טיוטה שהמנהל עורך ושולח בעצמו. brief: תיאור בשורה של מה רוצים להגיד, והסוכן ינסח. לחלופין אפשר להעביר subject ו-body מוכנים. is_marketing חובה: true לפרסומת (מבצע, הצעה, שירות חדש), false להודעת שירות (תחזוקה, אבטחה, שינוי בשירות) — קבע לפי התוכן, ובספק בחר true. קהל היעד: audience_status — active (ברירת מחדל) / suspended / churned / all; plan_names — לצמצום ללקוחות בחבילות מסוימות (שמות החבילות כפי שהם במערכת); customer_ids — לצמצום ללקוחות מסוימים. אם ביקשו קהל מצומצם, ציין אותו כאן ואל תשאיר את ברירת המחדל.',
@@ -482,6 +501,12 @@ class ConsoleAgent
                 'propose_content_edit' => $this->proposeContentEdit($input),
                 'propose_elementor_text' => $this->proposeElementorText($input),
                 'propose_field_change' => $this->proposeFieldChange($input),
+                'read_site_users' => $this->readSiteUsers($input),
+                'propose_add_user' => $this->proposeAddUser($input),
+                'propose_set_user_role' => $this->proposeSetUserRole($input),
+                'read_site_media' => $this->readSiteMedia($input),
+                'propose_upload_media' => $this->proposeUploadMedia($input),
+                'propose_set_featured_image' => $this->proposeSetFeaturedImage($input),
                 'investigate_site' => $this->investigateSite($input),
                 'draft_broadcast' => $this->draftBroadcast($input),
                 // The old name still arrives from a model working off an
@@ -1393,6 +1418,276 @@ class ConsoleAgent
         );
 
         return $this->proposedOk($action->id, "עדכון שדות בפריט {$id} ב-{$site->domain}");
+    }
+
+    // ---- people and media on the site --------------------------------------
+
+    /**
+     * Roles the console will ever propose.
+     *
+     * The plugin refuses anything outside its own allow-list too — this copy
+     * exists so the refusal happens here, before a proposal is written and sent
+     * to somebody's phone for approval. A manager should never be asked to
+     * approve a change that cannot run.
+     */
+    private const ASSIGNABLE_ROLES = ['subscriber', 'contributor', 'author', 'editor', 'customer', 'shop_manager'];
+
+    private function readSiteUsers(array $input): array
+    {
+        $site = $this->connectedSite($input, requireStore: false);
+
+        if (! $site instanceof Site) {
+            return $site;
+        }
+
+        try {
+            return ['content' => $this->mcp->textContent($this->mcp->callTool($site, 'wp_user_list', array_filter([
+                'role' => trim((string) ($input['role'] ?? '')) ?: null,
+                'search' => trim((string) ($input['search'] ?? '')) ?: null,
+                'page' => max(1, (int) ($input['page'] ?? 1)),
+                'limit' => 25,
+            ])))];
+        } catch (\Throwable $e) {
+            return ['content' => 'לא ניתן לקרוא את המשתמשים: '.Str::limit($e->getMessage(), 150), 'is_error' => true];
+        }
+    }
+
+    private function proposeAddUser(array $input): array
+    {
+        $site = $this->connectedSite($input, requireStore: false);
+
+        if (! $site instanceof Site) {
+            return $site;
+        }
+
+        $email = trim((string) ($input['email'] ?? ''));
+
+        if (! filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            return ['content' => 'חסרה כתובת אימייל תקינה למשתמש החדש.', 'is_error' => true];
+        }
+
+        $role = $this->assignableRole($input, default: 'subscriber');
+
+        if (! is_string($role)) {
+            return $role;
+        }
+
+        $arguments = array_filter([
+            'email' => $email,
+            'role' => $role,
+            'display_name' => trim((string) ($input['display_name'] ?? '')) ?: null,
+            'first_name' => trim((string) ($input['first_name'] ?? '')) ?: null,
+            'last_name' => trim((string) ($input['last_name'] ?? '')) ?: null,
+        ]);
+
+        $action = $this->gate->propose(
+            type: 'site_action',
+            summary: "👤 משתמש חדש ב-{$site->domain}\n{$email} · תפקיד: {$role}"
+                .(isset($arguments['display_name']) ? "\nשם: {$arguments['display_name']}" : '')
+                ."\nוורדפרס ישלח לו קישור לקביעת סיסמה. סיסמה אינה נקבעת כאן.",
+            payload: [
+                'site_id' => $site->id,
+                'tool' => 'wp_user_create',
+                'arguments' => $arguments,
+                'source' => 'console_agent',
+            ],
+            customerId: $site->customer_id,
+            proposedBy: 'console',
+            taskId: $this->delegatedTaskId,
+        );
+
+        return $this->proposedOk($action->id, "הוספת {$email} כ-{$role} ב-{$site->domain}");
+    }
+
+    private function proposeSetUserRole(array $input): array
+    {
+        $site = $this->connectedSite($input, requireStore: false);
+
+        if (! $site instanceof Site) {
+            return $site;
+        }
+
+        $userId = (int) ($input['user_id'] ?? 0);
+
+        if ($userId <= 0) {
+            return ['content' => 'חסר user_id. קרא קודם את המשתמשים עם read_site_users.', 'is_error' => true];
+        }
+
+        $role = $this->assignableRole($input);
+
+        if (! is_string($role)) {
+            return $role;
+        }
+
+        // Quoted from what the agent actually read, not from a prediction —
+        // an approval that does not say what the role is now is an approval
+        // nobody can check.
+        $current = trim((string) ($input['current_role'] ?? ''));
+
+        $action = $this->gate->propose(
+            type: 'site_action',
+            summary: "👤 שינוי תפקיד ב-{$site->domain} (משתמש #{$userId})\n"
+                .($current !== '' ? "{$current} ← {$role}" : "תפקיד חדש: {$role}"),
+            payload: [
+                'site_id' => $site->id,
+                'tool' => 'wp_user_role_set',
+                'arguments' => ['user_id' => $userId, 'role' => $role],
+                'source' => 'console_agent',
+            ],
+            customerId: $site->customer_id,
+            proposedBy: 'console',
+            taskId: $this->delegatedTaskId,
+        );
+
+        return $this->proposedOk($action->id, "שינוי תפקיד למשתמש #{$userId} ב-{$site->domain}");
+    }
+
+    private function readSiteMedia(array $input): array
+    {
+        $site = $this->connectedSite($input, requireStore: false);
+
+        if (! $site instanceof Site) {
+            return $site;
+        }
+
+        try {
+            return ['content' => $this->mcp->textContent($this->mcp->callTool($site, 'wp_media_list', array_filter([
+                'search' => trim((string) ($input['search'] ?? '')) ?: null,
+                'page' => max(1, (int) ($input['page'] ?? 1)),
+                'limit' => 20,
+            ])))];
+        } catch (\Throwable $e) {
+            return ['content' => 'לא ניתן לקרוא את ספריית המדיה: '.Str::limit($e->getMessage(), 150), 'is_error' => true];
+        }
+    }
+
+    private function proposeUploadMedia(array $input): array
+    {
+        $site = $this->connectedSite($input, requireStore: false);
+
+        if (! $site instanceof Site) {
+            return $site;
+        }
+
+        $filename = trim((string) ($input['filename'] ?? ''));
+        $url = trim((string) ($input['url'] ?? ''));
+        $alt = trim((string) ($input['alt'] ?? ''));
+
+        if ($filename === '' || ! str_contains($filename, '.')) {
+            return ['content' => 'חסר שם קובץ עם סיומת (למשל banner.jpg).', 'is_error' => true];
+        }
+
+        if (! filter_var($url, FILTER_VALIDATE_URL) || ! Str::startsWith($url, ['http://', 'https://'])) {
+            return ['content' => 'חסרה כתובת הורדה תקינה (http/https).', 'is_error' => true];
+        }
+
+        // Refused here rather than at the site, so nobody is asked to approve
+        // an upload that will be rejected — and so "I will add alt later"
+        // never becomes an image on a customer's page without a description.
+        if ($alt === '' && ! Str::endsWith(Str::lower($filename), '.pdf')) {
+            return ['content' => 'לתמונה חובה טקסט חלופי (alt) — תיאור קצר של מה שרואים בה.', 'is_error' => true];
+        }
+
+        $arguments = array_filter([
+            'filename' => $filename,
+            'url' => $url,
+            'alt' => $alt ?: null,
+            'title' => trim((string) ($input['title'] ?? '')) ?: null,
+            'attach_to' => ($attach = (int) ($input['attach_to'] ?? 0)) > 0 ? $attach : null,
+        ]);
+
+        $action = $this->gate->propose(
+            type: 'site_action',
+            summary: "🖼️ העלאת קובץ ל-{$site->domain}\n{$filename}"
+                .($alt !== '' ? "\nטקסט חלופי: {$alt}" : '')
+                ."\nמקור: ".Str::limit($url, 120)
+                ."\n⚠️ להעלאה אין ביטול — קובץ שהועלה נמחק ידנית.",
+            payload: [
+                'site_id' => $site->id,
+                'tool' => 'wp_media_upload',
+                'arguments' => $arguments,
+                'source' => 'console_agent',
+            ],
+            customerId: $site->customer_id,
+            proposedBy: 'console',
+            taskId: $this->delegatedTaskId,
+        );
+
+        return $this->proposedOk($action->id, "העלאת {$filename} ל-{$site->domain}");
+    }
+
+    private function proposeSetFeaturedImage(array $input): array
+    {
+        $site = $this->connectedSite($input, requireStore: false);
+
+        if (! $site instanceof Site) {
+            return $site;
+        }
+
+        $id = (int) ($input['id'] ?? 0);
+
+        if ($id <= 0) {
+            return ['content' => 'חסר id של העמוד/הפוסט.', 'is_error' => true];
+        }
+
+        // 0 is a real instruction here — "remove the featured image" — so it is
+        // read with array_key_exists rather than treated as missing.
+        if (! array_key_exists('attachment_id', $input)) {
+            return ['content' => 'חסר attachment_id (0 להסרת התמונה הראשית).', 'is_error' => true];
+        }
+
+        $attachmentId = (int) $input['attachment_id'];
+
+        $action = $this->gate->propose(
+            type: 'site_action',
+            summary: "🖼️ תמונה ראשית ב-{$site->domain} (פריט {$id})\n"
+                .($attachmentId > 0 ? "קובץ #{$attachmentId}" : 'הסרת התמונה הראשית'),
+            payload: [
+                'site_id' => $site->id,
+                'tool' => 'wp_post_thumbnail_set',
+                'arguments' => ['id' => $id, 'attachment_id' => $attachmentId],
+                'source' => 'console_agent',
+            ],
+            customerId: $site->customer_id,
+            proposedBy: 'console',
+            taskId: $this->delegatedTaskId,
+        );
+
+        return $this->proposedOk($action->id, "תמונה ראשית לפריט {$id} ב-{$site->domain}");
+    }
+
+    /**
+     * The requested role, or the tool-error explaining why it will not be
+     * proposed.
+     *
+     * @param  array<string, mixed>  $input
+     * @return string|array<string, mixed>
+     */
+    private function assignableRole(array $input, string $default = ''): string|array
+    {
+        $role = Str::lower(trim((string) ($input['role'] ?? '')));
+
+        // An empty role means "no role at all" at the site. That is a valid
+        // state and it is how an approval is undone, but it is never something
+        // the agent proposes in conversation — a revert is built from the
+        // journal, not from a sentence.
+        if ($role === '') {
+            $role = $default;
+        }
+
+        if ($role === '') {
+            return ['content' => 'חסר תפקיד. אפשריים: '.implode(', ', self::ASSIGNABLE_ROLES).'.', 'is_error' => true];
+        }
+
+        if ($role === 'administrator') {
+            return ['content' => 'תפקיד מנהל אתר אינו ניתן להקצאה על ידי הסוכן — זו החלטה של בעל האתר. פתח משימה לאדם.', 'is_error' => true];
+        }
+
+        if (! in_array($role, self::ASSIGNABLE_ROLES, true)) {
+            return ['content' => "התפקיד \"{$role}\" אינו נתמך. אפשריים: ".implode(', ', self::ASSIGNABLE_ROLES).'.', 'is_error' => true];
+        }
+
+        return $role;
     }
 
     private function investigateSite(array $input): array
