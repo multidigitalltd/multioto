@@ -1,5 +1,15 @@
 # Multioto — full stack in one command:  docker compose up -d --build
 # Brings up the app, queue worker, scheduler, PostgreSQL and Redis together.
+# Docker keeps every line a container ever printed to stdout, forever, in
+# /var/lib/docker/containers. Nothing rotates it by default — so those JSON log
+# files outgrow the application's own logs, and they are the harder ones to find
+# when a disk fills. Anchored here and applied to every service below.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
 services:
   app:
     build: .
@@ -41,6 +51,7 @@ services:
     depends_on:
       - postgres
       - redis
+    logging: *logging
     restart: unless-stopped
 
   queue:
@@ -63,6 +74,7 @@ services:
       - storage:/app/storage
     depends_on:
       - app
+    logging: *logging
     restart: unless-stopped
 
   scheduler:
@@ -85,6 +97,7 @@ services:
       - storage:/app/storage
     depends_on:
       - app
+    logging: *logging
     restart: unless-stopped
 
   postgres:
@@ -95,10 +108,12 @@ services:
       POSTGRES_PASSWORD: multioto
     volumes:
       - pgdata:/var/lib/postgresql/data
+    logging: *logging
     restart: unless-stopped
 
   redis:
     image: redis:7
+    logging: *logging
     restart: unless-stopped
 
   # Optional HTTPS reverse proxy for your domain (app.multidigital.co.il).
@@ -120,6 +135,7 @@ services:
       - caddy_config:/config
     depends_on:
       - app
+    logging: *logging
     restart: unless-stopped
 
 volumes:
