@@ -24,54 +24,57 @@ class SystemStorageCommand extends Command
     protected $description = 'Show table sizes, their retention windows, and log-file usage';
 
     /**
-     * Tables that accumulate, and the config key holding their retention.
+     * Tables that accumulate: the config key holding their retention, and the
+     * column that says how old a row is.
+     *
+     * The age column is named per table rather than assumed. Not every table
+     * has `created_at` — `monitor_checks` stamps `checked_at` and `failed_jobs`
+     * stamps `failed_at` — and assuming one name made the whole report die on
+     * the first table instead of showing the other thirteen.
      *
      * Business records — customers, charges, invoices, tickets, subscriptions —
      * are deliberately absent: they are the product, not exhaust, and nothing
      * here should ever suggest deleting them.
      *
-     * @var array<string, string|null>
+     * @var array<string, array{0: string|null, 1: string}>
      */
     private const TRACKED = [
-        'monitor_checks' => 'billing.system.monitor_check_retention_days',
-        'system_logs' => 'billing.system.log_retention_days',
-        'webhook_events' => 'billing.system.webhook_retention_days',
-        'notifications' => 'billing.system.notification_retention_days',
-        'notification_logs' => 'billing.system.notification_log_retention_days',
-        'site_changes' => 'billing.system.site_change_retention_days',
-        'site_events' => 'billing.system.site_event_retention_days',
-        'site_audits' => 'billing.system.site_audit_retention_days',
-        'failed_jobs' => 'billing.system.failed_job_retention_days',
-        'audit_logs' => 'security.audit.retention_days',
+        'monitor_checks' => ['billing.system.monitor_check_retention_days', 'checked_at'],
+        'system_logs' => ['billing.system.log_retention_days', 'created_at'],
+        'webhook_events' => ['billing.system.webhook_retention_days', 'created_at'],
+        'notifications' => ['billing.system.notification_retention_days', 'created_at'],
+        'notification_logs' => ['billing.system.notification_log_retention_days', 'created_at'],
+        'site_changes' => ['billing.system.site_change_retention_days', 'created_at'],
+        'site_events' => ['billing.system.site_event_retention_days', 'created_at'],
+        'site_audits' => ['billing.system.site_audit_retention_days', 'created_at'],
+        'failed_jobs' => ['billing.system.failed_job_retention_days', 'failed_at'],
+        'audit_logs' => ['security.audit.retention_days', 'created_at'],
         // No window on purpose — listed so the absence is visible rather than
         // assumed. Each is either small, or something a person must decide to
         // delete.
-        'pending_actions' => null,
-        'dunning_events' => null,
-        'ai_usage_daily' => null,
-        'incidents' => null,
+        'pending_actions' => [null, 'created_at'],
+        'dunning_events' => [null, 'created_at'],
+        'ai_usage_daily' => [null, 'created_at'],
+        'incidents' => [null, 'created_at'],
     ];
 
     public function handle(): int
     {
         $rows = [];
 
-        foreach (self::TRACKED as $table => $configKey) {
+        foreach (self::TRACKED as $table => [$configKey, $ageColumn]) {
             if (! $this->tableExists($table)) {
                 continue;
             }
 
-            $count = (int) DB::table($table)->count();
             $days = $configKey !== null ? (int) config($configKey, 0) : 0;
 
             $rows[] = [
                 $table,
-                number_format($count),
+                number_format((int) DB::table($table)->count()),
                 $this->size($table),
                 $configKey === null ? '— ללא ניקוי' : "{$days} ימים",
-                $configKey !== null && $days > 0
-                    ? number_format((int) DB::table($table)->where('created_at', '<', now()->subDays($days))->count())
-                    : '—',
+                $this->waiting($table, $ageColumn, $days),
             ];
         }
 
@@ -115,6 +118,32 @@ class SystemStorageCommand extends Command
         if (in_array('single', (array) config('logging.channels.stack.channels', []), true)) {
             $this->newLine();
             $this->warn('  הערוץ "single" כותב קובץ אחד שגדל ללא גבול. מומלץ LOG_STACK=daily.');
+        }
+    }
+
+    /**
+     * How many rows are already past their window.
+     *
+     * Guarded on the column existing: a report about disk usage must never be
+     * the thing that stops the report. A table whose age column was renamed
+     * shows "—" and everything else still prints.
+     */
+    private function waiting(string $table, string $ageColumn, int $days): string
+    {
+        if ($days <= 0) {
+            return '—';
+        }
+
+        try {
+            if (! DB::getSchemaBuilder()->hasColumn($table, $ageColumn)) {
+                return '?';
+            }
+
+            return number_format((int) DB::table($table)
+                ->where($ageColumn, '<', now()->subDays($days))
+                ->count());
+        } catch (\Throwable) {
+            return '?';
         }
     }
 
