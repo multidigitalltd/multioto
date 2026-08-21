@@ -11,6 +11,7 @@ use App\Services\Cardcom\CardcomClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\URL;
 use Tests\TestCase;
 
 /**
@@ -98,6 +99,77 @@ class CardUpdateFailureTest extends TestCase
 
         Mail::assertSent(NotificationMail::class, fn (NotificationMail $mail): bool => str_contains($mail->subjectLine, 'עדכון כרטיס נכשל')
             && str_contains($mail->subjectLine, 'עסק לדוגמה'));
+    }
+
+    /**
+     * כרטיס שנדחה מגיע ללקוח במילים, ולצוות בהתראה.
+     *
+     * זה המקרה שלא היה מכוסה בכלל: קארדקום שולחת webhook על עסקה שהושלמה, לא
+     * על אחת שנדחתה. לקוח שהקליד כרטיס וקיבל סירוב לא ייצר שום רשומה, שום
+     * התראה ושום עקבה — הוא ראה התנצלות כללית, ואחרי כמה ימים נכנס לדאנינג.
+     * ההפניה לעמוד הכישלון היא הרגע היחיד שבו אפשר לדעת.
+     */
+    public function test_a_declined_card_tells_the_customer_why_and_alerts_the_team(): void
+    {
+        Mail::fake();
+        Http::fake(['*/LowProfile/GetLpResult' => Http::response([
+            'ResponseCode' => 5117,
+            'Description' => 'deal Revoked',
+            'TranzactionInfo' => [
+                'ResponseCode' => 60000004,
+                'Description' => 'העסקה קיבלה סירוב מ חברת האשראי - יש להתקשר לחברת האשראי לבירור.',
+            ],
+        ])]);
+
+        $customer = Customer::factory()->create([
+            'name' => 'מקושרים',
+            'pending_card_lp_id' => 'lp-declined',
+        ]);
+
+        $this->get(URL::temporarySignedRoute(
+            'billing.update-card.failed', now()->addDay(), ['customer' => $customer->id],
+        ))
+            ->assertOk()
+            // Cardcom's own sentence, because it names the one action that
+            // helps: call the card company.
+            ->assertSee('להתקשר לחברת האשראי', false);
+
+        Mail::assertSent(NotificationMail::class, fn (NotificationMail $mail): bool => str_contains($mail->subjectLine, 'עדכון כרטיס נדחה')
+            && str_contains($mail->subjectLine, 'מקושרים'));
+    }
+
+    /** רענון של אותו עמוד אינו מייצר התראה שנייה על אותו ניסיון. */
+    public function test_the_team_is_told_once_per_attempt(): void
+    {
+        Mail::fake();
+        Http::fake(['*' => Http::response(['TranzactionInfo' => ['ResponseCode' => 60000004, 'Description' => 'סירוב']])]);
+
+        $customer = Customer::factory()->create(['pending_card_lp_id' => 'lp-same']);
+        $url = URL::temporarySignedRoute('billing.update-card.failed', now()->addDay(), ['customer' => $customer->id]);
+
+        $this->get($url)->assertOk();
+        $this->get($url)->assertOk();
+
+        Mail::assertSentCount(1);
+    }
+
+    /**
+     * וכשקארדקום אינה עונה — העמוד עדיין נטען, עם ההתנצלות הכללית.
+     *
+     * דף שגיאה שמתפוצץ בגלל שירות חיצוני הוא שני כשלים במקום אחד.
+     */
+    public function test_the_page_still_loads_when_cardcom_cannot_be_reached(): void
+    {
+        Mail::fake();
+        Http::fake(fn () => throw new \RuntimeException('network down'));
+
+        $customer = Customer::factory()->create(['pending_card_lp_id' => 'lp-x']);
+
+        $this->get(URL::temporarySignedRoute(
+            'billing.update-card.failed', now()->addDay(), ['customer' => $customer->id],
+        ))
+            ->assertOk()
+            ->assertSee('לא הסתיים בהצלחה', false);
     }
 
     /**
