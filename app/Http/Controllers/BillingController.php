@@ -6,11 +6,14 @@ use App\Enums\ChargeStatus;
 use App\Models\Charge;
 use App\Models\Customer;
 use App\Services\Cardcom\CardcomClient;
+use App\Services\Notifications\TeamNotifier;
 use App\Support\CardcomWebhook;
 use Illuminate\Contracts\View\View;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\URL;
 use Illuminate\Support\Str;
 
 /**
@@ -39,7 +42,10 @@ class BillingController extends Controller
             $lowProfile = $cardcom->createTokenLowProfile(
                 $customer->id,
                 route('billing.update-card.done', ['result' => 'success']),
-                route('billing.update-card.done', ['result' => 'failed']),
+                // A day, not the few minutes the card page lives: an expired
+                // signature would replace the reason with a 403, and the
+                // failure page is the only place the reason ever appears.
+                URL::temporarySignedRoute('billing.update-card.failed', now()->addDay(), ['customer' => $customer->id]),
                 CardcomWebhook::url(),
             );
         } catch (\Throwable $e) {
@@ -69,6 +75,91 @@ class BillingController extends Controller
         return view('billing.card-iframe', [
             'cardUrl' => $cardUrl,
         ]);
+    }
+
+    /**
+     * A card entry that Cardcom refused.
+     *
+     * This page exists because nothing else covers the case. Cardcom sends its
+     * webhook for a completed deal, not a declined one — so a customer who
+     * types their card and is turned down produces no webhook, no record, and
+     * no alert. They see a generic apology, we hear nothing, and days later
+     * dunning starts against somebody who already tried to pay.
+     *
+     * So the redirect itself is the notification: it asks Cardcom what happened
+     * to this exact session, tells the customer in their own language, and tells
+     * the team with the raw reason attached.
+     */
+    public function updateCardFailed(Customer $customer, CardcomClient $cardcom): View
+    {
+        $result = [];
+
+        if (filled($customer->pending_card_lp_id)) {
+            try {
+                $result = $cardcom->getLpResult((string) $customer->pending_card_lp_id);
+            } catch (\Throwable $e) {
+                Log::warning('updateCardFailed: could not read the Cardcom result', [
+                    'customer_id' => $customer->id,
+                    'error' => Str::limit($e->getMessage(), 200),
+                ]);
+            }
+        }
+
+        // Cardcom nests the interesting part: the top level says the session
+        // ended, the transaction block says WHY the card was refused.
+        $reason = trim((string) (
+            data_get($result, 'TranzactionInfo.Description')
+                ?: data_get($result, 'Description')
+                ?: ''
+        ));
+        $code = (string) (data_get($result, 'TranzactionInfo.ResponseCode') ?: data_get($result, 'ResponseCode') ?: '');
+
+        $this->announceCardFailure($customer, $code, $reason);
+
+        return view('billing.update-card-done', [
+            'result' => 'failed',
+            // Cardcom writes these for the card holder and they say the one
+            // thing that helps ("call your card company"). Anything we cannot
+            // read falls back to the generic apology rather than to a code.
+            'reason' => $reason,
+        ]);
+    }
+
+    /**
+     * Tell the team, once per session.
+     *
+     * The customer may reload the page; the alert is about the attempt, not
+     * about the page view.
+     */
+    private function announceCardFailure(Customer $customer, string $code, string $reason): void
+    {
+        $key = 'card-failure:'.$customer->id.':'.($customer->pending_card_lp_id ?: 'unknown');
+
+        if (! Cache::add($key, true, now()->addDay())) {
+            return;
+        }
+
+        Log::warning('Card update declined by Cardcom', [
+            'customer_id' => $customer->id,
+            'low_profile_id' => $customer->pending_card_lp_id,
+            'response_code' => $code,
+            'description' => $reason,
+        ]);
+
+        try {
+            app(TeamNotifier::class)->alert(
+                "💳 עדכון כרטיס נדחה — {$customer->name}",
+                implode("\n", array_filter([
+                    "לקוח: {$customer->name} (#{$customer->id})",
+                    $reason !== '' ? "סיבה מקארדקום: {$reason}" : 'קארדקום לא החזירה סיבה.',
+                    $code !== '' ? "קוד: {$code}" : null,
+                    'הלקוח ניסה למסור כרטיס ולא הצליח — הכרטיס לא נשמר.',
+                ])),
+                route('filament.admin.resources.customers.view', ['record' => $customer->id]),
+            );
+        } catch (\Throwable $e) {
+            Log::warning('Card-failure alert could not be sent', ['error' => $e->getMessage()]);
+        }
     }
 
     /**

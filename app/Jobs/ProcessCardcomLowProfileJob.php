@@ -9,6 +9,7 @@ use App\Models\Customer;
 use App\Models\WebhookEvent;
 use App\Services\Cardcom\CardcomClient;
 use App\Services\Cardcom\CardTokenService;
+use App\Services\Notifications\TeamNotifier;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Log;
@@ -63,13 +64,27 @@ class ProcessCardcomLowProfileJob implements ShouldQueue
         $token = $customer ? app(CardTokenService::class)->storeFromLpResult($customer, $result) : null;
 
         if ($token === null) {
+            // A customer who tried to hand us their card and could not is a
+            // billing emergency, not a log line: their next charge fails and
+            // dunning starts against somebody who already tried to pay.
+            //
+            // Cardcom's own words go in — a code on its own ("2", "60000042")
+            // says nothing to whoever reads it, and the reason is the only part
+            // that tells the team whether to call the customer or fix a
+            // terminal setting.
+            $reason = trim((string) ($result['Description'] ?? '')) ?: 'לא צוינה סיבה';
+
             Log::warning('Cardcom low profile webhook without a usable token', [
                 'webhook_event_id' => $event->id,
                 'low_profile_id' => $lowProfileId,
                 'response_code' => $responseCode,
+                'description' => $reason,
+                'customer_id' => $customer?->id,
                 'has_customer' => (bool) $customer,
                 'has_token' => ! empty(data_get($result, 'TokenInfo.Token')),
             ]);
+
+            $this->tellTheTeam($customer, $responseCode, $reason, (string) $lowProfileId);
         } elseif ($lowProfileId && (string) $customer->pending_card_lp_id === (string) $lowProfileId) {
             // The webhook handled this capture — clear the pending marker so the
             // manual "sync card" action can't later re-process the same session
@@ -79,6 +94,32 @@ class ProcessCardcomLowProfileJob implements ShouldQueue
         }
 
         $event->markProcessed();
+    }
+
+    /**
+     * Say out loud that a card capture failed.
+     *
+     * Never allowed to break the webhook: the event is still marked processed
+     * either way, because failing here would make Cardcom redeliver a
+     * notification we have already recorded.
+     */
+    private function tellTheTeam(?Customer $customer, string $responseCode, string $reason, string $lowProfileId): void
+    {
+        try {
+            app(TeamNotifier::class)->alert(
+                '💳 עדכון כרטיס נכשל'.($customer ? " — {$customer->name}" : ''),
+                implode("\n", array_filter([
+                    $customer ? "לקוח: {$customer->name} (#{$customer->id})" : 'לא זוהה לקוח בהתראה מקארדקום.',
+                    "סיבה מקארדקום: {$reason}",
+                    "קוד: {$responseCode}",
+                    $lowProfileId !== '' ? "מזהה סשן: {$lowProfileId}" : null,
+                    'הכרטיס לא נשמר — החיוב הבא ייכשל אם לא יטופל.',
+                ])),
+                $customer ? route('filament.admin.resources.customers.view', ['record' => $customer->id]) : null,
+            );
+        } catch (\Throwable $e) {
+            Log::warning('Cardcom card-failure alert could not be sent', ['error' => $e->getMessage()]);
+        }
     }
 
     /**

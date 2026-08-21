@@ -87,9 +87,16 @@ class CardcomClient
     {
         $customer = Customer::find($customerId);
 
+        // The amount the card is VALIDATED for — never captured. J5 places an
+        // authorization hold the acquirer releases on its own, and Cardcom
+        // substitutes its own minimum when this is zero (real captures come back
+        // as Amount 0.01), so the default of 0 is the smallest real hold rather
+        // than a broken one.
+        $validationAmount = (float) config('billing.cardcom.token_validation_amount', 0);
+
         $response = $this->request('LowProfile/Create', array_filter([
             'Operation' => 'CreateTokenOnly',
-            'Amount' => 0,
+            'Amount' => $validationAmount,
             'ISOCoinId' => 1, // ILS
             'Language' => 'he',
             'ReturnValue' => (string) $customerId,
@@ -111,7 +118,10 @@ class CardcomClient
                 $customer?->email,
                 $customer?->phone,
                 'עדכון אמצעי תשלום',
-                0,
+                // The document, where a terminal insists on one, has to describe
+                // the same amount the transaction carries — a document for zero
+                // against a validation for one is a mismatch Cardcom rejects.
+                $validationAmount,
             ),
         ], fn ($v) => $v !== null), withApiPassword: false);
 

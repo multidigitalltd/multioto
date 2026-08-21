@@ -161,6 +161,20 @@ return [
         //    disable Linet issuance to avoid duplicate invoices).
         'document_type' => env('CARDCOM_DOCUMENT_TYPE', ''),
 
+        // What a card is validated for when we capture a token and charge
+        // nothing (the "update your card" page).
+        //
+        // Zero is correct and is the default. Cardcom substitutes its own
+        // minimum for a J5 on a zero amount — observed in real captures as
+        // `Amount: 0.01` with `ResponseCode 701` ("עסקת אישור תקינה — תפיסת
+        // מסגרת אשראי J5"). So a 0 here produces a one-agora authorization hold
+        // that the acquirer releases on its own, which is the smallest possible
+        // footprint on the card holder.
+        //
+        // Raising it only makes the hold bigger; it does not fix anything.
+        // Nothing is ever captured either way — no charge row, no invoice.
+        'token_validation_amount' => (float) env('CARDCOM_TOKEN_VALIDATION_AMOUNT', 0),
+
         // Automatic reconciliation of charges stuck on "ממתין" (a lost completion
         // webhook). A hosted charge/demand is looked up against Cardcom once it's
         // at least `reconcile_after_minutes` old (give the webhook a chance first)
@@ -535,6 +549,26 @@ return [
 
         // Read in-panel notifications older than this are pruned.
         'notification_retention_days' => env('NOTIFICATION_RETENTION_DAYS', 30),
+
+        // Delivery audit of every message we sent (notification_logs): one row
+        // per email / WhatsApp / push. Useful for "did the customer get it?",
+        // which nobody asks about a message from last quarter.
+        'notification_log_retention_days' => env('NOTIFICATION_LOG_RETENTION_DAYS', 120),
+
+        // The site-change journal. Keeping it is what makes "שחזר" possible, so
+        // this is the one window that trades a capability rather than just disk:
+        // past it, an old change can still be read in the log but no longer
+        // undone with a click. Six months is far beyond when anyone reverts.
+        'site_change_retention_days' => env('SITE_CHANGE_RETENTION_DAYS', 180),
+
+        // Per-site event feed (site_events) and audit runs (site_audits) — both
+        // are diagnostics that age out of usefulness quickly.
+        'site_event_retention_days' => env('SITE_EVENT_RETENTION_DAYS', 90),
+        'site_audit_retention_days' => env('SITE_AUDIT_RETENTION_DAYS', 180),
+
+        // Failed queue jobs. A failure nobody looked at in a month is not going
+        // to be looked at.
+        'failed_job_retention_days' => env('FAILED_JOB_RETENTION_DAYS', 30),
     ],
 
     'support' => [

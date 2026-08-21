@@ -52,9 +52,18 @@ return [
 
     'channels' => [
 
+        /*
+         | Defaults to the ROTATING channel, not the single file.
+         |
+         | 'single' writes one laravel.log that grows until the disk does not
+         | have room for it — and it fills fastest exactly when something is
+         | wrong and the log matters most. 'daily' keeps LOG_DAILY_DAYS files
+         | and drops the rest, so the log has a ceiling without anybody
+         | remembering to empty it.
+         */
         'stack' => [
             'driver' => 'stack',
-            'channels' => explode(',', env('LOG_STACK', 'single')),
+            'channels' => explode(',', env('LOG_STACK', 'daily')),
             'ignore_exceptions' => false,
         ],
 

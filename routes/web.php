@@ -100,6 +100,14 @@ Route::view('/billing/update-card/done/{result}', 'billing.update-card-done')
     ->where('result', 'success|failed')
     ->name('billing.update-card.done');
 
+// Where Cardcom sends a card entry that did NOT go through. Signed and carrying
+// the customer, because the only useful thing this page can do is ask Cardcom
+// what actually happened — and Cardcom sends no webhook for a declined deal, so
+// this redirect is the ONLY moment anybody learns of it.
+Route::get('/billing/update-card/failed/{customer}', [BillingController::class, 'updateCardFailed'])
+    ->middleware(['signed', 'throttle:20,1'])
+    ->name('billing.update-card.failed');
+
 // Payment-demand link: our own signed URL that redirects to the Cardcom page
 // while payable, so a canceled demand can show "לא פעיל" instead of forwarding.
 Route::get('/billing/pay/{charge}', [BillingController::class, 'pay'])

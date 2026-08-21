@@ -38,13 +38,18 @@ use App\Models\Broadcast;
 use App\Models\Charge;
 use App\Models\HealthHeartbeat;
 use App\Models\MonitorCheck;
+use App\Models\NotificationLog;
 use App\Models\Site;
+use App\Models\SiteAudit;
+use App\Models\SiteChange;
+use App\Models\SiteEvent;
 use App\Models\Subscription;
 use App\Models\SystemLog;
 use App\Models\WebhookEvent;
 use App\Providers\SettingsServiceProvider;
 use App\Services\Backup\BackupRunner;
 use App\Services\Calendar\ShabbatClock;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schedule;
 
@@ -470,3 +475,48 @@ Schedule::call(function () {
         ->where('created_at', '<', now()->subDays((int) config('security.audit.retention_days', 365)))
         ->delete();
 })->dailyAt('03:40')->name('system:prune-audit-logs')->onOneServer();
+
+// Prune the delivery audit of messages we sent. "Did the customer get it?" is a
+// question about this week, not about last quarter.
+Schedule::call(function () {
+    SettingsServiceProvider::refreshFromDatabase();
+    NotificationLog::query()
+        ->where('created_at', '<', now()->subDays((int) config('billing.system.notification_log_retention_days', 120)))
+        ->delete();
+})->dailyAt('03:45')->name('system:prune-notification-logs')->onOneServer();
+
+// Prune the site-change journal.
+//
+// This one costs a capability, not just disk: the journal is what "שחזר" reads
+// to undo a change, so a pruned row can still be described in the log but no
+// longer reverted in a click. The window is deliberately long — nobody undoes a
+// six-month-old edit, and by then the site has moved on anyway.
+Schedule::call(function () {
+    SettingsServiceProvider::refreshFromDatabase();
+    SiteChange::query()
+        ->where('created_at', '<', now()->subDays((int) config('billing.system.site_change_retention_days', 180)))
+        ->delete();
+})->dailyAt('03:50')->name('system:prune-site-changes')->onOneServer();
+
+// Prune per-site diagnostics: the event feed and old audit runs.
+Schedule::call(function () {
+    SettingsServiceProvider::refreshFromDatabase();
+
+    SiteEvent::query()
+        ->where('created_at', '<', now()->subDays((int) config('billing.system.site_event_retention_days', 90)))
+        ->delete();
+
+    SiteAudit::query()
+        ->where('created_at', '<', now()->subDays((int) config('billing.system.site_audit_retention_days', 180)))
+        ->delete();
+})->dailyAt('03:55')->name('system:prune-site-diagnostics')->onOneServer();
+
+// Prune failed queue jobs through Laravel's own command, so the retention is
+// expressed once and the table is emptied the way the framework expects.
+Schedule::call(function () {
+    SettingsServiceProvider::refreshFromDatabase();
+
+    Artisan::call('queue:prune-failed', [
+        '--hours' => max(1, (int) config('billing.system.failed_job_retention_days', 30) * 24),
+    ]);
+})->dailyAt('04:00')->name('system:prune-failed-jobs')->onOneServer();

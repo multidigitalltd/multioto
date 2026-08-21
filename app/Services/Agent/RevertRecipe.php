@@ -62,6 +62,13 @@ class RevertRecipe
                 : null,
             'wc_product_update' => $this->product($arguments, $decoded),
             'wp_user_role_set' => $this->fromMap($tool, ['user_id' => $decoded['user_id'] ?? ($arguments['user_id'] ?? null)], $previous),
+            'wp_comment_moderate' => $this->fromMap($tool, ['comment_id' => $decoded['comment_id'] ?? ($arguments['comment_id'] ?? null)], $previous),
+            // The previous set carries its own mode ('replace'), because undoing
+            // an "add" still means putting the list back exactly as it was.
+            'wp_post_terms_set' => $this->fromMap($tool, [
+                'id' => $decoded['id'] ?? ($arguments['id'] ?? null),
+                'taxonomy' => $decoded['taxonomy'] ?? ($arguments['taxonomy'] ?? null),
+            ], $previous),
             // 0 is a real previous value — "there was no featured image" — so
             // this one cannot use fromMap, which reads an empty map as nothing
             // to restore. Putting the thumbnail back to 0 IS the undo.
