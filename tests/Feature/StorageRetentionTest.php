@@ -2,11 +2,13 @@
 
 namespace Tests\Feature;
 
+use App\Console\Commands\SystemStorageCommand;
 use App\Models\Site;
 use App\Models\SiteChange;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Tests\TestCase;
 
 /**
@@ -82,6 +84,37 @@ class StorageRetentionTest extends TestCase
         $this->runScheduled('system:prune-site-changes');
 
         $this->assertNull($gone->fresh());
+    }
+
+    /**
+     * לכל טבלה ברשימה יש באמת את עמודת הגיל שנרשמה לה.
+     *
+     * ההנחה ש"לכולן יש created_at" שגויה: monitor_checks חותמת checked_at
+     * ו-failed_jobs חותמת failed_at. ההנחה הזו הפילה את הדוח כולו על הטבלה
+     * הראשונה במקום להציג את שאר השלוש-עשרה — ודוח על תפוסת דיסק שנופל הוא
+     * בדיוק הכלי שלא היה שם כשהיה צריך אותו.
+     */
+    public function test_every_tracked_table_has_the_age_column_it_claims(): void
+    {
+        $tracked = (new \ReflectionClass(SystemStorageCommand::class))
+            ->getConstant('TRACKED');
+
+        $checked = 0;
+
+        foreach ($tracked as $table => [$configKey, $ageColumn]) {
+            if (! Schema::hasTable($table)) {
+                continue;
+            }
+
+            $this->assertTrue(
+                Schema::hasColumn($table, $ageColumn),
+                "{$table} has no column '{$ageColumn}' — the storage report would fail on it.",
+            );
+
+            $checked++;
+        }
+
+        $this->assertGreaterThan(5, $checked, 'The report should be covering the tables that accumulate.');
     }
 
     /** דוח האחסון מציג כל טבלה עם החלון שלה. */
