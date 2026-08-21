@@ -161,6 +161,21 @@ return [
         //    disable Linet issuance to avoid duplicate invoices).
         'document_type' => env('CARDCOM_DOCUMENT_TYPE', ''),
 
+        // What a card is validated for when we capture a token and charge
+        // nothing (the "update your card" page).
+        //
+        // The card is checked with a J5 authorization — a hold the acquirer
+        // places and releases, never a charge. An authorization for ZERO is not
+        // a transaction an Israeli acquirer honours, so a 0 here produces a page
+        // that loads, takes the card, and fails at the last step with nothing to
+        // show the customer. One shekel is the smallest amount that is a real
+        // authorization.
+        //
+        // Nothing is ever captured: no charge row is written and no invoice is
+        // issued for it. Set to 0 only if a terminal is known to accept a
+        // zero-amount J5.
+        'token_validation_amount' => (float) env('CARDCOM_TOKEN_VALIDATION_AMOUNT', 1),
+
         // Automatic reconciliation of charges stuck on "ממתין" (a lost completion
         // webhook). A hosted charge/demand is looked up against Cardcom once it's
         // at least `reconcile_after_minutes` old (give the webhook a chance first)
