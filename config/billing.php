@@ -164,17 +164,16 @@ return [
         // What a card is validated for when we capture a token and charge
         // nothing (the "update your card" page).
         //
-        // The card is checked with a J5 authorization — a hold the acquirer
-        // places and releases, never a charge. An authorization for ZERO is not
-        // a transaction an Israeli acquirer honours, so a 0 here produces a page
-        // that loads, takes the card, and fails at the last step with nothing to
-        // show the customer. One shekel is the smallest amount that is a real
-        // authorization.
+        // Zero is correct and is the default. Cardcom substitutes its own
+        // minimum for a J5 on a zero amount — observed in real captures as
+        // `Amount: 0.01` with `ResponseCode 701` ("עסקת אישור תקינה — תפיסת
+        // מסגרת אשראי J5"). So a 0 here produces a one-agora authorization hold
+        // that the acquirer releases on its own, which is the smallest possible
+        // footprint on the card holder.
         //
-        // Nothing is ever captured: no charge row is written and no invoice is
-        // issued for it. Set to 0 only if a terminal is known to accept a
-        // zero-amount J5.
-        'token_validation_amount' => (float) env('CARDCOM_TOKEN_VALIDATION_AMOUNT', 1),
+        // Raising it only makes the hold bigger; it does not fix anything.
+        // Nothing is ever captured either way — no charge row, no invoice.
+        'token_validation_amount' => (float) env('CARDCOM_TOKEN_VALIDATION_AMOUNT', 0),
 
         // Automatic reconciliation of charges stuck on "ממתין" (a lost completion
         // webhook). A hosted charge/demand is looked up against Cardcom once it's

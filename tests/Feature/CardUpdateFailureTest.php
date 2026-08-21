@@ -37,13 +37,14 @@ class CardUpdateFailureTest extends TestCase
     }
 
     /**
-     * אימות כרטיס יוצא בסכום אמיתי, לא באפס.
+     * אימות כרטיס יוצא כ-J5 על סכום אפס — וזה הנכון.
      *
-     * J5 הוא הרשאה (hold) שחברת האשראי תופסת ומשחררת — הרשאה על אפס אינה
-     * עסקה שסולק ישראלי מכבד, וזה נראה בדיוק כמו העמוד שנטען, מקבל את הכרטיס,
-     * ונופל בשלב האחרון בלי שום דבר להראות ללקוח.
+     * קארדקום מציבה מינימום משלה ל-J5 על אפס: קליטות אמיתיות חוזרות עם
+     * Amount 0.01 ו-ResponseCode 701 ("עסקת אישור תקינה — תפיסת מסגרת אשראי").
+     * כלומר אפס מייצר את התפיסה הקטנה ביותר האפשרית על הכרטיס, והעלאתו רק
+     * מגדילה את הסכום שנתפס אצל הלקוח.
      */
-    public function test_a_card_is_validated_for_a_real_amount(): void
+    public function test_a_card_is_validated_with_a_j5_on_the_smallest_possible_hold(): void
     {
         Http::fake(['*/LowProfile/Create' => Http::response(['ResponseCode' => 0, 'Url' => 'https://secure.cardcom.solutions/x'])]);
 
@@ -56,21 +57,21 @@ class CardUpdateFailureTest extends TestCase
 
             return ($body['Operation'] ?? null) === 'CreateTokenOnly'
                 && ($body['AdvancedDefinition']['JValidateType'] ?? null) === 5
-                && (float) ($body['Amount'] ?? 0) > 0;
+                && (float) ($body['Amount'] ?? -1) === 0.0;
         });
     }
 
-    /** ומי שיודע שהמסוף שלו מקבל אפס — יכול להחזיר אותו. */
+    /** ומסוף שדורש סכום מפורש יכול לקבל אחד. */
     public function test_the_validation_amount_is_configurable(): void
     {
-        config(['billing.cardcom.token_validation_amount' => 0]);
+        config(['billing.cardcom.token_validation_amount' => 1]);
         Http::fake(['*/LowProfile/Create' => Http::response(['ResponseCode' => 0, 'Url' => 'https://secure.cardcom.solutions/x'])]);
 
         app(CardcomClient::class)->createTokenLowProfile(
             Customer::factory()->create()->id, 'https://x/ok', 'https://x/no', 'https://x/hook',
         );
 
-        Http::assertSent(fn ($request): bool => (float) ($request->data()['Amount'] ?? -1) === 0.0);
+        Http::assertSent(fn ($request): bool => (float) ($request->data()['Amount'] ?? -1) === 1.0);
     }
 
     /**
