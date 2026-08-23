@@ -20,6 +20,7 @@ use App\Http\Controllers\SignupController;
 use App\Http\Controllers\SupportAttachmentController;
 use App\Http\Controllers\SupportFormController;
 use App\Http\Controllers\TasksPrintController;
+use App\Http\Controllers\TranscribeController;
 use App\Http\Controllers\Webhooks\CardcomWebhookController;
 use App\Http\Controllers\Webhooks\EmailDeliveryWebhookController;
 use App\Http\Controllers\Webhooks\EmailWebhookController;
@@ -218,6 +219,13 @@ Route::middleware(['web', 'auth', EnsureTwoFactorConfirmed::class])->group(funct
     Route::delete('/push-subscriptions', [PushSubscriptionController::class, 'destroy'])
         ->name('push-subscriptions.destroy');
 });
+
+// Speech to text for the agent console — team-only. The audio goes to a model
+// on our own server and comes back as words the operator reads before sending;
+// nothing is acted on here. Throttled because each call costs real compute.
+Route::post('/agent/transcribe', TranscribeController::class)
+    ->middleware(['web', 'auth', 'throttle:30,1'])
+    ->name('agent.transcribe');
 
 // Customer signup signature (consent record) — team-only, private disk.
 Route::get('/customers/{customer}/signature', SignatureController::class)
