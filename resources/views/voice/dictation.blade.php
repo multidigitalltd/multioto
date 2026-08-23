@@ -52,7 +52,11 @@
     var useServer = serverAvailable;
 
     var TYPES = ['text', 'search', 'email', 'tel', 'url', ''];
-    var field = null;      // השדה שאליו מכתיבים כרגע
+    var field = null;      // השדה שבמיקוד כרגע
+    // השדה שאליו התחילו להכתיב. תמלול בשרת אורך עד שתי דקות, ובזמן הזה המשתמש
+    // עשוי לעבור לשדה אחר לגמרי — בלי לקבע את היעד, משפט על לקוח אחד היה נוחת
+    // בטופס של אחר.
+    var target = null;
     var listening = false;
     var working = false;   // ההקלטה נשלחה ומחכים לתמלול
     var recognition = null;
@@ -165,9 +169,40 @@
         button.innerHTML = '<span aria-hidden="true">' + (working ? '⏳' : '🎙') + '</span>';
     }
 
+    /*
+     * השדה שאליו מכתיבים, גם אחרי שהדף רונדר מחדש.
+     *
+     * Livewire מחליף צמתים בזמן עדכון (בקונסולת הסוכן יש רענון כל 15 שניות),
+     * ולכן הצומת שנשמר עלול לא להיות זה שבדף. מחפשים את **אותו** שדה לפי
+     * הזהות שלו — ולעולם לא נופלים ל"מה שבמיקוד עכשיו", שזו בדיוק התקלה.
+     */
+    function destination() {
+        if (target && document.contains(target)) {
+            return target;
+        }
+
+        if (! target) {
+            return null;
+        }
+
+        var found = target.id ? document.getElementById(target.id) : null;
+
+        if (! found && target.name) {
+            found = document.querySelector('[name="' + CSS.escape(target.name) + '"]');
+        }
+
+        return (found && dictatable(found)) ? found : null;
+    }
+
     /* הטקסט נכנס במקום הסמן ומצטרף למה שכבר כתוב — לא מוחק אותו. */
     function insert(text) {
-        if (! field || ! document.contains(field)) {
+        var field = destination();
+
+        if (! field) {
+            // הטקסט לא הוכנס, ואומרים זאת: הכתבה של שתי דקות שנעלמת בשקט היא
+            // הרבה יותר גרועה מהודעה.
+            announce('השדה שאליו הוכתב כבר אינו בדף — התמלול לא הוכנס.');
+
             return;
         }
 
@@ -242,6 +277,10 @@
     }
 
     function startRecording() {
+        // מקובע כאן, לפני ההמתנה להרשאה: מכאן והלאה זה היעד, ולא משנה לאן
+        // המיקוד יעבור בינתיים.
+        target = field;
+
         navigator.mediaDevices.getUserMedia({ audio: true }).then(function (granted) {
             stream = granted;
             chunks = [];
@@ -375,6 +414,7 @@
         }
 
         try {
+            target = field;
             engine().start();
             listening = true;
             announce('מקליט. לחצו שוב לעצירה.');
