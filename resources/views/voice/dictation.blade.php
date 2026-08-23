@@ -1,3 +1,12 @@
+@php
+    // Our own model, when one is configured. The browser's engine — which is
+    // Google's, and which Firefox and Safari do not have at all — stays
+    // available as the fallback, and as the only option before a model exists.
+    $localModel = (bool) config('transcription.enabled') && filled(config('transcription.url'));
+    $engine = in_array(config('transcription.engine'), ['auto', 'server', 'browser'], true)
+        ? config('transcription.engine')
+        : 'auto';
+@endphp
 {{--
     הכתבה קולית בכל שדה טקסט בפאנל.
 
@@ -6,22 +15,59 @@
     נשארת חלקית ביום שאחרי. כאן, כל שדה שאפשר להקליד בו מקבל מיקרופון בעצם זה
     שנכנסו אליו.
 
-    התמלול נעשה בדפדפן. אין מודל, אין שרת, ואין הקלטה שיוצאת מהמכשיר דרכנו —
-    וזו גם הסיבה שזה לא דורש להתקין דבר.
+    שני מנועים, ושניהם נשארים:
+
+    · **מודל על השרת שלנו** — מקליטים בדפדפן, שולחים את הקובץ אלינו, ומקבלים
+      טקסט. ההקלטה אינה יוצאת מהמכונה שלנו, וזה חשוב: מנהל שמכתיב מדבר על
+      לקוחות בשמם. עובד בכל דפדפן שיודע להקליט, כולל פיירפוקס וספארי.
+
+    · **המנוע של הדפדפן** (webkitSpeechRecognition) — נוח ומיידי, אבל האודיו
+      עובר דרך גוגל והוא קיים רק בכרום.
+
+    ברירת המחדל ('auto') מעדיפה את שלנו, ונופלת לדפדפן רק אחרי כישלון אמיתי —
+    ואומרת זאת, כי הכתבה שמפסיקה לעבוד בלי הסבר נראית כמו תקלה במיקרופון.
+    TRANSCRIPTION_ENGINE=server אוסר על הנפילה הזו, ו-browser מוותר על המודל.
 --}}
 <script data-navigate-once>
 (function () {
-    var Engine = window.SpeechRecognition || window.webkitSpeechRecognition;
+    var LOCAL = @js($localModel);
+    var MODE = @js($engine);
+    var ENDPOINT = @js(route('agent.transcribe'));
+    var MAX_SECONDS = @js((int) config('transcription.max_seconds', 120));
 
-    if (! Engine) {
-        return; // פיירפוקס וכדומה — עדיף בלי כפתור מאשר עם כפתור שלא עושה כלום.
+    var Engine = window.SpeechRecognition || window.webkitSpeechRecognition;
+    var canRecord = !! (navigator.mediaDevices && window.MediaRecorder);
+
+    var serverAvailable = LOCAL && canRecord && MODE !== 'browser';
+    // 'server' אוסר על נפילה לדפדפן במפורש: יש התקנות שבהן העדפה שהאודיו לא
+    // יגיע לצד שלישי חזקה מהעדפה שההכתבה תמיד תעבוד.
+    var browserAvailable = !! Engine && MODE !== 'server';
+
+    // בלי מנוע כלשהו עדיף בלי כפתור מאשר עם כפתור שלא עושה כלום.
+    if (! serverAvailable && ! browserAvailable) {
+        return;
     }
 
+    // המנוע לשימוש עכשיו. יורד לדפדפן רק אחרי שהשרת נכשל בפועל — ולא מראש.
+    var useServer = serverAvailable;
+
     var TYPES = ['text', 'search', 'email', 'tel', 'url', ''];
-    var field = null;      // השדה שאליו מכתיבים כרגע
+    var field = null;      // השדה שבמיקוד כרגע
+    // השדה שאליו התחילו להכתיב. תמלול בשרת אורך עד שתי דקות, ובזמן הזה המשתמש
+    // עשוי לעבור לשדה אחר לגמרי — בלי לקבע את היעד, משפט על לקוח אחד היה נוחת
+    // בטופס של אחר.
+    var target = null;
     var listening = false;
+    var working = false;   // ההקלטה נשלחה ומחכים לתמלול
     var recognition = null;
     var button = null;
+
+    // מצב ההקלטה בצד השרת.
+    var recorder = null;
+    var stream = null;
+    var chunks = [];
+    var timer = null;
+    var seconds = 0;
 
     /* שדה שאפשר להכתיב אליו. סיסמאות לא — קול הוא הדרך הגרועה ביותר למסור סוד. */
     function dictatable(el) {
@@ -66,6 +112,23 @@
         return el;
     }
 
+    /* מה שקורה עכשיו, בקול רם — כפתור שמשנה רק צבע אינו אומר דבר לקורא מסך. */
+    function announce(text) {
+        var live = document.getElementById('md-dictation-status');
+
+        if (! live) {
+            live = document.createElement('p');
+            live.id = 'md-dictation-status';
+            live.setAttribute('role', 'status');
+            live.setAttribute('aria-live', 'polite');
+            // נשמע ולא נראה: המצב מוצג ויזואלית על הכפתור עצמו.
+            live.style.cssText = 'position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0;padding:0';
+            document.body.appendChild(live);
+        }
+
+        live.textContent = text;
+    }
+
     function place() {
         if (! button || ! field || ! document.contains(field)) {
             hide();
@@ -100,12 +163,46 @@
 
         button.style.borderColor = listening ? 'rgba(220,38,38,.9)' : 'rgba(120,120,130,.35)';
         button.style.background = listening ? 'rgba(254,226,226,.98)' : 'rgba(255,255,255,.96)';
+        button.style.opacity = working ? '.55' : '1';
+        button.disabled = working;
         button.setAttribute('aria-pressed', listening ? 'true' : 'false');
+        button.innerHTML = '<span aria-hidden="true">' + (working ? '⏳' : '🎙') + '</span>';
+    }
+
+    /*
+     * השדה שאליו מכתיבים, גם אחרי שהדף רונדר מחדש.
+     *
+     * Livewire מחליף צמתים בזמן עדכון (בקונסולת הסוכן יש רענון כל 15 שניות),
+     * ולכן הצומת שנשמר עלול לא להיות זה שבדף. מחפשים את **אותו** שדה לפי
+     * הזהות שלו — ולעולם לא נופלים ל"מה שבמיקוד עכשיו", שזו בדיוק התקלה.
+     */
+    function destination() {
+        if (target && document.contains(target)) {
+            return target;
+        }
+
+        if (! target) {
+            return null;
+        }
+
+        var found = target.id ? document.getElementById(target.id) : null;
+
+        if (! found && target.name) {
+            found = document.querySelector('[name="' + CSS.escape(target.name) + '"]');
+        }
+
+        return (found && dictatable(found)) ? found : null;
     }
 
     /* הטקסט נכנס במקום הסמן ומצטרף למה שכבר כתוב — לא מוחק אותו. */
     function insert(text) {
-        if (! field || ! document.contains(field)) {
+        var field = destination();
+
+        if (! field) {
+            // הטקסט לא הוכנס, ואומרים זאת: הכתבה של שתי דקות שנעלמת בשקט היא
+            // הרבה יותר גרועה מהודעה.
+            announce('השדה שאליו הוכתב כבר אינו בדף — התמלול לא הוכנס.');
+
             return;
         }
 
@@ -131,6 +228,8 @@
         field.dispatchEvent(new Event('input', { bubbles: true }));
         field.dispatchEvent(new Event('change', { bubbles: true }));
     }
+
+    /* ── המנוע של הדפדפן ─────────────────────────────────────────────── */
 
     function engine() {
         if (recognition) {
@@ -162,8 +261,149 @@
         return recognition;
     }
 
+    /* ── המודל שלנו ──────────────────────────────────────────────────── */
+
+    /* המכל הטוב ביותר שהדפדפן הזה באמת ייתן. */
+    function recorderOptions() {
+        var types = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg'];
+
+        for (var i = 0; i < types.length; i++) {
+            if (MediaRecorder.isTypeSupported(types[i])) {
+                return { mimeType: types[i] };
+            }
+        }
+
+        return {};
+    }
+
+    function startRecording() {
+        // מקובע כאן, לפני ההמתנה להרשאה: מכאן והלאה זה היעד, ולא משנה לאן
+        // המיקוד יעבור בינתיים.
+        target = field;
+
+        navigator.mediaDevices.getUserMedia({ audio: true }).then(function (granted) {
+            stream = granted;
+            chunks = [];
+            seconds = 0;
+
+            recorder = new MediaRecorder(stream, recorderOptions());
+            recorder.ondataavailable = function (e) { if (e.data && e.data.size) { chunks.push(e.data); } };
+            recorder.onstop = upload;
+            recorder.start();
+
+            listening = true;
+            paint();
+            announce('מקליט. לחצו שוב לעצירה.');
+
+            timer = setInterval(function () {
+                seconds++;
+
+                // נעצר לבד, כדי שהקלטה שנשכחה לא תגדל מעבר למה שהשרת מקבל.
+                if (seconds >= MAX_SECONDS) {
+                    stopRecording();
+                }
+            }, 1000);
+        }).catch(function (e) {
+            listening = false;
+            paint();
+            // סירוב הרשאה והיעדר מיקרופון הם שתי בעיות שונות, ורק לאחת מהן יש
+            // טעם לנסות שוב.
+            announce(e && e.name === 'NotAllowedError'
+                ? 'אין הרשאה למיקרופון — יש לאשר אותה בדפדפן.'
+                : 'לא נמצא מיקרופון זמין.');
+        });
+    }
+
+    function stopRecording() {
+        if (timer) { clearInterval(timer); timer = null; }
+
+        if (recorder && recorder.state !== 'inactive') {
+            recorder.stop();
+        }
+
+        listening = false;
+        paint();
+    }
+
+    /* בלי זה נורית ההקלטה של הדפדפן נשארת דולקת אחרי שסיימנו. */
+    function releaseMicrophone() {
+        if (stream) {
+            stream.getTracks().forEach(function (track) { track.stop(); });
+            stream = null;
+        }
+    }
+
+    function upload() {
+        var blob = new Blob(chunks, { type: (chunks[0] && chunks[0].type) || 'audio/webm' });
+
+        chunks = [];
+        releaseMicrophone();
+
+        if (blob.size < 1000) {
+            announce('ההקלטה קצרה מדי.');
+
+            return;
+        }
+
+        working = true;
+        paint();
+        announce('מתמלל…');
+
+        var body = new FormData();
+        var token = document.querySelector('meta[name="csrf-token"]');
+
+        body.append('audio', blob, 'recording.' + (blob.type.indexOf('mp4') !== -1 ? 'mp4' : 'webm'));
+
+        fetch(ENDPOINT, {
+            method: 'POST',
+            body: body,
+            headers: {
+                'X-CSRF-TOKEN': token ? token.content : '',
+                'Accept': 'application/json',
+            },
+        }).then(function (response) {
+            return response.json().catch(function () { return {}; }).then(function (data) {
+                if (! response.ok) {
+                    throw new Error(data.message || 'התמלול נכשל.');
+                }
+
+                return data;
+            });
+        }).then(function (data) {
+            if (! data.text) {
+                announce('לא נשמעו מילים בהקלטה.');
+
+                return;
+            }
+
+            insert(data.text);
+            announce('התמלול הוכנס לשדה. קראו ותקנו לפני שליחה.');
+        }).catch(function (e) {
+            // נפילה אמיתית, ולא הנחה מראש: מכאן והלאה בדף הזה מכתיבים דרך
+            // הדפדפן, ואומרים את זה — הכתבה שמפסיקה לעבוד בלי הסבר נראית
+            // כמו תקלה במיקרופון.
+            if (browserAvailable && useServer) {
+                useServer = false;
+                announce((e.message || 'התמלול נכשל') + ' — ממשיכים עם התמלול של הדפדפן.');
+            } else {
+                announce(e.message || 'התמלול נכשל. אפשר להקליד במקום.');
+            }
+        }).finally(function () {
+            working = false;
+            paint();
+        });
+    }
+
+    /* ── משותף ───────────────────────────────────────────────────────── */
+
     function toggle() {
-        if (! field) {
+        if (! field || working) {
+            return;
+        }
+
+        if (useServer) {
+            listening ? stopRecording() : startRecording();
+
             return;
         }
 
@@ -174,8 +414,10 @@
         }
 
         try {
+            target = field;
             engine().start();
             listening = true;
+            announce('מקליט. לחצו שוב לעצירה.');
         } catch (e) {
             listening = false; // start() כשכבר רץ — אין מה לדווח.
         }
@@ -202,6 +444,12 @@
                 hide();
             }
         }, 200);
+    });
+
+    // עזיבת הדף באמצע הקלטה משאירה את המיקרופון פתוח בלי זה.
+    window.addEventListener('pagehide', function () {
+        if (timer) { clearInterval(timer); timer = null; }
+        releaseMicrophone();
     });
 
     window.addEventListener('scroll', place, true);
