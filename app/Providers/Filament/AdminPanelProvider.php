@@ -77,6 +77,9 @@ class AdminPanelProvider extends PanelProvider
             ->when($this->notificationsTableReady(), fn (Panel $panel): Panel => $panel
                 ->databaseNotifications()
                 ->databaseNotificationsPolling('30s'))
+            // קריאוּת הטקסט: משקל בסיס, איסור על נטייה מזויפת, ורשימת נפילה
+            // שיודעת עברית. אחרי הסגנונות של פילמנט, כדי לגבור על ה-:root שלו.
+            ->renderHook(PanelsRenderHook::STYLES_AFTER, fn (): string => view('panel.typography')->render())
             // Browser (Web Push) notifications — a real desktop "pop" even when
             // this tab is in the background. The view is a no-op unless VAPID keys
             // are configured, so an install without keys is unaffected.
