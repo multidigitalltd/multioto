@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\User;
+use App\Support\PanelFont;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Testing\TestResponse;
 use Tests\TestCase;
@@ -64,16 +65,62 @@ class PanelTypographyTest extends TestCase
         $this->panel()->assertSee('font-synthesis-style: auto', false);
     }
 
-    /** ולכן גם נטענים גופני האיטליק עצמם, ולא רק מותר לזייף אותם. */
-    public function test_the_real_italic_faces_are_requested(): void
-    {
-        $this->panel()->assertSee('family=Rubik:ital,wght@', false);
-    }
-
-    /** ו-Rubik שלא נטען נופל לגופן שיודע עברית, ולא למה שהמכונה תבחר. */
+    /** וגופן שלא נטען נופל לגופן שיודע עברית, ולא למה שהמכונה תבחר. */
     public function test_a_font_that_fails_to_load_falls_back_to_hebrew_faces(): void
     {
         $this->panel()
-            ->assertSee("'Rubik', 'Segoe UI', 'Noto Sans Hebrew'", false);
+            ->assertSee("'Heebo', 'Segoe UI', 'Noto Sans Hebrew'", false);
+    }
+
+    /** והגופן שנבחר הוא זה שנטען. */
+    public function test_the_stylesheet_asks_for_the_configured_family(): void
+    {
+        $this->panel()->assertSee('family=Heebo:wght@400;500;600;700', false);
+    }
+
+    /**
+     * החלפת המשפחה משנה גם את מה שנטען וגם את מה שה-CSS מבקש.
+     *
+     * שני אלה נקבעים במקומות שונים בזמן — הכתובת בעליית הפאנל, וה-CSS בכל
+     * בקשה — ולכן הם נבדקים דרך PanelFont, המקור היחיד של שניהם. משפחה
+     * שמוגדרת במקום אחד ומקודדת קשיח בשני היא הדרך שבה החלפת פונט נראית כאילו
+     * לא עשתה כלום.
+     */
+    public function test_changing_the_family_changes_both_the_stylesheet_and_the_css(): void
+    {
+        config(['billing.branding.panel_font' => 'Assistant']);
+
+        $this->assertSame('Assistant', PanelFont::family());
+        $this->assertStringContainsString('family=Assistant:wght@', PanelFont::url());
+        $this->assertStringStartsWith("'Assistant', ", PanelFont::stack());
+    }
+
+    /**
+     * וברירת המחדל מבקשת משקלים בלבד.
+     *
+     * ציר ital שנדרש ממשפחה שאין לה אחד גורם לגוגל לדחות את **כל** הבקשה —
+     * כלומר לאבד את הגופן כולו, לא רק את האיטליק שלו.
+     */
+    public function test_the_default_request_asks_for_weights_only(): void
+    {
+        $this->assertStringNotContainsString('ital', PanelFont::url());
+    }
+
+    /** ומשפחה שכן מספקת איטליק אמיתי יכולה לבקש אותו במפורש. */
+    public function test_a_family_with_real_italics_can_ask_for_them(): void
+    {
+        $url = 'https://fonts.googleapis.com/css2?family=Rubik:ital,wght@0,400;1,400&display=swap';
+
+        config(['billing.branding.panel_font_url' => $url]);
+
+        $this->assertSame($url, PanelFont::url());
+    }
+
+    /** ומשפחה ריקה בהגדרות אינה משאירה את הפאנל בלי גופן. */
+    public function test_a_blank_family_falls_back_to_the_default(): void
+    {
+        config(['billing.branding.panel_font' => '  ']);
+
+        $this->assertSame(PanelFont::DEFAULT_FAMILY, PanelFont::family());
     }
 }

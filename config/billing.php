@@ -23,12 +23,38 @@ return [
         // built from the sender name and current year. Editable in הגדרות ← מייל.
         'email_footer' => env('BRANDING_EMAIL_FOOTER'),
 
-        // Base text weight in the panel. Rubik at 400 reads light in Hebrew on a
-        // bright screen; 500 is a weight Rubik actually ships (the panel already
-        // requests 400;500;600;700), so this is a real face rather than a
-        // browser thickening one. A taste setting, hence tunable without a
-        // deploy — 400 restores the previous look.
+        // Base text weight in the panel. 400 reads light in Hebrew on a bright
+        // screen; 500 is a weight the panel already downloads, so this is a real
+        // face rather than a browser thickening one. A taste setting, hence
+        // tunable without a deploy.
         'panel_font_weight' => (int) env('PANEL_FONT_WEIGHT', 500),
+
+        /*
+        | The panel's typeface.
+        |
+        | Heebo by default — the Hebrew companion to Roboto: upright, sturdy,
+        | and the closest thing to a system face in an Israeli interface. It
+        | replaces Rubik, whose Hebrew several people read as light and slanted.
+        |
+        | A matter of taste, and taste is not worth a deploy: any Google Fonts
+        | family name works here (Assistant, Noto Sans Hebrew, Open Sans Hebrew,
+        | Rubik…), and the URL below is built from it.
+        */
+        'panel_font' => env('PANEL_FONT', 'Heebo'),
+
+        /*
+        | The stylesheet URL, when the family alone is not enough.
+        |
+        | Blank builds a plain weights-only request, which every family on
+        | Google Fonts answers. Asking for an `ital` axis from a family that has
+        | none makes Google reject the WHOLE request — no font at all, and the
+        | panel silently falls back to a system face. So italics are left to the
+        | browser to slant (see resources/views/panel/typography.blade.php),
+        | and a family that does ship real italics can opt in here:
+        |
+        |   https://fonts.googleapis.com/css2?family=Rubik:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&display=swap
+        */
+        'panel_font_url' => env('PANEL_FONT_URL'),
     ],
 
     // How long a signed card-update link (embedded in dunning messages) stays
