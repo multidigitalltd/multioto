@@ -24,23 +24,28 @@ return [
         'email_footer' => env('BRANDING_EMAIL_FOOTER'),
 
         // Base text weight in the panel. 400 reads light in Hebrew on a bright
-        // screen; 500 is a weight the panel already downloads, so this is a real
-        // face rather than a browser thickening one. A taste setting, hence
+        // screen; 500 is heavier without being bold. A taste setting, hence
         // tunable without a deploy.
+        //
+        // Snapped to a multiple of 100 and fetched along with the panel's own
+        // weights, so the weight asked for is always one that was downloaded —
+        // see App\Support\PanelFont. Anything else would restyle the text and
+        // silently render whatever face the browser already had.
         'panel_font_weight' => (int) env('PANEL_FONT_WEIGHT', 500),
 
         /*
         | The panel's typeface.
         |
-        | Heebo by default — the Hebrew companion to Roboto: upright, sturdy,
-        | and the closest thing to a system face in an Israeli interface. It
-        | replaces Rubik, whose Hebrew several people read as light and slanted.
+        | Rubik, as it has always been. A stretch where the panel looked
+        | slanted and thin turned out to be a stale browser cache, not the
+        | typeface — so there is no reason to change what the team already
+        | reads, and the default stays put.
         |
-        | A matter of taste, and taste is not worth a deploy: any Google Fonts
-        | family name works here (Assistant, Noto Sans Hebrew, Open Sans Hebrew,
-        | Rubik…), and the URL below is built from it.
+        | It lives here rather than in the panel provider because taste is not
+        | worth a deploy: any Google Fonts family works (Heebo, Assistant,
+        | Noto Sans Hebrew…), and the URL below is built from it.
         */
-        'panel_font' => env('PANEL_FONT', 'Heebo'),
+        'panel_font' => env('PANEL_FONT', 'Rubik'),
 
         /*
         | The stylesheet URL, when the family alone is not enough.

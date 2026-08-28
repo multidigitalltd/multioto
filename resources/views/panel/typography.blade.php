@@ -31,7 +31,7 @@
     }
 
     .fi-body {
-        font-weight: {{ (int) config('billing.branding.panel_font_weight', 500) }};
+        font-weight: {{ \App\Support\PanelFont::weight() }};
         font-synthesis-style: none;
     }
 
