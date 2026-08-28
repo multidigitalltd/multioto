@@ -66,7 +66,14 @@ class AdminPanelProvider extends PanelProvider
             ->colors([
                 'primary' => Color::Indigo,
             ])
-            ->font('Rubik')
+            // Rubik, WITH its italic faces.
+            //
+            // Filament's default URL asks for upright weights only, so Rubik
+            // arrives with no italic at all — and every deliberate italic in the
+            // panel (a customer's emphasis in a ticket, the editor's italic
+            // button) was left to a browser-invented slant. Asking for the real
+            // faces costs one more file and makes emphasis mean something.
+            ->font('Rubik', url: 'https://fonts.googleapis.com/css2?family=Rubik:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&display=swap')
             // In-panel notification bell (new task assigned, a site incident,
             // a customer reply…) — always visible in the panel, independent of
             // WhatsApp/email config. The bell queries the notifications table on
@@ -77,6 +84,9 @@ class AdminPanelProvider extends PanelProvider
             ->when($this->notificationsTableReady(), fn (Panel $panel): Panel => $panel
                 ->databaseNotifications()
                 ->databaseNotificationsPolling('30s'))
+            // קריאוּת הטקסט: משקל בסיס, איסור על נטייה מזויפת, ורשימת נפילה
+            // שיודעת עברית. אחרי הסגנונות של פילמנט, כדי לגבור על ה-:root שלו.
+            ->renderHook(PanelsRenderHook::STYLES_AFTER, fn (): string => view('panel.typography')->render())
             // Browser (Web Push) notifications — a real desktop "pop" even when
             // this tab is in the background. The view is a no-op unless VAPID keys
             // are configured, so an install without keys is unaffected.

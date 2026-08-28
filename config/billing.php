@@ -22,6 +22,13 @@ return [
         // Footer shown at the bottom of every customer email. Blank → a default
         // built from the sender name and current year. Editable in הגדרות ← מייל.
         'email_footer' => env('BRANDING_EMAIL_FOOTER'),
+
+        // Base text weight in the panel. Rubik at 400 reads light in Hebrew on a
+        // bright screen; 500 is a weight Rubik actually ships (the panel already
+        // requests 400;500;600;700), so this is a real face rather than a
+        // browser thickening one. A taste setting, hence tunable without a
+        // deploy — 400 restores the previous look.
+        'panel_font_weight' => (int) env('PANEL_FONT_WEIGHT', 500),
     ],
 
     // How long a signed card-update link (embedded in dunning messages) stays
