@@ -52,6 +52,24 @@ class PanelTypographyTest extends TestCase
         $this->panel()->assertSee('font-synthesis-style: none', false);
     }
 
+    /**
+     * אבל איטליק מכוון נשאר נטוי.
+     *
+     * Rubik מגיע כברירת מחדל בלי גופן איטליק כלל, ולכן איסור גורף על זיוף
+     * הנטייה היה מיישר את ההדגשה של לקוח בפנייה ומכבה את כפתור האיטליק בעורך —
+     * כלומר מכבה תכונה אמיתית כדי לתקן מראה.
+     */
+    public function test_deliberate_italics_are_not_flattened(): void
+    {
+        $this->panel()->assertSee('font-synthesis-style: auto', false);
+    }
+
+    /** ולכן גם נטענים גופני האיטליק עצמם, ולא רק מותר לזייף אותם. */
+    public function test_the_real_italic_faces_are_requested(): void
+    {
+        $this->panel()->assertSee('family=Rubik:ital,wght@', false);
+    }
+
     /** ו-Rubik שלא נטען נופל לגופן שיודע עברית, ולא למה שהמכונה תבחר. */
     public function test_a_font_that_fails_to_load_falls_back_to_hebrew_faces(): void
     {
