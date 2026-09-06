@@ -128,20 +128,18 @@ class SendProactiveRemindersJob implements ShouldQueue
             ->get()
             // A card expires at the end of its month; flag it once the end of
             // its month is at or before the window's end.
-            ->filter(fn (PaymentToken $t): bool => Carbon::create((int) $t->expiry_year, (int) $t->expiry_month, 1)
-                ->endOfMonth()->lessThanOrEqualTo($cutoff->copy()->endOfMonth()))
-            ->sortBy(fn (PaymentToken $t): int => (int) $t->expiry_year * 12 + (int) $t->expiry_month)
+            ->filter(fn (PaymentToken $t): bool => $t->expiresAt()?->lessThanOrEqualTo($cutoff->copy()->endOfMonth()) ?? false)
+            ->sortBy(fn (PaymentToken $t): int => $t->expiryYear() * 12 + (int) $t->expiry_month)
             ->values();
 
         if ($tokens->isEmpty()) {
             return null;
         }
 
-        $lines = $tokens->map(fn (PaymentToken $t): string => sprintf('• %s — כרטיס ...%s בתוקף עד %02d/%02d',
+        $lines = $tokens->map(fn (PaymentToken $t): string => sprintf('• %s — כרטיס ...%s בתוקף עד %s',
             $t->customer?->name ?? 'לקוח',
             $t->card_last4 ?? '????',
-            (int) $t->expiry_month,
-            (int) $t->expiry_year % 100,
+            $t->expiryLabel() ?? '—',
         ));
 
         return "💳 כרטיסים שעומדים לפוג ({$tokens->count()}):\n".$lines->implode("\n");

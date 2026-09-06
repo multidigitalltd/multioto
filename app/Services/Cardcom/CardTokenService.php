@@ -7,6 +7,8 @@ use App\Enums\TokenStatus;
 use App\Jobs\ChargeSubscriptionJob;
 use App\Models\Customer;
 use App\Models\PaymentToken;
+use App\Models\Subscription;
+use InvalidArgumentException;
 
 /**
  * Turns a completed Cardcom Low Profile result into a saved card token and wires
@@ -47,13 +49,13 @@ class CardTokenService
     }
 
     /**
-     * Persist the token, make it the customer's default (retiring any previous
-     * active card), point every live subscription at it, and collect anything
-     * already owed — so a debtor who just entered a card is billed at once.
+     * Persist the token, make it the customer's card on file, and collect
+     * anything already owed — so a debtor who just entered a card is billed at
+     * once.
      *
      * @param  array<string, mixed>  $tokenInfo
      */
-    public function store(Customer $customer, array $tokenInfo): PaymentToken
+    public function store(Customer $customer, array $tokenInfo, bool $collectNow = true): PaymentToken
     {
         $token = $customer->paymentTokens()->create([
             'cardcom_token' => $tokenInfo['Token'],
@@ -64,6 +66,51 @@ class CardTokenService
             'status' => TokenStatus::Active,
         ]);
 
+        $this->makeDefault($customer, $token, $collectNow);
+
+        return $token;
+    }
+
+    /**
+     * Make one of the customer's saved cards THE card on file: every other
+     * active card is retired, `default_token_id` points here, and every live
+     * subscription is repointed at it.
+     *
+     * This is the only place that wiring exists, and everything that saves a
+     * card goes through it. A card saved without it — which is what the hosted
+     * one-off charge used to do — leaves the customer holding two "active"
+     * cards while every subscription still charges the old one. That is exactly
+     * how a customer who has just replaced an expired card keeps getting
+     * declined on the card they replaced, with the panel showing a valid card
+     * the whole time.
+     *
+     * @param  bool  $collectNow  Whether this card arrived as an act of payment.
+     *                            True for a card capture: a trial converts and
+     *                            anything overdue is collected immediately.
+     *                            False when the team is merely choosing which
+     *                            saved card is the live one — repointing a card
+     *                            is a bookkeeping decision and must not, by
+     *                            itself, end a trial or take money.
+     */
+    public function makeDefault(Customer $customer, PaymentToken $token, bool $collectNow = true): void
+    {
+        if ((int) $token->customer_id !== (int) $customer->id) {
+            // A card belongs to exactly one customer. Wiring one across would
+            // charge somebody else's card on this customer's subscriptions.
+            throw new InvalidArgumentException("כרטיס #{$token->id} אינו שייך ללקוח #{$customer->id}.");
+        }
+
+        // A removed card gave up its token. Making it the card on file again
+        // would wire every subscription to something that cannot be charged,
+        // and each renewal would fail as if the card had been declined.
+        if (blank($token->cardcom_token)) {
+            throw new InvalidArgumentException("כרטיס #{$token->id} הוסר ואין לו טוקן — יש להזין את הכרטיס מחדש.");
+        }
+
+        if ($token->status !== TokenStatus::Active) {
+            $token->update(['status' => TokenStatus::Active]);
+        }
+
         $customer->paymentTokens()
             ->whereKeyNot($token->id)
             ->where('status', TokenStatus::Active)
@@ -73,8 +120,12 @@ class CardTokenService
 
         $customer->subscriptions()
             ->whereNot('status', SubscriptionStatus::Canceled)
-            ->each(function ($subscription) use ($token) {
+            ->each(function (Subscription $subscription) use ($token, $collectNow): void {
                 $subscription->update(['token_id' => $token->id]);
+
+                if (! $collectNow) {
+                    return;
+                }
 
                 if ($subscription->status === SubscriptionStatus::Trialing) {
                     $subscription->update(['status' => SubscriptionStatus::Active]);
@@ -95,7 +146,47 @@ class CardTokenService
                     ChargeSubscriptionJob::dispatch($subscription->id, manual: true);
                 }
             });
+    }
 
-        return $token;
+    /**
+     * Take a card off the customer's file.
+     *
+     * The row stays. Charges reference the card they were collected on, and a
+     * deleted token would take that trail with it (`subscriptions.token_id` is
+     * nullOnDelete, so the pointer would vanish silently) — so the card is
+     * marked removed instead: never charged again, no longer the default, and
+     * unhooked from every subscription that pointed at it.
+     *
+     * Nothing is promoted in its place, deliberately. A customer left without a
+     * card is one the collection screens are built to surface (scopeAwaitingCard);
+     * quietly activating some older card instead would charge a card nobody chose.
+     *
+     * Nothing is deleted at Cardcom either, and nothing needs to be: the token
+     * is dropped from our row, so there is no longer anything here to charge it
+     * with. Removal is not a status somebody could flip back.
+     */
+    public function detach(Customer $customer, PaymentToken $token): void
+    {
+        if ((int) $token->customer_id !== (int) $customer->id) {
+            throw new InvalidArgumentException("כרטיס #{$token->id} אינו שייך ללקוח #{$customer->id}.");
+        }
+
+        $token->update([
+            'status' => TokenStatus::Removed,
+            // The credential goes; the card's identity (brand, last four,
+            // expiry) stays, because charges collected on it point here.
+            'cardcom_token' => null,
+        ]);
+
+        if ((int) $customer->default_token_id === (int) $token->id) {
+            $customer->update(['default_token_id' => null]);
+        }
+
+        // One at a time rather than a mass update: the model clears the
+        // "card expires before the next charge" warning when token_id moves,
+        // and a mass update never runs that.
+        $customer->subscriptions()
+            ->where('token_id', $token->id)
+            ->each(fn (Subscription $subscription) => $subscription->update(['token_id' => null]));
     }
 }

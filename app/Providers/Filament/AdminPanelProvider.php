@@ -7,6 +7,7 @@ use App\Filament\Widgets\StatsOverview;
 use App\Http\Controllers\HealthController;
 use App\Http\Middleware\EnsureTwoFactorConfirmed;
 use App\Support\Branding;
+use App\Support\PanelFont;
 use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
 use Filament\Http\Middleware\DisableBladeIconComponents;
@@ -66,14 +67,13 @@ class AdminPanelProvider extends PanelProvider
             ->colors([
                 'primary' => Color::Indigo,
             ])
-            // Rubik, WITH its italic faces.
+            // The panel's typeface, from settings rather than from here.
             //
-            // Filament's default URL asks for upright weights only, so Rubik
-            // arrives with no italic at all — and every deliberate italic in the
-            // panel (a customer's emphasis in a ticket, the editor's italic
-            // button) was left to a browser-invented slant. Asking for the real
-            // faces costs one more file and makes emphasis mean something.
-            ->font('Rubik', url: 'https://fonts.googleapis.com/css2?family=Rubik:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&display=swap')
+            // Which face reads well is a matter of taste and of the screen it is
+            // read on, and settling that should never cost a deploy — so the
+            // family and (optionally) its stylesheet URL are configuration. See
+            // config/billing.php for why the default URL asks for weights only.
+            ->font(PanelFont::family(), url: PanelFont::url())
             // In-panel notification bell (new task assigned, a site incident,
             // a customer reply…) — always visible in the panel, independent of
             // WhatsApp/email config. The bell queries the notifications table on

@@ -212,6 +212,20 @@ class CardcomClient
     public function chargeToken(PaymentToken $token, int $totalAgorot, string $description, string $externalUniqueId): ChargeResult
     {
         $customer = $token->customer;
+
+        // A removed card gives up its token, and array_filter below would drop
+        // a null one — sending Cardcom a charge with no token at all rather
+        // than a charge that fails. Refuse it here, recorded on the charge row
+        // like any other decline.
+        if (blank($token->cardcom_token)) {
+            return new ChargeResult(
+                success: false,
+                transactionId: null,
+                responseCode: 'no-token',
+                message: 'הכרטיס הוסר מהמערכת ואין אפשרות לחייב בו. יש להזין כרטיס חדש.',
+            );
+        }
+
         $amountNis = round($totalAgorot / 100, 2);
 
         $payload = array_filter([
@@ -234,7 +248,7 @@ class CardcomClient
         // Include the stored expiry (MMYY) when we have it — some terminals
         // require it alongside the token.
         if ($token->expiry_month && $token->expiry_year) {
-            $payload['CardExpirationMMYY'] = sprintf('%02d%02d', $token->expiry_month, $token->expiry_year % 100);
+            $payload['CardExpirationMMYY'] = sprintf('%02d%02d', $token->expiry_month, $token->expiryYear() % 100);
         }
 
         $response = $this->request('Transactions/Transaction', $payload, withApiPassword: false);

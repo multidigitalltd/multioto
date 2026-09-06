@@ -23,12 +23,43 @@ return [
         // built from the sender name and current year. Editable in הגדרות ← מייל.
         'email_footer' => env('BRANDING_EMAIL_FOOTER'),
 
-        // Base text weight in the panel. Rubik at 400 reads light in Hebrew on a
-        // bright screen; 500 is a weight Rubik actually ships (the panel already
-        // requests 400;500;600;700), so this is a real face rather than a
-        // browser thickening one. A taste setting, hence tunable without a
-        // deploy — 400 restores the previous look.
+        // Base text weight in the panel. 400 reads light in Hebrew on a bright
+        // screen; 500 is heavier without being bold. A taste setting, hence
+        // tunable without a deploy.
+        //
+        // Snapped to a multiple of 100 and fetched along with the panel's own
+        // weights, so the weight asked for is always one that was downloaded —
+        // see App\Support\PanelFont. Anything else would restyle the text and
+        // silently render whatever face the browser already had.
         'panel_font_weight' => (int) env('PANEL_FONT_WEIGHT', 500),
+
+        /*
+        | The panel's typeface.
+        |
+        | Rubik, as it has always been. A stretch where the panel looked
+        | slanted and thin turned out to be a stale browser cache, not the
+        | typeface — so there is no reason to change what the team already
+        | reads, and the default stays put.
+        |
+        | It lives here rather than in the panel provider because taste is not
+        | worth a deploy: any Google Fonts family works (Heebo, Assistant,
+        | Noto Sans Hebrew…), and the URL below is built from it.
+        */
+        'panel_font' => env('PANEL_FONT', 'Rubik'),
+
+        /*
+        | The stylesheet URL, when the family alone is not enough.
+        |
+        | Blank builds a plain weights-only request, which every family on
+        | Google Fonts answers. Asking for an `ital` axis from a family that has
+        | none makes Google reject the WHOLE request — no font at all, and the
+        | panel silently falls back to a system face. So italics are left to the
+        | browser to slant (see resources/views/panel/typography.blade.php),
+        | and a family that does ship real italics can opt in here:
+        |
+        |   https://fonts.googleapis.com/css2?family=Rubik:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&display=swap
+        */
+        'panel_font_url' => env('PANEL_FONT_URL'),
     ],
 
     // How long a signed card-update link (embedded in dunning messages) stays
