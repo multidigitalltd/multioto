@@ -3,7 +3,6 @@
 namespace App\Jobs;
 
 use App\Enums\ChargeStatus;
-use App\Enums\TokenStatus;
 use App\Models\Charge;
 use App\Models\Customer;
 use App\Models\WebhookEvent;
@@ -170,6 +169,18 @@ class ProcessCardcomLowProfileJob implements ShouldQueue
      * Save the card token captured during a hosted one-off charge, so a walk-in
      * customer becomes reusable for future manual charges. Best-effort — a
      * missing token never fails the charge.
+     *
+     * The card the customer just paid with becomes the card on file. This used
+     * to save the token and stop there unless the customer had no default at
+     * all, which meant a customer whose stored card had expired paid here with
+     * a fresh one and then went on failing every subscription charge: the new
+     * card sat in the list marked active while every subscription still pointed
+     * at the dead one, and the panel showed a valid card throughout.
+     *
+     * Collection is NOT triggered from here (collectNow: false). The customer
+     * came to settle one specific charge; billing them for an overdue
+     * subscription in the same breath is not what they agreed to. The scheduler
+     * picks that debt up on its own terms now that a live card is attached.
      */
     private function storeTokenForManualCharge(Charge $charge, array $result): void
     {
@@ -180,17 +191,13 @@ class ProcessCardcomLowProfileJob implements ShouldQueue
             return;
         }
 
-        $token = $customer->paymentTokens()->create([
-            'cardcom_token' => $tokenInfo['Token'],
-            'card_last4' => isset($tokenInfo['CardLast4Digits']) ? (string) $tokenInfo['CardLast4Digits'] : null,
-            'card_brand' => $tokenInfo['CardBrand'] ?? null,
-            'expiry_month' => $tokenInfo['CardMonth'] ?? null,
-            'expiry_year' => $tokenInfo['CardYear'] ?? null,
-            'status' => TokenStatus::Active,
-        ]);
+        // Merge in the brand and last-4, which Cardcom carries on the
+        // transaction rather than on the token.
+        $tran = $result['TranzactionInfo'] ?? [];
 
-        if (! $customer->default_token_id) {
-            $customer->update(['default_token_id' => $token->id]);
-        }
+        app(CardTokenService::class)->store($customer, array_merge($tokenInfo, [
+            'CardLast4Digits' => $tran['Last4CardDigits'] ?? $tran['Last4CardDigitsString'] ?? $tokenInfo['CardLast4Digits'] ?? null,
+            'CardBrand' => $tran['CardName'] ?? $tran['Brand'] ?? $tokenInfo['CardBrand'] ?? null,
+        ]), collectNow: false);
     }
 }

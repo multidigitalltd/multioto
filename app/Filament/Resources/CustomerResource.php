@@ -9,6 +9,7 @@ use App\Filament\Concerns\RespectsModuleAccess;
 use App\Filament\Resources\CustomerResource\Pages;
 use App\Filament\Resources\CustomerResource\RelationManagers;
 use App\Models\Customer;
+use App\Models\PaymentToken;
 use App\Models\Site;
 use App\Models\Ticket;
 use App\Services\Customers\OnboardingChecklist;
@@ -385,14 +386,36 @@ class CustomerResource extends Resource
                         ->url(fn (Customer $record): string => CardLink::for($record->id), shouldOpenInNewTab: true),
                 ])
                 ->schema([
+                    // Which card actually gets charged, said once and plainly.
+                    // A list of cards all marked "פעיל" does not answer it, and
+                    // that question is the whole reason somebody opens this
+                    // section after a charge failed.
+                    TextEntry::make('defaultToken')
+                        ->label('הכרטיס שמחויב')
+                        ->state(fn (Customer $record): string => $record->defaultToken?->label() ?? 'אין — מנויים בכרטיס לא ייגבו')
+                        ->badge()
+                        ->color(fn (Customer $record): string => match (true) {
+                            $record->defaultToken === null => 'danger',
+                            $record->defaultToken->hasExpired() => 'danger',
+                            default => 'success',
+                        })
+                        ->helperText('לשינוי הכרטיס הפעיל או להסרת כרטיס — לשונית "כרטיסי אשראי" למטה.'),
                     RepeatableEntry::make('paymentTokens')
                         ->hiddenLabel()
                         ->schema([
                             TextEntry::make('card_brand')->label('סוג')->placeholder('—'),
                             TextEntry::make('card_last4')->label('4 ספרות אחרונות')
                                 ->formatStateUsing(fn ($state): string => filled($state) ? '****'.$state : '—'),
+                            // Shown here too, because a card that expired keeps
+                            // its "פעיל" status until something replaces it —
+                            // the status alone would say the card is fine while
+                            // every charge on it is declined.
+                            TextEntry::make('expiry')->label('תוקף')
+                                ->state(fn (PaymentToken $record): string => $record->expiryLabel() ?? '—')
+                                ->badge()
+                                ->color(fn (PaymentToken $record): string => $record->hasExpired() ? 'danger' : 'gray'),
                             TextEntry::make('status')->label('סטטוס')->badge(),
-                        ])->columns(3)
+                        ])->columns(4)
                         ->placeholder('אין כרטיס שמור — הוסיפו כרטיס בכפתור למעלה.'),
                 ]),
         ]);
@@ -404,6 +427,7 @@ class CustomerResource extends Resource
             RelationManagers\ContactsRelationManager::class,
             RelationManagers\SubscriptionsRelationManager::class,
             RelationManagers\SitesRelationManager::class,
+            RelationManagers\PaymentTokensRelationManager::class,
             RelationManagers\NotificationLogsRelationManager::class,
         ];
     }

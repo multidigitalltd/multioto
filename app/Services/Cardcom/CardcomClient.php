@@ -234,7 +234,7 @@ class CardcomClient
         // Include the stored expiry (MMYY) when we have it — some terminals
         // require it alongside the token.
         if ($token->expiry_month && $token->expiry_year) {
-            $payload['CardExpirationMMYY'] = sprintf('%02d%02d', $token->expiry_month, $token->expiry_year % 100);
+            $payload['CardExpirationMMYY'] = sprintf('%02d%02d', $token->expiry_month, $token->expiryYear() % 100);
         }
 
         $response = $this->request('Transactions/Transaction', $payload, withApiPassword: false);
