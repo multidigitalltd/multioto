@@ -85,7 +85,11 @@ class PaymentTokensRelationManager extends RelationManager
                     ->label('הפוך לפעיל')
                     ->icon('heroicon-o-check-circle')
                     ->color('success')
-                    ->visible(fn (PaymentToken $record): bool => ! $this->isDefault($record) || $record->status !== TokenStatus::Active)
+                    // A removed card has no token left to charge, so it is not
+                    // offered as a choice — the way back is entering the card
+                    // again, not flipping a status.
+                    ->visible(fn (PaymentToken $record): bool => filled($record->cardcom_token)
+                        && (! $this->isDefault($record) || $record->status !== TokenStatus::Active))
                     ->requiresConfirmation()
                     ->modalHeading('הפיכת הכרטיס לכרטיס הפעיל')
                     // Quote the actual card and the actual consequences rather
@@ -119,7 +123,7 @@ class PaymentTokensRelationManager extends RelationManager
                     ->requiresConfirmation()
                     ->modalHeading('הסרת כרטיס מהתיק')
                     ->modalDescription(fn (PaymentToken $record): string => sprintf(
-                        '%s לא יחויב יותר ויוסר מהמנויים שמצביעים עליו. ההיסטוריה והחיובים שבוצעו בו נשמרים.%s',
+                        '%s יוסר מהמנויים שמצביעים עליו והטוקן יימחק — לא ניתן לחייב בו יותר ולא ניתן לשחזר אותו (להחזרתו יש להזין את הכרטיס מחדש). ההיסטוריה והחיובים שבוצעו בו נשמרים.%s',
                         $record->label(),
                         $this->lastUsableCard($record)
                             ? ' ⚠️ זה הכרטיס האחרון של הלקוח — לא יישאר כרטיס לגבייה, והמנויים יופיעו במסך "ממתין לכרטיס".'

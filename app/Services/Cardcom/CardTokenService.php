@@ -100,6 +100,13 @@ class CardTokenService
             throw new InvalidArgumentException("כרטיס #{$token->id} אינו שייך ללקוח #{$customer->id}.");
         }
 
+        // A removed card gave up its token. Making it the card on file again
+        // would wire every subscription to something that cannot be charged,
+        // and each renewal would fail as if the card had been declined.
+        if (blank($token->cardcom_token)) {
+            throw new InvalidArgumentException("כרטיס #{$token->id} הוסר ואין לו טוקן — יש להזין את הכרטיס מחדש.");
+        }
+
         if ($token->status !== TokenStatus::Active) {
             $token->update(['status' => TokenStatus::Active]);
         }
@@ -153,6 +160,10 @@ class CardTokenService
      * Nothing is promoted in its place, deliberately. A customer left without a
      * card is one the collection screens are built to surface (scopeAwaitingCard);
      * quietly activating some older card instead would charge a card nobody chose.
+     *
+     * Nothing is deleted at Cardcom either, and nothing needs to be: the token
+     * is dropped from our row, so there is no longer anything here to charge it
+     * with. Removal is not a status somebody could flip back.
      */
     public function detach(Customer $customer, PaymentToken $token): void
     {
@@ -160,7 +171,12 @@ class CardTokenService
             throw new InvalidArgumentException("כרטיס #{$token->id} אינו שייך ללקוח #{$customer->id}.");
         }
 
-        $token->update(['status' => TokenStatus::Removed]);
+        $token->update([
+            'status' => TokenStatus::Removed,
+            // The credential goes; the card's identity (brand, last four,
+            // expiry) stays, because charges collected on it point here.
+            'cardcom_token' => null,
+        ]);
 
         if ((int) $customer->default_token_id === (int) $token->id) {
             $customer->update(['default_token_id' => null]);

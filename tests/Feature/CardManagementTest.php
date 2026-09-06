@@ -17,6 +17,7 @@ use App\Models\PaymentToken;
 use App\Models\Subscription;
 use App\Models\User;
 use App\Models\WebhookEvent;
+use App\Services\Cardcom\CardcomClient;
 use App\Services\Cardcom\CardTokenService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -128,6 +129,28 @@ class CardManagementTest extends TestCase
         $this->assertNull($subscription->fresh()->token_id);
         // The row survives: charges collected on this card still point at it.
         $this->assertDatabaseHas('payment_tokens', ['id' => $token->id]);
+        // The credential does not. Nothing is deleted at Cardcom, and nothing
+        // needs to be — there is no longer anything here to charge it with.
+        $this->assertNull($token->fresh()->cardcom_token);
+    }
+
+    public function test_a_removed_card_cannot_be_charged_or_reactivated(): void
+    {
+        Http::fake();
+        $customer = Customer::factory()->create();
+        $token = PaymentToken::factory()->create(['customer_id' => $customer->id]);
+
+        app(CardTokenService::class)->detach($customer, $token);
+
+        // A charge is refused here, not sent to Cardcom without a token.
+        $result = app(CardcomClient::class)->chargeToken($token->fresh(), 5900, 'בדיקה', 'uniq-removed');
+
+        $this->assertFalse($result->success);
+        Http::assertNothingSent();
+
+        // And it cannot be wired back: the way back is entering the card again.
+        $this->expectException(InvalidArgumentException::class);
+        app(CardTokenService::class)->makeDefault($customer, $token->fresh());
     }
 
     public function test_removing_a_card_promotes_nothing_in_its_place(): void
