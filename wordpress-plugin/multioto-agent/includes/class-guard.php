@@ -215,6 +215,16 @@ class Multioto_Agent_Guard
             return null;
         }
 
+        $directory = WP_PLUGIN_DIR.'/'.$slug;
+
+        // The cheap answer first. The sweep runs on ordinary front-end requests,
+        // and on the overwhelmingly common "nothing is there" it must cost one
+        // stat call rather than pulling two wp-admin includes and building the
+        // whole plugin list.
+        if (! is_dir($directory)) {
+            return null;
+        }
+
         require_once ABSPATH.'wp-admin/includes/plugin.php';
         require_once ABSPATH.'wp-admin/includes/file.php';
 
@@ -224,12 +234,6 @@ class Multioto_Agent_Guard
             if ($this->slugOf((string) $file) === $slug) {
                 $files[] = (string) $file;
             }
-        }
-
-        $directory = WP_PLUGIN_DIR.'/'.$slug;
-
-        if ($files === [] && ! is_dir($directory)) {
-            return null;
         }
 
         if ($files !== []) {

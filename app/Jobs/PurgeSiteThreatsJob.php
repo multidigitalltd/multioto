@@ -167,10 +167,14 @@ class PurgeSiteThreatsJob implements ShouldQueue
         foreach ($slugs as $slug) {
             $wasContained = in_array($slug, $contained, true);
 
-            SiteEvent::record($site->id, $wasContained ? 'threat_purged' : 'threat_found', 'critical',
-                $wasContained ? "תוסף בהסגר כובה: {$slug}" : "תוסף בהסגר נמצא באתר: {$slug}",
+            // Filed as "found", not "purged", even when we managed to
+            // deactivate it: the files are still on the server, and the site
+            // page must not show a green shield over a threat that is still
+            // there. The title says what we did; the type says where it stands.
+            SiteEvent::record($site->id, 'threat_found', 'critical',
+                $wasContained ? "תוסף בהסגר כובה (הקבצים נשארו): {$slug}" : "תוסף בהסגר נמצא באתר: {$slug}",
                 $wasContained
-                    ? 'התוסף כובה, אך קבצי התוסף עדיין על השרת. למחיקה מלאה יש לעדכן את תוסף הסוכן (1.5.0 ומעלה).'
+                    ? 'התוסף כובה ואינו נטען יותר, אך קבצי התוסף עדיין על השרת. למחיקה מלאה יש לעדכן את תוסף הסוכן (1.5.0 ומעלה).'
                     : 'לא ניתן היה לכבות את התוסף מרחוק — נדרשת הסרה ידנית מיידית.',
             );
         }

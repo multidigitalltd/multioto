@@ -194,8 +194,10 @@ class ThreatQuarantineTest extends TestCase
         (new PurgeSiteThreatsJob($site->id))->handle(app(McpClient::class), app(TeamNotifier::class));
 
         $event = SiteEvent::where('site_id', $site->id)->sole();
-        $this->assertSame('threat_purged', $event->type);
-        // Honest about being half a job: the files are still on the server.
+        // Deactivated is not removed: the files are still on the server, so the
+        // site page must not carry a green shield over a threat that is there.
+        $this->assertSame('threat_found', $event->type);
+        $this->assertStringContainsString('כובה', $event->title);
         $this->assertStringContainsString('קבצי התוסף עדיין על השרת', (string) $event->detail);
     }
 
