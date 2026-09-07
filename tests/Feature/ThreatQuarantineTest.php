@@ -186,8 +186,10 @@ class ThreatQuarantineTest extends TestCase
         Http::fakeSequence()
             // wp_guard_status — unknown tool on an older plugin.
             ->push(['jsonrpc' => '2.0', 'id' => 1, 'error' => ['code' => -32602, 'message' => 'Unknown tool: wp_guard_status']])
-            ->push($this->toolResult(json_encode([['id' => 1, 'login' => 'owner']])))
+            // wp_plugin_list
             ->push($this->toolResult(json_encode([['plugin' => 'wp-file-manager/file_folder_manager.php', 'name' => 'WP File Manager']])))
+            // wp_user_list — clean.
+            ->push($this->toolResult(json_encode(['total' => 1, 'users' => [['id' => 1, 'login' => 'owner']]])))
             // wp_plugin_deactivate
             ->push($this->toolResult('התוסף כובה.'));
 
@@ -239,6 +241,115 @@ class ThreatQuarantineTest extends TestCase
         // automatic removal is reserved for the two names on the list.
         Queue::assertNotPushed(PurgeSiteThreatsJob::class);
         $this->assertSame('admin_added', SiteEvent::where('site_id', $site->id)->sole()->type);
+    }
+
+    public function test_a_quarantined_login_is_found_even_without_an_admin_role(): void
+    {
+        $site = $this->site(['agent_plugin_version' => '1.4.0']);
+
+        Http::fakeSequence()
+            // No guard on this agent.
+            ->push(['jsonrpc' => '2.0', 'id' => 1, 'error' => ['code' => -32602, 'message' => 'Unknown tool: wp_guard_status']])
+            // wp_plugin_list — clean.
+            ->push($this->toolResult('[]'))
+            // wp_user_list, searched across every role: the account is a
+            // subscriber today. wp_admin_list would not have seen it at all,
+            // and by the time it did the escalation would already have happened.
+            ->push($this->toolResult(json_encode([
+                'total' => 1,
+                'users' => [['id' => 8, 'login' => 'sys_maint', 'roles' => ['subscriber']]],
+            ])));
+
+        (new PurgeSiteThreatsJob($site->id))->handle(app(McpClient::class), app(TeamNotifier::class));
+
+        $event = SiteEvent::where('site_id', $site->id)->sole();
+        $this->assertStringContainsString('sys_maint', $event->title);
+    }
+
+    public function test_a_site_that_cannot_list_users_says_so_instead_of_reporting_clean(): void
+    {
+        $site = $this->site(['agent_plugin_version' => '1.0.9']);
+
+        Http::fakeSequence()
+            ->push(['jsonrpc' => '2.0', 'id' => 1, 'error' => ['code' => -32602, 'message' => 'Unknown tool: wp_guard_status']])
+            // The plugin list answers — so the site is up, and a silent
+            // "nothing found" here would be a blind spot, not a clean bill.
+            ->push($this->toolResult(json_encode([['plugin' => 'akismet/akismet.php']])))
+            ->push(['jsonrpc' => '2.0', 'id' => 1, 'error' => ['code' => -32602, 'message' => 'Unknown tool: wp_user_list']])
+            ->push(['jsonrpc' => '2.0', 'id' => 1, 'error' => ['code' => -32602, 'message' => 'Unknown tool: wp_admin_list']]);
+
+        (new PurgeSiteThreatsJob($site->id))->handle(app(McpClient::class), app(TeamNotifier::class));
+
+        $this->assertStringContainsString('לא ניתן היה לבדוק',
+            (string) SiteEvent::where('site_id', $site->id)->sole()->title);
+    }
+
+    public function test_an_agent_without_an_admin_list_still_contains_the_plugin(): void
+    {
+        $site = $this->site(['agent_plugin_version' => '1.0.9']);
+
+        Http::fakeSequence()
+            ->push(['jsonrpc' => '2.0', 'id' => 1, 'error' => ['code' => -32602, 'message' => 'Unknown tool: wp_guard_status']])
+            ->push($this->toolResult(json_encode([['plugin' => 'wp-file-manager/file_folder_manager.php']])))
+            ->push(['jsonrpc' => '2.0', 'id' => 1, 'error' => ['code' => -32602, 'message' => 'Unknown tool: wp_user_list']])
+            ->push(['jsonrpc' => '2.0', 'id' => 1, 'error' => ['code' => -32602, 'message' => 'Unknown tool: wp_admin_list']])
+            // wp_plugin_deactivate
+            ->push($this->toolResult('התוסף כובה.'));
+
+        (new PurgeSiteThreatsJob($site->id))->handle(app(McpClient::class), app(TeamNotifier::class));
+
+        // The user check failing must not cost the plugin containment: sharing
+        // one try/catch meant the oldest agents — the ones with no guard at all
+        // — never reached this step.
+        $titles = SiteEvent::where('site_id', $site->id)->pluck('title')->implode(' | ');
+        $this->assertStringContainsString('כובה', $titles);
+    }
+
+    public function test_a_guard_log_reset_does_not_hide_every_later_removal(): void
+    {
+        // The site was restored from a backup: its guard options went back to
+        // zero while the panel kept a cursor from before.
+        $site = $this->site(['guard_cursor' => 40]);
+
+        Http::fakeSequence()
+            // First read, with after_id 40: nothing, and the site's own last id
+            // is far below the cursor — the tell that its sequence restarted.
+            ->push($this->toolResult(json_encode(['present' => ['users' => [], 'plugins' => []], 'actions' => [], 'last_id' => 2])))
+            // Re-read from zero: the removals that were being hidden.
+            ->push($this->toolResult(json_encode([
+                'present' => ['users' => [], 'plugins' => []],
+                'actions' => [['id' => 2, 'kind' => 'user', 'target' => 'sys_maint', 'result' => 'removed', 'detail' => 'נמחק.']],
+                'last_id' => 2,
+            ])));
+
+        (new PurgeSiteThreatsJob($site->id))->handle(app(McpClient::class), app(TeamNotifier::class));
+
+        $this->assertSame('threat_purged', SiteEvent::where('site_id', $site->id)->sole()->type);
+        $this->assertSame(2, $site->fresh()->guard_cursor);
+    }
+
+    public function test_other_changes_in_the_same_scan_still_reach_the_team(): void
+    {
+        Queue::fake([PurgeSiteThreatsJob::class]);
+
+        $site = $this->site([
+            'mcp_capabilities' => ['tools' => [['name' => 'wp_admin_list'], ['name' => 'wp_plugin_list']]],
+            'plugin_snapshot' => ['admins' => ['owner'], 'plugins' => ['wordfence/wordfence.php']],
+        ]);
+
+        Http::fakeSequence()
+            // Wordfence is gone — disabling the security plugin is part of the
+            // same break-in, and it must not be swallowed with it.
+            ->push($this->toolResult('[]'))
+            ->push($this->toolResult(json_encode([['id' => 1, 'login' => 'owner'], ['id' => 2, 'login' => 'sys_maint']])));
+
+        (new CheckSitePluginChangesJob($site->id))->handle(app(McpClient::class), app(TeamNotifier::class));
+
+        Queue::assertPushed(PurgeSiteThreatsJob::class);
+
+        $types = SiteEvent::where('site_id', $site->id)->pluck('type');
+        $this->assertTrue($types->contains('plugin_removed'));
+        $this->assertTrue($types->contains('admin_added'));
     }
 
     public function test_the_purge_tool_is_classified_as_destructive(): void

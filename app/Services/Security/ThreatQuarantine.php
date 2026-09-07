@@ -54,6 +54,37 @@ class ThreatQuarantine
     }
 
     /**
+     * Every login in a `wp_user_list` response — all roles, not just admins.
+     *
+     * That tool answers with a paged envelope (`{total, users: [...]}`) rather
+     * than a bare list, so the admin-list parser cannot read it: handed this
+     * shape it would walk the envelope's own keys and find no logins at all,
+     * which reads exactly like a clean site.
+     *
+     * @return list<string>
+     */
+    public static function loginsIn(string $userListJson): array
+    {
+        $decoded = json_decode(trim($userListJson), true);
+
+        if (! is_array($decoded) || ! is_array($decoded['users'] ?? null)) {
+            return [];
+        }
+
+        $logins = [];
+
+        foreach ($decoded['users'] as $user) {
+            $login = is_array($user) ? trim((string) ($user['login'] ?? '')) : '';
+
+            if ($login !== '') {
+                $logins[] = mb_strtolower($login);
+            }
+        }
+
+        return array_values(array_unique($logins));
+    }
+
+    /**
      * Quarantined plugin slugs present in a `wp_plugin_list` response.
      *
      * Read from the plugin FILE ("wp-file-manager/file_folder_manager.php"),

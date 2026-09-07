@@ -425,8 +425,21 @@ class Multioto_Agent_Mcp_Server
         $guard = new Multioto_Agent_Guard;
         $actions = $guard->sweep();
 
+        // Counts removals, not attempts. sweep() also returns the ones it
+        // refused (the last administrator) and the ones that failed to write,
+        // so counting every action would answer "removed: 1" for a threat that
+        // is still sitting on the site.
+        $removed = 0;
+
+        foreach ($actions as $action) {
+            if (isset($action['result']) && $action['result'] === 'removed') {
+                $removed++;
+            }
+        }
+
         return wp_json_encode([
-            'removed' => count($actions),
+            'removed' => $removed,
+            'attempted' => count($actions),
             'actions' => $actions,
             'status' => $guard->status(),
         ], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);

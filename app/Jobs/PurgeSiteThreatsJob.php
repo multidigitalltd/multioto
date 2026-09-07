@@ -73,6 +73,21 @@ class PurgeSiteThreatsJob implements ShouldQueue
      */
     private function withGuard(McpClient $mcp, TeamNotifier $team, Site $site, array $status): void
     {
+        // A site restored from backup — or one whose options were reset — starts
+        // its guard log from zero again. The panel's cursor is then ahead of
+        // everything the site will ever produce, so every future removal lands
+        // below `after_id` and is hidden for good. The site's own last id is the
+        // tell, and it is cheaper to re-read a few entries than to go blind.
+        if (array_key_exists('last_id', $status) && (int) $status['last_id'] < (int) $site->guard_cursor) {
+            $site->update(['guard_cursor' => 0]);
+
+            try {
+                $status = $this->guardStatus($mcp, $site);
+            } catch (\Throwable $e) {
+                Log::warning('PurgeSiteThreatsJob: re-read after sequence reset failed', ['site' => $site->id, 'error' => $e->getMessage()]);
+            }
+        }
+
         $present = array_merge(
             (array) data_get($status, 'present.users', []),
             (array) data_get($status, 'present.plugins', []),
@@ -122,19 +137,26 @@ class PurgeSiteThreatsJob implements ShouldQueue
      */
     private function withoutGuard(McpClient $mcp, TeamNotifier $team, Site $site, string $why): void
     {
-        try {
-            $admins = $mcp->textContent($mcp->callTool($site, 'wp_admin_list'));
-            $plugins = $mcp->textContent($mcp->callTool($site, 'wp_plugin_list'));
-        } catch (\Throwable $e) {
-            // Unreachable site. MonitorSiteJob already owns "the site is down";
-            // this job stays quiet rather than raising a second alarm for it.
-            Log::info('PurgeSiteThreatsJob: site not readable', ['site' => $site->id, 'error' => $e->getMessage()]);
+        // Read the two inventories INDEPENDENTLY. Sharing one try/catch meant a
+        // site whose agent does not expose wp_admin_list never reached the
+        // plugin read at all — so the containment this whole path exists for
+        // never ran, on exactly the oldest agents that need it most.
+        $plugins = $this->read($mcp, $site, 'wp_plugin_list');
+        $users = $this->quarantinedUsers($mcp, $site, $usersChecked);
 
+        if ($plugins === null && ! $usersChecked) {
+            // Nothing answered: the site is unreachable. MonitorSiteJob owns
+            // "the site is down"; this job does not raise a second alarm for it.
             return;
         }
 
-        $users = ThreatQuarantine::usersIn($admins);
-        $slugs = ThreatQuarantine::pluginsIn($plugins);
+        if (! $usersChecked) {
+            // A gap, not a clean bill of health. Said once a day rather than
+            // every hour, because the fix is updating the agent, not this run.
+            $this->noteUncheckedUsers($site);
+        }
+
+        $slugs = $plugins === null ? [] : ThreatQuarantine::pluginsIn($plugins);
 
         if ($users === [] && $slugs === []) {
             return;
@@ -143,7 +165,7 @@ class PurgeSiteThreatsJob implements ShouldQueue
         $contained = [];
 
         foreach ($slugs as $slug) {
-            $file = ThreatQuarantine::pluginFileFor($plugins, $slug);
+            $file = ThreatQuarantine::pluginFileFor((string) $plugins, $slug);
 
             if ($file === null) {
                 continue;
@@ -189,6 +211,90 @@ class PurgeSiteThreatsJob implements ShouldQueue
             "\n\nתוסף הסוכן באתר ישן מכדי להסיר אותם לבד (".($site->agent_plugin_version ?: 'גרסה לא ידועה').
             "). יש לעדכן את התוסף ל-1.5.0 ומעלה, ועד אז לטפל ידנית.\n\nהסיבה שהשומר לא נענה: ".$why,
             $this->siteUrl($site),
+        );
+    }
+
+    /** One tool's text output, or null when it could not be read. */
+    private function read(McpClient $mcp, Site $site, string $tool, array $arguments = []): ?string
+    {
+        try {
+            return $mcp->textContent($mcp->callTool($site, $tool, $arguments));
+        } catch (\Throwable $e) {
+            Log::info('PurgeSiteThreatsJob: tool not readable', [
+                'site' => $site->id, 'tool' => $tool, 'error' => $e->getMessage(),
+            ]);
+
+            return null;
+        }
+    }
+
+    /**
+     * Quarantined logins on a site with no guard.
+     *
+     * Searched across ALL users, not just administrators. The rule is that the
+     * login goes whatever role it holds — an intruder who creates the account
+     * as a subscriber today and escalates it tomorrow is the same intruder —
+     * and `wp_admin_list` returns administrators only, so relying on it alone
+     * meant the account stayed invisible until the day it was promoted, which
+     * is the day it stops mattering that we found it.
+     *
+     * @param  bool|null  $checked  set to false when neither tool could answer,
+     *                              so "nothing found" is never mistaken for
+     *                              "nothing there"
+     * @return list<string>
+     */
+    private function quarantinedUsers(McpClient $mcp, Site $site, ?bool &$checked): array
+    {
+        $checked = false;
+        $found = [];
+
+        foreach (ThreatQuarantine::users() as $login) {
+            // wp_user_list (agent 1.3.0+) searches every role. Its search is a
+            // substring match, so the exact-login filter still happens here.
+            $text = $this->read($mcp, $site, 'wp_user_list', ['search' => $login, 'limit' => 25]);
+
+            if ($text !== null) {
+                $checked = true;
+
+                if (in_array($login, ThreatQuarantine::loginsIn($text), true)) {
+                    $found[] = $login;
+                }
+
+                continue;
+            }
+
+            // Older agent: administrators are all we can see. Better than not
+            // looking, and the gap is reported rather than assumed away.
+            $admins = $this->read($mcp, $site, 'wp_admin_list');
+
+            if ($admins !== null && in_array($login, ThreatQuarantine::usersIn($admins), true)) {
+                $found[] = $login;
+            }
+        }
+
+        return array_values(array_unique($found));
+    }
+
+    /**
+     * Record — at most once a day — that we could not check this site's users
+     * at all. Every hour would be noise; never would be a silent blind spot.
+     */
+    private function noteUncheckedUsers(Site $site): void
+    {
+        $already = SiteEvent::where('site_id', $site->id)
+            ->where('type', 'threat_found')
+            ->where('title', 'like', 'לא ניתן היה לבדוק%')
+            ->where('detected_at', '>=', now()->subDay())
+            ->exists();
+
+        if ($already) {
+            return;
+        }
+
+        SiteEvent::record($site->id, 'threat_found', 'warning',
+            'לא ניתן היה לבדוק את משתמשי האתר',
+            'תוסף הסוכן באתר ('.($site->agent_plugin_version ?: 'גרסה לא ידועה').
+            ') אינו חושף כלי לקריאת משתמשים, כך שבדיקת ההסגר על המשתמשים לא בוצעה. יש לעדכן את התוסף ל-1.5.0 ומעלה.',
         );
     }
 

@@ -106,14 +106,22 @@ class CheckSitePluginChangesJob implements ShouldQueue
         if ($changes !== []) {
             $this->recordFindings($site, $changes);
 
-            // One of the additions is a quarantined intrusion indicator: that
-            // is not a finding to report and discuss, it is a removal to start
-            // now. The purge job does its own reporting, so this run stays
-            // quiet about it rather than sending a "we noticed" alongside.
-            if ($this->hasQuarantinedAddition($changes)) {
+            // A quarantined addition is not a finding to report and discuss, it
+            // is a removal to start now, and the purge job does its own
+            // reporting — so it is dropped from this alert rather than
+            // announced twice.
+            $quarantined = array_values(array_filter($changes, fn (array $c): bool => $this->isQuarantinedAddition($c)));
+            $rest = array_values(array_filter($changes, fn (array $c): bool => ! $this->isQuarantinedAddition($c)));
+
+            if ($quarantined !== []) {
                 PurgeSiteThreatsJob::dispatch($site->id);
-            } else {
-                $this->alert($team, $site, $changes);
+            }
+
+            // Everything else in the same scan still gets its alert. A security
+            // plugin removed in the same breath as the intrusion is part of the
+            // same story, and suppressing the whole batch buried it.
+            if ($rest !== []) {
+                $this->alert($team, $site, $rest);
             }
         }
 
@@ -133,35 +141,31 @@ class CheckSitePluginChangesJob implements ShouldQueue
     }
 
     /**
-     * Does any ADDED identity match the quarantine list?
+     * Is this change an ADDITION matching the quarantine list?
      *
      * Matched exactly, and only against what the diff calls an addition: the
      * plugin identity here has been through the normalizer, and a site that
      * legitimately runs one of these would otherwise be purged on the day we
      * first baseline it rather than on the day somebody installed it.
      *
-     * @param  array<int, array{0: string, 1: string, 2: string}>  $changes
+     * @param  array{0: string, 1: string, 2: string}  $change
      */
-    private function hasQuarantinedAddition(array $changes): bool
+    private function isQuarantinedAddition(array $change): bool
     {
-        if (! ThreatQuarantine::enabled()) {
+        [$kind, $id, $direction] = $change;
+
+        if ($direction !== 'added' || ! ThreatQuarantine::enabled()) {
             return false;
         }
 
-        foreach ($changes as [$kind, $id, $direction]) {
-            if ($direction !== 'added') {
-                continue;
-            }
+        $needles = $kind === 'admins' ? ThreatQuarantine::users() : ThreatQuarantine::plugins();
 
-            $needles = $kind === 'admins' ? ThreatQuarantine::users() : ThreatQuarantine::plugins();
-
-            foreach ($needles as $needle) {
-                // The plugin identity is "slug/file.php" normalized; the admin
-                // identity is the login verbatim. Both contain the quarantined
-                // token as a whole path segment rather than equalling it.
-                if ($id === $needle || str_starts_with($id, $needle.'/')) {
-                    return true;
-                }
+        foreach ($needles as $needle) {
+            // The plugin identity is "slug/file.php" normalized; the admin
+            // identity is the login verbatim. Both contain the quarantined
+            // token as a whole path segment rather than equalling it.
+            if ($id === $needle || str_starts_with($id, $needle.'/')) {
+                return true;
             }
         }
 
