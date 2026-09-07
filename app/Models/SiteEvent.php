@@ -25,6 +25,8 @@ class SiteEvent extends Model
         'theme_removed' => ['🎨', 'תבנית הוסרה'],
         'reputation' => ['🛡️', 'ממצא מוניטין'],
         'defacement' => ['🚨', 'חשד להשחתת אתר'],
+        'threat_purged' => ['🛡️', 'סימן פריצה הוסר אוטומטית'],
+        'threat_found' => ['🚨', 'סימן פריצה שלא הוסר'],
         'vulnerability' => ['⚠️', 'פגיעות אבטחה'],
         'dns' => ['🌐', 'שינוי DNS'],
         'store_silent' => ['🛒', 'החנות הפסיקה לקבל הזמנות'],

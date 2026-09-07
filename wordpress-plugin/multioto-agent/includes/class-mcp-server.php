@@ -142,12 +142,18 @@ class Multioto_Agent_Mcp_Server
     {
         $read = ['readOnlyHint' => true, 'destructiveHint' => false];
         $change = ['readOnlyHint' => false, 'destructiveHint' => false];
+        // Removes things permanently. Declared honestly so the platform files it
+        // at the top risk tier — a tool that deletes must never look like a tool
+        // that edits, whatever the panel intends to use it for.
+        $destructive = ['readOnlyHint' => false, 'destructiveHint' => true];
 
         $tools = [
             ['name' => 'wp_health', 'description' => 'סקירת בריאות האתר: גרסאות, SSL, תוספים פעילים.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => (object) []]],
             ['name' => 'wp_plugin_list', 'description' => 'רשימת התוספים המותקנים והאם יש עדכון.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => (object) []]],
             ['name' => 'wp_theme_list', 'description' => 'רשימת התבניות (themes) המותקנות ואיזו פעילה.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => (object) []]],
             ['name' => 'wp_admin_list', 'description' => 'רשימת המשתמשים בעלי תפקיד מנהל (administrator): שם משתמש, אימייל ותאריך רישום.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => (object) []]],
+            ['name' => 'wp_guard_status', 'description' => 'מצב שומר החדירות: מה ברשימת ההסגר (משתמשים ותוספים שמוסרים אוטומטית עם הופעתם), מה מהם נמצא באתר כרגע, ומה השומר כבר הסיר. after_id מחזיר רק פעולות חדשות מהמזהה שכבר נקרא.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['after_id' => ['type' => 'integer']]]],
+            ['name' => 'wp_guard_purge', 'description' => 'הרצת שומר החדירות עכשיו: מחיקת משתמש או תוסף שנמצא ברשימת ההסגר הקבועה של התוסף. הרשימה מקודדת בתוסף ואינה מקבלת פרמטרים — לא ניתן להסיר דרך הכלי הזה שום משתמש או תוסף אחר.', 'annotations' => $destructive, 'inputSchema' => ['type' => 'object', 'properties' => (object) []]],
             ['name' => 'wp_option_get', 'description' => 'קריאת הגדרה בטוחה מרשימה מוגדרת מראש.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['name' => ['type' => 'string']], 'required' => ['name']]],
             ['name' => 'wp_error_log_tail', 'description' => 'שורות אחרונות מיומן השגיאות (אם מופעל).', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['lines' => ['type' => 'integer']]]],
             ['name' => 'wp_cache_flush', 'description' => 'ניקוי מטמון אובייקטים ו-OPcache.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => (object) []]],
@@ -241,6 +247,8 @@ class Multioto_Agent_Mcp_Server
             'wp_plugin_list' => 'pluginList',
             'wp_theme_list' => 'themeList',
             'wp_admin_list' => 'adminList',
+            'wp_guard_status' => 'guardStatus',
+            'wp_guard_purge' => 'guardPurge',
             'wp_option_get' => 'optionGet',
             'wp_error_log_tail' => 'errorLogTail',
             'wp_cache_flush' => 'cacheFlush',
@@ -291,7 +299,7 @@ class Multioto_Agent_Mcp_Server
         ];
 
         // Tools whose signature takes no arguments, or a second flag.
-        $noArgs = ['wp_health', 'wp_plugin_list', 'wp_theme_list', 'wp_admin_list', 'wp_cache_flush', 'wp_salts_rotate', 'wp_core_update', 'wp_menu_list', 'wc_shipping_zones_list', 'wp_post_types_list'];
+        $noArgs = ['wp_health', 'wp_plugin_list', 'wp_theme_list', 'wp_admin_list', 'wp_cache_flush', 'wp_salts_rotate', 'wp_core_update', 'wp_menu_list', 'wc_shipping_zones_list', 'wp_post_types_list', 'wp_guard_purge'];
 
         if ($name === 'wp_plugin_activate') {
             $text = $this->setPluginState($args, true);
@@ -389,6 +397,39 @@ class Multioto_Agent_Mcp_Server
         }
 
         return wp_json_encode($out, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    }
+
+    /**
+     * What the intrusion guard is watching for, what is present right now, and
+     * what it has already removed on its own.
+     */
+    private function guardStatus(array $args): string
+    {
+        $guard = new Multioto_Agent_Guard;
+
+        return wp_json_encode(
+            $guard->status((int) ($args['after_id'] ?? 0)),
+            JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT,
+        );
+    }
+
+    /**
+     * Run the guard now.
+     *
+     * Takes no arguments by design: the quarantine list lives in the plugin, so
+     * this cannot be pointed at an administrator or a plugin of the caller's
+     * choosing. The panel is asking "check yourself", not "delete this".
+     */
+    private function guardPurge(): string
+    {
+        $guard = new Multioto_Agent_Guard;
+        $actions = $guard->sweep();
+
+        return wp_json_encode([
+            'removed' => count($actions),
+            'actions' => $actions,
+            'status' => $guard->status(),
+        ], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
     }
 
     // ---- people and media -------------------------------------------------
