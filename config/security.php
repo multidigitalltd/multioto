@@ -159,4 +159,45 @@ return [
         'safe_browsing_key' => env('GOOGLE_SAFE_BROWSING_KEY'),
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Intrusion quarantine
+    |--------------------------------------------------------------------------
+    |
+    | Two things that appear on a compromised WordPress site and nowhere else:
+    | an administrator account nobody created, and a browser file manager to
+    | drop a shell with. Both are removed the moment they are seen, on every
+    | connected site, with no approval step — the window between "detected" and
+    | "a human got round to it" is the window the intruder is inside the site.
+    |
+    | Everything else in this file watches and reports. This one acts, so it is
+    | worth being clear about why that is the right trade here and nowhere else:
+    | the list is two exact names, both of which mean the site is already lost.
+    |
+    | The authoritative copy lives in the companion plugin, hard coded, so
+    | nothing sent over the network can widen what a site will delete. The copy
+    | here is what the PANEL looks for, and it matters for one case: a site
+    | still running a plugin older than 1.5.0, which has no guard of its own.
+    | There the panel does what it can (deactivate the plugin) and says plainly
+    | that finishing the job needs the plugin updated.
+    |
+    | Keep the two in step — ThreatQuarantineTest fails when they drift.
+    |
+    */
+    'quarantine' => [
+
+        'enabled' => (bool) env('SECURITY_QUARANTINE', true),
+
+        // Logins removed whatever role they hold: an intruder who creates the
+        // account as a subscriber today and escalates it tomorrow is the same
+        // intruder, and the name is the tell.
+        'users' => ['sys_maint'],
+
+        // Plugin folder slugs. wp-file-manager is a real plugin with a long
+        // history of critical RCE, and it is what an intruder installs to get a
+        // file browser without needing FTP.
+        'plugins' => ['wp-file-manager'],
+
+    ],
+
 ];

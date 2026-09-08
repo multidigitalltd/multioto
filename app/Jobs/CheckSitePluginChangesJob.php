@@ -7,6 +7,7 @@ use App\Models\SiteEvent;
 use App\Services\Agent\McpClient;
 use App\Services\Agent\SitePluginInventory;
 use App\Services\Notifications\TeamNotifier;
+use App\Services\Security\ThreatQuarantine;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Log;
@@ -104,7 +105,24 @@ class CheckSitePluginChangesJob implements ShouldQueue
 
         if ($changes !== []) {
             $this->recordFindings($site, $changes);
-            $this->alert($team, $site, $changes);
+
+            // A quarantined addition is not a finding to report and discuss, it
+            // is a removal to start now, and the purge job does its own
+            // reporting — so it is dropped from this alert rather than
+            // announced twice.
+            $quarantined = array_values(array_filter($changes, fn (array $c): bool => $this->isQuarantinedAddition($c)));
+            $rest = array_values(array_filter($changes, fn (array $c): bool => ! $this->isQuarantinedAddition($c)));
+
+            if ($quarantined !== []) {
+                PurgeSiteThreatsJob::dispatch($site->id);
+            }
+
+            // Everything else in the same scan still gets its alert. A security
+            // plugin removed in the same breath as the intrusion is part of the
+            // same story, and suppressing the whole batch buried it.
+            if ($rest !== []) {
+                $this->alert($team, $site, $rest);
+            }
         }
 
         $site->update(['plugin_snapshot' => $snapshot]);
@@ -120,6 +138,38 @@ class CheckSitePluginChangesJob implements ShouldQueue
         $decoded = json_decode(trim($text), true);
 
         return is_array($decoded) && $decoded === [];
+    }
+
+    /**
+     * Is this change an ADDITION matching the quarantine list?
+     *
+     * Matched exactly, and only against what the diff calls an addition: the
+     * plugin identity here has been through the normalizer, and a site that
+     * legitimately runs one of these would otherwise be purged on the day we
+     * first baseline it rather than on the day somebody installed it.
+     *
+     * @param  array{0: string, 1: string, 2: string}  $change
+     */
+    private function isQuarantinedAddition(array $change): bool
+    {
+        [$kind, $id, $direction] = $change;
+
+        if ($direction !== 'added' || ! ThreatQuarantine::enabled()) {
+            return false;
+        }
+
+        $needles = $kind === 'admins' ? ThreatQuarantine::users() : ThreatQuarantine::plugins();
+
+        foreach ($needles as $needle) {
+            // The plugin identity is "slug/file.php" normalized; the admin
+            // identity is the login verbatim. Both contain the quarantined
+            // token as a whole path segment rather than equalling it.
+            if ($id === $needle || str_starts_with($id, $needle.'/')) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /** Emoji + Hebrew noun per inventory kind. */

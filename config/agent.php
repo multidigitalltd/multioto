@@ -51,7 +51,7 @@ return [
         // The current version of the companion plugin we ship. A site reporting
         // an older version is told to update itself from the download channel —
         // so we never have to re-install the plugin by hand on every site.
-        'current_version' => env('AGENT_PLUGIN_VERSION', '1.4.0'),
+        'current_version' => env('AGENT_PLUGIN_VERSION', '1.5.0'),
 
         // Private disk + path prefix where release zips live: {path}/{version}.zip.
         'disk' => env('AGENT_PLUGIN_DISK', 'local'),
@@ -125,7 +125,7 @@ return [
      | the harmless one.
      */
     'risk' => [
-        3 => ['exec', 'eval', 'sql', 'db_write', 'file_write', 'file_edit', 'delete', 'drop', 'remove'],
+        3 => ['exec', 'eval', 'sql', 'db_write', 'file_write', 'file_edit', 'delete', 'drop', 'remove', 'purge'],
         1 => ['cache', 'restart', 'maintenance', 'transient'],
         0 => ['list', 'get', 'read', 'health', 'status', 'log', 'info', 'check', 'search', 'schema'],
     ],

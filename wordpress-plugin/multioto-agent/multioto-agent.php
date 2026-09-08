@@ -3,24 +3,31 @@
  * Plugin Name:       Multi Digital Agent
  * Plugin URI:        https://multidigital.co.il
  * Description:        מחבר את האתר לפאנל התפעול של Multi Digital: נקודת קצה MCP מאובטחת לאבחון ותיקון מרחוק.
- * Version:           1.4.0
+ * Version:           1.5.0
  * Requires at least: 6.0
  * Requires PHP:      7.4
  * Author:            Multi Digital
  * License:           GPL-2.0-or-later
  * Text Domain:       multioto-agent
  *
- * The agent NEVER acts on its own: this plugin only exposes a small, fixed set
- * of allow-listed tools that the Multi Digital platform calls after a manager
- * approved the exact action. Every request is authenticated with a per-site
- * shared secret. There is no arbitrary code/SQL/file execution.
+ * The agent does not decide anything on its own: this plugin exposes a small,
+ * fixed set of allow-listed tools that the Multi Digital platform calls after a
+ * manager approved the exact action. Every request is authenticated with a
+ * per-site shared secret. There is no arbitrary code/SQL/file execution.
+ *
+ * The one exception, and it is deliberate: the intrusion guard (class-guard.php)
+ * removes two specific compromise indicators — an administrator named
+ * `sys_maint` and the wp-file-manager plugin — the moment they appear, with no
+ * approval and no instruction from anywhere. The list is hard-coded here, so
+ * nothing sent over the network can widen it; see that file for why waiting for
+ * a human on those two is the wrong trade.
  */
 
 if (! defined('ABSPATH')) {
     exit; // No direct access.
 }
 
-define('MULTIOTO_AGENT_VERSION', '1.4.0');
+define('MULTIOTO_AGENT_VERSION', '1.5.0');
 define('MULTIOTO_AGENT_FILE', __FILE__);
 define('MULTIOTO_AGENT_SLUG', 'multioto-agent');
 define('MULTIOTO_AGENT_DIR', plugin_dir_path(__FILE__));
@@ -67,6 +74,7 @@ require_once MULTIOTO_AGENT_DIR.'includes/class-users.php';
 require_once MULTIOTO_AGENT_DIR.'includes/class-media.php';
 require_once MULTIOTO_AGENT_DIR.'includes/class-comments.php';
 require_once MULTIOTO_AGENT_DIR.'includes/class-terms.php';
+require_once MULTIOTO_AGENT_DIR.'includes/class-guard.php';
 require_once MULTIOTO_AGENT_DIR.'includes/class-mcp-server.php';
 require_once MULTIOTO_AGENT_DIR.'includes/class-updater.php';
 
@@ -74,6 +82,13 @@ require_once MULTIOTO_AGENT_DIR.'includes/class-updater.php';
 add_action('plugins_loaded', function () {
     $settings = new Multioto_Agent_Settings;
     $settings->boot();
+
+    // Boots even on a site that was never connected to the panel: the two
+    // things it removes are compromise indicators, not platform features, and
+    // a site whose secret was never set is not a site that should keep a
+    // stranger's administrator account.
+    $guard = new Multioto_Agent_Guard;
+    $guard->boot();
 
     $server = new Multioto_Agent_Mcp_Server;
     $server->boot();

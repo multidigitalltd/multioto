@@ -19,6 +19,7 @@ use App\Jobs\DrillBackupJob;
 use App\Jobs\FollowUpPendingTicketsJob;
 use App\Jobs\HeartbeatJob;
 use App\Jobs\MonitorSiteJob;
+use App\Jobs\PurgeSiteThreatsJob;
 use App\Jobs\ReconcileChargeJob;
 use App\Jobs\RefreshCloudflareCountryRulesJob;
 use App\Jobs\RemindExpiringLicensesJob;
@@ -49,6 +50,7 @@ use App\Models\WebhookEvent;
 use App\Providers\SettingsServiceProvider;
 use App\Services\Backup\BackupRunner;
 use App\Services\Calendar\ShabbatClock;
+use App\Services\Security\ThreatQuarantine;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schedule;
@@ -175,6 +177,27 @@ Schedule::call(function () {
         ->pluck('id')
         ->each(fn (int $id) => CheckSitePluginChangesJob::dispatch($id));
 })->dailyAt('07:30')->name('monitoring:plugin-changes')->onOneServer();
+
+// Intrusion quarantine, hourly and around the clock.
+//
+// Not gated on $awake, and not daily like the watch above: an administrator
+// nobody created and a file manager nobody installed are not findings to review
+// in the morning, they are somebody inside the site now. The removal itself
+// happens on the site within the same request (the companion plugin's guard);
+// this sweep is the safety net for what its hooks cannot see — a user written
+// straight into the database, a plugin folder uploaded over FTP, a site still
+// on an older plugin — and the path by which what it removed reaches the team.
+Schedule::call(function () {
+    if (! ThreatQuarantine::enabled()) {
+        return;
+    }
+
+    Site::query()
+        ->where('mcp_enabled', true)
+        ->whereNotNull('mcp_endpoint')
+        ->pluck('id')
+        ->each(fn (int $id) => PurgeSiteThreatsJob::dispatch($id));
+})->hourly()->name('security:quarantine-sweep')->onOneServer();
 
 // Silent-failure watch for stores: a shop that answers 200 all day but stopped
 // taking orders (broken checkout) or stopped being paid (broken gateway).

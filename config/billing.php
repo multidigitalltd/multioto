@@ -642,7 +642,12 @@ return [
         'pending_followup' => [
             'enabled' => (bool) env('SUPPORT_PENDING_FOLLOWUP', true),
             'reminder_days' => (int) env('SUPPORT_PENDING_REMINDER_DAYS', 3),
-            'close_days' => (int) env('SUPPORT_PENDING_CLOSE_DAYS', 7),
+            // Fourteen days of silence after the reminder, then the ticket is
+            // closed without telling the customer: they were already asked once
+            // and chose not to answer, and "we closed your ticket" on top of
+            // that is a message about our filing, not about their problem.
+            // A reply reopens it, so nothing is lost by closing early.
+            'close_days' => (int) env('SUPPORT_PENDING_CLOSE_DAYS', 14),
         ],
 
         // Daily email reminder to a team member about their open tasks that are
