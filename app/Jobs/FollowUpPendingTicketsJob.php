@@ -13,6 +13,11 @@ use Illuminate\Foundation\Queue\Queueable;
  * silent for reminder_days, send the customer one reminder; after close_days
  * of silence, auto-close the ticket. Timings live in config/billing.php.
  * Dispatched once a day by the scheduler.
+ *
+ * The close is SILENT by design. The customer was asked once and chose not to
+ * answer; "we closed your ticket" on top of that is a message about our filing
+ * rather than about their problem. Nothing is lost either — a reply reopens the
+ * ticket, and the history stays on it.
  */
 class FollowUpPendingTicketsJob implements ShouldQueue
 {
@@ -34,18 +39,37 @@ class FollowUpPendingTicketsJob implements ShouldQueue
         $reminderDays = (int) ($config['reminder_days'] ?? 3);
         $closeDays = (int) ($config['close_days'] ?? 7);
 
+        $cutoff = now()->subDays(min($reminderDays, $closeDays));
+
         Ticket::query()
             ->where('status', TicketStatus::Pending)
-            ->whereNotNull('pending_since')
             // Only tickets already old enough for SOME action (reminder is the
             // earlier threshold), oldest first, THEN the cap — so fresh rows can
             // never crowd an overdue ticket out of the bounded daily sweep.
-            ->where('pending_since', '<=', now()->subDays(min($reminderDays, $closeDays)))
-            ->oldest('pending_since')
+            ->where(fn ($query) => $query
+                ->where('pending_since', '<=', $cutoff)
+                // A ticket that went Pending before this column existed carries
+                // no clock, and `whereNotNull` quietly excluded it — so the
+                // OLDEST waiting tickets in the system, the ones this sweep is
+                // most for, were the only ones it could never close. For those
+                // the clock is the last time anything happened on the ticket.
+                ->orWhere(fn ($legacy) => $legacy
+                    ->whereNull('pending_since')
+                    ->where('updated_at', '<=', $cutoff)))
+            // Ordered by the same clock the decision uses. Sorting by
+            // pending_since alone puts the unstamped rows first on SQLite and
+            // last on Postgres, so the cap would cut a different set on each.
+            ->orderByRaw('COALESCE(pending_since, updated_at) ASC')
             ->limit(200)
             ->get()
             ->each(function (Ticket $ticket) use ($reminderDays, $closeDays) {
-                $silentDays = $ticket->pending_since->diffInDays(now());
+                $since = $ticket->pending_since ?? $ticket->updated_at;
+
+                if ($since === null) {
+                    return; // No clock at all — nothing honest to measure against.
+                }
+
+                $silentDays = $since->diffInDays(now());
 
                 if ($silentDays >= $closeDays) {
                     // Quiet close: the customer already got the reminder and chose
@@ -57,12 +81,23 @@ class FollowUpPendingTicketsJob implements ShouldQueue
                     return;
                 }
 
+                // Still waiting: give an unstamped ticket the clock we just read,
+                // so the panel shows since when it has been waiting instead of a
+                // blank, and the next run treats it as an ordinary row. Written
+                // without touching updated_at — that column IS its clock here,
+                // and bumping it would reset the wait to zero every night.
+                if ($ticket->pending_since === null) {
+                    $ticket->timestamps = false;
+                    $ticket->forceFill(['pending_since' => $since])->saveQuietly();
+                    $ticket->timestamps = true;
+                }
+
                 if ($silentDays >= $reminderDays && $ticket->pending_reminded_at === null) {
                     // Tag the notification with this pending cycle so a ticket that
                     // has gone Pending → replied → Pending again is reminded afresh
                     // (the status-only dedupe would otherwise swallow it).
                     SendTicketNotificationJob::dispatch(
-                        $ticket->id, 'ticket.reminder', 'cycle-'.$ticket->pending_since->getTimestamp(),
+                        $ticket->id, 'ticket.reminder', 'cycle-'.$since->getTimestamp(),
                     );
                     $ticket->update(['pending_reminded_at' => now()]);
                 }
