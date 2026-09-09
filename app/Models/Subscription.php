@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Enums\BillingInterval;
 use App\Enums\ChargeStatus;
+use App\Enums\PaymentMethod;
 use App\Enums\SubscriptionStatus;
 use App\Support\Money;
 use Illuminate\Database\Eloquent\Builder;
@@ -18,13 +19,18 @@ class Subscription extends Model
 {
     use HasFactory;
 
-    /** Customer payment methods that are collected by hand (not via a saved card). */
+    /**
+     * Payment methods that are collected by hand (not via a saved card).
+     *
+     * PaymentMethod::manualValues() is the live source now — this is the same
+     * list written out, kept only so a test can assert the two never drift.
+     */
     public const MANUAL_PAYMENT_METHODS = ['standing_order', 'bank_transfer', 'checks'];
 
     protected $fillable = [
         'customer_id', 'plan_id', 'external_ref', 'name', 'billing_interval', 'vat_applies',
         'installments_total',
-        'site_id', 'token_id', 'status',
+        'site_id', 'token_id', 'payment_method', 'card_fallback_days', 'status',
         'current_period_start', 'current_period_end', 'next_charge_at', 'card_expiry_alerted_at',
         'price_agorot_override', 'dunning_stage', 'canceled_at',
     ];
@@ -41,6 +47,7 @@ class Subscription extends Model
             'card_expiry_alerted_at' => 'datetime',
             'price_agorot_override' => 'integer',
             'installments_total' => 'integer',
+            'card_fallback_days' => 'integer',
             'dunning_stage' => 'integer',
             'canceled_at' => 'datetime',
         ];
@@ -132,15 +139,113 @@ class Subscription extends Model
     public const AUTO_CHARGE_STATUSES = [SubscriptionStatus::Active, SubscriptionStatus::PastDue];
 
     /**
+     * How THIS subscription is paid: its own setting, or the customer's when it
+     * has none. Null when neither says — which means a card, the default
+     * arrangement.
+     */
+    public function effectivePaymentMethod(): ?string
+    {
+        return $this->payment_method ?? $this->customer?->payment_method;
+    }
+
+    /** Collected by a person (transfer / standing order / cheques). */
+    public function isManuallyCollected(): bool
+    {
+        return PaymentMethod::isManualValue($this->effectivePaymentMethod());
+    }
+
+    /**
+     * Restrict to subscriptions collected BY HAND under the effective method.
+     *
+     * The subscription's own column wins when it is set, and only a subscription
+     * that says nothing falls through to the customer's. Written as a query
+     * rather than a PHP check because every collection screen and the scheduler
+     * itself have to ask this of thousands of rows at once — and if the two ever
+     * disagreed, a subscription would be on the automatic run and the manual
+     * work list at the same time, or on neither.
+     */
+    public function scopeWhereCollectedByHand(Builder $query): Builder
+    {
+        return $query->where(fn (Builder $q) => $q
+            ->whereIn('payment_method', PaymentMethod::manualValues())
+            ->orWhere(fn (Builder $inherit) => $inherit
+                ->whereNull('payment_method')
+                ->whereHas('customer', fn (Builder $c) => $c
+                    ->whereIn('payment_method', PaymentMethod::manualValues()))));
+    }
+
+    /** The complement: subscriptions whose effective method is a card. */
+    public function scopeWhereCollectedByCard(Builder $query): Builder
+    {
+        return $query->where(fn (Builder $q) => $q
+            // Explicitly set to a card method — this overrides a customer who is
+            // otherwise on a transfer, which is the whole point of the column.
+            ->where(fn (Builder $own) => $own
+                ->whereNotNull('payment_method')
+                ->whereNotIn('payment_method', PaymentMethod::manualValues()))
+            // Or silent, and the customer is not on a manual method either. A
+            // blank on both sides means a card: that is the default arrangement,
+            // and reading it as manual would move the subscription off the
+            // automatic run onto a list nobody was told to watch.
+            ->orWhere(fn (Builder $inherit) => $inherit
+                ->whereNull('payment_method')
+                ->where(fn (Builder $c) => $c
+                    ->whereDoesntHave('customer', fn (Builder $q2) => $q2
+                        ->whereIn('payment_method', PaymentMethod::manualValues())))));
+    }
+
+    /**
      * Subscriptions whose next charge is due now — the scheduler's work list.
+     *
+     * A saved card is no longer enough on its own: a subscription the customer
+     * pays by transfer keeps its card on file as a fallback (see
+     * scopeDueForCardFallback), and charging it on the ordinary run would take
+     * money the customer arranged to send another way.
      */
     public function scopeDueForCharge(Builder $query): Builder
     {
         return $query
             ->whereIn('status', self::AUTO_CHARGE_STATUSES)
             ->whereNotNull('token_id')
+            ->whereCollectedByCard()
             ->whereNotNull('next_charge_at')
             ->where('next_charge_at', '<=', now());
+    }
+
+    /**
+     * Manually-collected subscriptions whose payment never arrived, and whose
+     * saved card was set to back them up.
+     *
+     * The safety property is the grace period, and it is opt-in per
+     * subscription: the card is charged only after the collection has been due
+     * for card_fallback_days and nobody recorded a payment. Recording one on the
+     * "גבייה ידנית" screen rolls next_charge_at forward, which takes the
+     * subscription out of this scope — so a transfer that arrived and was
+     * written down can never be charged a second time.
+     */
+    public function scopeDueForCardFallback(Builder $query): Builder
+    {
+        return $query
+            ->whereIn('status', self::AUTO_CHARGE_STATUSES)
+            ->whereNotNull('token_id')
+            ->whereNotNull('card_fallback_days')
+            ->whereCollectedByHand()
+            ->whereNotNull('next_charge_at')
+            // Days are a column, so the cutoff cannot be a single timestamp:
+            // each row is late by its own allowance. Date arithmetic is the one
+            // thing the three engines spell differently, so it is written per
+            // driver — read from THIS query's connection, not the default one,
+            // or a query run against another connection would be built with the
+            // wrong dialect and fail (or, worse, be built for a driver that
+            // happens to parse it differently).
+            ->whereRaw(
+                match ($query->getConnection()->getDriverName()) {
+                    'sqlite' => "datetime(next_charge_at, '+' || card_fallback_days || ' days') <= ?",
+                    'pgsql' => "next_charge_at + (card_fallback_days * INTERVAL '1 day') <= ?",
+                    default => 'DATE_ADD(next_charge_at, INTERVAL card_fallback_days DAY) <= ?',
+                },
+                [now()],
+            );
     }
 
     /**
@@ -152,7 +257,19 @@ class Subscription extends Model
     public function collectsAutomatically(): bool
     {
         return $this->token_id !== null
-            && in_array($this->status, self::AUTO_CHARGE_STATUSES, true);
+            && in_array($this->status, self::AUTO_CHARGE_STATUSES, true)
+            // A card on file that the subscription is not paid with does not
+            // make it self-collecting — somebody still has to go and get the
+            // transfer, whatever the fallback does later.
+            && ! $this->isManuallyCollected();
+    }
+
+    /** Is the saved card standing behind a collection somebody does by hand? */
+    public function usesCardFallback(): bool
+    {
+        return $this->card_fallback_days !== null
+            && $this->token_id !== null
+            && $this->isManuallyCollected();
     }
 
     /**
@@ -173,9 +290,12 @@ class Subscription extends Model
     public function scopeManuallyCollected(Builder $query): Builder
     {
         return $query
-            ->whereNull('token_id')
+            // No longer "has no card". A subscription paid by transfer may well
+            // have a card on file as a fallback, and it is still collected by
+            // hand until that fallback fires — leaving it off this list because
+            // a card exists is how the collection quietly stops happening.
             ->whereNot('status', SubscriptionStatus::Canceled)
-            ->whereHas('customer', fn (Builder $c) => $c->whereIn('payment_method', self::MANUAL_PAYMENT_METHODS));
+            ->whereCollectedByHand();
     }
 
     /**
@@ -206,9 +326,7 @@ class Subscription extends Model
             ->whereNotNull('next_charge_at')
             // A blank payment method means nobody chose bank transfer, and the
             // default arrangement is a card — so it belongs here, not in limbo.
-            ->whereHas('customer', fn (Builder $c) => $c
-                ->whereNotIn('payment_method', self::MANUAL_PAYMENT_METHODS)
-                ->orWhereNull('payment_method'));
+            ->whereCollectedByCard();
     }
 
     /** Awaiting a card AND already past the date it should have been charged. */

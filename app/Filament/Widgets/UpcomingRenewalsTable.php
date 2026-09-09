@@ -49,6 +49,15 @@ class UpcomingRenewalsTable extends BaseWidget
             return 'גבייה אוטומטית';
         }
 
+        // A subscription the customer pays another way is collected by hand on
+        // purpose — saying "אין כרטיס" about it would send somebody to chase a
+        // card that was never meant to pay for it.
+        if ($subscription->isManuallyCollected()) {
+            return $subscription->usesCardFallback()
+                ? 'גבייה ידנית — כרטיס גיבוי אחרי '.$subscription->card_fallback_days.' ימים'
+                : 'גבייה ידנית';
+        }
+
         return $subscription->token_id === null
             ? 'גבייה ידנית — אין כרטיס'
             : 'גבייה ידנית — בתקופת ניסיון';
@@ -120,11 +129,13 @@ class UpcomingRenewalsTable extends BaseWidget
                         : $query),
                 Tables\Filters\Filter::make('manual_only')
                     ->label('רק מה שלא ייגבה לבד')
-                    // Mirrors collectsAutomatically(): no card, OR a card the
-                    // scheduler will not act on because of the status.
+                    // Mirrors collectsAutomatically(): no card, a card the
+                    // scheduler will not act on because of the status, or a
+                    // subscription paid another way entirely.
                     ->query(fn (Builder $query): Builder => $query->where(
                         fn (Builder $q) => $q->whereNull('token_id')
                             ->orWhereNotIn('status', Subscription::AUTO_CHARGE_STATUSES)
+                            ->orWhere(fn (Builder $byHand) => $byHand->whereCollectedByHand())
                     )),
             ])
             ->emptyStateHeading('אין חידושים צפויים')

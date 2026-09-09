@@ -50,8 +50,10 @@ use App\Models\WebhookEvent;
 use App\Providers\SettingsServiceProvider;
 use App\Services\Backup\BackupRunner;
 use App\Services\Calendar\ShabbatClock;
+use App\Services\Notifications\TeamNotifier;
 use App\Services\Security\ThreatQuarantine;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schedule;
 
@@ -125,6 +127,47 @@ Schedule::call(function () {
         ->pluck('id')
         ->each(fn (int $id) => ChargeSubscriptionJob::dispatch($id));
 })->everyFifteenMinutes()->name('billing:dispatch-due-charges')->when($awake)->onOneServer();
+
+// The card as a fallback: a subscription the customer pays by transfer or
+// standing order, whose payment has now been due for its whole grace period
+// with nobody recording one. The ordinary run above deliberately skips these —
+// this is the only path that charges them, and only for subscriptions somebody
+// explicitly gave a fallback allowance.
+//
+// Recording the payment on the "גבייה ידנית" screen rolls next_charge_at
+// forward and takes the subscription straight out of this query, so a transfer
+// that arrived and was written down is never charged on top.
+//
+// The team is told each time, once per due period: a card charged instead of a
+// transfer is money arriving somewhere nobody is looking for it, and somebody
+// is otherwise still chasing that transfer.
+Schedule::call(function () {
+    Subscription::query()
+        ->dueForCardFallback()
+        ->with('customer')
+        ->get()
+        ->each(function (Subscription $subscription) {
+            $key = 'card-fallback:'.$subscription->id.':'.$subscription->next_charge_at?->getTimestamp();
+
+            if (Cache::add($key, true, now()->addDays(30))) {
+                app(TeamNotifier::class)->alert(
+                    '💳 גבייה ידנית שלא הגיעה — מחייבים את כרטיס הגיבוי',
+                    sprintf(
+                        "מנוי #%d של %s (%s) היה אמור להיגבות ב-%s ולא סומן כשולם תוך %d ימים.\n\n".
+                        'מחייבים עכשיו את הכרטיס השמור. אם התשלום כן הגיע — עצרו את החיוב ועדכנו את המנוי.',
+                        $subscription->id,
+                        $subscription->customer?->name ?? 'לקוח',
+                        $subscription->planName(),
+                        $subscription->next_charge_at?->format('d/m/Y') ?? '—',
+                        (int) $subscription->card_fallback_days,
+                    ),
+                    rtrim((string) config('app.url'), '/').'/admin/customers/'.$subscription->customer_id,
+                );
+            }
+
+            ChargeSubscriptionJob::dispatch($subscription->id);
+        });
+})->everyFifteenMinutes()->name('billing:dispatch-card-fallback')->when($awake)->onOneServer();
 
 // Reconcile manual charges left "pending": if Cardcom actually charged the card
 // but we never recorded the result (lost webhook / crashed job), finalise the

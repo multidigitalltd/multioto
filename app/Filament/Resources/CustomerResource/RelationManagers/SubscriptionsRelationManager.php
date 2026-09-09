@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\CustomerResource\RelationManagers;
 
 use App\Enums\BillingInterval;
+use App\Enums\PaymentMethod;
 use App\Enums\SubscriptionStatus;
 use App\Filament\Support\InstallmentFields;
 use App\Filament\Support\MoneyField;
@@ -64,6 +65,27 @@ class SubscriptionsRelationManager extends RelationManager
             Forms\Components\Select::make('site_id')->label('אתר')
                 ->relationship('site', 'domain', fn ($query, RelationManager $livewire) => $query->where('customer_id', $livewire->getOwnerRecord()->id))
                 ->helperText('אופציונלי — האתר שהמנוי מכסה.'),
+            // How THIS subscription is paid. The customer-level setting stays the
+            // default, so the common case needs no decision — but the same
+            // customer can have hosting on a standing order and a retainer on
+            // the card, and until now one answer was forced onto both.
+            Forms\Components\Select::make('payment_method')
+                ->label('אמצעי תשלום למנוי')
+                ->options(PaymentMethod::options())
+                ->placeholder(fn (RelationManager $livewire): string => 'כמו בכרטיס הלקוח'.
+                    (filled($method = $livewire->getOwnerRecord()->payment_method)
+                        ? ' ('.(PaymentMethod::tryFrom($method)?->getLabel() ?? $method).')'
+                        : ''))
+                ->live()
+                ->helperText('רק במנוי שמשלמים אחרת מברירת המחדל של הלקוח. מנוי שמוגדר כאן לגבייה ידנית לא ייגבה אוטומטית בכרטיס, גם אם יש כרטיס שמור.'),
+            Forms\Components\TextInput::make('card_fallback_days')
+                ->label('כרטיס גיבוי אחרי (ימים)')
+                ->numeric()->minValue(1)->maxValue(120)
+                ->placeholder('ללא — לא לחייב בכרטיס')
+                ->visible(fn (Forms\Get $get, RelationManager $livewire): bool => PaymentMethod::isManualValue(
+                    $get('payment_method') ?: $livewire->getOwnerRecord()->payment_method,
+                ))
+                ->helperText('אם התשלום לא סומן כשולם תוך כך וכך ימים מהמועד — הכרטיס השמור יחויב אוטומטית, והצוות יקבל התראה. השאירו ריק כדי שהכרטיס לעולם לא יחויב על המנוי הזה.'),
             Forms\Components\Select::make('status')->label('סטטוס')->options(SubscriptionStatus::class)
                 ->default(SubscriptionStatus::Active)->required(),
             Forms\Components\DateTimePicker::make('next_charge_at')->label('חיוב הבא'),
@@ -81,6 +103,18 @@ class SubscriptionsRelationManager extends RelationManager
                     ->state(fn (Subscription $record): string => $record->planName())
                     ->description(fn (Subscription $record): ?string => $record->installmentSummary()),
                 Tables\Columns\TextColumn::make('status')->label('סטטוס')->badge(),
+                // Says how the money actually arrives, and whether the card is
+                // standing behind it — the question the whole setting exists to
+                // answer, so it belongs in the list and not only in the form.
+                Tables\Columns\TextColumn::make('payment_method')->label('תשלום')
+                    ->state(fn (Subscription $record): string => $record->collectsAutomatically()
+                        ? 'כרטיס — אוטומטי'
+                        : (PaymentMethod::tryFrom((string) $record->effectivePaymentMethod())?->getLabel() ?? 'כרטיס'))
+                    ->badge()
+                    ->color(fn (Subscription $record): string => $record->collectsAutomatically() ? 'success' : 'warning')
+                    ->description(fn (Subscription $record): ?string => $record->usesCardFallback()
+                        ? 'כרטיס גיבוי אחרי '.$record->card_fallback_days.' ימים'
+                        : null),
                 Tables\Columns\TextColumn::make('next_charge_at')->label('חיוב הבא')->dateTime('d/m/Y')->placeholder('—'),
                 Tables\Columns\TextColumn::make('dunning_stage')->label('שלב דאנינג')->badge(),
             ])

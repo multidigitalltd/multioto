@@ -120,7 +120,10 @@ class CardTokenService
 
         $customer->subscriptions()
             ->whereNot('status', SubscriptionStatus::Canceled)
-            ->each(function (Subscription $subscription) use ($token, $collectNow): void {
+            ->each(function (Subscription $subscription) use ($customer, $token, $collectNow): void {
+                // The customer is already in hand — hand it over rather than
+                // letting each row fetch it again to answer "how is this paid".
+                $subscription->setRelation('customer', $customer);
                 $subscription->update(['token_id' => $token->id]);
 
                 if (! $collectNow) {
@@ -140,7 +143,13 @@ class CardTokenService
 
                 if ($subscription->status !== SubscriptionStatus::Canceled
                     && $subscription->next_charge_at
-                    && $subscription->next_charge_at->isPast()) {
+                    && $subscription->next_charge_at->isPast()
+                    // A subscription the customer pays by transfer keeps its
+                    // card as a fallback only. Entering a card must not collect
+                    // it here — that is the fallback's decision, after its grace
+                    // period, and taking the money now would be charging a card
+                    // the customer did not arrange to have charged.
+                    && ! $subscription->isManuallyCollected()) {
                     // The customer just updated their card in order to pay —
                     // charge now, even during the Shabbat quiet period.
                     ChargeSubscriptionJob::dispatch($subscription->id, manual: true);
