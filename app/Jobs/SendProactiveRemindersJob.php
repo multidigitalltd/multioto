@@ -105,7 +105,10 @@ class SendProactiveRemindersJob implements ShouldQueue
         $lines = $subs->take(10)->map(fn (Subscription $s): string => sprintf('• %s — %s (%s, מ-%s)',
             $s->customer?->name ?? 'לקוח',
             Money::ils($s->totalChargeAgorot()),
-            self::MANUAL_METHOD_LABELS[$s->customer?->payment_method] ?? 'ידני',
+            // The SUBSCRIPTION's method. Reading the customer's would name the
+            // wrong rail for a subscription that overrides it — and this line is
+            // what the team acts on when they go and look for the money.
+            self::MANUAL_METHOD_LABELS[$s->effectivePaymentMethod()] ?? 'ידני',
             $s->next_charge_at->format('d/m'),
         ));
 

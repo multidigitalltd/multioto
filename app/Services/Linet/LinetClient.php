@@ -103,9 +103,15 @@ class LinetClient
         // A tax invoice/receipt records the payment, so it carries a docCheq —
         // with the Linet payment-method code that matches how the customer pays.
         $payload = $this->buildDocumentPayload($charge, $vatCategory, $description, (string) $config['doctype'], "charge-{$charge->id}");
-        // Charges are usually created via the subscription (customer_id unset),
-        // so fall back to the subscription's customer for the payment method.
-        $method = $charge->customer?->payment_method ?? $charge->subscription?->customer?->payment_method;
+        // What the money ACTUALLY moved on, as recorded when it moved. The
+        // customer's default is only a fallback now, for charges written before
+        // the column existed: a subscription can be paid another way than the
+        // customer usually is, and a saved card can stand in for a transfer that
+        // never arrived — so reading the customer here would put the wrong
+        // payment means on a tax document, in both directions.
+        $method = $charge->payment_method
+            ?? $charge->customer?->payment_method
+            ?? $charge->subscription?->customer?->payment_method;
         $payload['docCheq'] = [[
             'type' => $this->paymentTypeFor($method),
             'currency_id' => 'ILS',

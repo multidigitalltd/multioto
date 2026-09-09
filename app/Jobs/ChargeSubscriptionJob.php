@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Enums\BillingInterval;
 use App\Enums\ChargeStatus;
+use App\Enums\PaymentMethod;
 use App\Enums\SubscriptionStatus;
 use App\Jobs\Concerns\PausesForShabbat;
 use App\Jobs\Concerns\WaitsForRestore;
@@ -35,24 +36,56 @@ class ChargeSubscriptionJob implements ShouldQueue
 
     public int $tries = 1;
 
+    /** Queued by the ordinary due-charge run (Subscription::dueForCharge). */
+    public const MODE_SCHEDULED = 'scheduled';
+
+    /** Queued because a manual collection never arrived (dueForCardFallback). */
+    public const MODE_FALLBACK = 'fallback';
+
     /**
      * $manual marks a charge a human explicitly requested right now (operator
      * "חייב עכשיו", or a customer who just updated their card to pay) — those
      * run immediately and never defer to after Shabbat; only SCHEDULED charges
      * hold for the quiet period.
+     *
+     * $mode records WHICH scheduled run queued this, so the worker can ask that
+     * same question again before taking the money. Null means a person asked
+     * for this charge directly, and there is no scheduling rule to re-check.
      */
-    public function __construct(public int $subscriptionId, public bool $manual = false) {}
+    public function __construct(public int $subscriptionId, public bool $manual = false, public ?string $mode = null) {}
 
     /** @return array<int, mixed> */
     protected function shabbatDispatchArgs(): array
     {
-        return [$this->subscriptionId, $this->manual];
+        return [$this->subscriptionId, $this->manual, $this->mode];
     }
 
     /** @return array<int, mixed> */
     protected function backupWaitDispatchArgs(): array
     {
-        return [$this->subscriptionId, $this->manual];
+        return [$this->subscriptionId, $this->manual, $this->mode];
+    }
+
+    /**
+     * Is the reason this job was queued still true?
+     *
+     * A job sits in the queue for a while, and in that time somebody can move
+     * the subscription to a bank transfer, or take away the card fallback, or
+     * lengthen its grace period. The due-date check alone does not notice any
+     * of that — it would charge a card on an arrangement that no longer says
+     * to. So the scheduling rule is asked again, here, inside the lock, using
+     * the same scope that queued the job in the first place rather than a
+     * second copy of its conditions.
+     */
+    private function stillEligible(): bool
+    {
+        return match ($this->mode) {
+            self::MODE_SCHEDULED => Subscription::query()->whereKey($this->subscriptionId)->dueForCharge()->exists(),
+            self::MODE_FALLBACK => Subscription::query()->whereKey($this->subscriptionId)->dueForCardFallback()->exists(),
+            // A human asked for this one. Their decision is the authority, and
+            // isChargeable() below is the only gate it answers to.
+            default => true,
+        };
     }
 
     public function handle(CardcomClient $cardcom, DunningMachine $dunning): void
@@ -85,6 +118,10 @@ class ChargeSubscriptionJob implements ShouldQueue
 
             if ($subscription->next_charge_at === null || $subscription->next_charge_at->isFuture()) {
                 return; // Already charged by a concurrent/earlier run.
+            }
+
+            if (! $this->stillEligible()) {
+                return; // The arrangement changed while this waited in the queue.
             }
 
             $charge = $this->createPendingCharge($subscription);
@@ -159,6 +196,11 @@ class ChargeSubscriptionJob implements ShouldQueue
             'vat_agorot' => $subscription->vatAgorot(),
             'total_agorot' => $subscription->totalChargeAgorot(),
             'currency' => config('billing.currency'),
+            // Everything this job collects runs on a card, including a fallback
+            // charge for a subscription nominally paid by transfer — and the
+            // receipt has to say card, because that is where the money came
+            // from and what the customer will see on their statement.
+            'payment_method' => PaymentMethod::CreditCard->value,
             'status' => ChargeStatus::Pending,
             'attempt_number' => $attempt,
             'period_start' => $periodStart,

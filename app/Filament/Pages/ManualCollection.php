@@ -89,9 +89,19 @@ class ManualCollection extends Page implements HasTable
                 Tables\Columns\TextColumn::make('customer.name')->label('לקוח')->searchable()->sortable()->weight('bold'),
                 Tables\Columns\TextColumn::make('plan_name')->label('מנוי')
                     ->state(fn (Subscription $record): string => $record->planName()),
-                Tables\Columns\TextColumn::make('customer.payment_method')->label('אמצעי')
+                // The SUBSCRIPTION's method, which may differ from the
+                // customer's — reading the customer here would label a row by an
+                // arrangement that does not apply to it.
+                Tables\Columns\TextColumn::make('payment_method')->label('אמצעי')
+                    ->state(fn (Subscription $record): string => self::METHOD_LABELS[$record->effectivePaymentMethod()] ?? '—')
                     ->badge()
-                    ->formatStateUsing(fn (?string $state): string => self::METHOD_LABELS[$state] ?? '—'),
+                    // A card standing behind a manual collection changes what
+                    // this row means: it will collect itself if nobody gets to
+                    // it, so it is not the same job as one that will simply go
+                    // unpaid.
+                    ->description(fn (Subscription $record): ?string => $record->usesCardFallback()
+                        ? 'כרטיס גיבוי אחרי '.$record->card_fallback_days.' ימים'
+                        : null),
                 Tables\Columns\TextColumn::make('amount')->label('סכום')
                     ->state(fn (Subscription $record): string => Money::ils($record->totalChargeAgorot())),
                 Tables\Columns\TextColumn::make('next_charge_at')->label('מועד תשלום הבא')
