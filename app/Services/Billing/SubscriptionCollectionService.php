@@ -87,6 +87,10 @@ class SubscriptionCollectionService
                     'vat_agorot' => $subscription->vatAgorot(),
                     'total_agorot' => $subscription->totalChargeAgorot(),
                     'currency' => config('billing.currency'),
+                    // Recorded here, not inferred at invoicing time: this money
+                    // arrived by transfer / standing order / cheque, whatever
+                    // the customer's usual arrangement says.
+                    'payment_method' => $subscription->effectivePaymentMethod(),
                     'status' => ChargeStatus::Succeeded,
                     'attempt_number' => $attempt,
                     'description' => $subscription->chargeDescription($periodStart, $periodEnd),

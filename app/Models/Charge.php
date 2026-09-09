@@ -14,6 +14,7 @@ class Charge extends Model
 
     protected $fillable = [
         'subscription_id', 'customer_id', 'amount_agorot', 'vat_agorot', 'total_agorot', 'currency',
+        'payment_method',
         'status', 'attempt_number', 'cardcom_transaction_id', 'cardcom_response_code',
         'failure_reason', 'description', 'invoice_notes', 'lines', 'cardcom_low_profile_id', 'cardcom_pay_url', 'cardcom_bit_url',
         'demand_sent_at', 'demand_channel', 'due_at', 'demand_reminder_count', 'demand_reminders_log', 'demand_reminders_paused',

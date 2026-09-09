@@ -125,7 +125,7 @@ Schedule::call(function () {
     Subscription::query()
         ->dueForCharge()
         ->pluck('id')
-        ->each(fn (int $id) => ChargeSubscriptionJob::dispatch($id));
+        ->each(fn (int $id) => ChargeSubscriptionJob::dispatch($id, mode: ChargeSubscriptionJob::MODE_SCHEDULED));
 })->everyFifteenMinutes()->name('billing:dispatch-due-charges')->when($awake)->onOneServer();
 
 // The card as a fallback: a subscription the customer pays by transfer or
@@ -165,7 +165,7 @@ Schedule::call(function () {
                 );
             }
 
-            ChargeSubscriptionJob::dispatch($subscription->id);
+            ChargeSubscriptionJob::dispatch($subscription->id, mode: ChargeSubscriptionJob::MODE_FALLBACK);
         });
 })->everyFifteenMinutes()->name('billing:dispatch-card-fallback')->when($awake)->onOneServer();
 

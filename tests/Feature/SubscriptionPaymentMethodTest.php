@@ -5,11 +5,16 @@ namespace Tests\Feature;
 use App\Enums\PaymentMethod;
 use App\Enums\SubscriptionStatus;
 use App\Jobs\ChargeSubscriptionJob;
+use App\Jobs\IssueInvoiceJob;
 use App\Models\Customer;
 use App\Models\PaymentToken;
 use App\Models\Subscription;
+use App\Services\Billing\DunningMachine;
+use App\Services\Billing\SubscriptionCollectionService;
+use App\Services\Cardcom\CardcomClient;
 use App\Services\Cardcom\CardTokenService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
 
@@ -213,6 +218,83 @@ class SubscriptionPaymentMethodTest extends TestCase
 
         $this->assertFalse(Subscription::query()->awaitingCardOverdue()->pluck('id')->contains($byStandingOrder->id));
         $this->assertTrue(Subscription::query()->dueForManualCollection()->pluck('id')->contains($byStandingOrder->id));
+    }
+
+    public function test_a_queued_charge_is_dropped_when_the_arrangement_changes_first(): void
+    {
+        Http::fake();
+        $customer = $this->customerWithCard();
+        $subscription = $this->subscription($customer);
+
+        // Queued while it was a card subscription; moved to a bank transfer
+        // before the worker picked it up. A job already in the queue used to be
+        // unstoppable — the due-date check does not notice the arrangement.
+        $subscription->update(['payment_method' => 'bank_transfer']);
+
+        (new ChargeSubscriptionJob($subscription->id, mode: ChargeSubscriptionJob::MODE_SCHEDULED))
+            ->handle(app(CardcomClient::class), app(DunningMachine::class));
+
+        Http::assertNothingSent();
+        $this->assertSame(0, $subscription->charges()->count());
+    }
+
+    public function test_removing_the_fallback_stops_a_charge_already_queued_for_it(): void
+    {
+        Http::fake();
+        $customer = $this->customerWithCard();
+        $subscription = $this->subscription($customer, [
+            'payment_method' => 'bank_transfer',
+            'card_fallback_days' => 7,
+            'next_charge_at' => now()->subDays(9),
+        ]);
+
+        // The team decided to give them longer after the job was queued.
+        $subscription->update(['card_fallback_days' => 60]);
+
+        (new ChargeSubscriptionJob($subscription->id, mode: ChargeSubscriptionJob::MODE_FALLBACK))
+            ->handle(app(CardcomClient::class), app(DunningMachine::class));
+
+        Http::assertNothingSent();
+        $this->assertSame(0, $subscription->charges()->count());
+    }
+
+    public function test_a_charge_records_the_rail_the_money_actually_moved_on(): void
+    {
+        // Linet is not configured in tests, and issuing the document is not
+        // what this asserts — only what the charge records about itself.
+        Queue::fake([IssueInvoiceJob::class]);
+        Http::fake(['*' => Http::response(['ResponseCode' => 0, 'TranzactionId' => 55])]);
+        $customer = Customer::factory()->create(['payment_method' => 'bank_transfer']);
+        $token = PaymentToken::factory()->create(['customer_id' => $customer->id]);
+        $customer->update(['default_token_id' => $token->id]);
+
+        $subscription = $this->subscription($customer->fresh(), [
+            'payment_method' => 'bank_transfer',
+            'card_fallback_days' => 3,
+            'next_charge_at' => now()->subDays(5),
+        ]);
+
+        (new ChargeSubscriptionJob($subscription->id, mode: ChargeSubscriptionJob::MODE_FALLBACK))
+            ->handle(app(CardcomClient::class), app(DunningMachine::class));
+
+        // The customer's default says transfer and so does the subscription, but
+        // the money came off a card — and that is what the tax document has to
+        // say, because that is what the customer will see on their statement.
+        $this->assertSame('credit_card', $subscription->charges()->sole()->payment_method);
+    }
+
+    public function test_a_hand_collected_payment_records_the_subscriptions_rail(): void
+    {
+        Queue::fake([IssueInvoiceJob::class]);
+
+        // Customer defaults to a card; this subscription is on a transfer.
+        $customer = $this->customerWithCard('credit_card');
+        $subscription = $this->subscription($customer, ['payment_method' => 'bank_transfer']);
+
+        app(SubscriptionCollectionService::class)->recordPayment($subscription);
+
+        // Documented as a transfer, not as the card the customer usually uses.
+        $this->assertSame('bank_transfer', $subscription->charges()->latest('id')->first()->payment_method);
     }
 
     public function test_the_grace_period_is_expressed_in_each_engines_own_dialect(): void
