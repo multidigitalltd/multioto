@@ -51,6 +51,7 @@ class CheckMoneyIntegrityJob implements ShouldQueue
             $this->amountMismatch(),
             $this->overdueSubscriptions(),
             $this->dueWithoutCard(),
+            $this->fallbackWithoutCard(),
             $this->stuckPendingCharges(),
         ]));
 
@@ -205,6 +206,37 @@ class CheckMoneyIntegrityJob implements ShouldQueue
             fn (Subscription $subscription): string => "מנוי #{$subscription->id} · מועד: "
                 .$subscription->next_charge_at->format('d/m/Y')
                 .' · שלחו ללקוח קישור להזנת כרטיס',
+        );
+    }
+
+    /**
+     * A subscription promised a card fallback, whose customer has no card.
+     *
+     * This is the security-card arrangement with nothing behind it. The
+     * customer was told their card would be charged if the transfer did not
+     * arrive within the grace period; the transfer does not arrive, the grace
+     * period runs out, the fallback dispatches — and finds no token. Nothing
+     * fails loudly, because nothing is attempted.
+     *
+     * Neither of the checks above sees it: they ask awaitingCardOverdue(),
+     * which filters to card-collected subscriptions, and these are by
+     * definition collected some other way.
+     */
+    private function fallbackWithoutCard(): ?array
+    {
+        $rows = Subscription::query()
+            ->whereNotNull('card_fallback_days')
+            ->whereIn('status', Subscription::AUTO_CHARGE_STATUSES)
+            ->whereHas('customer', fn (Builder $query) => $query->missingSecurityCard())
+            ->with('customer:id,name')
+            ->orderBy('id');
+
+        return $this->finding(
+            $rows,
+            ['id', 'customer_id', 'card_fallback_days'],
+            'מנויים עם הסדר גבייה מכרטיס ביטחון — ואין כרטיס שמור',
+            fn (Subscription $subscription): string => "מנוי #{$subscription->id} · {$subscription->customer?->name} · "
+                ."הובטחה גבייה מהכרטיס אחרי {$subscription->card_fallback_days} יום ואין ממה לגבות",
         );
     }
 

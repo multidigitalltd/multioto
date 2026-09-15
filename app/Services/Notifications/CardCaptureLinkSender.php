@@ -4,6 +4,7 @@ namespace App\Services\Notifications;
 
 use App\Enums\NotificationType;
 use App\Mail\DunningNotificationMail;
+use App\Models\Customer;
 use App\Models\NotificationLog;
 use App\Models\Subscription;
 use App\Services\Waha\WahaClient;
@@ -54,6 +55,41 @@ class CardCaptureLinkSender
             ? 'card.capture_debt'
             : 'card.capture');
 
+        return $this->deliver($customer, $key, $data, $link);
+    }
+
+    /**
+     * Ask a CUSTOMER for a card, with no subscription in the picture.
+     *
+     * The security card is required of everyone at signup, and at that moment
+     * no subscription exists yet — the team sets those up afterwards. Routing
+     * that request through a subscription would mean the customers who most
+     * need asking, the ones who left before the card page, are the ones that
+     * cannot be asked.
+     *
+     * @param  array<string, scalar|null>  $extra  Extra placeholders for the template.
+     * @return array{link: string, sent: array<int, string>, failed: array<int, string>, skipped: array<int, string>}
+     */
+    public function sendToCustomer(Customer $customer, string $templateKey, array $extra = []): array
+    {
+        $link = CardLink::for($customer->id);
+
+        return $this->deliver($customer, $templateKey, [
+            'customer_name' => $customer->name,
+            'link' => $link,
+            'business_name' => config('mail.from.name') ?: config('app.name'),
+            ...$extra,
+        ], $link);
+    }
+
+    /**
+     * Render and deliver over both channels, reporting each one honestly.
+     *
+     * @param  array<string, scalar|null>  $data
+     * @return array{link: string, sent: array<int, string>, failed: array<int, string>, skipped: array<int, string>}
+     */
+    private function deliver(Customer $customer, string $key, array $data, string $link): array
+    {
         $sent = [];
         $failed = [];
         // Intentional non-deliveries (a channel whose template the operator turned

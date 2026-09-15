@@ -4,6 +4,7 @@ use App\Enums\BroadcastStatus;
 use App\Enums\ChargeStatus;
 use App\Jobs\AlertExpiringCardsBeforeChargeJob;
 use App\Jobs\ChargeSubscriptionJob;
+use App\Jobs\ChaseMissingSecurityCardJob;
 use App\Jobs\CheckDomainExpiryJob;
 use App\Jobs\CheckMoneyIntegrityJob;
 use App\Jobs\CheckSiteContentJob;
@@ -437,6 +438,15 @@ Schedule::job(new CheckWhatsappInboundJob)
 // outward automation.
 Schedule::job(new RequestMissingCardJob)
     ->dailyAt('09:30')->name('billing:request-missing-cards')->when($awake)->onOneServer();
+
+// Chase the security card signup asked for and never got. Separate from the job
+// above because that one runs off subscriptions whose charge date has passed —
+// and these customers have no subscription for weeks after signup, then a
+// manually-collected one that scope deliberately skips. Without this, the card
+// page being the last step means an abandoned tab is indistinguishable from a
+// finished signup, and the fallback collection has nothing to fall back to.
+Schedule::job(new ChaseMissingSecurityCardJob)
+    ->dailyAt('09:45')->name('billing:chase-security-cards')->when($awake)->onOneServer();
 
 // Chase unpaid payment demands: after the quiet interval, resend the request
 // (link/transfer) up to the configured maximum, then stop.

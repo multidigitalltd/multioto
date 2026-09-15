@@ -121,6 +121,22 @@ return [
             'interval_days' => (int) env('CARD_MISSING_REQUEST_INTERVAL_DAYS', 3),
             'max_requests' => (int) env('CARD_MISSING_MAX_REQUESTS', 5),
         ],
+
+        /*
+         | Chasing the security card that signup asked for and never got. The
+         | card page is the last step, so a customer who closes the tab leaves a
+         | complete-looking record with nothing behind the fallback collection.
+         |
+         | grace_hours: how long after the customer agreed before the first
+         | request — short enough to still be about this signup, long enough not
+         | to chase somebody who still has the card page open.
+         | max_requests: 0 switches the chase off entirely.
+        */
+        'security_missing' => [
+            'grace_hours' => (int) env('CARD_SECURITY_MISSING_GRACE_HOURS', 24),
+            'interval_days' => (int) env('CARD_SECURITY_MISSING_INTERVAL_DAYS', 4),
+            'max_requests' => (int) env('CARD_SECURITY_MISSING_MAX_REQUESTS', 3),
+        ],
     ],
 
     /*
