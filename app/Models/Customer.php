@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Enums\BusinessType;
 use App\Enums\CustomerStatus;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -118,6 +119,45 @@ class Customer extends Model
     public function paymentTokens(): HasMany
     {
         return $this->hasMany(PaymentToken::class);
+    }
+
+    /**
+     * Is there a card on file that could actually be charged right now?
+     *
+     * Asked of the token rows rather than of `default_token_id`: a card that
+     * expired, was replaced or was removed by hand is still pointed at by that
+     * column, and answering "yes" on the strength of it is how a customer with
+     * no usable card reads as covered.
+     *
+     * And asked through chargeable(), not `status = active`: nothing restamps a
+     * card when its printed expiry passes, so status alone would show a green
+     * "card on file" for a card every charge would decline.
+     */
+    public function hasActiveCard(): bool
+    {
+        return $this->paymentTokens()->chargeable()->exists();
+    }
+
+    /**
+     * Customers who agreed to leave a security card and never did.
+     *
+     * The card page is the LAST step of signup and the customer record is
+     * already saved by the time they reach it — so closing the tab leaves a
+     * customer who looks exactly like one who finished. Nothing else finds
+     * them: the missing-card chase runs off subscriptions whose charge date has
+     * passed, and a transfer customer has neither a card-collected subscription
+     * nor, for weeks after signup, any subscription at all.
+     *
+     * Keyed on the recorded consent, never on a date or a config value: a
+     * customer who was never shown the clause did not agree to it and is not
+     * chased for it.
+     */
+    public function scopeMissingSecurityCard(Builder $query): Builder
+    {
+        return $query
+            ->whereNotNull('security_card_terms_at')
+            ->where('status', CustomerStatus::Active)
+            ->whereDoesntHave('paymentTokens', fn (Builder $q) => $q->chargeable());
     }
 
     public function defaultToken(): BelongsTo

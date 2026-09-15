@@ -3,7 +3,9 @@
 namespace App\Services\Notifications;
 
 use App\Enums\NotificationType;
+use App\Enums\PaymentMethod;
 use App\Mail\DunningNotificationMail;
+use App\Models\Customer;
 use App\Models\NotificationLog;
 use App\Models\Subscription;
 use App\Services\Waha\WahaClient;
@@ -54,6 +56,65 @@ class CardCaptureLinkSender
             ? 'card.capture_debt'
             : 'card.capture');
 
+        return $this->deliver($customer, $key, $data, $link);
+    }
+
+    /**
+     * Ask a CUSTOMER for a card, with no subscription in the picture.
+     *
+     * The security card is required of everyone at signup, and at that moment
+     * no subscription exists yet — the team sets those up afterwards. Routing
+     * that request through a subscription would mean the customers who most
+     * need asking, the ones who left before the card page, are the ones that
+     * cannot be asked.
+     *
+     * @param  array<string, scalar|null>  $extra  Extra placeholders for the template.
+     * @return array{link: string, sent: array<int, string>, failed: array<int, string>, skipped: array<int, string>}
+     */
+    public function sendToCustomer(Customer $customer, string $templateKey, array $extra = []): array
+    {
+        $link = CardLink::for($customer->id);
+
+        return $this->deliver($customer, $templateKey, [
+            'customer_name' => $customer->name,
+            'link' => $link,
+            'business_name' => config('mail.from.name') ?: config('app.name'),
+            ...$extra,
+        ], $link);
+    }
+
+    /**
+     * Ask a customer to finish the card step of signup, in the wording that is
+     * actually true for the way they pay.
+     *
+     * One place decides, because the two are not interchangeable: a customer
+     * paying by transfer is told their payment continues as agreed and this
+     * card is only security, and saying that to somebody whose chosen method IS
+     * the card promises a regular payment with nothing to run it on.
+     *
+     * @return array{link: string, sent: array<int, string>, failed: array<int, string>, skipped: array<int, string>}
+     */
+    public function sendSignupCardRequest(Customer $customer): array
+    {
+        $method = (string) $customer->payment_method;
+
+        if (! PaymentMethod::isManualValue($method)) {
+            return $this->sendToCustomer($customer, 'card.signup_missing');
+        }
+
+        return $this->sendToCustomer($customer, 'card.security_missing', [
+            'method_label' => PaymentMethod::tryFrom($method)?->getLabel() ?? 'אמצעי התשלום שנבחר',
+        ]);
+    }
+
+    /**
+     * Render and deliver over both channels, reporting each one honestly.
+     *
+     * @param  array<string, scalar|null>  $data
+     * @return array{link: string, sent: array<int, string>, failed: array<int, string>, skipped: array<int, string>}
+     */
+    private function deliver(Customer $customer, string $key, array $data, string $link): array
+    {
         $sent = [];
         $failed = [];
         // Intentional non-deliveries (a channel whose template the operator turned

@@ -95,6 +95,37 @@ class TemplateEngine
                 'body' => "היי {{customer_name}} 👋\nהגיע מועד החיוב של המנוי {{plan}} ({{amount}} ₪), אך לא שמורים אצלנו פרטי כרטיס ולכן החיוב לא בוצע.\n\nכדי שהשירות ימשיך לפעול, יש להזין את פרטי הכרטיס בעמוד המאובטח:\n{{link}}\n\nהעמוד מאובטח ומופעל ע״י חברת הסליקה — איננו רואים או שומרים את מספר הכרטיס.\nאם כבר סידרתם את התשלום בדרך אחרת — אפשר להתעלם.\nתודה, {{business_name}}",
             ],
         ],
+        // The security card that was required at signup and never arrived. This
+        // customer may well pay by transfer or standing order, so every other
+        // card template is wrong for them: none of their money is late, nothing
+        // failed, and telling them otherwise would be a debt claim against
+        // somebody who owes nothing. What is true is that one step of the
+        // signup was left unfinished — so that is what it says.
+        'card.security_missing' => [
+            'email' => [
+                'subject' => 'נותר שלב אחד להשלמת ההרשמה — כרטיס לביטחון | {{business_name}}',
+                'body' => "היי {{customer_name}},\n\nההרשמה שלכם נקלטה, ונותר שלב אחד שלא הושלם: הזנת כרטיס אשראי לביטחון.\n\nהתשלום שלכם ממשיך להתבצע ב{{method_label}} כפי שסוכם — הכרטיס אינו מחויב באופן שוטף. הוא נשמר כביטחון בלבד, למקרה שתשלום לא יגיע במועד.\n\nלהשלמה בעמוד המאובטח:\n{{link}}\n\nהעמוד מאובטח לחלוטין ומופעל על ידי חברת הסליקה — אנחנו לא רואים ולא שומרים את מספר הכרטיס.\n\nתודה,\n{{business_name}}",
+            ],
+            'whatsapp' => [
+                'subject' => null,
+                'body' => "היי {{customer_name}} 👋\nההרשמה שלכם נקלטה, ונותר שלב אחד שלא הושלם: הזנת כרטיס אשראי לביטחון.\n\nהתשלום ממשיך להתבצע ב{{method_label}} כפי שסוכם — הכרטיס אינו מחויב באופן שוטף ונשמר כביטחון בלבד.\n\nלהשלמה:\n{{link}}\n\nהעמוד מאובטח ומופעל ע״י חברת הסליקה — איננו רואים או שומרים את מספר הכרטיס.\nתודה, {{business_name}}",
+            ],
+        ],
+        // The same unfinished step, for a customer who chose to PAY by card.
+        // Kept apart from card.security_missing because that one's whole point
+        // is "your payment continues by the method you chose and this card is
+        // only security" — which, said to somebody whose chosen method IS the
+        // card, claims a regular payment that has no card to run on.
+        'card.signup_missing' => [
+            'email' => [
+                'subject' => 'נותר שלב אחד להשלמת ההרשמה — פרטי תשלום | {{business_name}}',
+                'body' => "היי {{customer_name}},\n\nההרשמה שלכם נקלטה, ונותר שלב אחד שלא הושלם: הזנת פרטי כרטיס האשראי שממנו יתבצעו החיובים.\n\nעד להזנת הכרטיס לא ניתן להפעיל את החיוב השוטף.\n\nלהשלמה בעמוד המאובטח:\n{{link}}\n\nהעמוד מאובטח לחלוטין ומופעל על ידי חברת הסליקה — אנחנו לא רואים ולא שומרים את מספר הכרטיס.\n\nתודה,\n{{business_name}}",
+            ],
+            'whatsapp' => [
+                'subject' => null,
+                'body' => "היי {{customer_name}} 👋\nההרשמה שלכם נקלטה, ונותר שלב אחד שלא הושלם: הזנת פרטי כרטיס האשראי שממנו יתבצעו החיובים.\n\nעד להזנת הכרטיס לא ניתן להפעיל את החיוב השוטף.\n\nלהשלמה:\n{{link}}\n\nהעמוד מאובטח ומופעל ע״י חברת הסליקה — איננו רואים או שומרים את מספר הכרטיס.\nתודה, {{business_name}}",
+            ],
+        ],
         'card.expiring' => [
             'email' => [
                 'subject' => 'כרטיס האשראי עומד לפוג — עדכון פרטי תשלום | {{business_name}}',

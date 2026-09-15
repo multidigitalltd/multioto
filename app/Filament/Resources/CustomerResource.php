@@ -28,6 +28,7 @@ use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
 
 class CustomerResource extends Resource
 {
@@ -150,6 +151,25 @@ class CustomerResource extends Resource
                         CustomerStatus::Suspended => 'warning',
                         CustomerStatus::Churned => 'gray',
                     }),
+                // The security card, answered on screen rather than left to be
+                // discovered the day a collection fails. The customer record is
+                // saved before the card page opens, so "signed up" and "gave us
+                // a card" are two different facts and only one of them was
+                // visible here.
+                Tables\Columns\IconColumn::make('has_security_card')
+                    ->label('כרטיס ביטחון')
+                    ->state(fn (Customer $record): bool => (bool) $record->has_active_card)
+                    ->boolean()
+                    ->trueIcon('heroicon-o-credit-card')
+                    ->trueColor('success')
+                    ->falseIcon('heroicon-o-exclamation-triangle')
+                    ->falseColor('danger')
+                    ->tooltip(fn (Customer $record): string => $record->has_active_card
+                        ? 'כרטיס שמור וניתן לחיוב'
+                        : ($record->security_card_terms_at !== null
+                            ? 'הלקוח אישר להשאיר כרטיס ביטחון ולא הזין אותו — אין ממה לגבות אם תשלום לא יגיע'
+                            : 'אין כרטיס שמור (הלקוח נרשם לפני שנדרש כרטיס ביטחון)'))
+                    ->toggleable(),
                 Tables\Columns\IconColumn::make('marketing_opt_out_at')
                     ->label('הוסר מדיוור')
                     ->boolean()
@@ -174,13 +194,20 @@ class CustomerResource extends Resource
                     ->options(CustomerStatus::class),
                 Tables\Filters\TernaryFilter::make('vat_exempt')
                     ->label('פטור ממע״מ'),
+                // The work list this whole mechanism exists to produce: who
+                // agreed to leave a card and never did.
+                Tables\Filters\Filter::make('missing_security_card')
+                    ->label('חסר כרטיס ביטחון')
+                    ->query(fn (Builder $query): Builder => $query->missingSecurityCard()),
             ])
             ->actions([
                 Tables\Actions\Action::make('sendCardLink')
                     ->label('קישור לכרטיס')
                     ->icon('heroicon-o-credit-card')
-                    ->visible(fn (Customer $record): bool => filled($record->phone ?? $record->email)
-                        && $record->subscriptions()->whereNot('status', SubscriptionStatus::Canceled)->exists())
+                    // Not gated on having a subscription. A customer who left
+                    // before the card page has no subscription yet, and they
+                    // are precisely the one the team needs to be able to ask.
+                    ->visible(fn (Customer $record): bool => filled($record->phone ?? $record->email))
                     ->requiresConfirmation()
                     ->modalHeading('שליחת קישור להזנת כרטיס')
                     ->modalDescription(fn (Customer $record): string => "לשלוח ל-{$record->name} קישור מאובטח להזנת/עדכון כרטיס אשראי (וואטסאפ + מייל)?")
@@ -192,12 +219,13 @@ class CustomerResource extends Resource
                             ->orderBy('id')
                             ->first();
 
-                        // The subscription may have been canceled between render and click.
+                        // No subscription — either it was canceled between
+                        // render and click, or this customer never had one. The
+                        // card link is customer-wide either way; what changes is
+                        // the wording, since a message about activating a
+                        // subscription would name one that does not exist.
                         if ($subscription === null) {
-                            Notification::make()
-                                ->title('ללקוח אין מנוי פעיל לשליחת קישור')
-                                ->warning()
-                                ->send();
+                            self::notifyLinkResult($sender->sendSignupCardRequest($record));
 
                             return;
                         }
@@ -307,6 +335,23 @@ class CustomerResource extends Resource
                             default => '—',
                         })->placeholder('—'),
                     TextEntry::make('terms_accepted_at')->label('אישור תנאים')->dateTime('d/m/Y H:i')->placeholder('—'),
+                    // Stated on the record, because this is the fact that
+                    // decides whether the fallback collection has anything to
+                    // collect from — and the one the signup flow cannot
+                    // guarantee, since the card page comes after the customer
+                    // is already saved.
+                    TextEntry::make('security_card')
+                        ->label('כרטיס ביטחון')
+                        ->badge()
+                        ->state(fn (Customer $record): string => $record->hasActiveCard()
+                            ? 'כרטיס שמור'
+                            : ($record->security_card_terms_at !== null ? 'חסר — הלקוח אישר ולא הזין' : 'אין כרטיס'))
+                        ->color(fn (Customer $record): string => $record->hasActiveCard()
+                            ? 'success'
+                            : ($record->security_card_terms_at !== null ? 'danger' : 'gray'))
+                        ->helperText(fn (Customer $record): ?string => $record->hasActiveCard() || $record->security_card_terms_at === null
+                            ? null
+                            : 'אם תשלום לא יגיע במועד אין ממה לגבות. ניתן לשלוח קישור להזנת כרטיס מרשימת הלקוחות.'),
                     // The signed consent record from /join, viewable inline (team-only route).
                     TextEntry::make('signature_path')->label('חתימה')
                         ->formatStateUsing(fn (): string => 'צפייה בחתימה ↗')
@@ -418,6 +463,19 @@ class CustomerResource extends Resource
                         ])->columns(4)
                         ->placeholder('אין כרטיס שמור — הוסיפו כרטיס בכפתור למעלה.'),
                 ]),
+        ]);
+    }
+
+    /**
+     * Whether a chargeable card is on file, answered once for the whole page.
+     *
+     * A per-row `exists()` would be a query per customer on a list that shows
+     * fifty of them, for a column that is on by default.
+     */
+    public static function getEloquentQuery(): Builder
+    {
+        return parent::getEloquentQuery()->withExists([
+            'paymentTokens as has_active_card' => fn (Builder $query) => $query->chargeable(),
         ]);
     }
 
