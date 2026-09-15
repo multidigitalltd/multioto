@@ -17,6 +17,10 @@ use Illuminate\Support\Facades\Storage;
  * It copies FROM the repo release TO the configured disk, so the two can never
  * disagree about what version 1.5.0 is — publishing a file somebody assembled
  * by hand is how a site ends up updating to a build nobody can reproduce.
+ *
+ * The copy goes to a staging name first and is moved into place only once it is
+ * whole: sites check in for updates continuously, and a zip downloaded halfway
+ * through a write installs as a broken plugin on a live customer site.
  */
 class PublishAgentPluginCommand extends Command
 {
@@ -66,16 +70,40 @@ class PublishAgentPluginCommand extends Command
             return self::FAILURE;
         }
 
+        // Written beside the target, never onto it. The download endpoint serves
+        // whatever sits at the target the moment it exists, so writing there
+        // directly means a site that checks in mid-copy downloads half a zip —
+        // and with --force the valid package it would have received is already
+        // truncated. The temp name can never be requested: a version is
+        // validated to digits and dots, so no signed URL can point at it.
+        $staging = trim((string) config('agent.plugin.path'), '/').'/.publish-'.$version.'-'.bin2hex(random_bytes(6)).'.tmp';
+
         try {
             // Streamed rather than read into memory: the release is tens of
             // megabytes and this may run on a small container.
-            $written = $disk->put($target, $stream);
+            $written = $disk->put($staging, $stream);
         } finally {
             fclose($stream);
         }
 
         if ($written === false) {
+            $disk->delete($staging);
             $this->error("הכתיבה ל-{$diskName}:{$target} נכשלה — יש לבדוק הרשאות כתיבה.");
+
+            return self::FAILURE;
+        }
+
+        // Only now does the target change, in one step: sites see either the
+        // previous release or the complete new one, never a partial file.
+        try {
+            $moved = $disk->move($staging, $target);
+        } catch (\Throwable $e) {
+            $moved = false;
+        }
+
+        if ($moved === false) {
+            $disk->delete($staging);
+            $this->error("ההעברה ל-{$diskName}:{$target} נכשלה — הקובץ הקודם לא נגע.");
 
             return self::FAILURE;
         }

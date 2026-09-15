@@ -2,8 +2,10 @@
 
 namespace Tests\Feature;
 
+use Illuminate\Contracts\Filesystem\Filesystem;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Storage;
+use Mockery;
 use Tests\TestCase;
 
 /**
@@ -60,6 +62,63 @@ class PublishAgentPluginTest extends TestCase
         // update to a build that does not exist.
         $this->artisan('agent:publish-plugin 9.9.9')->assertFailed();
         Storage::disk('plugins')->assertMissing('agent-plugin/9.9.9.zip');
+    }
+
+    public function test_nothing_is_written_under_the_served_name_until_the_file_is_whole(): void
+    {
+        config(['agent.plugin.disk' => 'plugins', 'agent.plugin.path' => 'agent-plugin']);
+
+        $version = (string) config('agent.plugin.current_version');
+        $target = "agent-plugin/{$version}.zip";
+        $staged = null;
+
+        $disk = Mockery::mock(Filesystem::class);
+        $disk->shouldReceive('exists')->andReturn(false);
+        $disk->shouldReceive('put')->once()->andReturnUsing(function (string $path) use (&$staged, $target) {
+            // Sites check in for updates around the clock. If the half-written
+            // copy sat at the served name, one of them would download a
+            // truncated zip and install a broken plugin.
+            $this->assertNotSame($target, $path);
+            $staged = $path;
+
+            return true;
+        });
+        $disk->shouldReceive('move')->once()->andReturnUsing(function (string $from, string $to) use (&$staged, $target) {
+            $this->assertSame($staged, $from);
+            $this->assertSame($target, $to);
+
+            return true;
+        });
+
+        Storage::set('plugins', $disk);
+
+        $this->artisan('agent:publish-plugin')->assertSuccessful();
+    }
+
+    public function test_a_publish_that_fails_leaves_the_previous_release_untouched(): void
+    {
+        config(['agent.plugin.disk' => 'plugins', 'agent.plugin.path' => 'agent-plugin']);
+
+        $deleted = [];
+
+        $disk = Mockery::mock(Filesystem::class);
+        $disk->shouldReceive('exists')->andReturn(true);
+        $disk->shouldReceive('put')->once()->andReturn(true);
+        // The disk fills up, or the volume is read-only, at the last step.
+        $disk->shouldReceive('move')->once()->andReturn(false);
+        $disk->shouldReceive('delete')->andReturnUsing(function (string $path) use (&$deleted) {
+            $deleted[] = $path;
+
+            return true;
+        });
+
+        Storage::set('plugins', $disk);
+
+        // The build sites are already updating to has to survive a failed
+        // replacement, and the leftover must not accumulate on the disk.
+        $this->artisan('agent:publish-plugin --force')->assertFailed();
+        $this->assertCount(1, $deleted);
+        $this->assertStringContainsString('.tmp', $deleted[0]);
     }
 
     public function test_a_malformed_version_is_refused(): void
