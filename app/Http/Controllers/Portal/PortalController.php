@@ -2,7 +2,6 @@
 
 namespace App\Http\Controllers\Portal;
 
-use App\Enums\ChargeStatus;
 use App\Enums\MessageChannel;
 use App\Enums\SubscriptionStatus;
 use App\Enums\TicketChannel;
@@ -13,7 +12,6 @@ use App\Models\Customer;
 use App\Services\Support\TicketIntake;
 use App\Support\CardLink;
 use Illuminate\Contracts\View\View;
-use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -131,11 +129,7 @@ class PortalController extends Controller
     private function openCharges(Customer $customer): Collection
     {
         return Charge::query()
-            ->where('status', ChargeStatus::Pending)
-            ->whereNotNull('demand_sent_at')
-            ->where(fn (Builder $q) => $q
-                ->where('customer_id', $customer->id)
-                ->orWhereHas('subscription', fn (Builder $s) => $s->where('customer_id', $customer->id)))
+            ->openDebtFor($customer)
             ->with('subscription.site')
             ->orderBy('created_at')
             ->get();
