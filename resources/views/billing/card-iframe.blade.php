@@ -34,6 +34,15 @@
            breathe and never renders in a cramped, unreadable strip. */
         iframe { width: 100%; height: clamp(30rem, 80vh, 52rem); border: 0; display: block; }
         .secure { text-align: center; color: var(--muted); font-size: .85rem; margin-top: 1rem; }
+        /* The agreed payment details, for a customer who pays by transfer or
+           standing order: what they actually came for, kept in front of them
+           rather than lost behind the card form. */
+        .notice {
+            border: 1px solid var(--border); border-radius: 12px; padding: .85rem 1rem;
+            margin: 0 0 1rem; background: color-mix(in srgb, var(--bg) 60%, transparent);
+        }
+        .notice-head { font-weight: 600; margin-bottom: .35rem; }
+        .notice-body { white-space: pre-line; color: var(--muted); font-size: .92rem; line-height: 1.6; }
         @media (max-width: 30rem) {
             main { border-radius: 12px; }
             p.lead { font-size: .9rem; }
@@ -45,8 +54,32 @@
         @if ($logo = \App\Support\Branding::logoUrl())
             <div style="text-align:center;margin-bottom:.75rem;"><img src="{{ $logo }}" alt="לוגו" style="max-height:3rem;"></div>
         @endif
-        <h1>הזנת פרטי כרטיס אשראי</h1>
-        <p class="lead">הזינו את פרטי הכרטיס בטופס המאובטח למטה. הכרטיס נשמר אצל חברת הסליקה בלבד.</p>
+        @if (($securityCard ?? false) === true)
+            <h1>כרטיס אשראי לביטחון</h1>
+            <p class="lead">
+                התשלום שלכם מתבצע ב{{ $methodLabel }} כפי שסוכם — הכרטיס הזה אינו מחויב באופן שוטף.
+                @if (($fallbackDays ?? 0) > 0)
+                    הוא משמש כביטחון בלבד: אם תשלום לא יגיע תוך {{ $fallbackDays }} יום ממועד הפירעון, נחייב אותו.
+                @else
+                    {{-- No allowance on any of their subscriptions: naming a
+                         deadline the collection does not follow would be a
+                         promise we do not keep. --}}
+                    הוא נשמר כביטחון בלבד.
+                @endif
+            </p>
+
+            @if (filled($paymentInstructions ?? null))
+                <div class="notice">
+                    <div class="notice-head">פרטי התשלום ב{{ $methodLabel }}</div>
+                    {{-- Escaped, and newlines are preserved by CSS rather than by
+                         markup — the text is operator-editable and never HTML. --}}
+                    <div class="notice-body">{{ $paymentInstructions }}</div>
+                </div>
+            @endif
+        @else
+            <h1>הזנת פרטי כרטיס אשראי</h1>
+            <p class="lead">הזינו את פרטי הכרטיס בטופס המאובטח למטה. הכרטיס נשמר אצל חברת הסליקה בלבד.</p>
+        @endif
         <div class="frame-wrap">
             {{-- The card fields are served by Cardcom (PCI Level 1); we only frame them. --}}
             <iframe src="{{ $cardUrl }}" title="הזנת כרטיס אשראי מאובטחת"

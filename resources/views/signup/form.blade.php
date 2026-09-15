@@ -219,6 +219,19 @@
                     @error('payment_method') <p class="error" id="pm-error">{{ $message }}</p> @enderror
                 </div>
 
+                {{-- Said before the choice is made, not discovered afterwards on
+                     the card page: whatever they pick, a card is required, and
+                     it can be charged. Somebody agreeing to a standing order has
+                     to know that before they agree, not after. --}}
+                <div class="instructions" data-security-card>
+                    <div class="head">כרטיס אשראי לביטחון — נדרש בכל אמצעי תשלום</div>
+                    בסיום הטופס תתבקשו להזין פרטי כרטיס אשראי בעמוד המאובטח של חברת הסליקה.
+                    אם בחרתם אמצעי תשלום אחר, הכרטיס <strong>לא יחויב באופן שוטף</strong> — התשלום מתבצע כפי שסוכם.
+                    @if (($securityCardDays = (int) config('billing.card_fallback_days', 0)) > 0)
+                        הכרטיס משמש כביטחון בלבד: אם תשלום לא יגיע תוך {{ $securityCardDays }} יום ממועד הפירעון, נחייב אותו בסכום שלא שולם.
+                    @endif
+                </div>
+
                 <div class="instructions" data-method="credit_card">
                     <div class="head">כרטיס אשראי</div>
                     לאחר סיום הטופס תועברו להזנת פרטי הכרטיס בעמוד מאובטח של חברת הסליקה (קארדקום). איננו רואים ואיננו שומרים את מספר הכרטיס.
@@ -258,7 +271,7 @@
                 <h2>אישור וחתימה</h2>
                 <div class="field terms">
                     <input type="checkbox" id="terms" name="terms" value="1" required @checked(old('terms'))>
-                    <label for="terms" style="font-weight:400;margin:0">קראתי את <a href="#" target="_blank" rel="noopener">תנאי השירות והתקנון</a> ואני מאשר/ת אותם, וכי החיוב יתבצע באופן מתחדש בהתאם למנוי שיוגדר.</label>
+                    <label for="terms" style="font-weight:400;margin:0">קראתי את <a href="#" target="_blank" rel="noopener">תנאי השירות והתקנון</a> ואני מאשר/ת אותם, וכי החיוב יתבצע באופן מתחדש בהתאם למנוי שיוגדר.@if ((int) config('billing.card_fallback_days', 0) > 0) כמו כן אני מאשר/ת כי כרטיס האשראי שיימסר משמש כביטחון, וכי אם תשלום לא יתקבל באמצעי שנבחר תוך {{ (int) config('billing.card_fallback_days') }} יום ממועד הפירעון — יחויב בו הסכום שלא שולם.@endif</label>
                 </div>
                 @error('terms') <p class="error">{{ $message }}</p> @enderror
 

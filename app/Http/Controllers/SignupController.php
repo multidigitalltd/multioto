@@ -128,6 +128,11 @@ class SignupController extends Controller
                 // enforces it) and the customer signed. Stamped server-side with
                 // the filer's IP.
                 'terms_accepted_at' => now(),
+                // Recorded only when the terms the customer just ticked actually
+                // carried the security-card clause — the form prints it from the
+                // same setting. With the arrangement switched off, nobody agreed
+                // to it, and stamping it anyway would manufacture a consent.
+                'security_card_terms_at' => (int) config('billing.card_fallback_days', 0) > 0 ? now() : null,
                 'signature_path' => $signaturePath,
                 'signed_ip' => $ip,
                 'status' => CustomerStatus::Active,
@@ -174,7 +179,8 @@ class SignupController extends Controller
                 TicketChannel::Manual,
                 MessageChannel::InternalNote,
                 $customer,
-                'לקוח חדש בחר '.$label.' — יש ליצור קשר ולהשלים את הסדר התשלום.',
+                'לקוח חדש בחר '.$label.' — יש ליצור קשר ולהשלים את הסדר התשלום. '
+                    .'הלקוח הופנה גם להזנת כרטיס ביטחון; אם לא נשמר כרטיס, יש לוודא מולו שהוא מזין אותו.',
                 externalMessageId: 'signup-payment-'.$customer->id,
                 subject: 'השלמת הסדר תשלום — '.$customer->name,
             );
@@ -189,17 +195,19 @@ class SignupController extends Controller
      */
     private function redirectAfter(Customer $customer, string $method): RedirectResponse
     {
-        // Credit card: hand off to the embedded Cardcom card page via a
-        // short-lived signed link (same route used for card updates), so no
-        // customer id is enumerable. No card data ever touches this system.
-        if ($method === 'credit_card') {
-            return redirect()->to(CardLink::for($customer->id));
-        }
-
-        return redirect()->route('signup.thanks')->with([
-            'payment_method_label' => self::METHOD_LABELS[$method] ?? $method,
-            'payment_instructions' => config('billing.signup.instructions.'.$method),
-        ]);
+        // EVERY customer ends up here, whatever they chose to pay by. A card is
+        // required from all of them as security — somebody paying by transfer is
+        // still not charged on it, but it is what covers the payment that never
+        // arrives. Sending the non-card methods to a thank-you page instead is
+        // how the company ended up with customers it had no way to collect from.
+        //
+        // The hand-off is the embedded Cardcom page via a short-lived signed
+        // link (the same route card updates use), so no customer id is
+        // enumerable and no card data ever touches this system. Their own
+        // payment instructions travel with them onto that page — the transfer
+        // details are what a transfer customer came for, and losing them behind
+        // a card form would be trading one omission for another.
+        return redirect()->to(CardLink::for($customer->id));
     }
 
     /**

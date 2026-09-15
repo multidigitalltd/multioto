@@ -3,6 +3,8 @@
 namespace App\Http\Controllers;
 
 use App\Enums\ChargeStatus;
+use App\Enums\PaymentMethod;
+use App\Enums\SubscriptionStatus;
 use App\Models\Charge;
 use App\Models\Customer;
 use App\Services\Cardcom\CardcomClient;
@@ -38,6 +40,13 @@ class BillingController extends Controller
             return view('billing.card-inactive');
         }
 
+        // Built BEFORE the call to Cardcom. Every signup now lands here, so a
+        // Cardcom outage would otherwise take the bank details down with it —
+        // and those have nothing to do with Cardcom. A customer who came to be
+        // told how to pay by transfer must still be told, even on the day the
+        // card provider is unreachable.
+        $context = $this->securityCardContext($customer);
+
         try {
             $lowProfile = $cardcom->createTokenLowProfile(
                 $customer->id,
@@ -54,7 +63,7 @@ class BillingController extends Controller
                 'error' => Str::limit($e->getMessage(), 300),
             ]);
 
-            return view('billing.card-error');
+            return view('billing.card-error', $context);
         }
 
         $cardUrl = (string) ($lowProfile['url'] ?? '');
@@ -63,7 +72,7 @@ class BillingController extends Controller
         // Cardcom rejected the request (logged in the client) — show a clear
         // message instead of embedding a broken 404 the customer can't act on.
         if (! Str::startsWith($cardUrl, 'https://')) {
-            return view('billing.card-error');
+            return view('billing.card-error', $context);
         }
 
         // Remember this session so the team can reconcile the card manually if
@@ -72,9 +81,54 @@ class BillingController extends Controller
             $customer->update(['pending_card_lp_id' => $lowProfile['low_profile_id']]);
         }
 
-        return view('billing.card-iframe', [
-            'cardUrl' => $cardUrl,
-        ]);
+        return view('billing.card-iframe', [...$context, 'cardUrl' => $cardUrl]);
+    }
+
+    /**
+     * What this particular customer needs told on the card page.
+     *
+     * A customer paying by transfer or standing order is here for the SECURITY
+     * card, not to be charged — so the page says so, and carries the details of
+     * the way they actually pay. Losing those behind a card form would trade
+     * one omission for another.
+     *
+     * The grace period is read from the customer's OWN subscriptions, never
+     * from the current global default. This route also serves ordinary
+     * card-update links, and a customer whose subscriptions carry no allowance
+     * — or carry ninety days — would otherwise be told they are charged after
+     * thirty. Promising a customer a deadline the collection does not follow is
+     * worse than saying nothing, so with no allowance on file nothing is
+     * promised.
+     *
+     * @return array<string, mixed>
+     */
+    private function securityCardContext(Customer $customer): array
+    {
+        $method = (string) $customer->payment_method;
+        $manualMethod = PaymentMethod::isManualValue($method);
+
+        if (! $manualMethod) {
+            return ['securityCard' => false, 'methodLabel' => null, 'paymentInstructions' => null, 'fallbackDays' => 0];
+        }
+
+        // The shortest allowance any of their live subscriptions carries: it is
+        // the first date a card could be charged, and the only one it would be
+        // honest to name.
+        $fallbackDays = (int) $customer->subscriptions()
+            ->whereNot('status', SubscriptionStatus::Canceled)
+            ->whereNotNull('card_fallback_days')
+            ->min('card_fallback_days');
+
+        return [
+            'securityCard' => true,
+            'methodLabel' => PaymentMethod::tryFrom($method)?->getLabel() ?? '',
+            'paymentInstructions' => trim((string) config('billing.signup.instructions.'.$method)),
+            // A customer signing up has no subscription yet, so the arrangement
+            // they are agreeing to right now is the standing one.
+            'fallbackDays' => $fallbackDays > 0
+                ? $fallbackDays
+                : ($customer->subscriptions()->exists() ? 0 : (int) config('billing.card_fallback_days', 0)),
+        ];
     }
 
     /**

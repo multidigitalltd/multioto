@@ -16,7 +16,7 @@ class Customer extends Model
 
     protected $fillable = [
         'name', 'contact_name', 'business_number', 'business_type', 'vat_exempt', 'email', 'phone',
-        'address', 'payment_method', 'terms_accepted_at', 'signature_path', 'signed_ip', 'signed_pdf_path',
+        'address', 'payment_method', 'terms_accepted_at', 'security_card_terms_at', 'signature_path', 'signed_ip', 'signed_pdf_path',
         'whatsapp_jid', 'cardcom_account_id', 'pending_card_lp_id', 'card_link_token', 'default_token_id', 'status', 'notes',
         'monitoring_report_sent_at', 'onboarding_checklist',
         'marketing_opt_out_at', 'marketing_opt_out_channel',
@@ -30,6 +30,7 @@ class Customer extends Model
             'status' => CustomerStatus::class,
             'vat_exempt' => 'boolean',
             'terms_accepted_at' => 'datetime',
+            'security_card_terms_at' => 'datetime',
             'monitoring_report_sent_at' => 'datetime',
             'onboarding_checklist' => 'array',
             'marketing_opt_out_at' => 'datetime',
