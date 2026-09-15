@@ -3,47 +3,36 @@
 namespace App\Http\Controllers;
 
 use App\Enums\BusinessType;
-use App\Enums\CustomerStatus;
-use App\Enums\MessageChannel;
-use App\Enums\SiteStatus;
-use App\Enums\TicketChannel;
 use App\Http\Requests\SignupRequest;
-use App\Jobs\GenerateCustomerCardPdfJob;
-use App\Jobs\NotifySignupJob;
-use App\Jobs\SendWelcomeMessageJob;
-use App\Models\Customer;
+use App\Models\PendingSignup;
 use App\Models\Setting;
-use App\Models\Site;
-use App\Services\Support\TicketIntake;
-use App\Support\CardLink;
+use App\Models\SignupInvite;
+use App\Services\Signup\CompleteSignup;
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\View\View;
 
 /**
  * Public self-signup: the multi-step "open a customer" form the team sends to a
  * prospect. The customer fills their details, signs, and picks how they pay.
- * It opens a new customer WITH a signed consent record — no plan is chosen here;
- * subscriptions are custom per customer and set up by the team afterwards.
  *
- * Credit-card customers then enter a card inside an embedded Cardcom iframe;
- * standing-order / bank-transfer / cheque customers get setup instructions and
- * an internal follow-up ticket. No card data touches this controller — PCI
- * scope stays with Cardcom.
+ * A card is required of everyone, and this controller no longer creates the
+ * customer. The details wait in `pending_signups` and become a customer only
+ * once Cardcom hands back a token — the card page used to be the last step
+ * AFTER the customer was saved, which meant closing the tab left a customer
+ * nobody could collect from and nobody could tell apart from a finished one.
+ *
+ * The single exception is an invite a manager issued with the card waived. It
+ * is recorded, single-use and attributed; see SignupInvite.
+ *
+ * No card data touches this controller — PCI scope stays with Cardcom.
  */
 class SignupController extends Controller
 {
-    /** Human labels for the non-card payment methods (for the follow-up ticket). */
-    private const METHOD_LABELS = [
-        'standing_order' => 'הוראת קבע בנקאית',
-        'bank_transfer' => 'העברה בנקאית',
-        'checks' => 'צ׳קים (מקדמה / תשלום מראש)',
-    ];
-
-    public function show(): View
+    public function show(Request $request): View
     {
         // The tax notice is optional and can be hidden by clearing it. A stored
         // empty value means "hidden"; only fall back to the config default when
@@ -53,20 +42,30 @@ class SignupController extends Controller
             ? $stored['signup.tax_approval_notice']
             : config('billing.signup.tax_approval_notice');
 
+        $invite = $this->inviteFrom($request);
+
         return view('signup.form', [
             'instructions' => config('billing.signup.instructions'),
             'taxNotice' => $taxNotice,
+            // Carried through the form so the exemption survives the POST, and
+            // so the terms the customer ticks say what is actually true for
+            // them: an exempt signup must not promise a card it never takes.
+            'invite' => $invite,
+            'cardRequired' => ! ($invite?->waivesCard() ?? false),
+            'prefill' => [
+                'name' => $invite?->name,
+                'email' => $invite?->email,
+                'phone' => $invite?->phone,
+            ],
         ]);
     }
 
     /**
      * File a signup.
      *
-     * Sending the same form twice must not open a second customer. The whole
-     * body is serialised on a fingerprint of the submission, so two clicks
-     * landing at once queue behind each other instead of racing to insert —
-     * without it the duplicate check reads an empty table in both requests and
-     * passes in both.
+     * Sending the same form twice must not open a second pending signup. The
+     * whole body is serialised on a fingerprint of the submission, so two
+     * clicks landing at once queue behind each other instead of racing.
      */
     public function store(SignupRequest $request): RedirectResponse
     {
@@ -81,13 +80,8 @@ class SignupController extends Controller
             // Waited and never got the lock. Running the body anyway would put
             // two requests inside the very section this lock exists to hold one
             // at a time — both would read an empty table and both would insert.
-            //
-            // So look once more (the other request may have committed while we
-            // waited), and otherwise say so and hand the form back with
-            // everything still in it. Asking someone to press again is a far
-            // smaller harm than opening the duplicate we came here to prevent.
             if ($existing = $this->alreadyFiled($data)) {
-                return $this->redirectAfter($existing, $data['payment_method']);
+                return $this->handOff($existing);
             }
 
             return back()->withInput()->withErrors([
@@ -101,131 +95,86 @@ class SignupController extends Controller
      */
     private function file(array $data, ?string $ip): RedirectResponse
     {
-        // The same form, arriving again. A customer who clicks "אישור וסיום"
-        // a second time because nothing seemed to happen is not a second
-        // customer: they would otherwise get a duplicate customer row, a
-        // duplicate site (monitored twice), a duplicate welcome message and a
-        // duplicate follow-up ticket — every click.
+        // The same form, arriving again. A customer who clicks "אישור וסיום" a
+        // second time because nothing seemed to happen is not a second signup.
         if ($existing = $this->alreadyFiled($data)) {
-            return $this->redirectAfter($existing, $data['payment_method']);
+            return $this->handOff($existing);
         }
 
         $businessType = BusinessType::from($data['business_type']);
-        $signaturePath = $this->storeSignature($data['signature']);
+        $invite = SignupInvite::query()->where('token', $data['invite'] ?? '')->first();
 
-        $customer = DB::transaction(function () use ($data, $businessType, $signaturePath, $ip): Customer {
-            $customer = Customer::create([
-                'name' => $data['name'],
-                'contact_name' => $data['contact_name'],
-                'business_number' => $data['business_number'] ?? null,
-                'business_type' => $businessType,
-                // Exempt dealers are VAT-exempt; everyone else is charged VAT.
-                'vat_exempt' => $businessType === BusinessType::ExemptDealer,
-                'email' => strtolower($data['email']),
-                'phone' => $data['phone'],
-                'payment_method' => $data['payment_method'],
-                // The legal record of consent — the box was ticked (validation
-                // enforces it) and the customer signed. Stamped server-side with
-                // the filer's IP.
-                'terms_accepted_at' => now(),
-                // Recorded only when the terms the customer just ticked actually
-                // carried the security-card clause — the form prints it from the
-                // same setting. With the arrangement switched off, nobody agreed
-                // to it, and stamping it anyway would manufacture a consent.
-                'security_card_terms_at' => (int) config('billing.card_fallback_days', 0) > 0 ? now() : null,
-                'signature_path' => $signaturePath,
-                'signed_ip' => $ip,
-                'status' => CustomerStatus::Active,
-            ]);
+        $pending = PendingSignup::create([
+            'name' => $data['name'],
+            'contact_name' => $data['contact_name'],
+            'business_number' => $data['business_number'] ?? null,
+            'business_type' => $businessType->value,
+            // Exempt dealers are VAT-exempt; everyone else is charged VAT.
+            'vat_exempt' => $businessType === BusinessType::ExemptDealer,
+            'email' => strtolower($data['email']),
+            'phone' => $data['phone'],
+            'domain' => $this->domainFrom($data),
+            'payment_method' => $data['payment_method'],
+            // The legal record of consent — the box was ticked (validation
+            // enforces it) and the customer signed. Stamped server-side.
+            'terms_accepted_at' => now(),
+            // Recorded only when the terms the customer just ticked actually
+            // carried the security-card clause. A signup the manager exempted
+            // never showed that clause, so nobody agreed to it and stamping it
+            // would manufacture a consent.
+            'security_card_terms_at' => $this->securityCardApplies($invite) ? now() : null,
+            'signature_path' => $this->storeSignature($data['signature']),
+            'signed_ip' => $ip,
+        ]);
 
-            // Record the site (if given) so monitoring starts right away.
-            if (($domain = $this->domainFrom($data)) !== null) {
-                Site::create([
-                    'customer_id' => $customer->id,
-                    'domain' => $domain,
-                    'monitor_url' => 'https://'.ltrim($domain, '/'),
-                    'monitor_enabled' => true,
-                    'status' => SiteStatus::Active,
-                ]);
-            }
+        // The exception: a manager waived the card for this one prospect. The
+        // customer is created now, because there is no card to wait for.
+        if ($invite?->waivesCard()) {
+            $customer = app(CompleteSignup::class)->exempt($pending, $invite);
 
-            // No subscription is created here — the customer's plan is custom and
-            // set up by the team afterwards, then the captured card is charged.
-            return $customer;
-        });
-
-        // Tell the team a customer just signed up — WhatsApp + email + bell —
-        // for EVERY payment method (a credit-card signup opens no ticket, so this
-        // is the only signal there). Queued so it never blocks the response.
-        NotifySignupJob::dispatch($customer->id);
-
-        // Personal welcome (email + WhatsApp) — dispatched only from this
-        // explicit signup flow, never from bulk import.
-        SendWelcomeMessageJob::dispatch($customer->id);
-
-        // Generate the signed "customer card" PDF (details + signature), store it
-        // on the customer, and email it to them with a thank-you. Heavy work runs
-        // on the queue, never in this request.
-        GenerateCustomerCardPdfJob::dispatch($customer->id);
-
-        // Standing order / bank transfer / cheques: the team completes the
-        // arrangement manually — open a ticket so it can't fall through the
-        // cracks. (Credit card needs no ticket: the customer enters the card
-        // themselves on the next screen.)
-        if ($data['payment_method'] !== 'credit_card') {
-            $label = self::METHOD_LABELS[$data['payment_method']] ?? $data['payment_method'];
-
-            app(TicketIntake::class)->recordInbound(
-                TicketChannel::Manual,
-                MessageChannel::InternalNote,
-                $customer,
-                'לקוח חדש בחר '.$label.' — יש ליצור קשר ולהשלים את הסדר התשלום. '
-                    .'הלקוח הופנה גם להזנת כרטיס ביטחון; אם לא נשמר כרטיס, יש לוודא מולו שהוא מזין אותו.',
-                externalMessageId: 'signup-payment-'.$customer->id,
-                subject: 'השלמת הסדר תשלום — '.$customer->name,
-            );
+            return redirect()->route('signup.done', ['pending' => $pending->token])
+                ->with('customerId', $customer->id);
         }
 
-        return $this->redirectAfter($customer, $data['payment_method']);
+        return $this->handOff($pending);
     }
 
-    /**
-     * Where the customer goes once their details are filed — identical whether
-     * this submission opened the customer or was the same form arriving twice.
-     */
-    private function redirectAfter(Customer $customer, string $method): RedirectResponse
+    /** Whether this signup is being asked for a security card at all. */
+    private function securityCardApplies(?SignupInvite $invite): bool
     {
-        // EVERY customer ends up here, whatever they chose to pay by. A card is
-        // required from all of them as security — somebody paying by transfer is
-        // still not charged on it, but it is what covers the payment that never
-        // arrives. Sending the non-card methods to a thank-you page instead is
-        // how the company ended up with customers it had no way to collect from.
-        //
-        // The hand-off is the embedded Cardcom page via a short-lived signed
-        // link (the same route card updates use), so no customer id is
-        // enumerable and no card data ever touches this system. Their own
-        // payment instructions travel with them onto that page — the transfer
-        // details are what a transfer customer came for, and losing them behind
-        // a card form would be trading one omission for another.
-        return redirect()->to(CardLink::for($customer->id));
+        return ! ($invite?->waivesCard() ?? false)
+            && (int) config('billing.card_fallback_days', 0) > 0;
     }
 
     /**
-     * The customer this exact submission already opened, if it did.
+     * Where the customer goes once their details are filed: the card page.
+     *
+     * EVERY customer passes through it, whatever they chose to pay by. A card
+     * is required from all of them as security — somebody paying by transfer is
+     * still not charged on it, but it is what covers the payment that never
+     * arrives.
+     */
+    private function handOff(PendingSignup $pending): RedirectResponse
+    {
+        if ($pending->completed_at !== null) {
+            // Already finished — the same form arriving after the card went in.
+            return redirect()->route('signup.done', ['pending' => $pending->token]);
+        }
+
+        return redirect()->route('signup.card', ['pending' => $pending->token]);
+    }
+
+    /**
+     * The pending signup this exact submission already opened, if it did.
      *
      * Matched on every identifying field the form collects, not on the email
      * alone. A resubmission that differs in any of them is a different filing
      * and is treated as one — collapsing it onto the earlier row would discard
      * whatever the customer changed, silently, which is worse than a duplicate.
      *
-     * The window is short by design: this is here to absorb a second click on
-     * one form, not to decide what a customer signing up again months later
-     * means. Nothing is written to the existing record either way, so knowing
-     * somebody's details buys no way to overwrite their customer card.
-     *
      * @param  array<string, mixed>  $data
      */
-    private function alreadyFiled(array $data): ?Customer
+    private function alreadyFiled(array $data): ?PendingSignup
     {
         $window = (int) config('billing.signup.duplicate_window_minutes');
 
@@ -236,7 +185,7 @@ class SignupController extends Controller
         $number = $data['business_number'] ?? null;
         $domain = $this->domainFrom($data);
 
-        return Customer::query()
+        return PendingSignup::query()
             ->where('created_at', '>=', now()->subMinutes($window))
             ->where('email', strtolower($data['email']))
             ->where('name', $data['name'])
@@ -251,15 +200,22 @@ class SignupController extends Controller
             )
             // The site counts too. The same business filing again for a SECOND
             // domain keeps every other field identical, and collapsing that
-            // would drop the new site out of monitoring without a word — the
-            // silent loss this whole check is shaped to avoid.
+            // would drop the new site out of monitoring without a word.
             ->when(
                 $domain === null,
-                fn ($q) => $q->whereDoesntHave('sites'),
-                fn ($q) => $q->whereHas('sites', fn ($s) => $s->where('domain', $domain)),
+                fn ($q) => $q->whereNull('domain'),
+                fn ($q) => $q->where('domain', $domain),
             )
             ->latest('id')
             ->first();
+    }
+
+    /** The invite this visit carries, if it names a real one. */
+    private function inviteFrom(Request $request): ?SignupInvite
+    {
+        $token = trim((string) $request->query('invite', ''));
+
+        return $token === '' ? null : SignupInvite::query()->where('token', $token)->first();
     }
 
     /**

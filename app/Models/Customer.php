@@ -18,6 +18,7 @@ class Customer extends Model
     protected $fillable = [
         'name', 'contact_name', 'business_number', 'business_type', 'vat_exempt', 'email', 'phone',
         'address', 'payment_method', 'terms_accepted_at', 'security_card_terms_at', 'signature_path', 'signed_ip', 'signed_pdf_path',
+        'card_exempt_at', 'card_exempt_reason', 'card_exempt_by',
         'whatsapp_jid', 'cardcom_account_id', 'pending_card_lp_id', 'card_link_token', 'default_token_id', 'status', 'notes',
         'monitoring_report_sent_at', 'onboarding_checklist',
         'marketing_opt_out_at', 'marketing_opt_out_channel',
@@ -32,6 +33,7 @@ class Customer extends Model
             'vat_exempt' => 'boolean',
             'terms_accepted_at' => 'datetime',
             'security_card_terms_at' => 'datetime',
+            'card_exempt_at' => 'datetime',
             'monitoring_report_sent_at' => 'datetime',
             'onboarding_checklist' => 'array',
             'marketing_opt_out_at' => 'datetime',
@@ -156,6 +158,10 @@ class Customer extends Model
     {
         return $query
             ->whereNotNull('security_card_terms_at')
+            // A manager waived the card for this one customer, on the record and
+            // with a reason. Chasing them anyway would be the system arguing
+            // with a decision a person already made and wrote down.
+            ->whereNull('card_exempt_at')
             ->where('status', CustomerStatus::Active)
             ->whereDoesntHave('paymentTokens', fn (Builder $q) => $q->chargeable());
     }
@@ -163,6 +169,12 @@ class Customer extends Model
     public function defaultToken(): BelongsTo
     {
         return $this->belongsTo(PaymentToken::class, 'default_token_id');
+    }
+
+    /** Who waived the card requirement for this customer, where one did. */
+    public function cardExemptBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'card_exempt_by');
     }
 
     public function tickets(): HasMany

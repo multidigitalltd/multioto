@@ -28,6 +28,7 @@ class SendJoinInviteJob implements ShouldQueue
         public string $name,
         public ?string $email = null,
         public ?string $phone = null,
+        public ?string $inviteToken = null,
     ) {}
 
     public function handle(WahaClient $waha): void
@@ -78,6 +79,10 @@ class SendJoinInviteJob implements ShouldQueue
             'name' => $this->name,
             'email' => $this->email,
             'phone' => $this->phone,
+            // Names the invite row. Everything it grants — prefill, and a card
+            // exemption where one was given — is re-read and re-checked
+            // server-side, so the token in the URL decides nothing by itself.
+            'invite' => $this->inviteToken,
         ], fn (?string $v): bool => filled($v));
 
         return route('signup', $query);

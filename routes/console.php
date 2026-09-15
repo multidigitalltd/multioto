@@ -20,6 +20,7 @@ use App\Jobs\DrillBackupJob;
 use App\Jobs\FollowUpPendingTicketsJob;
 use App\Jobs\HeartbeatJob;
 use App\Jobs\MonitorSiteJob;
+use App\Jobs\PrunePendingSignupsJob;
 use App\Jobs\PurgeSiteThreatsJob;
 use App\Jobs\ReconcileChargeJob;
 use App\Jobs\RefreshCloudflareCountryRulesJob;
@@ -438,6 +439,13 @@ Schedule::job(new CheckWhatsappInboundJob)
 // outward automation.
 Schedule::job(new RequestMissingCardJob)
     ->dailyAt('09:30')->name('billing:request-missing-cards')->when($awake)->onOneServer();
+
+// Signups that were filled in and never finished: the row holds a name, phone,
+// email and a drawn signature for somebody who is not a customer. Cleared once
+// the link has expired, signature file included. Not gated on Shabbat — it sends
+// nothing outward and touches no customer.
+Schedule::job(new PrunePendingSignupsJob)
+    ->dailyAt('03:40')->name('billing:prune-pending-signups')->onOneServer();
 
 // Chase the security card signup asked for and never got. Separate from the job
 // above because that one runs off subscriptions whose charge date has passed —

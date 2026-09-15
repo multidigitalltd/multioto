@@ -4,6 +4,7 @@ namespace App\Services\Cardcom;
 
 use App\Models\Customer;
 use App\Models\PaymentToken;
+use App\Models\PendingSignup;
 use App\Services\Health\ConnectionResult;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -87,6 +88,60 @@ class CardcomClient
     {
         $customer = Customer::find($customerId);
 
+        return $this->tokenLowProfile(
+            (string) $customerId,
+            $customer?->name,
+            $customer?->email,
+            $customer?->phone,
+            $successUrl,
+            $failureUrl,
+            $webhookUrl,
+            ['customer_id' => $customerId],
+        );
+    }
+
+    /**
+     * The same hosted card page, for a signup whose customer does not exist yet.
+     *
+     * Card first, customer after: nothing is created until Cardcom hands back a
+     * token, so there is no window in which a customer record exists without the
+     * card it was required to have. The session is identified by the pending
+     * signup rather than a customer id, and the webhook matches it back on the
+     * LowProfileId.
+     *
+     * @return array{url: string, low_profile_id: string}
+     */
+    public function createSignupTokenLowProfile(PendingSignup $pending, string $successUrl, string $failureUrl, string $webhookUrl): array
+    {
+        return $this->tokenLowProfile(
+            PendingSignup::RETURN_VALUE_PREFIX.$pending->id,
+            $pending->name,
+            $pending->email,
+            $pending->phone,
+            $successUrl,
+            $failureUrl,
+            $webhookUrl,
+            ['pending_signup_id' => $pending->id],
+        );
+    }
+
+    /**
+     * Build the hosted card page. One body, whether the card belongs to an
+     * existing customer or to a signup still waiting to become one.
+     *
+     * @param  array<string, mixed>  $logContext
+     * @return array{url: string, low_profile_id: string}
+     */
+    private function tokenLowProfile(
+        string $returnValue,
+        ?string $name,
+        ?string $email,
+        ?string $phone,
+        string $successUrl,
+        string $failureUrl,
+        string $webhookUrl,
+        array $logContext = [],
+    ): array {
         // The amount the card is VALIDATED for — never captured. J5 places an
         // authorization hold the acquirer releases on its own, and Cardcom
         // substitutes its own minimum when this is zero (real captures come back
@@ -99,7 +154,7 @@ class CardcomClient
             'Amount' => $validationAmount,
             'ISOCoinId' => 1, // ILS
             'Language' => 'he',
-            'ReturnValue' => (string) $customerId,
+            'ReturnValue' => $returnValue,
             'SuccessRedirectUrl' => $successUrl,
             'FailedRedirectUrl' => $failureUrl,
             'WebHookUrl' => $webhookUrl,
@@ -114,9 +169,9 @@ class CardcomClient
             // No Document by default (this account has no Cardcom documents
             // module — Linet invoices). Only sent if document_type is configured.
             'Document' => $this->buildDocument(
-                $customer?->name,
-                $customer?->email,
-                $customer?->phone,
+                $name,
+                $email,
+                $phone,
                 'עדכון אמצעי תשלום',
                 // The document, where a terminal insists on one, has to describe
                 // the same amount the transaction carries — a document for zero
@@ -133,7 +188,7 @@ class CardcomClient
         // page as a failure, and log the exact reason so it's diagnosable.
         if (! Str::startsWith($url, 'https://')) {
             Log::warning('Cardcom LowProfile/Create (token) returned no usable URL', [
-                'customer_id' => $customerId,
+                ...$logContext,
                 'response_code' => $response['ResponseCode'] ?? null,
                 'description' => $response['Description'] ?? null,
                 'response' => $response,

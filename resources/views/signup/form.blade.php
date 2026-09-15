@@ -138,7 +138,7 @@
             <fieldset class="panel" data-step="1">
                 <div class="field">
                     <label for="name">שם העסק <span class="req" aria-hidden="true">*</span></label>
-                    <input type="text" id="name" name="name" value="{{ old('name', is_string(request('name')) ? request('name') : null) }}" required autocomplete="organization"
+                    <input type="text" id="name" name="name" value="{{ old('name', $prefill['name'] ?? (is_string(request('name')) ? request('name') : null)) }}" required autocomplete="organization"
                         placeholder="השם שיופיע בחשבוניות"
                         @error('name') aria-invalid="true" aria-describedby="name-error" @enderror>
                     @error('name') <p class="error" id="name-error">{{ $message }}</p> @enderror
@@ -177,7 +177,7 @@
                     </div>
                     <div class="field">
                         <label for="phone">טלפון <span class="req" aria-hidden="true">*</span></label>
-                        <input type="tel" id="phone" name="phone" value="{{ old('phone', is_string(request('phone')) ? request('phone') : null) }}" required autocomplete="tel" inputmode="tel"
+                        <input type="tel" id="phone" name="phone" value="{{ old('phone', $prefill['phone'] ?? (is_string(request('phone')) ? request('phone') : null)) }}" required autocomplete="tel" inputmode="tel"
                             placeholder="עדיף נייד זמין (למשל 0501234567)"
                             data-validate="phone"
                             @error('phone') aria-invalid="true" aria-describedby="phone-error" @enderror>
@@ -187,7 +187,7 @@
 
                 <div class="field">
                     <label for="email">אימייל <span class="req" aria-hidden="true">*</span></label>
-                    <input type="email" id="email" name="email" value="{{ old('email', is_string(request('email')) ? request('email') : null) }}" required autocomplete="email"
+                    <input type="email" id="email" name="email" value="{{ old('email', $prefill['email'] ?? (is_string(request('email')) ? request('email') : null)) }}" required autocomplete="email"
                         placeholder="אימייל אליו יישלחו מסמכים וחשבוניות"
                         data-validate="email"
                         @error('email') aria-invalid="true" aria-describedby="email-error" @enderror>
@@ -223,7 +223,11 @@
                      the card page: whatever they pick, a card is required, and
                      it can be charged. Somebody agreeing to a standing order has
                      to know that before they agree, not after. --}}
-                <div class="instructions" data-security-card>
+                {{-- Only when a card is actually going to be asked for. An
+                     invite a manager exempted takes no card, and promising one
+                     here would have the customer agree to an arrangement that
+                     never happens. --}}
+                <div class="instructions" data-security-card @if (! ($cardRequired ?? true)) hidden @endif>
                     <div class="head">כרטיס אשראי לביטחון — נדרש בכל אמצעי תשלום</div>
                     בסיום הטופס תתבקשו להזין פרטי כרטיס אשראי בעמוד המאובטח של חברת הסליקה.
                     אם בחרתם אמצעי תשלום אחר, הכרטיס <strong>לא יחויב באופן שוטף</strong> — התשלום מתבצע כפי שסוכם.
@@ -271,7 +275,7 @@
                 <h2>אישור וחתימה</h2>
                 <div class="field terms">
                     <input type="checkbox" id="terms" name="terms" value="1" required @checked(old('terms'))>
-                    <label for="terms" style="font-weight:400;margin:0">קראתי את <a href="#" target="_blank" rel="noopener">תנאי השירות והתקנון</a> ואני מאשר/ת אותם, וכי החיוב יתבצע באופן מתחדש בהתאם למנוי שיוגדר.@if ((int) config('billing.card_fallback_days', 0) > 0) כמו כן אני מאשר/ת כי כרטיס האשראי שיימסר משמש כביטחון, וכי אם תשלום לא יתקבל באמצעי שנבחר תוך {{ (int) config('billing.card_fallback_days') }} יום ממועד הפירעון — יחויב בו הסכום שלא שולם.@endif</label>
+                    <label for="terms" style="font-weight:400;margin:0">קראתי את <a href="#" target="_blank" rel="noopener">תנאי השירות והתקנון</a> ואני מאשר/ת אותם, וכי החיוב יתבצע באופן מתחדש בהתאם למנוי שיוגדר.@if (($cardRequired ?? true) && (int) config('billing.card_fallback_days', 0) > 0) כמו כן אני מאשר/ת כי כרטיס האשראי שיימסר משמש כביטחון, וכי אם תשלום לא יתקבל באמצעי שנבחר תוך {{ (int) config('billing.card_fallback_days') }} יום ממועד הפירעון — יחויב בו הסכום שלא שולם.@endif</label>
                 </div>
                 @error('terms') <p class="error">{{ $message }}</p> @enderror
 
@@ -282,6 +286,10 @@
                         <button type="button" class="sig-clear" id="sig-clear">ניקוי ✕</button>
                     </div>
                     <input type="hidden" name="signature" id="signature-input" value="{{ old('signature') }}">
+                    {{-- The invite travels with the submission. Re-read and
+                         re-checked server-side — this field decides nothing on
+                         its own, it only names which invite to look up. --}}
+                    <input type="hidden" name="invite" value="{{ old('invite', $invite?->token) }}">
                     <p class="error" id="sig-error" hidden>יש לחתום בתיבת החתימה.</p>
                     @error('signature') <p class="error">{{ $message }}</p> @enderror
                 </div>

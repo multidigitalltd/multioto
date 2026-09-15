@@ -53,6 +53,10 @@ class SignupRequest extends FormRequest
             // is bounded so a huge/forged payload can't be stored; the format is
             // pinned to PNG so only an image (never a script) is ever decoded.
             'signature' => ['required', 'string', 'max:200000', 'regex:/^data:image\/png;base64,[A-Za-z0-9+\/=\r\n]+$/'],
+            // Names a manager-issued invite. It decides nothing by itself: the
+            // controller looks the row up and re-checks that it is real, unused
+            // and unexpired, so a guessed value buys no card exemption.
+            'invite' => ['nullable', 'string', 'max:64'],
             // Honeypot: real users never fill this hidden field.
             'website' => ['prohibited'],
         ];

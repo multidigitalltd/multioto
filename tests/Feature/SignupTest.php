@@ -10,12 +10,14 @@ use App\Jobs\NotifySignupJob;
 use App\Jobs\SendWelcomeMessageJob;
 use App\Mail\NotificationMail;
 use App\Models\Customer;
+use App\Models\PendingSignup;
 use App\Models\Setting;
 use App\Models\Site;
 use App\Models\Subscription;
 use App\Models\Ticket;
 use App\Services\Notifications\TeamNotifier;
 use App\Services\Notifications\TemplateEngine;
+use App\Services\Signup\CompleteSignup;
 use App\Services\Waha\WahaClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
@@ -76,40 +78,57 @@ class SignupTest extends TestCase
         $this->get('/new-client')->assertRedirect('/join');
     }
 
-    public function test_signup_creates_a_customer_and_redirects_to_card_capture(): void
+    public function test_submitting_the_form_files_a_signup_but_opens_no_customer(): void
     {
         Queue::fake([SendWelcomeMessageJob::class, GenerateCustomerCardPdfJob::class, NotifySignupJob::class]);
         Storage::fake('local');
 
         $response = $this->post(route('signup.store'), $this->validPayload());
 
-        // Redirects to the signed Cardcom card-capture link.
-        $response->assertRedirect();
-        $this->assertStringContainsString('/billing/update-card/', $response->headers->get('Location'));
-        $this->assertStringContainsString('signature=', $response->headers->get('Location'));
+        $response->assertRedirectContains('/join/card/');
 
-        $customer = Customer::first();
-        $this->assertNotNull($customer);
-        $this->assertSame('new@example.co.il', $customer->email); // normalized
-        $this->assertSame('ישראל ישראלי', $customer->contact_name);
-        $this->assertSame('credit_card', $customer->payment_method);
-        $this->assertNotNull($customer->terms_accepted_at); // consent record
-        $this->assertSame('newbiz.co.il', $customer->sites()->value('domain')); // scheme stripped
+        // The card page used to be a last step AFTER the customer was saved, so
+        // closing the tab left a customer nobody could collect from. Now
+        // nothing is in `customers`, nothing is monitored and nobody has been
+        // welcomed — none of it has been earned yet.
+        $this->assertSame(0, Customer::count());
+        $this->assertSame(0, Site::count());
+        $this->assertSame(0, Subscription::count());
+        Queue::assertNothingPushed();
+
+        $pending = PendingSignup::sole();
+        $this->assertSame('new@example.co.il', $pending->email); // normalized
+        $this->assertSame('ישראל ישראלי', $pending->contact_name);
+        $this->assertSame('credit_card', $pending->payment_method);
+        $this->assertNotNull($pending->terms_accepted_at); // consent record
+        $this->assertSame('newbiz.co.il', $pending->domain); // scheme stripped
 
         // The signature is stored privately as the consent record, with the IP.
-        $this->assertNotNull($customer->signature_path);
-        Storage::disk('local')->assertExists($customer->signature_path);
-        $this->assertNotNull($customer->signed_ip);
+        $this->assertNotNull($pending->signature_path);
+        Storage::disk('local')->assertExists($pending->signature_path);
+        $this->assertNotNull($pending->signed_ip);
+    }
+
+    public function test_the_card_is_what_opens_the_customer(): void
+    {
+        Queue::fake([SendWelcomeMessageJob::class, GenerateCustomerCardPdfJob::class, NotifySignupJob::class]);
+        Storage::fake('local');
+
+        $this->post(route('signup.store'), $this->validPayload())->assertRedirect();
+
+        $customer = $this->completeWithCard(PendingSignup::sole());
+
+        $this->assertNotNull($customer);
+        $this->assertSame('new@example.co.il', $customer->email);
+        $this->assertSame('newbiz.co.il', $customer->sites()->value('domain'));
+        // And the card is on file — which is the whole point of the ordering.
+        $this->assertTrue($customer->hasActiveCard());
 
         // No subscription is created here — the plan is custom and set up later.
         $this->assertSame(0, Subscription::count());
 
-        // The personal welcome + the signed-card PDF generation are queued.
         Queue::assertPushed(SendWelcomeMessageJob::class, 1);
         Queue::assertPushed(GenerateCustomerCardPdfJob::class, 1);
-
-        // The team is alerted about the new signup even for a credit-card
-        // customer (no ticket is opened for card signups).
         Queue::assertPushed(NotifySignupJob::class, fn (NotifySignupJob $job): bool => $job->customerId === $customer->id);
     }
 
@@ -145,7 +164,7 @@ class SignupTest extends TestCase
             'phone' => '12345',
         ]))->assertSessionHasErrors(['email', 'business_number', 'phone']);
 
-        $this->assertSame(0, Customer::count());
+        $this->assertSame(0, PendingSignup::count());
     }
 
     public function test_signup_accepts_a_nonprofit_and_a_dashed_phone(): void
@@ -158,8 +177,8 @@ class SignupTest extends TestCase
             'phone' => '050-123-4567',
         ]))->assertRedirect();
 
-        $customer = Customer::sole();
-        $this->assertSame(BusinessType::Nonprofit, $customer->business_type);
+        $customer = PendingSignup::sole();
+        $this->assertSame(BusinessType::Nonprofit->value, $customer->business_type);
         $this->assertSame('580123456', $customer->business_number);
         $this->assertSame('0501234567', $customer->phone);
     }
@@ -169,7 +188,7 @@ class SignupTest extends TestCase
         $this->post(route('signup.store'), $this->validPayload(['signature' => '']))
             ->assertSessionHasErrors('signature');
 
-        $this->assertSame(0, Customer::count());
+        $this->assertSame(0, PendingSignup::count());
     }
 
     public function test_signup_rejects_a_non_png_signature(): void
@@ -179,16 +198,21 @@ class SignupTest extends TestCase
             'signature' => 'data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=',
         ]))->assertSessionHasErrors('signature');
 
-        $this->assertSame(0, Customer::count());
+        $this->assertSame(0, PendingSignup::count());
     }
 
     public function test_checks_signup_opens_a_follow_up_ticket(): void
     {
         Queue::fake([SendWelcomeMessageJob::class, GenerateCustomerCardPdfJob::class, NotifySignupJob::class]);
 
-        // Every method now ends at the security-card page, cheques included.
+        // Every method now ends at the security-card page, cheques included —
+        // and the follow-up ticket waits for the card, because until then there
+        // is no customer to open it against.
         $this->post(route('signup.store'), $this->validPayload(['payment_method' => 'checks']))
-            ->assertRedirectContains('/billing/update-card/');
+            ->assertRedirectContains('/join/card/');
+
+        $this->assertSame(0, Ticket::count());
+        $this->completeWithCard(PendingSignup::sole());
 
         $ticket = Ticket::sole();
         $this->assertStringContainsString('צ׳קים', $ticket->messages()->first()->body);
@@ -204,7 +228,9 @@ class SignupTest extends TestCase
 
         // A card IS now asked for — as security, not to be charged — alongside
         // the internal follow-up ticket for the transfer arrangement itself.
-        $response->assertRedirectContains('/billing/update-card/');
+        $response->assertRedirectContains('/join/card/');
+
+        $this->completeWithCard(PendingSignup::sole());
 
         $ticket = Ticket::sole();
         $this->assertSame(TicketChannel::Manual, $ticket->channel);
@@ -231,10 +257,15 @@ class SignupTest extends TestCase
 
         foreach (range(1, 6) as $ignored) {
             $this->post(route('signup.store'), $payload)
-                ->assertRedirectContains('/billing/update-card/');
+                ->assertRedirectContains('/join/card/');
         }
 
-        // One customer, one site, one ticket, one welcome — from six clicks.
+        // One filing from six clicks — and once the card lands, one customer,
+        // one site, one ticket, one welcome.
+        $this->assertSame(1, PendingSignup::count());
+
+        $this->completeWithCard(PendingSignup::sole());
+
         $this->assertSame(1, Customer::count());
         $this->assertSame(1, Ticket::count());
         $this->assertSame(1, Customer::sole()->sites()->count());
@@ -249,13 +280,13 @@ class SignupTest extends TestCase
         Queue::fake([SendWelcomeMessageJob::class, GenerateCustomerCardPdfJob::class, NotifySignupJob::class]);
 
         $this->post(route('signup.store'), $this->validPayload())->assertRedirect();
-        $customer = Customer::sole();
+        $customer = PendingSignup::sole();
 
         $again = $this->post(route('signup.store'), $this->validPayload());
 
-        $this->assertSame(1, Customer::count());
-        $this->assertStringContainsString('/billing/update-card/', (string) $again->headers->get('Location'));
-        $this->assertSame($customer->id, Customer::sole()->id);
+        $this->assertSame(1, PendingSignup::count());
+        $this->assertStringContainsString('/join/card/', (string) $again->headers->get('Location'));
+        $this->assertSame($customer->id, PendingSignup::sole()->id);
     }
 
     /**
@@ -271,7 +302,7 @@ class SignupTest extends TestCase
         $this->post(route('signup.store'), $this->validPayload())->assertRedirect();
         $this->post(route('signup.store'), $this->validPayload(['phone' => '0521234567']))->assertRedirect();
 
-        $this->assertSame(2, Customer::count());
+        $this->assertSame(2, PendingSignup::count());
     }
 
     /**
@@ -287,7 +318,10 @@ class SignupTest extends TestCase
         $this->post(route('signup.store'), $this->validPayload())->assertRedirect();
         $this->post(route('signup.store'), $this->validPayload(['domain' => 'second-site.co.il']))->assertRedirect();
 
-        $this->assertSame(2, Customer::count());
+        $this->assertSame(2, PendingSignup::count());
+
+        PendingSignup::orderBy('id')->get()->each(fn (PendingSignup $p) => $this->completeWithCard($p));
+
         $this->assertSame(
             ['newbiz.co.il', 'second-site.co.il'],
             Site::orderBy('id')->pluck('domain')->all(),
@@ -305,7 +339,7 @@ class SignupTest extends TestCase
         $this->travel(31)->minutes();
         $this->post(route('signup.store'), $this->validPayload())->assertRedirect();
 
-        $this->assertSame(2, Customer::count());
+        $this->assertSame(2, PendingSignup::count());
     }
 
     /**
@@ -339,7 +373,7 @@ class SignupTest extends TestCase
         $this->post(route('signup.store'), $this->validPayload())
             ->assertSessionHasErrors('signup');
 
-        $this->assertSame(0, Customer::count());
+        $this->assertSame(0, PendingSignup::count());
 
         $lock->release();
     }
@@ -354,7 +388,7 @@ class SignupTest extends TestCase
             'email' => 'patur@example.co.il',
         ]))->assertRedirect();
 
-        $this->assertTrue(Customer::first()->vat_exempt);
+        $this->assertTrue(PendingSignup::first()->vat_exempt);
     }
 
     public function test_signup_validates_required_fields(): void
@@ -362,7 +396,7 @@ class SignupTest extends TestCase
         $this->post(route('signup.store'), [])
             ->assertSessionHasErrors(['name', 'contact_name', 'business_type', 'email', 'phone', 'payment_method', 'terms', 'signature']);
 
-        $this->assertSame(0, Customer::count());
+        $this->assertSame(0, PendingSignup::count());
     }
 
     public function test_signup_rejects_a_honeypot_submission(): void
@@ -371,7 +405,7 @@ class SignupTest extends TestCase
             'website' => 'http://spam.example',
         ]))->assertSessionHasErrors('website');
 
-        $this->assertSame(0, Customer::count());
+        $this->assertSame(0, PendingSignup::count());
     }
 
     public function test_welcome_job_sends_email_and_whatsapp(): void
@@ -390,5 +424,18 @@ class SignupTest extends TestCase
         Mail::assertSent(NotificationMail::class, fn ($mail) => str_contains($mail->bodyText, 'דנה'));
         Http::assertSent(fn ($request) => str_contains($request->url(), 'sendText')
             && str_contains($request->data()['text'], 'ברוכים הבאים'));
+    }
+
+    /**
+     * Cardcom captured a card for this signup — the moment the customer is
+     * created. The flow's whole shape is that nothing exists before this point.
+     */
+    private function completeWithCard(PendingSignup $pending): Customer
+    {
+        return app(CompleteSignup::class)->withCard($pending, [
+            'ResponseCode' => 0,
+            'TokenInfo' => ['Token' => 'tok-'.$pending->id, 'CardMonth' => 12, 'CardYear' => (int) now()->addYears(3)->format('Y')],
+            'TranzactionInfo' => ['Last4CardDigits' => '4580', 'CardName' => 'Visa'],
+        ]);
     }
 }
