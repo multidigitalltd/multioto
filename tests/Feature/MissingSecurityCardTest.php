@@ -83,6 +83,92 @@ class MissingSecurityCardTest extends TestCase
         $this->assertTrue(Customer::query()->missingSecurityCard()->whereKey($customer->id)->exists());
     }
 
+    public function test_a_card_past_its_printed_expiry_is_not_a_card(): void
+    {
+        $customer = Customer::factory()->create([
+            'payment_method' => 'bank_transfer',
+            'security_card_terms_at' => now()->subDays(3),
+        ]);
+
+        // Nothing in the system walks the table to restamp cards, so a card
+        // that expired two years ago still says "פעיל". Reading status alone
+        // would paint this customer green on the list and leave the integrity
+        // report silent — for a card every charge would decline.
+        PaymentToken::factory()->create([
+            'customer_id' => $customer->id,
+            'status' => TokenStatus::Active,
+            'expiry_month' => 1,
+            'expiry_year' => (int) now()->subYears(2)->format('Y'),
+        ]);
+
+        $this->assertFalse($customer->hasActiveCard());
+        $this->assertTrue(Customer::query()->missingSecurityCard()->whereKey($customer->id)->exists());
+    }
+
+    public function test_a_two_digit_expiry_year_is_read_as_the_card_prints_it(): void
+    {
+        $customer = Customer::factory()->create([
+            'payment_method' => 'bank_transfer',
+            'security_card_terms_at' => now()->subDays(3),
+        ]);
+
+        // Cardcom hands the year back in whichever form the capture produced.
+        // Read literally, "28" is the year 28 AD and a perfectly good card
+        // reads as long dead — which would put this customer on the chase list
+        // and start asking them for a card they already gave us.
+        PaymentToken::factory()->create([
+            'customer_id' => $customer->id,
+            'status' => TokenStatus::Active,
+            'expiry_month' => 12,
+            'expiry_year' => (int) now()->addYears(3)->format('y'),
+        ]);
+
+        $this->assertTrue($customer->hasActiveCard());
+        $this->assertSame(0, Customer::query()->missingSecurityCard()->count());
+    }
+
+    public function test_a_card_with_no_captured_expiry_is_left_alone(): void
+    {
+        $customer = Customer::factory()->create([
+            'payment_method' => 'bank_transfer',
+            'security_card_terms_at' => now()->subDays(3),
+        ]);
+
+        // An unknown expiry means we never captured one — not that the card is
+        // dead. Refusing it on that basis would strand a working card.
+        PaymentToken::factory()->create([
+            'customer_id' => $customer->id,
+            'status' => TokenStatus::Active,
+            'expiry_month' => null,
+            'expiry_year' => null,
+        ]);
+
+        $this->assertTrue($customer->hasActiveCard());
+    }
+
+    public function test_a_card_customer_is_not_told_their_payments_continue_elsewhere(): void
+    {
+        config(['billing.cards.security_missing.grace_hours' => 1]);
+
+        // They chose to PAY by card and then left before entering one. Telling
+        // them "your payment continues by credit card as agreed, this card is
+        // only security" names a regular payment with nothing to run it on.
+        $customer = Customer::factory()->create([
+            'email' => 'card@example.com',
+            'phone' => null,
+            'payment_method' => 'credit_card',
+            'security_card_terms_at' => now()->subDays(2),
+        ]);
+
+        $this->runChase();
+
+        $body = (string) NotificationLog::query()->where('customer_id', $customer->id)->value('body');
+
+        $this->assertStringContainsString('שממנו יתבצעו החיובים', $body);
+        $this->assertStringNotContainsString('אינו מחויב באופן שוטף', $body);
+        $this->assertStringNotContainsString('כביטחון בלבד', $body);
+    }
+
     public function test_a_legacy_customer_is_not_chased_for_something_nobody_showed_them(): void
     {
         // Signed up years ago; the security-card clause did not exist.

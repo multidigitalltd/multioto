@@ -4,7 +4,6 @@ namespace App\Models;
 
 use App\Enums\BusinessType;
 use App\Enums\CustomerStatus;
-use App\Enums\TokenStatus;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -129,12 +128,14 @@ class Customer extends Model
      * expired, was replaced or was removed by hand is still pointed at by that
      * column, and answering "yes" on the strength of it is how a customer with
      * no usable card reads as covered.
+     *
+     * And asked through chargeable(), not `status = active`: nothing restamps a
+     * card when its printed expiry passes, so status alone would show a green
+     * "card on file" for a card every charge would decline.
      */
     public function hasActiveCard(): bool
     {
-        return $this->paymentTokens()
-            ->where('status', TokenStatus::Active)
-            ->exists();
+        return $this->paymentTokens()->chargeable()->exists();
     }
 
     /**
@@ -156,7 +157,7 @@ class Customer extends Model
         return $query
             ->whereNotNull('security_card_terms_at')
             ->where('status', CustomerStatus::Active)
-            ->whereDoesntHave('paymentTokens', fn (Builder $q) => $q->where('status', TokenStatus::Active));
+            ->whereDoesntHave('paymentTokens', fn (Builder $q) => $q->chargeable());
     }
 
     public function defaultToken(): BelongsTo

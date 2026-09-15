@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Enums\TokenStatus;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -34,6 +35,38 @@ class PaymentToken extends Model
     public function customer(): BelongsTo
     {
         return $this->belongsTo(Customer::class);
+    }
+
+    /**
+     * Tokens that could actually take money right now.
+     *
+     * `status = active` is NOT that question. Nothing in the system walks the
+     * table to restamp cards (see hasExpired below), so a card that expired two
+     * years ago still says "פעיל" — and a check written against status alone
+     * reports a chargeable card where every charge would be declined. That is
+     * the failure this predicate exists to prevent, so it asks about the expiry
+     * we captured, exactly as hasExpired() does for a single row.
+     *
+     * An unknown expiry is not treated as expired: it means we never captured
+     * one, and calling a working card dead on that basis would strand it.
+     */
+    public function scopeChargeable(Builder $query): Builder
+    {
+        // Months since year zero, so one integer comparison covers both fields
+        // and no date function has to behave identically on SQLite and
+        // Postgres. Both operands are computed here, never taken from input.
+        $cutoff = now()->year * 12 + now()->month;
+
+        return $query
+            ->where('status', TokenStatus::Active)
+            ->where(fn (Builder $q) => $q
+                ->whereNull('expiry_month')
+                ->orWhereNull('expiry_year')
+                // The stored year may be two digits (see expiryYear): read
+                // literally, 27 is the year 27 AD and every such card reads as
+                // long dead.
+                ->orWhereRaw('(CASE WHEN expiry_year < 100 THEN 2000 + expiry_year ELSE expiry_year END) * 12 + expiry_month >= ?', [$cutoff])
+            );
     }
 
     /**

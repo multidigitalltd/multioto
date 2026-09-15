@@ -4,9 +4,7 @@ namespace App\Filament\Resources;
 
 use App\Enums\BusinessType;
 use App\Enums\CustomerStatus;
-use App\Enums\PaymentMethod;
 use App\Enums\SubscriptionStatus;
-use App\Enums\TokenStatus;
 use App\Filament\Concerns\RespectsModuleAccess;
 use App\Filament\Resources\CustomerResource\Pages;
 use App\Filament\Resources\CustomerResource\RelationManagers;
@@ -227,9 +225,7 @@ class CustomerResource extends Resource
                         // the wording, since a message about activating a
                         // subscription would name one that does not exist.
                         if ($subscription === null) {
-                            self::notifyLinkResult($sender->sendToCustomer($record, 'card.security_missing', [
-                                'method_label' => PaymentMethod::tryFrom((string) $record->payment_method)?->getLabel() ?? 'אמצעי התשלום שנבחר',
-                            ]));
+                            self::notifyLinkResult($sender->sendSignupCardRequest($record));
 
                             return;
                         }
@@ -479,7 +475,7 @@ class CustomerResource extends Resource
     public static function getEloquentQuery(): Builder
     {
         return parent::getEloquentQuery()->withExists([
-            'paymentTokens as has_active_card' => fn (Builder $query) => $query->where('status', TokenStatus::Active),
+            'paymentTokens as has_active_card' => fn (Builder $query) => $query->chargeable(),
         ]);
     }
 

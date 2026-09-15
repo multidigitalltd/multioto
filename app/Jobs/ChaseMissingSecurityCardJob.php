@@ -82,9 +82,7 @@ class ChaseMissingSecurityCardJob implements ShouldQueue
             }
 
             try {
-                $result = $sender->sendToCustomer($customer, 'card.security_missing', [
-                    'method_label' => PaymentMethod::tryFrom((string) $customer->payment_method)?->getLabel() ?? 'אמצעי התשלום שנבחר',
-                ]);
+                $result = $sender->sendSignupCardRequest($customer);
             } catch (\Throwable $e) {
                 Log::warning('ChaseMissingSecurityCardJob: send failed', [
                     'customer_id' => $customer->id,

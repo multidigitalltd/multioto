@@ -3,6 +3,7 @@
 namespace App\Services\Notifications;
 
 use App\Enums\NotificationType;
+use App\Enums\PaymentMethod;
 use App\Mail\DunningNotificationMail;
 use App\Models\Customer;
 use App\Models\NotificationLog;
@@ -80,6 +81,30 @@ class CardCaptureLinkSender
             'business_name' => config('mail.from.name') ?: config('app.name'),
             ...$extra,
         ], $link);
+    }
+
+    /**
+     * Ask a customer to finish the card step of signup, in the wording that is
+     * actually true for the way they pay.
+     *
+     * One place decides, because the two are not interchangeable: a customer
+     * paying by transfer is told their payment continues as agreed and this
+     * card is only security, and saying that to somebody whose chosen method IS
+     * the card promises a regular payment with nothing to run it on.
+     *
+     * @return array{link: string, sent: array<int, string>, failed: array<int, string>, skipped: array<int, string>}
+     */
+    public function sendSignupCardRequest(Customer $customer): array
+    {
+        $method = (string) $customer->payment_method;
+
+        if (! PaymentMethod::isManualValue($method)) {
+            return $this->sendToCustomer($customer, 'card.signup_missing');
+        }
+
+        return $this->sendToCustomer($customer, 'card.security_missing', [
+            'method_label' => PaymentMethod::tryFrom($method)?->getLabel() ?? 'אמצעי התשלום שנבחר',
+        ]);
     }
 
     /**
