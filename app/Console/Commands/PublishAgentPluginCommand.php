@@ -97,13 +97,13 @@ class PublishAgentPluginCommand extends Command
         // previous release or the complete new one, never a partial file.
         try {
             $moved = $disk->move($staging, $target);
-        } catch (\Throwable $e) {
+        } catch (\Throwable) {
             $moved = false;
         }
 
         if ($moved === false) {
             $disk->delete($staging);
-            $this->error("ההעברה ל-{$diskName}:{$target} נכשלה — הקובץ הקודם לא נגע.");
+            $this->error("ההעברה ל-{$diskName}:{$target} נכשלה — הקובץ הקודם לא נפגע.");
 
             return self::FAILURE;
         }
