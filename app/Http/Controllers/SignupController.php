@@ -128,6 +128,11 @@ class SignupController extends Controller
                 // enforces it) and the customer signed. Stamped server-side with
                 // the filer's IP.
                 'terms_accepted_at' => now(),
+                // Recorded only when the terms the customer just ticked actually
+                // carried the security-card clause — the form prints it from the
+                // same setting. With the arrangement switched off, nobody agreed
+                // to it, and stamping it anyway would manufacture a consent.
+                'security_card_terms_at' => (int) config('billing.card_fallback_days', 0) > 0 ? now() : null,
                 'signature_path' => $signaturePath,
                 'signed_ip' => $ip,
                 'status' => CustomerStatus::Active,

@@ -27,10 +27,46 @@ class SecurityCardTest extends TestCase
     {
         config(['billing.card_fallback_days' => 30]);
 
-        $customer = Customer::factory()->create(['payment_method' => 'bank_transfer']);
+        $customer = Customer::factory()->create([
+            'payment_method' => 'bank_transfer',
+            'security_card_terms_at' => now(),
+        ]);
         $subscription = Subscription::factory()->create(['customer_id' => $customer->id]);
 
         $this->assertSame(30, $subscription->fresh()->card_fallback_days);
+    }
+
+    public function test_a_legacy_customer_does_not_acquire_the_arrangement_through_a_new_subscription(): void
+    {
+        config(['billing.card_fallback_days' => 30]);
+
+        // Signed up years ago; never saw the security-card terms.
+        $customer = Customer::factory()->create([
+            'payment_method' => 'bank_transfer',
+            'security_card_terms_at' => null,
+        ]);
+
+        // The team opens a new subscription for them today. Reading consent from
+        // the creation DATE would hand this customer an arrangement nobody put
+        // in front of them — and then charge their card on it.
+        $subscription = Subscription::factory()->create(['customer_id' => $customer->id]);
+
+        $this->assertNull($subscription->fresh()->card_fallback_days);
+        $this->assertSame(0, Subscription::query()->dueForCardFallback()->count());
+    }
+
+    public function test_signing_up_records_the_consent_that_the_terms_carried(): void
+    {
+        config(['billing.card_fallback_days' => 30]);
+
+        $customer = Customer::factory()->create(['security_card_terms_at' => null]);
+
+        // The stamp exists so the arrangement can be traced to the moment the
+        // customer was shown it — not to a config value read later.
+        $this->assertNull($customer->security_card_terms_at);
+
+        $customer->update(['security_card_terms_at' => now()]);
+        $this->assertNotNull($customer->fresh()->security_card_terms_at);
     }
 
     public function test_a_card_subscription_gets_no_fallback_because_it_is_simply_charged(): void
@@ -48,7 +84,10 @@ class SecurityCardTest extends TestCase
     {
         config(['billing.card_fallback_days' => 30]);
 
-        $customer = Customer::factory()->create(['payment_method' => 'bank_transfer']);
+        $customer = Customer::factory()->create([
+            'payment_method' => 'bank_transfer',
+            'security_card_terms_at' => now(),
+        ]);
         $subscription = Subscription::factory()->create([
             'customer_id' => $customer->id,
             'card_fallback_days' => 90,
@@ -80,7 +119,10 @@ class SecurityCardTest extends TestCase
     {
         config(['billing.card_fallback_days' => 0]);
 
-        $customer = Customer::factory()->create(['payment_method' => 'bank_transfer']);
+        $customer = Customer::factory()->create([
+            'payment_method' => 'bank_transfer',
+            'security_card_terms_at' => now(),
+        ]);
 
         $this->assertNull(Subscription::factory()->create(['customer_id' => $customer->id])->fresh()->card_fallback_days);
     }
@@ -93,7 +135,10 @@ class SecurityCardTest extends TestCase
         ]);
         Http::fake(['*' => Http::response(['ResponseCode' => 0, 'Url' => 'https://secure.cardcom.solutions/x', 'LowProfileId' => 'lp-1'])]);
 
-        $customer = Customer::factory()->create(['payment_method' => 'bank_transfer']);
+        $customer = Customer::factory()->create([
+            'payment_method' => 'bank_transfer',
+            'security_card_terms_at' => now(),
+        ]);
 
         $response = $this->get(CardLink::for($customer->id));
 
@@ -116,6 +161,69 @@ class SecurityCardTest extends TestCase
             ->assertOk()
             ->assertSee('הזנת פרטי כרטיס אשראי', false)
             ->assertDontSee('אינו מחויב באופן שוטף', false);
+    }
+
+    public function test_a_cardcom_outage_does_not_take_the_bank_details_with_it(): void
+    {
+        config(['billing.signup.instructions.bank_transfer' => "בנק 12 סניף 345\nחשבון 67890"]);
+        // The card provider is down. It has nothing to do with how this
+        // customer pays — and every signup now passes through this page.
+        Http::fake(['*' => Http::response(['ResponseCode' => 1, 'Description' => 'error'], 500)]);
+
+        $customer = Customer::factory()->create([
+            'payment_method' => 'bank_transfer',
+            'security_card_terms_at' => now(),
+        ]);
+
+        $this->get(CardLink::for($customer->id))
+            ->assertOk()
+            ->assertSee('סניף 345', false)
+            ->assertSee('ההרשמה נקלטה', false);
+    }
+
+    public function test_the_page_names_the_customers_own_deadline_not_the_current_default(): void
+    {
+        config([
+            'billing.card_fallback_days' => 30,
+            'billing.signup.instructions.standing_order' => 'פרטי הוראת קבע',
+        ]);
+        Http::fake(['*' => Http::response(['ResponseCode' => 0, 'Url' => 'https://secure.cardcom.solutions/x', 'LowProfileId' => 'lp-3'])]);
+
+        $customer = Customer::factory()->create([
+            'payment_method' => 'standing_order',
+            'security_card_terms_at' => now(),
+        ]);
+        // This customer agreed to ninety days, whatever today's default says.
+        Subscription::factory()->create(['customer_id' => $customer->id, 'card_fallback_days' => 90]);
+
+        $this->get(CardLink::for($customer->id))
+            ->assertOk()
+            ->assertSee('90 יום', false)
+            ->assertDontSee('30 יום', false);
+    }
+
+    public function test_a_legacy_customer_is_not_promised_a_deadline_that_does_not_apply(): void
+    {
+        config([
+            'billing.card_fallback_days' => 30,
+            'billing.signup.instructions.standing_order' => 'פרטי הוראת קבע',
+        ]);
+        Http::fake(['*' => Http::response(['ResponseCode' => 0, 'Url' => 'https://secure.cardcom.solutions/x', 'LowProfileId' => 'lp-4'])]);
+
+        $customer = Customer::factory()->create([
+            'payment_method' => 'standing_order',
+            'security_card_terms_at' => null,
+        ]);
+        $subscription = Subscription::factory()->create(['customer_id' => $customer->id]);
+        $subscription->update(['card_fallback_days' => null]);
+
+        // Their card is never charged on a schedule, so naming one — on the
+        // ordinary card-update link they get from a dunning message — would be
+        // a deadline the collection does not follow.
+        $this->get(CardLink::for($customer->id))
+            ->assertOk()
+            ->assertSee('נשמר כביטחון בלבד', false)
+            ->assertDontSee('30 יום', false);
     }
 
     public function test_the_signup_form_states_the_arrangement_before_it_is_agreed_to(): void

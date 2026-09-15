@@ -26,6 +26,12 @@
         h1 { font-size: 1.25rem; margin: .5rem 0 .5rem; }
         p { color: var(--muted); margin: 0 0 .75rem; line-height: 1.6; }
         .icon { font-size: 2.5rem; }
+        .notice {
+            border: 1px solid var(--border); border-radius: 12px; padding: .85rem 1rem;
+            margin: 0 0 1rem; text-align: start;
+        }
+        .notice-head { font-weight: 600; margin-bottom: .35rem; }
+        .notice-body { white-space: pre-line; color: var(--muted); font-size: .92rem; line-height: 1.6; }
     </style>
 </head>
 <body>
@@ -33,6 +39,18 @@
         <div class="icon">⚠️</div>
         <h1>לא ניתן לטעון כרגע את טופס הכרטיס</h1>
         <p>אירעה תקלה זמנית מול חברת הסליקה. אפשר לנסות שוב בעוד מספר דקות, או ליצור איתנו קשר ונשמח לעזור.</p>
+
+        {{-- The card provider being unreachable has nothing to do with how this
+             customer actually pays. Every signup now passes through this page,
+             so without this a Cardcom outage would also swallow the bank
+             details the customer came here for. --}}
+        @if (($securityCard ?? false) === true && filled($paymentInstructions ?? null))
+            <div class="notice">
+                <div class="notice-head">פרטי התשלום ב{{ $methodLabel }}</div>
+                <div class="notice-body">{{ $paymentInstructions }}</div>
+            </div>
+            <p>ההרשמה נקלטה. הזנת כרטיס הביטחון אינה מעכבת את תחילת השירות — נשלח לכם קישור להשלמתה.</p>
+        @endif
         @if ($support = config('billing.email.support_address'))
             <p>לתמיכה: <a href="mailto:{{ $support }}">{{ $support }}</a></p>
         @endif

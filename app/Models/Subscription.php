@@ -66,22 +66,31 @@ class Subscription extends Model
             }
         });
 
-        // The security card, on subscriptions opened from here on.
+        // The security card, for customers who agreed to it.
         //
         // A subscription collected by hand gets the standing fallback allowance
-        // unless somebody set one explicitly — that is the arrangement every
-        // customer now signs up under: pay by transfer as agreed, and if the
-        // payment does not arrive, the card they gave covers it.
+        // — pay by transfer as agreed, and if the payment does not arrive, the
+        // card covers it — but ONLY for a customer who accepted those terms,
+        // which the signup form records on them.
         //
-        // Stamped at creation rather than read from config at charge time, and
-        // the difference is the whole point: a customer who signed up under the
-        // old arrangement never agreed to this one, and reading a live config
-        // would apply it to them the moment it changed. What a subscription
-        // carries is what was agreed when it was opened.
+        // The consent is read from the customer rather than inferred from "this
+        // subscription was created after we changed the policy", and that
+        // distinction is the whole guard: a subscription the team opens today
+        // for a customer who signed up two years ago would otherwise carry an
+        // arrangement that customer was never shown, and their card would be
+        // charged on terms nobody put in front of them.
+        //
+        // It is also stamped at creation rather than read from config when
+        // charging, so changing the setting never reaches back into what was
+        // already agreed.
         static::creating(function (self $subscription): void {
             $days = (int) config('billing.card_fallback_days', 0);
 
-            if ($days > 0 && $subscription->card_fallback_days === null && $subscription->isManuallyCollected()) {
+            if ($days <= 0 || $subscription->card_fallback_days !== null || ! $subscription->isManuallyCollected()) {
+                return;
+            }
+
+            if ($subscription->customer?->security_card_terms_at !== null) {
                 $subscription->card_fallback_days = $days;
             }
         });

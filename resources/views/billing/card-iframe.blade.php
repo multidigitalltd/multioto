@@ -61,6 +61,9 @@
                 @if (($fallbackDays ?? 0) > 0)
                     הוא משמש כביטחון בלבד: אם תשלום לא יגיע תוך {{ $fallbackDays }} יום ממועד הפירעון, נחייב אותו.
                 @else
+                    {{-- No allowance on any of their subscriptions: naming a
+                         deadline the collection does not follow would be a
+                         promise we do not keep. --}}
                     הוא נשמר כביטחון בלבד.
                 @endif
             </p>
