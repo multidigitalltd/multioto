@@ -66,6 +66,23 @@ return [
     // valid. Short-lived so a forwarded/leaked message can't be reused forever.
     'card_update_link_ttl_hours' => env('CARD_UPDATE_LINK_TTL_HOURS', 72),
 
+    /*
+    | כרטיס ביטחון — the security card.
+    |
+    | Every customer gives a card at signup, whatever they pay by. A customer on
+    | a standing order or a transfer is NOT charged on it: their subscription is
+    | collected by hand as agreed. The card is what happens when that agreed
+    | payment does not arrive — after this many days past the due date with
+    | nobody recording a payment, it is charged instead.
+    |
+    | Applied to subscriptions created from here on, never retroactively: a
+    | customer who signed up under the old arrangement did not agree to this
+    | one, and a card charged on an agreement somebody never made is the worst
+    | outcome this whole mechanism can produce. Set 0 to stop stamping it onto
+    | new subscriptions (existing ones keep whatever they carry).
+    */
+    'card_fallback_days' => (int) env('BILLING_CARD_FALLBACK_DAYS', 30),
+
     // How long a payment-demand link stays valid. Longer than a card-update link
     // — a demand may sit unpaid for a while — but still bounded. A canceled
     // demand stops working immediately regardless of this TTL.

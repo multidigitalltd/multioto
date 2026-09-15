@@ -130,13 +130,15 @@ class SubscriptionPaymentMethodTest extends TestCase
     {
         $customer = $this->customerWithCard();
 
-        // Same subscription, a year overdue, no allowance set. The fallback is
-        // opt-in: a card nobody nominated as backup stays unused.
-        $this->subscription($customer, [
+        // A subscription with no allowance — one opened before the security-card
+        // arrangement existed, since new ones now carry the standing default.
+        // A year overdue, and the card still stays unused: nobody nominated it
+        // as backup for this subscription.
+        $subscription = $this->subscription($customer, [
             'payment_method' => 'bank_transfer',
-            'card_fallback_days' => null,
             'next_charge_at' => now()->subYear(),
         ]);
+        $subscription->update(['card_fallback_days' => null]);
 
         $this->assertSame(0, Subscription::query()->dueForCardFallback()->count());
     }

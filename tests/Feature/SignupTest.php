@@ -186,15 +186,15 @@ class SignupTest extends TestCase
     {
         Queue::fake([SendWelcomeMessageJob::class, GenerateCustomerCardPdfJob::class, NotifySignupJob::class]);
 
+        // Every method now ends at the security-card page, cheques included.
         $this->post(route('signup.store'), $this->validPayload(['payment_method' => 'checks']))
-            ->assertRedirect(route('signup.thanks'))
-            ->assertSessionHas('payment_instructions');
+            ->assertRedirectContains('/billing/update-card/');
 
         $ticket = Ticket::sole();
         $this->assertStringContainsString('צ׳קים', $ticket->messages()->first()->body);
     }
 
-    public function test_bank_transfer_signup_opens_a_follow_up_ticket_instead_of_card_capture(): void
+    public function test_bank_transfer_signup_opens_a_follow_up_ticket_and_still_asks_for_a_card(): void
     {
         Queue::fake([SendWelcomeMessageJob::class, GenerateCustomerCardPdfJob::class, NotifySignupJob::class]);
 
@@ -202,8 +202,9 @@ class SignupTest extends TestCase
             'payment_method' => 'bank_transfer',
         ]));
 
-        // No Cardcom hand-off — a thank-you page plus an internal follow-up ticket.
-        $response->assertRedirect(route('signup.thanks'));
+        // A card IS now asked for — as security, not to be charged — alongside
+        // the internal follow-up ticket for the transfer arrangement itself.
+        $response->assertRedirectContains('/billing/update-card/');
 
         $ticket = Ticket::sole();
         $this->assertSame(TicketChannel::Manual, $ticket->channel);
@@ -230,8 +231,7 @@ class SignupTest extends TestCase
 
         foreach (range(1, 6) as $ignored) {
             $this->post(route('signup.store'), $payload)
-                ->assertRedirect(route('signup.thanks'))
-                ->assertSessionHas('payment_instructions');
+                ->assertRedirectContains('/billing/update-card/');
         }
 
         // One customer, one site, one ticket, one welcome — from six clicks.

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Enums\ChargeStatus;
+use App\Enums\PaymentMethod;
 use App\Models\Charge;
 use App\Models\Customer;
 use App\Services\Cardcom\CardcomClient;
@@ -72,8 +73,21 @@ class BillingController extends Controller
             $customer->update(['pending_card_lp_id' => $lowProfile['low_profile_id']]);
         }
 
+        // A customer who pays by transfer or standing order is here for the
+        // SECURITY card, not to be charged — and the instructions for the way
+        // they actually pay have to travel with them, or the card form becomes
+        // the last thing they see and the transfer details are lost behind it.
+        $method = (string) $customer->payment_method;
+        $manualMethod = PaymentMethod::isManualValue($method);
+
         return view('billing.card-iframe', [
             'cardUrl' => $cardUrl,
+            'securityCard' => $manualMethod,
+            'methodLabel' => $manualMethod ? (PaymentMethod::tryFrom($method)?->getLabel() ?? '') : null,
+            'paymentInstructions' => $manualMethod
+                ? trim((string) config('billing.signup.instructions.'.$method))
+                : null,
+            'fallbackDays' => (int) config('billing.card_fallback_days', 0),
         ]);
     }
 

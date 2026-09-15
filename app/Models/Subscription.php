@@ -66,6 +66,26 @@ class Subscription extends Model
             }
         });
 
+        // The security card, on subscriptions opened from here on.
+        //
+        // A subscription collected by hand gets the standing fallback allowance
+        // unless somebody set one explicitly — that is the arrangement every
+        // customer now signs up under: pay by transfer as agreed, and if the
+        // payment does not arrive, the card they gave covers it.
+        //
+        // Stamped at creation rather than read from config at charge time, and
+        // the difference is the whole point: a customer who signed up under the
+        // old arrangement never agreed to this one, and reading a live config
+        // would apply it to them the moment it changed. What a subscription
+        // carries is what was agreed when it was opened.
+        static::creating(function (self $subscription): void {
+            $days = (int) config('billing.card_fallback_days', 0);
+
+            if ($days > 0 && $subscription->card_fallback_days === null && $subscription->isManuallyCollected()) {
+                $subscription->card_fallback_days = $days;
+            }
+        });
+
         // A new card re-arms the "card expires before next charge" alert: the
         // old warning no longer applies once a fresh token is on file.
         static::updating(function (self $subscription): void {
