@@ -326,10 +326,19 @@ class SendTicketNotificationJob implements ShouldQueue
                 return true;
             }
 
-            // WhatsApp ids carry a suffix ("9725...@c.us") and phone numbers are
-            // written a dozen ways, so compare digits only — but only when there
-            // are enough of them to identify somebody. A short string of digits
-            // matching by accident would hand the balance to a stranger.
+            // An email address is only ever itself. Stripping its punctuation to
+            // compare digits made a contact at "0501234567@example.com" match
+            // the customer's phone 0501234567 — and handed that contact the
+            // balance, through the very fence meant to stop it.
+            if ($this->looksLikeEmail($candidate) || $this->looksLikeEmail($destination)) {
+                continue;
+            }
+
+            // Phone numbers and WhatsApp ids are the loose pair: ids carry a
+            // suffix ("9725...@c.us") and numbers are written a dozen ways, so
+            // compare digits — but only when there are enough of them to
+            // identify somebody. A short run matching by accident would hand
+            // the balance to a stranger.
             $candidateDigits = preg_replace('/\D+/', '', $candidate) ?? '';
             $destinationDigits = preg_replace('/\D+/', '', $destination) ?? '';
 
@@ -339,6 +348,21 @@ class SendTicketNotificationJob implements ShouldQueue
         }
 
         return false;
+    }
+
+    /**
+     * An email address rather than a phone number / WhatsApp id.
+     *
+     * A WhatsApp JID also contains "@" ("9725…@c.us"), so the "@" alone does not
+     * separate them — a real address has a dot in its domain and does not begin
+     * with a run of digits standing in for a number.
+     */
+    private function looksLikeEmail(string $value): bool
+    {
+        return filter_var($value, FILTER_VALIDATE_EMAIL) !== false
+            && ! str_ends_with($value, '@c.us')
+            && ! str_ends_with($value, '@s.whatsapp.net')
+            && ! str_ends_with($value, '@g.us');
     }
 
     /** Greeting/small-talk openers that carry no request, in both languages. */
@@ -550,6 +574,14 @@ class SendTicketNotificationJob implements ShouldQueue
         $messages = $ticket->messages()
             ->where('channel', '!=', MessageChannel::InternalNote)
             ->where('author', '!=', MessageAuthor::System)
+            // An outbound reply only counts once it has actually left. The send
+            // job stamps external_message_id on delivery and treats a null as
+            // "not sent yet", so a reply that is queued, delayed, or retrying
+            // after a provider failure is an answer the customer does not have
+            // — summarising it would tell them we said something we did not.
+            ->where(fn ($q) => $q
+                ->where('direction', MessageDirection::Inbound)
+                ->orWhereNotNull('external_message_id'))
             // Newest first under the cap, so on a long thread it is the ENDING
             // that survives — where what was actually done is written — rather
             // than twenty messages of opening back-and-forth.
@@ -567,7 +599,18 @@ class SendTicketNotificationJob implements ShouldQueue
                 continue;
             }
 
-            $who = $message->direction === MessageDirection::Inbound ? 'לקוח' : 'נציג';
+            // A tagged email thread accepts replies from whoever joins it — a
+            // bookkeeper, a watcher, the customer's developer — and intake
+            // records who that was in sender_label (null when it IS the
+            // customer). Labelling all of them "לקוח" lets the summary put a
+            // stranger's request, or their confirmation that all is well, in
+            // the customer's mouth.
+            $who = match (true) {
+                $message->direction !== MessageDirection::Inbound => 'נציג',
+                filled($message->sender_label) => Str::limit((string) $message->sender_label, 40, ''),
+                default => 'לקוח',
+            };
+
             $lines[] = "{$who}: ".Str::limit($body, self::TRANSCRIPT_MESSAGE_CHARS);
         }
 

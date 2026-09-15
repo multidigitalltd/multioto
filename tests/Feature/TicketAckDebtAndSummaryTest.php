@@ -149,6 +149,7 @@ class TicketAckDebtAndSummaryTest extends TestCase
         $ticket->messages()->create([
             'direction' => MessageDirection::Outbound, 'channel' => MessageChannel::Email,
             'author' => MessageAuthor::Agent, 'body' => 'החלפנו את תוסף המטמון והעברנו את התמונות ל-WebP. זמן הטעינה ירד ל-1.4 שניות.',
+            'external_message_id' => 'mail-7',   // delivered
         ]);
         // An internal note and an unsent AI draft share the internal channel.
         // Neither may reach the prompt: one is the team talking to itself, the
@@ -179,6 +180,102 @@ class TicketAckDebtAndSummaryTest extends TestCase
         $this->assertStringContainsString('נציג:', $seen);
         // And the internal remark is not.
         $this->assertStringNotContainsString('מעצבנת', $seen);
+    }
+
+    public function test_a_contact_whose_email_reads_like_the_phone_number_is_still_a_stranger(): void
+    {
+        $customer = $this->customer(['phone' => '0501234567']);
+        $this->demandedCharge($customer, 24000, 'אחסון שנתי');
+
+        // Digits-only comparison exists for phone numbers and WhatsApp ids, and
+        // it used to be applied to everything — so this address matched the
+        // customer's phone and was handed the balance.
+        $body = $this->sendAck($this->emailTicket($customer, '0501234567@example.com'));
+
+        $this->assertStringNotContainsString('/pay/', $body);
+    }
+
+    public function test_a_reply_that_has_not_left_yet_is_not_summarised_as_said(): void
+    {
+        config(['billing.ai.enabled' => true, 'billing.ai.dynamic_ack' => true]);
+
+        $customer = $this->customer();
+        $ticket = $this->emailTicket($customer);
+
+        $ticket->messages()->create([
+            'direction' => MessageDirection::Inbound, 'channel' => MessageChannel::Email,
+            'author' => MessageAuthor::Customer, 'body' => 'האתר נטען לאט.',
+            'external_message_id' => 'in-1',
+        ]);
+        $ticket->messages()->create([
+            'direction' => MessageDirection::Outbound, 'channel' => MessageChannel::Email,
+            'author' => MessageAuthor::Agent, 'body' => 'העברנו את האתר לשרת מהיר יותר.',
+            'external_message_id' => 'mail-9',
+        ]);
+        // Queued or retrying after a provider failure — the customer does not
+        // have this one.
+        $ticket->messages()->create([
+            'direction' => MessageDirection::Outbound, 'channel' => MessageChannel::Email,
+            'author' => MessageAuthor::Agent, 'body' => 'והוספנו לך גיבוי יומי בחינם.',
+            'external_message_id' => null,
+        ]);
+
+        $seen = '';
+        $ai = Mockery::mock(ClaudeClient::class);
+        $ai->shouldReceive('isEnabled')->andReturn(true);
+        $ai->shouldReceive('structured')->once()
+            ->with(Mockery::any(), Mockery::on(function (string $prompt) use (&$seen): bool {
+                $seen = $prompt;
+
+                return true;
+            }), Mockery::any())
+            ->andReturn(['message' => 'העברנו את האתר לשרת מהיר יותר. פנייה #1']);
+
+        Mail::fake();
+        (new SendTicketNotificationJob($ticket->id, 'ticket.resolved'))
+            ->handle(app(TemplateEngine::class), app(WahaClient::class), $ai);
+
+        $this->assertStringContainsString('שרת מהיר יותר', $seen);
+        $this->assertStringNotContainsString('גיבוי יומי', $seen);
+    }
+
+    public function test_a_stranger_on_the_thread_is_not_quoted_as_the_customer(): void
+    {
+        config(['billing.ai.enabled' => true, 'billing.ai.dynamic_ack' => true]);
+
+        $customer = $this->customer();
+        $ticket = $this->emailTicket($customer);
+
+        $ticket->messages()->create([
+            'direction' => MessageDirection::Inbound, 'channel' => MessageChannel::Email,
+            'author' => MessageAuthor::Customer, 'body' => 'האתר נטען לאט.',
+            'external_message_id' => 'in-1',
+        ]);
+        // A tagged thread lets anyone who replies join it, and intake records
+        // who. "הכול תקין אצלי" from the bookkeeper is not the customer saying
+        // their site is fixed.
+        $ticket->messages()->create([
+            'direction' => MessageDirection::Inbound, 'channel' => MessageChannel::Email,
+            'author' => MessageAuthor::Customer, 'body' => 'הכול תקין אצלי.',
+            'sender_label' => 'רו״ח חיצוני', 'external_message_id' => 'in-2',
+        ]);
+
+        $seen = '';
+        $ai = Mockery::mock(ClaudeClient::class);
+        $ai->shouldReceive('isEnabled')->andReturn(true);
+        $ai->shouldReceive('structured')->once()
+            ->with(Mockery::any(), Mockery::on(function (string $prompt) use (&$seen): bool {
+                $seen = $prompt;
+
+                return true;
+            }), Mockery::any())
+            ->andReturn(['message' => 'הטיפול בפנייה #1 הושלם.']);
+
+        Mail::fake();
+        (new SendTicketNotificationJob($ticket->id, 'ticket.resolved'))
+            ->handle(app(TemplateEngine::class), app(WahaClient::class), $ai);
+
+        $this->assertStringContainsString('רו״ח חיצוני: הכול תקין', $seen);
     }
 
     public function test_the_closing_message_is_told_not_to_invent_a_resolution(): void
