@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Enums\ChargeStatus;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -83,6 +84,33 @@ class Charge extends Model
     public function customer(): BelongsTo
     {
         return $this->belongsTo(Customer::class);
+    }
+
+    /**
+     * What a customer currently owes: pending charges we actually asked them to
+     * pay. A pending charge with no demand behind it is mid-processing, not a
+     * debt — telling somebody they owe money for one would be a demand nobody
+     * decided to send.
+     *
+     * A charge belongs to a customer directly OR through one of their
+     * subscriptions, and both have to be matched: subscription charges carry no
+     * customer_id of their own, so the direct test alone reports a debtor with
+     * a clean slate.
+     *
+     * The single definition, shared by the portal, the ticket acknowledgement
+     * and anything else that names a number to a customer — two of those
+     * quoting different totals is worse than either being wrong alone.
+     */
+    public function scopeOpenDebtFor(Builder $query, Customer|int $customer): Builder
+    {
+        $customerId = $customer instanceof Customer ? $customer->id : $customer;
+
+        return $query
+            ->where('status', ChargeStatus::Pending)
+            ->whereNotNull('demand_sent_at')
+            ->where(fn (Builder $q) => $q
+                ->where('customer_id', $customerId)
+                ->orWhereHas('subscription', fn (Builder $s) => $s->where('customer_id', $customerId)));
     }
 
     /** The customer behind this charge, whether one-off or via a subscription. */

@@ -310,6 +310,14 @@ return [
         // closing/resolved notice, …) is also emailed as a copy to the team
         // address above — so the owner sees exactly what went out. Off by default.
         'copy_customer_messages' => env('NOTIFY_COPY_CUSTOMER_MESSAGES', false),
+        // Show the customer's open balance, with a link to pay it, at the foot
+        // of the acknowledgement for a new ticket. Somebody who has just written
+        // in is reading that message — it is the one moment we know they are
+        // looking, and a demand sent on its own competes with their whole inbox.
+        // Only ever added when the ticket belongs to a customer AND the message
+        // is going to that customer's own address or number; a ticket opened by
+        // an employee or their web developer never carries it.
+        'debt_in_ticket_ack' => (bool) env('NOTIFY_DEBT_IN_TICKET_ACK', true),
         // Fixed signature appended to outbound support replies. Editable in
         // הגדרות ← דואר. Email is the primary use; WhatsApp is optional and
         // usually shorter (or empty). Blank = no signature appended.
