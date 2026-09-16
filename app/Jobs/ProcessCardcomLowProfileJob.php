@@ -5,13 +5,16 @@ namespace App\Jobs;
 use App\Enums\ChargeStatus;
 use App\Models\Charge;
 use App\Models\Customer;
+use App\Models\PendingSignup;
 use App\Models\WebhookEvent;
 use App\Services\Cardcom\CardcomClient;
 use App\Services\Cardcom\CardTokenService;
 use App\Services\Notifications\TeamNotifier;
+use App\Services\Signup\CompleteSignup;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 
 /**
  * Process a completed Cardcom Low Profile session. Two shapes arrive here:
@@ -46,6 +49,13 @@ class ProcessCardcomLowProfileJob implements ShouldQueue
             return;
         }
 
+        // A public signup waiting on its card. This is the moment the customer
+        // is created — before it, there is no customer record at all, which is
+        // what stops a half-finished signup from looking like a finished one.
+        if ($this->finishSignupIfMatched($payload, $event)) {
+            return;
+        }
+
         // Token capture (subscription setup / card update). Cardcom's webhook
         // body is minimal — the token itself lives in the authoritative
         // GetLpResult, so fetch it whenever the payload doesn't already carry it.
@@ -57,8 +67,12 @@ class ProcessCardcomLowProfileJob implements ShouldQueue
         }
 
         $responseCode = (string) ($result['ResponseCode'] ?? '0');
-        $customerId = (int) ($result['ReturnValue'] ?? $payload['ReturnValue'] ?? 0);
-        $customer = Customer::find($customerId);
+        $returnValue = (string) ($result['ReturnValue'] ?? $payload['ReturnValue'] ?? '');
+        // A signup reference is never a customer id. Cast naively, "PS-7"
+        // becomes 0 and this path would report a failed card update for a
+        // customer that does not exist, hiding a signup nobody completed.
+        $customerId = Str::startsWith($returnValue, PendingSignup::RETURN_VALUE_PREFIX) ? 0 : (int) $returnValue;
+        $customer = $customerId > 0 ? Customer::find($customerId) : null;
 
         $token = $customer ? app(CardTokenService::class)->storeFromLpResult($customer, $result) : null;
 
@@ -118,6 +132,97 @@ class ProcessCardcomLowProfileJob implements ShouldQueue
             );
         } catch (\Throwable $e) {
             Log::warning('Cardcom card-failure alert could not be sent', ['error' => $e->getMessage()]);
+        }
+    }
+
+    /**
+     * Create the customer behind a public signup, if this webhook is one.
+     *
+     * Matched on the LowProfileId first and the ReturnValue second: the id is
+     * what Cardcom guarantees on the notification, and the prefixed ReturnValue
+     * covers a session we recorded but whose id came back in a different field.
+     * A pending signup id is never read as a customer id — the two sequences
+     * overlap, and confusing them would hand a stranger's card to a customer.
+     *
+     * Returns true when handled, so the card-update path below is skipped.
+     *
+     * @param  array<string, mixed>  $payload
+     */
+    private function finishSignupIfMatched(array $payload, WebhookEvent $event): bool
+    {
+        $lowProfileId = (string) ($payload['LowProfileId'] ?? '');
+        $returnValue = (string) ($payload['ReturnValue'] ?? '');
+
+        $pending = $lowProfileId === ''
+            ? null
+            : PendingSignup::query()->where('cardcom_lp_id', $lowProfileId)->first();
+
+        // And by ReturnValue when the id does not match — which is ordinary,
+        // not exotic: opening the card link in a second tab starts a second
+        // Cardcom session and only the newest id is kept on the row. Finishing
+        // in the FIRST tab would then match nothing, the generic path below
+        // would read "PS-7" as customer 0, and the event would be marked
+        // processed. The card is captured and no customer is created, which is
+        // the one outcome this whole flow exists to prevent.
+        if ($pending === null && Str::startsWith($returnValue, PendingSignup::RETURN_VALUE_PREFIX)) {
+            $pending = PendingSignup::query()
+                ->whereKey((int) Str::after($returnValue, PendingSignup::RETURN_VALUE_PREFIX))
+                ->first();
+        }
+
+        if ($pending === null) {
+            return false;
+        }
+
+        // The webhook body is minimal; the token lives in the authoritative
+        // GetLpResult.
+        $result = $payload;
+
+        if ($lowProfileId !== '' && empty(data_get($payload, 'TokenInfo.Token'))) {
+            $result = app(CardcomClient::class)->getLpResult($lowProfileId);
+        }
+
+        $customer = app(CompleteSignup::class)->withCard($pending, $result);
+
+        if ($customer === null) {
+            // No token, so no customer — which is the intended outcome, not a
+            // silent loss. Said out loud, because a prospect who tried to join
+            // and could not is otherwise invisible: there is no customer record
+            // for anybody to find.
+            $reason = trim((string) ($result['Description'] ?? '')) ?: 'לא צוינה סיבה';
+
+            Log::warning('Signup low profile webhook without a usable token', [
+                'webhook_event_id' => $event->id,
+                'pending_signup_id' => $pending->id,
+                'low_profile_id' => $lowProfileId,
+                'response_code' => $result['ResponseCode'] ?? null,
+                'description' => $reason,
+            ]);
+
+            $this->tellTheTeamAboutSignup($pending, $reason);
+        }
+
+        $event->markProcessed();
+
+        return true;
+    }
+
+    /** A prospect whose card did not go through, and who therefore does not exist. */
+    private function tellTheTeamAboutSignup(PendingSignup $pending, string $reason): void
+    {
+        try {
+            app(TeamNotifier::class)->alert(
+                "💳 הרשמה ללא כרטיס — {$pending->name}",
+                implode("\n", [
+                    "נרשם: {$pending->name}",
+                    "טלפון: {$pending->phone}",
+                    "אימייל: {$pending->email}",
+                    "סיבה מקארדקום: {$reason}",
+                    'הכרטיס לא נשמר ולכן לא נפתח כרטיס לקוח — יש ליצור קשר.',
+                ]),
+            );
+        } catch (\Throwable $e) {
+            Log::warning('Signup card-failure alert could not be sent', ['error' => $e->getMessage()]);
         }
     }
 

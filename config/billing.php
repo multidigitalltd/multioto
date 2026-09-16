@@ -145,6 +145,18 @@ return [
      | team can edit from הגדרות ← טופס הרשמה (overlaid onto these defaults).
      */
     'signup' => [
+        /*
+         | How long a filled-in signup waits for its card before it is pruned.
+         | It holds personal details and a signature, so it is deliberately
+         | short-lived — long enough to come back to the link in the evening,
+         | short enough that we are not keeping the details of somebody who
+         | walked away.
+        */
+        'pending_lifetime_hours' => (int) env('SIGNUP_PENDING_LIFETIME_HOURS', 72),
+
+        // How long a manager-issued invite link stays usable.
+        'invite_days' => (int) env('SIGNUP_INVITE_DAYS', 14),
+
         'instructions' => [
             // Standing order (bank debit authorisation) — our Kesher institution
             // code and the digital-authorisation link.

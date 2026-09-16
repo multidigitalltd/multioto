@@ -12,6 +12,7 @@ use App\Jobs\SendCardCaptureLinkJob;
 use App\Jobs\SendJoinInviteJob;
 use App\Models\Customer;
 use App\Models\Plan;
+use App\Models\SignupInvite;
 use App\Models\Site;
 use App\Models\Subscription;
 use Filament\Actions\Action;
@@ -103,6 +104,22 @@ class OnboardCustomer extends Page implements HasForms
                         ->helperText('הקישור יישלח לוואטסאפ של המספר הזה'),
                     TextInput::make('email')->label('אימייל')->email()
                         ->helperText('והקישור יישלח גם לכתובת הזו'),
+                    // The exception, and deliberately awkward to reach for: off
+                    // by default, and it will not send without a reason. A card
+                    // is what the business collects from when an agreed payment
+                    // does not arrive, so waiving it is a decision about one
+                    // customer — not a checkbox somebody ticks out of habit.
+                    Toggle::make('card_exempt')
+                        ->label('לוותר על חובת כרטיס אשראי')
+                        ->helperText('ברירת המחדל: כרטיס חובה — בלי כרטיס לא נפתח לקוח. הוויתור נרשם על שמכם ותקף לקישור הזה בלבד, פעם אחת.')
+                        ->live()
+                        ->inline(false),
+                    TextInput::make('exempt_reason')
+                        ->label('סיבת הוויתור')
+                        ->maxLength(500)
+                        ->required(fn (Get $get): bool => (bool) $get('card_exempt'))
+                        ->visible(fn (Get $get): bool => (bool) $get('card_exempt'))
+                        ->helperText('יופיע בכרטיס הלקוח. ביום שתשלום לא יגיע ואין ממה לגבות, זה מה שיסביר למה.'),
                 ])
                 ->action(function (array $data): void {
                     $email = trim((string) ($data['email'] ?? ''));
@@ -114,10 +131,37 @@ class OnboardCustomer extends Page implements HasForms
                         return;
                     }
 
-                    SendJoinInviteJob::dispatch(trim((string) $data['name']), $email ?: null, $phone ?: null);
+                    $exempt = (bool) ($data['card_exempt'] ?? false);
+                    $reason = trim((string) ($data['exempt_reason'] ?? ''));
+
+                    if ($exempt && $reason === '') {
+                        Notification::make()->title('ויתור על כרטיס מחייב סיבה')->danger()->send();
+
+                        return;
+                    }
+
+                    $invite = SignupInvite::create([
+                        'name' => trim((string) $data['name']),
+                        'email' => $email ?: null,
+                        'phone' => $phone ?: null,
+                        'card_exempt' => $exempt,
+                        'exempt_reason' => $exempt ? $reason : null,
+                        'created_by' => auth()->id(),
+                        'expires_at' => now()->addDays((int) config('billing.signup.invite_days', 14)),
+                    ]);
+
+                    SendJoinInviteJob::dispatch(
+                        trim((string) $data['name']),
+                        $email ?: null,
+                        $phone ?: null,
+                        $invite->token,
+                    );
 
                     Notification::make()->title('הקישור נשלח ללקוח')
-                        ->body('הלקוח יקבל קישור להשלמת הפרטים וחתימה.')->success()->send();
+                        ->body($exempt
+                            ? 'הקישור נשלח — ללא חובת כרטיס אשראי. הוויתור נרשם על שמכם.'
+                            : 'הלקוח יקבל קישור להשלמת הפרטים וחתימה. כרטיס הלקוח ייפתח עם הזנת הכרטיס.')
+                        ->success()->send();
                 }),
         ];
     }

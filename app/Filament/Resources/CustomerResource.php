@@ -343,15 +343,32 @@ class CustomerResource extends Resource
                     TextEntry::make('security_card')
                         ->label('כרטיס ביטחון')
                         ->badge()
-                        ->state(fn (Customer $record): string => $record->hasActiveCard()
-                            ? 'כרטיס שמור'
-                            : ($record->security_card_terms_at !== null ? 'חסר — הלקוח אישר ולא הזין' : 'אין כרטיס'))
-                        ->color(fn (Customer $record): string => $record->hasActiveCard()
-                            ? 'success'
-                            : ($record->security_card_terms_at !== null ? 'danger' : 'gray'))
-                        ->helperText(fn (Customer $record): ?string => $record->hasActiveCard() || $record->security_card_terms_at === null
-                            ? null
-                            : 'אם תשלום לא יגיע במועד אין ממה לגבות. ניתן לשלוח קישור להזנת כרטיס מרשימת הלקוחות.'),
+                        ->state(fn (Customer $record): string => match (true) {
+                            $record->hasActiveCard() => 'כרטיס שמור',
+                            $record->card_exempt_at !== null => 'פטור מכרטיס',
+                            $record->security_card_terms_at !== null => 'חסר — הלקוח אישר ולא הזין',
+                            default => 'אין כרטיס',
+                        })
+                        ->color(fn (Customer $record): string => match (true) {
+                            $record->hasActiveCard() => 'success',
+                            $record->card_exempt_at !== null => 'warning',
+                            $record->security_card_terms_at !== null => 'danger',
+                            default => 'gray',
+                        })
+                        // The exemption names itself and its author. On the day
+                        // a payment does not arrive and there is nothing to
+                        // fall back on, this is the line that explains why.
+                        ->helperText(fn (Customer $record): ?string => match (true) {
+                            $record->hasActiveCard() => null,
+                            $record->card_exempt_at !== null => trim(sprintf(
+                                '%s · אישר/ה %s ב-%s',
+                                $record->card_exempt_reason ?: 'ללא סיבה שנרשמה',
+                                $record->cardExemptBy?->name ?? '—',
+                                $record->card_exempt_at->format('d/m/Y'),
+                            )),
+                            $record->security_card_terms_at !== null => 'אם תשלום לא יגיע במועד אין ממה לגבות. ניתן לשלוח קישור להזנת כרטיס מרשימת הלקוחות.',
+                            default => null,
+                        }),
                     // The signed consent record from /join, viewable inline (team-only route).
                     TextEntry::make('signature_path')->label('חתימה')
                         ->formatStateUsing(fn (): string => 'צפייה בחתימה ↗')

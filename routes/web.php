@@ -16,6 +16,7 @@ use App\Http\Controllers\Portal\PortalController;
 use App\Http\Controllers\Portal\PortalLicenseController;
 use App\Http\Controllers\PushSubscriptionController;
 use App\Http\Controllers\SignatureController;
+use App\Http\Controllers\SignupCardController;
 use App\Http\Controllers\SignupController;
 use App\Http\Controllers\SupportAttachmentController;
 use App\Http\Controllers\SupportFormController;
@@ -85,6 +86,26 @@ Route::get('/join', [SignupController::class, 'show'])->name('signup');
 Route::post('/join', [SignupController::class, 'store'])
     ->middleware('throttle:8,1')
     ->name('signup.store');
+
+/*
+ | The card step, and the gate the customer record sits behind: nothing is
+ | written to `customers` until Cardcom hands back a token. Addressed by the
+ | pending signup's own random token, so no id is enumerable.
+ */
+Route::get('/join/card/{pending}', [SignupCardController::class, 'show'])
+    ->middleware('throttle:20,1')
+    ->name('signup.card');
+
+Route::get('/join/done/{pending}', [SignupCardController::class, 'done'])
+    ->middleware('throttle:30,1')
+    ->name('signup.done');
+
+// Where Cardcom sends a card entry that did NOT go through. Cardcom sends no
+// webhook for a declined deal, so this redirect is the only moment anybody
+// learns of it — and a refused card here means no customer was opened at all.
+Route::get('/join/card-failed/{pending}', [SignupCardController::class, 'failed'])
+    ->middleware(['signed', 'throttle:20,1'])
+    ->name('signup.card.failed');
 // Friendly alias matching the business site's terminology.
 Route::redirect('/new-client', '/join');
 
