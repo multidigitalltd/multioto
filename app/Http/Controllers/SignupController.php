@@ -102,7 +102,20 @@ class SignupController extends Controller
         }
 
         $businessType = BusinessType::from($data['business_type']);
-        $invite = SignupInvite::query()->where('token', $data['invite'] ?? '')->first();
+        $inviteToken = trim((string) ($data['invite'] ?? ''));
+        $invite = $inviteToken === '' ? null : SignupInvite::query()->where('token', $inviteToken)->first();
+
+        // The form was rendered from an exempt invite that has since expired or
+        // been spent. The terms this person read carried no security-card
+        // clause, so neither answer is available: stamping the consent would
+        // record an agreement to text they were never shown, and pushing them
+        // into the card flow under those terms is the same thing more quietly.
+        // They are asked to reload and accept the terms that now apply.
+        if ($invite?->card_exempt && ! $invite->waivesCard()) {
+            return back()->withInput()->withErrors([
+                'signup' => 'הקישור שקיבלתם כבר נוצל או פג תוקף. רעננו את העמוד ומלאו שוב — ייתכן שתנאי ההרשמה השתנו.',
+            ]);
+        }
 
         $pending = PendingSignup::create([
             'name' => $data['name'],
@@ -115,6 +128,7 @@ class SignupController extends Controller
             'phone' => $data['phone'],
             'domain' => $this->domainFrom($data),
             'payment_method' => $data['payment_method'],
+            'invite_token' => $inviteToken ?: null,
             // The legal record of consent — the box was ticked (validation
             // enforces it) and the customer signed. Stamped server-side.
             'terms_accepted_at' => now(),
@@ -128,12 +142,15 @@ class SignupController extends Controller
         ]);
 
         // The exception: a manager waived the card for this one prospect. The
-        // customer is created now, because there is no card to wait for.
-        if ($invite?->waivesCard()) {
-            $customer = app(CompleteSignup::class)->exempt($pending, $invite);
+        // invite is SPENT FIRST, in one conditional update — two submissions
+        // carrying different details take different locks, so checking and then
+        // creating would let both of them open a cardless customer from a
+        // waiver meant for one. Losing the race simply means a card is
+        // required, which is the default anyway.
+        if ($invite?->waivesCard() && $invite->claim()) {
+            app(CompleteSignup::class)->exempt($pending, $invite);
 
-            return redirect()->route('signup.done', ['pending' => $pending->token])
-                ->with('customerId', $customer->id);
+            return redirect()->route('signup.done', ['pending' => $pending->token]);
         }
 
         return $this->handOff($pending);
@@ -193,6 +210,15 @@ class SignupController extends Controller
             ->where('phone', $data['phone'])
             ->where('business_type', $data['business_type'])
             ->where('payment_method', $data['payment_method'])
+            // The invite counts. The same prospect filing again ON AN EXEMPT
+            // INVITE is a different filing: collapsing it onto the earlier one
+            // would send them back to the card page and make the exemption a
+            // manager just granted impossible to use.
+            ->when(
+                ($data['invite'] ?? '') === '',
+                fn ($q) => $q->whereNull('invite_token'),
+                fn ($q) => $q->where('invite_token', $data['invite']),
+            )
             ->when(
                 $number === null,
                 fn ($q) => $q->whereNull('business_number'),
@@ -250,6 +276,7 @@ class SignupController extends Controller
             (string) $data['payment_method'],
             (string) ($data['business_number'] ?? ''),
             (string) $this->domainFrom($data),
+            (string) ($data['invite'] ?? ''),
         ]));
     }
 

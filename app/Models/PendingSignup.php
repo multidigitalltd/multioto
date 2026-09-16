@@ -32,7 +32,7 @@ class PendingSignup extends Model
 
     protected $fillable = [
         'token', 'name', 'contact_name', 'business_number', 'business_type', 'vat_exempt',
-        'email', 'phone', 'domain', 'payment_method',
+        'email', 'phone', 'domain', 'payment_method', 'invite_token',
         'signature_path', 'signed_ip', 'terms_accepted_at', 'security_card_terms_at',
         'cardcom_lp_id', 'customer_id', 'completed_at',
     ];

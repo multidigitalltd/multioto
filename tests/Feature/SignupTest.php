@@ -366,6 +366,7 @@ class SignupTest extends TestCase
             'credit_card',
             '',
             'newbiz.co.il',
+            '', // no invite
         ])), 30);
 
         $this->assertTrue($lock->get());

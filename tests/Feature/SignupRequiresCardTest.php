@@ -148,11 +148,9 @@ class SignupRequiresCardTest extends TestCase
         $this->cardcomReturns(['ResponseCode' => 1, 'Description' => 'error'], 500);
         $this->post(route('signup.store'), $this->payload())->assertRedirect();
 
-        // The card provider is unreachable. A card is required to open a
-        // customer, so the signup stops — the cost of the guarantee, and the
-        // customer is told plainly rather than left believing they registered.
-        Http::fake(['*' => Http::response(['ResponseCode' => 1, 'Description' => 'error'], 500)]);
-
+        // A card is required to open a customer, so the signup stops — the cost
+        // of the guarantee, and the customer is told plainly rather than left
+        // believing they registered.
         $this->get(route('signup.card', ['pending' => PendingSignup::sole()->token]))
             ->assertOk()
             ->assertSee('לא ניתן להשלים את ההרשמה כרגע', false);
@@ -255,21 +253,40 @@ class SignupRequiresCardTest extends TestCase
         $this->assertNotNull($invite->fresh()->used_at);
         $this->assertFalse($invite->fresh()->waivesCard());
 
-        // Forwarded on to somebody else, it is an ordinary signup link again —
-        // one waiver must not become a standing way in.
+        // Forwarded on to somebody else, it opens nothing. The refusal is
+        // deliberate rather than a quiet fall-through to the card page: that
+        // second person read terms with no security-card clause, so they are
+        // sent back to accept the ones that actually apply.
         $this->post(route('signup.store'), $this->payload([
             'invite' => $invite->token,
             'email' => 'second@example.co.il',
             'phone' => '0529876543',
-        ]))->assertRedirectContains('/join/card/');
+        ]))->assertSessionHasErrors('signup');
 
         $this->assertSame(1, Customer::count());
     }
 
-    public function test_an_expired_invite_waives_nothing(): void
+    public function test_an_expired_exemption_waives_nothing_and_says_so(): void
     {
         $this->cardcomReturns();
         $invite = SignupInvite::factory()->cardExempt()->create(['expires_at' => now()->subDay()]);
+
+        // Refused rather than quietly turned into a card signup: the terms this
+        // person read carried no security-card clause, and moving them into the
+        // card flow under those terms records an agreement they never made.
+        $this->post(route('signup.store'), $this->payload(['invite' => $invite->token]))
+            ->assertSessionHasErrors('signup');
+
+        $this->assertSame(0, Customer::count());
+        $this->assertSame(0, PendingSignup::count());
+    }
+
+    public function test_an_expired_ordinary_invite_is_just_a_signup(): void
+    {
+        $this->cardcomReturns();
+        // Nothing was waived, so nothing changed for this person: they read the
+        // ordinary terms and get the ordinary card step.
+        $invite = SignupInvite::factory()->create(['expires_at' => now()->subDay()]);
 
         $this->post(route('signup.store'), $this->payload(['invite' => $invite->token]))
             ->assertRedirectContains('/join/card/');
@@ -327,6 +344,121 @@ class SignupRequiresCardTest extends TestCase
         // Nobody showed them the security-card clause, so stamping the consent
         // would manufacture one — and the chase reads that stamp as agreement.
         $this->assertNull(Customer::sole()->security_card_terms_at);
+    }
+
+    public function test_finishing_in_the_first_of_two_tabs_still_opens_the_customer(): void
+    {
+        Queue::fake();
+        // A sequence rather than cardcomReturns(): each card page must come
+        // back with its OWN session id, and Http::fake never replaces a stub.
+        Http::fakeSequence()
+            ->push(['ResponseCode' => 0, 'Url' => 'https://secure.cardcom.solutions/a', 'LowProfileId' => 'lp-first'])
+            ->push(['ResponseCode' => 0, 'Url' => 'https://secure.cardcom.solutions/b', 'LowProfileId' => 'lp-second']);
+
+        $this->post(route('signup.store'), $this->payload())->assertRedirect();
+        $pending = PendingSignup::sole();
+
+        // Two tabs on the same link: two Cardcom sessions, and only the newest
+        // id is kept on the row.
+        $this->get(route('signup.card', ['pending' => $pending->token]))->assertOk();
+        $firstSession = $pending->fresh()->cardcom_lp_id;
+        $this->get(route('signup.card', ['pending' => $pending->token]))->assertOk();
+
+        $this->assertSame('lp-first', $firstSession);
+        $this->assertSame('lp-second', $pending->fresh()->cardcom_lp_id);
+
+        // They finish in the FIRST tab. Matching on the stored id alone would
+        // find nothing, and the card would be captured with no customer created.
+        [$event] = WebhookEvent::record(WebhookSource::Cardcom, 'low_profile', 'wh-first-tab', [
+            'LowProfileId' => $firstSession,
+            'ReturnValue' => PendingSignup::RETURN_VALUE_PREFIX.$pending->id,
+            'ResponseCode' => 0,
+            'TokenInfo' => ['Token' => 'tok-first', 'CardMonth' => 12, 'CardYear' => (int) now()->addYears(3)->format('Y')],
+            'TranzactionInfo' => ['Last4CardDigits' => '4580', 'CardName' => 'Visa'],
+        ]);
+        (new ProcessCardcomLowProfileJob($event->id))->handle();
+
+        $this->assertSame(1, Customer::count());
+        $this->assertTrue(Customer::sole()->hasActiveCard());
+    }
+
+    public function test_a_signup_reference_is_never_read_as_a_customer_id(): void
+    {
+        $this->cardcomReturns();
+        $victim = Customer::factory()->create();
+
+        // "PS-7" cast to an int is 0 — and a naive cast would send this down
+        // the card-update path for a customer that does not exist.
+        [$event] = WebhookEvent::record(WebhookSource::Cardcom, 'low_profile', 'wh-stray', [
+            'ReturnValue' => PendingSignup::RETURN_VALUE_PREFIX.'999',
+            'ResponseCode' => 0,
+            'TokenInfo' => ['Token' => 'tok-stray'],
+        ]);
+        (new ProcessCardcomLowProfileJob($event->id))->handle();
+
+        $this->assertSame(0, $victim->paymentTokens()->count());
+    }
+
+    public function test_one_exemption_cannot_open_two_cardless_customers(): void
+    {
+        $this->cardcomReturns();
+        Queue::fake();
+        $invite = SignupInvite::factory()->cardExempt()->create();
+
+        // Different details, so the two submissions take DIFFERENT locks and
+        // the check-then-create would let both through.
+        $this->post(route('signup.store'), $this->payload(['invite' => $invite->token]))->assertRedirect();
+        $this->post(route('signup.store'), $this->payload([
+            'invite' => $invite->token,
+            'email' => 'second@example.co.il',
+            'phone' => '0529876543',
+        ]))->assertRedirect();
+
+        // One waiver, one cardless customer. The second is asked for a card.
+        $this->assertSame(1, Customer::count());
+        $this->assertSame(1, Customer::query()->whereNotNull('card_exempt_at')->count());
+    }
+
+    public function test_a_spent_exemption_does_not_stamp_consent_nobody_was_shown(): void
+    {
+        $this->cardcomReturns();
+        Queue::fake();
+        config(['billing.card_fallback_days' => 30]);
+
+        $invite = SignupInvite::factory()->cardExempt()->create();
+        // The form was rendered from the exempt invite — without the
+        // security-card clause in the terms.
+        $this->get(route('signup', ['invite' => $invite->token]))->assertOk();
+
+        // It is spent before they press send.
+        $invite->claim();
+
+        // Stamping the consent here would record an agreement to text they were
+        // never shown, and the chase reads that stamp as agreement.
+        $this->post(route('signup.store'), $this->payload(['invite' => $invite->token]))
+            ->assertSessionHasErrors('signup');
+
+        $this->assertSame(0, PendingSignup::count());
+        $this->assertSame(0, Customer::count());
+    }
+
+    public function test_an_exemption_granted_after_an_abandoned_signup_can_still_be_used(): void
+    {
+        $this->cardcomReturns();
+        Queue::fake();
+        config(['billing.signup.duplicate_window_minutes' => 60]);
+
+        // They filed normally and walked away at the card page.
+        $this->post(route('signup.store'), $this->payload())->assertRedirectContains('/join/card/');
+
+        // The manager then sends them an exempt invite with the same details.
+        // Collapsing this onto the earlier filing would send them back to the
+        // card page and make the exemption impossible to use.
+        $invite = SignupInvite::factory()->cardExempt()->create();
+        $this->post(route('signup.store'), $this->payload(['invite' => $invite->token]))
+            ->assertRedirectContains('/join/done/');
+
+        $this->assertNotNull(Customer::sole()->card_exempt_at);
     }
 
     /** Cardcom announcing a captured card for this signup. */

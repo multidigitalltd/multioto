@@ -80,6 +80,32 @@ class SignupInvite extends Model
         return $this->card_exempt && $this->isOpen();
     }
 
+    /**
+     * Spend this invite, and say whether it was ours to spend.
+     *
+     * A single conditional UPDATE, because two submissions can reach the
+     * exemption at the same moment: they carry different details, so they take
+     * different locks, and both would read `used_at` as null and both would
+     * open a cardless customer from a waiver meant for one. Only the request
+     * whose UPDATE actually changes a row may proceed.
+     */
+    public function claim(): bool
+    {
+        $claimed = static::query()
+            ->whereKey($this->getKey())
+            ->whereNull('used_at')
+            ->where(fn (Builder $q) => $q->whereNull('expires_at')->orWhere('expires_at', '>', now()))
+            ->update(['used_at' => now()]);
+
+        if ($claimed !== 1) {
+            return false;
+        }
+
+        $this->refresh();
+
+        return true;
+    }
+
     /** The public link a prospect receives. */
     public function url(): string
     {

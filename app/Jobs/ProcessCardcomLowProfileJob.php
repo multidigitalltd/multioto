@@ -67,8 +67,12 @@ class ProcessCardcomLowProfileJob implements ShouldQueue
         }
 
         $responseCode = (string) ($result['ResponseCode'] ?? '0');
-        $customerId = (int) ($result['ReturnValue'] ?? $payload['ReturnValue'] ?? 0);
-        $customer = Customer::find($customerId);
+        $returnValue = (string) ($result['ReturnValue'] ?? $payload['ReturnValue'] ?? '');
+        // A signup reference is never a customer id. Cast naively, "PS-7"
+        // becomes 0 and this path would report a failed card update for a
+        // customer that does not exist, hiding a signup nobody completed.
+        $customerId = Str::startsWith($returnValue, PendingSignup::RETURN_VALUE_PREFIX) ? 0 : (int) $returnValue;
+        $customer = $customerId > 0 ? Customer::find($customerId) : null;
 
         $token = $customer ? app(CardTokenService::class)->storeFromLpResult($customer, $result) : null;
 
@@ -149,14 +153,22 @@ class ProcessCardcomLowProfileJob implements ShouldQueue
         $lowProfileId = (string) ($payload['LowProfileId'] ?? '');
         $returnValue = (string) ($payload['ReturnValue'] ?? '');
 
-        $pending = PendingSignup::query()
-            ->when($lowProfileId !== '', fn ($q) => $q->where('cardcom_lp_id', $lowProfileId))
-            ->when(
-                $lowProfileId === '' && Str::startsWith($returnValue, PendingSignup::RETURN_VALUE_PREFIX),
-                fn ($q) => $q->whereKey((int) Str::after($returnValue, PendingSignup::RETURN_VALUE_PREFIX)),
-                fn ($q) => $lowProfileId === '' ? $q->whereRaw('1 = 0') : $q,
-            )
-            ->first();
+        $pending = $lowProfileId === ''
+            ? null
+            : PendingSignup::query()->where('cardcom_lp_id', $lowProfileId)->first();
+
+        // And by ReturnValue when the id does not match — which is ordinary,
+        // not exotic: opening the card link in a second tab starts a second
+        // Cardcom session and only the newest id is kept on the row. Finishing
+        // in the FIRST tab would then match nothing, the generic path below
+        // would read "PS-7" as customer 0, and the event would be marked
+        // processed. The card is captured and no customer is created, which is
+        // the one outcome this whole flow exists to prevent.
+        if ($pending === null && Str::startsWith($returnValue, PendingSignup::RETURN_VALUE_PREFIX)) {
+            $pending = PendingSignup::query()
+                ->whereKey((int) Str::after($returnValue, PendingSignup::RETURN_VALUE_PREFIX))
+                ->first();
+        }
 
         if ($pending === null) {
             return false;
