@@ -122,14 +122,22 @@ class ThreatQuarantineTest extends TestCase
             // Status again: gone, and the log says what happened.
             ->push($this->toolResult($status(['users' => [], 'plugins' => []], [
                 ['id' => 4, 'kind' => 'user', 'target' => 'sys_maint', 'result' => 'removed', 'detail' => 'משתמש #12 (מנהל) נמחק.'],
-            ])));
+            ])))
+            // The lockdown that a real removal now triggers: new keys, and
+            // every open session cut.
+            ->push($this->toolResult('{"ok":true}'))
+            ->push($this->toolResult('{"ok":true,"users_signed_out":3}'));
 
         (new PurgeSiteThreatsJob($site->id))->handle(app(McpClient::class), app(TeamNotifier::class));
 
-        $event = SiteEvent::where('site_id', $site->id)->sole();
-        $this->assertSame('threat_purged', $event->type);
+        $event = SiteEvent::where('site_id', $site->id)->where('type', 'threat_purged')->sole();
         $this->assertSame('critical', $event->severity);
         $this->assertStringContainsString('sys_maint', $event->title);
+
+        // Deleting the account they created does nothing to the browser they
+        // are already signed in from, so the removal is only half the
+        // containment. The other half has to have happened too.
+        $this->assertTrue(SiteEvent::where('site_id', $site->id)->where('type', 'sessions_locked')->exists());
 
         // The cursor advanced, so the same removal is not reported every hour.
         $this->assertSame(4, $site->fresh()->guard_cursor);
@@ -320,11 +328,13 @@ class ThreatQuarantineTest extends TestCase
                 'present' => ['users' => [], 'plugins' => []],
                 'actions' => [['id' => 2, 'kind' => 'user', 'target' => 'sys_maint', 'result' => 'removed', 'detail' => 'נמחק.']],
                 'last_id' => 2,
-            ])));
+            ])))
+            ->push($this->toolResult('{"ok":true}'))
+            ->push($this->toolResult('{"ok":true,"users_signed_out":1}'));
 
         (new PurgeSiteThreatsJob($site->id))->handle(app(McpClient::class), app(TeamNotifier::class));
 
-        $this->assertSame('threat_purged', SiteEvent::where('site_id', $site->id)->sole()->type);
+        $this->assertTrue(SiteEvent::where('site_id', $site->id)->where('type', 'threat_purged')->exists());
         $this->assertSame(2, $site->fresh()->guard_cursor);
     }
 

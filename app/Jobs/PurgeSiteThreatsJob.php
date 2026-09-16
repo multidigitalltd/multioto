@@ -108,6 +108,7 @@ class PurgeSiteThreatsJob implements ShouldQueue
         if ($actions !== []) {
             $this->recordActions($site, $actions);
             $this->alertActions($team, $site, $actions);
+            $this->lockOutSessions($site, $actions);
         }
 
         // Advance the cursor only over entries we actually recorded, so a
@@ -341,10 +342,35 @@ class PurgeSiteThreatsJob implements ShouldQueue
                 : "🚨 סימן פריצה באתר {$site->domain} — נדרשת בדיקה",
             $this->customerLine($site).
             "השומר באתר פעל בלי לחכות לאישור:\n{$lines}\n\n".
-            'מישהו הצליח ליצור משתמש או להתקין תוסף באתר — ההסרה עצמה טופלה, אבל דרך הכניסה עדיין פתוחה. '.
-            'כדאי להחליף סיסמאות מנהל, להחליף את מפתחות ההצפנה (salts) ולבדוק מה עוד השתנה באתר.',
+            'מישהו הצליח ליצור משתמש או להתקין תוסף באתר — ההסרה עצמה טופלה. '.
+            'מפתחות ההצפנה מוחלפים עכשיו אוטומטית וכל ההתחברויות מנותקות (תגיע הודעה נפרדת). '.
+            'כדאי גם להחליף סיסמאות מנהל ולבדוק מה עוד השתנה באתר.',
             $this->siteUrl($site),
         );
+    }
+
+    /**
+     * Something really was removed, so somebody really did get in — and they
+     * may be holding a login cookie right now. Replacing the keys and cutting
+     * the sessions is the half of the containment the removal does not cover:
+     * deleting the account they created does nothing to the browser they are
+     * already signed in from.
+     *
+     * Only for an actual removal. A `skipped` or `failed` entry means the guard
+     * did not touch anything, and signing every user out of a customer's site on
+     * that basis would be a monthly-scale disruption fired by a non-event.
+     *
+     * @param  list<array<string, mixed>>  $actions
+     */
+    private function lockOutSessions(Site $site, array $actions): void
+    {
+        $removed = collect($actions)->contains(fn (array $a): bool => ($a['result'] ?? '') === 'removed');
+
+        if (! $removed) {
+            return;
+        }
+
+        LockOutSiteSessionsJob::dispatch($site->id, LockOutSiteSessionsJob::REASON_INTRUSION);
     }
 
     /** @param  list<string>  $stillThere */

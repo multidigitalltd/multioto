@@ -2,6 +2,7 @@
 
 use App\Enums\BroadcastStatus;
 use App\Enums\ChargeStatus;
+use App\Enums\SiteStatus;
 use App\Jobs\AlertExpiringCardsBeforeChargeJob;
 use App\Jobs\ChargeSubscriptionJob;
 use App\Jobs\ChaseMissingSecurityCardJob;
@@ -19,6 +20,7 @@ use App\Jobs\CheckWhatsappInboundJob;
 use App\Jobs\DrillBackupJob;
 use App\Jobs\FollowUpPendingTicketsJob;
 use App\Jobs\HeartbeatJob;
+use App\Jobs\LockOutSiteSessionsJob;
 use App\Jobs\MonitorSiteJob;
 use App\Jobs\PrunePendingSignupsJob;
 use App\Jobs\PurgeSiteThreatsJob;
@@ -187,6 +189,35 @@ Schedule::call(function () {
         ->pluck('id')
         ->each(fn (int $id) => ReconcileChargeJob::dispatch($id));
 })->everyThreeMinutes()->name('billing:reconcile-pending-charges')->onOneServer();
+
+// Monthly key rotation: fresh WordPress encryption keys on every connected
+// site, and every open session cut. A login cookie stolen months ago stops
+// working without anybody having had to notice it was stolen.
+//
+// The cost falls on the customer — everyone signed in is signed out, them
+// included — so it runs at a quiet hour and the sites are spread over a window
+// rather than all cut off in the same minute. NOT gated on Shabbat: it sends
+// nothing to a customer and the quiet hours are exactly when it belongs.
+Schedule::call(function () {
+    if (! (bool) config('security.key_rotation.enabled', true)) {
+        return;
+    }
+
+    $spread = max(0, (int) config('security.key_rotation.spread_minutes', 120));
+
+    Site::query()
+        ->where('mcp_enabled', true)
+        ->whereNotNull('mcp_endpoint')
+        ->where('status', SiteStatus::Active)
+        ->pluck('id')
+        ->each(function (int $id, int $index) use ($spread): void {
+            LockOutSiteSessionsJob::dispatch($id, LockOutSiteSessionsJob::REASON_ROUTINE)
+                ->delay(now()->addSeconds($spread > 0 ? random_int(0, $spread * 60) : 0));
+        });
+})->monthlyOn(
+    max(1, min(28, (int) config('security.key_rotation.day', 1))),
+    sprintf('%02d:00', max(0, min(23, (int) config('security.key_rotation.hour', 4)))),
+)->name('security:rotate-site-keys')->onOneServer();
 
 // Uptime monitoring.
 Schedule::call(function () {
