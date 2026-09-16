@@ -14,6 +14,33 @@ return [
     | for teams that hold a token (per-plugin API, rate-limited on the free tier).
     |
     */
+    /*
+    |--------------------------------------------------------------------------
+    | Monthly key rotation
+    |--------------------------------------------------------------------------
+    |
+    | Once a month every connected site gets fresh WordPress encryption keys and
+    | has its open sessions cut. A login cookie stolen months ago stops working
+    | without anybody having to notice it was stolen.
+    |
+    | The cost is real and falls on the customer: everyone signed in to the site
+    | is signed out, including them. So it runs at a quiet hour, and the sites
+    | are spread across a window rather than all cut off in the same minute —
+    | a hundred customers locked out simultaneously is a support queue, not a
+    | security measure.
+    |
+    */
+    'key_rotation' => [
+        'enabled' => (bool) env('SITE_KEY_ROTATION_ENABLED', true),
+
+        // Day of the month and the hour it starts (site clock is the server's).
+        'day' => (int) env('SITE_KEY_ROTATION_DAY', 1),
+        'hour' => (int) env('SITE_KEY_ROTATION_HOUR', 4),
+
+        // Minutes to spread the sites over, from that hour.
+        'spread_minutes' => (int) env('SITE_KEY_ROTATION_SPREAD_MINUTES', 120),
+    ],
+
     'vulnerabilities' => [
         // Master switch for the scan job.
         'enabled' => (bool) env('VULN_SCAN_ENABLED', true),

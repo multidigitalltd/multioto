@@ -158,6 +158,7 @@ class Multioto_Agent_Mcp_Server
             ['name' => 'wp_error_log_tail', 'description' => 'שורות אחרונות מיומן השגיאות (אם מופעל).', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['lines' => ['type' => 'integer']]]],
             ['name' => 'wp_cache_flush', 'description' => 'ניקוי מטמון אובייקטים ו-OPcache.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => (object) []]],
             ['name' => 'wp_salts_rotate', 'description' => 'החלפת שמונת מפתחות ההצפנה (Secret Keys / Salts) ב-wp-config.php במפתחות אקראיים חדשים. התוצאה: כל המשתמשים באתר מנותקים ונדרשים להתחבר מחדש, וכל עוגיית התחברות ישנה מפסיקה להיות תקפה. אינו נוגע בסיסמאות, בתוכן או במסד הנתונים. מפתחות המוגדרים מחוץ ל-wp-config.php אינם מוחלפים והפעולה נכשלת במפורש.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => (object) []]],
+            ['name' => 'wp_sessions_destroy', 'description' => 'ניתוק כל המשתמשים המחוברים לאתר: מחיקת אסימוני ההתחברות (session tokens) של כל המשתמשים, כך שכל דפדפן מחובר נדרש להתחבר מחדש. אינו נוגע בסיסמאות, בתוכן או בקבצים. משלים את wp_salts_rotate ופועל גם כששרת אינו מאפשר כתיבה ל-wp-config.php.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => (object) []]],
             ['name' => 'wp_plugin_update', 'description' => 'עדכון תוסף לגרסה האחרונה לפי slug.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['plugin' => ['type' => 'string']], 'required' => ['plugin']]],
             ['name' => 'wp_core_update', 'description' => 'עדכון ליבת וורדפרס (WordPress core) לגרסה היציבה האחרונה. מחזיר את הגרסה לפני ואחרי. אם כבר מעודכן — לא מבצע דבר. לפני העדכון נשמרת נקודת שחזור (הגרסה הקודמת) לצורך Rollback.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => (object) []]],
             ['name' => 'wp_core_rollback', 'description' => 'שחזור ליבת וורדפרס לגרסה שנשמרה בנקודת השחזור לפני העדכון האחרון (או לגרסה שצוינה ב-version). מתקין מחדש את קבצי הגרסה מ-wordpress.org. שים לב: שדרוג מסד הנתונים אינו הפיך — שחזור בטוח בעיקר לעדכוני תחזוקה (minor/patch).', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['version' => ['type' => 'string']]]],
@@ -253,6 +254,7 @@ class Multioto_Agent_Mcp_Server
             'wp_error_log_tail' => 'errorLogTail',
             'wp_cache_flush' => 'cacheFlush',
             'wp_salts_rotate' => 'saltsRotate',
+            'wp_sessions_destroy' => 'sessionsDestroy',
             'wp_plugin_update' => 'pluginUpdate',
             'wp_core_update' => 'coreUpdate',
             'wp_core_rollback' => 'coreRollback',
@@ -299,7 +301,7 @@ class Multioto_Agent_Mcp_Server
         ];
 
         // Tools whose signature takes no arguments, or a second flag.
-        $noArgs = ['wp_health', 'wp_plugin_list', 'wp_theme_list', 'wp_admin_list', 'wp_cache_flush', 'wp_salts_rotate', 'wp_core_update', 'wp_menu_list', 'wc_shipping_zones_list', 'wp_post_types_list', 'wp_guard_purge'];
+        $noArgs = ['wp_health', 'wp_plugin_list', 'wp_theme_list', 'wp_admin_list', 'wp_cache_flush', 'wp_salts_rotate', 'wp_sessions_destroy', 'wp_core_update', 'wp_menu_list', 'wc_shipping_zones_list', 'wp_post_types_list', 'wp_guard_purge'];
 
         if ($name === 'wp_plugin_activate') {
             $text = $this->setPluginState($args, true);
@@ -582,6 +584,43 @@ class Multioto_Agent_Mcp_Server
      *    truncates wp-config.php, so a failure at any point leaves the site
      *    exactly as it was — the one file that must never be half-written.
      */
+    /**
+     * Log every user out, by deleting the session tokens WordPress stores per
+     * user.
+     *
+     * Kept separate from rotating the salts even though both end every session,
+     * because they fail in different places. Rotating salts needs wp-config.php
+     * to be writable, which on plenty of hosts it is not — and the moment the
+     * containment is actually needed is the worst moment to discover that the
+     * only available answer was the one that cannot run. This one needs nothing
+     * but the database.
+     *
+     * Passwords, content and files are untouched. A user simply signs in again.
+     */
+    private function sessionsDestroy(): string
+    {
+        global $wpdb;
+
+        // Deleted wholesale rather than user by user: a site with thousands of
+        // customers would otherwise mean thousands of queries, and WP_User_Query
+        // over every user is exactly the shape that times out on a big install.
+        $deleted = $wpdb->delete($wpdb->usermeta, array('meta_key' => 'session_tokens'));
+
+        if ($deleted === false) {
+            throw new Multioto_Agent_Rpc_Error(-32000, 'מחיקת אסימוני ההתחברות נכשלה במסד הנתונים.');
+        }
+
+        // The cache still holds what the table no longer does, so without this
+        // a logged-in visitor keeps their session until the cache expires.
+        wp_cache_flush();
+
+        return wp_json_encode(array(
+            'ok' => true,
+            'users_signed_out' => (int) $deleted,
+            'note' => 'כל המשתמשים נותקו ונדרשים להתחבר מחדש. סיסמאות ותוכן לא שונו.',
+        ), JSON_UNESCAPED_UNICODE);
+    }
+
     private function saltsRotate(): string
     {
         $file = $this->configFile();

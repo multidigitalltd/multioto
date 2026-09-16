@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Jobs\CheckSitePluginChangesJob;
+use App\Jobs\LockOutSiteSessionsJob;
 use App\Jobs\PurgeSiteThreatsJob;
 use App\Models\Site;
 use App\Models\SiteEvent;
@@ -122,17 +123,78 @@ class ThreatQuarantineTest extends TestCase
             // Status again: gone, and the log says what happened.
             ->push($this->toolResult($status(['users' => [], 'plugins' => []], [
                 ['id' => 4, 'kind' => 'user', 'target' => 'sys_maint', 'result' => 'removed', 'detail' => 'משתמש #12 (מנהל) נמחק.'],
+            ])))
+            // The lockdown that a real removal now triggers: new keys, and
+            // every open session cut.
+            ->push($this->toolResult('{"ok":true}'))
+            ->push($this->toolResult('{"ok":true,"users_signed_out":3}'));
+
+        (new PurgeSiteThreatsJob($site->id))->handle(app(McpClient::class), app(TeamNotifier::class));
+
+        $event = SiteEvent::where('site_id', $site->id)->where('type', 'threat_purged')->sole();
+        $this->assertSame('critical', $event->severity);
+        $this->assertStringContainsString('sys_maint', $event->title);
+
+        // Deleting the account they created does nothing to the browser they
+        // are already signed in from, so the removal is only half the
+        // containment. The other half has to have happened too.
+        $this->assertTrue(SiteEvent::where('site_id', $site->id)->where('type', 'sessions_locked')->exists());
+
+        // The cursor advanced, so the same removal is not reported every hour.
+        $this->assertSame(4, $site->fresh()->guard_cursor);
+    }
+
+    /**
+     * The worse case, not a lesser one: the plugin was neutralised but its
+     * files could not be deleted. Reading that as "nothing happened" would
+     * leave the attacker signed in exactly where the cleanup failed — while
+     * the team alert says the lockdown is happening.
+     */
+    public function test_a_threat_that_could_only_be_deactivated_still_ends_every_session(): void
+    {
+        Queue::fake([LockOutSiteSessionsJob::class]);
+        $site = $this->site();
+
+        Http::fakeSequence()
+            ->push($this->toolResult(json_encode([
+                'present' => ['users' => [], 'plugins' => ['wp-file-manager']],
+                'actions' => [],
+                'last_id' => 0,
+            ])))
+            ->push($this->toolResult('{"removed":0}'))
+            ->push($this->toolResult(json_encode([
+                'present' => ['users' => [], 'plugins' => []],
+                'actions' => [[
+                    'id' => 7, 'kind' => 'plugin', 'target' => 'wp-file-manager',
+                    'result' => 'deactivated', 'detail' => 'כובה; הקבצים לא נמחקו (אין הרשאת כתיבה).',
+                ]],
+                'last_id' => 7,
             ])));
 
         (new PurgeSiteThreatsJob($site->id))->handle(app(McpClient::class), app(TeamNotifier::class));
 
-        $event = SiteEvent::where('site_id', $site->id)->sole();
-        $this->assertSame('threat_purged', $event->type);
-        $this->assertSame('critical', $event->severity);
-        $this->assertStringContainsString('sys_maint', $event->title);
+        Queue::assertPushed(
+            LockOutSiteSessionsJob::class,
+            fn (LockOutSiteSessionsJob $job): bool => $job->siteId === $site->id
+                && $job->reason === LockOutSiteSessionsJob::REASON_INTRUSION,
+        );
+    }
 
-        // The cursor advanced, so the same removal is not reported every hour.
-        $this->assertSame(4, $site->fresh()->guard_cursor);
+    /** A clean sweep disconnects nobody. */
+    public function test_a_clean_site_never_signs_anybody_out(): void
+    {
+        Queue::fake([LockOutSiteSessionsJob::class]);
+        $site = $this->site();
+
+        Http::fake(['*' => Http::response($this->toolResult(json_encode([
+            'present' => ['users' => [], 'plugins' => []],
+            'actions' => [],
+            'last_id' => 0,
+        ])))]);
+
+        (new PurgeSiteThreatsJob($site->id))->handle(app(McpClient::class), app(TeamNotifier::class));
+
+        Queue::assertNotPushed(LockOutSiteSessionsJob::class);
     }
 
     public function test_a_clean_site_is_left_alone_and_says_nothing(): void
@@ -170,13 +232,20 @@ class ThreatQuarantineTest extends TestCase
         Http::fakeSequence()
             ->push($this->toolResult($stuck))
             ->push($this->toolResult('{"removed":0}'))
-            ->push($this->toolResult($stuck));
+            ->push($this->toolResult($stuck))
+            ->push($this->toolResult('{"ok":true}'))
+            ->push($this->toolResult('{"ok":true}'));
 
         (new PurgeSiteThreatsJob($site->id))->handle(app(McpClient::class), app(TeamNotifier::class));
 
-        $event = SiteEvent::where('site_id', $site->id)->sole();
         // Not "purged": a removal that did not happen must never be filed as one.
-        $this->assertSame('threat_found', $event->type);
+        $this->assertTrue(SiteEvent::where('site_id', $site->id)->where('type', 'threat_found')->exists());
+
+        // And the sessions end anyway. This is the worst case, not a lesser
+        // one: the intruder's account is still there AND is the site's only
+        // administrator, so leaving their browser signed in would be leaving
+        // them the run of the place.
+        $this->assertTrue(SiteEvent::where('site_id', $site->id)->where('type', 'sessions_locked')->exists());
     }
 
     public function test_an_older_plugin_falls_back_to_deactivating_and_says_so(): void
@@ -320,11 +389,13 @@ class ThreatQuarantineTest extends TestCase
                 'present' => ['users' => [], 'plugins' => []],
                 'actions' => [['id' => 2, 'kind' => 'user', 'target' => 'sys_maint', 'result' => 'removed', 'detail' => 'נמחק.']],
                 'last_id' => 2,
-            ])));
+            ])))
+            ->push($this->toolResult('{"ok":true}'))
+            ->push($this->toolResult('{"ok":true,"users_signed_out":1}'));
 
         (new PurgeSiteThreatsJob($site->id))->handle(app(McpClient::class), app(TeamNotifier::class));
 
-        $this->assertSame('threat_purged', SiteEvent::where('site_id', $site->id)->sole()->type);
+        $this->assertTrue(SiteEvent::where('site_id', $site->id)->where('type', 'threat_purged')->exists());
         $this->assertSame(2, $site->fresh()->guard_cursor);
     }
 

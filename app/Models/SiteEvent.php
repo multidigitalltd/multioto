@@ -26,6 +26,8 @@ class SiteEvent extends Model
         'reputation' => ['🛡️', 'ממצא מוניטין'],
         'defacement' => ['🚨', 'חשד להשחתת אתר'],
         'threat_purged' => ['🛡️', 'סימן פריצה הוסר אוטומטית'],
+        'sessions_locked' => ['🔐', 'כל ההתחברויות נותקו'],
+        'sessions_lock_failed' => ['🔓', 'ניתוק ההתחברויות לא הושלם'],
         'threat_found' => ['🚨', 'סימן פריצה שלא הוסר'],
         'vulnerability' => ['⚠️', 'פגיעות אבטחה'],
         'dns' => ['🌐', 'שינוי DNS'],

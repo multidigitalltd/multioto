@@ -108,6 +108,7 @@ class PurgeSiteThreatsJob implements ShouldQueue
         if ($actions !== []) {
             $this->recordActions($site, $actions);
             $this->alertActions($team, $site, $actions);
+            $this->lockOutSessions($site, $actions);
         }
 
         // Advance the cursor only over entries we actually recorded, so a
@@ -341,10 +342,41 @@ class PurgeSiteThreatsJob implements ShouldQueue
                 : "🚨 סימן פריצה באתר {$site->domain} — נדרשת בדיקה",
             $this->customerLine($site).
             "השומר באתר פעל בלי לחכות לאישור:\n{$lines}\n\n".
-            'מישהו הצליח ליצור משתמש או להתקין תוסף באתר — ההסרה עצמה טופלה, אבל דרך הכניסה עדיין פתוחה. '.
-            'כדאי להחליף סיסמאות מנהל, להחליף את מפתחות ההצפנה (salts) ולבדוק מה עוד השתנה באתר.',
+            'מישהו הצליח ליצור משתמש או להתקין תוסף באתר — ההסרה עצמה טופלה. '.
+            'מפתחות ההצפנה מוחלפים עכשיו אוטומטית וכל ההתחברויות מנותקות (תגיע הודעה נפרדת). '.
+            'כדאי גם להחליף סיסמאות מנהל ולבדוק מה עוד השתנה באתר.',
             $this->siteUrl($site),
         );
+    }
+
+    /**
+     * A quarantined account or plugin was ON THIS SITE, so somebody got in —
+     * and they may be holding a login cookie right now. Replacing the keys and
+     * cutting the sessions is the half of the containment the removal does not
+     * cover: deleting the account they created does nothing to the browser they
+     * are already signed in from.
+     *
+     * Triggered by the guard having ANYTHING to report, not by it having
+     * succeeded. Every outcome it logs means the indicator was present:
+     * `deactivated` is a plugin it neutralised but could not delete from a
+     * read-only filesystem, and `skipped` is usually the intruder's account
+     * being the site's last administrator. Those are the WORSE cases, not
+     * lesser ones — reading them as "nothing happened" would leave the attacker
+     * signed in precisely where the cleanup failed.
+     *
+     * Each log entry is acted on once: the cursor advances over what was
+     * recorded, so a threat that stays stuck does not sign the customer out
+     * again on every sweep.
+     *
+     * @param  list<array<string, mixed>>  $actions
+     */
+    private function lockOutSessions(Site $site, array $actions): void
+    {
+        if ($actions === []) {
+            return;
+        }
+
+        LockOutSiteSessionsJob::dispatch($site->id, LockOutSiteSessionsJob::REASON_INTRUSION);
     }
 
     /** @param  list<string>  $stillThere */
