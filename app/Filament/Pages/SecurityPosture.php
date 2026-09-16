@@ -39,13 +39,16 @@ class SecurityPosture extends Page implements HasTable
 
     protected static ?string $navigationIcon = 'heroicon-o-shield-check';
 
-    protected static ?string $navigationGroup = 'אתרים';
+    // The same group the sites themselves live under, which is also what gates
+    // it: an invented group has no module key, so a team member limited to
+    // support or finance would have been able to open this screen.
+    protected static ?string $navigationGroup = 'ניהול';
 
     protected static ?string $navigationLabel = 'אבטחה';
 
     protected static ?string $title = 'אבטחת אתרים';
 
-    protected static ?int $navigationSort = 30;
+    protected static ?int $navigationSort = 6;
 
     protected static string $view = 'filament.pages.security-posture';
 

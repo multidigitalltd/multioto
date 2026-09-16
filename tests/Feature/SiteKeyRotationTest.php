@@ -3,10 +3,12 @@
 namespace Tests\Feature;
 
 use App\Enums\SiteStatus;
+use App\Filament\Pages\SecurityPosture;
 use App\Jobs\LockOutSiteSessionsJob;
 use App\Models\Customer;
 use App\Models\Site;
 use App\Models\SiteEvent;
+use App\Models\User;
 use App\Services\Agent\McpClient;
 use App\Services\Notifications\TeamNotifier;
 use Illuminate\Console\Scheduling\Schedule;
@@ -14,6 +16,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Queue;
+use Livewire\Livewire;
 use Tests\TestCase;
 
 /**
@@ -55,9 +58,8 @@ class SiteKeyRotationTest extends TestCase
     {
         $site = $this->site();
 
-        // The single most common real failure: the host will not let anything
-        // write wp-config.php. If that stopped the job, the one containment
-        // still available would never run.
+        // The host will not let anything write wp-config.php. If that stopped
+        // the job, the one containment still available would never run.
         Http::fakeSequence()
             ->push($this->toolResult('{"error":"read only"}', isError: true))
             ->push($this->toolResult('{"ok":true,"users_signed_out":4}'));
@@ -65,12 +67,51 @@ class SiteKeyRotationTest extends TestCase
         $this->lockOut($site);
 
         $event = SiteEvent::where('site_id', $site->id)->sole();
-        $this->assertSame('sessions_lock_failed', $event->type);
-        $this->assertSame('critical', $event->severity);
-        // And the report says which half happened, rather than one verdict for
-        // two different things.
+        // Every session ended, so the containment succeeded — calling this a
+        // failure would raise an emergency about a site that is fine.
+        $this->assertSame('sessions_locked', $event->type);
+        // And the report still says which half happened: a config nobody can
+        // write is worth knowing before the day it is all that matters.
         $this->assertStringContainsString('✗ החלפת מפתחות נכשלה', $event->detail);
         $this->assertStringContainsString('✓ אסימוני ההתחברות נמחקו', $event->detail);
+    }
+
+    public function test_an_older_plugin_without_the_session_tool_is_still_contained(): void
+    {
+        $site = $this->site();
+
+        // Most sites will run a plugin older than the session tool for a while
+        // after this ships. Rotating the salts already invalidated every cookie
+        // there, and reporting a monthly critical for each of them would be an
+        // alert storm about sites that were never at risk.
+        Http::fakeSequence()
+            ->push($this->toolResult('{"ok":true,"rotated":8}'))
+            ->push($this->toolResult('{"error":"unknown tool wp_sessions_destroy"}', isError: true));
+
+        $notifier = \Mockery::mock(TeamNotifier::class);
+        $notifier->shouldNotReceive('alert');
+
+        (new LockOutSiteSessionsJob($site->id))->handle(app(McpClient::class), $notifier);
+
+        $event = SiteEvent::where('site_id', $site->id)->sole();
+        $this->assertSame('sessions_locked', $event->type);
+        $this->assertSame('info', $event->severity);
+    }
+
+    public function test_only_a_site_where_nothing_worked_is_called_a_failure(): void
+    {
+        $site = $this->site();
+        Http::fakeSequence()
+            ->push($this->toolResult('{"error":"read only"}', isError: true))
+            ->push($this->toolResult('{"error":"db down"}', isError: true));
+
+        $this->lockOut($site);
+
+        // Neither step ran: somebody may still be logged in, and that is the
+        // one case worth waking a person for.
+        $event = SiteEvent::where('site_id', $site->id)->sole();
+        $this->assertSame('sessions_lock_failed', $event->type);
+        $this->assertSame('critical', $event->severity);
     }
 
     public function test_a_failed_rotation_is_never_silent(): void
@@ -171,6 +212,62 @@ class SiteKeyRotationTest extends TestCase
         $this->runScheduled('security:rotate-site-keys');
 
         Queue::assertNotPushed(LockOutSiteSessionsJob::class);
+    }
+
+    public function test_the_security_screen_states_the_standing_rules(): void
+    {
+        $this->actingAs(User::factory()->create());
+        config([
+            'security.quarantine.enabled' => true,
+            'security.quarantine.users' => ['sys_maint'],
+            'security.quarantine.plugins' => ['wp-file-manager'],
+            'security.key_rotation.enabled' => true,
+        ]);
+
+        Livewire::test(SecurityPosture::class)
+            ->assertOk()
+            ->assertSee('sys_maint', false)
+            ->assertSee('wp-file-manager', false)
+            ->assertDontSee('לא פעיל', false);
+    }
+
+    public function test_a_rule_that_is_switched_off_says_so_rather_than_reading_as_cover(): void
+    {
+        $this->actingAs(User::factory()->create());
+        config(['security.key_rotation.enabled' => false]);
+
+        // A screen that lists a protection it is not applying is worse than one
+        // that lists nothing.
+        Livewire::test(SecurityPosture::class)
+            ->assertOk()
+            ->assertSee('לא פעיל', false)
+            ->assertSee('כבויה', false);
+    }
+
+    public function test_the_screen_counts_the_sites_nothing_on_it_protects(): void
+    {
+        $this->actingAs(User::factory()->create());
+
+        $this->site();                          // connected
+        $this->site(['mcp_enabled' => false]);  // the plugin cannot be reached
+
+        Livewire::test(SecurityPosture::class)
+            ->assertOk()
+            ->assertSee('1 אתרים פעילים אינם מחוברים לתוסף', false);
+    }
+
+    public function test_the_screen_lists_what_the_guard_removed(): void
+    {
+        $this->actingAs(User::factory()->create());
+        $site = $this->site();
+
+        SiteEvent::record($site->id, 'threat_purged', 'critical', 'משתמש בהסגר הוסר אוטומטית: sys_maint', 'משתמש #12 נמחק.');
+        SiteEvent::record($site->id, 'sessions_locked', 'warning', 'נותקו כל ההתחברויות בעקבות חשד לפריצה', '');
+
+        Livewire::test(SecurityPosture::class)
+            ->assertOk()
+            ->assertSee('sys_maint', false)
+            ->assertSee('נותקו כל ההתחברויות', false);
     }
 
     /** Run one scheduled task by the name the scheduler registered it under. */

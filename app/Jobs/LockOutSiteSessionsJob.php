@@ -20,18 +20,21 @@ use Illuminate\Support\Str;
  * are the same two API calls and completely different events, and a log that
  * cannot tell them apart is one nobody can read afterwards.
  *
- * BOTH steps are attempted, and neither is allowed to stand in for the other:
+ * Both steps are attempted, and EITHER ONE ENDS EVERY SESSION on its own:
  *
  *  - Rotating the salts invalidates every login cookie ever issued. It needs
  *    wp-config.php to be writable, which on plenty of hosts it is not.
  *  - Destroying the session tokens signs out everyone who is signed in now. It
  *    needs nothing but the database, and it is what still works when the first
- *    step cannot run.
+ *    step cannot run — including on a site whose plugin is too old to have it.
  *
- * So a site where the config is read-only is still emptied of live sessions,
- * and the report says exactly which half happened. Reporting "sessions ended"
- * when only one of them ran — on the day of a break-in — is the failure this
- * shape exists to avoid.
+ * So the containment succeeded if either worked, and only a site where BOTH
+ * failed still has live logins on it. Judging that by "did everything run"
+ * instead would raise a monthly emergency for every site that is perfectly
+ * well protected by the half that did — which is most of them.
+ *
+ * The report still names both outcomes separately. A config nobody can write
+ * is worth knowing about before the day it is the only thing that matters.
  */
 class LockOutSiteSessionsJob implements ShouldQueue
 {
@@ -70,10 +73,11 @@ class LockOutSiteSessionsJob implements ShouldQueue
 
         $this->record($site, $rotated, $signedOut);
 
-        // A routine rotation that worked is not news. An intrusion always is,
-        // and so is any failure: a site whose keys could not be replaced is one
-        // where a stolen cookie still works, and nobody else will notice.
-        if ($this->isIntrusion() || ! $rotated['ok'] || ! $signedOut['ok']) {
+        // A routine rotation that worked is not news, and an alert a month for
+        // every site is how people stop reading the ones that matter. An
+        // intrusion always is. And so is a site where NEITHER step ran: there
+        // the logins are still live and nobody else will notice.
+        if ($this->isIntrusion() || ! $this->contained($rotated, $signedOut)) {
             $this->alert($team, $site, $rotated, $signedOut);
         }
     }
@@ -110,13 +114,13 @@ class LockOutSiteSessionsJob implements ShouldQueue
      */
     private function record(Site $site, array $rotated, array $signedOut): void
     {
-        $bothWorked = $rotated['ok'] && $signedOut['ok'];
+        $contained = $this->contained($rotated, $signedOut);
 
         SiteEvent::record(
             $site->id,
-            $bothWorked ? 'sessions_locked' : 'sessions_lock_failed',
-            $bothWorked ? ($this->isIntrusion() ? 'warning' : 'info') : 'critical',
-            $bothWorked
+            $contained ? 'sessions_locked' : 'sessions_lock_failed',
+            $contained ? ($this->isIntrusion() ? 'warning' : 'info') : 'critical',
+            $contained
                 ? ($this->isIntrusion()
                     ? 'נותקו כל ההתחברויות בעקבות חשד לפריצה'
                     : 'החלפת מפתחות הצפנה חודשית — כל ההתחברויות נותקו')
@@ -127,7 +131,7 @@ class LockOutSiteSessionsJob implements ShouldQueue
             ])),
         );
 
-        if (! $bothWorked) {
+        if (! $contained) {
             SystemLog::record('warning', 'security',
                 "ניתוק ההתחברויות באתר {$site->domain} לא הושלם",
                 ['site_id' => $site->id, 'reason' => $this->reason]);
@@ -140,12 +144,12 @@ class LockOutSiteSessionsJob implements ShouldQueue
      */
     private function alert(TeamNotifier $team, Site $site, array $rotated, array $signedOut): void
     {
-        $bothWorked = $rotated['ok'] && $signedOut['ok'];
+        $contained = $this->contained($rotated, $signedOut);
 
         $title = match (true) {
-            $this->isIntrusion() && $bothWorked => "🔐 נותקו כל ההתחברויות באתר {$site->domain}",
+            $this->isIntrusion() && $contained => "🔐 נותקו כל ההתחברויות באתר {$site->domain}",
             $this->isIntrusion() => "🚨 ניתוק ההתחברויות נכשל באתר {$site->domain}",
-            default => "⚠️ החלפת מפתחות ההצפנה נכשלה באתר {$site->domain}",
+            default => "⚠️ לא ניתן היה לנתק את ההתחברויות באתר {$site->domain}",
         };
 
         $lines = [
@@ -153,7 +157,7 @@ class LockOutSiteSessionsJob implements ShouldQueue
             $rotated['ok'] ? '✓ מפתחות ההצפנה הוחלפו' : '✗ החלפת מפתחות נכשלה: '.$rotated['error'],
             $signedOut['ok'] ? '✓ אסימוני ההתחברות נמחקו' : '✗ מחיקת אסימוני ההתחברות נכשלה: '.$signedOut['error'],
             '',
-            $bothWorked
+            $contained
                 ? 'כל מי שהיה מחובר לאתר — כולל הלקוח — נדרש להתחבר מחדש.'
                 : 'לפחות חלק מההתחברויות הקיימות עדיין תקפות. אם מישהו נכנס לאתר, ייתכן שהוא עדיין בפנים — נדרש טיפול ידני.',
             $this->isIntrusion()
@@ -167,6 +171,21 @@ class LockOutSiteSessionsJob implements ShouldQueue
         } catch (\Throwable $e) {
             Log::warning('LockOutSiteSessionsJob: alert could not be sent', ['error' => $e->getMessage()]);
         }
+    }
+
+    /**
+     * Did every session actually end?
+     *
+     * Either step alone is enough: new salts make every issued cookie invalid,
+     * and deleting the tokens invalidates every cookie WordPress would check
+     * them against. Only a site where both failed still has somebody logged in.
+     *
+     * @param  array{ok: bool, error: string|null}  $rotated
+     * @param  array{ok: bool, error: string|null}  $signedOut
+     */
+    private function contained(array $rotated, array $signedOut): bool
+    {
+        return $rotated['ok'] || $signedOut['ok'];
     }
 
     private function isIntrusion(): bool
