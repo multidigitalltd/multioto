@@ -350,23 +350,29 @@ class PurgeSiteThreatsJob implements ShouldQueue
     }
 
     /**
-     * Something really was removed, so somebody really did get in — and they
-     * may be holding a login cookie right now. Replacing the keys and cutting
-     * the sessions is the half of the containment the removal does not cover:
-     * deleting the account they created does nothing to the browser they are
-     * already signed in from.
+     * A quarantined account or plugin was ON THIS SITE, so somebody got in —
+     * and they may be holding a login cookie right now. Replacing the keys and
+     * cutting the sessions is the half of the containment the removal does not
+     * cover: deleting the account they created does nothing to the browser they
+     * are already signed in from.
      *
-     * Only for an actual removal. A `skipped` or `failed` entry means the guard
-     * did not touch anything, and signing every user out of a customer's site on
-     * that basis would be a monthly-scale disruption fired by a non-event.
+     * Triggered by the guard having ANYTHING to report, not by it having
+     * succeeded. Every outcome it logs means the indicator was present:
+     * `deactivated` is a plugin it neutralised but could not delete from a
+     * read-only filesystem, and `skipped` is usually the intruder's account
+     * being the site's last administrator. Those are the WORSE cases, not
+     * lesser ones — reading them as "nothing happened" would leave the attacker
+     * signed in precisely where the cleanup failed.
+     *
+     * Each log entry is acted on once: the cursor advances over what was
+     * recorded, so a threat that stays stuck does not sign the customer out
+     * again on every sweep.
      *
      * @param  list<array<string, mixed>>  $actions
      */
     private function lockOutSessions(Site $site, array $actions): void
     {
-        $removed = collect($actions)->contains(fn (array $a): bool => ($a['result'] ?? '') === 'removed');
-
-        if (! $removed) {
+        if ($actions === []) {
             return;
         }
 

@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Jobs\CheckSitePluginChangesJob;
+use App\Jobs\LockOutSiteSessionsJob;
 use App\Jobs\PurgeSiteThreatsJob;
 use App\Models\Site;
 use App\Models\SiteEvent;
@@ -143,6 +144,59 @@ class ThreatQuarantineTest extends TestCase
         $this->assertSame(4, $site->fresh()->guard_cursor);
     }
 
+    /**
+     * The worse case, not a lesser one: the plugin was neutralised but its
+     * files could not be deleted. Reading that as "nothing happened" would
+     * leave the attacker signed in exactly where the cleanup failed — while
+     * the team alert says the lockdown is happening.
+     */
+    public function test_a_threat_that_could_only_be_deactivated_still_ends_every_session(): void
+    {
+        Queue::fake([LockOutSiteSessionsJob::class]);
+        $site = $this->site();
+
+        Http::fakeSequence()
+            ->push($this->toolResult(json_encode([
+                'present' => ['users' => [], 'plugins' => ['wp-file-manager']],
+                'actions' => [],
+                'last_id' => 0,
+            ])))
+            ->push($this->toolResult('{"removed":0}'))
+            ->push($this->toolResult(json_encode([
+                'present' => ['users' => [], 'plugins' => []],
+                'actions' => [[
+                    'id' => 7, 'kind' => 'plugin', 'target' => 'wp-file-manager',
+                    'result' => 'deactivated', 'detail' => 'כובה; הקבצים לא נמחקו (אין הרשאת כתיבה).',
+                ]],
+                'last_id' => 7,
+            ])));
+
+        (new PurgeSiteThreatsJob($site->id))->handle(app(McpClient::class), app(TeamNotifier::class));
+
+        Queue::assertPushed(
+            LockOutSiteSessionsJob::class,
+            fn (LockOutSiteSessionsJob $job): bool => $job->siteId === $site->id
+                && $job->reason === LockOutSiteSessionsJob::REASON_INTRUSION,
+        );
+    }
+
+    /** A clean sweep disconnects nobody. */
+    public function test_a_clean_site_never_signs_anybody_out(): void
+    {
+        Queue::fake([LockOutSiteSessionsJob::class]);
+        $site = $this->site();
+
+        Http::fake(['*' => Http::response($this->toolResult(json_encode([
+            'present' => ['users' => [], 'plugins' => []],
+            'actions' => [],
+            'last_id' => 0,
+        ])))]);
+
+        (new PurgeSiteThreatsJob($site->id))->handle(app(McpClient::class), app(TeamNotifier::class));
+
+        Queue::assertNotPushed(LockOutSiteSessionsJob::class);
+    }
+
     public function test_a_clean_site_is_left_alone_and_says_nothing(): void
     {
         $site = $this->site();
@@ -178,13 +232,20 @@ class ThreatQuarantineTest extends TestCase
         Http::fakeSequence()
             ->push($this->toolResult($stuck))
             ->push($this->toolResult('{"removed":0}'))
-            ->push($this->toolResult($stuck));
+            ->push($this->toolResult($stuck))
+            ->push($this->toolResult('{"ok":true}'))
+            ->push($this->toolResult('{"ok":true}'));
 
         (new PurgeSiteThreatsJob($site->id))->handle(app(McpClient::class), app(TeamNotifier::class));
 
-        $event = SiteEvent::where('site_id', $site->id)->sole();
         // Not "purged": a removal that did not happen must never be filed as one.
-        $this->assertSame('threat_found', $event->type);
+        $this->assertTrue(SiteEvent::where('site_id', $site->id)->where('type', 'threat_found')->exists());
+
+        // And the sessions end anyway. This is the worst case, not a lesser
+        // one: the intruder's account is still there AND is the site's only
+        // administrator, so leaving their browser signed in would be leaving
+        // them the run of the place.
+        $this->assertTrue(SiteEvent::where('site_id', $site->id)->where('type', 'sessions_locked')->exists());
     }
 
     public function test_an_older_plugin_falls_back_to_deactivating_and_says_so(): void

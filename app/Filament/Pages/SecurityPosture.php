@@ -205,13 +205,21 @@ class SecurityPosture extends Page implements HasTable
     {
         return [
             Action::make('sweepAll')
-                ->label('סרוק עכשיו את כל האתרים')
+                ->label('סרוק והסר בכל האתרים')
                 ->icon('heroicon-o-magnifying-glass')
                 ->color('gray')
                 ->requiresConfirmation()
                 ->modalHeading('סריקת הסגר בכל האתרים')
-                ->modalDescription('כל אתר מחובר ייבדק עכשיו: מה מרשימת ההסגר נמצא בו, ומה השומר כבר הסיר. הסריקה קוראת בלבד — היא אינה מנתקת אף אחד.')
-                ->modalSubmitActionLabel('סרוק')
+                // Says what it does, not what it used to do. The sweep runs the
+                // guard, the guard removes what it finds, and a find now signs
+                // that site's users out — approving this on a promise that
+                // nothing gets disconnected would be approving it blind.
+                ->modalDescription(
+                    'כל אתר מחובר ייבדק עכשיו: מה מרשימת ההסגר נמצא בו, ומה השומר כבר הסיר. '
+                    .'באתר נקי לא משתנה דבר — אבל באתר שנמצא בו משתמש או תוסף מרשימת ההסגר, '
+                    .'השומר יסיר אותו וכל המשתמשים באתר ההוא ינותקו ויצטרכו להתחבר מחדש, כולל הלקוח.'
+                )
+                ->modalSubmitActionLabel('סרוק והסר מה שנמצא')
                 ->action(function (): void {
                     $ids = Site::query()
                         ->where('mcp_enabled', true)
