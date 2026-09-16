@@ -61,6 +61,18 @@ return [
     'undo_minutes' => (int) env('SITE_AGENT_UNDO_MINUTES', 1440),
 
     /*
+    | Images a customer sends in the chat and asks to put on their site.
+    |
+    | The cap is on what we will DOWNLOAD and publish, not on what WhatsApp
+    | allows: an image goes onto a public page, and a page that takes eight
+    | seconds to load because somebody sent a photo straight off a phone is a
+    | site the agent made worse.
+    */
+    'media' => [
+        'max_megabytes' => (int) env('SITE_AGENT_MEDIA_MAX_MB', 8),
+    ],
+
+    /*
     | A number is bound to one customer's site before it can do anything. An
     | unknown number gets a polite "this number is not registered" — never a
     | guess at which site it might mean.

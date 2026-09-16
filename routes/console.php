@@ -23,6 +23,7 @@ use App\Jobs\HeartbeatJob;
 use App\Jobs\LockOutSiteSessionsJob;
 use App\Jobs\MonitorSiteJob;
 use App\Jobs\PrunePendingSignupsJob;
+use App\Jobs\PruneSiteAgentRequestsJob;
 use App\Jobs\PurgeSiteThreatsJob;
 use App\Jobs\ReconcileChargeJob;
 use App\Jobs\RefreshCloudflareCountryRulesJob;
@@ -477,6 +478,12 @@ Schedule::job(new RequestMissingCardJob)
 // nothing outward and touches no customer.
 Schedule::job(new PrunePendingSignupsJob)
     ->dailyAt('03:40')->name('billing:prune-pending-signups')->onOneServer();
+
+// Offers to change a site that nobody answered, and the pictures they were
+// holding. The expiry already stops an old offer being confirmed; this is about
+// not keeping a customer's photograph for a change they never agreed to.
+Schedule::job(new PruneSiteAgentRequestsJob)
+    ->hourly()->name('site-agent:prune-requests')->onOneServer();
 
 // Chase the security card signup asked for and never got. Separate from the job
 // above because that one runs off subscriptions whose charge date has passed —

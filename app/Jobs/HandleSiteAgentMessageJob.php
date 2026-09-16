@@ -50,7 +50,15 @@ class HandleSiteAgentMessageJob implements ShouldQueue
 
         $payload = (array) $event->payload;
         $from = $whatsapp->normalize((string) ($payload['from'] ?? ''));
-        $text = trim((string) data_get($payload, 'text.body', ''));
+
+        // An image carries its instruction in the caption; a text message in
+        // its body. Anything else (voice, a document, a location) has no
+        // meaning to this agent and is answered as such rather than ignored.
+        $type = (string) ($payload['type'] ?? 'text');
+        $mediaId = $type === 'image' ? (string) data_get($payload, 'image.id', '') : '';
+        $text = trim((string) ($type === 'image'
+            ? data_get($payload, 'image.caption', '')
+            : data_get($payload, 'text.body', '')));
 
         if ($from === '') {
             $event->markProcessed();
@@ -73,7 +81,14 @@ class HandleSiteAgentMessageJob implements ShouldQueue
         if ($decision['status'] === SiteAgentAccess::ALLOWED && $subscriber !== null) {
             $subscriber->forceFill(['last_seen_at' => now()])->save();
 
-            $reply = $conversation->handle($subscriber, $text, (string) ($payload['id'] ?? '') ?: null);
+            $reply = $type !== 'text' && $type !== 'image'
+                ? 'אני יודע לקרוא הודעות טקסט ותמונות. אפשר לכתוב לי מה לשנות באתר?'
+                : $conversation->handle(
+                    $subscriber,
+                    $text,
+                    (string) ($payload['id'] ?? '') ?: null,
+                    $mediaId !== '' ? $mediaId : null,
+                );
         } else {
             $reply = $this->answerFor($decision['status']);
         }

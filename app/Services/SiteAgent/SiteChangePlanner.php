@@ -241,6 +241,42 @@ class SiteChangePlanner
         }
     }
 
+    /**
+     * Everything an image could be attached to: the pages, and the products.
+     *
+     * Names only. The image planner has to choose a target, not read the shop —
+     * handing it full product bodies would cost tokens and time for a decision
+     * that is made on the title alone.
+     *
+     * @return list<array{id: int, title: string}>
+     */
+    public function targets(Site $site): array
+    {
+        $targets = collect($this->pages($site))
+            ->map(fn (array $page): array => ['id' => $page['id'], 'title' => $page['title']])
+            ->all();
+
+        try {
+            $products = json_decode($this->mcp->textContent($this->mcp->callTool($site, 'wc_product_search', [
+                'query' => '',
+                'limit' => 40,
+            ])), true);
+        } catch (\Throwable) {
+            // A site with no shop is the ordinary case, not a fault.
+            return $targets;
+        }
+
+        foreach ((array) data_get($products, 'products', []) as $product) {
+            $id = (int) data_get($product, 'id', 0);
+
+            if ($id > 0) {
+                $targets[] = ['id' => $id, 'title' => (string) data_get($product, 'name', '')];
+            }
+        }
+
+        return $targets;
+    }
+
     /** The page list is stale the moment we change one. */
     public static function forget(Site $site): void
     {

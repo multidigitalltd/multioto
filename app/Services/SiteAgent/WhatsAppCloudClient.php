@@ -82,6 +82,111 @@ class WhatsAppCloudClient
     }
 
     /**
+     * Fetch an image the customer sent, as bytes we may actually publish.
+     *
+     * Two calls, because that is how Meta serves media: an id resolves to a
+     * short-lived URL, and the URL itself needs the same bearer token. Neither
+     * step is skippable and neither result is trusted.
+     *
+     * Everything a file could be wrong about is checked HERE, before the bytes
+     * reach a customer's website: the type is read from the CONTENT and not
+     * from what Meta said it was, it must be one of a handful of image types,
+     * and it must be under the size cap. A file that lies about itself is
+     * exactly the file that must not be uploaded anywhere.
+     *
+     * @return array{bytes: string, mime: string, extension: string}|null
+     */
+    public function downloadMedia(string $mediaId): ?array
+    {
+        if (! $this->configured() || trim($mediaId) === '') {
+            return null;
+        }
+
+        $token = (string) config('siteagent.whatsapp.token');
+        $timeout = (int) config('siteagent.whatsapp.timeout_seconds', 20);
+
+        try {
+            $lookup = Http::withToken($token)->timeout($timeout)->get(sprintf(
+                'https://graph.facebook.com/%s/%s',
+                trim((string) config('siteagent.whatsapp.api_version', 'v21.0'), '/'),
+                rawurlencode($mediaId),
+            ));
+
+            $url = (string) $lookup->json('url', '');
+
+            // Only ever follow Meta's own host. The URL arrives in a response,
+            // and a fetch that follows wherever a response points is a request
+            // forger waiting for one bad day.
+            if (! $lookup->successful() || ! Str::startsWith($url, 'https://') || ! $this->isMetaHost($url)) {
+                Log::warning('WhatsAppCloudClient: media lookup rejected', ['media_id' => $mediaId]);
+
+                return null;
+            }
+
+            $download = Http::withToken($token)->timeout($timeout)->get($url);
+
+            if (! $download->successful()) {
+                return null;
+            }
+
+            $bytes = $download->body();
+        } catch (\Throwable $e) {
+            Log::warning('WhatsAppCloudClient: media download failed', ['error' => Str::limit($e->getMessage(), 200)]);
+
+            return null;
+        }
+
+        $maxBytes = max(1, (int) config('siteagent.media.max_megabytes', 8)) * 1024 * 1024;
+
+        if ($bytes === '' || strlen($bytes) > $maxBytes) {
+            return null;
+        }
+
+        // Read from the bytes themselves. What the sender called it, and what
+        // the provider reported, are both claims.
+        $mime = (string) (new \finfo(FILEINFO_MIME_TYPE))->buffer($bytes);
+        $allowed = self::ALLOWED_MEDIA;
+
+        if (! array_key_exists($mime, $allowed)) {
+            Log::warning('WhatsAppCloudClient: media type refused', ['mime' => $mime]);
+
+            return null;
+        }
+
+        return ['bytes' => $bytes, 'mime' => $mime, 'extension' => $allowed[$mime]];
+    }
+
+    /**
+     * Image types a customer's site may receive, and the extension each one
+     * gets. Deliberately short, and deliberately not driven by the filename:
+     * the extension is OURS to decide, so nothing named ".php" is ever written.
+     */
+    private const ALLOWED_MEDIA = [
+        'image/jpeg' => 'jpg',
+        'image/png' => 'png',
+        'image/gif' => 'gif',
+        'image/webp' => 'webp',
+    ];
+
+    /** Meta's own media hosts, and nothing else. */
+    private function isMetaHost(string $url): bool
+    {
+        $host = Str::lower((string) parse_url($url, PHP_URL_HOST));
+
+        if ($host === '') {
+            return false;
+        }
+
+        foreach (['graph.facebook.com', 'lookaside.fbsbx.com', 'scontent.xx.fbcdn.net'] as $allowed) {
+            if ($host === $allowed || Str::endsWith($host, '.fbcdn.net')) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * Is this delivery really from Meta?
      *
      * Meta signs the RAW body with the app secret. The comparison is on the raw

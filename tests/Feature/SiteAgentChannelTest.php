@@ -371,6 +371,35 @@ class SiteAgentChannelTest extends TestCase
             ->assertSee('אין מנוי פעיל', false);
     }
 
+    public function test_a_voice_note_is_answered_rather_than_ignored(): void
+    {
+        Http::fake(['*' => Http::response(['messages' => [['id' => 'wamid.reply']]])]);
+        $subscriber = $this->subscriber();
+        $this->subscribe($subscriber->customer);
+
+        // Not something this agent can act on. Silence would read as the
+        // product being broken, which is worse than saying so.
+        $this->deliverTyped('972501234567', ['type' => 'audio', 'audio' => ['id' => 'audio-1']]);
+
+        $this->assertReplyContains('הודעות טקסט ותמונות');
+    }
+
+    public function test_an_image_reaches_the_agent_with_its_caption(): void
+    {
+        Http::fake(['*' => Http::response(['messages' => [['id' => 'wamid.reply']]])]);
+        $subscriber = $this->subscriber();
+        $this->subscribe($subscriber->customer);
+
+        // The instruction for an image lives in its caption, not in a text
+        // body — reading only `text.body` would drop it silently.
+        $this->deliverTyped('972501234567', [
+            'type' => 'image',
+            'image' => ['id' => 'media-9', 'caption' => 'תשים את זה בדף הבית'],
+        ]);
+
+        $this->assertReplyDoesNotContain('הודעות טקסט ותמונות');
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────
 
     /** @param array<string, mixed> $attributes */
@@ -463,6 +492,27 @@ class SiteAgentChannelTest extends TestCase
         });
 
         $this->assertFalse($found, "נשלחה תשובה שמכילה: {$needle}");
+    }
+
+    /** Deliver a message of any Meta type, end to end. */
+    private function deliverTyped(string $from, array $message): void
+    {
+        $envelope = $this->envelope($from, '');
+        $envelope['entry'][0]['changes'][0]['value']['messages'][0] = array_merge(
+            ['from' => $from, 'id' => 'wamid.'.md5(json_encode($message)), 'timestamp' => (string) now()->timestamp],
+            $message,
+        );
+
+        $this->postSigned(json_encode($envelope))->assertOk();
+
+        $event = WebhookEvent::latest('id')->firstOrFail();
+        $event->update(['processed_at' => null]);
+
+        (new HandleSiteAgentMessageJob($event->id))->handle(
+            app(SiteAgentAccess::class),
+            app(WhatsAppCloudClient::class),
+            app(SiteAgentConversation::class),
+        );
     }
 
     /** The body of the reply the agent actually sent back over the API. */

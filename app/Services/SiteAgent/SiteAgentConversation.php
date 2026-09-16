@@ -6,6 +6,7 @@ use App\Models\SiteAgentRequest;
 use App\Models\SiteAgentSubscriber;
 use App\Models\SystemLog;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
 /**
@@ -30,7 +31,10 @@ class SiteAgentConversation
 
     public function __construct(
         private SiteChangePlanner $planner,
+        private ProductChangePlanner $products,
+        private ImageChangePlanner $images,
         private SiteChangeApplier $applier,
+        private WhatsAppCloudClient $whatsapp,
     ) {}
 
     /**
@@ -38,11 +42,11 @@ class SiteAgentConversation
      *
      * @return string the reply to send back
      */
-    public function handle(SiteAgentSubscriber $subscriber, string $text, ?string $messageId): string
+    public function handle(SiteAgentSubscriber $subscriber, string $text, ?string $messageId, ?string $mediaId = null): string
     {
         $text = trim($text);
 
-        if ($text === '') {
+        if ($text === '' && $mediaId === null) {
             return 'לא הבנתי מה לשנות. כתבו לי מה תרצו לעדכן באתר.';
         }
 
@@ -58,7 +62,7 @@ class SiteAgentConversation
             }
 
             if ($this->matches($text, self::NO)) {
-                $pending->update(['state' => SiteAgentRequest::CANCELED]);
+                $this->settle($pending, SiteAgentRequest::CANCELED);
 
                 return 'בוטל, לא שיניתי כלום. אפשר לבקש משהו אחר.';
             }
@@ -66,7 +70,12 @@ class SiteAgentConversation
             // Anything else replaces the offer: they changed their mind about
             // what they want, and leaving the old one alive would let a "כן"
             // three messages later confirm something they have moved on from.
-            $pending->update(['state' => SiteAgentRequest::CANCELED]);
+            $this->settle($pending, SiteAgentRequest::CANCELED);
+        }
+
+        // An image is unambiguous about which planner it needs.
+        if ($mediaId !== null) {
+            return $this->proposeImage($subscriber, $text, $mediaId, $messageId);
         }
 
         // "בטל" with nothing on the table means the last thing that went live.
@@ -92,7 +101,16 @@ class SiteAgentConversation
             return 'אין לי כרגע חיבור לאתר.';
         }
 
-        $plan = $this->planner->plan($site, $text);
+        // The shop is asked first. A price is a number a business charges, and
+        // "תוריד את החולצה ל-90" landing in the text planner would append a
+        // sentence about ninety shekels to a page instead of changing a price.
+        $plan = $this->products->plan($site, $text);
+
+        if (is_array($plan) && isset($plan['question'])) {
+            return $plan['question'];
+        }
+
+        $plan ??= $this->planner->plan($site, $text);
 
         if ($plan === null) {
             return implode("\n", [
@@ -122,6 +140,65 @@ class SiteAgentConversation
     }
 
     /**
+     * An image arrived. Fetch it, work out where it goes, and show the plan.
+     *
+     * The bytes are downloaded and validated BEFORE the customer is asked to
+     * approve anything. Meta's media links are short-lived, so an offer made
+     * first and fetched on confirmation would be an offer that expires into a
+     * failure — and a file that turns out not to be an image at all should
+     * never have produced a preview in the first place.
+     */
+    private function proposeImage(SiteAgentSubscriber $subscriber, string $caption, string $mediaId, ?string $messageId): string
+    {
+        $site = $subscriber->site;
+
+        if ($site === null) {
+            return 'אין לי כרגע חיבור לאתר.';
+        }
+
+        $media = $this->whatsapp->downloadMedia($mediaId);
+
+        if ($media === null) {
+            return 'לא הצלחתי לקרוא את התמונה. אפשר לשלוח אותה שוב כקובץ JPG או PNG, עד '
+                .(int) config('siteagent.media.max_megabytes', 8).'MB.';
+        }
+
+        $plan = $this->images->plan($site, $caption, $this->planner->targets($site));
+
+        if ($plan === null) {
+            return 'קיבלתי את התמונה, אבל לא הצלחתי להבין לאן לשים אותה.';
+        }
+
+        if (isset($plan['question'])) {
+            return $plan['question'];
+        }
+
+        $minutes = max(1, (int) config('siteagent.confirmation_minutes', 30));
+
+        // Held on a private disk, not in the database row: an eight-megabyte
+        // image base64'd into a json column is a row nobody can read quickly
+        // and a table that grows in a way nothing else here does. The path
+        // rides with the plan; the file is removed once the offer is settled.
+        $path = 'site-agent/'.$subscriber->id.'/'.Str::random(32).'.'.$media['extension'];
+        Storage::disk('local')->put($path, $media['bytes']);
+
+        $request = SiteAgentRequest::create([
+            'site_agent_subscriber_id' => $subscriber->id,
+            'site_id' => $site->id,
+            'customer_id' => $subscriber->customer_id,
+            'message' => Str::limit($caption !== '' ? $caption : '[תמונה]', 2000),
+            'inbound_message_id' => $messageId,
+            'operation' => SiteAgentRequest::OP_IMAGE,
+            'plan' => [...$plan, 'image_path' => $path, 'extension' => $media['extension']],
+            'preview' => $this->preview($plan),
+            'state' => SiteAgentRequest::AWAITING,
+            'expires_at' => now()->addMinutes($minutes),
+        ]);
+
+        return $request->preview."\n\n".'לביצוע השיבו "כן". לביטול — "לא".';
+    }
+
+    /**
      * The words the customer sees before they agree.
      *
      * Before and after are quoted in full rather than summarised. A summary is
@@ -132,9 +209,38 @@ class SiteAgentConversation
      */
     private function preview(array $plan): string
     {
-        $page = (string) $plan['page_title'];
+        // Only the page operations have a page. Reading it unconditionally is
+        // how a price change crashed on its own preview.
+        $page = (string) ($plan['page_title'] ?? '');
 
         return match ($plan['operation']) {
+            SiteAgentRequest::OP_PRICE => implode("\n", array_filter([
+                "🛒 מוצר: {$plan['product_name']}",
+                isset($plan['fields']['regular_price'])
+                    ? 'מחיר רגיל: '.($plan['current']['regular_price'] ?: '—')." ← {$plan['fields']['regular_price']}"
+                    : null,
+                array_key_exists('sale_price', $plan['fields'])
+                    ? ($plan['fields']['sale_price'] === ''
+                        ? 'סיום המבצע (המחיר חוזר למחיר הרגיל)'
+                        : 'מחיר מבצע: '.($plan['current']['sale_price'] ?: '—')." ← {$plan['fields']['sale_price']}")
+                    : null,
+            ])),
+            SiteAgentRequest::OP_STOCK => implode("\n", [
+                "🛒 מוצר: {$plan['product_name']}",
+                isset($plan['fields']['stock_quantity'])
+                    ? "מלאי: {$plan['fields']['stock_quantity']}"
+                    : 'מצב מלאי: '.match ($plan['fields']['stock_status'] ?? '') {
+                        'instock' => 'במלאי',
+                        'outofstock' => 'אזל מהמלאי',
+                        'onbackorder' => 'בהזמנה מראש',
+                        default => (string) ($plan['fields']['stock_status'] ?? ''),
+                    },
+            ]),
+            SiteAgentRequest::OP_IMAGE => implode("\n", [
+                "🖼️ {$plan['target_title']}",
+                'התמונה ששלחתם תוגדר כתמונה הראשית.',
+                'תיאור לנגישות: "'.$plan['alt'].'"',
+            ]),
             SiteAgentRequest::OP_TITLE => implode("\n", [
                 "📄 עמוד: {$page}",
                 'שינוי הכותרת ל:',
@@ -233,6 +339,24 @@ class SiteAgentConversation
         } finally {
             $lock->release();
         }
+    }
+
+    /**
+     * Close an offer, and take its image with it.
+     *
+     * An uploaded picture that nobody approved has no reason to stay on our
+     * disk — it is a customer's file, held only for as long as the question
+     * about it is open.
+     */
+    private function settle(SiteAgentRequest $request, string $state): void
+    {
+        $path = (string) data_get($request->plan, 'image_path', '');
+
+        if ($path !== '') {
+            Storage::disk('local')->delete($path);
+        }
+
+        $request->update(['state' => $state]);
     }
 
     /**

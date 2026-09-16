@@ -41,6 +41,21 @@ class SiteAgentRequest extends Model
     /** Change a page's title. */
     public const OP_TITLE = 'update_title';
 
+    /** Change one product's price (regular, sale, or ending a sale). */
+    public const OP_PRICE = 'update_price';
+
+    /** Change one product's stock. */
+    public const OP_STOCK = 'update_stock';
+
+    /** Put an image the customer sent onto a page or product. */
+    public const OP_IMAGE = 'set_image';
+
+    /** Everything the agent is allowed to do, in one list. */
+    public const OPERATIONS = [
+        self::OP_APPEND, self::OP_REPLACE, self::OP_TITLE,
+        self::OP_PRICE, self::OP_STOCK, self::OP_IMAGE,
+    ];
+
     protected $fillable = [
         'site_agent_subscriber_id', 'site_id', 'customer_id',
         'message', 'inbound_message_id', 'operation', 'plan', 'preview', 'restore',
