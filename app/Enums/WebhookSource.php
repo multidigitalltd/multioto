@@ -11,6 +11,7 @@ enum WebhookSource: string implements HasLabel
     case Linet = 'linet';
     case Email = 'email';
     case Kesher = 'kesher';
+    case WhatsappCloud = 'whatsapp_cloud';
 
     public function getLabel(): string
     {
@@ -20,6 +21,7 @@ enum WebhookSource: string implements HasLabel
             self::Linet => 'לינט',
             self::Email => 'אימייל',
             self::Kesher => 'קשר',
+            self::WhatsappCloud => 'וואטסאפ רשמי (סוכן האתר)',
         };
     }
 }

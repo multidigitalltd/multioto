@@ -12,7 +12,7 @@ class Plan extends Model
     use HasFactory;
 
     protected $fillable = [
-        'name', 'price_agorot', 'vat_applies', 'billing_interval', 'description', 'active',
+        'name', 'price_agorot', 'vat_applies', 'billing_interval', 'description', 'active', 'includes_site_agent',
     ];
 
     protected function casts(): array
@@ -22,6 +22,7 @@ class Plan extends Model
             'vat_applies' => 'boolean',
             'billing_interval' => BillingInterval::class,
             'active' => 'boolean',
+            'includes_site_agent' => 'boolean',
         ];
     }
 

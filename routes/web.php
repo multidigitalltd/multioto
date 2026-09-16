@@ -26,6 +26,7 @@ use App\Http\Controllers\Webhooks\CardcomWebhookController;
 use App\Http\Controllers\Webhooks\EmailDeliveryWebhookController;
 use App\Http\Controllers\Webhooks\EmailWebhookController;
 use App\Http\Controllers\Webhooks\KesherWebhookController;
+use App\Http\Controllers\Webhooks\SiteAgentWhatsAppController;
 use App\Http\Controllers\Webhooks\WahaWebhookController;
 use App\Http\Middleware\EnsureTwoFactorConfirmed;
 use App\Http\Middleware\ThrottleHealthProbe;
@@ -350,4 +351,19 @@ Route::middleware('throttle:120,1')->prefix('webhooks')->group(function () {
     Route::post('/kesher', KesherWebhookController::class)->name('webhooks.kesher');
     // Delivery / open / bounce / spam-complaint events for mail WE sent.
     Route::post('/email/delivery', EmailDeliveryWebhookController::class)->name('webhooks.email.delivery');
+
+    /*
+     | The site-agent product's own WhatsApp number, on Meta's Cloud API.
+     | Meta signs every delivery (X-Hub-Signature-256) rather than carrying a
+     | shared secret, so verification happens against the raw body inside the
+     | controller. The GET is Meta's one-time subscribe handshake.
+     */
+    Route::get('/site-agent/whatsapp', [SiteAgentWhatsAppController::class, 'verify'])
+        ->name('webhooks.site-agent.verify');
+    Route::post('/site-agent/whatsapp', [SiteAgentWhatsAppController::class, 'receive'])
+        // Its own budget, wider than the shared one: this is a live customer
+        // channel, and a 429 makes Meta redeliver — turning a rate limit into
+        // more traffic, and eventually into an instruction carried out twice.
+        ->middleware('throttle:600,1')
+        ->name('webhooks.site-agent');
 });
