@@ -47,6 +47,20 @@ return [
     ],
 
     /*
+    | How long an offer waits for a yes. Long enough to answer after a meeting,
+    | short enough that a "כן" typed tomorrow cannot confirm something the
+    | customer has long stopped thinking about.
+    */
+    'confirmation_minutes' => (int) env('SITE_AGENT_CONFIRMATION_MINUTES', 30),
+
+    /*
+    | How long "בטל" can still put a change back. The previous content is kept
+    | on the request, so the undo restores what was actually live rather than
+    | what we believed was.
+    */
+    'undo_minutes' => (int) env('SITE_AGENT_UNDO_MINUTES', 1440),
+
+    /*
     | A number is bound to one customer's site before it can do anything. An
     | unknown number gets a polite "this number is not registered" — never a
     | guess at which site it might mean.

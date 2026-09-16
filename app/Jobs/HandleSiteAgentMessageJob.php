@@ -6,6 +6,7 @@ use App\Models\SiteAgentSubscriber;
 use App\Models\SystemLog;
 use App\Models\WebhookEvent;
 use App\Services\SiteAgent\SiteAgentAccess;
+use App\Services\SiteAgent\SiteAgentConversation;
 use App\Services\SiteAgent\WhatsAppCloudClient;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -15,15 +16,11 @@ use Illuminate\Support\Facades\Log;
  * One message to the agent's number: work out who sent it, whether they may use
  * the product, and answer.
  *
- * STAGE ONE. Nothing here touches a customer's site. The number can be
- * connected, numbers can be bound to sites, and every sender gets a true answer
- * about where they stand — while the part that changes a live website is still
- * being built.
- *
- * That order is deliberate and is the same one the Kesher integration used: the
- * expensive mistakes in an external channel are in identity and delivery
- * shape, and they are far cheaper to find on an endpoint that only talks than
- * on one that also edits somebody's homepage.
+ * Identity first, always. Nothing about the message is even read until this
+ * number has been bound to a site, proved it holds the number, and the customer
+ * behind it is paying — because every later step edits a live website, and the
+ * only thing standing between a stranger's message and that website is this
+ * order of checks.
  */
 class HandleSiteAgentMessageJob implements ShouldQueue
 {
@@ -40,8 +37,11 @@ class HandleSiteAgentMessageJob implements ShouldQueue
 
     public function __construct(public int $webhookEventId) {}
 
-    public function handle(SiteAgentAccess $access, WhatsAppCloudClient $whatsapp): void
-    {
+    public function handle(
+        SiteAgentAccess $access,
+        WhatsAppCloudClient $whatsapp,
+        SiteAgentConversation $conversation,
+    ): void {
         $event = WebhookEvent::find($this->webhookEventId);
 
         if (! $event || $event->processed_at !== null) {
@@ -70,11 +70,13 @@ class HandleSiteAgentMessageJob implements ShouldQueue
             return;
         }
 
-        if ($decision['status'] === SiteAgentAccess::ALLOWED) {
-            $subscriber?->forceFill(['last_seen_at' => now()])->save();
-        }
+        if ($decision['status'] === SiteAgentAccess::ALLOWED && $subscriber !== null) {
+            $subscriber->forceFill(['last_seen_at' => now()])->save();
 
-        $reply = $this->answerFor($decision['status']);
+            $reply = $conversation->handle($subscriber, $text, (string) ($payload['id'] ?? '') ?: null);
+        } else {
+            $reply = $this->answerFor($decision['status']);
+        }
 
         if ($reply !== '' && $whatsapp->sendText($from, $reply) === null) {
             // The customer is holding a phone that shows their message
@@ -111,7 +113,9 @@ class HandleSiteAgentMessageJob implements ShouldQueue
             '✅ המספר אומת.',
             '',
             "מעכשיו אפשר לנהל מכאן את האתר {$subscriber->site?->domain}.",
-            'השירות נמצא בהרצה — בקרוב תוכלו לבקש שינויים ישירות בצ׳אט.',
+            '',
+            'כתבו לי מה לשנות — למשל "בעמוד צור קשר, תחליף את הטלפון 03-1234567 ב-03-7654321".',
+            'אציג לכם בדיוק מה ישתנה, וזה יקרה רק אחרי שתאשרו.',
         ]));
     }
 
@@ -129,13 +133,6 @@ class HandleSiteAgentMessageJob implements ShouldQueue
         $contact = $support !== '' ? "\nלכל שאלה: {$support}" : '';
 
         return match ($status) {
-            SiteAgentAccess::ALLOWED => implode("\n", [
-                'קיבלתי 👍',
-                '',
-                'השירות נמצא בהרצה אחרונה ועוד אינו מבצע שינויים באתר.',
-                'ההודעה נשמרה, ונעדכן אתכם ברגע שאפשר להתחיל.',
-            ]),
-
             SiteAgentAccess::UNVERIFIED => 'כדי להתחיל, שלחו כאן את קוד האימות בן 6 הספרות שנשלח אליכם. '
                 .'אם הקוד פג — פנו אלינו ונשלח חדש.'.$contact,
 

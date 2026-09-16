@@ -13,6 +13,7 @@ use App\Models\Subscription;
 use App\Models\User;
 use App\Models\WebhookEvent;
 use App\Services\SiteAgent\SiteAgentAccess;
+use App\Services\SiteAgent\SiteAgentConversation;
 use App\Services\SiteAgent\WhatsAppCloudClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -248,7 +249,10 @@ class SiteAgentChannelTest extends TestCase
 
         $this->deliver('972501234567', 'תוסיף לדף הבית שאנחנו פתוחים בשישי');
 
-        $this->assertReplyContains('קיבלתי');
+        // Past the gate and into the agent itself: the reply is about the
+        // request, not about whether they are allowed to make one.
+        $this->assertReplyDoesNotContain('אינו רשום');
+        $this->assertReplyDoesNotContain('המנוי');
         $this->assertNotNull($subscriber->fresh()->last_seen_at);
     }
 
@@ -438,8 +442,27 @@ class SiteAgentChannelTest extends TestCase
         $event = WebhookEvent::latest('id')->firstOrFail();
         $event->update(['processed_at' => null]);
 
-        (new HandleSiteAgentMessageJob($event->id))
-            ->handle(app(SiteAgentAccess::class), app(WhatsAppCloudClient::class));
+        (new HandleSiteAgentMessageJob($event->id))->handle(
+            app(SiteAgentAccess::class),
+            app(WhatsAppCloudClient::class),
+            app(SiteAgentConversation::class),
+        );
+    }
+
+    /** The agent never sent a reply containing this. */
+    private function assertReplyDoesNotContain(string $needle): void
+    {
+        $found = false;
+
+        Http::recorded(function ($request) use ($needle, &$found) {
+            if (str_contains((string) data_get($request->data(), 'text.body', ''), $needle)) {
+                $found = true;
+            }
+
+            return true;
+        });
+
+        $this->assertFalse($found, "נשלחה תשובה שמכילה: {$needle}");
     }
 
     /** The body of the reply the agent actually sent back over the API. */
