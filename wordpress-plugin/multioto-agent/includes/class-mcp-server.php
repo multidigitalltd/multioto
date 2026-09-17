@@ -1224,6 +1224,11 @@ class Multioto_Agent_Mcp_Server
             'status' => $post->post_status,
             'excerpt' => $post->post_excerpt,
             'content' => $post->post_content,
+            // The featured image, by id. Read-only elsewhere in this server,
+            // and the only way a caller can tell whether the picture it is
+            // about to replace is still the one it saw — wp_post_thumbnail_set
+            // reports what it displaced, but only after it has displaced it.
+            'thumbnail_id' => (int) get_post_thumbnail_id($post->ID),
             // Said on every read, because it decides which tool edits this page.
             // A page built with Elementor keeps its visible text elsewhere, and
             // an agent that does not know that will "successfully" edit nothing.

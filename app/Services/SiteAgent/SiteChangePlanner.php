@@ -400,6 +400,29 @@ class SiteChangePlanner
         return $targets;
     }
 
+    /**
+     * The featured image a target carries right now, or null when the site
+     * does not say.
+     *
+     * Reported by the plugin from 1.6.1; an older site, or a product (which is
+     * not readable as content), answers nothing — and the caller then stands
+     * down rather than refusing every image change on an older install.
+     */
+    public function thumbnailOf(Site $site, int $targetId): ?int
+    {
+        try {
+            $target = json_decode($this->mcp->textContent($this->mcp->callTool($site, 'wp_content_get', [
+                'id' => $targetId,
+            ])), true);
+        } catch (\Throwable) {
+            return null;
+        }
+
+        $thumbnail = data_get($target, 'thumbnail_id');
+
+        return $thumbnail === null ? null : (int) $thumbnail;
+    }
+
     /** The page list is stale the moment we change one. */
     public static function forget(Site $site): void
     {

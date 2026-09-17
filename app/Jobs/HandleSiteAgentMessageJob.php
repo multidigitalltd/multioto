@@ -41,15 +41,18 @@ class HandleSiteAgentMessageJob implements ShouldQueue
     /**
      * Longer than everything it can wait on, added up.
      *
-     * The image upload alone allows a 120-second call to the site, planning
-     * reads a bounded set of pages one after another (SiteChangePlanner's
-     * PAGE_LIMIT, each at the MCP timeout), and the turn may queue behind
-     * another message for ninety seconds. A worker killed mid-flight runs no
-     * catch and no finally: the request stays `applying` for ever, the
-     * customer's photograph is never cleaned up, and with one attempt there is
-     * no retry to put any of it right.
+     * Added up, and with room over: two model calls (the shop planner and the
+     * page planner), the page list, PAGE_LIMIT content reads one after another
+     * at the MCP timeout, a 120-second image upload, and up to ninety seconds
+     * queueing behind the message before this one. Roughly 660 seconds of
+     * budget on the slowest path, so 600 was under it.
+     *
+     * The margin matters because being killed here is not a retry: a worker cut
+     * off mid-flight runs no catch and no finally, the request stays `applying`
+     * for ever, the customer's photograph is never cleaned up, and with one
+     * attempt the instruction is simply lost with nothing to say so.
      */
-    public int $timeout = 600;
+    public int $timeout = 900;
 
     public function __construct(public int $webhookEventId) {}
 

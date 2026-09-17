@@ -46,6 +46,31 @@ class SiteAgentSubscriber extends Model
         ];
     }
 
+    protected static function booted(): void
+    {
+        // A different number is a different person until it proves otherwise.
+        //
+        // Verification establishes that whoever holds THIS number asked for
+        // this access. Editing the number afterwards — correcting a typo, or
+        // handing the binding to somebody else — carries that proof over to a
+        // number nobody has ever heard from, and the agent would take its very
+        // first message as authority to rewrite a business's website.
+        //
+        // Enforced on the model rather than on the screen that happens to do it
+        // today: every path that can change this column has to lose the proof
+        // with it.
+        static::updating(function (self $subscriber): void {
+            if (! $subscriber->isDirty('phone')) {
+                return;
+            }
+
+            $subscriber->verified_at = null;
+            $subscriber->verification_code = null;
+            $subscriber->verification_sent_at = null;
+            $subscriber->verification_attempts = 0;
+        });
+    }
+
     public function customer(): BelongsTo
     {
         return $this->belongsTo(Customer::class);

@@ -199,6 +199,38 @@ class SiteAgentPluginContractTest extends TestCase
         $this->assertSame(77, $restore['after']);
     }
 
+    public function test_an_image_set_by_somebody_else_since_the_preview_is_not_replaced(): void
+    {
+        $this->imageArrives();
+
+        $this->siteSends([
+            $this->tool(json_encode([
+                ['id' => 11, 'title' => 'דף הבית', 'type' => 'page', 'status' => 'publish', 'built_with_elementor' => false],
+            ])),
+            $this->tool(json_encode(['id' => 11, 'title' => 'דף הבית', 'content' => 'טקסט', 'status' => 'publish'])),
+            // The shop, searched with the caption in case they named a product.
+            $this->tool(json_encode(['total' => 0, 'returned' => 0, 'page' => 1, 'pages' => 1, 'products' => []])),
+            // The featured image at preview time — reported by the plugin from
+            // 1.6.1, which is the only way to know before overwriting it.
+            $this->tool(json_encode(['id' => 11, 'title' => 'דף הבית', 'content' => 'טקסט', 'status' => 'publish', 'thumbnail_id' => 42])),
+        ]);
+
+        $this->planning(['can_do' => true, 'target_id' => 11, 'alt' => 'כיכר לחם', 'summary' => 'תמונה']);
+        $this->talk('תשים את זה בדף הבית — כיכר לחם', mediaId: 'media-1');
+
+        // An administrator put a different picture there while the offer waited.
+        $this->siteSends([
+            $this->tool(json_encode(['id' => 11, 'title' => 'דף הבית', 'content' => 'טקסט', 'status' => 'publish', 'thumbnail_id' => 99])),
+        ]);
+
+        $reply = $this->talk('כן');
+
+        $this->assertStringContainsString('השתנה', $reply);
+        $this->assertSame(SiteAgentRequest::FAILED, SiteAgentRequest::sole()->state);
+        // And nothing was uploaded to their media library either.
+        Http::assertSent(fn ($request): bool => data_get($request->data(), 'params.name') !== 'wp_media_upload');
+    }
+
     public function test_an_elementor_undo_matches_the_setting_and_not_only_the_widget(): void
     {
         $widget = [

@@ -433,6 +433,32 @@ class SiteChangeApplier
             return $this->refuse('חסר יעד, תיאור או קובץ לתמונה.');
         }
 
+        // Is the picture we are about to replace still the one that was there
+        // when the offer was made?
+        //
+        // The plugin reports the featured image on a content read (1.6.1+); an
+        // older site answers nothing and this check stands down rather than
+        // refusing every image change. Where it IS reported, an image somebody
+        // set in wp-admin between the preview and the yes is not ours to throw
+        // away without a word.
+        $expected = $plan['thumbnail_id'] ?? null;
+
+        if ($expected !== null) {
+            try {
+                $live = json_decode($this->mcp->textContent($this->mcp->callTool($site, 'wp_content_get', [
+                    'id' => $targetId,
+                ])), true);
+            } catch (\Throwable $e) {
+                return $this->failure(Str::limit($e->getMessage(), 200));
+            }
+
+            $current = data_get($live, 'thumbnail_id');
+
+            if ($current !== null && (int) $current !== (int) $expected) {
+                return $this->refuse(self::STALE);
+            }
+        }
+
         // The filename is ours, never the sender's: a name that arrived with
         // the file is a name an attacker chose.
         $filename = 'whatsapp-'.now()->format('Ymd-His').'-'.Str::random(6).'.'.$extension;

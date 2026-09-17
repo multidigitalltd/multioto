@@ -78,7 +78,13 @@ class SiteAgentSubscriberResource extends Resource
                         ->label('מספר וואטסאפ')
                         ->tel()
                         ->required()
-                        ->helperText('אפשר להקליד 050-1234567 — יומר לפורמט הבינלאומי אוטומטית.')
+                        // Said here because it surprises people: the model
+                        // clears the verification whenever this column moves,
+                        // so a corrected number is a number that has not proved
+                        // itself yet — and the agent will not answer it until
+                        // it does.
+                        ->helperText(fn (?SiteAgentSubscriber $record): string => 'אפשר להקליד 050-1234567 — יומר לפורמט הבינלאומי אוטומטית.'
+                            .($record?->verified_at !== null ? ' שינוי המספר מבטל את האימות, ויידרש קוד חדש.' : ''))
                         ->dehydrateStateUsing(fn (?string $state): string => app(WhatsAppCloudClient::class)->normalize((string) $state)),
                     Forms\Components\TextInput::make('name')
                         ->label('שם')

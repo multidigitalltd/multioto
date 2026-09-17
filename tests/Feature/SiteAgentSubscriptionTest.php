@@ -550,6 +550,28 @@ class SiteAgentSubscriptionTest extends TestCase
             ->assertSee('ממתין לכרטיס', false);
     }
 
+    public function test_changing_the_number_takes_the_verification_with_it(): void
+    {
+        $subscriber = $this->subscriber(['verified_at' => now(), 'name' => 'דנה']);
+
+        // A typo corrected, or the binding handed to somebody else. Either way
+        // the new number has never written to us and has proved nothing —
+        // carrying the old proof across would let its very first message
+        // rewrite a business's website.
+        $subscriber->update(['phone' => '972509999999']);
+
+        $subscriber->refresh();
+        $this->assertNull($subscriber->verified_at);
+        $this->assertFalse($subscriber->isUsable());
+        $this->assertSame(0, (int) $subscriber->verification_attempts);
+
+        // And an unrelated edit leaves the proof alone.
+        $subscriber->forceFill(['verified_at' => now()])->save();
+        $subscriber->update(['name' => 'רונית']);
+
+        $this->assertNotNull($subscriber->fresh()->verified_at);
+    }
+
     public function test_the_journal_shows_what_the_customer_asked_and_what_they_approved(): void
     {
         $this->actingAs(User::factory()->create());

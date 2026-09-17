@@ -266,7 +266,17 @@ class SiteAgentConversation
             'message' => Str::limit($caption !== '' ? $caption : '[תמונה]', 2000),
             'inbound_message_id' => $messageId,
             'operation' => SiteAgentRequest::OP_IMAGE,
-            'plan' => [...$plan, 'image_path' => $path, 'extension' => $media['extension'], 'caption' => $caption],
+            'plan' => [
+                ...$plan,
+                'image_path' => $path,
+                'extension' => $media['extension'],
+                'caption' => $caption,
+                // What is on the target now, so the execution can tell whether
+                // somebody put a different picture there in the meantime.
+                'thumbnail_id' => isset($plan['target_id'])
+                    ? $this->planner->thumbnailOf($site, (int) $plan['target_id'])
+                    : null,
+            ],
             // A question is not an offer, so there is nothing to preview and
             // nothing a "כן" could confirm — the row exists to hold the picture
             // and the caption while we wait for the missing half.
@@ -412,7 +422,15 @@ class SiteAgentConversation
         }
 
         $request->update([
-            'plan' => [...$next, 'image_path' => $plan['image_path'], 'extension' => $plan['extension'] ?? 'jpg', 'caption' => $caption],
+            'plan' => [
+                ...$next,
+                'image_path' => $plan['image_path'],
+                'extension' => $plan['extension'] ?? 'jpg',
+                'caption' => $caption,
+                'thumbnail_id' => isset($next['target_id'])
+                    ? $this->planner->thumbnailOf($site, (int) $next['target_id'])
+                    : null,
+            ],
             'message' => Str::limit($caption, 2000),
             'preview' => $this->preview($next),
             'expires_at' => now()->addMinutes(max(1, (int) config('siteagent.confirmation_minutes', 30))),
