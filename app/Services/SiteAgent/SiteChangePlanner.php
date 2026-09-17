@@ -31,8 +31,8 @@ class SiteChangePlanner
     public function __construct(private ClaudeClient $ai, private McpClient $mcp) {}
 
     /**
-     * @return array{operation: string, page_id: int, page_title: string, find?: string, text: string, summary: string}|null
-     *                                                                                                                       null when this is not one clear edit to one page
+     * @return array{operation: string, page_id: int, page_title: string, elementor: bool, find?: string, text: string, summary: string}|array{refusal: string}|null
+     *                                                                                                                                                               null when this is not one clear edit to one page
      */
     public function plan(Site $site, string $request): ?array
     {
@@ -71,8 +71,8 @@ class SiteChangePlanner
      * a change to the one they meant.
      *
      * @param  array<string, mixed>  $result
-     * @param  list<array{id: int, title: string, content: string}>  $pages
-     * @return array{operation: string, page_id: int, page_title: string, find?: string, text: string, summary: string}|null
+     * @param  list<array{id: int, title: string, content: string, elementor: bool}>  $pages
+     * @return array{operation: string, page_id: int, page_title: string, elementor: bool, find?: string, text: string, summary: string}|array{refusal: string}|null
      */
     private function validate(array $result, array $pages): ?array
     {
@@ -96,10 +96,22 @@ class SiteChangePlanner
             return null;
         }
 
+        $elementor = (bool) ($page['elementor'] ?? false);
+
+        // An Elementor page keeps its visible text inside the builder, and its
+        // `content` field is a leftover nobody reads. Appending to it would
+        // report a paragraph added to a page that does not show it — the agent
+        // saying it did something when it did nothing at all.
+        if ($elementor && $operation === SiteAgentRequest::OP_APPEND) {
+            return ['refusal' => 'העמוד "'.$page['title'].'" בנוי באלמנטור, ושם אני יודע להחליף טקסט קיים אבל לא להוסיף פסקה חדשה. '
+                .'אפשר לומר לי איזה טקסט בעמוד להחליף ובמה.'];
+        }
+
         $plan = [
             'operation' => $operation,
             'page_id' => $pageId,
             'page_title' => $page['title'],
+            'elementor' => $elementor,
             'text' => $text,
             'summary' => $summary !== '' ? $summary : $text,
         ];
@@ -135,6 +147,7 @@ class SiteChangePlanner
             '- אם הבקשה היא שינוי של מידע שכבר כתוב בעמוד (שעות, טלפון, כתובת, מחיר בטקסט) — השתמש ב-replace_text ולא ב-append_text. הוספת פסקה עם שעות חדשות בעמוד שבו כתובות השעות הישנות יוצרת עמוד שסותר את עצמו.',
             '- find חייב להיות ציטוט מדויק מתוכן העמוד, ורק מופע אחד שלו. אם הטקסט מופיע כמה פעמים או שאינך מוצא אותו — החזר can_do=false.',
             '- אל תמציא פרטים שלא נאמרו במפורש (שעות, מחירים, טלפונים, כתובות).',
+            '- בעמוד שמסומן [אלמנטור] אפשר רק replace_text או update_title. אין אפשרות להוסיף פסקה.',
             '- אם הבקשה עמומה, אינה שינוי תוכן, נוגעת לעיצוב/קוד/תוספים, או שאינך בטוח לאיזה עמוד היא מתייחסת — החזר can_do=false.',
             '- summary: משפט קצר בעברית שמתאר מה ישתנה, לבעל האתר.',
             '',
@@ -148,7 +161,8 @@ class SiteChangePlanner
     private function prompt(Site $site, array $pages, string $request): string
     {
         $catalogue = collect($pages)
-            ->map(fn (array $p): string => "### עמוד #{$p['id']} — {$p['title']}\n".Str::limit($p['content'], 2000))
+            ->map(fn (array $p): string => '### עמוד #'.$p['id'].' — '.$p['title']
+                .(($p['elementor'] ?? false) ? ' [אלמנטור]' : '')."\n".Str::limit($p['content'], 2000))
             ->implode("\n\n");
 
         return "האתר: {$site->domain}\n\n"
@@ -209,7 +223,7 @@ class SiteChangePlanner
 
                 $pages = [];
 
-                foreach ((array) data_get($listed, 'items', data_get($listed, 'pages', [])) as $item) {
+                foreach ($this->rows($listed) as $item) {
                     $id = (int) data_get($item, 'id', 0);
 
                     if ($id <= 0) {
@@ -219,7 +233,13 @@ class SiteChangePlanner
                     $pages[] = [
                         'id' => $id,
                         'title' => (string) data_get($item, 'title', ''),
-                        'content' => $this->content($site, $id),
+                        // Carried from the list, where the plugin already says
+                        // it. A page built with Elementor keeps its visible text
+                        // somewhere else entirely, and an agent that does not
+                        // know that edits a field nobody sees and reports
+                        // success — see how it is used in plan().
+                        'elementor' => $elementor = (bool) data_get($item, 'built_with_elementor', false),
+                        'content' => $this->content($site, $id, $elementor),
                     ];
                 }
 
@@ -228,8 +248,43 @@ class SiteChangePlanner
         );
     }
 
-    private function content(Site $site, int $pageId): string
+    /**
+     * The rows of a list response, however the site wrapped them.
+     *
+     * The plugin returns a bare JSON array. Reading only `items`/`pages` — as
+     * this did — found nothing on every real site while the tests, which mocked
+     * a wrapper the plugin never sends, went green: the whole product could not
+     * edit a single page and nothing said so.
+     *
+     * @return list<mixed>
+     */
+    private function rows(mixed $listed): array
     {
+        if (! is_array($listed)) {
+            return [];
+        }
+
+        return array_is_list($listed)
+            ? $listed
+            : (array) data_get($listed, 'items', data_get($listed, 'pages', data_get($listed, 'products', [])));
+    }
+
+    /**
+     * One page's text — from Elementor when that is where it lives.
+     *
+     * The `content` field of an Elementor page is a leftover, usually empty and
+     * never what the visitor reads. Planning against it means offering the
+     * customer a replacement for text that is not on their page.
+     */
+    private function content(Site $site, int $pageId, bool $elementor = false): string
+    {
+        if ($elementor) {
+            return implode("\n", array_map(
+                fn (array $text): string => (string) ($text['text'] ?? ''),
+                $this->elementorTexts($site, $pageId),
+            ));
+        }
+
         try {
             $page = json_decode($this->mcp->textContent($this->mcp->callTool($site, 'wp_content_get', [
                 'id' => $pageId,
@@ -242,35 +297,88 @@ class SiteChangePlanner
     }
 
     /**
+     * The editable texts of an Elementor page, each with the handle that
+     * changes it.
+     *
+     * @return list<array{widget_id: string, setting: string, text: string}>
+     */
+    public function elementorTexts(Site $site, int $pageId): array
+    {
+        try {
+            $result = json_decode($this->mcp->textContent($this->mcp->callTool($site, 'wp_elementor_texts_get', [
+                'id' => $pageId,
+            ])), true);
+        } catch (\Throwable $e) {
+            Log::warning('SiteChangePlanner: could not read Elementor texts', [
+                'site' => $site->id,
+                'page' => $pageId,
+                'error' => Str::limit($e->getMessage(), 200),
+            ]);
+
+            return [];
+        }
+
+        $texts = [];
+
+        foreach ($this->rows(data_get($result, 'texts', [])) as $text) {
+            $widget = trim((string) data_get($text, 'widget_id', ''));
+
+            if ($widget === '') {
+                continue;
+            }
+
+            $texts[] = [
+                'widget_id' => $widget,
+                'setting' => (string) data_get($text, 'setting', ''),
+                'text' => (string) data_get($text, 'text', ''),
+            ];
+        }
+
+        return $texts;
+    }
+
+    /**
      * Everything an image could be attached to: the pages, and the products.
      *
      * Names only. The image planner has to choose a target, not read the shop —
      * handing it full product bodies would cost tokens and time for a decision
      * that is made on the title alone.
      *
+     * @param  string  $hint  what the customer said, used to look the shop up
      * @return list<array{id: int, title: string}>
      */
-    public function targets(Site $site): array
+    public function targets(Site $site, string $hint = ''): array
     {
         $targets = collect($this->pages($site))
             ->map(fn (array $page): array => ['id' => $page['id'], 'title' => $page['title']])
             ->all();
 
+        $hint = trim($hint);
+
+        // The shop is searched with the customer's own words, never listed.
+        // wc_product_search answers "which product did they mean" and refuses
+        // an empty term — asking it for everything threw on every real site,
+        // and the catch below turned that into "this shop has no products",
+        // which is why an image could never be put on one.
+        if ($hint === '') {
+            return $targets;
+        }
+
         try {
             $products = json_decode($this->mcp->textContent($this->mcp->callTool($site, 'wc_product_search', [
-                'query' => '',
-                'limit' => 40,
+                'search' => Str::limit($hint, 120, ''),
+                'limit' => 10,
             ])), true);
         } catch (\Throwable) {
             // A site with no shop is the ordinary case, not a fault.
             return $targets;
         }
 
-        foreach ((array) data_get($products, 'products', []) as $product) {
+        foreach ($this->rows(data_get($products, 'products', [])) as $product) {
             $id = (int) data_get($product, 'id', 0);
 
             if ($id > 0) {
-                $targets[] = ['id' => $id, 'title' => (string) data_get($product, 'name', '')];
+                $targets[] = ['id' => $id, 'title' => (string) data_get($product, 'name', data_get($product, 'title', ''))];
             }
         }
 

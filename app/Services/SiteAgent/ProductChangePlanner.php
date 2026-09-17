@@ -150,13 +150,16 @@ class ProductChangePlanner
     /**
      * Products matching what the customer called the thing.
      *
-     * @return list<array{id: int, name: string, regular_price: string, sale_price: string, stock: string}>
+     * @return list<array{id: int, name: string, regular_price: string, sale_price: string, stock_quantity: string, stock_status: string}>
      */
     private function search(Site $site, string $query): array
     {
         try {
             $found = json_decode($this->mcp->textContent($this->mcp->callTool($site, 'wc_product_search', [
-                'query' => $query,
+                // The tool's documented key. Sending `query` made the plugin
+                // throw on every call, the catch turned it into "no products",
+                // and the customer was asked which product they meant forever.
+                'search' => $query,
                 'limit' => 10,
             ])), true);
         } catch (\Throwable $e) {
@@ -182,7 +185,12 @@ class ProductChangePlanner
                 'name' => (string) data_get($product, 'name', ''),
                 'regular_price' => (string) data_get($product, 'regular_price', ''),
                 'sale_price' => (string) data_get($product, 'sale_price', ''),
-                'stock' => (string) data_get($product, 'stock_status', data_get($product, 'stock_quantity', '')),
+                // The shop's own key names, not ours. These values are
+                // compared against the live product before the approved change
+                // is written, and a key we invented would never match one the
+                // shop reports — every change would read as "the product moved".
+                'stock_quantity' => (string) data_get($product, 'stock_quantity', ''),
+                'stock_status' => (string) data_get($product, 'stock_status', ''),
             ];
         }
 

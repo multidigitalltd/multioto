@@ -10,8 +10,11 @@ use App\Services\SiteAgent\SiteAgentBilling;
 use App\Services\SiteAgent\SiteAgentConversation;
 use App\Services\SiteAgent\SiteChoice;
 use App\Services\SiteAgent\WhatsAppCloudClient;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -35,7 +38,17 @@ class HandleSiteAgentMessageJob implements ShouldQueue
      */
     public int $tries = 1;
 
-    public int $timeout = 60;
+    /**
+     * Longer than everything it can wait on, added up.
+     *
+     * The image upload alone allows a 120-second call to the site, planning a
+     * page can read up to forty of them, and the turn may queue behind another
+     * message for ninety seconds. A worker killed mid-flight runs no catch and
+     * no finally: the request stays `applying` for ever, the customer's
+     * photograph is never cleaned up, and with one attempt there is no retry to
+     * put any of it right.
+     */
+    public int $timeout = 600;
 
     public function __construct(public int $webhookEventId) {}
 
@@ -82,11 +95,23 @@ class HandleSiteAgentMessageJob implements ShouldQueue
         // one site goes on sending ordinary instructions while a second binding
         // waits — five of those would burn the second site's code before they
         // ever got round to typing it.
-        $awaiting = $this->looksLikeCode($text)
-            ? $bindings->first(fn (SiteAgentSubscriber $binding): bool => $binding->verified_at === null
-                && $binding->revoked_at === null
-                && $binding->codeMatches($text))
-            : null;
+        $pending = $this->looksLikeCode($text)
+            ? $bindings->filter(fn (SiteAgentSubscriber $binding): bool => $binding->verified_at === null
+                && $binding->revoked_at === null)
+            : collect();
+
+        // Asked without charging, then charged once. Testing each binding with
+        // codeMatches() would spend an attempt on every one it asked before
+        // finding the right one — so entering the correct code for a second
+        // site would quietly burn the first site's remaining guesses.
+        $awaiting = $pending->first(fn (SiteAgentSubscriber $binding): bool => $binding->codeIs($text));
+
+        if ($awaiting === null) {
+            // A six-digit message that opened nothing IS a wrong guess. One
+            // binding pays for it — the newest, which is the one a code was
+            // most recently sent for.
+            $pending->sortByDesc('verification_sent_at')->first()?->chargeAttempt();
+        }
 
         if ($awaiting !== null) {
             $this->completeVerification($awaiting, $whatsapp, (string) ($payload['_profile_name'] ?? ''));
@@ -98,29 +123,36 @@ class HandleSiteAgentMessageJob implements ShouldQueue
         }
 
         $usable = $bindings->filter(fn (SiteAgentSubscriber $binding): bool => $binding->isUsable())->values();
-        $subscriber = $choice->resolve($from, $text, $usable);
 
-        // More than one site and nothing in the message says which. Asking is
-        // the only safe answer: an instruction meant for one business carried
-        // out on another is the worst thing this product can do, and it would
-        // be done silently.
-        //
-        // What they asked for is kept while we ask. Otherwise their next
-        // message is "1", and "1" is all the planner ever sees — the customer
-        // watches their instruction vanish into a question.
-        if ($subscriber === null && $usable->count() > 1) {
-            $choice->hold($from, $text, $mediaId !== '' ? $mediaId : null);
-            $whatsapp->sendText($from, $choice->question($usable));
+        // Choosing a site, holding the instruction and taking it back are one
+        // decision about one conversation, and they are keyed by the PHONE —
+        // taken before any subscriber is known, so the per-subscriber lock
+        // inside the conversation is too late to cover them. Two messages
+        // arriving together would otherwise both find no choice made, overwrite
+        // each other's held instruction, send two questions, and answering
+        // either would replay whichever won the race.
+        $lock = Cache::lock("site-agent:routing:{$from}", 120);
+
+        try {
+            $routed = $lock->block(60, fn (): array => $this->route($choice, $whatsapp, $from, $text, $mediaId, $usable));
+        } catch (LockTimeoutException) {
+            $whatsapp->sendText($from, 'אני עדיין מטפל בהודעה הקודמת — נסו שוב בעוד רגע.');
             $event->markProcessed();
 
             return;
         }
 
-        // They answered the question and nothing more, so the instruction they
-        // gave before it is the one to carry out.
-        if ($subscriber !== null && $choice->isBareAnswer($text, $usable)) {
-            [$text, $mediaId] = $choice->take($from) ?? [$text, $mediaId];
+        // The question about which site went out; what they asked for is held
+        // until they answer it, and there is nothing else to do with this one.
+        if ($routed['asked']) {
+            $event->markProcessed();
+
+            return;
         }
+
+        $subscriber = $routed['subscriber'];
+        $text = $routed['text'];
+        $mediaId = $routed['media_id'];
 
         // Nothing usable: fall back to any binding at all, so the refusal can
         // say WHICH refusal it is — unverified, revoked, or unheard of.
@@ -152,6 +184,50 @@ class HandleSiteAgentMessageJob implements ShouldQueue
         }
 
         $event->markProcessed();
+    }
+
+    /**
+     * Which site is this message for, and what is the instruction?
+     *
+     * Runs with this number's routing lock held. Returns the binding to act on,
+     * together with the text and image to act WITH — which may be the ones held
+     * from before the question rather than the ones in this message.
+     *
+     * @param  Collection<int, SiteAgentSubscriber>  $usable
+     * @return array{subscriber: SiteAgentSubscriber|null, text: string, media_id: string, asked: bool}
+     */
+    private function route(
+        SiteChoice $choice,
+        WhatsAppCloudClient $whatsapp,
+        string $from,
+        string $text,
+        string $mediaId,
+        Collection $usable,
+    ): array {
+        $subscriber = $choice->resolve($from, $text, $usable);
+
+        // More than one site and nothing in the message says which. Asking is
+        // the only safe answer: an instruction meant for one business carried
+        // out on another is the worst thing this product can do, and it would
+        // be done silently.
+        //
+        // What they asked for is kept while we ask. Otherwise their next
+        // message is "1", and "1" is all the planner ever sees — the customer
+        // watches their instruction vanish into a question.
+        if ($subscriber === null && $usable->count() > 1) {
+            $choice->hold($from, $text, $mediaId !== '' ? $mediaId : null);
+            $whatsapp->sendText($from, $choice->question($usable));
+
+            return ['subscriber' => null, 'text' => $text, 'media_id' => $mediaId, 'asked' => true];
+        }
+
+        // They answered the question and nothing more, so the instruction they
+        // gave before it is the one to carry out.
+        if ($subscriber !== null && $choice->isBareAnswer($text, $usable)) {
+            [$text, $mediaId] = $choice->take($from) ?? [$text, $mediaId];
+        }
+
+        return ['subscriber' => $subscriber, 'text' => $text, 'media_id' => $mediaId, 'asked' => false];
     }
 
     /**

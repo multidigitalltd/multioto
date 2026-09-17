@@ -1,0 +1,232 @@
+<?php
+
+namespace Tests\Feature;
+
+use App\Models\Customer;
+use App\Models\Site;
+use App\Models\SiteAgentRequest;
+use App\Models\SiteAgentSubscriber;
+use App\Services\Ai\ClaudeClient;
+use App\Services\SiteAgent\SiteAgentConversation;
+use App\Services\SiteAgent\SiteChangeApplier;
+use App\Services\SiteAgent\SiteChangePlanner;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\ResponseSequence;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Http;
+use Mockery;
+use Tests\TestCase;
+
+/**
+ * The agent against the shapes the bundled plugin actually sends.
+ *
+ * Every other test here mocks the MCP client, which means every other test is
+ * agreeing with whatever contract this side of the code believes in. Three real
+ * bugs lived in exactly that gap and all three were invisible: we read the page
+ * list from an `items` wrapper the plugin never sends, and asked the shop to
+ * search on a `query` key it rejects. Both failures were swallowed by a catch,
+ * so the agent politely told every customer it could not understand them — with
+ * a green suite the whole time.
+ *
+ * So the responses below are copied from the plugin's own handlers
+ * (wordpress-plugin/multioto-agent/includes/class-mcp-server.php), and the
+ * requests are asserted as the plugin's own argument checks read them. When the
+ * plugin changes, this is what says so.
+ */
+class SiteAgentPluginContractTest extends TestCase
+{
+    use RefreshDatabase;
+
+    private ?ResponseSequence $sequence = null;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        config(['siteagent.enabled' => true, 'siteagent.confirmation_minutes' => 30]);
+        Cache::flush();
+        $this->sequence = null;
+    }
+
+    public function test_the_page_list_is_read_as_the_plugin_sends_it(): void
+    {
+        // contentList() returns a BARE array — no wrapper of any kind.
+        $this->siteSends([
+            $this->tool(json_encode([
+                ['id' => 11, 'title' => 'צור קשר', 'type' => 'page', 'status' => 'publish', 'built_with_elementor' => false],
+            ])),
+            $this->tool(json_encode(['id' => 11, 'title' => 'צור קשר', 'content' => 'טלפון: 03-1234567', 'status' => 'publish', 'built_with_elementor' => false])),
+        ]);
+
+        $this->planning(['can_do' => true, 'operation' => 'replace_text', 'page_id' => 11,
+            'find' => '03-1234567', 'text' => '03-7654321', 'summary' => 'עדכון טלפון']);
+
+        $reply = $this->talk('תחליף את הטלפון');
+
+        // Reading `items` found nothing on every real site, and the customer
+        // was told the agent could not understand a perfectly clear request.
+        $this->assertStringContainsString('03-7654321', $reply);
+        $this->assertSame(11, (int) SiteAgentRequest::sole()->plan['page_id']);
+    }
+
+    public function test_the_shop_is_searched_on_the_key_the_plugin_requires(): void
+    {
+        // wcProductSearch() reads `search` and throws when it is missing.
+        $this->siteSends([
+            $this->tool(json_encode([
+                'total' => 1, 'returned' => 1, 'page' => 1, 'pages' => 1,
+                'products' => [['id' => 5, 'name' => 'חולצה כחולה', 'regular_price' => '120', 'sale_price' => '', 'stock_quantity' => 8, 'stock_status' => 'instock']],
+            ])),
+        ]);
+
+        $this->planning(['can_do' => true, 'operation' => 'update_price',
+            'product_query' => 'חולצה כחולה', 'regular_price' => '90', 'summary' => 'הורדת מחיר']);
+
+        $reply = $this->talk('תוריד את החולצה הכחולה ל-90');
+
+        $this->assertStringContainsString('120', $reply);
+        $this->assertStringContainsString('90', $reply);
+
+        // Sending `query` made the plugin throw on every call, which the catch
+        // turned into "no such product" — an endless "which one did you mean?"
+        Http::assertSent(function ($request): bool {
+            $arguments = (array) data_get($request->data(), 'params.arguments', []);
+
+            return data_get($request->data(), 'params.name') !== 'wc_product_search'
+                || (($arguments['search'] ?? '') !== '' && ! array_key_exists('query', $arguments));
+        });
+    }
+
+    public function test_an_elementor_page_is_edited_where_its_text_actually_lives(): void
+    {
+        // The plugin flags the page and says content is not what is displayed.
+        $this->siteSends([
+            $this->tool(json_encode([
+                ['id' => 12, 'title' => 'דף הבית', 'type' => 'page', 'status' => 'publish', 'built_with_elementor' => true],
+            ])),
+            // Its visible text, from the builder.
+            $this->tool(json_encode(['id' => 12, 'texts' => [
+                ['widget_id' => 'a1b2c3d', 'type' => 'heading', 'setting' => 'title', 'text' => 'שעות: 08:00-16:00'],
+                ['widget_id' => 'e4f5g6h', 'type' => 'text-editor', 'setting' => 'editor', 'text' => 'ברוכים הבאים'],
+            ]])),
+        ]);
+
+        $this->planning(['can_do' => true, 'operation' => 'replace_text', 'page_id' => 12,
+            'find' => '08:00-16:00', 'text' => '09:00-17:00', 'summary' => 'עדכון שעות']);
+
+        $this->talk('תעדכן שעות');
+
+        // Confirmation reads the page (is it still published?), then re-reads
+        // the builder, then writes the ONE widget.
+        $this->siteSends([
+            $this->tool(json_encode(['id' => 12, 'title' => 'דף הבית', 'content' => '', 'status' => 'publish', 'built_with_elementor' => true])),
+            $this->tool(json_encode(['id' => 12, 'texts' => [
+                ['widget_id' => 'a1b2c3d', 'type' => 'heading', 'setting' => 'title', 'text' => 'שעות: 08:00-16:00'],
+            ]])),
+            $this->tool(json_encode(['updated_id' => 12, 'widget_id' => 'a1b2c3d', 'setting' => 'title', 'previous' => 'שעות: 08:00-16:00'])),
+        ]);
+
+        $this->assertStringContainsString('בוצע', $this->talk('כן'));
+
+        // The `content` field of an Elementor page is a leftover nobody reads.
+        // Writing there reports success and changes nothing the visitor sees —
+        // the agent lying to the customer about their own website.
+        Http::assertSent(fn ($request): bool => data_get($request->data(), 'params.name') !== 'wp_content_update');
+        Http::assertSent(function ($request): bool {
+            return data_get($request->data(), 'params.name') !== 'wp_elementor_text_update'
+                || data_get($request->data(), 'params.arguments.widget_id') === 'a1b2c3d';
+        });
+
+        $this->assertSame('elementor', SiteAgentRequest::sole()->restore['kind']);
+    }
+
+    public function test_an_elementor_page_cannot_be_appended_to_and_says_so(): void
+    {
+        $this->siteSends([
+            $this->tool(json_encode([
+                ['id' => 12, 'title' => 'דף הבית', 'type' => 'page', 'status' => 'publish', 'built_with_elementor' => true],
+            ])),
+            $this->tool(json_encode(['id' => 12, 'texts' => [
+                ['widget_id' => 'a1b2c3d', 'setting' => 'title', 'text' => 'ברוכים הבאים'],
+            ]])),
+        ]);
+
+        $this->planning(['can_do' => true, 'operation' => 'append_text', 'page_id' => 12,
+            'text' => 'אנחנו פתוחים בשישי', 'summary' => 'הוספה']);
+
+        $reply = $this->talk('תוסיף שאנחנו פתוחים בשישי');
+
+        // Said plainly, with what IS possible — rather than appending to a
+        // field the page does not render and calling it done.
+        $this->assertStringContainsString('אלמנטור', $reply);
+        $this->assertSame(0, SiteAgentRequest::count());
+    }
+
+    // ── helpers ──────────────────────────────────────────────────────────
+
+    private function talk(string $text): string
+    {
+        return app(SiteAgentConversation::class)->handle(
+            $this->subscriber(),
+            $text,
+            'wamid.'.md5($text.microtime()),
+        );
+    }
+
+    private ?SiteAgentSubscriber $subscriber = null;
+
+    private function subscriber(): SiteAgentSubscriber
+    {
+        if ($this->subscriber !== null) {
+            return $this->subscriber;
+        }
+
+        $site = $this->site();
+
+        return $this->subscriber = SiteAgentSubscriber::create([
+            'phone' => '972501234567',
+            'customer_id' => $site->customer_id,
+            'site_id' => $site->id,
+            'verified_at' => now(),
+        ]);
+    }
+
+    private function site(): Site
+    {
+        return Site::factory()->create([
+            'customer_id' => Customer::factory()->create()->id,
+            'mcp_enabled' => true,
+            'mcp_endpoint' => 'https://example.test/wp-json/multioto/v1/mcp',
+            'mcp_secret' => 'secret',
+        ]);
+    }
+
+    /** The model's answer; the site is left to the real MCP client over HTTP. */
+    private function planning(?array $answer): void
+    {
+        $ai = Mockery::mock(ClaudeClient::class);
+        $ai->shouldReceive('isEnabled')->andReturn(true);
+        $ai->shouldReceive('structured')->andReturn($answer);
+        $this->app->instance(ClaudeClient::class, $ai);
+
+        foreach ([SiteChangePlanner::class, SiteChangeApplier::class, SiteAgentConversation::class] as $service) {
+            $this->app->forgetInstance($service);
+        }
+    }
+
+    /** Responses in the plugin's own shape, appended to one sequence. */
+    private function siteSends(array $responses): void
+    {
+        $this->sequence ??= Http::fakeSequence();
+
+        foreach ($responses as $response) {
+            $this->sequence->push($response);
+        }
+    }
+
+    /** @return array<string, mixed> */
+    private function tool(string $text): array
+    {
+        return ['jsonrpc' => '2.0', 'id' => 1, 'result' => ['content' => [['type' => 'text', 'text' => $text]]]];
+    }
+}

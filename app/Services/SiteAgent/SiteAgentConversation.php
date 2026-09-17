@@ -6,6 +6,7 @@ use App\Models\Site;
 use App\Models\SiteAgentRequest;
 use App\Models\SiteAgentSubscriber;
 use App\Models\SystemLog;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -58,16 +59,19 @@ class SiteAgentConversation
         // both see no offer pending and both create one, so the customer is
         // shown two previews and their "כן" answers only the newer. Everything
         // that reads the conversation and then writes it belongs inside here.
-        $lock = Cache::lock("site-agent:conversation:{$subscriber->id}", 120);
-
-        if (! $lock->get()) {
-            return 'רגע אחד — אני עדיין מטפל בהודעה הקודמת.';
-        }
+        $lock = Cache::lock("site-agent:conversation:{$subscriber->id}", 180);
 
         try {
-            return $this->act($subscriber, $text, $messageId, $mediaId);
-        } finally {
-            $lock->release();
+            // WAITS for its turn rather than giving up on it. The job runs once
+            // and its webhook event is marked processed either way, so a turn
+            // dropped here is the customer's instruction — or their "כן" —
+            // thrown away in silence. Queueing behind the message before it is
+            // what they expect; being ignored is not.
+            return $lock->block(90, fn (): string => $this->act($subscriber, $text, $messageId, $mediaId));
+        } catch (LockTimeoutException) {
+            // Ninety seconds behind a turn that is still running. Saying so is
+            // the honest answer, and the customer can repeat themselves.
+            return 'אני עדיין מטפל בהודעה הקודמת — נסו שוב בעוד רגע.';
         }
     }
 
@@ -182,6 +186,13 @@ class SiteAgentConversation
 
         $plan ??= $this->planner->plan($site, $text);
 
+        // A refusal the planner can explain — an Elementor page it can replace
+        // text in but not append to. Saying which page and what IS possible
+        // beats the generic "I did not understand".
+        if (is_array($plan) && isset($plan['refusal'])) {
+            return $plan['refusal'];
+        }
+
         if ($plan === null) {
             return implode("\n", [
                 'לא הצלחתי להבין בוודאות מה לשנות, ולכן לא נגעתי בכלום.',
@@ -233,7 +244,7 @@ class SiteAgentConversation
                 .(int) config('siteagent.media.max_megabytes', 8).'MB.';
         }
 
-        $plan = $this->images->plan($site, $caption, $this->planner->targets($site));
+        $plan = $this->images->plan($site, $caption, $this->planner->targets($site, $caption));
 
         if ($plan === null) {
             return 'קיבלתי את התמונה, אבל לא הצלחתי להבין לאן לשים אותה.';
@@ -378,7 +389,7 @@ class SiteAgentConversation
         $plan = (array) $request->plan;
         $caption = trim(trim((string) ($plan['caption'] ?? '')).' '.$answer);
 
-        $next = $this->images->plan($site, $caption, $this->planner->targets($site));
+        $next = $this->images->plan($site, $caption, $this->planner->targets($site, $caption));
 
         if ($next === null) {
             return 'קיבלתי את התמונה, אבל לא הצלחתי להבין לאן לשים אותה.';

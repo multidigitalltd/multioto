@@ -179,6 +179,9 @@ class SiteAgentShopAndMediaTest extends TestCase
         // write a sale could have started, so what we saw earlier is not what
         // to put back.
         $this->siteReturns([
+            // Checked before writing: the price is still the 120 the customer
+            // was shown, so nobody repriced while the offer waited.
+            $this->tool(json_encode(['id' => 5, 'regular_price' => '120', 'sale_price' => ''])),
             $this->tool(json_encode(['previous' => ['regular_price' => '135', 'sale_price' => '99']])),
             // And the product read back, so the undo has something to compare
             // the shop against later.
@@ -199,11 +202,16 @@ class SiteAgentShopAndMediaTest extends TestCase
     public function test_a_product_undo_refuses_after_the_shop_moved(): void
     {
         $subscriber = $this->subscriber();
-        $this->shopAnswers(['can_do' => true, 'operation' => 'update_stock',
-            'product_query' => 'חולצה כחולה', 'stock_quantity' => 40, 'summary' => 'עדכון מלאי']);
+        $this->shopAnswers(
+            ['can_do' => true, 'operation' => 'update_stock',
+                'product_query' => 'חולצה כחולה', 'stock_quantity' => 40, 'summary' => 'עדכון מלאי'],
+            products: [['id' => 5, 'name' => 'חולצה כחולה', 'regular_price' => '120', 'stock_quantity' => 12]],
+        );
         $this->talk($subscriber, 'תעדכן מלאי ל-40');
 
         $this->siteReturns([
+            // Still the 12 they were shown — nothing sold while they decided.
+            $this->tool(json_encode(['id' => 5, 'stock_quantity' => 12])),
             $this->tool(json_encode(['previous' => ['stock_quantity' => 12]])),
             $this->tool(json_encode(['id' => 5, 'stock_quantity' => 40])),
         ]);
@@ -226,11 +234,16 @@ class SiteAgentShopAndMediaTest extends TestCase
     public function test_a_product_undo_goes_through_when_nothing_moved(): void
     {
         $subscriber = $this->subscriber();
-        $this->shopAnswers(['can_do' => true, 'operation' => 'update_stock',
-            'product_query' => 'חולצה כחולה', 'stock_quantity' => 40, 'summary' => 'עדכון מלאי']);
+        $this->shopAnswers(
+            ['can_do' => true, 'operation' => 'update_stock',
+                'product_query' => 'חולצה כחולה', 'stock_quantity' => 40, 'summary' => 'עדכון מלאי'],
+            products: [['id' => 5, 'name' => 'חולצה כחולה', 'regular_price' => '120', 'stock_quantity' => 12]],
+        );
         $this->talk($subscriber, 'תעדכן מלאי ל-40');
 
         $this->siteReturns([
+            // Still the 12 they were shown — nothing sold while they decided.
+            $this->tool(json_encode(['id' => 5, 'stock_quantity' => 12])),
             $this->tool(json_encode(['previous' => ['stock_quantity' => 12]])),
             $this->tool(json_encode(['id' => 5, 'stock_quantity' => 40])),
         ]);

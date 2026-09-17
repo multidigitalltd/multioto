@@ -26,7 +26,7 @@ class SiteChangeApplier
     /** Thrown so the caller can tell the customer in their own words. */
     public const STALE = 'stale';
 
-    public function __construct(private McpClient $mcp) {}
+    public function __construct(private McpClient $mcp, private SiteChangePlanner $planner) {}
 
     /**
      * @return array{ok: bool, reason: string|null, message: string|null, restore: array<string, mixed>|null}
@@ -81,6 +81,24 @@ class SiteChangeApplier
         $title = (string) ($page['title'] ?? '');
         $text = (string) ($plan['text'] ?? '');
 
+        // A title change that would overwrite somebody else's rename.
+        //
+        // The page is re-read for every operation, but only the CONTENT was
+        // being compared: a title approved against "צור קשר" was written over
+        // whatever the title had become since, which is the same silent
+        // overwrite the re-read exists to prevent.
+        if ($request->operation === SiteAgentRequest::OP_TITLE
+            && array_key_exists('page_title', $plan)
+            && ! $this->sameText($title, (string) $plan['page_title'])) {
+            return $this->refuse(self::STALE);
+        }
+
+        // The visible text of an Elementor page is not in `content`, so the
+        // ordinary update would change a field nobody reads and report success.
+        if ((bool) ($plan['elementor'] ?? false) && $request->operation === SiteAgentRequest::OP_REPLACE) {
+            return $this->applyElementor($site, $pageId, (string) ($plan['find'] ?? ''), $text);
+        }
+
         $update = match ($request->operation) {
             SiteAgentRequest::OP_TITLE => ['title' => $text],
             SiteAgentRequest::OP_APPEND => ['content' => rtrim($content)."\n\n".$text],
@@ -128,6 +146,108 @@ class SiteChangeApplier
     }
 
     /**
+     * A text replacement inside an Elementor page.
+     *
+     * Elementor stores what the visitor reads as widget settings, not as the
+     * post content — the plugin says so on every read. Writing `content` there
+     * changes a field nobody sees, and the agent would tell the customer their
+     * page was updated when nothing on it moved.
+     *
+     * The widget is found at execution time, by the same rule the page path
+     * uses: the approved text must be in exactly one widget, exactly once.
+     * Anything else is us not knowing which words they meant.
+     *
+     * @return array{ok: bool, reason: string|null, message: string|null, restore: array<string, mixed>|null}
+     */
+    private function applyElementor(Site $site, int $pageId, string $find, string $text): array
+    {
+        if ($find === '') {
+            return $this->refuse(self::STALE);
+        }
+
+        $matches = array_values(array_filter(
+            $this->planner->elementorTexts($site, $pageId),
+            fn (array $widget): bool => mb_substr_count($widget['text'], $find) === 1,
+        ));
+
+        if (count($matches) !== 1) {
+            return $this->refuse(self::STALE);
+        }
+
+        $widget = $matches[0];
+        $replaced = $this->replacement($widget['text'], $find, $text);
+
+        if ($replaced === null) {
+            return $this->refuse(self::STALE);
+        }
+
+        try {
+            $result = json_decode($this->mcp->textContent($this->mcp->callTool($site, 'wp_elementor_text_update', [
+                'id' => $pageId,
+                'widget_id' => $widget['widget_id'],
+                'setting' => $widget['setting'],
+                'text' => $replaced['content'],
+            ], 60)), true);
+        } catch (\Throwable $e) {
+            return $this->failure(Str::limit($e->getMessage(), 200));
+        }
+
+        SiteChangePlanner::forget($site);
+
+        return ['ok' => true, 'reason' => null, 'message' => null, 'restore' => [
+            'kind' => 'elementor',
+            'page_id' => $pageId,
+            'widget_id' => $widget['widget_id'],
+            'setting' => (string) data_get($result, 'setting', $widget['setting']),
+            // Elementor's own "before", not the text we read a moment earlier.
+            'text' => (string) data_get($result, 'previous', $widget['text']),
+            'after' => $replaced['content'],
+        ]];
+    }
+
+    /**
+     * Put one Elementor text back, if it is still the text we left.
+     *
+     * @param  array<string, mixed>  $restore
+     * @return array{ok: bool, reason: string|null, message: string|null}
+     */
+    private function revertElementor(Site $site, array $restore): array
+    {
+        $pageId = (int) ($restore['page_id'] ?? 0);
+        $widgetId = (string) ($restore['widget_id'] ?? '');
+
+        if ($pageId <= 0 || $widgetId === '') {
+            return $this->refuse('אין לי גיבוי לשחזור הבקשה הזו.');
+        }
+
+        $live = collect($this->planner->elementorTexts($site, $pageId))
+            ->firstWhere('widget_id', $widgetId);
+
+        if ($live === null) {
+            return $this->refuse('לא הצלחתי לקרוא את העמוד באתר.');
+        }
+
+        if (! $this->sameText((string) $live['text'], (string) ($restore['after'] ?? ''))) {
+            return $this->refuse(self::STALE);
+        }
+
+        try {
+            $this->mcp->textContent($this->mcp->callTool($site, 'wp_elementor_text_update', [
+                'id' => $pageId,
+                'widget_id' => $widgetId,
+                'setting' => (string) ($restore['setting'] ?? ''),
+                'text' => (string) ($restore['text'] ?? ''),
+            ], 60));
+        } catch (\Throwable $e) {
+            return $this->failure(Str::limit($e->getMessage(), 200));
+        }
+
+        SiteChangePlanner::forget($site);
+
+        return ['ok' => true, 'reason' => null, 'message' => null];
+    }
+
+    /**
      * The page as it stands now, or — if it cannot be read back — what we sent.
      *
      * A failed read must not fail a change that already happened, so the
@@ -170,6 +290,32 @@ class SiteChangeApplier
 
         if ($productId <= 0 || $fields === []) {
             return $this->refuse('הבקשה חסרה מוצר או ערכים לעדכון.');
+        }
+
+        // Is the product still what the customer was shown?
+        //
+        // These are absolute values, not deltas: an approved "stock 40" written
+        // after an order took two off the shelf puts those two back, and an
+        // approved price written after somebody repriced in wp-admin throws
+        // that away. The page path re-reads before writing for exactly this
+        // reason; the shop was not doing it.
+        // Only the fields about to change, under the shop's own names: a
+        // product renamed since the preview is not a reason to refuse a price
+        // change nobody else touched.
+        $current = array_intersect_key((array) ($plan['current'] ?? []), $fields);
+
+        if ($current !== []) {
+            $live = $this->productNow($site, $productId, $current);
+
+            if ($live === []) {
+                return $this->refuse('לא הצלחתי לקרוא את המוצר מהחנות.');
+            }
+
+            foreach ($current as $field => $value) {
+                if (! $this->sameText((string) ($live[$field] ?? ''), (string) $value)) {
+                    return $this->refuse(self::STALE);
+                }
+            }
         }
 
         try {
@@ -299,6 +445,10 @@ class SiteChangeApplier
             // 0 is meaningful: it means the page had no featured image before,
             // and the undo has to be able to put "none" back.
             'attachment_id' => (int) data_get($set, 'previous', data_get($set, 'previous_attachment_id', 0)),
+            // What WE put there. The undo refuses unless this is still the
+            // featured image, so a picture the customer chose afterwards is
+            // never quietly replaced by the one it succeeded.
+            'after' => $attachmentId,
         ]];
     }
 
@@ -328,6 +478,10 @@ class SiteChangeApplier
 
         if ($kind === 'thumbnail') {
             return $this->revertThumbnail($site, $restore);
+        }
+
+        if ($kind === 'elementor') {
+            return $this->revertElementor($site, $restore);
         }
 
         $pageId = (int) ($restore['page_id'] ?? 0);
@@ -451,15 +605,41 @@ class SiteChangeApplier
      */
     private function revertThumbnail(Site $site, array $restore): array
     {
+        $targetId = (int) ($restore['target_id'] ?? 0);
+        $installed = (int) ($restore['after'] ?? 0);
+        $previous = (int) ($restore['attachment_id'] ?? 0);
+
+        // There is no read-only "which image is featured" tool — but the setter
+        // reports what it replaced, and that is enough to be safe: put the old
+        // image back, and if what we displaced was NOT the image we installed,
+        // somebody had chosen another one since. Put theirs straight back and
+        // refuse.
+        //
+        // Two writes in the bad case, and none of the customer's work lost.
+        // Overwriting a picture they picked, silently, is the outcome that is
+        // not acceptable here.
         try {
-            // 0 removes the featured image, which is the correct undo for a
-            // page that had none before.
-            $this->mcp->textContent($this->mcp->callTool($site, 'wp_post_thumbnail_set', [
-                'id' => (int) ($restore['target_id'] ?? 0),
-                'attachment_id' => (int) ($restore['attachment_id'] ?? 0),
-            ], 60));
+            $set = json_decode($this->mcp->textContent($this->mcp->callTool($site, 'wp_post_thumbnail_set', [
+                'id' => $targetId,
+                'attachment_id' => $previous,
+            ], 60)), true);
         } catch (\Throwable $e) {
             return $this->failure(Str::limit($e->getMessage(), 200));
+        }
+
+        $displaced = (int) data_get($set, 'previous', data_get($set, 'previous_attachment_id', $installed));
+
+        if ($installed > 0 && $displaced !== $installed) {
+            try {
+                $this->mcp->callTool($site, 'wp_post_thumbnail_set', [
+                    'id' => $targetId,
+                    'attachment_id' => $displaced,
+                ], 60);
+            } catch (\Throwable) {
+                // Nothing more we can do from here; the team sees the reason.
+            }
+
+            return $this->refuse(self::STALE);
         }
 
         SiteChangePlanner::forget($site);

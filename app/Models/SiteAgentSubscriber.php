@@ -84,6 +84,27 @@ class SiteAgentSubscriber extends Model
      */
     public function codeMatches(string $candidate): bool
     {
+        if (! $this->codeIs($candidate)) {
+            $this->chargeAttempt();
+
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Does this code open this binding? Asked WITHOUT spending an attempt.
+     *
+     * Separate from codeMatches because one number may have several bindings
+     * waiting for a code, and the caller has to try them all to find out which
+     * one the code belongs to. Charging each binding it asked along the way
+     * would mean that entering the correct code for one site spends an attempt
+     * on every other — and a handful of those burns a perfectly good pending
+     * code before its owner ever typed it.
+     */
+    public function codeIs(string $candidate): bool
+    {
         if (blank($this->verification_code) || $this->verification_sent_at === null) {
             return false;
         }
@@ -93,14 +114,24 @@ class SiteAgentSubscriber extends Model
         }
 
         $ttl = max(1, (int) config('siteagent.binding.verification_ttl_minutes', 30));
-        $alive = $this->verification_sent_at->gte(now()->subMinutes($ttl));
 
-        if ($alive && Hash::check(trim($candidate), $this->verification_code)) {
-            return true;
+        return $this->verification_sent_at->gte(now()->subMinutes($ttl))
+            && Hash::check(trim($candidate), $this->verification_code);
+    }
+
+    /**
+     * Spend one of the guesses.
+     *
+     * Charged only to the binding the message was actually aimed at, and only
+     * when it is still open to guessing — an expired or spent code has nothing
+     * left to protect.
+     */
+    public function chargeAttempt(): void
+    {
+        if (blank($this->verification_code) || $this->verification_attempts >= self::MAX_VERIFICATION_ATTEMPTS) {
+            return;
         }
 
         $this->increment('verification_attempts');
-
-        return false;
     }
 }
