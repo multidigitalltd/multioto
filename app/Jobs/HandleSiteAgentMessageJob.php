@@ -76,9 +76,17 @@ class HandleSiteAgentMessageJob implements ShouldQueue
         // and against EVERY binding awaiting one. The code is what identifies
         // which binding they are proving, so an owner already managing one site
         // can still verify a second.
-        $awaiting = $bindings->first(fn (SiteAgentSubscriber $binding): bool => $binding->verified_at === null
-            && $binding->revoked_at === null
-            && $binding->codeMatches($text));
+        //
+        // Only a message SHAPED like a code is offered to the matcher. A wrong
+        // answer spends one of the five attempts, and an owner already managing
+        // one site goes on sending ordinary instructions while a second binding
+        // waits — five of those would burn the second site's code before they
+        // ever got round to typing it.
+        $awaiting = $this->looksLikeCode($text)
+            ? $bindings->first(fn (SiteAgentSubscriber $binding): bool => $binding->verified_at === null
+                && $binding->revoked_at === null
+                && $binding->codeMatches($text))
+            : null;
 
         if ($awaiting !== null) {
             $this->completeVerification($awaiting, $whatsapp, (string) ($payload['_profile_name'] ?? ''));
@@ -96,11 +104,22 @@ class HandleSiteAgentMessageJob implements ShouldQueue
         // the only safe answer: an instruction meant for one business carried
         // out on another is the worst thing this product can do, and it would
         // be done silently.
+        //
+        // What they asked for is kept while we ask. Otherwise their next
+        // message is "1", and "1" is all the planner ever sees — the customer
+        // watches their instruction vanish into a question.
         if ($subscriber === null && $usable->count() > 1) {
+            $choice->hold($from, $text, $mediaId !== '' ? $mediaId : null);
             $whatsapp->sendText($from, $choice->question($usable));
             $event->markProcessed();
 
             return;
+        }
+
+        // They answered the question and nothing more, so the instruction they
+        // gave before it is the one to carry out.
+        if ($subscriber !== null && $choice->isBareAnswer($text, $usable)) {
+            [$text, $mediaId] = $choice->take($from) ?? [$text, $mediaId];
         }
 
         // Nothing usable: fall back to any binding at all, so the refusal can
@@ -133,6 +152,19 @@ class HandleSiteAgentMessageJob implements ShouldQueue
         }
 
         $event->markProcessed();
+    }
+
+    /**
+     * Could this message be a verification code at all?
+     *
+     * Six digits and nothing else. The check exists so that an ordinary
+     * instruction is never counted as a wrong guess — the attempt counter is
+     * what stops somebody guessing a code, and spending it on messages nobody
+     * meant as a guess turns a safety measure into a way to lock customers out.
+     */
+    private function looksLikeCode(string $text): bool
+    {
+        return preg_match('/^\d{6}$/', trim($text)) === 1;
     }
 
     /**

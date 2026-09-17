@@ -194,7 +194,40 @@ class SiteChangeApplier
             'kind' => 'product',
             'product_id' => $productId,
             'fields' => array_intersect_key($previous, $fields),
+            // What the product looks like now that our change is on it, read
+            // back from the shop. The undo checks against this, because a shop
+            // moves on its own: an order drops the stock, an administrator sets
+            // a price, and restoring the values from before our change would
+            // erase a sale that really happened.
+            'after' => $this->productNow($site, $productId, $fields),
         ]];
+    }
+
+    /**
+     * The fields we just changed, as the shop reports them now.
+     *
+     * Read back rather than taken from what we sent: WooCommerce normalises
+     * prices ("90" becomes "90.00") and derives stock status from quantity, so
+     * comparing the live product against our own strings would call an
+     * untouched product "edited" and refuse every undo.
+     *
+     * An empty result means we could not tell — and the undo then refuses,
+     * because the alternative is overwriting a change we cannot see.
+     *
+     * @param  array<string, mixed>  $fields
+     * @return array<string, mixed>
+     */
+    private function productNow(Site $site, int $productId, array $fields): array
+    {
+        try {
+            $product = json_decode($this->mcp->textContent($this->mcp->callTool($site, 'wc_product_get', [
+                'product_id' => $productId,
+            ])), true);
+        } catch (\Throwable) {
+            return [];
+        }
+
+        return is_array($product) ? array_intersect_key($product, $fields) : [];
     }
 
     /**
@@ -367,14 +400,42 @@ class SiteChangeApplier
     private function revertProduct(Site $site, array $restore): array
     {
         $fields = (array) ($restore['fields'] ?? []);
+        $productId = (int) ($restore['product_id'] ?? 0);
 
         if ($fields === []) {
             return $this->refuse('אין לי את הערכים הקודמים של המוצר.');
         }
 
+        // Has the shop moved since we changed it?
+        //
+        // The same rule as the page undo, and it matters more here: between the
+        // change and the undo an order can have dropped the stock, and putting
+        // back the quantity from before our change would hand the customer back
+        // items they have already sold.
+        $after = (array) ($restore['after'] ?? []);
+
+        if ($after === []) {
+            return $this->refuse('איני יכול לוודא שהמוצר לא השתנה מאז, ולכן לא שיניתי בו דבר.');
+        }
+
+        $live = $this->productNow($site, $productId, $after);
+
+        if ($live === []) {
+            return $this->refuse('לא הצלחתי לקרוא את המוצר מהחנות.');
+        }
+
+        foreach ($after as $field => $value) {
+            // Compared as strings: the shop gives a price back as "90.00" and a
+            // quantity as a number, and only their written form is comparable
+            // across the two reads.
+            if (! $this->sameText((string) ($live[$field] ?? ''), (string) $value)) {
+                return $this->refuse(self::STALE);
+            }
+        }
+
         try {
             $this->mcp->textContent($this->mcp->callTool($site, 'wc_product_update', [
-                'product_id' => (int) ($restore['product_id'] ?? 0),
+                'product_id' => $productId,
                 ...$fields,
             ], 60));
         } catch (\Throwable $e) {

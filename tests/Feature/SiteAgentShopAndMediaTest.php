@@ -16,6 +16,7 @@ use App\Services\SiteAgent\SiteChangeApplier;
 use App\Services\SiteAgent\SiteChangePlanner;
 use App\Services\SiteAgent\WhatsAppCloudClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\ResponseSequence;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
@@ -34,6 +35,8 @@ class SiteAgentShopAndMediaTest extends TestCase
 {
     use RefreshDatabase;
 
+    private ?ResponseSequence $sequence = null;
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -47,6 +50,7 @@ class SiteAgentShopAndMediaTest extends TestCase
 
         Cache::flush();
         Storage::fake('local');
+        $this->sequence = null;
     }
 
     public function test_a_price_change_is_previewed_with_the_price_it_replaces(): void
@@ -95,7 +99,44 @@ class SiteAgentShopAndMediaTest extends TestCase
         // without opening their own shop.
         $this->assertStringContainsString('חולצה כחולה', $reply);
         $this->assertStringContainsString('חולצה אדומה', $reply);
-        $this->assertSame(0, SiteAgentRequest::count());
+
+        // The question is held with their own words, because the price they
+        // asked for is in THIS message and not in the name they answer with.
+        // Nothing to confirm yet, so no preview.
+        $held = SiteAgentRequest::sole();
+        $this->assertNull($held->preview);
+        $this->assertSame('תוריד את החולצה ל-90', data_get($held->plan, 'text'));
+    }
+
+    public function test_the_answer_to_which_product_completes_the_price_change(): void
+    {
+        $subscriber = $this->subscriber();
+        $this->shopAnswers(
+            ['can_do' => true, 'operation' => 'update_price', 'product_query' => 'חולצה', 'regular_price' => '90'],
+            products: [
+                ['id' => 5, 'name' => 'חולצה כחולה', 'regular_price' => '120'],
+                ['id' => 6, 'name' => 'חולצה אדומה', 'regular_price' => '110'],
+            ],
+        );
+
+        $this->talk($subscriber, 'תוריד את החולצה ל-90');
+
+        // They answer with the name only. The 90 was in the message before it.
+        $this->shopAnswers(
+            ['can_do' => true, 'operation' => 'update_price', 'product_query' => 'חולצה כחולה', 'regular_price' => '90'],
+            products: [['id' => 5, 'name' => 'חולצה כחולה', 'regular_price' => '120', 'sale_price' => '']],
+        );
+
+        $reply = $this->talk($subscriber, 'חולצה כחולה');
+
+        $this->assertStringContainsString('90', $reply);
+        $this->assertStringContainsString('חולצה כחולה', $reply);
+
+        // The same row, completed — the price survived the question.
+        $request = SiteAgentRequest::sole();
+        $this->assertSame(SiteAgentRequest::OP_PRICE, $request->operation);
+        $this->assertSame('90', data_get($request->plan, 'fields.regular_price'));
+        $this->assertSame(5, (int) data_get($request->plan, 'product_id'));
     }
 
     public function test_a_product_that_does_not_exist_is_said_plainly(): void
@@ -109,7 +150,10 @@ class SiteAgentShopAndMediaTest extends TestCase
         $reply = $this->talk($subscriber, 'תוריד את המכנסיים ל-90');
 
         $this->assertStringContainsString('לא מצאתי', $reply);
-        $this->assertSame(0, SiteAgentRequest::count());
+
+        // Held the same way: they may answer with the right name, and the
+        // price they wanted was in the message that asked.
+        $this->assertNull(SiteAgentRequest::sole()->preview);
     }
 
     public function test_ending_a_sale_is_an_empty_sale_price_and_says_so(): void
@@ -134,7 +178,12 @@ class SiteAgentShopAndMediaTest extends TestCase
         // WooCommerce hands back what the product was. Between our read and the
         // write a sale could have started, so what we saw earlier is not what
         // to put back.
-        $this->siteReturns([$this->tool(json_encode(['previous' => ['regular_price' => '135', 'sale_price' => '99']]))]);
+        $this->siteReturns([
+            $this->tool(json_encode(['previous' => ['regular_price' => '135', 'sale_price' => '99']])),
+            // And the product read back, so the undo has something to compare
+            // the shop against later.
+            $this->tool(json_encode(['id' => 5, 'regular_price' => '90.00', 'sale_price' => ''])),
+        ]);
 
         $this->talk($subscriber, 'כן');
 
@@ -142,6 +191,61 @@ class SiteAgentShopAndMediaTest extends TestCase
         $this->assertSame('135', $restore['fields']['regular_price']);
         // Only the fields we changed are put back — not the whole product.
         $this->assertArrayNotHasKey('sale_price', $restore['fields']);
+        // And what the change left behind, read from the shop, so the undo can
+        // tell whether anything has happened to the product since.
+        $this->assertSame('90.00', $restore['after']['regular_price']);
+    }
+
+    public function test_a_product_undo_refuses_after_the_shop_moved(): void
+    {
+        $subscriber = $this->subscriber();
+        $this->shopAnswers(['can_do' => true, 'operation' => 'update_stock',
+            'product_query' => 'חולצה כחולה', 'stock_quantity' => 40, 'summary' => 'עדכון מלאי']);
+        $this->talk($subscriber, 'תעדכן מלאי ל-40');
+
+        $this->siteReturns([
+            $this->tool(json_encode(['previous' => ['stock_quantity' => 12]])),
+            $this->tool(json_encode(['id' => 5, 'stock_quantity' => 40])),
+        ]);
+        $this->talk($subscriber, 'כן');
+
+        // Two were sold since. Restoring the quantity from before our change
+        // would hand back stock the shop no longer has.
+        $this->siteReturns([$this->tool(json_encode(['id' => 5, 'stock_quantity' => 38]))]);
+
+        $before = Http::recorded()->count();
+        $reply = $this->talk($subscriber, 'בטל');
+
+        $this->assertStringContainsString('המוצר השתנה', $reply);
+        $this->assertSame(SiteAgentRequest::APPLIED, SiteAgentRequest::sole()->state);
+        // Reading the product is the only thing the undo did — nothing was
+        // written back over the sale.
+        $this->assertSame($before + 1, Http::recorded()->count());
+    }
+
+    public function test_a_product_undo_goes_through_when_nothing_moved(): void
+    {
+        $subscriber = $this->subscriber();
+        $this->shopAnswers(['can_do' => true, 'operation' => 'update_stock',
+            'product_query' => 'חולצה כחולה', 'stock_quantity' => 40, 'summary' => 'עדכון מלאי']);
+        $this->talk($subscriber, 'תעדכן מלאי ל-40');
+
+        $this->siteReturns([
+            $this->tool(json_encode(['previous' => ['stock_quantity' => 12]])),
+            $this->tool(json_encode(['id' => 5, 'stock_quantity' => 40])),
+        ]);
+        $this->talk($subscriber, 'כן');
+
+        $this->siteReturns([
+            $this->tool(json_encode(['id' => 5, 'stock_quantity' => 40])),
+            $this->tool('{"ok":true}'),
+        ]);
+
+        $this->assertStringContainsString('הוחזר', $this->talk($subscriber, 'בטל'));
+        $this->assertSame(SiteAgentRequest::REVERTED, SiteAgentRequest::sole()->state);
+
+        // Put back to what it was before the agent touched it.
+        Http::assertSent(fn ($request): bool => (int) data_get($request->data(), 'params.arguments.stock_quantity') === 12);
     }
 
     public function test_an_image_without_a_description_is_not_published(): void
@@ -411,10 +515,15 @@ class SiteAgentShopAndMediaTest extends TestCase
         $this->app->forgetInstance(McpClient::class);
         $this->forgetServices();
 
-        $sequence = Http::fakeSequence();
+        // ONE sequence for the whole test, appended to. Http::fake never
+        // replaces an existing stub — a second call would build a rival
+        // sequence the client never reaches while the first quietly ran dry,
+        // and the test would then be exercising the error path it was written
+        // to avoid.
+        $this->sequence ??= Http::fakeSequence();
 
         foreach ($responses as $response) {
-            $sequence->push($response);
+            $this->sequence->push($response);
         }
     }
 

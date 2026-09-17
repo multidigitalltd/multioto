@@ -12,6 +12,7 @@ use App\Services\SiteAgent\SiteAgentConversation;
 use App\Services\SiteAgent\SiteChangeApplier;
 use App\Services\SiteAgent\SiteChangePlanner;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\ResponseSequence;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Mockery;
@@ -30,6 +31,8 @@ class SiteAgentConversationTest extends TestCase
 {
     use RefreshDatabase;
 
+    private ?ResponseSequence $sequence = null;
+
     private const PAGE = "שעות הפתיחה שלנו: 08:00-16:00\nמוזמנים לבקר.";
 
     /** The same page once the agent's change is on it. */
@@ -46,6 +49,7 @@ class SiteAgentConversationTest extends TestCase
         ]);
 
         Cache::flush();
+        $this->sequence = null;
     }
 
     public function test_a_request_is_previewed_exactly_and_nothing_changes_yet(): void
@@ -500,10 +504,15 @@ class SiteAgentConversationTest extends TestCase
         $this->app->forgetInstance(McpClient::class);
         $this->app->forgetInstance(SiteChangeApplier::class);
 
-        $sequence = Http::fakeSequence();
+        // ONE sequence for the whole test, appended to. Http::fake never
+        // replaces an existing stub — a second call would build a rival
+        // sequence the client never reaches while the first quietly ran dry,
+        // and the test would then be exercising the error path it was written
+        // to avoid.
+        $this->sequence ??= Http::fakeSequence();
 
         foreach ($responses as $response) {
-            $sequence->push($response);
+            $this->sequence->push($response);
         }
     }
 

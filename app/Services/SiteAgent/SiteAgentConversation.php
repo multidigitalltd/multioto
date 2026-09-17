@@ -2,6 +2,7 @@
 
 namespace App\Services\SiteAgent;
 
+use App\Models\Site;
 use App\Models\SiteAgentRequest;
 use App\Models\SiteAgentSubscriber;
 use App\Models\SystemLog;
@@ -50,6 +51,29 @@ class SiteAgentConversation
             return 'לא הבנתי מה לשנות. כתבו לי מה תרצו לעדכן באתר.';
         }
 
+        // One message from this number at a time.
+        //
+        // Reading the offer on the table and then replacing it is two steps,
+        // and production runs several workers: two messages arriving together
+        // both see no offer pending and both create one, so the customer is
+        // shown two previews and their "כן" answers only the newer. Everything
+        // that reads the conversation and then writes it belongs inside here.
+        $lock = Cache::lock("site-agent:conversation:{$subscriber->id}", 120);
+
+        if (! $lock->get()) {
+            return 'רגע אחד — אני עדיין מטפל בהודעה הקודמת.';
+        }
+
+        try {
+            return $this->act($subscriber, $text, $messageId, $mediaId);
+        } finally {
+            $lock->release();
+        }
+    }
+
+    /** The conversation itself, with this number's turn held. */
+    private function act(SiteAgentSubscriber $subscriber, string $text, ?string $messageId, ?string $mediaId): string
+    {
         $pending = SiteAgentRequest::query()
             ->where('site_agent_subscriber_id', $subscriber->id)
             ->awaitingConfirmation()
@@ -74,6 +98,20 @@ class SiteAgentConversation
                 }
 
                 return $this->answerImageQuestion($subscriber, $pending, $text);
+            }
+
+            // The same thing for the shop: "איזה מוצר?" is a question, and the
+            // product name they answer with is half of an instruction whose
+            // other half — the price, the stock, the action — was in the
+            // message before it.
+            if ($mediaId === null && $this->isProductQuestion($pending)) {
+                if ($this->matches($text, self::NO)) {
+                    $this->settle($pending, SiteAgentRequest::CANCELED);
+
+                    return 'בוטל, לא שיניתי כלום. אפשר לבקש משהו אחר.';
+                }
+
+                return $this->answerProductQuestion($subscriber, $pending, $text, $messageId);
             }
 
             if ($this->matches($text, self::YES)) {
@@ -112,7 +150,7 @@ class SiteAgentConversation
      * and after, so "כן" is consent to something specific rather than to the
      * agent's good intentions.
      */
-    private function propose(SiteAgentSubscriber $subscriber, string $text, ?string $messageId): string
+    private function propose(SiteAgentSubscriber $subscriber, string $text, ?string $messageId, bool $tryShop = true): string
     {
         $site = $subscriber->site;
 
@@ -123,9 +161,22 @@ class SiteAgentConversation
         // The shop is asked first. A price is a number a business charges, and
         // "תוריד את החולצה ל-90" landing in the text planner would append a
         // sentence about ninety shekels to a page instead of changing a price.
-        $plan = $this->products->plan($site, $text);
+        //
+        // Except when the shop has already been asked and had nothing to say —
+        // asking it the same question twice is a second call to the model for
+        // an answer we are holding.
+        $plan = $tryShop ? $this->products->plan($site, $text) : null;
 
         if (is_array($plan) && isset($plan['question'])) {
+            // Held, not just asked. "איזה מוצר?" is answered with a name, and
+            // the price they wanted was in the message before it — planning
+            // that name on its own would look for an instruction that is not
+            // in it and come back with nothing.
+            $this->holdQuestion($subscriber, $site, $text, $messageId, [
+                'kind' => 'product',
+                'question' => $plan['question'],
+            ]);
+
             return $plan['question'];
         }
 
@@ -216,6 +267,84 @@ class SiteAgentConversation
         return isset($plan['question'])
             ? $plan['question']
             : $request->preview."\n\n".'לביצוע השיבו "כן". לביטול — "לא".';
+    }
+
+    /**
+     * Park a question on the record so the answer has something to join.
+     *
+     * The same row an offer would have used, with no preview: a question is not
+     * an offer, so there is nothing for a "כן" to confirm — and it carries the
+     * customer's own words, which is the half of the instruction the answer
+     * does not repeat.
+     *
+     * @param  array<string, mixed>  $plan
+     */
+    private function holdQuestion(SiteAgentSubscriber $subscriber, Site $site, string $text, ?string $messageId, array $plan): void
+    {
+        SiteAgentRequest::create([
+            'site_agent_subscriber_id' => $subscriber->id,
+            'site_id' => $site->id,
+            'customer_id' => $subscriber->customer_id,
+            'message' => Str::limit($text, 2000),
+            'inbound_message_id' => $messageId,
+            'plan' => [...$plan, 'text' => $text],
+            'state' => SiteAgentRequest::AWAITING,
+            'expires_at' => now()->addMinutes(max(1, (int) config('siteagent.confirmation_minutes', 30))),
+        ]);
+    }
+
+    /** A parked question about the shop, waiting for which product they meant. */
+    private function isProductQuestion(SiteAgentRequest $request): bool
+    {
+        return data_get($request->plan, 'kind') === 'product'
+            && filled(data_get($request->plan, 'question'));
+    }
+
+    /**
+     * Their answer, planned together with what they asked for in the first place.
+     *
+     * "תוריד את המחיר ל-90" then "חולצה כחולה" is one instruction in two
+     * messages. Planning only the second finds a product and no price.
+     */
+    private function answerProductQuestion(SiteAgentSubscriber $subscriber, SiteAgentRequest $request, string $answer, ?string $messageId): string
+    {
+        $site = $subscriber->site;
+
+        if ($site === null) {
+            return 'אין לי כרגע חיבור לאתר.';
+        }
+
+        $combined = trim(trim((string) data_get($request->plan, 'text', '')).' '.$answer);
+        $plan = $this->products->plan($site, $combined);
+
+        if (is_array($plan) && isset($plan['question'])) {
+            $request->update([
+                'plan' => ['kind' => 'product', 'question' => $plan['question'], 'text' => $combined],
+                'message' => Str::limit($combined, 2000),
+                'expires_at' => now()->addMinutes(max(1, (int) config('siteagent.confirmation_minutes', 30))),
+            ]);
+
+            return $plan['question'];
+        }
+
+        // Not a shop request after all — let the page planner have the whole of
+        // what they said, rather than answering "I could not find the product"
+        // to somebody who was never talking about one.
+        if ($plan === null) {
+            $this->settle($request, SiteAgentRequest::CANCELED);
+
+            return $this->propose($subscriber, $combined, $messageId, tryShop: false);
+        }
+
+        $request->update([
+            'operation' => $plan['operation'],
+            'plan' => $plan,
+            'preview' => $this->preview($plan),
+            'message' => Str::limit($combined, 2000),
+            'expires_at' => now()->addMinutes(max(1, (int) config('siteagent.confirmation_minutes', 30))),
+        ]);
+
+        return $request->refresh()->preview."\n\n".'לביצוע השיבו "כן". לביטול — "לא".';
     }
 
     /**
@@ -458,12 +587,16 @@ class SiteAgentConversation
             $result = $this->applier->revert($last);
 
             if (! $result['ok']) {
-                // The page was edited after our change. An undo writes the whole
-                // page back, so carrying on would erase that edit — which is
-                // the one thing an undo must never do.
+                // Something happened after our change. An undo writes the
+                // whole page — or the whole set of product fields — back, so
+                // carrying on would erase it, which is the one thing an undo
+                // must never do.
                 if ($result['reason'] === SiteChangeApplier::STALE) {
-                    return 'העמוד נערך אחרי השינוי שביצעתי, ולכן לא החזרתי אותו — שחזור היה מוחק את העריכה החדשה. '
-                        .'אפשר לומר לי בדיוק מה להחזיר ואציג הצעה.';
+                    return data_get($last->restore, 'kind') === 'product'
+                        ? 'המוצר השתנה אחרי השינוי שביצעתי — ייתכן שנמכר ממנו משהו או שמישהו עדכן אותו. '
+                            .'לא החזרתי, כדי לא למחוק את השינוי החדש. אפשר לומר לי בדיוק מה להחזיר.'
+                        : 'העמוד נערך אחרי השינוי שביצעתי, ולכן לא החזרתי אותו — שחזור היה מוחק את העריכה החדשה. '
+                            .'אפשר לומר לי בדיוק מה להחזיר ואציג הצעה.';
                 }
 
                 return 'לא הצלחתי להחזיר את השינוי: '.$result['message'];

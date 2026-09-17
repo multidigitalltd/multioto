@@ -395,6 +395,76 @@ class SiteAgentChannelTest extends TestCase
         $this->assertSame($bakery->site_id, SiteAgentRequest::latest('id')->first()?->site_id);
     }
 
+    public function test_the_instruction_survives_the_question_about_which_site(): void
+    {
+        Http::fake(['*' => Http::response(['messages' => [['id' => 'wamid.reply']]])]);
+
+        [$bakery] = $this->twoSites();
+
+        $this->deliver('972501234567', 'תוסיף בדף הבית שאנחנו פתוחים בשישי');
+        $this->assertReplyContains('יותר מאתר אחד');
+
+        $this->deliver('972501234567', '1');
+
+        // Their instruction is what gets planned — not the "1". Otherwise the
+        // agent asks a question and then forgets what it was about, and the
+        // customer has to type the whole thing again.
+        $request = SiteAgentRequest::latest('id')->firstOrFail();
+        $this->assertSame($bakery->site_id, $request->site_id);
+        $this->assertStringContainsString('פתוחים בשישי', (string) $request->message);
+    }
+
+    public function test_an_ordinary_word_does_not_move_the_conversation_to_another_site(): void
+    {
+        Http::fake(['*' => Http::response(['messages' => [['id' => 'wamid.reply']]])]);
+
+        [$bakery] = $this->twoSites('car.test', 'zzz.test');
+
+        $this->deliver('972501234567', 'car.test');
+        $this->deliver('972501234567', 'תוסיף לעמוד משהו על cart נטוש');
+
+        // "cart" contains "car". Matching a site name as a bare substring would
+        // move the whole conversation to another business mid-sentence, and say
+        // nothing about it.
+        $this->assertSame($bakery->site_id, SiteAgentRequest::latest('id')->firstOrFail()->site_id);
+    }
+
+    public function test_an_ordinary_instruction_does_not_burn_a_second_sites_code(): void
+    {
+        Http::fake(['*' => Http::response(['messages' => [['id' => 'wamid.reply']]])]);
+
+        $bakery = $this->subscriber();
+        $this->subscribe($bakery->customer);
+
+        $second = Site::factory()->create([
+            'customer_id' => $bakery->customer_id,
+            'domain' => 'cafe.test',
+            'mcp_enabled' => true,
+            'mcp_endpoint' => 'https://cafe.test/wp-json/multioto/v1/mcp',
+            'mcp_secret' => 'secret',
+        ]);
+
+        $pending = SiteAgentSubscriber::create([
+            'phone' => '972501234567',
+            'customer_id' => $bakery->customer_id,
+            'site_id' => $second->id,
+            'verification_code' => Hash::make('654321'),
+            'verification_sent_at' => now(),
+        ]);
+
+        // Five ordinary instructions while the second binding waits for its
+        // code. Counting them as wrong guesses would spend the whole allowance
+        // before the owner ever typed the code.
+        foreach (range(1, SiteAgentSubscriber::MAX_VERIFICATION_ATTEMPTS) as $attempt) {
+            $this->deliver('972501234567', "תעדכן משהו מספר {$attempt}");
+        }
+
+        $this->assertSame(0, (int) $pending->fresh()->verification_attempts);
+
+        $this->deliver('972501234567', '654321');
+        $this->assertNotNull($pending->fresh()->verified_at);
+    }
+
     public function test_a_second_site_can_still_be_verified_by_its_own_code(): void
     {
         Http::fake(['*' => Http::response(['messages' => [['id' => 'wamid.reply']]])]);
@@ -675,14 +745,14 @@ class SiteAgentChannelTest extends TestCase
      *
      * @return array{0: SiteAgentSubscriber, 1: SiteAgentSubscriber} bakery, cafe
      */
-    private function twoSites(): array
+    private function twoSites(string $first = 'bakery.test', string $second = 'cafe.test'): array
     {
         Cache::flush();
 
         $customer = Customer::factory()->create();
         $this->subscribe($customer);
 
-        $bindings = collect(['bakery.test', 'cafe.test'])->map(function (string $domain) use ($customer): SiteAgentSubscriber {
+        $bindings = collect([$first, $second])->map(function (string $domain) use ($customer): SiteAgentSubscriber {
             $site = Site::factory()->create([
                 'customer_id' => $customer->id,
                 'domain' => $domain,

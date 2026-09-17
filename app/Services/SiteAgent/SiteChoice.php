@@ -52,6 +52,84 @@ class SiteChoice
     }
 
     /**
+     * Keep what they asked for while we ask which site it is for.
+     *
+     * Without this the question eats the instruction: the customer writes
+     * "תעדכן את שעות הפתיחה", is asked which site, answers "1" — and "1" is the
+     * only thing the planner ever sees. From where they sit, the agent asked a
+     * question and then forgot what it was about.
+     *
+     * Held for the confirmation window, not for the day the site choice lasts:
+     * an instruction nobody got back to within half an hour should not spring
+     * to life later on.
+     */
+    public function hold(string $phone, string $text, ?string $mediaId = null): void
+    {
+        if (trim($text) === '' && $mediaId === null) {
+            return;
+        }
+
+        Cache::put(
+            $this->heldKey($phone),
+            ['text' => $text, 'media_id' => $mediaId],
+            now()->addMinutes(max(1, (int) config('siteagent.confirmation_minutes', 30))),
+        );
+    }
+
+    /**
+     * The instruction we were holding, taken (never left behind to run twice).
+     *
+     * @return array{0: string, 1: string}|null [text, media id]
+     */
+    public function take(string $phone): ?array
+    {
+        $held = Cache::pull($this->heldKey($phone));
+
+        return is_array($held)
+            ? [(string) ($held['text'] ?? ''), (string) ($held['media_id'] ?? '')]
+            : null;
+    }
+
+    /**
+     * Is this message ONLY an answer to "which site?", with no instruction in it?
+     *
+     * The distinction decides whether the held instruction is replayed. "1" and
+     * "cafe.test" are answers and nothing more; "cafe.test תעדכן מחיר" names the
+     * site AND says what to do, and replaying an older instruction over it would
+     * carry out something they have moved on from.
+     *
+     * @param  Collection<int, SiteAgentSubscriber>  $bindings
+     */
+    public function isBareAnswer(string $text, Collection $bindings): bool
+    {
+        if ($bindings->count() <= 1) {
+            return false;
+        }
+
+        $trimmed = Str::lower(trim($text, " \t\n\r\0\x0B.!?,־-"));
+
+        if ($trimmed === '') {
+            return false;
+        }
+
+        if (ctype_digit($trimmed) && $bindings->get((int) $trimmed - 1) !== null) {
+            return true;
+        }
+
+        return $bindings->contains(function (SiteAgentSubscriber $binding) use ($trimmed): bool {
+            $domain = Str::lower((string) $binding->site?->domain);
+
+            return $domain !== ''
+                && ($trimmed === $domain || $trimmed === Str::before(Str::after($domain, 'www.') ?: $domain, '.'));
+        });
+    }
+
+    private function heldKey(string $phone): string
+    {
+        return 'site-agent:held-instruction:'.$phone;
+    }
+
+    /**
      * The binding this message is about, or null when we have to ask.
      *
      * Three ways to arrive at an answer, in order of how explicit they are:
@@ -114,11 +192,32 @@ class SiteChoice
 
             $label = Str::before(Str::after($domain, 'www.') ?: $domain, '.');
 
-            return str_contains($haystack, $domain)
-                || ($label !== '' && mb_strlen($label) >= 3 && str_contains($haystack, $label));
+            return $this->mentions($haystack, $domain)
+                || ($label !== '' && mb_strlen($label) >= 3 && $this->mentions($haystack, $label));
         });
 
         return $matches->count() === 1 ? $matches->first() : null;
+    }
+
+    /**
+     * Is this name a word of its own in the text, rather than a fragment?
+     *
+     * A bare substring is not good enough, and the failure is silent: a site
+     * called car.example would match the word "cart" in an ordinary sentence,
+     * and — because naming a site outranks the site already chosen — quietly
+     * move the whole conversation to the wrong business.
+     *
+     * The boundary is Latin only. Hebrew runs straight into a Latin name with
+     * no space ("בcafe"), and treating a Hebrew letter as part of the word
+     * would stop the customer being able to name their site in the way they
+     * actually write.
+     */
+    private function mentions(string $haystack, string $needle): bool
+    {
+        return preg_match(
+            '/(?<![a-z0-9_-])'.preg_quote($needle, '/').'(?![a-z0-9_-])/u',
+            $haystack,
+        ) === 1;
     }
 
     /**
