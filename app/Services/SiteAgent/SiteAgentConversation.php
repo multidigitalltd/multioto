@@ -389,7 +389,11 @@ class SiteAgentConversation
         $plan = (array) $request->plan;
         $caption = trim(trim((string) ($plan['caption'] ?? '')).' '.$answer);
 
-        $next = $this->images->plan($site, $caption, $this->planner->targets($site, $caption));
+        // Planned on both halves, but the shop is looked up with the ANSWER
+        // alone. The plugin hands the term straight to WooCommerce's text
+        // search, so a whole sentence — "שים את זה כמוצר הראשי של חולצה כחולה"
+        // — matches nothing, while the two words they just typed find it.
+        $next = $this->images->plan($site, $caption, $this->planner->targets($site, $answer));
 
         if ($next === null) {
             return 'קיבלתי את התמונה, אבל לא הצלחתי להבין לאן לשים אותה.';

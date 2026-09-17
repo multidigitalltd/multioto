@@ -220,8 +220,15 @@ class SiteChangeApplier
             return $this->refuse('אין לי גיבוי לשחזור הבקשה הזו.');
         }
 
+        $setting = (string) ($restore['setting'] ?? '');
+
+        // Both, not just the widget. One Elementor widget can carry several
+        // editable settings — an icon box has a title and a description, a
+        // repeater has a path per row — so matching the id alone compares the
+        // wrong text and refuses a perfectly safe undo.
         $live = collect($this->planner->elementorTexts($site, $pageId))
-            ->firstWhere('widget_id', $widgetId);
+            ->first(fn (array $text): bool => $text['widget_id'] === $widgetId
+                && (string) $text['setting'] === $setting);
 
         if ($live === null) {
             return $this->refuse('לא הצלחתי לקרוא את העמוד באתר.');
@@ -235,7 +242,7 @@ class SiteChangeApplier
             $this->mcp->textContent($this->mcp->callTool($site, 'wp_elementor_text_update', [
                 'id' => $pageId,
                 'widget_id' => $widgetId,
-                'setting' => (string) ($restore['setting'] ?? ''),
+                'setting' => $setting,
                 'text' => (string) ($restore['text'] ?? ''),
             ], 60));
         } catch (\Throwable $e) {
@@ -269,6 +276,29 @@ class SiteChangeApplier
         return $page === null
             ? $sent
             : ['title' => $page['title'], 'content' => $page['content']];
+    }
+
+    /**
+     * The attachment the thumbnail tool says it displaced.
+     *
+     * The plugin answers `previous: {attachment_id: 42}` — an OBJECT. Casting
+     * that to int gives 1, so the undo either installed attachment #1 or
+     * compared against it and called every image change stale. Read the field
+     * by name, and keep the scalar form as a fallback for any other plugin.
+     *
+     * @param  mixed  $result
+     */
+    private function thumbnailPrevious($result, int $default = 0): int
+    {
+        $previous = data_get($result, 'previous');
+
+        if (is_array($previous)) {
+            return (int) data_get($previous, 'attachment_id', $default);
+        }
+
+        return $previous === null
+            ? (int) data_get($result, 'previous_attachment_id', $default)
+            : (int) $previous;
     }
 
     /**
@@ -444,7 +474,7 @@ class SiteChangeApplier
             'target_id' => $targetId,
             // 0 is meaningful: it means the page had no featured image before,
             // and the undo has to be able to put "none" back.
-            'attachment_id' => (int) data_get($set, 'previous', data_get($set, 'previous_attachment_id', 0)),
+            'attachment_id' => $this->thumbnailPrevious($set),
             // What WE put there. The undo refuses unless this is still the
             // featured image, so a picture the customer chose afterwards is
             // never quietly replaced by the one it succeeded.
@@ -627,7 +657,7 @@ class SiteChangeApplier
             return $this->failure(Str::limit($e->getMessage(), 200));
         }
 
-        $displaced = (int) data_get($set, 'previous', data_get($set, 'previous_attachment_id', $installed));
+        $displaced = $this->thumbnailPrevious($set, $installed);
 
         if ($installed > 0 && $displaced !== $installed) {
             try {

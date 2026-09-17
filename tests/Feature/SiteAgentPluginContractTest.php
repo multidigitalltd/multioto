@@ -14,6 +14,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\ResponseSequence;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Storage;
 use Mockery;
 use Tests\TestCase;
 
@@ -45,6 +46,7 @@ class SiteAgentPluginContractTest extends TestCase
 
         config(['siteagent.enabled' => true, 'siteagent.confirmation_minutes' => 30]);
         Cache::flush();
+        Storage::fake('local');
         $this->sequence = null;
     }
 
@@ -162,14 +164,109 @@ class SiteAgentPluginContractTest extends TestCase
         $this->assertSame(0, SiteAgentRequest::count());
     }
 
+    public function test_the_displaced_image_is_read_from_the_shape_the_plugin_sends(): void
+    {
+        // The media stubs go up FIRST: Http::fake never replaces a stub, and a
+        // catch-all sequence registered before them would answer Meta's media
+        // URLs with a tool envelope.
+        $this->imageArrives();
+
+        $this->siteSends([
+            // The page catalogue, then the page's own text.
+            $this->tool(json_encode([
+                ['id' => 11, 'title' => 'דף הבית', 'type' => 'page', 'status' => 'publish', 'built_with_elementor' => false],
+            ])),
+            $this->tool(json_encode(['id' => 11, 'title' => 'דף הבית', 'content' => 'טקסט', 'status' => 'publish'])),
+        ]);
+
+        $this->planning(['can_do' => true, 'target_id' => 11, 'alt' => 'כיכר לחם', 'summary' => 'תמונה']);
+
+        $this->talk('תשים את זה בדף הבית — כיכר לחם', mediaId: 'media-1');
+
+        $this->siteSends([
+            $this->tool(json_encode(['id' => 77, 'url' => 'https://example.test/bread.png'])),
+            // setThumbnail() answers with previous as an OBJECT.
+            $this->tool(json_encode(['id' => 11, 'attachment_id' => 77, 'previous' => ['attachment_id' => 42]])),
+        ]);
+
+        $this->assertStringContainsString('בוצע', $this->talk('כן'));
+
+        // Casting that object to int yields 1 — so the undo used to restore
+        // attachment #1, a picture belonging to somebody else's upload or to
+        // nothing at all. The real displaced image is 42.
+        $restore = SiteAgentRequest::sole()->restore;
+        $this->assertSame(42, $restore['attachment_id']);
+        $this->assertSame(77, $restore['after']);
+    }
+
+    public function test_an_elementor_undo_matches_the_setting_and_not_only_the_widget(): void
+    {
+        $widget = [
+            ['widget_id' => 'a1b2c3d', 'type' => 'icon-box', 'setting' => 'title_text', 'text' => 'כותרת'],
+            ['widget_id' => 'a1b2c3d', 'type' => 'icon-box', 'setting' => 'description_text', 'text' => 'שעות: 08:00-16:00'],
+        ];
+
+        $this->siteSends([
+            $this->tool(json_encode([
+                ['id' => 12, 'title' => 'דף הבית', 'type' => 'page', 'status' => 'publish', 'built_with_elementor' => true],
+            ])),
+            $this->tool(json_encode(['id' => 12, 'texts' => $widget])),
+        ]);
+
+        $this->planning(['can_do' => true, 'operation' => 'replace_text', 'page_id' => 12,
+            'find' => '08:00-16:00', 'text' => '09:00-17:00', 'summary' => 'עדכון שעות']);
+
+        $this->talk('תעדכן שעות');
+
+        $this->siteSends([
+            $this->tool(json_encode(['id' => 12, 'title' => 'דף הבית', 'content' => '', 'status' => 'publish', 'built_with_elementor' => true])),
+            $this->tool(json_encode(['id' => 12, 'texts' => $widget])),
+            $this->tool(json_encode(['updated_id' => 12, 'widget_id' => 'a1b2c3d', 'setting' => 'description_text', 'previous' => 'שעות: 08:00-16:00'])),
+        ]);
+
+        $this->talk('כן');
+
+        // One widget, two editable settings. Looking it up by id alone finds
+        // the TITLE, compares it against the description we changed, and calls
+        // a perfectly safe undo stale.
+        $changed = $widget;
+        $changed[1]['text'] = 'שעות: 09:00-17:00';
+
+        $this->siteSends([
+            $this->tool(json_encode(['id' => 12, 'texts' => $changed])),
+            $this->tool(json_encode(['updated_id' => 12, 'widget_id' => 'a1b2c3d', 'setting' => 'description_text', 'previous' => 'שעות: 09:00-17:00'])),
+        ]);
+
+        $this->assertStringContainsString('הוחזר', $this->talk('בטל'));
+        $this->assertSame(SiteAgentRequest::REVERTED, SiteAgentRequest::sole()->state);
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────
 
-    private function talk(string $text): string
+    /** Meta serves the picture: an id resolves to a URL, the URL to bytes. */
+    private function imageArrives(): void
+    {
+        Http::fake([
+            'graph.facebook.com/*' => Http::response(['url' => 'https://lookaside.fbsbx.com/whatsapp/media-1']),
+            'lookaside.fbsbx.com/*' => Http::response(base64_decode(
+                'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+            )),
+        ]);
+
+        config([
+            'siteagent.whatsapp.phone_number_id' => '123456',
+            'siteagent.whatsapp.token' => 'permanent-token',
+            'siteagent.media.max_megabytes' => 8,
+        ]);
+    }
+
+    private function talk(string $text, ?string $mediaId = null): string
     {
         return app(SiteAgentConversation::class)->handle(
             $this->subscriber(),
             $text,
             'wamid.'.md5($text.microtime()),
+            $mediaId,
         );
     }
 
@@ -217,7 +314,10 @@ class SiteAgentPluginContractTest extends TestCase
     /** Responses in the plugin's own shape, appended to one sequence. */
     private function siteSends(array $responses): void
     {
-        $this->sequence ??= Http::fakeSequence();
+        // Scoped to the site's own host. A catch-all sequence would also
+        // answer Meta's media URLs and run dry before the site was asked
+        // anything — the test would then be exercising the failure path.
+        $this->sequence ??= Http::fakeSequence('example.test/*');
 
         foreach ($responses as $response) {
             $this->sequence->push($response);

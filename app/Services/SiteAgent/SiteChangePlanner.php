@@ -28,6 +28,21 @@ class SiteChangePlanner
     /** Pages are listed once per site per short window, not once per message. */
     private const PAGE_CACHE_SECONDS = 120;
 
+    /**
+     * How many pages the agent holds the text of.
+     *
+     * Each one is its own round trip to the customer's site, made one after
+     * another, and the site decides how long it takes. Forty of them on a slow
+     * site outruns any job timeout worth setting — and a worker killed halfway
+     * runs no cleanup and never marks the message handled, so the customer's
+     * instruction is lost with nothing to say it was.
+     *
+     * The plugin lists by last-modified, so these are the pages somebody has
+     * actually been working on. A page outside the window is not offered at
+     * all, rather than offered and then impossible to edit.
+     */
+    private const PAGE_LIMIT = 15;
+
     public function __construct(private ClaudeClient $ai, private McpClient $mcp) {}
 
     /**
@@ -210,7 +225,7 @@ class SiteChangePlanner
                     $listed = json_decode($this->mcp->textContent($this->mcp->callTool($site, 'wp_content_list', [
                         'type' => 'page',
                         'status' => 'publish',
-                        'limit' => 40,
+                        'limit' => self::PAGE_LIMIT,
                     ])), true);
                 } catch (\Throwable $e) {
                     Log::warning('SiteChangePlanner: could not list pages', [
@@ -223,7 +238,7 @@ class SiteChangePlanner
 
                 $pages = [];
 
-                foreach ($this->rows($listed) as $item) {
+                foreach (array_slice($this->rows($listed), 0, self::PAGE_LIMIT) as $item) {
                     $id = (int) data_get($item, 'id', 0);
 
                     if ($id <= 0) {

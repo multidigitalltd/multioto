@@ -41,12 +41,13 @@ class HandleSiteAgentMessageJob implements ShouldQueue
     /**
      * Longer than everything it can wait on, added up.
      *
-     * The image upload alone allows a 120-second call to the site, planning a
-     * page can read up to forty of them, and the turn may queue behind another
-     * message for ninety seconds. A worker killed mid-flight runs no catch and
-     * no finally: the request stays `applying` for ever, the customer's
-     * photograph is never cleaned up, and with one attempt there is no retry to
-     * put any of it right.
+     * The image upload alone allows a 120-second call to the site, planning
+     * reads a bounded set of pages one after another (SiteChangePlanner's
+     * PAGE_LIMIT, each at the MCP timeout), and the turn may queue behind
+     * another message for ninety seconds. A worker killed mid-flight runs no
+     * catch and no finally: the request stays `applying` for ever, the
+     * customer's photograph is never cleaned up, and with one attempt there is
+     * no retry to put any of it right.
      */
     public int $timeout = 600;
 
@@ -134,7 +135,10 @@ class HandleSiteAgentMessageJob implements ShouldQueue
         $lock = Cache::lock("site-agent:routing:{$from}", 120);
 
         try {
-            $routed = $lock->block(60, fn (): array => $this->route($choice, $whatsapp, $from, $text, $mediaId, $usable));
+            $routed = $lock->block(60, fn (): array => $this->route(
+                $choice, $whatsapp, $from, $text, $mediaId, $usable,
+                (int) ($payload['timestamp'] ?? 0),
+            ));
         } catch (LockTimeoutException) {
             $whatsapp->sendText($from, 'אני עדיין מטפל בהודעה הקודמת — נסו שוב בעוד רגע.');
             $event->markProcessed();
@@ -203,6 +207,7 @@ class HandleSiteAgentMessageJob implements ShouldQueue
         string $text,
         string $mediaId,
         Collection $usable,
+        int $sentAt,
     ): array {
         $subscriber = $choice->resolve($from, $text, $usable);
 
@@ -215,7 +220,7 @@ class HandleSiteAgentMessageJob implements ShouldQueue
         // message is "1", and "1" is all the planner ever sees — the customer
         // watches their instruction vanish into a question.
         if ($subscriber === null && $usable->count() > 1) {
-            $choice->hold($from, $text, $mediaId !== '' ? $mediaId : null);
+            $choice->hold($from, $text, $mediaId !== '' ? $mediaId : null, $sentAt);
             $whatsapp->sendText($from, $choice->question($usable));
 
             return ['subscriber' => null, 'text' => $text, 'media_id' => $mediaId, 'asked' => true];

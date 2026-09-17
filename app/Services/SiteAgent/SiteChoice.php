@@ -63,15 +63,26 @@ class SiteChoice
      * an instruction nobody got back to within half an hour should not spring
      * to life later on.
      */
-    public function hold(string $phone, string $text, ?string $mediaId = null): void
+    public function hold(string $phone, string $text, ?string $mediaId = null, int $sentAt = 0): void
     {
         if (trim($text) === '' && $mediaId === null) {
             return;
         }
 
+        $held = Cache::get($this->heldKey($phone));
+
+        // The NEWEST instruction is the one they meant — and "newest" is when
+        // the customer sent it, not which worker happened to get there first.
+        // Two messages arriving together are handed out in no particular order,
+        // so without their own timestamps the one that survives is a coin toss
+        // and the customer cannot tell which of the two they are answering.
+        if (is_array($held) && (int) ($held['sent_at'] ?? 0) > $sentAt) {
+            return;
+        }
+
         Cache::put(
             $this->heldKey($phone),
-            ['text' => $text, 'media_id' => $mediaId],
+            ['text' => $text, 'media_id' => $mediaId, 'sent_at' => $sentAt],
             now()->addMinutes(max(1, (int) config('siteagent.confirmation_minutes', 30))),
         );
     }
