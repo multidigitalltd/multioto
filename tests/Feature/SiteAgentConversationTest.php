@@ -32,6 +32,9 @@ class SiteAgentConversationTest extends TestCase
 
     private const PAGE = "שעות הפתיחה שלנו: 08:00-16:00\nמוזמנים לבקר.";
 
+    /** The same page once the agent's change is on it. */
+    private const PAGE_AFTER = "שעות הפתיחה שלנו: 09:00-17:00\nמוזמנים לבקר.";
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -74,6 +77,10 @@ class SiteAgentConversationTest extends TestCase
         $this->siteReturns([
             $this->tool(json_encode(['id' => 11, 'title' => 'צור קשר', 'content' => self::PAGE, 'status' => 'publish'])),
             $this->tool('{"ok":true}'),
+            // Read back once the change is on the page. WordPress is what
+            // decides how the content is finally stored, so the undo compares
+            // against the site's own answer and not against our text.
+            $this->tool(json_encode(['id' => 11, 'title' => 'צור קשר', 'content' => self::PAGE_AFTER, 'status' => 'publish'])),
         ]);
 
         $reply = $this->talk($subscriber, 'כן');
@@ -84,6 +91,9 @@ class SiteAgentConversationTest extends TestCase
         $this->assertSame(SiteAgentRequest::APPLIED, $request->state);
         // The undo needs what was actually live, not what we imagined was.
         $this->assertSame(self::PAGE, $request->restore['content']);
+        // And what it left behind, so the undo can tell whether anybody has
+        // touched the page since.
+        $this->assertSame(self::PAGE_AFTER, $request->restore['after']['content']);
     }
 
     public function test_no_changes_nothing(): void
@@ -197,7 +207,11 @@ class SiteAgentConversationTest extends TestCase
         $subscriber = $this->subscriber();
         $request = $this->applied($subscriber);
 
-        $this->siteReturns([$this->tool('{"ok":true}')]);
+        $this->siteReturns([
+            // The page still looks the way our change left it.
+            $this->tool(json_encode(['id' => 11, 'title' => 'צור קשר', 'content' => self::PAGE_AFTER, 'status' => 'publish'])),
+            $this->tool('{"ok":true}'),
+        ]);
 
         $reply = $this->talk($subscriber, 'בטל');
 
@@ -210,6 +224,122 @@ class SiteAgentConversationTest extends TestCase
 
             return ($arguments['content'] ?? null) === self::PAGE;
         });
+    }
+
+    public function test_undo_is_refused_when_the_page_was_edited_afterwards(): void
+    {
+        $subscriber = $this->subscriber();
+        $request = $this->applied($subscriber);
+
+        // The customer fixed a typo in wp-admin after the agent's change, and
+        // only then asked to undo it. An undo writes the WHOLE page back, so
+        // carrying on would erase that fix without a word.
+        $this->siteReturns([
+            $this->tool(json_encode(['id' => 11, 'title' => 'צור קשר', 'content' => self::PAGE_AFTER."\nחניה בחינם.", 'status' => 'publish'])),
+        ]);
+
+        $reply = $this->talk($subscriber, 'בטל');
+
+        $this->assertStringContainsString('נערך אחרי השינוי', $reply);
+        $this->assertSame(SiteAgentRequest::APPLIED, $request->fresh()->state);
+
+        // And nothing was written: the read is the only call that happened.
+        Http::assertSentCount(1);
+    }
+
+    public function test_a_line_ending_rewritten_by_wordpress_does_not_block_the_undo(): void
+    {
+        $subscriber = $this->subscriber();
+        $this->applied($subscriber);
+
+        // The only difference is how the site gave the line endings back.
+        // Treating that as "somebody edited the page" would refuse every undo
+        // on a site that does it.
+        $this->siteReturns([
+            $this->tool(json_encode(['id' => 11, 'title' => 'צור קשר',
+                'content' => str_replace("\n", "\r\n", self::PAGE_AFTER)."\n", 'status' => 'publish'])),
+            $this->tool('{"ok":true}'),
+        ]);
+
+        $this->assertStringContainsString('הוחזר', $this->talk($subscriber, 'בטל'));
+    }
+
+    public function test_a_second_yes_arriving_mid_change_does_not_repeat_it(): void
+    {
+        $subscriber = $this->subscriber();
+        $this->planning(['can_do' => true, 'operation' => 'append_text', 'page_id' => 11,
+            'text' => 'אנחנו פתוחים גם בשישי', 'summary' => 'הוספה']);
+        $this->talk($subscriber, 'תוסיף שאנחנו פתוחים בשישי');
+
+        $pending = SiteAgentRequest::sole();
+
+        // Two "כן" messages are two DIFFERENT inbound messages, so nothing
+        // upstream treats them as one: two workers can both read this offer
+        // while it is still awaiting and both carry it out — the paragraph
+        // appended to the page twice. Here the first worker is mid-change: it
+        // holds the claim and has not written the state yet.
+        Cache::lock("site-agent:confirm:{$pending->id}", 180)->get();
+
+        $reply = $this->talk($subscriber, 'כן');
+
+        $this->assertStringContainsString('רגע אחד', $reply);
+        // Nothing was touched on the site, and the first worker still owns the
+        // offer — the second one found out before doing any work, not after.
+        Http::assertNothingSent();
+        $this->assertSame(SiteAgentRequest::AWAITING, $pending->fresh()->state);
+    }
+
+    public function test_a_yes_for_a_change_already_carried_out_does_nothing(): void
+    {
+        $subscriber = $this->subscriber();
+        $this->planning(['can_do' => true, 'operation' => 'append_text', 'page_id' => 11,
+            'text' => 'טקסט', 'summary' => 'הוספה']);
+        $this->talk($subscriber, 'תוסיף טקסט');
+
+        // The other worker got there first and finished.
+        $pending = SiteAgentRequest::sole();
+        $pending->update(['state' => SiteAgentRequest::APPLIED, 'applied_at' => now()]);
+
+        $reply = $this->talk($subscriber, 'כן');
+
+        // The claim is a conditional UPDATE on the state, so it is the database
+        // that decides — and it decides once, whether or not a lock store is
+        // reachable at the time.
+        $this->assertSame(0, SiteAgentRequest::query()
+            ->whereKey($pending->id)
+            ->where('state', SiteAgentRequest::AWAITING)
+            ->update(['state' => SiteAgentRequest::APPLYING]));
+
+        $this->assertStringNotContainsString('בוצע.', $reply);
+        Http::assertNothingSent();
+        $this->assertSame(SiteAgentRequest::APPLIED, $pending->fresh()->state);
+    }
+
+    public function test_an_error_from_the_customers_site_is_not_repeated_to_them(): void
+    {
+        $subscriber = $this->subscriber();
+        $this->planning(['can_do' => true, 'operation' => 'append_text', 'page_id' => 11,
+            'text' => 'טקסט', 'summary' => 'הוספה']);
+        $this->talk($subscriber, 'תוסיף טקסט');
+
+        $this->siteReturns([
+            $this->tool(json_encode(['id' => 11, 'title' => 'צור קשר', 'content' => self::PAGE, 'status' => 'publish'])),
+            ['jsonrpc' => '2.0', 'id' => 1, 'error' => ['code' => -32000, 'message' => 'PDO exception at /var/www/wp-includes/db.php:411']],
+        ]);
+
+        $reply = $this->talk($subscriber, 'כן');
+
+        // The customer is told plainly that it did not work. An exception from
+        // their own WordPress, with a server path in it, is an internal detail
+        // and not something to put in a WhatsApp message.
+        $this->assertStringNotContainsString('/var/www', $reply);
+        $this->assertStringNotContainsString('PDO', $reply);
+        $this->assertStringContainsString('לא הצלחתי', $reply);
+
+        // It is kept where the team can read it.
+        $failed = SiteAgentRequest::sole();
+        $this->assertSame(SiteAgentRequest::FAILED, $failed->state);
+        $this->assertStringContainsString('PDO', (string) $failed->failure_reason);
     }
 
     public function test_undo_outside_the_window_is_refused_plainly(): void
@@ -228,7 +358,10 @@ class SiteAgentConversationTest extends TestCase
         $subscriber = $this->subscriber();
         $request = $this->applied($subscriber);
 
-        $this->siteReturns([$this->tool('{"ok":true}'), $this->tool('{"ok":true}')]);
+        $this->siteReturns([
+            $this->tool(json_encode(['id' => 11, 'title' => 'צור קשר', 'content' => self::PAGE_AFTER, 'status' => 'publish'])),
+            $this->tool('{"ok":true}'),
+        ]);
 
         $this->talk($subscriber, 'בטל');
         // A second "בטל" must not write the old content back over an edit the
@@ -391,7 +524,12 @@ class SiteAgentConversationTest extends TestCase
             'operation' => SiteAgentRequest::OP_REPLACE,
             'plan' => ['operation' => 'replace_text', 'page_id' => 11, 'page_title' => 'צור קשר',
                 'find' => '08:00-16:00', 'text' => '09:00-17:00', 'summary' => 'עדכון שעות'],
-            'restore' => ['page_id' => 11, 'title' => 'צור קשר', 'content' => self::PAGE],
+            'restore' => [
+                'page_id' => 11,
+                'title' => 'צור קשר',
+                'content' => self::PAGE,
+                'after' => ['title' => 'צור קשר', 'content' => self::PAGE_AFTER],
+            ],
             'state' => SiteAgentRequest::APPLIED,
             'applied_at' => $appliedAt ?? now(),
         ]);

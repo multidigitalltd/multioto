@@ -74,6 +74,7 @@ class SiteAgentRequestResource extends Resource
 
     private const STATES = [
         SiteAgentRequest::AWAITING => 'ממתין לאישור',
+        SiteAgentRequest::APPLYING => 'מתבצע',
         SiteAgentRequest::APPLIED => 'בוצע',
         SiteAgentRequest::CANCELED => 'בוטל לפני ביצוע',
         SiteAgentRequest::EXPIRED => 'פג בלי תשובה',

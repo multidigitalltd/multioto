@@ -28,12 +28,91 @@ class WhatsAppCloudClient
     /**
      * Send a plain-text message.
      *
+     * Only ever as a REPLY. Meta allows free-form text solely inside the
+     * 24-hour service window that a customer's own message opens; outside it
+     * the send is rejected (error 131047), so anything this product initiates
+     * goes out as a template instead — see sendTemplate().
+     *
      * Returns the provider's message id, or null when the send failed — never a
      * bare bool. The id is what lets a reply be tied to the message it answers,
      * and a caller that cannot tell "sent" from "not sent" is one that will
      * eventually tell a customer their site changed when nothing was sent.
      */
     public function sendText(string $to, string $body): ?string
+    {
+        return $this->send($to, [
+            'type' => 'text',
+            // Link previews off: the agent quotes page titles and URLs from the
+            // customer's own site, and an unfurled preview of a draft page is a
+            // leak of something not published yet.
+            'text' => ['preview_url' => false, 'body' => $body],
+        ]);
+    }
+
+    /**
+     * Send one of the account's approved templates.
+     *
+     * This is the only way to reach a customer who has not just written to us,
+     * and that covers everything the product initiates: the verification code
+     * for a number that has never messaged this account at all, and a notice to
+     * a customer whose last message was three weeks ago. Sending those as free
+     * text means Meta refuses them — the customer never gets the code that
+     * activates the product they just paid for, and nobody here would know why.
+     *
+     * Templates are accepted at any time, window or no window, so a proactive
+     * message never has to ask whether one is open.
+     *
+     * @param  list<string|int>  $parameters  positional body parameters ({{1}}, {{2}}, …)
+     * @param  string|null  $copyCode  the code for an authentication template's
+     *                                 copy-code button; omitted for utility ones
+     */
+    public function sendTemplate(string $to, string $name, array $parameters = [], ?string $copyCode = null): ?string
+    {
+        if ($name === '') {
+            return null;
+        }
+
+        $components = [];
+
+        if ($parameters !== []) {
+            $components[] = [
+                'type' => 'body',
+                'parameters' => array_map(
+                    // Meta rejects a parameter containing a newline or a tab, and
+                    // a rejected template is a customer who hears nothing.
+                    fn ($value): array => ['type' => 'text', 'text' => trim(preg_replace('/\s+/u', ' ', (string) $value) ?? '')],
+                    array_values($parameters),
+                ),
+            ];
+        }
+
+        if ($copyCode !== null) {
+            // Meta's authentication category ships a copy-code button, and the
+            // code has to be repeated on it as well as in the body.
+            $components[] = [
+                'type' => 'button',
+                'sub_type' => 'url',
+                'index' => '0',
+                'parameters' => [['type' => 'text', 'text' => $copyCode]],
+            ];
+        }
+
+        return $this->send($to, [
+            'type' => 'template',
+            'template' => [
+                'name' => $name,
+                'language' => ['code' => (string) config('siteagent.whatsapp.templates.language', 'he')],
+                'components' => $components,
+            ],
+        ]);
+    }
+
+    /**
+     * The one place a message actually goes out.
+     *
+     * @param  array<string, mixed>  $message  the type-specific part of the body
+     */
+    private function send(string $to, array $message): ?string
     {
         if (! $this->configured()) {
             Log::warning('WhatsAppCloudClient: not configured, message not sent');
@@ -54,11 +133,7 @@ class WhatsAppCloudClient
                     'messaging_product' => 'whatsapp',
                     'recipient_type' => 'individual',
                     'to' => $number,
-                    'type' => 'text',
-                    // Link previews off: the agent quotes page titles and URLs
-                    // from the customer's own site, and an unfurled preview of a
-                    // draft page is a leak of something not published yet.
-                    'text' => ['preview_url' => false, 'body' => $body],
+                    ...$message,
                 ]);
 
             if ($response->failed()) {

@@ -52,13 +52,26 @@ class SendSiteAgentVerificationJob implements ShouldQueue
 
         $code = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
         $ttl = max(1, (int) config('siteagent.binding.verification_ttl_minutes', 30));
+        $template = (string) config('siteagent.whatsapp.templates.verification', '');
 
-        $sent = $whatsapp->sendText($subscriber->phone, implode("\n", [
-            'קוד האימות שלכם לניהול האתר '.($subscriber->site?->domain ?? '').':',
-            $code,
-            '',
-            "שלחו אותו חזרה כאן כדי להתחיל. הקוד תקף ל-{$ttl} דקות.",
-        ]));
+        // This number has, by definition, never written to us — there is no
+        // open service window, so free text would be refused by Meta and the
+        // customer would simply never receive the code. The plain-text branch
+        // exists for an installation that has not registered the template yet,
+        // and it will fail loudly (below) rather than quietly.
+        $sent = $template !== ''
+            ? $whatsapp->sendTemplate(
+                $subscriber->phone,
+                $template,
+                [$code],
+                copyCode: (bool) config('siteagent.whatsapp.templates.verification_copy_button', true) ? $code : null,
+            )
+            : $whatsapp->sendText($subscriber->phone, implode("\n", [
+                'קוד האימות שלכם לניהול האתר '.($subscriber->site?->domain ?? '').':',
+                $code,
+                '',
+                "שלחו אותו חזרה כאן כדי להתחיל. הקוד תקף ל-{$ttl} דקות.",
+            ]));
 
         if ($sent === null) {
             // Stamping a code nobody received leaves the team waiting for a

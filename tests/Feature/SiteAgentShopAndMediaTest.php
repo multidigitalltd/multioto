@@ -155,7 +155,60 @@ class SiteAgentShopAndMediaTest extends TestCase
         // An empty alt attribute is a site made less accessible, one image at a
         // time — and the plugin refuses it anyway.
         $this->assertStringContainsString('לתאר את התמונה', $reply);
-        $this->assertSame(0, SiteAgentRequest::count());
+
+        // The picture is kept while the question is open, so the answer can
+        // complete it. A question is not an offer, so there is no preview and
+        // nothing a "כן" could confirm.
+        $held = SiteAgentRequest::sole();
+        $this->assertNull($held->preview);
+        $this->assertSame('תשים את זה בדף הבית', data_get($held->plan, 'caption'));
+        Storage::disk('local')->assertExists((string) data_get($held->plan, 'image_path'));
+    }
+
+    public function test_the_answer_to_a_question_completes_the_image_already_sent(): void
+    {
+        $subscriber = $this->subscriber();
+        $this->imageArrives();
+        $this->aiAnswers(['can_do' => false, 'needs' => 'alt']);
+
+        $this->talk($subscriber, 'תשים את זה בדף הבית', mediaId: 'media-1');
+
+        // They answer with the description. The photograph is already here —
+        // asking them to send it again is the product wasting their time.
+        $this->aiAnswers(['can_do' => true, 'target_id' => 11, 'alt' => 'כיכר לחם על שולחן עץ', 'summary' => 'תמונה']);
+
+        $reply = $this->talk($subscriber, 'כיכר לחם על שולחן עץ');
+
+        $this->assertStringContainsString('כיכר לחם על שולחן עץ', $reply);
+        $this->assertStringContainsString('כן', $reply);
+
+        // The same row, completed — not a second one, and not a lost picture.
+        $request = SiteAgentRequest::sole();
+        $this->assertSame(SiteAgentRequest::AWAITING, $request->state);
+        $this->assertNotNull($request->preview);
+        Storage::disk('local')->assertExists((string) data_get($request->plan, 'image_path'));
+
+        // Both halves of what they said, kept together: the page came from the
+        // first message and the description from the second.
+        $this->assertStringContainsString('דף הבית', (string) $request->message);
+        $this->assertStringContainsString('כיכר לחם', (string) $request->message);
+    }
+
+    public function test_saying_no_to_a_question_about_an_image_deletes_it(): void
+    {
+        $subscriber = $this->subscriber();
+        $this->imageArrives();
+        $this->aiAnswers(['can_do' => false, 'needs' => 'alt']);
+
+        $this->talk($subscriber, 'תשים את זה בדף הבית', mediaId: 'media-1');
+        $path = (string) data_get(SiteAgentRequest::sole()->plan, 'image_path');
+
+        $this->talk($subscriber, 'לא');
+
+        // Held only while the question is open. A customer who dropped the idea
+        // has not agreed to us keeping their photograph.
+        Storage::disk('local')->assertMissing($path);
+        $this->assertSame(SiteAgentRequest::CANCELED, SiteAgentRequest::sole()->state);
     }
 
     public function test_an_image_with_a_description_is_previewed_with_it(): void
@@ -242,6 +295,27 @@ class SiteAgentShopAndMediaTest extends TestCase
         // A customer's photograph, held for a change they never agreed to.
         Storage::disk('local')->assertMissing($path);
         $this->assertSame(SiteAgentRequest::EXPIRED, SiteAgentRequest::sole()->state);
+    }
+
+    public function test_an_image_change_that_failed_does_not_keep_the_photo_either(): void
+    {
+        $subscriber = $this->subscriber();
+        $this->imageArrives();
+        $this->aiAnswers(['can_do' => true, 'target_id' => 11, 'alt' => 'לחם', 'summary' => 'תמונה']);
+        $this->talk($subscriber, 'תשים בדף הבית', mediaId: 'media-1');
+
+        $path = SiteAgentRequest::sole()->plan['image_path'];
+
+        // The upload does not go through. The change is over either way.
+        $this->siteReturns([['jsonrpc' => '2.0', 'id' => 1, 'error' => ['code' => -32000, 'message' => 'upload failed']]]);
+
+        $this->talk($subscriber, 'כן');
+
+        // The pruning job only ever visits offers still awaiting an answer, so
+        // without this the photograph would sit on our disk forever — for a
+        // change that never happened.
+        $this->assertSame(SiteAgentRequest::FAILED, SiteAgentRequest::sole()->state);
+        Storage::disk('local')->assertMissing($path);
     }
 
     public function test_saying_no_to_an_image_deletes_it_too(): void

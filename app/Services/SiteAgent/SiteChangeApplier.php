@@ -29,7 +29,7 @@ class SiteChangeApplier
     public function __construct(private McpClient $mcp) {}
 
     /**
-     * @return array{ok: bool, reason: string|null, restore: array<string, mixed>|null}
+     * @return array{ok: bool, reason: string|null, message: string|null, restore: array<string, mixed>|null}
      */
     public function apply(SiteAgentRequest $request): array
     {
@@ -37,7 +37,7 @@ class SiteChangeApplier
         $plan = (array) $request->plan;
 
         if (! $site instanceof Site) {
-            return $this->failure('הבקשה חסרה אתר.');
+            return $this->refuse('הבקשה חסרה אתר.');
         }
 
         return match ($request->operation) {
@@ -51,14 +51,14 @@ class SiteChangeApplier
      * A text edit on a page.
      *
      * @param  array<string, mixed>  $plan
-     * @return array{ok: bool, reason: string|null, restore: array<string, mixed>|null}
+     * @return array{ok: bool, reason: string|null, message: string|null, restore: array<string, mixed>|null}
      */
     private function applyPage(Site $site, SiteAgentRequest $request, array $plan): array
     {
         $pageId = (int) ($plan['page_id'] ?? 0);
 
         if ($pageId <= 0) {
-            return $this->failure('הבקשה חסרה עמוד.');
+            return $this->refuse('הבקשה חסרה עמוד.');
         }
 
         try {
@@ -68,13 +68,13 @@ class SiteChangeApplier
         }
 
         if ($page === null) {
-            return $this->failure('לא הצלחתי לקרוא את העמוד באתר.');
+            return $this->refuse('לא הצלחתי לקרוא את העמוד באתר.');
         }
 
         // Unpublished, made private or trashed since the preview. Editing it
         // anyway would report a change live on a page nobody can see.
         if ((string) ($page['status'] ?? '') !== 'publish') {
-            return $this->failure('העמוד אינו מפורסם יותר, ולכן לא שיניתי בו דבר.');
+            return $this->refuse('העמוד אינו מפורסם יותר, ולכן לא שיניתי בו דבר.');
         }
 
         $content = (string) ($page['content'] ?? '');
@@ -89,7 +89,7 @@ class SiteChangeApplier
         };
 
         if ($update === null) {
-            return $this->failure(self::STALE, restore: null);
+            return $this->refuse(self::STALE);
         }
 
         // What was there before, captured from the page we just read — so the
@@ -111,7 +111,44 @@ class SiteChangeApplier
 
         SiteChangePlanner::forget($site);
 
-        return ['ok' => true, 'reason' => null, 'restore' => $restore];
+        // And what the page looks like now that our change is on it — read
+        // back rather than assumed, because WordPress sanitises and normalises
+        // on save, and an undo comparing against the text WE sent would find a
+        // mismatch every time and refuse every legitimate undo.
+        //
+        // This is what makes the undo safe: revert() checks the page still
+        // looks like this before writing the old content back, so an edit made
+        // in wp-admin afterwards is never silently erased.
+        $restore['after'] = $this->stateAfter($site, $pageId, [
+            'title' => (string) ($update['title'] ?? $title),
+            'content' => (string) ($update['content'] ?? $content),
+        ]);
+
+        return ['ok' => true, 'reason' => null, 'message' => null, 'restore' => $restore];
+    }
+
+    /**
+     * The page as it stands now, or — if it cannot be read back — what we sent.
+     *
+     * A failed read must not fail a change that already happened, so the
+     * fallback is our own text. It may not match byte for byte after the site's
+     * own filtering, in which case the undo refuses and says so; refusing an
+     * undo is recoverable, and overwriting somebody's work is not.
+     *
+     * @param  array{title: string, content: string}  $sent
+     * @return array{title: string, content: string}
+     */
+    private function stateAfter(Site $site, int $pageId, array $sent): array
+    {
+        try {
+            $page = $this->read($site, $pageId);
+        } catch (\Throwable) {
+            return $sent;
+        }
+
+        return $page === null
+            ? $sent
+            : ['title' => $page['title'], 'content' => $page['content']];
     }
 
     /**
@@ -124,7 +161,7 @@ class SiteChangeApplier
      * shop was never in.
      *
      * @param  array<string, mixed>  $plan
-     * @return array{ok: bool, reason: string|null, restore: array<string, mixed>|null}
+     * @return array{ok: bool, reason: string|null, message: string|null, restore: array<string, mixed>|null}
      */
     private function applyProduct(Site $site, array $plan): array
     {
@@ -132,7 +169,7 @@ class SiteChangeApplier
         $fields = (array) ($plan['fields'] ?? []);
 
         if ($productId <= 0 || $fields === []) {
-            return $this->failure('הבקשה חסרה מוצר או ערכים לעדכון.');
+            return $this->refuse('הבקשה חסרה מוצר או ערכים לעדכון.');
         }
 
         try {
@@ -150,10 +187,10 @@ class SiteChangeApplier
             // The change may well have happened, but without the shop's own
             // "before" there is nothing honest to offer as an undo — so the
             // customer is told that rather than promised one that would guess.
-            return ['ok' => true, 'reason' => null, 'restore' => null];
+            return ['ok' => true, 'reason' => null, 'message' => null, 'restore' => null];
         }
 
-        return ['ok' => true, 'reason' => null, 'restore' => [
+        return ['ok' => true, 'reason' => null, 'message' => null, 'restore' => [
             'kind' => 'product',
             'product_id' => $productId,
             'fields' => array_intersect_key($previous, $fields),
@@ -169,7 +206,7 @@ class SiteChangeApplier
      * before the second call is made at all.
      *
      * @param  array<string, mixed>  $plan
-     * @return array{ok: bool, reason: string|null, restore: array<string, mixed>|null}
+     * @return array{ok: bool, reason: string|null, message: string|null, restore: array<string, mixed>|null}
      */
     private function applyImage(Site $site, array $plan): array
     {
@@ -184,7 +221,7 @@ class SiteChangeApplier
         // The description is required by the plugin, by WCAG and by ת"י 5568.
         // Reaching here without one means a planner let it through.
         if ($targetId <= 0 || $alt === '' || $bytes === '') {
-            return $this->failure('חסר יעד, תיאור או קובץ לתמונה.');
+            return $this->refuse('חסר יעד, תיאור או קובץ לתמונה.');
         }
 
         // The filename is ours, never the sender's: a name that arrived with
@@ -204,7 +241,7 @@ class SiteChangeApplier
         $attachmentId = (int) data_get($uploaded, 'id', data_get($uploaded, 'attachment_id', 0));
 
         if ($attachmentId <= 0) {
-            return $this->failure('התמונה לא נשמרה בספריית המדיה.');
+            return $this->refuse('התמונה לא נשמרה בספריית המדיה.');
         }
 
         try {
@@ -223,7 +260,7 @@ class SiteChangeApplier
             Storage::disk('local')->delete($path);
         }
 
-        return ['ok' => true, 'reason' => null, 'restore' => [
+        return ['ok' => true, 'reason' => null, 'message' => null, 'restore' => [
             'kind' => 'thumbnail',
             'target_id' => $targetId,
             // 0 is meaningful: it means the page had no featured image before,
@@ -239,7 +276,7 @@ class SiteChangeApplier
      * field we happened to change would leave a page that is neither what it
      * was nor what the customer asked for.
      *
-     * @return array{ok: bool, reason: string|null}
+     * @return array{ok: bool, reason: string|null, message: string|null}
      */
     public function revert(SiteAgentRequest $request): array
     {
@@ -247,7 +284,7 @@ class SiteChangeApplier
         $restore = (array) $request->restore;
 
         if (! $site instanceof Site || $restore === []) {
-            return ['ok' => false, 'reason' => 'אין לי גיבוי לשחזור הבקשה הזו.'];
+            return $this->refuse('אין לי גיבוי לשחזור הבקשה הזו.');
         }
 
         $kind = (string) ($restore['kind'] ?? 'page');
@@ -263,7 +300,34 @@ class SiteChangeApplier
         $pageId = (int) ($restore['page_id'] ?? 0);
 
         if ($pageId <= 0) {
-            return ['ok' => false, 'reason' => 'אין לי גיבוי לשחזור הבקשה הזו.'];
+            return $this->refuse('אין לי גיבוי לשחזור הבקשה הזו.');
+        }
+
+        // Has anything happened to this page since we changed it?
+        //
+        // An undo writes back the WHOLE title and content, so it is destructive
+        // by construction: if the customer or an administrator edited the page
+        // in wp-admin after the agent's change, writing our snapshot back
+        // erases every one of those edits. The apply path already refuses to
+        // overwrite work it did not expect; the undo path must refuse for
+        // exactly the same reason.
+        $after = (array) ($restore['after'] ?? []);
+
+        if ($after !== []) {
+            try {
+                $live = $this->read($site, $pageId);
+            } catch (\Throwable $e) {
+                return $this->failure(Str::limit($e->getMessage(), 200));
+            }
+
+            if ($live === null) {
+                return $this->refuse('לא הצלחתי לקרוא את העמוד באתר.');
+            }
+
+            if (! $this->sameText($live['title'], (string) ($after['title'] ?? ''))
+                || ! $this->sameText($live['content'], (string) ($after['content'] ?? ''))) {
+                return $this->refuse(self::STALE);
+            }
         }
 
         try {
@@ -273,24 +337,39 @@ class SiteChangeApplier
                 'content' => (string) ($restore['content'] ?? ''),
             ], 60));
         } catch (\Throwable $e) {
-            return ['ok' => false, 'reason' => Str::limit($e->getMessage(), 200)];
+            return $this->failure(Str::limit($e->getMessage(), 200));
         }
 
         SiteChangePlanner::forget($site);
 
-        return ['ok' => true, 'reason' => null];
+        return ['ok' => true, 'reason' => null, 'message' => null];
+    }
+
+    /**
+     * Same text, ignoring how the line endings came back.
+     *
+     * The only tolerance allowed. WordPress rewrites CRLF to LF on save and may
+     * trim the trailing newline, and treating that as "somebody edited the
+     * page" would refuse every undo on a site that does it. Anything beyond
+     * whitespace at the edges IS an edit, and is treated as one.
+     */
+    private function sameText(string $live, string $expected): bool
+    {
+        $normalize = fn (string $text): string => trim(str_replace("\r\n", "\n", $text));
+
+        return $normalize($live) === $normalize($expected);
     }
 
     /**
      * @param  array<string, mixed>  $restore
-     * @return array{ok: bool, reason: string|null}
+     * @return array{ok: bool, reason: string|null, message: string|null}
      */
     private function revertProduct(Site $site, array $restore): array
     {
         $fields = (array) ($restore['fields'] ?? []);
 
         if ($fields === []) {
-            return ['ok' => false, 'reason' => 'אין לי את הערכים הקודמים של המוצר.'];
+            return $this->refuse('אין לי את הערכים הקודמים של המוצר.');
         }
 
         try {
@@ -299,15 +378,15 @@ class SiteChangeApplier
                 ...$fields,
             ], 60));
         } catch (\Throwable $e) {
-            return ['ok' => false, 'reason' => Str::limit($e->getMessage(), 200)];
+            return $this->failure(Str::limit($e->getMessage(), 200));
         }
 
-        return ['ok' => true, 'reason' => null];
+        return ['ok' => true, 'reason' => null, 'message' => null];
     }
 
     /**
      * @param  array<string, mixed>  $restore
-     * @return array{ok: bool, reason: string|null}
+     * @return array{ok: bool, reason: string|null, message: string|null}
      */
     private function revertThumbnail(Site $site, array $restore): array
     {
@@ -319,12 +398,12 @@ class SiteChangeApplier
                 'attachment_id' => (int) ($restore['attachment_id'] ?? 0),
             ], 60));
         } catch (\Throwable $e) {
-            return ['ok' => false, 'reason' => Str::limit($e->getMessage(), 200)];
+            return $this->failure(Str::limit($e->getMessage(), 200));
         }
 
         SiteChangePlanner::forget($site);
 
-        return ['ok' => true, 'reason' => null];
+        return ['ok' => true, 'reason' => null, 'message' => null];
     }
 
     /**
@@ -363,9 +442,34 @@ class SiteChangeApplier
         ];
     }
 
-    /** @return array{ok: bool, reason: string|null, restore: null} */
-    private function failure(string $reason, ?array $restore = null): array
+    /**
+     * A technical failure: the site's API threw, timed out or answered wrongly.
+     *
+     * The detail is kept as `reason` — it goes on the request row for the team
+     * to read — and the customer is told something plain. An exception message
+     * from somebody's WordPress is an internal detail, and forwarding it to a
+     * WhatsApp message is both useless to them and against the standard.
+     *
+     * @return array{ok: bool, reason: string, message: string, restore: null}
+     */
+    private function failure(string $reason): array
     {
-        return ['ok' => false, 'reason' => $reason, 'restore' => $restore];
+        return [
+            'ok' => false,
+            'reason' => $reason,
+            'message' => 'לא הצלחתי לבצע את השינוי באתר. נסו שוב, ואם זה חוזר — נשמח לעזור.',
+            'restore' => null,
+        ];
+    }
+
+    /**
+     * A refusal we can explain: the page is gone, the text moved, nothing was
+     * backed up. Said to the customer in the same words we record.
+     *
+     * @return array{ok: bool, reason: string, message: string, restore: null}
+     */
+    private function refuse(string $reason): array
+    {
+        return ['ok' => false, 'reason' => $reason, 'message' => $reason, 'restore' => null];
     }
 }

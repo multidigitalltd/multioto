@@ -88,6 +88,36 @@ class SiteAgentBilling
         ]));
     }
 
+    /**
+     * The same two facts, as positional parameters for the approved template.
+     *
+     * Used when the notice is the one WE start, which is outside any service
+     * window and therefore has to be a template. The wording lives in the
+     * template Meta approved; what varies — which site, and what to do about it
+     * — comes from here, so the two never say different things.
+     *
+     * @return list<string> {{1}} the domain · {{2}} what to do next
+     */
+    public function pausedTemplateParameters(SiteAgentSubscriber $subscriber): array
+    {
+        $subscription = $subscriber->customer !== null
+            ? $this->subscriptionFor($subscriber->customer)
+            : null;
+
+        $subscription?->setRelation('customer', $subscriber->customer);
+
+        return [
+            $subscriber->site?->domain ?? '',
+            $this->recovery($subscriber, $subscription),
+        ];
+    }
+
+    /** @return list<string> {{1}} the domain */
+    public function resumedTemplateParameters(SiteAgentSubscriber $subscriber): array
+    {
+        return [$subscriber->site?->domain ?? ''];
+    }
+
     /** What to say when it comes back. Short: the good news is the message. */
     public function resumedMessage(SiteAgentSubscriber $subscriber): string
     {

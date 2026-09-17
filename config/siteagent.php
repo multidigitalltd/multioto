@@ -44,6 +44,39 @@ return [
         'verify_token' => env('SITE_AGENT_WA_VERIFY_TOKEN', ''),
 
         'timeout_seconds' => (int) env('SITE_AGENT_WA_TIMEOUT', 20),
+
+        /*
+        | Approved message templates, for everything WE start.
+        |
+        | Meta accepts free-form text only inside the 24-hour window a customer's
+        | own message opens. The verification code goes to a number that has
+        | never written to this account at all, and a "your subscription lapsed"
+        | notice goes to somebody whose last message was weeks ago — both are
+        | outside it, and both would simply be refused.
+        |
+        | Names must match templates approved in the Meta account (see
+        | .env.example for the exact bodies they need). Left blank, the message
+        | falls back to plain text: correct inside an open window, and rejected
+        | outside one — which is why these are not optional in production.
+        */
+        'templates' => [
+            'language' => env('SITE_AGENT_WA_TEMPLATE_LANGUAGE', 'he'),
+
+            // Authentication category. {{1}} is the six-digit code.
+            'verification' => env('SITE_AGENT_WA_TEMPLATE_VERIFICATION', ''),
+
+            // Meta's authentication templates carry a copy-code button, which
+            // needs the code repeated on it. Turn off for a template approved
+            // without one — sending a button component a template does not have
+            // is rejected.
+            'verification_copy_button' => (bool) env('SITE_AGENT_WA_TEMPLATE_VERIFICATION_COPY_BUTTON', true),
+
+            // Utility category. {{1}} is the domain, {{2}} is what to do next.
+            'service_paused' => env('SITE_AGENT_WA_TEMPLATE_PAUSED', ''),
+
+            // Utility category. {{1}} is the domain.
+            'service_resumed' => env('SITE_AGENT_WA_TEMPLATE_RESUMED', ''),
+        ],
     ],
 
     /*

@@ -100,11 +100,26 @@ class SyncSiteAgentServiceStateJob implements ShouldQueue
             return;
         }
 
-        $message = $actual === SiteAgentSubscriber::STATE_PAUSED
-            ? $billing->pausedMessage($subscriber)
-            : $billing->resumedMessage($subscriber);
+        $paused = $actual === SiteAgentSubscriber::STATE_PAUSED;
 
-        if ($whatsapp->sendText($subscriber->phone, $message) === null) {
+        // Nobody asked us for this message, so it is outside the 24-hour window
+        // a customer's own message opens and Meta would refuse it as free text.
+        // A customer whose last message was three weeks ago is exactly the
+        // customer this notice is for.
+        $template = (string) config(
+            'siteagent.whatsapp.templates.'.($paused ? 'service_paused' : 'service_resumed'),
+            '',
+        );
+
+        $sent = $template !== ''
+            ? $whatsapp->sendTemplate($subscriber->phone, $template, $paused
+                ? $billing->pausedTemplateParameters($subscriber)
+                : $billing->resumedTemplateParameters($subscriber))
+            : $whatsapp->sendText($subscriber->phone, $paused
+                ? $billing->pausedMessage($subscriber)
+                : $billing->resumedMessage($subscriber));
+
+        if ($sent === null) {
             // Not recorded, so the next run tries again. Recording an
             // undelivered message is how a customer never finds out at all.
             return;

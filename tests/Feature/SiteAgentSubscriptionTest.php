@@ -265,6 +265,63 @@ class SiteAgentSubscriptionTest extends TestCase
         $this->assertTrue(Hash::check($this->sentCode(), $stored));
     }
 
+    public function test_the_code_goes_out_as_an_approved_template(): void
+    {
+        Http::fake(['*' => Http::response(['messages' => [['id' => 'wamid.code']]])]);
+        config(['siteagent.whatsapp.templates.verification' => 'site_agent_code']);
+
+        $subscriber = $this->subscriber(['verified_at' => null]);
+
+        (new SendSiteAgentVerificationJob($subscriber->id))->handle(
+            app(WhatsAppCloudClient::class),
+            app(TeamNotifier::class),
+        );
+
+        // This number has never written to us, so there is no 24-hour service
+        // window open and Meta refuses free-form text (131047). Sent as text,
+        // the customer simply never receives the code that activates the
+        // product they just paid for.
+        $body = Http::recorded()->first()[0]->data();
+
+        $this->assertSame('template', $body['type']);
+        $this->assertSame('site_agent_code', $body['template']['name']);
+
+        $code = data_get($body, 'template.components.0.parameters.0.text');
+        $this->assertMatchesRegularExpression('/^\d{6}$/', (string) $code);
+        // Meta's authentication templates carry a copy-code button, and the
+        // code has to be repeated on it or the send is rejected.
+        $this->assertSame($code, data_get($body, 'template.components.1.parameters.0.text'));
+        $this->assertTrue(Hash::check($code, $subscriber->fresh()->getAttributes()['verification_code']));
+    }
+
+    public function test_the_lapse_notice_goes_out_as_an_approved_template(): void
+    {
+        Http::fake(['*' => Http::response(['messages' => [['id' => 'wamid.x']]])]);
+        config(['siteagent.whatsapp.templates.service_paused' => 'site_agent_paused']);
+
+        $customer = Customer::factory()->create(['phone' => '050-1234567']);
+        $site = $this->connectedSite($customer);
+        $this->bind($site, '972501234567');
+
+        $subscription = $this->subscribe($customer);
+        $this->sync();
+
+        $subscription->update(['status' => SubscriptionStatus::PastDue]);
+        $this->sync();
+
+        $body = Http::recorded()->last()[0]->data();
+        $parameters = array_column(data_get($body, 'template.components.0.parameters', []), 'text');
+
+        $this->assertSame('site_agent_paused', data_get($body, 'template.name'));
+        $this->assertSame($site->domain, $parameters[0] ?? null);
+        // The way back rides in the template's own parameter: a template send
+        // does not open a window, so no free-text message can follow it.
+        $this->assertStringContainsString('/billing/update-card/', $parameters[1] ?? '');
+        // Meta rejects a parameter carrying a newline, and a rejected template
+        // is a customer who hears nothing at all.
+        $this->assertStringNotContainsString("\n", $parameters[1] ?? '');
+    }
+
     public function test_a_code_that_could_not_be_delivered_is_never_stamped(): void
     {
         Http::fake(['*' => Http::response(['error' => ['message' => 'down']], 500)]);

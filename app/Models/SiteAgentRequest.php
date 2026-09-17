@@ -17,6 +17,15 @@ class SiteAgentRequest extends Model
     /** Shown to the customer, waiting for their yes. */
     public const AWAITING = 'awaiting';
 
+    /**
+     * Claimed by a worker and being carried out right now.
+     *
+     * Its own state, and not a flag, because it is what makes a second "כן"
+     * harmless: the move out of AWAITING is a single conditional UPDATE, so
+     * exactly one worker wins it and the other finds nothing left to do.
+     */
+    public const APPLYING = 'applying';
+
     /** They said yes and it is live. */
     public const APPLIED = 'applied';
 

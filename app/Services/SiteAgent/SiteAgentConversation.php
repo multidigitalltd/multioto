@@ -57,6 +57,25 @@ class SiteAgentConversation
             ->first();
 
         if ($pending !== null) {
+            // A question WE asked about an image already in hand. Everything
+            // that is not a plain refusal is the answer to it — checked before
+            // the yes/no branches, because "כן" is not an answer to "how should
+            // I describe the picture?" and confirming an offer that was never
+            // made is not what the customer meant by it.
+            //
+            // Without this the reply would fall through to the text planner —
+            // which has no image — and they would be asked to send the
+            // photograph again for no reason they could see.
+            if ($mediaId === null && $this->isImageQuestion($pending)) {
+                if ($this->matches($text, self::NO)) {
+                    $this->settle($pending, SiteAgentRequest::CANCELED);
+
+                    return 'בוטל, לא שיניתי כלום. אפשר לבקש משהו אחר.';
+                }
+
+                return $this->answerImageQuestion($subscriber, $pending, $text);
+            }
+
             if ($this->matches($text, self::YES)) {
                 return $this->confirm($pending);
             }
@@ -169,10 +188,6 @@ class SiteAgentConversation
             return 'קיבלתי את התמונה, אבל לא הצלחתי להבין לאן לשים אותה.';
         }
 
-        if (isset($plan['question'])) {
-            return $plan['question'];
-        }
-
         $minutes = max(1, (int) config('siteagent.confirmation_minutes', 30));
 
         // Held on a private disk, not in the database row: an eight-megabyte
@@ -189,13 +204,77 @@ class SiteAgentConversation
             'message' => Str::limit($caption !== '' ? $caption : '[תמונה]', 2000),
             'inbound_message_id' => $messageId,
             'operation' => SiteAgentRequest::OP_IMAGE,
-            'plan' => [...$plan, 'image_path' => $path, 'extension' => $media['extension']],
-            'preview' => $this->preview($plan),
+            'plan' => [...$plan, 'image_path' => $path, 'extension' => $media['extension'], 'caption' => $caption],
+            // A question is not an offer, so there is nothing to preview and
+            // nothing a "כן" could confirm — the row exists to hold the picture
+            // and the caption while we wait for the missing half.
+            'preview' => isset($plan['question']) ? null : $this->preview($plan),
             'state' => SiteAgentRequest::AWAITING,
             'expires_at' => now()->addMinutes($minutes),
         ]);
 
-        return $request->preview."\n\n".'לביצוע השיבו "כן". לביטול — "לא".';
+        return isset($plan['question'])
+            ? $plan['question']
+            : $request->preview."\n\n".'לביצוע השיבו "כן". לביטול — "לא".';
+    }
+
+    /**
+     * Is this row a question we asked about an image, rather than an offer?
+     *
+     * An offer has a preview and can be confirmed; this has neither, and the
+     * next thing the customer types is the answer to it.
+     */
+    private function isImageQuestion(SiteAgentRequest $request): bool
+    {
+        return $request->operation === SiteAgentRequest::OP_IMAGE
+            && filled(data_get($request->plan, 'question'))
+            && filled(data_get($request->plan, 'image_path'));
+    }
+
+    /**
+     * Their answer, read together with what they originally said.
+     *
+     * Both halves go back to the planner: "תשים את זה בדף הבית" followed by
+     * "כיכר לחם על שולחן עץ" is one instruction the customer gave in two
+     * messages, and planning only the second would lose the page.
+     */
+    private function answerImageQuestion(SiteAgentSubscriber $subscriber, SiteAgentRequest $request, string $answer): string
+    {
+        $site = $subscriber->site;
+
+        if ($site === null) {
+            return 'אין לי כרגע חיבור לאתר.';
+        }
+
+        $plan = (array) $request->plan;
+        $caption = trim(trim((string) ($plan['caption'] ?? '')).' '.$answer);
+
+        $next = $this->images->plan($site, $caption, $this->planner->targets($site));
+
+        if ($next === null) {
+            return 'קיבלתי את התמונה, אבל לא הצלחתי להבין לאן לשים אותה.';
+        }
+
+        // Still short of something. The picture stays where it is and the
+        // question is asked again, refined — the customer never resends it.
+        if (isset($next['question'])) {
+            $request->update([
+                'plan' => [...$next, 'image_path' => $plan['image_path'], 'extension' => $plan['extension'] ?? 'jpg', 'caption' => $caption],
+                'message' => Str::limit($caption, 2000),
+                'expires_at' => now()->addMinutes(max(1, (int) config('siteagent.confirmation_minutes', 30))),
+            ]);
+
+            return $next['question'];
+        }
+
+        $request->update([
+            'plan' => [...$next, 'image_path' => $plan['image_path'], 'extension' => $plan['extension'] ?? 'jpg', 'caption' => $caption],
+            'message' => Str::limit($caption, 2000),
+            'preview' => $this->preview($next),
+            'expires_at' => now()->addMinutes(max(1, (int) config('siteagent.confirmation_minutes', 30))),
+        ]);
+
+        return $request->refresh()->preview."\n\n".'לביצוע השיבו "כן". לביטול — "לא".';
     }
 
     /**
@@ -262,16 +341,62 @@ class SiteAgentConversation
         };
     }
 
-    /** They said yes. Carry it out, and say plainly whether it worked. */
+    /**
+     * They said yes. Carry it out, and say plainly whether it worked.
+     *
+     * Two "כן" messages are two different inbound messages, so the webhook's
+     * own deduplication never sees them as the same thing: both jobs can load
+     * the same awaiting offer and both can carry it out — a paragraph appended
+     * twice, an image uploaded twice. The conditional UPDATE is what actually
+     * prevents it, because it is one statement and exactly one caller can move
+     * the row out of AWAITING; the lock is there so the second caller finds out
+     * before it has done any work rather than after.
+     */
     private function confirm(SiteAgentRequest $request): string
     {
-        $result = $this->applier->apply($request);
+        $lock = Cache::lock("site-agent:confirm:{$request->id}", 180);
+
+        if (! $lock->get()) {
+            return 'אני כבר מבצע את השינוי — רגע אחד.';
+        }
+
+        try {
+            $claimed = SiteAgentRequest::query()
+                ->whereKey($request->id)
+                ->where('state', SiteAgentRequest::AWAITING)
+                ->update(['state' => SiteAgentRequest::APPLYING]);
+
+            if ($claimed === 0) {
+                return 'השינוי הזה כבר טופל.';
+            }
+
+            $request->refresh();
+
+            return $this->carryOut($request);
+        } finally {
+            $lock->release();
+        }
+    }
+
+    /** The claimed request, executed. */
+    private function carryOut(SiteAgentRequest $request): string
+    {
+        try {
+            $result = $this->applier->apply($request);
+        } catch (\Throwable $e) {
+            // Nothing may leave the row stuck in APPLYING: the image would sit
+            // on our disk forever and the team would see a change that never
+            // finished.
+            $this->settle($request, SiteAgentRequest::FAILED, Str::limit($e->getMessage(), 490));
+
+            return 'לא הצלחתי לבצע את השינוי באתר. נסו שוב, ואם זה חוזר — נשמח לעזור.';
+        }
 
         if (! $result['ok']) {
-            $request->update([
-                'state' => SiteAgentRequest::FAILED,
-                'failure_reason' => $result['reason'],
-            ]);
+            // settle(), not a bare state change: a failed image change used to
+            // leave the customer's photograph on our disk indefinitely, because
+            // the pruning job only ever visits offers still awaiting an answer.
+            $this->settle($request, SiteAgentRequest::FAILED, (string) $result['reason']);
 
             // The page moved under us between the preview and the yes.
             if ($result['reason'] === SiteChangeApplier::STALE) {
@@ -279,7 +404,10 @@ class SiteAgentConversation
                     .'בקשו שוב ואציג הצעה מעודכנת.';
             }
 
-            return 'לא הצלחתי לבצע את השינוי: '.$result['reason'];
+            // The customer gets the message, never the reason: a reason may be
+            // an error from their site's API, and that is not theirs to read in
+            // a WhatsApp message.
+            return 'לא הצלחתי לבצע את השינוי: '.$result['message'];
         }
 
         $request->update([
@@ -330,7 +458,15 @@ class SiteAgentConversation
             $result = $this->applier->revert($last);
 
             if (! $result['ok']) {
-                return 'לא הצלחתי להחזיר את השינוי: '.$result['reason'];
+                // The page was edited after our change. An undo writes the whole
+                // page back, so carrying on would erase that edit — which is
+                // the one thing an undo must never do.
+                if ($result['reason'] === SiteChangeApplier::STALE) {
+                    return 'העמוד נערך אחרי השינוי שביצעתי, ולכן לא החזרתי אותו — שחזור היה מוחק את העריכה החדשה. '
+                        .'אפשר לומר לי בדיוק מה להחזיר ואציג הצעה.';
+                }
+
+                return 'לא הצלחתי להחזיר את השינוי: '.$result['message'];
             }
 
             $last->update(['state' => SiteAgentRequest::REVERTED, 'reverted_at' => now()]);
@@ -348,7 +484,7 @@ class SiteAgentConversation
      * disk — it is a customer's file, held only for as long as the question
      * about it is open.
      */
-    private function settle(SiteAgentRequest $request, string $state): void
+    private function settle(SiteAgentRequest $request, string $state, ?string $reason = null): void
     {
         $path = (string) data_get($request->plan, 'image_path', '');
 
@@ -356,7 +492,10 @@ class SiteAgentConversation
             Storage::disk('local')->delete($path);
         }
 
-        $request->update(['state' => $state]);
+        $request->update(array_filter([
+            'state' => $state,
+            'failure_reason' => $reason,
+        ], fn ($value): bool => $value !== null));
     }
 
     /**
