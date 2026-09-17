@@ -6,6 +6,7 @@ use App\Models\SiteAgentSubscriber;
 use App\Models\SystemLog;
 use App\Models\WebhookEvent;
 use App\Services\SiteAgent\SiteAgentAccess;
+use App\Services\SiteAgent\SiteAgentBilling;
 use App\Services\SiteAgent\SiteAgentConversation;
 use App\Services\SiteAgent\WhatsAppCloudClient;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -90,7 +91,7 @@ class HandleSiteAgentMessageJob implements ShouldQueue
                     $mediaId !== '' ? $mediaId : null,
                 );
         } else {
-            $reply = $this->answerFor($decision['status']);
+            $reply = $this->answerFor($decision['status'], $subscriber);
         }
 
         if ($reply !== '' && $whatsapp->sendText($from, $reply) === null) {
@@ -142,7 +143,7 @@ class HandleSiteAgentMessageJob implements ShouldQueue
      * nothing back, concludes the business is broken — and they are not wrong
      * to.
      */
-    private function answerFor(string $status): string
+    private function answerFor(string $status, ?SiteAgentSubscriber $subscriber): string
     {
         $support = (string) config('billing.email.support_address');
         $contact = $support !== '' ? "\nלכל שאלה: {$support}" : '';
@@ -151,12 +152,13 @@ class HandleSiteAgentMessageJob implements ShouldQueue
             SiteAgentAccess::UNVERIFIED => 'כדי להתחיל, שלחו כאן את קוד האימות בן 6 הספרות שנשלח אליכם. '
                 .'אם הקוד פג — פנו אלינו ונשלח חדש.'.$contact,
 
-            SiteAgentAccess::NO_SUBSCRIPTION => implode("\n", array_filter([
-                'המנוי לשירות ניהול האתר אינו פעיל כרגע, ולכן איני יכול לבצע שינויים.',
-                '',
-                'האתר עצמו ממשיך לעבוד כרגיל — רק הסוכן מושהה.',
-                'לחידוש המנוי דברו איתנו ונפעיל מחדש.'.$contact,
-            ])),
+            // The same words the pause notification used, from the same place:
+            // somebody who writes a week after being told the agent stopped
+            // should get the same explanation and the same way to fix it, not a
+            // vaguer version of it.
+            SiteAgentAccess::NO_SUBSCRIPTION => $subscriber !== null
+                ? app(SiteAgentBilling::class)->pausedMessage($subscriber)
+                : 'מנוי ניהול האתר אינו פעיל כרגע.'.$contact,
 
             SiteAgentAccess::REVOKED => 'ההרשאה של המספר הזה לניהול האתר הוסרה.'.$contact,
 

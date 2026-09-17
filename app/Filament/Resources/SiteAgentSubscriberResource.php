@@ -4,6 +4,7 @@ namespace App\Filament\Resources;
 
 use App\Filament\Concerns\RespectsModuleAccess;
 use App\Filament\Resources\SiteAgentSubscriberResource\Pages;
+use App\Jobs\SendSiteAgentVerificationJob;
 use App\Models\Site;
 use App\Models\SiteAgentSubscriber;
 use App\Services\SiteAgent\SiteAgentAccess;
@@ -15,7 +16,6 @@ use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Support\Facades\Hash;
 
 /**
  * מי מנהל אתר מהוואטסאפ — the list of numbers the product will answer.
@@ -101,6 +101,11 @@ class SiteAgentSubscriberResource extends Resource
             $record->revoked_at !== null => 'revoked',
             $record->verified_at === null => 'unverified',
             ! (bool) $record->customer_subscribed => 'unsubscribed',
+            // Entitled, and nothing is billing for it. A trial with no card is
+            // the one state that looks perfectly healthy from every other
+            // screen — the agent works, the customer is happy, and no charge
+            // will ever be attempted — so it is called out by name here.
+            (bool) $record->customer_awaiting_card => 'awaiting_card',
             default => 'active',
         };
     }
@@ -117,10 +122,12 @@ class SiteAgentSubscriberResource extends Resource
     {
         return parent::getEloquentQuery()
             ->with(['customer:id,name', 'site:id,domain,customer_id'])
-            ->withExists(['customer as customer_subscribed' => fn (Builder $query) => $query
-                ->whereHas('subscriptions', fn (Builder $subscription) => $subscription
-                    ->whereIn('status', SiteAgentAccess::ENTITLING)
-                    ->whereHas('plan', fn (Builder $plan) => $plan->where('includes_site_agent', true)))]);
+            ->withExists([
+                'customer as customer_subscribed' => fn (Builder $query) => $query
+                    ->whereHas('subscriptions', fn (Builder $s) => SiteAgentAccess::entitling($s)),
+                'customer as customer_awaiting_card' => fn (Builder $query) => $query
+                    ->whereHas('subscriptions', fn (Builder $s) => SiteAgentAccess::unbilled($s)),
+            ]);
     }
 
     public static function table(Table $table): Table
@@ -146,11 +153,12 @@ class SiteAgentSubscriberResource extends Resource
                         'revoked' => 'ההרשאה הוסרה',
                         'unverified' => 'ממתין לאימות',
                         'unsubscribed' => 'אין מנוי פעיל',
+                        'awaiting_card' => 'פעיל — ממתין לכרטיס',
                         default => 'פעיל',
                     })
                     ->color(fn (SiteAgentSubscriber $record): string => match (self::stateOf($record)) {
                         'revoked' => 'gray',
-                        'unverified' => 'warning',
+                        'unverified', 'awaiting_card' => 'warning',
                         'unsubscribed' => 'danger',
                         default => 'success',
                     }),
@@ -161,6 +169,28 @@ class SiteAgentSubscriberResource extends Resource
                     ->sortable(),
             ])
             ->defaultSort('created_at', 'desc')
+            // The list is read to find the rows that need doing something about,
+            // not to browse. Each option is one such row: a code that was never
+            // answered, a customer who stopped paying, a trial nobody is billing.
+            ->filters([
+                Tables\Filters\SelectFilter::make('state')
+                    ->label('מצב')
+                    ->options([
+                        'unverified' => 'ממתין לאימות',
+                        'unsubscribed' => 'אין מנוי פעיל',
+                        'awaiting_card' => 'פעיל — ממתין לכרטיס',
+                        'revoked' => 'ההרשאה הוסרה',
+                    ])
+                    ->query(fn (Builder $query, array $data): Builder => match ($data['value'] ?? null) {
+                        'unverified' => $query->whereNull('verified_at')->whereNull('revoked_at'),
+                        'revoked' => $query->whereNotNull('revoked_at'),
+                        'unsubscribed' => $query->usable()->whereDoesntHave('customer',
+                            fn (Builder $c) => $c->whereHas('subscriptions', fn (Builder $s) => SiteAgentAccess::entitling($s))),
+                        'awaiting_card' => $query->usable()->whereHas('customer',
+                            fn (Builder $c) => $c->whereHas('subscriptions', fn (Builder $s) => SiteAgentAccess::unbilled($s))),
+                        default => $query,
+                    }),
+            ])
             ->actions([
                 Tables\Actions\Action::make('sendCode')
                     ->label('שלח קוד אימות')
@@ -169,42 +199,16 @@ class SiteAgentSubscriberResource extends Resource
                     ->requiresConfirmation()
                     ->modalHeading('שליחת קוד אימות')
                     ->modalDescription(fn (SiteAgentSubscriber $record): string => "יישלח קוד בן 6 ספרות למספר {$record->phone}. משליחתו הוא תקף ל-".(int) config('siteagent.binding.verification_ttl_minutes', 30).' דקות.')
-                    ->action(function (SiteAgentSubscriber $record, WhatsAppCloudClient $whatsapp): void {
-                        // Minted here and never shown on screen: a code the team
-                        // can read is one the team can use, and the point of it
-                        // is to prove the PHONE holder is who we think.
-                        $code = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
-
-                        $sent = $whatsapp->sendText($record->phone, implode("\n", [
-                            'קוד האימות שלכם לניהול האתר '.$record->site?->domain.':',
-                            $code,
-                            '',
-                            'שלחו אותו חזרה כאן כדי להתחיל.',
-                        ]));
-
-                        if ($sent === null) {
-                            // Stamping a code we could not deliver would leave
-                            // the team waiting for a reply to a message nobody
-                            // received.
-                            Notification::make()->title('הקוד לא נשלח')
-                                ->body('לא הצלחנו לשלוח לוואטסאפ. בדקו את הגדרות החיבור ונסו שוב.')
-                                ->danger()->send();
-
-                            return;
-                        }
-
-                        $record->forceFill([
-                            'verification_code' => Hash::make($code),
-                            'verification_sent_at' => now(),
-                            // A fresh code is a fresh chance: the counter that
-                            // bounds guessing must not carry over, or resending
-                            // to a customer who mistyped would hand them a code
-                            // that is already spent.
-                            'verification_attempts' => 0,
-                        ])->save();
+                    // Queued, not sent from here. The code is minted and the
+                    // binding stamped in one place (SendSiteAgentVerificationJob),
+                    // so this button and the activation screen cannot drift —
+                    // and no screen waits on WhatsApp to answer.
+                    ->action(function (SiteAgentSubscriber $record): void {
+                        SendSiteAgentVerificationJob::dispatch($record->id);
 
                         Notification::make()->title('הקוד נשלח')
-                            ->body('הלקוח צריך לשלוח אותו חזרה באותה שיחה.')->success()->send();
+                            ->body('הלקוח צריך לשלוח אותו חזרה באותה שיחה. אם השליחה תיכשל — תישלח התראה לצוות.')
+                            ->success()->send();
                     }),
 
                 Tables\Actions\Action::make('revoke')

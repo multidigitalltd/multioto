@@ -6,6 +6,8 @@ use App\Enums\SubscriptionStatus;
 use App\Models\Customer;
 use App\Models\Site;
 use App\Models\SiteAgentSubscriber;
+use App\Models\Subscription;
+use Illuminate\Database\Eloquent\Builder;
 
 /**
  * May this number drive this site right now?
@@ -110,9 +112,46 @@ class SiteAgentAccess
      */
     public function subscribed(Customer $customer): bool
     {
-        return $customer->subscriptions()
+        // getQuery(): the relation already carries the customer constraint, and
+        // what entitling() needs is the Eloquent builder underneath it.
+        return self::entitling($customer->subscriptions()->getQuery())->exists();
+    }
+
+    /**
+     * The one definition of "a subscription that switches the agent on",
+     * expressed as a constraint on a subscriptions query.
+     *
+     * Every screen and job that has to ask this of many rows at once — the
+     * subscriber list, the pause/resume reconciliation, the activation screen —
+     * asks it through here. The question is "is this customer paying for the
+     * agent", and two versions of that predicate drifting apart means one
+     * screen showing a customer as paying while the agent turns them away.
+     *
+     * @param  Builder<Subscription>  $subscriptions
+     * @return Builder<Subscription>
+     */
+    public static function entitling(Builder $subscriptions): Builder
+    {
+        return $subscriptions
             ->whereIn('status', self::ENTITLING)
-            ->whereHas('plan', fn ($query) => $query->where('includes_site_agent', true))
-            ->exists();
+            ->whereHas('plan', fn (Builder $plan) => $plan->where('includes_site_agent', true));
+    }
+
+    /**
+     * Agent subscriptions that entitle but cannot bill: a trial with no card.
+     *
+     * Its own predicate because it is invisible everywhere else — the scheduler
+     * skips it for want of a token, the debtor screens skip it for being a
+     * trial, and the customer is using a product nobody is charging for.
+     *
+     * @param  Builder<Subscription>  $subscriptions
+     * @return Builder<Subscription>
+     */
+    public static function unbilled(Builder $subscriptions): Builder
+    {
+        return $subscriptions
+            ->where('status', SubscriptionStatus::Trialing)
+            ->whereNull('token_id')
+            ->whereHas('plan', fn (Builder $plan) => $plan->where('includes_site_agent', true));
     }
 }

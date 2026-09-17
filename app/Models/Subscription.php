@@ -6,6 +6,7 @@ use App\Enums\BillingInterval;
 use App\Enums\ChargeStatus;
 use App\Enums\PaymentMethod;
 use App\Enums\SubscriptionStatus;
+use App\Jobs\SyncSiteAgentServiceStateJob;
 use App\Support\Money;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -114,6 +115,36 @@ class Subscription extends Model
         static::saved(function (self $subscription): void {
             if ($subscription->wasChanged('installments_total')) {
                 $subscription->closeIfInstallmentPlanComplete();
+            }
+        });
+
+        // A site-agent customer whose subscription moved deserves to hear about
+        // it now rather than at the top of the hour.
+        //
+        // These hooks are for PROMPTNESS only, never for correctness: the job is
+        // a reconciliation that works out the truth for itself, runs hourly
+        // regardless, and does nothing when nothing changed. So a path that
+        // never triggers it — a plan flag toggled, a status written by a future
+        // screen — costs a delay and never a missed notice.
+        $syncSiteAgent = function (self $subscription): void {
+            // Nothing is queued while the product is switched off. The job would
+            // return on its own line one, so this is not about correctness — it
+            // is about every subscription written anywhere in the system not
+            // dragging a job behind it for a product this installation does not
+            // sell.
+            if ($subscription->customer_id !== null && (bool) config('siteagent.enabled', false)) {
+                SyncSiteAgentServiceStateJob::dispatch($subscription->customer_id);
+            }
+        };
+
+        // Opened (a customer who lapsed and re-subscribed) and removed are both
+        // changes of entitlement; an update is one only when the status moved.
+        static::created($syncSiteAgent);
+        static::deleted($syncSiteAgent);
+
+        static::updated(function (self $subscription) use ($syncSiteAgent): void {
+            if ($subscription->wasChanged('status')) {
+                $syncSiteAgent($subscription);
             }
         });
     }

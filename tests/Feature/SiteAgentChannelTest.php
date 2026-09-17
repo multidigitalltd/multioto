@@ -270,6 +270,22 @@ class SiteAgentChannelTest extends TestCase
         $this->assertReplyContains('האתר עצמו ממשיך לעבוד');
     }
 
+    public function test_a_lapsed_owner_is_given_the_way_back(): void
+    {
+        Http::fake(['*' => Http::response(['messages' => [['id' => 'wamid.reply']]])]);
+
+        $subscriber = $this->subscriber();
+        $subscriber->customer->update(['phone' => '050-1234567']);
+        $this->subscribe($subscriber->customer, SubscriptionStatus::PastDue);
+
+        $this->deliver('972501234567', 'תעדכן מחיר');
+
+        // "אינו פעיל" and nothing else is how a customer who wants to keep
+        // paying concludes the product is broken. The fix is one tap away, and
+        // this is the moment they are asking for it.
+        $this->assertReplyContains('/billing/update-card/');
+    }
+
     public function test_a_subscription_to_something_else_does_not_buy_the_agent(): void
     {
         $subscriber = $this->subscriber();

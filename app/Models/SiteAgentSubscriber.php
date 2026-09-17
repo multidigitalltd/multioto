@@ -26,6 +26,12 @@ class SiteAgentSubscriber extends Model
         'revoked_at', 'revoked_reason', 'last_seen_at',
     ];
 
+    /** The service is running for this number, and it has been told so. */
+    public const STATE_ACTIVE = 'active';
+
+    /** The subscription does not entitle it right now, and it has been told so. */
+    public const STATE_PAUSED = 'paused';
+
     /** The code is a credential for the duration of its life; never serialise it. */
     protected $hidden = ['verification_code'];
 
@@ -36,6 +42,7 @@ class SiteAgentSubscriber extends Model
             'verified_at' => 'datetime',
             'revoked_at' => 'datetime',
             'last_seen_at' => 'datetime',
+            'notified_service_state_at' => 'datetime',
         ];
     }
 
