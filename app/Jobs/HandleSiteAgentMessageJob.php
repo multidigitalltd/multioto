@@ -8,6 +8,7 @@ use App\Models\WebhookEvent;
 use App\Services\SiteAgent\SiteAgentAccess;
 use App\Services\SiteAgent\SiteAgentBilling;
 use App\Services\SiteAgent\SiteAgentConversation;
+use App\Services\SiteAgent\SiteChoice;
 use App\Services\SiteAgent\WhatsAppCloudClient;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -42,6 +43,7 @@ class HandleSiteAgentMessageJob implements ShouldQueue
         SiteAgentAccess $access,
         WhatsAppCloudClient $whatsapp,
         SiteAgentConversation $conversation,
+        SiteChoice $choice,
     ): void {
         $event = WebhookEvent::find($this->webhookEventId);
 
@@ -67,17 +69,44 @@ class HandleSiteAgentMessageJob implements ShouldQueue
             return;
         }
 
-        $decision = $access->for($from);
-        $subscriber = $decision['subscriber'];
+        $bindings = $access->bindings($from);
 
         // Somebody sending the code they were asked for is answering a question
-        // we asked, not issuing an instruction — checked before anything else.
-        if ($subscriber !== null && $subscriber->verified_at === null && $subscriber->codeMatches($text)) {
-            $this->completeVerification($subscriber, $whatsapp, (string) ($payload['_profile_name'] ?? ''));
+        // we asked, not issuing an instruction — checked before anything else,
+        // and against EVERY binding awaiting one. The code is what identifies
+        // which binding they are proving, so an owner already managing one site
+        // can still verify a second.
+        $awaiting = $bindings->first(fn (SiteAgentSubscriber $binding): bool => $binding->verified_at === null
+            && $binding->revoked_at === null
+            && $binding->codeMatches($text));
+
+        if ($awaiting !== null) {
+            $this->completeVerification($awaiting, $whatsapp, (string) ($payload['_profile_name'] ?? ''));
+            // The site they just proved is the one they are talking about.
+            $choice->remember($from, (int) $awaiting->site_id);
             $event->markProcessed();
 
             return;
         }
+
+        $usable = $bindings->filter(fn (SiteAgentSubscriber $binding): bool => $binding->isUsable())->values();
+        $subscriber = $choice->resolve($from, $text, $usable);
+
+        // More than one site and nothing in the message says which. Asking is
+        // the only safe answer: an instruction meant for one business carried
+        // out on another is the worst thing this product can do, and it would
+        // be done silently.
+        if ($subscriber === null && $usable->count() > 1) {
+            $whatsapp->sendText($from, $choice->question($usable));
+            $event->markProcessed();
+
+            return;
+        }
+
+        // Nothing usable: fall back to any binding at all, so the refusal can
+        // say WHICH refusal it is — unverified, revoked, or unheard of.
+        $decision = $access->forSubscriber($subscriber ?? $bindings->first());
+        $subscriber = $decision['subscriber'];
 
         if ($decision['status'] === SiteAgentAccess::ALLOWED && $subscriber !== null) {
             $subscriber->forceFill(['last_seen_at' => now()])->save();

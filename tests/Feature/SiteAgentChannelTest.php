@@ -8,20 +8,26 @@ use App\Jobs\HandleSiteAgentMessageJob;
 use App\Models\Customer;
 use App\Models\Plan;
 use App\Models\Site;
+use App\Models\SiteAgentRequest;
 use App\Models\SiteAgentSubscriber;
 use App\Models\Subscription;
 use App\Models\User;
 use App\Models\WebhookEvent;
+use App\Services\Agent\McpClient;
+use App\Services\Ai\ClaudeClient;
 use App\Services\SiteAgent\SiteAgentAccess;
 use App\Services\SiteAgent\SiteAgentConversation;
+use App\Services\SiteAgent\SiteChoice;
 use App\Services\SiteAgent\WhatsAppCloudClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Testing\TestResponse;
 use Livewire\Livewire;
+use Mockery;
 use Tests\TestCase;
 
 /**
@@ -211,9 +217,11 @@ class SiteAgentChannelTest extends TestCase
         ]);
 
         // Six digits is a million tries for a machine; the code has to stop
-        // being guessable long before that.
-        foreach (range(1, SiteAgentSubscriber::MAX_VERIFICATION_ATTEMPTS) as $ignored) {
-            $this->deliver('972501234567', '000000');
+        // being guessable long before that. Each guess is a DIFFERENT wrong
+        // code, because the same message twice is one delivery deduplicated —
+        // which is a replay, not a second attempt.
+        foreach (range(1, SiteAgentSubscriber::MAX_VERIFICATION_ATTEMPTS) as $attempt) {
+            $this->deliver('972501234567', str_pad((string) $attempt, 6, '0', STR_PAD_LEFT));
         }
 
         // Even the RIGHT code no longer binds: the attempt is over.
@@ -333,6 +341,89 @@ class SiteAgentChannelTest extends TestCase
         $this->deliver('972501234567', 'תעדכן טקסט');
 
         $this->assertReplyContains('אין כרגע חיבור לאתר');
+    }
+
+    public function test_a_number_managing_two_sites_is_asked_which_one(): void
+    {
+        Http::fake(['*' => Http::response(['messages' => [['id' => 'wamid.reply']]])]);
+
+        [$bakery, $cafe] = $this->twoSites();
+
+        $this->deliver('972501234567', 'תעדכן את שעות הפתיחה');
+
+        // Guessing here means an instruction meant for one business carried out
+        // on another, silently. Both names are offered so the answer is a word
+        // they already have.
+        $this->assertReplyContains('יותר מאתר אחד');
+        $this->assertReplyContains($bakery->site->domain);
+        $this->assertReplyContains($cafe->site->domain);
+
+        // And nothing was planned or changed while the question is open.
+        $this->assertSame(0, SiteAgentRequest::count());
+    }
+
+    public function test_naming_the_site_settles_it_for_the_conversation(): void
+    {
+        Http::fake(['*' => Http::response(['messages' => [['id' => 'wamid.reply']]])]);
+
+        [, $cafe] = $this->twoSites();
+
+        $this->deliver('972501234567', 'תעדכן את שעות הפתיחה');
+        $this->assertReplyContains('יותר מאתר אחד');
+
+        // Naming it answers the question...
+        $this->deliver('972501234567', $cafe->site->domain);
+        $this->assertStringNotContainsString('יותר מאתר אחד', $this->lastReply());
+
+        // ...and the next instruction does not ask again.
+        $this->deliver('972501234567', 'תוסיף משפט בדף הבית');
+        $this->assertStringNotContainsString('יותר מאתר אחד', $this->lastReply());
+
+        $this->assertSame($cafe->site_id, SiteAgentRequest::latest('id')->first()?->site_id);
+    }
+
+    public function test_the_position_in_the_list_is_an_answer_but_a_price_is_not(): void
+    {
+        Http::fake(['*' => Http::response(['messages' => [['id' => 'wamid.reply']]])]);
+
+        [$bakery] = $this->twoSites();
+
+        $this->deliver('972501234567', 'תעדכן מחיר');
+        $this->deliver('972501234567', '1');
+
+        // Sorted by domain, so "1" is a stable answer between two messages.
+        $this->assertSame($bakery->site_id, SiteAgentRequest::latest('id')->first()?->site_id);
+    }
+
+    public function test_a_second_site_can_still_be_verified_by_its_own_code(): void
+    {
+        Http::fake(['*' => Http::response(['messages' => [['id' => 'wamid.reply']]])]);
+
+        $bakery = $this->subscriber();
+        $this->subscribe($bakery->customer);
+
+        // The same owner, a second site, waiting for its code. Looking at only
+        // one binding per number meant this code could never be answered.
+        $second = Site::factory()->create([
+            'customer_id' => $bakery->customer_id,
+            'domain' => 'cafe.test',
+            'mcp_enabled' => true,
+            'mcp_endpoint' => 'https://cafe.test/wp-json/multioto/v1/mcp',
+            'mcp_secret' => 'secret',
+        ]);
+
+        $pending = SiteAgentSubscriber::create([
+            'phone' => '972501234567',
+            'customer_id' => $bakery->customer_id,
+            'site_id' => $second->id,
+            'verification_code' => Hash::make('654321'),
+            'verification_sent_at' => now(),
+        ]);
+
+        $this->deliver('972501234567', '654321');
+
+        $this->assertNotNull($pending->fresh()->verified_at);
+        $this->assertReplyContains('המספר אומת');
     }
 
     public function test_an_israeli_number_is_normalised_the_way_the_provider_wants_it(): void
@@ -485,13 +576,38 @@ class SiteAgentChannelTest extends TestCase
         $this->postSigned(json_encode($this->envelope($from, $text)))->assertOk();
 
         $event = WebhookEvent::latest('id')->firstOrFail();
-        $event->update(['processed_at' => null]);
+
+        // The queue runs inline here, so the controller's dispatch has usually
+        // already handled it. Running it a second time is not a harmless
+        // repeat — it would replay the customer's instruction.
+        if ($event->processed_at !== null) {
+            return;
+        }
 
         (new HandleSiteAgentMessageJob($event->id))->handle(
             app(SiteAgentAccess::class),
             app(WhatsAppCloudClient::class),
             app(SiteAgentConversation::class),
+            app(SiteChoice::class),
         );
+    }
+
+    /** The last thing the agent said. */
+    private function lastReply(): string
+    {
+        $last = '';
+
+        Http::recorded(function ($request) use (&$last) {
+            $body = (string) data_get($request->data(), 'text.body', '');
+
+            if ($body !== '') {
+                $last = $body;
+            }
+
+            return true;
+        });
+
+        return $last;
     }
 
     /** The agent never sent a reply containing this. */
@@ -522,12 +638,19 @@ class SiteAgentChannelTest extends TestCase
         $this->postSigned(json_encode($envelope))->assertOk();
 
         $event = WebhookEvent::latest('id')->firstOrFail();
-        $event->update(['processed_at' => null]);
+
+        // The queue runs inline here, so the controller's dispatch has usually
+        // already handled it. Running it a second time is not a harmless
+        // repeat — it would replay the customer's instruction.
+        if ($event->processed_at !== null) {
+            return;
+        }
 
         (new HandleSiteAgentMessageJob($event->id))->handle(
             app(SiteAgentAccess::class),
             app(WhatsAppCloudClient::class),
             app(SiteAgentConversation::class),
+            app(SiteChoice::class),
         );
     }
 
@@ -545,5 +668,60 @@ class SiteAgentChannelTest extends TestCase
         });
 
         $this->assertTrue($found, "לא נשלחה תשובה שמכילה: {$needle}");
+    }
+
+    /**
+     * One owner, one number, two sites — both live, both paid for.
+     *
+     * @return array{0: SiteAgentSubscriber, 1: SiteAgentSubscriber} bakery, cafe
+     */
+    private function twoSites(): array
+    {
+        Cache::flush();
+
+        $customer = Customer::factory()->create();
+        $this->subscribe($customer);
+
+        $bindings = collect(['bakery.test', 'cafe.test'])->map(function (string $domain) use ($customer): SiteAgentSubscriber {
+            $site = Site::factory()->create([
+                'customer_id' => $customer->id,
+                'domain' => $domain,
+                'mcp_enabled' => true,
+                'mcp_endpoint' => "https://{$domain}/wp-json/multioto/v1/mcp",
+                'mcp_secret' => 'secret',
+            ]);
+
+            return SiteAgentSubscriber::create([
+                'phone' => '972501234567',
+                'customer_id' => $customer->id,
+                'site_id' => $site->id,
+                'verified_at' => now(),
+            ])->setRelation('site', $site);
+        });
+
+        $this->planningWorks();
+
+        return [$bindings[0], $bindings[1]];
+    }
+
+    /** A planner that always has an answer, so the site is the only variable. */
+    private function planningWorks(): void
+    {
+        $ai = Mockery::mock(ClaudeClient::class);
+        $ai->shouldReceive('isEnabled')->andReturn(true);
+        $ai->shouldReceive('structured')->andReturn([
+            'can_do' => true, 'operation' => 'append_text', 'page_id' => 11,
+            'text' => 'טקסט חדש', 'summary' => 'הוספה',
+        ]);
+        $this->app->instance(ClaudeClient::class, $ai);
+
+        $mcp = Mockery::mock(McpClient::class);
+        $mcp->shouldReceive('callTool')->andReturnUsing(fn (Site $site, string $tool) => match ($tool) {
+            'wp_content_list' => ['items' => [['id' => 11, 'title' => 'דף הבית']]],
+            'wc_product_search' => ['products' => []],
+            default => [],
+        });
+        $mcp->shouldReceive('textContent')->andReturnUsing(fn ($result): string => json_encode($result));
+        $this->app->instance(McpClient::class, $mcp);
     }
 }

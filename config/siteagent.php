@@ -116,4 +116,16 @@ return [
         'verification_ttl_minutes' => (int) env('SITE_AGENT_BINDING_TTL_MINUTES', 30),
     ],
 
+    /*
+    | A number may manage more than one site — an owner of two businesses. The
+    | agent asks which one before it does anything, and remembers the answer for
+    | this long so the rest of the conversation does not keep asking.
+    |
+    | A day by default: long enough that a customer who confirms a change in the
+    | evening is still talking about the site they chose in the morning, short
+    | enough that tomorrow's instruction is not quietly aimed at yesterday's
+    | site. Naming the other site switches it at any point.
+    */
+    'site_choice_minutes' => (int) env('SITE_AGENT_SITE_CHOICE_MINUTES', 1440),
+
 ];

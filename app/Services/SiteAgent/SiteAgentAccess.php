@@ -8,6 +8,7 @@ use App\Models\Site;
 use App\Models\SiteAgentSubscriber;
 use App\Models\Subscription;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Collection;
 
 /**
  * May this number drive this site right now?
@@ -56,21 +57,60 @@ class SiteAgentAccess
     public const ENTITLING = [SubscriptionStatus::Active, SubscriptionStatus::Trialing];
 
     /**
+     * Every binding this number has, in a stable order.
+     *
+     * All of them, because one number may legitimately manage two sites — an
+     * owner of two businesses — and picking one of them here is picking which
+     * website a customer's instruction lands on. The caller resolves that by
+     * asking, never by ordering.
+     *
+     * Sorted by domain rather than by a timestamp: the order is read out to the
+     * customer as a numbered list, and a list that reorders itself between two
+     * messages turns "1" into the wrong answer.
+     *
+     * @return Collection<int, SiteAgentSubscriber>
+     */
+    public function bindings(string $phone): Collection
+    {
+        if (! (bool) config('siteagent.enabled', false) || $phone === '') {
+            return collect();
+        }
+
+        return SiteAgentSubscriber::query()
+            ->with(['customer', 'site'])
+            ->where('phone', $phone)
+            ->get()
+            ->sortBy(fn (SiteAgentSubscriber $binding): string => (string) $binding->site?->domain)
+            ->values();
+    }
+
+    /**
      * @return array{status: string, subscriber: SiteAgentSubscriber|null, site: Site|null, customer: Customer|null}
      */
     public function for(string $phone): array
+    {
+        $bindings = $this->bindings($phone);
+
+        // Deliberately the usable one when there is a usable one: this entry
+        // point answers for a single binding, and a caller that has more than
+        // one to choose between resolves that itself (see bindings()).
+        return $this->forSubscriber(
+            $bindings->first(fn (SiteAgentSubscriber $b): bool => $b->isUsable()) ?? $bindings->first(),
+        );
+    }
+
+    /**
+     * May this particular binding drive its site right now?
+     *
+     * @return array{status: string, subscriber: SiteAgentSubscriber|null, site: Site|null, customer: Customer|null}
+     */
+    public function forSubscriber(?SiteAgentSubscriber $subscriber): array
     {
         $none = ['status' => self::OFF, 'subscriber' => null, 'site' => null, 'customer' => null];
 
         if (! (bool) config('siteagent.enabled', false)) {
             return $none;
         }
-
-        $subscriber = SiteAgentSubscriber::query()
-            ->with(['customer', 'site'])
-            ->where('phone', $phone)
-            ->orderByDesc('verified_at')
-            ->first();
 
         if ($subscriber === null) {
             return [...$none, 'status' => self::UNKNOWN_NUMBER];
