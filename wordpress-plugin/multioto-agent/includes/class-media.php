@@ -324,16 +324,18 @@ class Multioto_Agent_Media
             // answer would say nothing changed while a new featured image sat
             // on the page. That is worse than the overwrite this exists to
             // prevent, because it is also untrue.
-            $ours = $inserted[$written] ?? null;
+            // Whether it was heard is a question about the KEY, not about the
+            // value: a sanitiser may hand core a null, core will store it and
+            // announce it, and reading that announcement as silence would
+            // leave the row sitting there while we reported nothing changed.
+            $heard = array_key_exists($written, $inserted);
             $row = get_metadata_by_mid('post', $written);
 
             if ($row !== false
-                && $ours !== null
+                && $heard
                 && (int) $row->post_id === $postId
                 && $row->meta_key === '_thumbnail_id'
-                && is_scalar($row->meta_value)
-                && is_scalar($ours)
-                && (string) $row->meta_value === (string) $ours) {
+                && self::sameMetaValue($row->meta_value, $inserted[$written])) {
                 delete_metadata_by_mid('post', $written);
             }
 
@@ -341,6 +343,26 @@ class Multioto_Agent_Media
         }
 
         return (bool) $written;
+    }
+
+    /**
+     * Is the row still holding the value we put in it?
+     *
+     * Meta values come back from the database as strings whatever went in, so
+     * the comparison is made on that footing — except for null, which is a
+     * value a sanitiser may legitimately produce and which is not the same
+     * thing as an empty string.
+     *
+     * @param  mixed  $stored
+     * @param  mixed  $written
+     */
+    private static function sameMetaValue($stored, $written): bool
+    {
+        if ($stored === null || $written === null) {
+            return $stored === $written;
+        }
+
+        return is_scalar($stored) && is_scalar($written) && (string) $stored === (string) $written;
     }
 
     /**
