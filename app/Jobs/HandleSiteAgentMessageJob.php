@@ -86,7 +86,111 @@ class HandleSiteAgentMessageJob implements ShouldQueue
             return;
         }
 
+        // Everything that decides WHO this message is from happens under one
+        // lock, held per phone number.
+        //
+        // Choosing a site, holding the instruction and taking it back are one
+        // decision about one conversation, and they are keyed by the PHONE —
+        // taken before any subscriber is known, so the per-subscriber lock
+        // inside the conversation is too late to cover them. Two messages
+        // arriving together would otherwise both find no choice made, overwrite
+        // each other's held instruction, send two questions, and answering
+        // either would replay whichever won the race.
+        //
+        // Matching a verification code belongs under the SAME lock, and the
+        // bindings must be read inside it. The five-attempt limit is the only
+        // thing standing between a stranger and a six-digit code, and it is
+        // read off a loaded model: workers that all loaded their copy before
+        // any of them charged would each see a budget that was already spent.
+        // Six guesses sent at once would then get six checks against live
+        // codes, however many attempts the row had left — a limit that holds
+        // only when nobody is in a hurry is not a limit.
+        $lock = Cache::lock("site-agent:routing:{$from}", 120);
+
+        try {
+            $routed = $lock->block(60, fn (): array => $this->identify(
+                $access, $choice, $whatsapp, $from, $text, $mediaId,
+                (string) ($payload['_profile_name'] ?? ''),
+                (int) ($payload['timestamp'] ?? 0),
+            ));
+        } catch (LockTimeoutException) {
+            $whatsapp->sendText($from, 'אני עדיין מטפל בהודעה הקודמת — נסו שוב בעוד רגע.');
+            $event->markProcessed();
+
+            return;
+        }
+
+        // Verified, or asked which site. Either way the answer already went
+        // out and there is nothing to carry out for this message.
+        if ($routed['done']) {
+            $event->markProcessed();
+
+            return;
+        }
+
+        $subscriber = $routed['subscriber'];
+        $text = $routed['text'];
+        $mediaId = $routed['media_id'];
+
+        // Nothing usable: fall back to any binding at all, so the refusal can
+        // say WHICH refusal it is — unverified, revoked, or unheard of.
+        $decision = $access->forSubscriber($subscriber ?? $routed['fallback']);
+        $subscriber = $decision['subscriber'];
+
+        if ($decision['status'] === SiteAgentAccess::ALLOWED && $subscriber !== null) {
+            $subscriber->forceFill(['last_seen_at' => now()])->save();
+
+            $reply = $type !== 'text' && $type !== 'image'
+                ? 'אני יודע לקרוא הודעות טקסט ותמונות. אפשר לכתוב לי מה לשנות באתר?'
+                : $conversation->handle(
+                    $subscriber,
+                    $text,
+                    (string) ($payload['id'] ?? '') ?: null,
+                    $mediaId !== '' ? $mediaId : null,
+                );
+        } else {
+            $reply = $this->answerFor($decision['status'], $subscriber);
+        }
+
+        if ($reply !== '' && $whatsapp->sendText($from, $reply) === null) {
+            // The customer is holding a phone that shows their message
+            // delivered and no answer. Nothing else in the system would notice.
+            Log::warning('SiteAgent: reply could not be delivered', [
+                'webhook_event_id' => $event->id,
+                'status' => $decision['status'],
+            ]);
+        }
+
+        $event->markProcessed();
+    }
+
+    /**
+     * Who is this message from, and which of their sites is it about?
+     *
+     * Runs with this number's routing lock held, and reads the bindings itself
+     * so that it reads them under that lock — a verification attempt counted by
+     * another worker has to be visible here before this one tests a code
+     * against it.
+     *
+     * `done` means the message is fully answered: they verified a number, or
+     * they were asked which site and the instruction is held until they say.
+     * `fallback` is any binding this number has, so that a refusal can name
+     * which refusal it is even when none of them is usable.
+     *
+     * @return array{subscriber: SiteAgentSubscriber|null, text: string, media_id: string, done: bool, fallback: SiteAgentSubscriber|null}
+     */
+    private function identify(
+        SiteAgentAccess $access,
+        SiteChoice $choice,
+        WhatsAppCloudClient $whatsapp,
+        string $from,
+        string $text,
+        string $mediaId,
+        string $profileName,
+        int $sentAt,
+    ): array {
         $bindings = $access->bindings($from);
+        $fallback = $bindings->first();
 
         // Somebody sending the code they were asked for is answering a question
         // we asked, not issuing an instruction — checked before anything else,
@@ -123,79 +227,24 @@ class HandleSiteAgentMessageJob implements ShouldQueue
         }
 
         if ($awaiting !== null) {
-            $this->completeVerification($awaiting, $whatsapp, (string) ($payload['_profile_name'] ?? ''));
+            $this->completeVerification($awaiting, $whatsapp, $profileName);
             // The site they just proved is the one they are talking about.
             $choice->remember($from, (int) $awaiting->site_id);
-            $event->markProcessed();
 
-            return;
+            return ['subscriber' => null, 'text' => $text, 'media_id' => $mediaId, 'done' => true, 'fallback' => $fallback];
         }
 
         $usable = $bindings->filter(fn (SiteAgentSubscriber $binding): bool => $binding->isUsable())->values();
 
-        // Choosing a site, holding the instruction and taking it back are one
-        // decision about one conversation, and they are keyed by the PHONE —
-        // taken before any subscriber is known, so the per-subscriber lock
-        // inside the conversation is too late to cover them. Two messages
-        // arriving together would otherwise both find no choice made, overwrite
-        // each other's held instruction, send two questions, and answering
-        // either would replay whichever won the race.
-        $lock = Cache::lock("site-agent:routing:{$from}", 120);
+        $routed = $this->route($choice, $whatsapp, $from, $text, $mediaId, $usable, $sentAt);
 
-        try {
-            $routed = $lock->block(60, fn (): array => $this->route(
-                $choice, $whatsapp, $from, $text, $mediaId, $usable,
-                (int) ($payload['timestamp'] ?? 0),
-            ));
-        } catch (LockTimeoutException) {
-            $whatsapp->sendText($from, 'אני עדיין מטפל בהודעה הקודמת — נסו שוב בעוד רגע.');
-            $event->markProcessed();
-
-            return;
-        }
-
-        // The question about which site went out; what they asked for is held
-        // until they answer it, and there is nothing else to do with this one.
-        if ($routed['asked']) {
-            $event->markProcessed();
-
-            return;
-        }
-
-        $subscriber = $routed['subscriber'];
-        $text = $routed['text'];
-        $mediaId = $routed['media_id'];
-
-        // Nothing usable: fall back to any binding at all, so the refusal can
-        // say WHICH refusal it is — unverified, revoked, or unheard of.
-        $decision = $access->forSubscriber($subscriber ?? $bindings->first());
-        $subscriber = $decision['subscriber'];
-
-        if ($decision['status'] === SiteAgentAccess::ALLOWED && $subscriber !== null) {
-            $subscriber->forceFill(['last_seen_at' => now()])->save();
-
-            $reply = $type !== 'text' && $type !== 'image'
-                ? 'אני יודע לקרוא הודעות טקסט ותמונות. אפשר לכתוב לי מה לשנות באתר?'
-                : $conversation->handle(
-                    $subscriber,
-                    $text,
-                    (string) ($payload['id'] ?? '') ?: null,
-                    $mediaId !== '' ? $mediaId : null,
-                );
-        } else {
-            $reply = $this->answerFor($decision['status'], $subscriber);
-        }
-
-        if ($reply !== '' && $whatsapp->sendText($from, $reply) === null) {
-            // The customer is holding a phone that shows their message
-            // delivered and no answer. Nothing else in the system would notice.
-            Log::warning('SiteAgent: reply could not be delivered', [
-                'webhook_event_id' => $event->id,
-                'status' => $decision['status'],
-            ]);
-        }
-
-        $event->markProcessed();
+        return [
+            'subscriber' => $routed['subscriber'],
+            'text' => $routed['text'],
+            'media_id' => $routed['media_id'],
+            'done' => $routed['asked'],
+            'fallback' => $fallback,
+        ];
     }
 
     /**

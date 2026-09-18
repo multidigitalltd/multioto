@@ -258,6 +258,40 @@ class SiteAgentPluginContractTest extends TestCase
         $this->assertSame(42, SiteAgentRequest::sole()->plan['thumbnail_id']);
     }
 
+    public function test_a_product_image_still_applies_when_the_check_re_reads_it(): void
+    {
+        $this->imageArrives();
+
+        $this->siteSends([
+            $this->tool(json_encode([])),
+            $this->tool(json_encode([
+                'total' => 1, 'returned' => 1, 'page' => 1, 'pages' => 1,
+                'products' => [['id' => 5, 'name' => 'חולצה כחולה', 'regular_price' => '120', 'thumbnail_id' => 42]],
+            ])),
+            ['jsonrpc' => '2.0', 'id' => 1, 'error' => ['code' => -32602, 'message' => 'סוג התוכן product אינו קיים באתר.']],
+            $this->tool(json_encode(['id' => 5, 'name' => 'חולצה כחולה', 'thumbnail_id' => 42])),
+        ]);
+
+        $this->planning(['can_do' => true, 'target_id' => 5, 'alt' => 'חולצה כחולה', 'summary' => 'תמונה']);
+        $this->talk('חולצה כחולה', mediaId: 'media-1');
+
+        // Carrying it out re-reads the featured image, and has to re-read it
+        // THE SAME WAY. Asking only the content tool throws on every product,
+        // the throw is caught as a failure, and the customer who said yes is
+        // told the change did not work — an image that could never be set on
+        // any product, on a plugin built to allow exactly that.
+        $this->siteSends([
+            ['jsonrpc' => '2.0', 'id' => 1, 'error' => ['code' => -32602, 'message' => 'סוג התוכן product אינו קיים באתר.']],
+            $this->tool(json_encode(['id' => 5, 'name' => 'חולצה כחולה', 'thumbnail_id' => 42])),
+            $this->tool(json_encode(['id' => 77, 'url' => 'https://example.test/shirt.png'])),
+            $this->tool(json_encode(['id' => 5, 'attachment_id' => 77, 'previous' => ['attachment_id' => 42]])),
+        ]);
+
+        $this->assertStringContainsString('בוצע', $this->talk('כן'));
+        $this->assertSame(SiteAgentRequest::APPLIED, SiteAgentRequest::sole()->state);
+        $this->assertSame(42, SiteAgentRequest::sole()->restore['attachment_id']);
+    }
+
     public function test_an_elementor_undo_matches_the_setting_and_not_only_the_widget(): void
     {
         $widget = [

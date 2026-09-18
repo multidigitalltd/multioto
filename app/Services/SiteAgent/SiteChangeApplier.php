@@ -474,25 +474,22 @@ class SiteChangeApplier
         // Is the picture we are about to replace still the one that was there
         // when the offer was made?
         //
-        // The plugin reports the featured image on a content read (1.6.1+); an
-        // older site answers nothing and this check stands down rather than
-        // refusing every image change. Where it IS reported, an image somebody
-        // set in wp-admin between the preview and the yes is not ours to throw
-        // away without a word.
+        // The plugin reports the featured image from 1.6.1 — a page through the
+        // content tool, a PRODUCT through the shop tool, because products are
+        // deliberately unreadable as content. Read through the planner so that
+        // both are asked the way each answers: reading products through the
+        // content tool alone throws, and the throw would fail every shop image
+        // instead of applying it. An older site reports neither, and the check
+        // then stands down rather than refusing every image change.
+        //
+        // Where it IS reported, an image somebody set in wp-admin between the
+        // preview and the yes is not ours to throw away without a word.
         $expected = $plan['thumbnail_id'] ?? null;
 
         if ($expected !== null) {
-            try {
-                $live = json_decode($this->mcp->textContent($this->mcp->callTool($site, 'wp_content_get', [
-                    'id' => $targetId,
-                ])), true);
-            } catch (\Throwable $e) {
-                return $this->failure(Str::limit($e->getMessage(), 200));
-            }
+            $current = $this->planner->thumbnailOf($site, $targetId);
 
-            $current = data_get($live, 'thumbnail_id');
-
-            if ($current !== null && (int) $current !== (int) $expected) {
+            if ($current !== null && $current !== (int) $expected) {
                 return $this->refuse(self::STALE);
             }
         }

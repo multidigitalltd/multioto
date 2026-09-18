@@ -175,6 +175,41 @@ class SiteAgentChannelTest extends TestCase
         $this->assertNull($subscriber->verification_code);
     }
 
+    public function test_a_code_is_only_tested_while_the_number_is_held(): void
+    {
+        Http::fake(['*' => Http::response(['messages' => [['id' => 'wamid.reply']]])]);
+
+        $subscriber = $this->subscriber([
+            'verified_at' => null,
+            'verification_code' => Hash::make('447291'),
+            'verification_sent_at' => now(),
+        ]);
+
+        // The five-attempt limit is read off a LOADED row. Workers that each
+        // load their copy before any of them charges all see a budget that is
+        // already spent, so six guesses sent at once would get six checks
+        // against a live code however many attempts the row had left — a limit
+        // that holds only when nobody is in a hurry is not a limit.
+        //
+        // What stops that is reading the rows while this number is held. Proved
+        // by trying to take the number at the moment they are read: whoever is
+        // reading must already have it.
+        $held = false;
+        $access = Mockery::mock(SiteAgentAccess::class)->makePartial();
+        $access->shouldReceive('bindings')->andReturnUsing(function (string $from) use (&$held) {
+            $held = ! Cache::lock("site-agent:routing:{$from}", 5)->get();
+
+            return (new SiteAgentAccess)->bindings($from);
+        });
+        $this->app->instance(SiteAgentAccess::class, $access);
+
+        $this->deliver('972501234567', '447291');
+
+        $this->assertTrue($held, 'הקוד נבדק בלי שהמספר מוחזק — שני עובדים היו בודקים במקביל מול אותו תקציב.');
+        // And it is still an ordinary verification, not a lock that swallows it.
+        $this->assertNotNull($subscriber->fresh()->verified_at);
+    }
+
     public function test_an_expired_code_does_not_bind_the_number(): void
     {
         Http::fake(['*' => Http::response(['messages' => [['id' => 'wamid.reply']]])]);
