@@ -264,21 +264,26 @@ class Multioto_Agent_Media
      */
     private static function swapThumbnail(int $postId, int $attachmentId, int $expected): bool
     {
-        // Core sanitises the value before it asks anybody anything, so a site
-        // that registered a sanitiser for this key (through register_post_meta,
-        // say) both sees and stores what its own policy produced. Going
-        // straight to the table skipped that: the filter would be shown a value
-        // core would never have shown it, and the row would hold a value the
-        // site had said it did not want. The first-image path happens to get it
-        // back through add_post_meta; a guarded replacement did not.
-        $attachmentId = (int) sanitize_meta(
+        // WHAT the operation is comes from what the CALLER asked for, before
+        // any sanitiser is consulted. Core picks delete_metadata or
+        // update_metadata on the caller's value, and delete_metadata never
+        // sanitises at all — so deciding this afterwards let a sanitiser that
+        // maps 0 to something else turn a removal into an update, and one that
+        // maps an id to 0 turn an update into a removal.
+        $clearing = $attachmentId === 0;
+
+        // Core sanitises on the UPDATE path only, so a site that registered a
+        // sanitiser for this key (through register_post_meta, say) both sees
+        // and stores what its own policy produced. Going straight to the table
+        // skipped that entirely: the filter would be shown a value core would
+        // never have shown it, and the row would hold a value the site had
+        // said it did not want.
+        $value = $clearing ? $attachmentId : (int) sanitize_meta(
             '_thumbnail_id',
             $attachmentId,
             'post',
             get_object_subtype('post', $postId)
         );
-
-        $clearing = $attachmentId === 0;
 
         // A site may keep this meta somewhere else entirely, or forbid the
         // change: core asks first through a short-circuit filter, and going
@@ -291,76 +296,82 @@ class Multioto_Agent_Media
         // adding one, so a veto covers that path too. Going straight to
         // add_post_meta would consult only `add_post_metadata` and put a real
         // row on a site that had said no.
+        //
         // The previous value is spelled the way CORE would spell it, because a
         // provider listening here is written against core, not against us. For
         // "there is no image yet" core sends '' — set_post_thumbnail() passes
-        // no previous value at all — and it never sends 0 for this key. A
-        // provider that checks the argument strictly would read our 0 as a real
-        // previous id, decline the write as none of its business, and the
-        // fall-through would then put a physical row on a site that keeps this
-        // meta somewhere else entirely. Zero stays zero for our own comparison,
-        // where it does mean something.
+        // no previous value at all — and it never sends 0 for this key. Zero
+        // stays zero for our own comparison, where it does mean something.
         $check = $clearing
             ? apply_filters('delete_post_metadata', null, $postId, '_thumbnail_id', $expected, false)
-            : apply_filters('update_post_metadata', null, $postId, '_thumbnail_id', $attachmentId, $expected === 0 ? '' : $expected);
+            : apply_filters('update_post_metadata', null, $postId, '_thumbnail_id', $value, $expected === 0 ? '' : $expected);
 
         if ($check !== null) {
             return (bool) $check;
         }
 
         if ($expected === 0) {
+            // The RAW value, not the sanitised one: add_post_meta sanitises in
+            // its own right, and core deliberately keeps the value as it
+            // arrived for exactly this fallback so a sanitiser runs once and
+            // not twice. A sanitiser that is not idempotent would otherwise
+            // store something neither we nor core ever asked for.
             return (bool) add_post_meta($postId, '_thumbnail_id', $attachmentId, true);
         }
 
         global $wpdb;
 
-        $metaId = (int) $wpdb->get_var($wpdb->prepare(
-            "SELECT meta_id FROM {$wpdb->postmeta} WHERE post_id = %d AND meta_key = '_thumbnail_id' AND meta_value = %s LIMIT 1",
+        // EVERY row holding that value, not the first one. post meta carries no
+        // unique index, and the check-and-insert above can lose a race and
+        // leave two — so clearing could report success while a second identical
+        // row went on supplying the same image, and replacing could leave the
+        // old value behind. Core's update and delete both touch them all.
+        $metaIds = array_map('intval', (array) $wpdb->get_col($wpdb->prepare(
+            "SELECT meta_id FROM {$wpdb->postmeta} WHERE post_id = %d AND meta_key = '_thumbnail_id' AND meta_value = %s",
             $postId,
             (string) $expected
-        ));
+        )));
 
-        if ($metaId === 0) {
+        if ($metaIds === []) {
             return false;
         }
 
-        // Everything that made this row the right row travels WITH the write —
-        // its id, its post, its key and the value it still has to hold. The id
-        // alone would not do: a listener on the action fired just below may
-        // rename the row through update_metadata_by_mid(), and a predicate that
-        // only knew the id and the value would happily change a row that is no
-        // longer a featured image at all, and call it a thumbnail change.
-        $where = [
-            'meta_id' => $metaId,
-            'post_id' => $postId,
-            'meta_key' => '_thumbnail_id',
-            'meta_value' => (string) $expected,
-        ];
+        // Everything that made those rows the right rows travels WITH the
+        // write — the post, the key, and the value they still have to hold. The
+        // key earns its place there: a listener on the action fired just below
+        // may repurpose a row through update_metadata_by_mid(), and that row
+        // then stops matching, which is exactly what should happen.
+        $where = ['post_id' => $postId, 'meta_key' => '_thumbnail_id', 'meta_value' => (string) $expected];
 
         if ($clearing) {
-            do_action('delete_post_meta', [$metaId], $postId, '_thumbnail_id', $expected);
-            do_action('delete_postmeta', [$metaId]);
+            do_action('delete_post_meta', $metaIds, $postId, '_thumbnail_id', $expected);
+            do_action('delete_postmeta', $metaIds);
         } else {
-            do_action('update_post_meta', $metaId, $postId, '_thumbnail_id', $attachmentId);
-            do_action('update_postmeta', $metaId, $postId, '_thumbnail_id', $attachmentId);
+            foreach ($metaIds as $metaId) {
+                do_action('update_post_meta', $metaId, $postId, '_thumbnail_id', $value);
+                do_action('update_postmeta', $metaId, $postId, '_thumbnail_id', $value);
+            }
         }
 
         $rows = $clearing
             ? $wpdb->delete($wpdb->postmeta, $where)
-            : $wpdb->update($wpdb->postmeta, ['meta_value' => (string) $attachmentId], $where);
+            : $wpdb->update($wpdb->postmeta, ['meta_value' => (string) $value], $where);
 
-        if ($rows !== 1) {
+        // false when the query failed, 0 when somebody got there first.
+        if ($rows < 1) {
             return false;
         }
 
         wp_cache_delete($postId, 'post_meta');
 
         if ($clearing) {
-            do_action('deleted_post_meta', [$metaId], $postId, '_thumbnail_id', $expected);
-            do_action('deleted_postmeta', [$metaId]);
+            do_action('deleted_post_meta', $metaIds, $postId, '_thumbnail_id', $expected);
+            do_action('deleted_postmeta', $metaIds);
         } else {
-            do_action('updated_post_meta', $metaId, $postId, '_thumbnail_id', $attachmentId);
-            do_action('updated_postmeta', $metaId, $postId, '_thumbnail_id', $attachmentId);
+            foreach ($metaIds as $metaId) {
+                do_action('updated_post_meta', $metaId, $postId, '_thumbnail_id', $value);
+                do_action('updated_postmeta', $metaId, $postId, '_thumbnail_id', $value);
+            }
         }
 
         return true;
