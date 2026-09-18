@@ -278,10 +278,28 @@ class Multioto_Agent_Media
         // An integer rather than true means core took its insert path: the row
         // we were told to expect had been removed, so nothing was swapped and
         // ours was added to an empty spot instead. That is not what was asked
-        // for, and it goes straight back out — by its own id, so a row somebody
-        // else added in the meantime is never the one removed.
+        // for, and it goes straight back out.
+        //
+        // By its own id, so a row somebody else added is never the one removed
+        // — and only while it still holds what we put in it. Core fires
+        // added_post_meta on the way in, and a listener there, or an
+        // administrator in the same instant, may already have made that row
+        // theirs; deleting it then would throw away a newer picture in the name
+        // of tidying up ours.
+        //
+        // Reading it and then deleting it is not one operation, and cannot be
+        // through this API. It narrows the window to the gap between these two
+        // lines instead of leaving it open from the insert, which is the honest
+        // best available without going behind core's back again.
         if (is_int($written)) {
-            delete_metadata_by_mid('post', $written);
+            $row = get_metadata_by_mid('post', $written);
+
+            if ($row !== false
+                && (int) $row->post_id === $postId
+                && $row->meta_key === '_thumbnail_id'
+                && (int) $row->meta_value === $attachmentId) {
+                delete_metadata_by_mid('post', $written);
+            }
 
             return false;
         }
