@@ -292,12 +292,22 @@ class Multioto_Agent_Media
         // lines instead of leaving it open from the insert, which is the honest
         // best available without going behind core's back again.
         if (is_int($written)) {
+            // Against the value core STORED, which is the sanitised one:
+            // update_metadata hands the raw value on to add_metadata, and that
+            // sanitises it in its turn. Comparing with what we asked for would
+            // miss on any site that registered a sanitiser, skip the cleanup,
+            // and then report that nothing changed while having left a new
+            // featured image behind — worse than the overwrite this exists to
+            // prevent, because it is also a lie.
+            $stored = sanitize_meta('_thumbnail_id', $attachmentId, 'post', get_object_subtype('post', $postId));
             $row = get_metadata_by_mid('post', $written);
 
             if ($row !== false
                 && (int) $row->post_id === $postId
                 && $row->meta_key === '_thumbnail_id'
-                && (int) $row->meta_value === $attachmentId) {
+                && is_scalar($row->meta_value)
+                && is_scalar($stored)
+                && (string) $row->meta_value === (string) $stored) {
                 delete_metadata_by_mid('post', $written);
             }
 
