@@ -264,6 +264,20 @@ class Multioto_Agent_Media
      */
     private static function swapThumbnail(int $postId, int $attachmentId, int $expected): bool
     {
+        // Core sanitises the value before it asks anybody anything, so a site
+        // that registered a sanitiser for this key (through register_post_meta,
+        // say) both sees and stores what its own policy produced. Going
+        // straight to the table skipped that: the filter would be shown a value
+        // core would never have shown it, and the row would hold a value the
+        // site had said it did not want. The first-image path happens to get it
+        // back through add_post_meta; a guarded replacement did not.
+        $attachmentId = (int) sanitize_meta(
+            '_thumbnail_id',
+            $attachmentId,
+            'post',
+            get_object_subtype('post', $postId)
+        );
+
         $clearing = $attachmentId === 0;
 
         // A site may keep this meta somewhere else entirely, or forbid the
