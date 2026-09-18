@@ -292,6 +292,47 @@ class SiteAgentPluginContractTest extends TestCase
         $this->assertSame(42, SiteAgentRequest::sole()->restore['attachment_id']);
     }
 
+    public function test_an_unreadable_featured_image_stops_the_upload_rather_than_guessing(): void
+    {
+        $this->imageArrives();
+
+        $this->siteSends([
+            $this->tool(json_encode([
+                ['id' => 11, 'title' => 'דף הבית', 'type' => 'page', 'status' => 'publish', 'built_with_elementor' => false],
+            ])),
+            $this->tool(json_encode(['id' => 11, 'title' => 'דף הבית', 'content' => 'טקסט', 'status' => 'publish'])),
+            $this->tool(json_encode(['total' => 0, 'returned' => 0, 'page' => 1, 'pages' => 1, 'products' => []])),
+            // The site answered at preview time, so it DOES report the image.
+            $this->tool(json_encode(['id' => 11, 'title' => 'דף הבית', 'content' => 'טקסט', 'status' => 'publish', 'thumbnail_id' => 42])),
+        ]);
+
+        $this->planning(['can_do' => true, 'target_id' => 11, 'alt' => 'כיכר לחם', 'summary' => 'תמונה']);
+        $this->talk('תשים את זה בדף הבית — כיכר לחם', mediaId: 'media-1');
+
+        // ...and at confirmation time it answers nothing: the read failed.
+        // Reading that as "a plugin too old to answer" would stand the guard
+        // down at the only moment it is needed, and the upload right after it
+        // may reach a site that recovered a second later — overwriting whatever
+        // an administrator put there, in silence.
+        // Both reads time out, and then the connection RECOVERS: the upload and
+        // the thumbnail set that follow would go through perfectly. That is the
+        // whole danger — standing down leaves a working write with no check in
+        // front of it.
+        $this->siteSends([
+            ['jsonrpc' => '2.0', 'id' => 1, 'error' => ['code' => -32000, 'message' => 'timeout']],
+            ['jsonrpc' => '2.0', 'id' => 1, 'error' => ['code' => -32000, 'message' => 'timeout']],
+            $this->tool(json_encode(['id' => 77, 'url' => 'https://example.test/bread.png'])),
+            $this->tool(json_encode(['id' => 11, 'attachment_id' => 77, 'previous' => ['attachment_id' => 99]])),
+        ]);
+
+        $reply = $this->talk('כן');
+
+        $this->assertSame(SiteAgentRequest::FAILED, SiteAgentRequest::sole()->state);
+        Http::assertSent(fn ($request): bool => data_get($request->data(), 'params.name') !== 'wp_media_upload');
+        // The customer is told it did not work — never why, in the site's words.
+        $this->assertStringNotContainsString('timeout', $reply);
+    }
+
     public function test_an_elementor_undo_matches_the_setting_and_not_only_the_widget(): void
     {
         $widget = [

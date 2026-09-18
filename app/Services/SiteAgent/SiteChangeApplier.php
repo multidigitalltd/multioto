@@ -489,7 +489,20 @@ class SiteChangeApplier
         if ($expected !== null) {
             $current = $this->planner->thumbnailOf($site, $targetId);
 
-            if ($current !== null && $current !== (int) $expected) {
+            // Nothing answering NOW is not an old plugin — building the preview
+            // got a number out of this very site, so this site reports the
+            // featured image. A blank here is a read that failed, and standing
+            // down on it stands down exactly when we cannot see. The upload
+            // that follows may well succeed on a connection that recovered by
+            // then, and the picture an administrator put there in between would
+            // be gone with nobody told.
+            //
+            // A target with no image at all answers 0, not nothing.
+            if ($current === null) {
+                return $this->failure('thumbnail unreadable at confirmation');
+            }
+
+            if ($current !== (int) $expected) {
                 return $this->refuse(self::STALE);
             }
         }
