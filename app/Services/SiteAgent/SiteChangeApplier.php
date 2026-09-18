@@ -295,14 +295,22 @@ class SiteChangeApplier
      * instead of theirs, which the caller has to say out loud rather than
      * report as an ordinary refusal.
      */
-    private function restoreThumbnail(Site $site, int $targetId, int $attachmentId): bool
+    private function restoreThumbnail(Site $site, int $targetId, int $attachmentId, int $onlyIfCurrent): bool
     {
         try {
             $this->mcp->callTool($site, 'wp_post_thumbnail_set', [
                 'id' => $targetId,
                 'attachment_id' => $attachmentId,
+                // Only while OUR picture is still the one showing. Putting
+                // theirs back over a third choice made since would repeat the
+                // very thing this exists to undo.
+                'if_current' => $onlyIfCurrent,
             ], 60);
 
+            // Written, or refused because somebody has moved on past both
+            // pictures — and the right thing to do about that is nothing.
+            // Either way nothing of theirs was lost, which is what this
+            // answers.
             return true;
         } catch (\Throwable) {
             return false;
@@ -570,11 +578,25 @@ class SiteChangeApplier
             return $this->refuse('התמונה לא נשמרה בספריית המדיה.');
         }
 
+        // The check before the upload is not enough on its own: the upload
+        // itself is allowed 120 seconds, and an administrator can put a
+        // different picture there while it runs.
+        //
+        // `if_current` makes the check and the write ONE operation on the site
+        // (plugin 1.6.2+), so a picture somebody chose in that window is never
+        // overwritten at all — rather than overwritten and then put back, which
+        // leaves its own window. An older plugin ignores the argument, and the
+        // displaced id it reports is what catches the same case after the fact.
+        $arguments = ['id' => $targetId, 'attachment_id' => $attachmentId];
+
+        if ($expected !== null) {
+            $arguments['if_current'] = (int) $expected;
+        }
+
         try {
-            $set = json_decode($this->mcp->textContent($this->mcp->callTool($site, 'wp_post_thumbnail_set', [
-                'id' => $targetId,
-                'attachment_id' => $attachmentId,
-            ], 60)), true);
+            $set = json_decode($this->mcp->textContent(
+                $this->mcp->callTool($site, 'wp_post_thumbnail_set', $arguments, 60),
+            ), true);
         } catch (\Throwable $e) {
             // The picture is in their library already and nothing points at it.
             // Left alone it stays there for ever, and every retry adds another.
@@ -583,16 +605,20 @@ class SiteChangeApplier
             return $this->failure(Str::limit($e->getMessage(), 200));
         }
 
+        // Refused before writing: nothing to put back.
+        if (($set['changed'] ?? true) === false) {
+            $this->discardUpload($site, $attachmentId);
+
+            return $this->refuse(self::STALE);
+        }
+
         $displaced = $this->thumbnailPrevious($set);
 
-        // The check before the upload is not enough on its own: the upload
-        // itself is allowed 120 seconds, and an administrator can put a
-        // different picture there while it runs. The setter reports which image
-        // it ACTUALLY displaced, which is the only account of that window we
-        // get — and without reading it we would have overwritten their picture
-        // and told the customer it went well.
+        // Same case on a site too old for `if_current`: here the write already
+        // happened, so their picture has to be put back — and put back only if
+        // ours is still the one showing, or we would be overwriting in turn.
         if ($expected !== null && $displaced !== (int) $expected) {
-            $restored = $this->restoreThumbnail($site, $targetId, $displaced);
+            $restored = $this->restoreThumbnail($site, $targetId, $displaced, $attachmentId);
             $this->discardUpload($site, $attachmentId);
 
             return $restored
@@ -777,22 +803,32 @@ class SiteChangeApplier
         $installed = (int) ($restore['after'] ?? 0);
         $previous = (int) ($restore['attachment_id'] ?? 0);
 
-        // There is no read-only "which image is featured" tool — but the setter
-        // reports what it replaced, and that is enough to be safe: put the old
-        // image back, and if what we displaced was NOT the image we installed,
-        // somebody had chosen another one since. Put theirs straight back and
-        // refuse.
+        // Undo the picture only while OUR picture is the one showing. On plugin
+        // 1.6.2+ `if_current` makes that one operation on the site, so a photo
+        // the customer chose since is never overwritten even for a moment.
         //
-        // Two writes in the bad case, and none of the customer's work lost.
-        // Overwriting a picture they picked, silently, is the outcome that is
-        // not acceptable here.
+        // An older plugin ignores it and writes regardless — but the setter
+        // reports what it replaced, and if that was not what we installed then
+        // somebody had chosen another one since. Theirs goes straight back, so
+        // the bad case costs two writes and loses none of their work.
+        $arguments = ['id' => $targetId, 'attachment_id' => $previous];
+
+        if ($installed > 0) {
+            $arguments['if_current'] = $installed;
+        }
+
         try {
-            $set = json_decode($this->mcp->textContent($this->mcp->callTool($site, 'wp_post_thumbnail_set', [
-                'id' => $targetId,
-                'attachment_id' => $previous,
-            ], 60)), true);
+            $set = json_decode($this->mcp->textContent(
+                $this->mcp->callTool($site, 'wp_post_thumbnail_set', $arguments, 60),
+            ), true);
         } catch (\Throwable $e) {
             return $this->failure(Str::limit($e->getMessage(), 200));
+        }
+
+        // Refused before writing: their picture is still theirs, and saying so
+        // is the whole answer.
+        if (($set['changed'] ?? true) === false) {
+            return $this->refuse(self::STALE);
         }
 
         $displaced = $this->thumbnailPrevious($set, $installed);

@@ -380,6 +380,49 @@ class SiteAgentPluginContractTest extends TestCase
         $this->assertContains(['wp_media_delete', 77], $calls);
     }
 
+    public function test_the_setter_is_told_which_image_it_may_replace(): void
+    {
+        $this->imageArrives();
+
+        $this->siteSends([
+            $this->tool(json_encode([
+                ['id' => 11, 'title' => 'דף הבית', 'type' => 'page', 'status' => 'publish', 'built_with_elementor' => false],
+            ])),
+            $this->tool(json_encode(['id' => 11, 'title' => 'דף הבית', 'content' => 'טקסט', 'status' => 'publish'])),
+            $this->tool(json_encode(['total' => 0, 'returned' => 0, 'page' => 1, 'pages' => 1, 'products' => []])),
+            $this->tool(json_encode(['id' => 11, 'title' => 'דף הבית', 'content' => 'טקסט', 'status' => 'publish', 'thumbnail_id' => 42])),
+        ]);
+
+        $this->planning(['can_do' => true, 'target_id' => 11, 'alt' => 'כיכר לחם', 'summary' => 'תמונה']);
+        $this->talk('תשים את זה בדף הבית — כיכר לחם', mediaId: 'media-1');
+
+        $this->siteSends([
+            $this->tool(json_encode(['id' => 11, 'title' => 'דף הבית', 'content' => 'טקסט', 'status' => 'publish', 'thumbnail_id' => 42])),
+            $this->tool(json_encode(['id' => 77, 'url' => 'https://example.test/bread.png'])),
+            // The plugin refuses BEFORE writing: #99 is there now, not the #42
+            // we were told to expect. Nothing was overwritten, so nothing has
+            // to be put back — which is the difference between this and a
+            // compensating second write that has a window of its own.
+            $this->tool(json_encode(['id' => 11, 'changed' => false, 'current' => ['attachment_id' => 99]])),
+            $this->tool(json_encode(['deleted_id' => 77])),
+        ]);
+
+        $reply = $this->talk('כן');
+
+        $this->assertStringContainsString('השתנה', $reply);
+        $this->assertSame(SiteAgentRequest::FAILED, SiteAgentRequest::sole()->state);
+
+        // The expectation travelled WITH the write, rather than being checked
+        // in a separate request beforehand.
+        $guarded = collect(Http::recorded())
+            ->map(fn ($pair) => $pair[0]->data())
+            ->first(fn ($body): bool => data_get($body, 'params.name') === 'wp_post_thumbnail_set');
+
+        $this->assertSame(42, data_get($guarded, 'params.arguments.if_current'));
+        // And ours did not stay behind in their library.
+        $this->assertContains(['wp_media_delete', 77], $this->toolCalls());
+    }
+
     public function test_an_upload_that_could_not_be_used_does_not_stay_in_the_library(): void
     {
         $this->imageArrives();

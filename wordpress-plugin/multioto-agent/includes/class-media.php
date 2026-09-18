@@ -182,6 +182,20 @@ class Multioto_Agent_Media
 
         $previousId = (int) get_post_thumbnail_id($postId);
 
+        // Compare-and-swap. Reading the featured image and then setting it are
+        // two requests with a gap between them, and anybody may edit the post in
+        // that gap — which is exactly how a caller ends up replacing a picture
+        // somebody chose a moment earlier and reporting success. Passing
+        // if_current makes the check and the write one operation: either it is
+        // still what the caller last saw, or nothing is written at all.
+        if (array_key_exists('if_current', $args) && $previousId !== (int) $args['if_current']) {
+            return wp_json_encode([
+                'id' => $postId,
+                'changed' => false,
+                'current' => ['attachment_id' => $previousId],
+            ], JSON_UNESCAPED_UNICODE);
+        }
+
         if ($attachmentId > 0) {
             set_post_thumbnail($postId, $attachmentId);
         } else {
@@ -191,6 +205,7 @@ class Multioto_Agent_Media
         return wp_json_encode([
             'id' => $postId,
             'attachment_id' => $attachmentId,
+            'changed' => true,
             // 0 is a real previous value here — it means "there was none" — and
             // restoring it clears the thumbnail, which is the correct undo.
             'previous' => ['attachment_id' => $previousId],
@@ -219,20 +234,25 @@ class Multioto_Agent_Media
             throw new Multioto_Agent_Rpc_Error(-32602, "קובץ #{$attachmentId} אינו קיים בספריית המדיה.");
         }
 
-        $shownOn = get_posts([
-            'post_type' => 'any',
-            'post_status' => 'any',
-            'posts_per_page' => 1,
-            'fields' => 'ids',
-            'meta_key' => '_thumbnail_id',
-            'meta_value' => (string) $attachmentId,
-        ]);
+        // Asked of the meta table directly, and deliberately NOT through
+        // WP_Query: 'any' does not mean any there. post_type => 'any' drops
+        // every type registered with exclude_from_search — which includes
+        // WooCommerce's product_variation — and post_status => 'any' drops
+        // trashed posts. A variation or a post in the trash would have gone
+        // unseen, and deleting is for ever: restoring that post later would
+        // restore it pointing at a file that no longer exists.
+        global $wpdb;
 
-        if (! empty($shownOn)) {
+        $shownOn = (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key = '_thumbnail_id' AND meta_value = %d LIMIT 1",
+            $attachmentId
+        ));
+
+        if ($shownOn > 0) {
             throw new Multioto_Agent_Rpc_Error(-32602, sprintf(
                 'קובץ #%d משמש כתמונה ראשית של פריט תוכן #%d. הסירו אותו משם לפני המחיקה.',
                 $attachmentId,
-                (int) $shownOn[0],
+                $shownOn,
             ));
         }
 
