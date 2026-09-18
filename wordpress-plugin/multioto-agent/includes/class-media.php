@@ -205,7 +205,14 @@ class Multioto_Agent_Media
                 delete_post_thumbnail($postId);
             }
         } elseif ($attachmentId !== $previousId) {
-            $written = self::swapThumbnail($postId, $attachmentId, $expected);
+            $written = self::swapThumbnail($postId, $attachmentId, $expected, $displaced);
+
+            // What the write actually displaced, which is not always what was
+            // read at the top: if the expected image had been removed in
+            // between, this insertion displaced nothing. Saying otherwise would
+            // hand the caller an undo that puts back a picture somebody had
+            // already taken down.
+            $previousId = $displaced;
 
             if (! $written) {
                 // This request already read the meta once, and a write that
@@ -263,8 +270,13 @@ class Multioto_Agent_Media
      *
      * @return bool Whether the featured image is now what the caller asked for.
      */
-    private static function swapThumbnail(int $postId, int $attachmentId, int $expected): bool
+    private static function swapThumbnail(int $postId, int $attachmentId, int $expected, ?int &$displaced = null): bool
     {
+        // What the write displaced. Ordinarily the image we expected — that is
+        // what being conditional on it means — but not on the insert path
+        // below.
+        $displaced = $expected;
+
         if ($attachmentId === 0) {
             return (bool) delete_post_meta($postId, '_thumbnail_id', $expected);
         }
@@ -317,8 +329,15 @@ class Multioto_Agent_Media
             // work while they can see that it did, and send the caller off to
             // delete an attachment the page has just started using.
             //
-            // So it is reported as the change it turned into. The row that
-            // refused to go is the record of why.
+            // So it is reported as the change it turned into — and as having
+            // displaced NOTHING, because that is what it displaced. The image
+            // read before the write was already gone by the time core looked;
+            // reporting it here would give the caller an undo that puts back a
+            // picture somebody had deliberately removed.
+            //
+            // The row that refused to go is the record of why.
+            $displaced = 0;
+
             return true;
         }
 
