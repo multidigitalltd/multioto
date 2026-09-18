@@ -277,9 +277,18 @@ class Multioto_Agent_Media
         // adding one, so a veto covers that path too. Going straight to
         // add_post_meta would consult only `add_post_metadata` and put a real
         // row on a site that had said no.
+        // The previous value is spelled the way CORE would spell it, because a
+        // provider listening here is written against core, not against us. For
+        // "there is no image yet" core sends '' — set_post_thumbnail() passes
+        // no previous value at all — and it never sends 0 for this key. A
+        // provider that checks the argument strictly would read our 0 as a real
+        // previous id, decline the write as none of its business, and the
+        // fall-through would then put a physical row on a site that keeps this
+        // meta somewhere else entirely. Zero stays zero for our own comparison,
+        // where it does mean something.
         $check = $clearing
             ? apply_filters('delete_post_metadata', null, $postId, '_thumbnail_id', $expected, false)
-            : apply_filters('update_post_metadata', null, $postId, '_thumbnail_id', $attachmentId, $expected);
+            : apply_filters('update_post_metadata', null, $postId, '_thumbnail_id', $attachmentId, $expected === 0 ? '' : $expected);
 
         if ($check !== null) {
             return (bool) $check;
