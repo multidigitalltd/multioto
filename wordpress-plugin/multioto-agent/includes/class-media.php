@@ -238,47 +238,81 @@ class Multioto_Agent_Media
      * thing that does is a WHERE clause on the value we expect, which means
      * this reads differently depending on what "expected" is:
      *
-     * - Replacing a known image: `update_post_meta`'s fourth argument puts the
-     *   expected id into the UPDATE's WHERE. One statement, decided by the
-     *   database. If the row was DELETED meanwhile, update_metadata finds no
-     *   rows and quietly inserts instead — returning a meta id where an update
-     *   returns true, which is how that is caught and taken back out.
-     * - Clearing a known image: delete_post_meta's third argument is likewise
-     *   part of the WHERE (it guards on `'' !== $value`, so an id passes).
-     * - Expecting NO image: there is no row to put a condition on, and post
-     *   meta carries no unique index, so a true compare-and-swap is not
-     *   available. `add_post_meta(..., unique)` is the closest there is — it
-     *   refuses once a row exists — and its SELECT-then-INSERT window is the
-     *   honest limit of this case rather than something the code hides.
+     * Neither `update_post_meta` nor `delete_post_meta` can express it, for
+     * three separate reasons, all of them in core:
      *
-     * Passing 0 as `$prev_value` would have been none of the above:
-     * update_metadata guards it with `! empty()`, so a zero drops out of the
-     * WHERE entirely and the write stops being conditional at all.
+     * - update_metadata guards the expected value with `! empty()`, so a zero
+     *   drops out of the WHERE and the write stops being conditional at all.
+     * - When its SELECT finds no row it does not fail but INSERTS, so an image
+     *   an administrator had just removed comes back as ours.
+     * - delete_metadata selects the matching ids WITH the value, then deletes
+     *   by id alone. An update landing in between keeps the same row id, and
+     *   the newer image is deleted anyway.
+     *
+     * So the write is one statement here, carrying the expectation in its own
+     * WHERE, and the hooks and cache invalidation core would have run are run
+     * after it. The row id is looked up first only so those hooks can be given
+     * what they are documented to receive.
+     *
+     * The one case with no compare-and-swap is expecting NO image: there is no
+     * row to put a condition on and post meta has no unique index.
+     * `add_post_meta(..., unique)` is the closest there is — it refuses once a
+     * row exists — and its SELECT-then-INSERT window is the honest limit of
+     * that case rather than something this hides.
      *
      * @return bool Whether the featured image is now what the caller asked for.
      */
     private static function swapThumbnail(int $postId, int $attachmentId, int $expected): bool
     {
-        if ($attachmentId === 0) {
-            return (bool) delete_post_meta($postId, '_thumbnail_id', $expected);
-        }
-
         if ($expected === 0) {
             return (bool) add_post_meta($postId, '_thumbnail_id', $attachmentId, true);
         }
 
-        $written = update_post_meta($postId, '_thumbnail_id', $attachmentId, $expected);
+        global $wpdb;
 
-        // An integer means it took the insert path: the image we were told to
-        // expect had been removed, so there was nothing to swap and we added
-        // ours to an empty spot. That is not what was asked for.
-        if (is_int($written)) {
-            delete_post_meta($postId, '_thumbnail_id', $attachmentId);
+        $metaId = (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT meta_id FROM {$wpdb->postmeta} WHERE post_id = %d AND meta_key = '_thumbnail_id' AND meta_value = %s LIMIT 1",
+            $postId,
+            (string) $expected
+        ));
 
+        if ($metaId === 0) {
             return false;
         }
 
-        return (bool) $written;
+        $clearing = $attachmentId === 0;
+        // Both conditions travel WITH the write: the row we found, and the
+        // value it still has to hold. Whoever changed it since changes nothing
+        // here, and no rows are affected.
+        $where = ['meta_id' => $metaId, 'meta_value' => (string) $expected];
+
+        if ($clearing) {
+            do_action('delete_post_meta', [$metaId], $postId, '_thumbnail_id', $expected);
+            do_action('delete_postmeta', [$metaId]);
+        } else {
+            do_action('update_post_meta', $metaId, $postId, '_thumbnail_id', $attachmentId);
+            do_action('update_postmeta', $metaId, $postId, '_thumbnail_id', $attachmentId);
+        }
+
+        $rows = $clearing
+            ? $wpdb->delete($wpdb->postmeta, $where)
+            : $wpdb->update($wpdb->postmeta, ['meta_value' => (string) $attachmentId], $where);
+
+        if ($rows !== 1) {
+            return false;
+        }
+
+        wp_cache_delete($postId, 'post_meta');
+
+        if ($clearing) {
+            do_action('deleted_post_meta', [$metaId], $postId, '_thumbnail_id', $expected);
+            do_action('deleted_postmeta', [$metaId]);
+        } else {
+            do_action('updated_post_meta', $metaId, $postId, '_thumbnail_id', $attachmentId);
+            do_action('updated_postmeta', $metaId, $postId, '_thumbnail_id', $attachmentId);
+        }
+
+        return true;
     }
 
     /**
