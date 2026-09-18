@@ -205,17 +205,17 @@ class Multioto_Agent_Media
                 delete_post_thumbnail($postId);
             }
         } elseif ($attachmentId !== $previousId) {
-            // One statement, decided by the database: `$prev_value` puts the
-            // expectation into the WHERE clause, so a request that slipped in
-            // between the read above and this line changes the row first and
-            // this write matches nothing. A PHP request is not a transaction,
-            // and treating it as one is how the check above, on its own, would
-            // still have let two writers through.
-            $written = $attachmentId > 0
-                ? update_post_meta($postId, '_thumbnail_id', $attachmentId, $expected)
-                : delete_post_meta($postId, '_thumbnail_id', $expected);
+            $written = self::swapThumbnail($postId, $attachmentId, $expected);
 
             if (! $written) {
+                // This request already read the meta once, and a write that
+                // matched nothing returns before invalidating anything — so the
+                // cached value here is still the one we lost to, not the one
+                // that won. Nobody can evict another process's runtime cache
+                // for us, so it has to be dropped before asking again, or the
+                // refusal would name the wrong picture.
+                wp_cache_delete($postId, 'post_meta');
+
                 return self::thumbnailUnchanged($postId, (int) get_post_thumbnail_id($postId));
             }
         }
@@ -228,6 +228,57 @@ class Multioto_Agent_Media
             // restoring it clears the thumbnail, which is the correct undo.
             'previous' => ['attachment_id' => $previousId],
         ], JSON_UNESCAPED_UNICODE);
+    }
+
+    /**
+     * Set the featured image only while it is still the one expected.
+     *
+     * The competing writer here is an administrator in wp-admin, who takes no
+     * lock of ours — so no lock WE take can serialise against them. The only
+     * thing that does is a WHERE clause on the value we expect, which means
+     * this reads differently depending on what "expected" is:
+     *
+     * - Replacing a known image: `update_post_meta`'s fourth argument puts the
+     *   expected id into the UPDATE's WHERE. One statement, decided by the
+     *   database. If the row was DELETED meanwhile, update_metadata finds no
+     *   rows and quietly inserts instead — returning a meta id where an update
+     *   returns true, which is how that is caught and taken back out.
+     * - Clearing a known image: delete_post_meta's third argument is likewise
+     *   part of the WHERE (it guards on `'' !== $value`, so an id passes).
+     * - Expecting NO image: there is no row to put a condition on, and post
+     *   meta carries no unique index, so a true compare-and-swap is not
+     *   available. `add_post_meta(..., unique)` is the closest there is — it
+     *   refuses once a row exists — and its SELECT-then-INSERT window is the
+     *   honest limit of this case rather than something the code hides.
+     *
+     * Passing 0 as `$prev_value` would have been none of the above:
+     * update_metadata guards it with `! empty()`, so a zero drops out of the
+     * WHERE entirely and the write stops being conditional at all.
+     *
+     * @return bool Whether the featured image is now what the caller asked for.
+     */
+    private static function swapThumbnail(int $postId, int $attachmentId, int $expected): bool
+    {
+        if ($attachmentId === 0) {
+            return (bool) delete_post_meta($postId, '_thumbnail_id', $expected);
+        }
+
+        if ($expected === 0) {
+            return (bool) add_post_meta($postId, '_thumbnail_id', $attachmentId, true);
+        }
+
+        $written = update_post_meta($postId, '_thumbnail_id', $attachmentId, $expected);
+
+        // An integer means it took the insert path: the image we were told to
+        // expect had been removed, so there was nothing to swap and we added
+        // ours to an empty spot. That is not what was asked for.
+        if (is_int($written)) {
+            delete_post_meta($postId, '_thumbnail_id', $attachmentId);
+
+            return false;
+        }
+
+        return (bool) $written;
     }
 
     /**
