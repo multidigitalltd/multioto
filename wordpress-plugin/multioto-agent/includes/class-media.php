@@ -301,13 +301,25 @@ class Multioto_Agent_Media
         if (is_int($written)) {
             $row = get_metadata_by_mid('post', $written);
 
-            if ($row !== false
+            $ours = $row !== false
                 && (int) $row->post_id === $postId
-                && $row->meta_key === '_thumbnail_id') {
-                delete_metadata_by_mid('post', $written);
+                && $row->meta_key === '_thumbnail_id';
+
+            if (! $ours || delete_metadata_by_mid('post', $written) !== false) {
+                return false;
             }
 
-            return false;
+            // The row would not go: a site can veto this through
+            // delete_post_metadata_by_mid, and a database can simply fail.
+            // Either way our picture is on the page now, whether we meant it to
+            // be or not — and "nothing happened" is the one answer that is
+            // certainly wrong. It would tell the customer their change did not
+            // work while they can see that it did, and send the caller off to
+            // delete an attachment the page has just started using.
+            //
+            // So it is reported as the change it turned into. The row that
+            // refused to go is the record of why.
+            return true;
         }
 
         return (bool) $written;
