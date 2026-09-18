@@ -188,18 +188,36 @@ class Multioto_Agent_Media
         // somebody chose a moment earlier and reporting success. Passing
         // if_current makes the check and the write one operation: either it is
         // still what the caller last saw, or nothing is written at all.
-        if (array_key_exists('if_current', $args) && $previousId !== (int) $args['if_current']) {
-            return wp_json_encode([
-                'id' => $postId,
-                'changed' => false,
-                'current' => ['attachment_id' => $previousId],
-            ], JSON_UNESCAPED_UNICODE);
+        $guarded = array_key_exists('if_current', $args);
+        $expected = $guarded ? (int) $args['if_current'] : $previousId;
+
+        // Cheapest refusal first, so the ordinary mismatch never reaches the
+        // database. It is NOT the guarantee, though — two PHP requests can both
+        // get past this line. The guarantee is the conditional write below.
+        if ($guarded && $previousId !== $expected) {
+            return self::thumbnailUnchanged($postId, $previousId);
         }
 
-        if ($attachmentId > 0) {
-            set_post_thumbnail($postId, $attachmentId);
-        } else {
-            delete_post_thumbnail($postId);
+        if (! $guarded) {
+            if ($attachmentId > 0) {
+                set_post_thumbnail($postId, $attachmentId);
+            } else {
+                delete_post_thumbnail($postId);
+            }
+        } elseif ($attachmentId !== $previousId) {
+            // One statement, decided by the database: `$prev_value` puts the
+            // expectation into the WHERE clause, so a request that slipped in
+            // between the read above and this line changes the row first and
+            // this write matches nothing. A PHP request is not a transaction,
+            // and treating it as one is how the check above, on its own, would
+            // still have let two writers through.
+            $written = $attachmentId > 0
+                ? update_post_meta($postId, '_thumbnail_id', $attachmentId, $expected)
+                : delete_post_meta($postId, '_thumbnail_id', $expected);
+
+            if (! $written) {
+                return self::thumbnailUnchanged($postId, (int) get_post_thumbnail_id($postId));
+            }
         }
 
         return wp_json_encode([
@@ -209,6 +227,18 @@ class Multioto_Agent_Media
             // 0 is a real previous value here — it means "there was none" — and
             // restoring it clears the thumbnail, which is the correct undo.
             'previous' => ['attachment_id' => $previousId],
+        ], JSON_UNESCAPED_UNICODE);
+    }
+
+    /**
+     * Nothing was written, and this is what is there instead.
+     */
+    private static function thumbnailUnchanged(int $postId, int $currentId): string
+    {
+        return wp_json_encode([
+            'id' => $postId,
+            'changed' => false,
+            'current' => ['attachment_id' => $currentId],
         ], JSON_UNESCAPED_UNICODE);
     }
 

@@ -5,6 +5,7 @@ namespace App\Services\SiteAgent;
 use App\Models\Site;
 use App\Models\SiteAgentRequest;
 use App\Services\Agent\McpClient;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
@@ -617,7 +618,21 @@ class SiteChangeApplier
         // Same case on a site too old for `if_current`: here the write already
         // happened, so their picture has to be put back — and put back only if
         // ours is still the one showing, or we would be overwriting in turn.
+        //
+        // On such a site that last part is a request the plugin ignores, so the
+        // put-back is best effort and nothing here can make it otherwise. The
+        // team is told, because the answer is to get that site updated — the
+        // plugin turns WordPress's own auto-updates on for itself, so a site
+        // sitting on an old version twice a day after a release is a site with
+        // something wrong with it.
         if ($expected !== null && $displaced !== (int) $expected) {
+            if (! array_key_exists('changed', (array) $set)) {
+                Log::warning('SiteAgent: featured image put back without compare-and-swap', [
+                    'site_id' => $site->id,
+                    'plugin_version' => $site->agent_plugin_version,
+                ]);
+            }
+
             $restored = $this->restoreThumbnail($site, $targetId, $displaced, $attachmentId);
             $this->discardUpload($site, $attachmentId);
 
