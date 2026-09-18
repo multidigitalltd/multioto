@@ -268,6 +268,21 @@ class Multioto_Agent_Media
             return (bool) add_post_meta($postId, '_thumbnail_id', $attachmentId, true);
         }
 
+        $clearing = $attachmentId === 0;
+
+        // A site may keep this meta somewhere else entirely, or forbid the
+        // change: core asks first through a short-circuit filter, and going
+        // straight to the table would both ignore a veto and fail to find a
+        // row that was never meant to be there. Asked before the lookup, in
+        // the same order core asks.
+        $check = $clearing
+            ? apply_filters('delete_post_metadata', null, $postId, '_thumbnail_id', $expected, false)
+            : apply_filters('update_post_metadata', null, $postId, '_thumbnail_id', $attachmentId, $expected);
+
+        if ($check !== null) {
+            return (bool) $check;
+        }
+
         global $wpdb;
 
         $metaId = (int) $wpdb->get_var($wpdb->prepare(
@@ -280,11 +295,18 @@ class Multioto_Agent_Media
             return false;
         }
 
-        $clearing = $attachmentId === 0;
-        // Both conditions travel WITH the write: the row we found, and the
-        // value it still has to hold. Whoever changed it since changes nothing
-        // here, and no rows are affected.
-        $where = ['meta_id' => $metaId, 'meta_value' => (string) $expected];
+        // Everything that made this row the right row travels WITH the write —
+        // its id, its post, its key and the value it still has to hold. The id
+        // alone would not do: a listener on the action fired just below may
+        // rename the row through update_metadata_by_mid(), and a predicate that
+        // only knew the id and the value would happily change a row that is no
+        // longer a featured image at all, and call it a thumbnail change.
+        $where = [
+            'meta_id' => $metaId,
+            'post_id' => $postId,
+            'meta_key' => '_thumbnail_id',
+            'meta_value' => (string) $expected,
+        ];
 
         if ($clearing) {
             do_action('delete_post_meta', [$metaId], $postId, '_thumbnail_id', $expected);
