@@ -802,7 +802,11 @@ class SiteChangeApplier
         return [
             'ok' => false,
             'reason' => $reason,
-            'message' => 'לא הצלחתי לבצע את השינוי באתר. נסו שוב, ואם זה חוזר — נשמח לעזור.',
+            // A fragment, not a sentence: the caller puts "לא הצלחתי לבצע את
+            // השינוי" — or "להחזיר" — in front of it. A whole sentence here
+            // came out stuttering ("לא הצלחתי להחזיר את השינוי: לא הצלחתי
+            // לבצע את השינוי באתר"), which is what a paying customer read.
+            'message' => 'משהו השתבש מול האתר. נסו שוב, ואם זה חוזר — נשמח לעזור.',
             'restore' => null,
         ];
     }

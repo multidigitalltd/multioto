@@ -329,8 +329,14 @@ class SiteAgentPluginContractTest extends TestCase
 
         $this->assertSame(SiteAgentRequest::FAILED, SiteAgentRequest::sole()->state);
         Http::assertSent(fn ($request): bool => data_get($request->data(), 'params.name') !== 'wp_media_upload');
-        // The customer is told it did not work — never why, in the site's words.
+        // The customer is told it did not work — never why, in the site's
+        // words — and the sentence they read is one sentence, not the lead-in
+        // twice over.
         $this->assertStringNotContainsString('timeout', $reply);
+        $this->assertSame(
+            'לא הצלחתי לבצע את השינוי: משהו השתבש מול האתר. נסו שוב, ואם זה חוזר — נשמח לעזור.',
+            $reply,
+        );
     }
 
     public function test_an_elementor_undo_matches_the_setting_and_not_only_the_widget(): void
