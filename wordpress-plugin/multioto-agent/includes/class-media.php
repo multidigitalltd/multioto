@@ -273,7 +273,28 @@ class Multioto_Agent_Media
             return (bool) add_post_meta($postId, '_thumbnail_id', $attachmentId, true);
         }
 
-        $written = update_post_meta($postId, '_thumbnail_id', $attachmentId, $expected);
+        // Core does not hand back the value it stored, only whether it stored
+        // one — and if it takes its insert path the value it wrote is the
+        // SANITISED one, which we would otherwise have to reproduce by running
+        // the sanitiser a second time. A sanitiser is an arbitrary filter: it
+        // may count, log, or answer differently on a second call, and running
+        // it again to find out what it said the first time is not a question
+        // that can be asked twice. So it is overheard instead, from core's own
+        // announcement of the row it created.
+        $inserted = null;
+        $overhear = static function ($metaId, $objectId, $metaKey, $metaValue) use (&$inserted, $postId) {
+            if ((int) $objectId === $postId && $metaKey === '_thumbnail_id') {
+                $inserted = $metaValue;
+            }
+        };
+
+        add_action('added_post_meta', $overhear, 10, 4);
+
+        try {
+            $written = update_post_meta($postId, '_thumbnail_id', $attachmentId, $expected);
+        } finally {
+            remove_action('added_post_meta', $overhear, 10);
+        }
 
         // An integer rather than true means core took its insert path: the row
         // we were told to expect had been removed, so nothing was swapped and
@@ -292,22 +313,20 @@ class Multioto_Agent_Media
         // lines instead of leaving it open from the insert, which is the honest
         // best available without going behind core's back again.
         if (is_int($written)) {
-            // Against the value core STORED, which is the sanitised one:
-            // update_metadata hands the raw value on to add_metadata, and that
-            // sanitises it in its turn. Comparing with what we asked for would
-            // miss on any site that registered a sanitiser, skip the cleanup,
-            // and then report that nothing changed while having left a new
-            // featured image behind — worse than the overwrite this exists to
-            // prevent, because it is also a lie.
-            $stored = sanitize_meta('_thumbnail_id', $attachmentId, 'post', get_object_subtype('post', $postId));
+            // Against the value core STORED — overheard above — and not against
+            // the one we asked for. On a site with a sanitiser the two differ,
+            // the comparison would miss, the cleanup would be skipped, and the
+            // answer would say nothing changed while a new featured image sat
+            // on the page. That is worse than the overwrite this exists to
+            // prevent, because it is also untrue.
             $row = get_metadata_by_mid('post', $written);
 
             if ($row !== false
                 && (int) $row->post_id === $postId
                 && $row->meta_key === '_thumbnail_id'
                 && is_scalar($row->meta_value)
-                && is_scalar($stored)
-                && (string) $row->meta_value === (string) $stored) {
+                && is_scalar($inserted)
+                && (string) $row->meta_value === (string) $inserted) {
                 delete_metadata_by_mid('post', $written);
             }
 
