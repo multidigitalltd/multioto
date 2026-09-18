@@ -233,148 +233,60 @@ class Multioto_Agent_Media
     /**
      * Set the featured image only while it is still the one expected.
      *
-     * The competing writer here is an administrator in wp-admin, who takes no
-     * lock of ours — so no lock WE take can serialise against them. The only
-     * thing that does is a WHERE clause on the value we expect, which means
-     * this reads differently depending on what "expected" is:
+     * Through core's own functions, deliberately — an earlier version of this
+     * went to the postmeta table directly, for a WHERE clause core does not
+     * offer. It worked, and it cost six separate pieces of the contract core
+     * runs around a meta write: the actions, the short-circuit filters,
+     * sanitising, which of those a delete does and does not get, whether the
+     * raw or the sanitised value reaches the add fallback, and how many rows a
+     * write touches. Every one of them was found only after the previous one
+     * had been called complete. Rebuilding a platform's contract by hand is a
+     * debt that keeps coming due, and what it bought here was microseconds.
      *
-     * Neither `update_post_meta` nor `delete_post_meta` can express it, for
-     * three separate reasons, all of them in core:
+     * The window that actually mattered is already shut by the time this runs:
+     * the read and the write used to be separated by an upload allowed 120
+     * seconds, which is ample time for an administrator to put a different
+     * picture there, and they are now in the same breath. What remains is
+     * somebody saving in the same instant, and against that core's own
+     * conditional UPDATE is as good as this gets.
      *
-     * - update_metadata guards the expected value with `! empty()`, so a zero
-     *   drops out of the WHERE and the write stops being conditional at all.
-     * - When its SELECT finds no row it does not fail but INSERTS, so an image
-     *   an administrator had just removed comes back as ours.
-     * - delete_metadata selects the matching ids WITH the value, then deletes
-     *   by id alone. An update landing in between keeps the same row id, and
-     *   the newer image is deleted anyway.
+     * So the guarantees differ by case, and honestly:
      *
-     * So the write is one statement here, carrying the expectation in its own
-     * WHERE, and the hooks and cache invalidation core would have run are run
-     * after it. The row id is looked up first only so those hooks can be given
-     * what they are documented to receive.
-     *
-     * The one case with no compare-and-swap is expecting NO image: there is no
-     * row to put a condition on and post meta has no unique index.
-     * `add_post_meta(..., unique)` is the closest there is — it refuses once a
-     * row exists — and its SELECT-then-INSERT window is the honest limit of
-     * that case rather than something this hides.
+     * - Replacing a known image: `update_post_meta`'s fourth argument becomes
+     *   part of the UPDATE's WHERE. A real conditional write.
+     * - Clearing a known image: `delete_post_meta`'s third argument narrows
+     *   the SELECT, though core then deletes by the ids it found — so a change
+     *   landing between those two statements is not caught.
+     * - Expecting NO image: nothing to put a condition on, and post meta has
+     *   no unique index. `add_post_meta(..., unique)` refuses once a row
+     *   exists, and that is the whole of it.
      *
      * @return bool Whether the featured image is now what the caller asked for.
      */
     private static function swapThumbnail(int $postId, int $attachmentId, int $expected): bool
     {
-        // WHAT the operation is comes from what the CALLER asked for, before
-        // any sanitiser is consulted. Core picks delete_metadata or
-        // update_metadata on the caller's value, and delete_metadata never
-        // sanitises at all — so deciding this afterwards let a sanitiser that
-        // maps 0 to something else turn a removal into an update, and one that
-        // maps an id to 0 turn an update into a removal.
-        $clearing = $attachmentId === 0;
-
-        // Core sanitises on the UPDATE path only, so a site that registered a
-        // sanitiser for this key (through register_post_meta, say) both sees
-        // and stores what its own policy produced. Going straight to the table
-        // skipped that entirely: the filter would be shown a value core would
-        // never have shown it, and the row would hold a value the site had
-        // said it did not want.
-        $value = $clearing ? $attachmentId : (int) sanitize_meta(
-            '_thumbnail_id',
-            $attachmentId,
-            'post',
-            get_object_subtype('post', $postId)
-        );
-
-        // A site may keep this meta somewhere else entirely, or forbid the
-        // change: core asks first through a short-circuit filter, and going
-        // straight to the table would both ignore a veto and fail to find a
-        // row that was never meant to be there.
-        //
-        // Asked before EVERYTHING else, which is where core asks it — including
-        // before the first-image case below. update_metadata runs this filter
-        // and only then discovers it has no row to update and falls back to
-        // adding one, so a veto covers that path too. Going straight to
-        // add_post_meta would consult only `add_post_metadata` and put a real
-        // row on a site that had said no.
-        //
-        // The previous value is spelled the way CORE would spell it, because a
-        // provider listening here is written against core, not against us. For
-        // "there is no image yet" core sends '' — set_post_thumbnail() passes
-        // no previous value at all — and it never sends 0 for this key. Zero
-        // stays zero for our own comparison, where it does mean something.
-        $check = $clearing
-            ? apply_filters('delete_post_metadata', null, $postId, '_thumbnail_id', $expected, false)
-            : apply_filters('update_post_metadata', null, $postId, '_thumbnail_id', $value, $expected === 0 ? '' : $expected);
-
-        if ($check !== null) {
-            return (bool) $check;
+        if ($attachmentId === 0) {
+            return (bool) delete_post_meta($postId, '_thumbnail_id', $expected);
         }
 
         if ($expected === 0) {
-            // The RAW value, not the sanitised one: add_post_meta sanitises in
-            // its own right, and core deliberately keeps the value as it
-            // arrived for exactly this fallback so a sanitiser runs once and
-            // not twice. A sanitiser that is not idempotent would otherwise
-            // store something neither we nor core ever asked for.
             return (bool) add_post_meta($postId, '_thumbnail_id', $attachmentId, true);
         }
 
-        global $wpdb;
+        $written = update_post_meta($postId, '_thumbnail_id', $attachmentId, $expected);
 
-        // EVERY row holding that value, not the first one. post meta carries no
-        // unique index, and the check-and-insert above can lose a race and
-        // leave two — so clearing could report success while a second identical
-        // row went on supplying the same image, and replacing could leave the
-        // old value behind. Core's update and delete both touch them all.
-        $metaIds = array_map('intval', (array) $wpdb->get_col($wpdb->prepare(
-            "SELECT meta_id FROM {$wpdb->postmeta} WHERE post_id = %d AND meta_key = '_thumbnail_id' AND meta_value = %s",
-            $postId,
-            (string) $expected
-        )));
+        // An integer rather than true means core took its insert path: the row
+        // we were told to expect had been removed, so nothing was swapped and
+        // ours was added to an empty spot instead. That is not what was asked
+        // for, and it goes straight back out — by its own id, so a row somebody
+        // else added in the meantime is never the one removed.
+        if (is_int($written)) {
+            delete_metadata_by_mid('post', $written);
 
-        if ($metaIds === []) {
             return false;
         }
 
-        // Everything that made those rows the right rows travels WITH the
-        // write — the post, the key, and the value they still have to hold. The
-        // key earns its place there: a listener on the action fired just below
-        // may repurpose a row through update_metadata_by_mid(), and that row
-        // then stops matching, which is exactly what should happen.
-        $where = ['post_id' => $postId, 'meta_key' => '_thumbnail_id', 'meta_value' => (string) $expected];
-
-        if ($clearing) {
-            do_action('delete_post_meta', $metaIds, $postId, '_thumbnail_id', $expected);
-            do_action('delete_postmeta', $metaIds);
-        } else {
-            foreach ($metaIds as $metaId) {
-                do_action('update_post_meta', $metaId, $postId, '_thumbnail_id', $value);
-                do_action('update_postmeta', $metaId, $postId, '_thumbnail_id', $value);
-            }
-        }
-
-        $rows = $clearing
-            ? $wpdb->delete($wpdb->postmeta, $where)
-            : $wpdb->update($wpdb->postmeta, ['meta_value' => (string) $value], $where);
-
-        // false when the query failed, 0 when somebody got there first.
-        if ($rows < 1) {
-            return false;
-        }
-
-        wp_cache_delete($postId, 'post_meta');
-
-        if ($clearing) {
-            do_action('deleted_post_meta', $metaIds, $postId, '_thumbnail_id', $expected);
-            do_action('deleted_postmeta', $metaIds);
-        } else {
-            foreach ($metaIds as $metaId) {
-                do_action('updated_post_meta', $metaId, $postId, '_thumbnail_id', $value);
-                do_action('updated_postmeta', $metaId, $postId, '_thumbnail_id', $value);
-            }
-        }
-
-        return true;
+        return (bool) $written;
     }
 
     /**
