@@ -273,6 +273,12 @@ class Site extends Model
         return $this->hasMany(MonitorCheck::class);
     }
 
+    /** What the owner asked their WhatsApp agent to change here, and when. */
+    public function siteAgentRequests(): HasMany
+    {
+        return $this->hasMany(SiteAgentRequest::class);
+    }
+
     /** Durable monitoring findings shown on the site page (what + when). */
     public function events(): HasMany
     {

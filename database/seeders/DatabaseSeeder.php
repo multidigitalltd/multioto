@@ -28,6 +28,15 @@ class DatabaseSeeder extends Seeder
             ['name' => 'אחזקה פרימיום', 'price_agorot' => 39900],
         ]);
 
+        // The site-agent product, outside the rotation above: its flag is what
+        // switches the WhatsApp agent on, so putting it in the rotation would
+        // hand the product to two demo customers who never bought it.
+        Plan::factory()->create([
+            'name' => 'ניהול אתר בוואטסאפ',
+            'price_agorot' => 14900,
+            'includes_site_agent' => true,
+        ]);
+
         Customer::factory()
             ->count(5)
             ->create()
