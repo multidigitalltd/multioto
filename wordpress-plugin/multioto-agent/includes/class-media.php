@@ -264,23 +264,29 @@ class Multioto_Agent_Media
      */
     private static function swapThumbnail(int $postId, int $attachmentId, int $expected): bool
     {
-        if ($expected === 0) {
-            return (bool) add_post_meta($postId, '_thumbnail_id', $attachmentId, true);
-        }
-
         $clearing = $attachmentId === 0;
 
         // A site may keep this meta somewhere else entirely, or forbid the
         // change: core asks first through a short-circuit filter, and going
         // straight to the table would both ignore a veto and fail to find a
-        // row that was never meant to be there. Asked before the lookup, in
-        // the same order core asks.
+        // row that was never meant to be there.
+        //
+        // Asked before EVERYTHING else, which is where core asks it — including
+        // before the first-image case below. update_metadata runs this filter
+        // and only then discovers it has no row to update and falls back to
+        // adding one, so a veto covers that path too. Going straight to
+        // add_post_meta would consult only `add_post_metadata` and put a real
+        // row on a site that had said no.
         $check = $clearing
             ? apply_filters('delete_post_metadata', null, $postId, '_thumbnail_id', $expected, false)
             : apply_filters('update_post_metadata', null, $postId, '_thumbnail_id', $attachmentId, $expected);
 
         if ($check !== null) {
             return (bool) $check;
+        }
+
+        if ($expected === 0) {
+            return (bool) add_post_meta($postId, '_thumbnail_id', $attachmentId, true);
         }
 
         global $wpdb;
