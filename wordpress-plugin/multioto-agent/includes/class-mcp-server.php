@@ -193,6 +193,7 @@ class Multioto_Agent_Mcp_Server
         $tools[] = ['name' => 'wp_media_list', 'description' => 'קבצים בספריית המדיה: מזהה, כותרת, כתובת, סוג, טקסט חלופי ותאריך. אופציונלי search, mime_type, limit, page. קִראו את זה לפני העלאה — תמונה שכבר קיימת עדיף לשייך מאשר להעלות שוב.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['search' => ['type' => 'string'], 'mime_type' => ['type' => 'string'], 'limit' => ['type' => 'integer'], 'page' => ['type' => 'integer']]]];
         $tools[] = ['name' => 'wp_media_upload', 'description' => 'העלאת קובץ לספריית המדיה. filename חובה (עם סיומת), ואחד מ: url (כתובת ציבורית) או data (base64). **לתמונה חובה alt** — תיאור קצר של מה שרואים בה. אופציונלי title ו-attach_to (מזהה פריט תוכן לשיוך). מותרים JPEG, PNG, GIF, WebP ו-PDF בלבד; הסוג נקבע מתוכן הקובץ ולא מהסיומת, ו-SVG נדחה. אין ביטול להעלאה.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['filename' => ['type' => 'string'], 'url' => ['type' => 'string'], 'data' => ['type' => 'string'], 'alt' => ['type' => 'string'], 'title' => ['type' => 'string'], 'attach_to' => ['type' => 'integer']], 'required' => ['filename']]];
         $tools[] = ['name' => 'wp_post_thumbnail_set', 'description' => 'קביעת התמונה הראשית של עמוד/פוסט. id + attachment_id (0 מסיר את התמונה הראשית). מחזיר את הקודמת לצורך ביטול.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['id' => ['type' => 'integer'], 'attachment_id' => ['type' => 'integer']], 'required' => ['id', 'attachment_id']]];
+        $tools[] = ['name' => 'wp_media_delete', 'description' => 'מחיקת קובץ מספריית המדיה, לצמיתות. attachment_id חובה. קובץ שמשמש כתמונה ראשית של פריט תוכן נדחה — הסירו אותו משם קודם. נועד לנקות העלאה שלא ניתן היה להשתמש בה; אין לכך ביטול.', 'annotations' => $destructive, 'inputSchema' => ['type' => 'object', 'properties' => ['attachment_id' => ['type' => 'integer']], 'required' => ['attachment_id']]];
 
         // Comments. The one body of text on a site that strangers wrote — see
         // Multioto_Agent_Comments.
@@ -283,6 +284,7 @@ class Multioto_Agent_Mcp_Server
             'wp_media_list' => 'mediaList',
             'wp_media_upload' => 'mediaUpload',
             'wp_post_thumbnail_set' => 'thumbnailSet',
+            'wp_media_delete' => 'mediaDelete',
             'wp_elementor_texts_get' => 'elementorTexts',
             'wp_elementor_text_update' => 'elementorTextUpdate',
             'wc_product_search' => 'wcProductSearch',
@@ -511,6 +513,11 @@ class Multioto_Agent_Mcp_Server
     private function thumbnailSet(array $args): string
     {
         return Multioto_Agent_Media::setThumbnail($args);
+    }
+
+    private function mediaDelete(array $args): string
+    {
+        return Multioto_Agent_Media::delete($args);
     }
 
     private function optionGet(array $args): string

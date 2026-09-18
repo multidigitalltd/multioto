@@ -198,6 +198,52 @@ class Multioto_Agent_Media
     }
 
     /**
+     * Remove a file from the media library, for good.
+     *
+     * Exists because an upload has no undo of its own. A change that uploaded a
+     * picture and then could not use it used to leave that picture in the
+     * customer's library — invisible, never asked for, and one more of them
+     * every time they tried again.
+     *
+     * A file still shown as somebody's featured image is refused: deleting it
+     * would blank that page, which is the opposite of tidying up.
+     *
+     * @param  array<string, mixed>  $args
+     */
+    public static function delete(array $args): string
+    {
+        $attachmentId = (int) ($args['attachment_id'] ?? 0);
+        $attachment = $attachmentId > 0 ? get_post($attachmentId) : null;
+
+        if (! $attachment instanceof WP_Post || $attachment->post_type !== 'attachment') {
+            throw new Multioto_Agent_Rpc_Error(-32602, "קובץ #{$attachmentId} אינו קיים בספריית המדיה.");
+        }
+
+        $shownOn = get_posts([
+            'post_type' => 'any',
+            'post_status' => 'any',
+            'posts_per_page' => 1,
+            'fields' => 'ids',
+            'meta_key' => '_thumbnail_id',
+            'meta_value' => (string) $attachmentId,
+        ]);
+
+        if (! empty($shownOn)) {
+            throw new Multioto_Agent_Rpc_Error(-32602, sprintf(
+                'קובץ #%d משמש כתמונה ראשית של פריט תוכן #%d. הסירו אותו משם לפני המחיקה.',
+                $attachmentId,
+                (int) $shownOn[0],
+            ));
+        }
+
+        if (wp_delete_attachment($attachmentId, true) === false) {
+            throw new Multioto_Agent_Rpc_Error(-32000, "מחיקת קובץ #{$attachmentId} נכשלה.");
+        }
+
+        return wp_json_encode(['deleted_id' => $attachmentId], JSON_UNESCAPED_UNICODE);
+    }
+
+    /**
      * The bytes, written to a temp file — from a URL or from base64.
      *
      * @param  array<string, mixed>  $args

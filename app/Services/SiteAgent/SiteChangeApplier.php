@@ -288,6 +288,49 @@ class SiteChangeApplier
      *
      * @param  mixed  $result
      */
+    /**
+     * Put back the featured image we should never have replaced.
+     *
+     * Best effort by nature: if this fails the page is left showing our picture
+     * instead of theirs, which the caller has to say out loud rather than
+     * report as an ordinary refusal.
+     */
+    private function restoreThumbnail(Site $site, int $targetId, int $attachmentId): bool
+    {
+        try {
+            $this->mcp->callTool($site, 'wp_post_thumbnail_set', [
+                'id' => $targetId,
+                'attachment_id' => $attachmentId,
+            ], 60);
+
+            return true;
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    /**
+     * Take an upload back out of the library when nothing came to point at it.
+     *
+     * An upload has no undo of its own, so a change that failed after it left
+     * the picture behind — invisible, unasked for, and one more of them on
+     * every retry. Silent on failure on purpose: a site running a plugin older
+     * than 1.6.2 has no such tool, and a leftover file must never replace the
+     * real reason the change did not happen.
+     */
+    private function discardUpload(Site $site, int $attachmentId): void
+    {
+        if ($attachmentId <= 0) {
+            return;
+        }
+
+        try {
+            $this->mcp->callTool($site, 'wp_media_delete', ['attachment_id' => $attachmentId], 60);
+        } catch (\Throwable) {
+            // Nothing to say to the customer about our own housekeeping.
+        }
+    }
+
     private function thumbnailPrevious($result, int $default = 0): int
     {
         $previous = data_get($result, 'previous');
@@ -533,7 +576,28 @@ class SiteChangeApplier
                 'attachment_id' => $attachmentId,
             ], 60)), true);
         } catch (\Throwable $e) {
+            // The picture is in their library already and nothing points at it.
+            // Left alone it stays there for ever, and every retry adds another.
+            $this->discardUpload($site, $attachmentId);
+
             return $this->failure(Str::limit($e->getMessage(), 200));
+        }
+
+        $displaced = $this->thumbnailPrevious($set);
+
+        // The check before the upload is not enough on its own: the upload
+        // itself is allowed 120 seconds, and an administrator can put a
+        // different picture there while it runs. The setter reports which image
+        // it ACTUALLY displaced, which is the only account of that window we
+        // get — and without reading it we would have overwritten their picture
+        // and told the customer it went well.
+        if ($expected !== null && $displaced !== (int) $expected) {
+            $restored = $this->restoreThumbnail($site, $targetId, $displaced);
+            $this->discardUpload($site, $attachmentId);
+
+            return $restored
+                ? $this->refuse(self::STALE)
+                : $this->failure('displaced a newer featured image and could not put it back');
         }
 
         SiteChangePlanner::forget($site);
@@ -548,7 +612,7 @@ class SiteChangeApplier
             'target_id' => $targetId,
             // 0 is meaningful: it means the page had no featured image before,
             // and the undo has to be able to put "none" back.
-            'attachment_id' => $this->thumbnailPrevious($set),
+            'attachment_id' => $displaced,
             // What WE put there. The undo refuses unless this is still the
             // featured image, so a picture the customer chose afterwards is
             // never quietly replaced by the one it succeeded.

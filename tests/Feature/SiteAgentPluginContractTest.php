@@ -339,6 +339,80 @@ class SiteAgentPluginContractTest extends TestCase
         );
     }
 
+    public function test_an_image_swapped_during_the_upload_is_put_back(): void
+    {
+        $this->imageArrives();
+
+        $this->siteSends([
+            $this->tool(json_encode([
+                ['id' => 11, 'title' => 'דף הבית', 'type' => 'page', 'status' => 'publish', 'built_with_elementor' => false],
+            ])),
+            $this->tool(json_encode(['id' => 11, 'title' => 'דף הבית', 'content' => 'טקסט', 'status' => 'publish'])),
+            $this->tool(json_encode(['total' => 0, 'returned' => 0, 'page' => 1, 'pages' => 1, 'products' => []])),
+            $this->tool(json_encode(['id' => 11, 'title' => 'דף הבית', 'content' => 'טקסט', 'status' => 'publish', 'thumbnail_id' => 42])),
+        ]);
+
+        $this->planning(['can_do' => true, 'target_id' => 11, 'alt' => 'כיכר לחם', 'summary' => 'תמונה']);
+        $this->talk('תשים את זה בדף הבית — כיכר לחם', mediaId: 'media-1');
+
+        $this->siteSends([
+            // The check before the upload still sees 42 — so far so good.
+            $this->tool(json_encode(['id' => 11, 'title' => 'דף הבית', 'content' => 'טקסט', 'status' => 'publish', 'thumbnail_id' => 42])),
+            $this->tool(json_encode(['id' => 77, 'url' => 'https://example.test/bread.png'])),
+            // ...but the upload is allowed 120 seconds, and in that window an
+            // administrator put #99 there. The setter is the only thing that
+            // ever sees it: it reports what it ACTUALLY displaced.
+            $this->tool(json_encode(['id' => 11, 'attachment_id' => 77, 'previous' => ['attachment_id' => 99]])),
+            // Their picture goes back...
+            $this->tool(json_encode(['id' => 11, 'attachment_id' => 99, 'previous' => ['attachment_id' => 77]])),
+            // ...and ours comes out of the library.
+            $this->tool(json_encode(['deleted_id' => 77])),
+        ]);
+
+        $reply = $this->talk('כן');
+
+        $this->assertStringContainsString('השתנה', $reply);
+        $this->assertSame(SiteAgentRequest::FAILED, SiteAgentRequest::sole()->state);
+
+        $calls = $this->toolCalls();
+        // Put back to #99 — theirs, not the #42 we had read.
+        $this->assertContains(['wp_post_thumbnail_set', 99], $calls);
+        $this->assertContains(['wp_media_delete', 77], $calls);
+    }
+
+    public function test_an_upload_that_could_not_be_used_does_not_stay_in_the_library(): void
+    {
+        $this->imageArrives();
+
+        $this->siteSends([
+            $this->tool(json_encode([
+                ['id' => 11, 'title' => 'דף הבית', 'type' => 'page', 'status' => 'publish', 'built_with_elementor' => false],
+            ])),
+            $this->tool(json_encode(['id' => 11, 'title' => 'דף הבית', 'content' => 'טקסט', 'status' => 'publish'])),
+            $this->tool(json_encode(['total' => 0, 'returned' => 0, 'page' => 1, 'pages' => 1, 'products' => []])),
+            $this->tool(json_encode(['id' => 11, 'title' => 'דף הבית', 'content' => 'טקסט', 'status' => 'publish', 'thumbnail_id' => 42])),
+        ]);
+
+        $this->planning(['can_do' => true, 'target_id' => 11, 'alt' => 'כיכר לחם', 'summary' => 'תמונה']);
+        $this->talk('תשים את זה בדף הבית — כיכר לחם', mediaId: 'media-1');
+
+        $this->siteSends([
+            $this->tool(json_encode(['id' => 11, 'title' => 'דף הבית', 'content' => 'טקסט', 'status' => 'publish', 'thumbnail_id' => 42])),
+            $this->tool(json_encode(['id' => 77, 'url' => 'https://example.test/bread.png'])),
+            // The file is in their library, and then the page it was meant for
+            // turns out to be gone. Nothing points at the picture, nothing ever
+            // will, and an upload has no undo of its own — so every retry used
+            // to leave another one behind.
+            ['jsonrpc' => '2.0', 'id' => 1, 'error' => ['code' => -32602, 'message' => 'פריט תוכן #11 לא נמצא.']],
+            $this->tool(json_encode(['deleted_id' => 77])),
+        ]);
+
+        $this->talk('כן');
+
+        $this->assertSame(SiteAgentRequest::FAILED, SiteAgentRequest::sole()->state);
+        $this->assertContains(['wp_media_delete', 77], $this->toolCalls());
+    }
+
     public function test_an_elementor_undo_matches_the_setting_and_not_only_the_widget(): void
     {
         $widget = [
@@ -468,5 +542,28 @@ class SiteAgentPluginContractTest extends TestCase
     private function tool(string $text): array
     {
         return ['jsonrpc' => '2.0', 'id' => 1, 'result' => ['content' => [['type' => 'text', 'text' => $text]]]];
+    }
+
+    /**
+     * Every MCP tool call that went to the site, as [name, the id it acted on].
+     *
+     * @return array<int, array{0: string, 1: int}>
+     */
+    private function toolCalls(): array
+    {
+        $calls = [];
+
+        foreach (Http::recorded() as [$request]) {
+            $name = (string) data_get($request->data(), 'params.name', '');
+
+            if ($name === '') {
+                continue;
+            }
+
+            $arguments = (array) data_get($request->data(), 'params.arguments', []);
+            $calls[] = [$name, (int) ($arguments['attachment_id'] ?? $arguments['id'] ?? 0)];
+        }
+
+        return $calls;
     }
 }
