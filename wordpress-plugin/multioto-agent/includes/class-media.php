@@ -273,69 +273,37 @@ class Multioto_Agent_Media
             return (bool) add_post_meta($postId, '_thumbnail_id', $attachmentId, true);
         }
 
-        // Core does not hand back the value it stored, only whether it stored
-        // one — and if it takes its insert path the value it wrote is the
-        // SANITISED one, which we would otherwise have to reproduce by running
-        // the sanitiser a second time. A sanitiser is an arbitrary filter: it
-        // may count, log, or answer differently on a second call, and running
-        // it again to find out what it said the first time is not a question
-        // that can be asked twice. So it is overheard instead, from core's own
-        // announcement of the row it created.
-        // Kept per row, not as "the last one heard": a listener on this very
-        // action may add a second _thumbnail_id row to the same post, and its
-        // announcement is as true as ours. Keeping only the newest would have
-        // us compare OUR row against SOMEBODY ELSE'S value, skip the cleanup,
-        // and report that nothing changed while our image stayed on the page.
-        $inserted = [];
-        $overhear = static function ($metaId, $objectId, $metaKey, $metaValue) use (&$inserted, $postId) {
-            if ((int) $objectId === $postId && $metaKey === '_thumbnail_id') {
-                $inserted[(int) $metaId] = $metaValue;
-            }
-        };
-
-        add_action('added_post_meta', $overhear, 10, 4);
-
-        try {
-            $written = update_post_meta($postId, '_thumbnail_id', $attachmentId, $expected);
-        } finally {
-            remove_action('added_post_meta', $overhear, 10);
-        }
+        $written = update_post_meta($postId, '_thumbnail_id', $attachmentId, $expected);
 
         // An integer rather than true means core took its insert path: the row
         // we were told to expect had been removed, so nothing was swapped and
         // ours was added to an empty spot instead. That is not what was asked
-        // for, and it goes straight back out.
+        // for, and it goes straight back out — by the row id core just handed
+        // us, and only while that row is still a featured image of this post,
+        // so one a listener has repurposed is left alone.
         //
-        // By its own id, so a row somebody else added is never the one removed
-        // — and only while it still holds what we put in it. Core fires
-        // added_post_meta on the way in, and a listener there, or an
-        // administrator in the same instant, may already have made that row
-        // theirs; deleting it then would throw away a newer picture in the name
-        // of tidying up ours.
+        // What this deliberately does NOT do is check that the row still holds
+        // the value we put in it. That question cannot be answered here, and
+        // four attempts to answer it each failed differently: the value passes
+        // through a sanitiser, is stored as a string, and comes back through
+        // maybe_unserialize, so null, false and an empty string arrive
+        // indistinguishable from one another and an array never matches itself.
+        // Every version of the comparison therefore refused to clean up on some
+        // real site — leaving the row behind, after which setting a first
+        // featured image on that post stops working, silently and later.
         //
-        // Reading it and then deleting it is not one operation, and cannot be
-        // through this API. It narrows the window to the gap between these two
-        // lines instead of leaving it open from the insert, which is the honest
-        // best available without going behind core's back again.
+        // So the policy is stated rather than implied: this removes a row it
+        // created, and does not attempt to notice somebody overwriting that row
+        // in the moment between creating it and removing it. That needs the
+        // expected image to vanish in one microsecond and a new one to be
+        // chosen in the next, and it is a smaller fault than a cleanup that
+        // does not run.
         if (is_int($written)) {
-            // Against the value core STORED — overheard above — and not against
-            // the one we asked for. On a site with a sanitiser the two differ,
-            // the comparison would miss, the cleanup would be skipped, and the
-            // answer would say nothing changed while a new featured image sat
-            // on the page. That is worse than the overwrite this exists to
-            // prevent, because it is also untrue.
-            // Whether it was heard is a question about the KEY, not about the
-            // value: a sanitiser may hand core a null, core will store it and
-            // announce it, and reading that announcement as silence would
-            // leave the row sitting there while we reported nothing changed.
-            $heard = array_key_exists($written, $inserted);
             $row = get_metadata_by_mid('post', $written);
 
             if ($row !== false
-                && $heard
                 && (int) $row->post_id === $postId
-                && $row->meta_key === '_thumbnail_id'
-                && self::sameMetaValue($row->meta_value, $inserted[$written])) {
+                && $row->meta_key === '_thumbnail_id') {
                 delete_metadata_by_mid('post', $written);
             }
 
@@ -343,26 +311,6 @@ class Multioto_Agent_Media
         }
 
         return (bool) $written;
-    }
-
-    /**
-     * Is the row still holding the value we put in it?
-     *
-     * Meta values come back from the database as strings whatever went in, so
-     * the comparison is made on that footing — except for null, which is a
-     * value a sanitiser may legitimately produce and which is not the same
-     * thing as an empty string.
-     *
-     * @param  mixed  $stored
-     * @param  mixed  $written
-     */
-    private static function sameMetaValue($stored, $written): bool
-    {
-        if ($stored === null || $written === null) {
-            return $stored === $written;
-        }
-
-        return is_scalar($stored) && is_scalar($written) && (string) $stored === (string) $written;
     }
 
     /**
