@@ -281,10 +281,15 @@ class Multioto_Agent_Media
         // it again to find out what it said the first time is not a question
         // that can be asked twice. So it is overheard instead, from core's own
         // announcement of the row it created.
-        $inserted = null;
+        // Kept per row, not as "the last one heard": a listener on this very
+        // action may add a second _thumbnail_id row to the same post, and its
+        // announcement is as true as ours. Keeping only the newest would have
+        // us compare OUR row against SOMEBODY ELSE'S value, skip the cleanup,
+        // and report that nothing changed while our image stayed on the page.
+        $inserted = [];
         $overhear = static function ($metaId, $objectId, $metaKey, $metaValue) use (&$inserted, $postId) {
             if ((int) $objectId === $postId && $metaKey === '_thumbnail_id') {
-                $inserted = $metaValue;
+                $inserted[(int) $metaId] = $metaValue;
             }
         };
 
@@ -319,14 +324,16 @@ class Multioto_Agent_Media
             // answer would say nothing changed while a new featured image sat
             // on the page. That is worse than the overwrite this exists to
             // prevent, because it is also untrue.
+            $ours = $inserted[$written] ?? null;
             $row = get_metadata_by_mid('post', $written);
 
             if ($row !== false
+                && $ours !== null
                 && (int) $row->post_id === $postId
                 && $row->meta_key === '_thumbnail_id'
                 && is_scalar($row->meta_value)
-                && is_scalar($inserted)
-                && (string) $row->meta_value === (string) $inserted) {
+                && is_scalar($ours)
+                && (string) $row->meta_value === (string) $ours) {
                 delete_metadata_by_mid('post', $written);
             }
 
