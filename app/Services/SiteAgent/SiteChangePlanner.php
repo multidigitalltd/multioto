@@ -404,23 +404,35 @@ class SiteChangePlanner
      * The featured image a target carries right now, or null when the site
      * does not say.
      *
-     * Reported by the plugin from 1.6.1; an older site, or a product (which is
-     * not readable as content), answers nothing — and the caller then stands
-     * down rather than refusing every image change on an older install.
+     * Reported by the plugin from 1.6.1 — on a page through the content tool,
+     * on a product through the shop tool, because products are deliberately not
+     * readable as content. An older site answers neither, and the caller then
+     * stands down rather than refusing every image change on an install that
+     * has not been updated yet.
      */
     public function thumbnailOf(Site $site, int $targetId): ?int
     {
-        try {
-            $target = json_decode($this->mcp->textContent($this->mcp->callTool($site, 'wp_content_get', [
-                'id' => $targetId,
-            ])), true);
-        } catch (\Throwable) {
-            return null;
+        // Pages and posts answer through the content tool; a PRODUCT does not —
+        // the plugin deliberately keeps products out of the content tools, so
+        // asking there throws for every shop image and the caller would stand
+        // down on exactly the targets it most needs to check.
+        foreach (['wp_content_get' => 'id', 'wc_product_get' => 'product_id'] as $tool => $argument) {
+            try {
+                $target = json_decode($this->mcp->textContent(
+                    $this->mcp->callTool($site, $tool, [$argument => $targetId]),
+                ), true);
+            } catch (\Throwable) {
+                continue;
+            }
+
+            $thumbnail = data_get($target, 'thumbnail_id');
+
+            if ($thumbnail !== null) {
+                return (int) $thumbnail;
+            }
         }
 
-        $thumbnail = data_get($target, 'thumbnail_id');
-
-        return $thumbnail === null ? null : (int) $thumbnail;
+        return null;
     }
 
     /** The page list is stale the moment we change one. */

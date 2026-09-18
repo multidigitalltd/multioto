@@ -366,17 +366,55 @@ class SiteChangeApplier
             return ['ok' => true, 'reason' => null, 'message' => null, 'restore' => null];
         }
 
+        // Everything the write touched, not only what we asked it to touch.
+        //
+        // wc_product_update has side effects of its own: ending a sale clears
+        // its scheduled dates, and setting a quantity turns stock management
+        // on. An undo that restores only the field we named would leave a
+        // discount that was meant to end running for ever, or leave a product
+        // managing stock it never managed — and report success either way.
+        $touched = array_merge($fields, $this->sideEffectsOf($fields));
+
         return ['ok' => true, 'reason' => null, 'message' => null, 'restore' => [
             'kind' => 'product',
             'product_id' => $productId,
-            'fields' => array_intersect_key($previous, $fields),
+            'fields' => array_intersect_key($previous, $touched),
             // What the product looks like now that our change is on it, read
             // back from the shop. The undo checks against this, because a shop
             // moves on its own: an order drops the stock, an administrator sets
             // a price, and restoring the values from before our change would
             // erase a sale that really happened.
-            'after' => $this->productNow($site, $productId, $fields),
+            'after' => $this->productNow($site, $productId, $touched),
         ]];
+    }
+
+    /**
+     * The fields the shop changes on its own when these are written.
+     *
+     * Named here rather than discovered by diffing the whole product: a diff
+     * would also catch everything an ORDER changed in the same moment, and the
+     * undo would then put a customer's purchase back on the shelf.
+     *
+     * @param  array<string, mixed>  $fields
+     * @return array<string, true>
+     */
+    private function sideEffectsOf(array $fields): array
+    {
+        $extra = [];
+
+        // Ending or changing a sale clears the window it was scheduled for.
+        if (array_key_exists('sale_price', $fields)) {
+            $extra['sale_from'] = true;
+            $extra['sale_to'] = true;
+        }
+
+        // Setting a quantity switches stock management on.
+        if (array_key_exists('stock_quantity', $fields)) {
+            $extra['manage_stock'] = true;
+            $extra['stock_status'] = true;
+        }
+
+        return $extra;
     }
 
     /**

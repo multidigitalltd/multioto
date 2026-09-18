@@ -231,6 +231,65 @@ class SiteAgentShopAndMediaTest extends TestCase
         $this->assertSame($before + 1, Http::recorded()->count());
     }
 
+    public function test_the_undo_puts_back_what_woocommerce_changed_by_itself(): void
+    {
+        $subscriber = $this->subscriber();
+        $this->shopAnswers(
+            ['can_do' => true, 'operation' => 'update_price',
+                'product_query' => 'חולצה כחולה', 'sale_price' => '', 'summary' => 'סיום מבצע'],
+            products: [['id' => 5, 'name' => 'חולצה כחולה', 'regular_price' => '120', 'sale_price' => '99']],
+        );
+        $this->talk($subscriber, 'תסיים את המבצע');
+
+        $this->siteReturns([
+            $this->tool(json_encode(['id' => 5, 'sale_price' => '99'])),
+            // Ending a sale also clears the window it was scheduled for — the
+            // shop does that on its own, and the undo has to know.
+            $this->tool(json_encode(['previous' => [
+                'sale_price' => '99', 'sale_from' => '2026-09-01', 'sale_to' => '2026-09-30',
+                'regular_price' => '120',
+            ]])),
+            $this->tool(json_encode(['id' => 5, 'sale_price' => '', 'sale_from' => null, 'sale_to' => null])),
+        ]);
+
+        $this->talk($subscriber, 'כן');
+
+        $restore = SiteAgentRequest::sole()->restore;
+
+        // Restoring only sale_price would put the discount back with no end
+        // date — a sale that was meant to stop running for ever, reported as a
+        // successful undo.
+        $this->assertSame('99', $restore['fields']['sale_price']);
+        $this->assertSame('2026-09-01', $restore['fields']['sale_from']);
+        $this->assertSame('2026-09-30', $restore['fields']['sale_to']);
+    }
+
+    public function test_a_stock_change_remembers_that_the_product_did_not_manage_stock(): void
+    {
+        $subscriber = $this->subscriber();
+        $this->shopAnswers(
+            ['can_do' => true, 'operation' => 'update_stock',
+                'product_query' => 'חולצה כחולה', 'stock_quantity' => 40, 'summary' => 'עדכון מלאי'],
+            products: [['id' => 5, 'name' => 'חולצה כחולה', 'regular_price' => '120', 'stock_quantity' => null]],
+        );
+        $this->talk($subscriber, 'תעדכן מלאי ל-40');
+
+        $this->siteReturns([
+            $this->tool(json_encode(['id' => 5, 'stock_quantity' => null])),
+            $this->tool(json_encode(['previous' => [
+                'stock_quantity' => null, 'manage_stock' => false, 'stock_status' => 'instock',
+            ]])),
+            $this->tool(json_encode(['id' => 5, 'stock_quantity' => 40, 'manage_stock' => true, 'stock_status' => 'instock'])),
+        ]);
+
+        $this->talk($subscriber, 'כן');
+
+        // Setting a quantity switches stock management ON. Without capturing
+        // that, the undo leaves the product managing stock it never managed.
+        $this->assertArrayHasKey('manage_stock', SiteAgentRequest::sole()->restore['fields']);
+        $this->assertFalse(SiteAgentRequest::sole()->restore['fields']['manage_stock']);
+    }
+
     public function test_a_product_undo_goes_through_when_nothing_moved(): void
     {
         $subscriber = $this->subscriber();

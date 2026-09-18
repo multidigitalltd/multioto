@@ -231,6 +231,33 @@ class SiteAgentPluginContractTest extends TestCase
         Http::assertSent(fn ($request): bool => data_get($request->data(), 'params.name') !== 'wp_media_upload');
     }
 
+    public function test_a_products_featured_image_is_read_through_the_shop_tool(): void
+    {
+        $this->imageArrives();
+
+        $this->siteSends([
+            // No pages at all; the target is a product.
+            $this->tool(json_encode([])),
+            $this->tool(json_encode([
+                'total' => 1, 'returned' => 1, 'page' => 1, 'pages' => 1,
+                'products' => [['id' => 5, 'name' => 'חולצה כחולה', 'regular_price' => '120', 'thumbnail_id' => 42]],
+            ])),
+            // Products are deliberately NOT readable through the content tool,
+            // so this is the error a real site answers with.
+            ['jsonrpc' => '2.0', 'id' => 1, 'error' => ['code' => -32602, 'message' => 'סוג התוכן product אינו קיים באתר.']],
+            // ...and the shop tool is where the answer actually lives.
+            $this->tool(json_encode(['id' => 5, 'name' => 'חולצה כחולה', 'thumbnail_id' => 42])),
+        ]);
+
+        $this->planning(['can_do' => true, 'target_id' => 5, 'alt' => 'חולצה כחולה', 'summary' => 'תמונה']);
+        $this->talk('חולצה כחולה', mediaId: 'media-1');
+
+        // Without the shop fallback the check stood down on every product, and
+        // an image an administrator set after the preview was overwritten in
+        // silence — the one case the guard was added for.
+        $this->assertSame(42, SiteAgentRequest::sole()->plan['thumbnail_id']);
+    }
+
     public function test_an_elementor_undo_matches_the_setting_and_not_only_the_widget(): void
     {
         $widget = [

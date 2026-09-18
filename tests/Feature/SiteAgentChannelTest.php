@@ -465,6 +465,47 @@ class SiteAgentChannelTest extends TestCase
         $this->assertNotNull($pending->fresh()->verified_at);
     }
 
+    public function test_guessing_is_bounded_across_every_code_a_number_is_waiting_on(): void
+    {
+        Http::fake(['*' => Http::response(['messages' => [['id' => 'wamid.reply']]])]);
+
+        $customer = Customer::factory()->create();
+        $this->subscribe($customer);
+
+        // Two sites, both waiting for their code from the same number.
+        $bindings = collect(['bakery.test', 'cafe.test'])->map(function (string $domain) use ($customer): SiteAgentSubscriber {
+            $site = Site::factory()->create([
+                'customer_id' => $customer->id,
+                'domain' => $domain,
+                'mcp_enabled' => true,
+                'mcp_endpoint' => "https://{$domain}/wp-json/multioto/v1/mcp",
+                'mcp_secret' => 'secret',
+            ]);
+
+            return SiteAgentSubscriber::create([
+                'phone' => '972501234567',
+                'customer_id' => $customer->id,
+                'site_id' => $site->id,
+                'verification_code' => Hash::make($domain === 'bakery.test' ? '111111' : '222222'),
+                'verification_sent_at' => now(),
+            ]);
+        });
+
+        foreach (range(1, SiteAgentSubscriber::MAX_VERIFICATION_ATTEMPTS) as $attempt) {
+            $this->deliver('972501234567', str_pad((string) $attempt, 6, '9', STR_PAD_LEFT));
+        }
+
+        // Charging only one binding left the other with an untouched counter,
+        // and once the charged one was spent its charge became a no-op — so the
+        // guessing could go on for ever against a live code.
+        $this->deliver('972501234567', '111111');
+        $this->deliver('972501234567', '222222');
+
+        foreach ($bindings as $binding) {
+            $this->assertNull($binding->fresh()->verified_at);
+        }
+    }
+
     public function test_a_second_site_can_still_be_verified_by_its_own_code(): void
     {
         Http::fake(['*' => Http::response(['messages' => [['id' => 'wamid.reply']]])]);

@@ -111,10 +111,15 @@ class HandleSiteAgentMessageJob implements ShouldQueue
         $awaiting = $pending->first(fn (SiteAgentSubscriber $binding): bool => $binding->codeIs($text));
 
         if ($awaiting === null) {
-            // A six-digit message that opened nothing IS a wrong guess. One
-            // binding pays for it — the newest, which is the one a code was
-            // most recently sent for.
-            $pending->sortByDesc('verification_sent_at')->first()?->chargeAttempt();
+            // A six-digit message that opened nothing is a wrong guess, and
+            // EVERY code it was tried against pays for it.
+            //
+            // Charging only one of them leaves the others with untouched
+            // counters: once the charged binding is spent its charge becomes a
+            // no-op, while codeIs() keeps happily testing the rest — which is
+            // unlimited guessing against live codes. The guesser is the phone,
+            // not the binding, so the whole phone runs out of attempts at once.
+            $pending->each(fn (SiteAgentSubscriber $binding) => $binding->chargeAttempt());
         }
 
         if ($awaiting !== null) {
