@@ -88,7 +88,7 @@ class AuditLog extends Model
             throw new RuntimeException('Refusing to record a team action with nobody signed in.');
         }
 
-        return static::create([
+        $entry = static::create([
             'user_id' => $user->getKey(),
             'user_name' => (string) ($user->name ?? $user->email ?? ''),
             'event' => $event,
@@ -99,6 +99,17 @@ class AuditLog extends Model
             'ip_address' => request()->ip(),
             'created_at' => now(),
         ]);
+
+        // create() hands back the model even when a saving/creating listener
+        // cancelled the insert by returning false — no exception, no row, and a
+        // caller that only watches for a thrown error would carry on. The point
+        // of this method is that it cannot fail quietly, so the row is checked
+        // rather than assumed.
+        if (! $entry->exists) {
+            throw new RuntimeException('The audit entry was not written.');
+        }
+
+        return $entry;
     }
 
     /**

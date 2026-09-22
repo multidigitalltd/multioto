@@ -241,6 +241,29 @@ class SiteAlertsWidgetTest extends TestCase
         $this->assertSame(1, SiteAlerts::pendingCount());
     }
 
+    /**
+     * גם רישום שבוטל בשקט מחזיר את המחיקה.
+     *
+     * מאזין Eloquent שמחזיר false מבטל את ההוספה בלי לזרוק, ו-create() מחזיר
+     * בכל זאת את המודל. בלי בדיקה שהשורה אכן נשמרה, "נכשל בקול" מפספס בדיוק
+     * את הכישלון השקט.
+     */
+    public function test_a_silently_cancelled_log_also_puts_the_findings_back(): void
+    {
+        $event = $this->event();
+
+        Event::listen('eloquent.creating: '.AuditLog::class, fn (): bool => false);
+
+        try {
+            Livewire::test(SiteAlerts::class)->callTableAction('discard', $event);
+        } catch (\Throwable) {
+            // הכישלון הוא הנקודה.
+        }
+
+        $this->assertDatabaseHas('site_events', ['id' => $event->id]);
+        $this->assertSame(0, AuditLog::where('event', 'deleted')->count());
+    }
+
     /** כמה ממצאים יחד — נמחקים בפעולה אחת, ונרשמים כאחת. */
     public function test_several_findings_can_be_deleted_together(): void
     {
