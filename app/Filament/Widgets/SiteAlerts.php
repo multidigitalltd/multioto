@@ -3,6 +3,7 @@
 namespace App\Filament\Widgets;
 
 use App\Filament\Resources\SiteResource;
+use App\Models\AuditLog;
 use App\Models\SiteEvent;
 use Filament\Notifications\Notification;
 use Filament\Tables;
@@ -52,6 +53,39 @@ class SiteAlerts extends BaseWidget
         }
     }
 
+    /**
+     * מחיקת ממצאים, עם רישום ביומן הצוות.
+     *
+     * "טופל" משאיר את הממצא בתיעוד האתר; מחיקה מוחקת אותו משם. זו הסיבה
+     * שהמחיקה נרשמת ביומן: אחרת הפעולה היחידה במסך הזה שמוחקת ראיה היא גם
+     * הפעולה היחידה שלא נשאר ממנה זכר.
+     *
+     * הדומיינים נקראים לפני המחיקה — אחריה אין את מי לשאול.
+     *
+     * @param  Collection<int, SiteEvent>  $records
+     * @return int כמה נמחקו בפועל
+     */
+    private function discard(Collection $records): int
+    {
+        if ($records->isEmpty()) {
+            return 0;
+        }
+
+        $described = $records
+            ->map(fn (SiteEvent $record): string => ($record->site?->domain ?? 'אתר שנמחק').' — '.$record->label())
+            ->implode(', ');
+
+        // מחיקה אחת לפי מפתחות, ולא מחיקה לכל שורה: המספר המוחזר הוא מה שבאמת
+        // ירד, כך שההודעה אינה מבטיחה יותר ממה שקרה אם משהו כבר נמחק בינתיים.
+        $deleted = SiteEvent::query()
+            ->whereKey($records->map(fn (SiteEvent $record) => $record->getKey())->all())
+            ->delete();
+
+        AuditLog::record('deleted', 'מחיקת ממצאי אתרים ('.$deleted.'): '.$described);
+
+        return $deleted;
+    }
+
     public function table(Table $table): Table
     {
         return $table
@@ -85,6 +119,17 @@ class SiteAlerts extends BaseWidget
 
                         Notification::make()->title('הממצא סומן כטופל')->success()->send();
                     }),
+                Tables\Actions\Action::make('discard')
+                    ->label('מחיקה')->icon('heroicon-o-trash')->color('danger')
+                    ->requiresConfirmation()
+                    ->modalHeading('למחוק את הממצא?')
+                    ->modalDescription('המחיקה סופית: הממצא יימחק גם מיומן הממצאים של האתר, ולא יהיה אפשר להראות ללקוח מה זוהה ומתי. כדי להוריד אותו מהחיווי ולשמור את התיעוד — בחרו "טופל".')
+                    ->modalSubmitActionLabel('מחיקה לצמיתות')
+                    ->action(function (SiteEvent $record): void {
+                        $this->discard(collect([$record]));
+
+                        Notification::make()->title('הממצא נמחק')->success()->send();
+                    }),
             ])
             ->bulkActions([
                 Tables\Actions\BulkAction::make('acknowledgeSelected')
@@ -96,6 +141,18 @@ class SiteAlerts extends BaseWidget
                         $records->each(fn (SiteEvent $record) => $record->acknowledge($user));
 
                         Notification::make()->title("{$records->count()} ממצאים סומנו כטופלו")->success()->send();
+                    }),
+                Tables\Actions\BulkAction::make('discardSelected')
+                    ->label('מחיקת הנבחרים')->icon('heroicon-o-trash')->color('danger')
+                    ->requiresConfirmation()
+                    ->modalHeading('למחוק את הממצאים שנבחרו?')
+                    ->modalDescription('המחיקה סופית: הממצאים יימחקו גם מיומן הממצאים של האתרים. כדי להוריד אותם מהחיווי ולשמור את התיעוד — בחרו "סימון הנבחרים כטופלו".')
+                    ->modalSubmitActionLabel('מחיקה לצמיתות')
+                    ->deselectRecordsAfterCompletion()
+                    ->action(function (Collection $records): void {
+                        $deleted = $this->discard($records);
+
+                        Notification::make()->title("{$deleted} ממצאים נמחקו")->success()->send();
                     }),
             ])
             ->recordUrl(fn (SiteEvent $record): ?string => $record->site

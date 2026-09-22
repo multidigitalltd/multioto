@@ -3,7 +3,9 @@
 namespace Tests\Feature;
 
 use App\Filament\Resources\SiteResource;
+use App\Filament\Resources\SiteResource\Pages\ListSites;
 use App\Filament\Widgets\SiteAlerts;
+use App\Models\AuditLog;
 use App\Models\Site;
 use App\Models\SiteEvent;
 use App\Models\User;
@@ -99,6 +101,87 @@ class SiteAlertsWidgetTest extends TestCase
         $event->acknowledge($this->user);
 
         $this->assertNull(SiteResource::getNavigationBadge());
+    }
+
+    /** מחיקה של ממצא בודד מורידה אותו מהיומן עצמו, לא רק מהחיווי. */
+    public function test_a_finding_can_be_deleted_outright(): void
+    {
+        $event = $this->event();
+
+        Livewire::test(SiteAlerts::class)
+            ->callTableAction('discard', $event);
+
+        $this->assertDatabaseMissing('site_events', ['id' => $event->id]);
+        $this->assertSame(0, SiteAlerts::pendingCount());
+    }
+
+    /**
+     * מחיקה נרשמת ביומן הצוות, עם האתר וסוג הממצא.
+     *
+     * "טופל" משאיר את הממצא עצמו כראיה; מחיקה מוחקת אותה. בלי הרישום הזה
+     * הפעולה היחידה במסך שמוחקת ראיה היא גם היחידה שלא נשאר ממנה זכר.
+     */
+    public function test_deleting_is_written_to_the_team_log_with_what_was_deleted(): void
+    {
+        $event = $this->event();
+
+        Livewire::test(SiteAlerts::class)
+            ->callTableAction('discard', $event);
+
+        $entry = AuditLog::where('event', 'deleted')->latest('id')->first();
+
+        $this->assertNotNull($entry);
+        $this->assertStringContainsString('shop.co.il', $entry->description);
+        $this->assertStringContainsString('משתמש מנהל חדש', $entry->description);
+        $this->assertSame($this->user->id, $entry->user_id);
+    }
+
+    /** כמה ממצאים יחד — נמחקים בפעולה אחת, ונרשמים כאחת. */
+    public function test_several_findings_can_be_deleted_together(): void
+    {
+        $first = $this->event();
+        $second = $this->event(severity: 'warning', type: 'dns');
+
+        Livewire::test(SiteAlerts::class)
+            ->callTableBulkAction('discardSelected', [$first, $second]);
+
+        $this->assertDatabaseMissing('site_events', ['id' => $first->id]);
+        $this->assertDatabaseMissing('site_events', ['id' => $second->id]);
+        $this->assertSame(0, SiteAlerts::pendingCount());
+        $this->assertSame(1, AuditLog::where('event', 'deleted')->count());
+    }
+
+    /**
+     * ממצא שכבר נמחק בין הבחירה לאישור אינו נספר.
+     *
+     * ההודעה ללקוח אומרת כמה נמחקו, והמספר הזה חייב להיות מה שבאמת ירד —
+     * לא כמה היו מסומנים על המסך.
+     */
+    public function test_the_count_reports_what_actually_went(): void
+    {
+        $first = $this->event();
+        $second = $this->event(severity: 'warning', type: 'dns');
+
+        $second->delete();
+
+        Livewire::test(SiteAlerts::class)
+            ->callTableBulkAction('discardSelected', [$first, $second]);
+
+        $this->assertStringContainsString(
+            'מחיקת ממצאי אתרים (1)',
+            (string) AuditLog::where('event', 'deleted')->latest('id')->first()?->description,
+        );
+    }
+
+    /** הממצאים מוצגים גם מעל רשימת האתרים, לא רק בדשבורד. */
+    public function test_the_findings_sit_above_the_sites_list(): void
+    {
+        $event = $this->event();
+
+        Livewire::test(ListSites::class)
+            ->assertSeeLivewire(SiteAlerts::class);
+
+        Livewire::test(SiteAlerts::class)->assertCanSeeTableRecords([$event]);
     }
 
     /** הקריטי מופיע מעל האזהרה, ולא לפי סדר הזמן בלבד. */
