@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Enums\ChargeStatus;
+use App\Enums\TokenStatus;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -117,6 +118,40 @@ class Charge extends Model
     public function resolveCustomer(): ?Customer
     {
         return $this->subscription?->customer ?? $this->customer;
+    }
+
+    /**
+     * The card this charge would actually be taken from, if any.
+     *
+     * The customer's default token when it is active, otherwise their most
+     * recent active one. A superseded or expired token is never returned — card
+     * capture marks a replaced token TokenStatus::Replaced, and charging it is
+     * how a customer who fixed their card gets declined anyway.
+     *
+     * One definition, because two screens disagreeing about this is a button
+     * that offers to charge a card that is not there — or worse, hides itself
+     * from a customer who does have one. It reads the customer through
+     * resolveCustomer() for the same reason the invoice issuer does: a charge
+     * may hang off a subscription rather than carry the customer directly.
+     */
+    public function chargeableToken(): ?PaymentToken
+    {
+        $customer = $this->resolveCustomer();
+
+        if ($customer === null) {
+            return null;
+        }
+
+        $default = $customer->defaultToken;
+
+        if ($default && $default->status === TokenStatus::Active) {
+            return $default;
+        }
+
+        return $customer->paymentTokens()
+            ->where('status', TokenStatus::Active)
+            ->latest('id')
+            ->first();
     }
 
     public function invoice(): HasOne
