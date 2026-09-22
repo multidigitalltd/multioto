@@ -67,21 +67,44 @@ class SiteAlerts extends BaseWidget
      */
     private function discard(Collection $records): int
     {
-        if ($records->isEmpty()) {
+        $keys = $records->map(fn (SiteEvent $record) => $record->getKey())->all();
+
+        if ($keys === []) {
             return 0;
         }
 
-        $described = $records
-            ->map(fn (SiteEvent $record): string => ($record->site?->domain ?? 'אתר שנמחק').' — '.$record->label())
-            ->implode(', ');
+        // נקרא מבסיס הנתונים ולא מהשורות שעל המסך: מה שנרשם חייב להיות מה שבאמת
+        // ירד, וממצא שנמחק בין הבחירה לאישור כבר אינו כאן.
+        $going = SiteEvent::query()->with('site')->whereKey($keys)->get();
 
-        // מחיקה אחת לפי מפתחות, ולא מחיקה לכל שורה: המספר המוחזר הוא מה שבאמת
-        // ירד, כך שההודעה אינה מבטיחה יותר ממה שקרה אם משהו כבר נמחק בינתיים.
-        $deleted = SiteEvent::query()
-            ->whereKey($records->map(fn (SiteEvent $record) => $record->getKey())->all())
-            ->delete();
+        if ($going->isEmpty()) {
+            return 0;
+        }
 
-        AuditLog::record('deleted', 'מחיקת ממצאי אתרים ('.$deleted.'): '.$described);
+        // מחיקה אחת לפי מפתחות ולא מחיקה לכל שורה, כדי שהמספר המוחזר יהיה מה
+        // שהמסד באמת מחק.
+        $deleted = SiteEvent::query()->whereKey($going->modelKeys())->delete();
+
+        AuditLog::record(
+            'deleted',
+            'מחיקת ממצאי אתרים ('.$deleted.'): '.$going
+                ->map(fn (SiteEvent $record): string => ($record->site?->domain ?? 'אתר שנמחק').' — '.$record->label())
+                ->implode(', '),
+            changes: [
+                // התיאור נחתך ב-480 תווים, ובבחירה מרובה זה קורה כבר אחרי כמה
+                // דומיינים ארוכים. מה שנחתך משם הוא בדיוק הראיה שהמחיקה השמידה,
+                // ולכן הפירוט המלא נשמר כאן — שדה מובנה שאינו נחתך.
+                'findings' => $going->map(fn (SiteEvent $record): array => [
+                    'id' => $record->getKey(),
+                    'site_id' => $record->site_id,
+                    'domain' => $record->site?->domain,
+                    'type' => $record->type,
+                    'severity' => $record->severity,
+                    'title' => $record->title,
+                    'detected_at' => $record->detected_at?->toDateTimeString(),
+                ])->all(),
+            ],
+        );
 
         return $deleted;
     }

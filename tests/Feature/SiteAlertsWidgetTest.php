@@ -136,6 +136,42 @@ class SiteAlertsWidgetTest extends TestCase
         $this->assertSame($this->user->id, $entry->user_id);
     }
 
+    /**
+     * מחיקה מרובה שומרת את הפירוט המלא, גם כשהתיאור נחתך.
+     *
+     * `AuditLog::record` חותך את התיאור ב-480 תווים, ובבחירה של עמוד שלם עם
+     * דומיינים ארוכים זה קורה. מה שנחתך משם הוא בדיוק מה שהמחיקה השמידה, ולכן
+     * הפירוט יושב בשדה מובנה שאינו נחתך.
+     */
+    public function test_the_full_detail_survives_even_when_the_description_is_cut(): void
+    {
+        $events = collect(range(1, 12))->map(function (int $i): SiteEvent {
+            $site = Site::factory()->create(['domain' => "a-very-long-customer-domain-number-{$i}.example.co.il"]);
+            SiteEvent::record($site->id, 'dns', 'critical', "שינוי DNS מספר {$i}");
+
+            return SiteEvent::latest('id')->firstOrFail();
+        });
+
+        Livewire::test(SiteAlerts::class)
+            ->callTableBulkAction('discardSelected', $events->all());
+
+        $entry = AuditLog::where('event', 'deleted')->latest('id')->firstOrFail();
+
+        // התיאור אכן נחתך — זו הנקודה.
+        $this->assertLessThanOrEqual(480, mb_strlen($entry->description));
+
+        // ובכל זאת כל אחד מהם נשמר, כולל האחרון שנפל מחוץ לתיאור.
+        $this->assertCount(12, $entry->changes['findings']);
+        $this->assertSame(
+            $events->map(fn (SiteEvent $e): int => $e->id)->all(),
+            array_column($entry->changes['findings'], 'id'),
+        );
+        $this->assertStringContainsString(
+            'a-very-long-customer-domain-number-12.example.co.il',
+            json_encode($entry->changes, JSON_UNESCAPED_UNICODE),
+        );
+    }
+
     /** כמה ממצאים יחד — נמחקים בפעולה אחת, ונרשמים כאחת. */
     public function test_several_findings_can_be_deleted_together(): void
     {
