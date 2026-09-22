@@ -16,6 +16,7 @@ use App\Models\Customer;
 use App\Models\Subscription;
 use App\Models\Task;
 use App\Models\Ticket;
+use App\Support\Money;
 use Filament\Widgets\StatsOverviewWidget as BaseWidget;
 use Filament\Widgets\StatsOverviewWidget\Stat;
 use Illuminate\Database\Eloquent\Builder;
@@ -62,21 +63,22 @@ class StatsOverview extends BaseWidget
         // The total on its own does not say whether a good month was the
         // subscriptions doing their job or one large one-off that will not
         // repeat — which is the difference between a business that grew and a
-        // business that had a good week. Recurring income is a subscription
-        // charge; everything else (a manual charge, a paid payment demand) is
-        // one-off.
+        // business that had a good week.
         //
-        // Two plain sums rather than one grouped query: a boolean grouping key
-        // comes back differently from Postgres and from SQLite, and a widget
-        // whose numbers depend on which driver answered is worse than a widget
-        // that runs one more indexed query.
+        // Recurring is defined on the model (Charge::scopeRecurringRevenue),
+        // because "has a subscription_id" is wrong in both directions: an
+        // instalment plan is a subscription that will stop, and a renewing
+        // storefront plan's first term is a charge with no subscription yet.
+        //
+        // One-off is its complement rather than a second predicate, so the two
+        // always add up to the total no matter how recurring is defined.
         $collectedThisMonth = fn (): Builder => Charge::query()
             ->where('status', ChargeStatus::Succeeded)
             ->where('charged_at', '>=', Carbon::now()->startOfMonth());
 
-        $recurringThisMonth = (int) $collectedThisMonth()->whereNotNull('subscription_id')->sum('total_agorot');
-        $oneOffThisMonth = (int) $collectedThisMonth()->whereNull('subscription_id')->sum('total_agorot');
-        $collectedTotal = $recurringThisMonth + $oneOffThisMonth;
+        $collectedTotal = (int) $collectedThisMonth()->sum('total_agorot');
+        $recurringThisMonth = (int) $collectedThisMonth()->recurringRevenue()->sum('total_agorot');
+        $oneOffThisMonth = $collectedTotal - $recurringThisMonth;
 
         // Only tickets awaiting OUR action count as "needs handling" — a ticket
         // in "ממתין ללקוח" (Pending) is waiting on the customer, so it is not a
@@ -115,9 +117,15 @@ class StatsOverview extends BaseWidget
                 ->color('success')
                 ->url(SubscriptionResource::getUrl()),
 
-            Stat::make('נגבה החודש', '₪ '.number_format($collectedTotal / 100))
-                ->description('מנויים ₪'.number_format($recurringThisMonth / 100)
-                    .' · חד-פעמי ₪'.number_format($oneOffThisMonth / 100))
+            // Agorot are kept here, unlike the whole-shekel tiles above. Two
+            // halves rounded on their own do not add up to a rounded total —
+            // 50 agorot each shows a ₪1 headline over "₪1 · ₪1" — and a
+            // breakdown that contradicts the number it breaks down is worse
+            // than a slightly longer line. Manual charges are entered to the
+            // agora, so this is not a theoretical case.
+            Stat::make('נגבה החודש', Money::ils($collectedTotal))
+                ->description('מנויים '.Money::ils($recurringThisMonth)
+                    .' · חד-פעמי '.Money::ils($oneOffThisMonth))
                 ->icon('heroicon-o-credit-card')
                 ->color('primary')
                 ->url(ChargeResource::getUrl()),
