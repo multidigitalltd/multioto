@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
+use RuntimeException;
 use Throwable;
 
 /**
@@ -61,20 +62,43 @@ class AuditLog extends Model
                 return;
             }
 
-            static::create([
-                'user_id' => $user->getKey(),
-                'user_name' => (string) ($user->name ?? $user->email ?? ''),
-                'event' => $event,
-                'auditable_type' => $subject !== null ? $subject::class : null,
-                'auditable_id' => $subject?->getKey(),
-                'description' => Str::limit($description, 480),
-                'changes' => $changes !== null ? self::redact($changes) : null,
-                'ip_address' => request()->ip(),
-                'created_at' => now(),
-            ]);
+            static::write($event, $description, $subject, $changes, $user);
         } catch (Throwable) {
             // Auditing must never break the operation it records.
         }
+    }
+
+    /**
+     * Append an audit entry, and FAIL LOUDLY when it cannot be written.
+     *
+     * `record()` swallows everything on purpose: a monitoring run must not break
+     * because its log did not. That is the wrong trade in the one place where
+     * the entry is the entire justification for the action — an irreversible
+     * deletion permitted only because it leaves a record must not go through
+     * when the record does not. Callers there run this inside their own
+     * transaction, so a failure here takes the deletion down with it.
+     *
+     * @param  array<string, mixed>|null  $changes
+     */
+    public static function write(string $event, string $description, ?Model $subject = null, ?array $changes = null, ?Authenticatable $actor = null): self
+    {
+        $user = $actor ?? Auth::user();
+
+        if ($user === null) {
+            throw new RuntimeException('Refusing to record a team action with nobody signed in.');
+        }
+
+        return static::create([
+            'user_id' => $user->getKey(),
+            'user_name' => (string) ($user->name ?? $user->email ?? ''),
+            'event' => $event,
+            'auditable_type' => $subject !== null ? $subject::class : null,
+            'auditable_id' => $subject?->getKey(),
+            'description' => Str::limit($description, 480),
+            'changes' => $changes !== null ? self::redact($changes) : null,
+            'ip_address' => request()->ip(),
+            'created_at' => now(),
+        ]);
     }
 
     /**

@@ -13,6 +13,7 @@ use App\Models\SiteEvent;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Event;
 use Livewire\Livewire;
 use Tests\TestCase;
 
@@ -211,6 +212,33 @@ class SiteAlertsWidgetTest extends TestCase
             ->assertTableActionExists('payload')
             ->mountTableAction('payload', $entry)
             ->assertSee($lastDomain);
+    }
+
+    /**
+     * רישום שנכשל מחזיר את המחיקה.
+     *
+     * המחיקה מותרת כאן רק מפני שהיא מותירה תיעוד. אם התיעוד לא נכתב — מסד
+     * שנפל, מטען שלא נכנס — מחיקה שבכל זאת עוברת היא בדיוק מחיקת ראיה בלי
+     * תיעוד, כלומר מה שהעסקה נועדה למנוע. record() בולע כישלון כזה בכוונה,
+     * ולכן המסלול הזה משתמש בווריאנט שנכשל בקול.
+     */
+    public function test_a_failed_log_puts_the_findings_back(): void
+    {
+        $event = $this->event();
+
+        Event::listen(
+            'eloquent.creating: '.AuditLog::class,
+            fn () => throw new \RuntimeException('audit down'),
+        );
+
+        try {
+            Livewire::test(SiteAlerts::class)->callTableAction('discard', $event);
+        } catch (\Throwable) {
+            // הכישלון הוא הנקודה; מה שנבדק הוא מה שנשאר אחריו.
+        }
+
+        $this->assertDatabaseHas('site_events', ['id' => $event->id]);
+        $this->assertSame(1, SiteAlerts::pendingCount());
     }
 
     /** כמה ממצאים יחד — נמחקים בפעולה אחת, ונרשמים כאחת. */

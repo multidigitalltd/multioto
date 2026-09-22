@@ -99,7 +99,11 @@ class SiteAlerts extends BaseWidget
         // שהמסד באמת מחק.
         $deleted = SiteEvent::query()->whereKey($going->modelKeys())->delete();
 
-        AuditLog::record(
+        // write() ולא record(): הרישום כאן אינו תיעוד נלווה אלא התנאי שבגללו
+        // המחיקה מותרת בכלל. record() בולע כישלון בכוונה — נכון לעבודת ניטור,
+        // ושגוי כאן, כי הוא היה מותיר בדיוק את מחיקת-הראיה-בלי-תיעוד שהעסקה
+        // הזאת נועדה למנוע. כישלון מפיל את העסקה, והממצאים נשארים.
+        AuditLog::write(
             'deleted',
             'מחיקת ממצאי אתרים ('.$deleted.'): '.$going
                 ->map(fn (SiteEvent $record): string => ($record->site?->domain ?? 'אתר שנמחק').' — '.$record->label())
