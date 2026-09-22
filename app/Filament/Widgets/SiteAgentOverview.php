@@ -66,11 +66,21 @@ class SiteAgentOverview extends BaseWidget
         // look perfectly healthy while verification codes are being refused by
         // Meta, so the reassuring number must not be the first thing read.
         if ($missing !== []) {
-            $stats[] = Stat::make('חסר להפעלה', count($missing))
-                ->description($missing[0]['label'].' — '.$missing[0]['detail'])
+            // The settings screen is admin-only while this widget is not, so
+            // the link is attached only for somebody who can actually open it.
+            // A prominent "fix this" tile that answers 403 is worse than one
+            // that does not offer itself — the reader is told to act and then
+            // told they may not, and the thing that is actually broken gets
+            // read as a permissions problem instead.
+            $canConfigure = ManageSiteAgent::canAccess();
+
+            $stat = Stat::make('חסר להפעלה', count($missing))
+                ->description($missing[0]['label'].' — '.$missing[0]['detail']
+                    .($canConfigure ? '' : ' (להגדרה נדרש מנהל)'))
                 ->icon('heroicon-o-exclamation-triangle')
-                ->color('danger')
-                ->url(ManageSiteAgent::getUrl());
+                ->color('danger');
+
+            $stats[] = $canConfigure ? $stat->url(ManageSiteAgent::getUrl()) : $stat;
         }
 
         $stats[] = Stat::make('מספרים פעילים', $numbers['active'])

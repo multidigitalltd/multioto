@@ -196,10 +196,21 @@ class ManageSiteAgent extends Page implements HasForms
 
         // Only overwrite a secret when a new one was actually typed. A blank
         // field is how this page looks every time it is opened.
+        $rejected = false;
+
         foreach (self::SECRETS as $key) {
             $value = data_get($this->data, $key);
 
-            if (filled($value)) {
+            // A "secret" equal to the operator's own panel password is a
+            // browser-autofill artefact, not a credential. The integrations
+            // screen carries this same guard because the case has actually
+            // happened; here it is worse than a broken save — the token field
+            // is sent to Meta as a bearer token, so storing it would hand a
+            // third party the password to this panel.
+            if (filled($value) && is_string($value)
+                && (auth()->user()?->enteredOwnPassword($value) ?? false)) {
+                $rejected = true;
+            } elseif (filled($value)) {
                 Setting::put($key, trim((string) $value));
             }
 
@@ -210,6 +221,17 @@ class ManageSiteAgent extends Page implements HasForms
         // — show exactly what was stored, rather than what was typed.
         $this->refreshConfig();
         $this->mount();
+
+        if ($rejected) {
+            Notification::make()
+                ->title('שדה לא נשמר — זוהה מילוי אוטומטי של הדפדפן')
+                ->body('הערך שהוזן זהה לסיסמת הכניסה שלך לפאנל, כנראה מילוי אוטומטי. נקו את השדה, הדביקו את הערך האמיתי ושמרו שוב. שאר השדות נשמרו.')
+                ->danger()
+                ->persistent()
+                ->send();
+
+            return;
+        }
 
         Notification::make()
             ->title('הגדרות סוכן האתר נשמרו')

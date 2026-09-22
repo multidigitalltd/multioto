@@ -2,6 +2,7 @@
 
 namespace App\Services\SiteAgent;
 
+use App\Enums\BillingInterval;
 use App\Enums\SubscriptionStatus;
 use App\Models\SiteAgentRequest;
 use App\Models\SiteAgentSubscriber;
@@ -152,6 +153,9 @@ class SiteAgentProduct
      * screens skip it for being a trial, so it is a customer using the product
      * that nothing at all will ever charge.
      *
+     * `monthly_agorot` is per month whatever the plan's billing cycle is — see
+     * perMonthAgorot().
+     *
      * @return array{subscribed: int, monthly_agorot: int, past_due: int, unbilled: int}
      */
     public function money(): array
@@ -165,7 +169,7 @@ class SiteAgentProduct
 
         return [
             'subscribed' => (int) SiteAgentAccess::entitling(Subscription::query())->count(),
-            'monthly_agorot' => (int) $active->sum(fn (Subscription $subscription): int => $subscription->totalChargeAgorot()),
+            'monthly_agorot' => (int) $active->sum(fn (Subscription $subscription): int => $this->perMonthAgorot($subscription)),
             'past_due' => (int) Subscription::query()
                 ->whereIn('status', [SubscriptionStatus::PastDue, SubscriptionStatus::Suspended])
                 ->whereHas('plan', fn (Builder $plan) => $plan->where('includes_site_agent', true))
@@ -199,6 +203,29 @@ class SiteAgentProduct
                 ->where('updated_at', '>=', $since)
                 ->count(),
         ];
+    }
+
+    /**
+     * One subscription's contribution to a MONTHLY figure.
+     *
+     * `totalChargeAgorot()` is what the customer is charged each billing cycle,
+     * and the cycle is not always a month: the activation screen accepts any
+     * active plan carrying the agent flag, a yearly one included. Summed as-is,
+     * a ₪1,200-a-year customer would be reported as ₪1,200 a month — a tile
+     * that overstates the product's income twelvefold and reads perfectly
+     * plausibly while doing it.
+     *
+     * Rounded rather than floored so twelve months of a yearly plan still add
+     * up to roughly the year, instead of quietly losing up to 11 agorot a month
+     * across every such customer.
+     */
+    private function perMonthAgorot(Subscription $subscription): int
+    {
+        $charge = $subscription->totalChargeAgorot();
+
+        return $subscription->plan?->billing_interval === BillingInterval::Yearly
+            ? (int) round($charge / 12)
+            : $charge;
     }
 
     /** Subscribers whose customer holds a subscription that switches the agent on. */

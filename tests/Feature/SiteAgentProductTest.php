@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Enums\BillingInterval;
 use App\Enums\SubscriptionStatus;
 use App\Enums\UserRole;
 use App\Filament\Pages\ManageSiteAgent;
@@ -208,6 +209,31 @@ class SiteAgentProductTest extends TestCase
     }
 
     /**
+     * מסלול שנתי הוא חיוב אחד לשנה, ולא הכנסה חודשית.
+     *
+     * מסך ההפעלה מקבל כל מסלול פעיל שמסומן ככולל סוכן, שנתי בכלל זה. בלי
+     * נירמול, לקוח שמשלם ₪1,200 בשנה היה מדווח כ-₪1,200 בחודש — אריח שמנפח
+     * את הכנסת המוצר פי שתים עשרה, ונראה סביר לגמרי בזמן שהוא עושה את זה.
+     */
+    public function test_a_yearly_plan_is_divided_into_months_before_it_is_called_monthly(): void
+    {
+        $customer = Customer::factory()->create(['vat_exempt' => true]);
+        $this->bind($this->connectedSite($customer));
+
+        Subscription::factory()->create([
+            'customer_id' => $customer->id,
+            'plan_id' => Plan::factory()->create([
+                'includes_site_agent' => true,
+                'price_agorot' => 120000,
+                'billing_interval' => BillingInterval::Yearly,
+            ])->id,
+            'status' => SubscriptionStatus::Active,
+        ]);
+
+        $this->assertSame(10000, $this->product()->money()['monthly_agorot']);
+    }
+
+    /**
      * מנוי שאינו נגבה: ניסיון בלי כרטיס.
      *
      * הוא נופל בין הכיסאות של כל שאר המסכים — המתזמן מדלג עליו כי אין אסימון,
@@ -302,6 +328,41 @@ class SiteAgentProductTest extends TestCase
         Livewire::test(SiteAgentOverview::class)
             ->assertSee('חסר להפעלה')
             ->assertSee('תבנית קוד האימות');
+    }
+
+    /**
+     * האריח לא שולח אנשים למסך שהם יקבלו בו 403.
+     *
+     * הווידג'ט פתוח למודול "ניהול" ומסך ההגדרות פתוח למנהלים בלבד. אריח בולט
+     * שאומר "תקנו את זה" ומחזיר 403 גרוע מאריח שאינו מציע את עצמו: הקורא
+     * מתבקש לפעול ואז נחסם, והתקלה האמיתית נקראת כבעיית הרשאות.
+     */
+    public function test_the_missing_configuration_tile_does_not_send_a_non_admin_to_a_403(): void
+    {
+        config(['siteagent.whatsapp.templates.verification' => '']);
+
+        $agent = User::factory()->create([
+            'role' => UserRole::Agent,
+            'allowed_modules' => ['management'],
+        ]);
+
+        $this->actingAs($agent);
+        $this->assertFalse(ManageSiteAgent::canAccess());
+
+        $forAgent = Livewire::test(SiteAgentOverview::class)
+            ->assertSee('חסר להפעלה')
+            ->assertSee('להגדרה נדרש מנהל')
+            ->assertDontSee(ManageSiteAgent::getUrl(), escape: false);
+
+        $this->assertNotNull($forAgent);
+
+        // ...and an admin still gets the link, so the tile stays actionable
+        // for whoever can act on it.
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+
+        Livewire::test(SiteAgentOverview::class)
+            ->assertSee(ManageSiteAgent::getUrl(), escape: false)
+            ->assertDontSee('להגדרה נדרש מנהל');
     }
 
     public function test_revenue_is_shown_only_to_whoever_may_see_money_elsewhere(): void
@@ -477,6 +538,45 @@ class SiteAgentProductTest extends TestCase
             Customer::factory()->create(),
             ViewCustomer::class,
         ));
+    }
+
+    /**
+     * מילוי אוטומטי של סיסמת הפאנל אינו נשמר כסוד.
+     *
+     * השדות האלה אינם type=password בדיוק כדי שדפדפנים לא ימלאו אותם אוטומטית,
+     * וזה לא תמיד מספיק — במסך האינטגרציות זה כבר קרה. כאן המחיר גבוה יותר:
+     * שדה הטוקן נשלח למטא ככותרת Bearer, כך ששמירה כזאת מוסרת לצד שלישי את
+     * סיסמת הכניסה לפאנל.
+     */
+    public function test_an_autofilled_panel_password_is_never_stored_as_a_secret(): void
+    {
+        $admin = User::factory()->create([
+            'role' => UserRole::Admin,
+            'password' => bcrypt('the-admins-own-password'),
+        ]);
+
+        $this->actingAs($admin);
+
+        Livewire::test(ManageSiteAgent::class)
+            ->fillForm(['siteagent' => ['token' => 'the-admins-own-password']])
+            ->call('save');
+
+        $this->assertArrayNotHasKey('siteagent.token', Setting::map());
+    }
+
+    /** אבל סוד אמיתי עדיין נשמר באותה שמירה. */
+    public function test_a_real_secret_is_still_stored(): void
+    {
+        $this->actingAs(User::factory()->create([
+            'role' => UserRole::Admin,
+            'password' => bcrypt('the-admins-own-password'),
+        ]));
+
+        Livewire::test(ManageSiteAgent::class)
+            ->fillForm(['siteagent' => ['token' => 'EAAG-a-real-meta-token']])
+            ->call('save');
+
+        $this->assertSame('EAAG-a-real-meta-token', Setting::map()['siteagent.token'] ?? null);
     }
 
     public function test_the_settings_screen_is_admin_only(): void
