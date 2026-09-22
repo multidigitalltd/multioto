@@ -2,9 +2,11 @@
 
 namespace App\Services\System;
 
+use App\Jobs\CheckWhatsappInboundJob;
 use App\Models\Backup;
 use App\Models\HealthHeartbeat;
 use App\Models\License;
+use App\Models\Setting;
 use App\Providers\SettingsServiceProvider;
 use App\Services\Backup\BackupRunner;
 use Illuminate\Support\Carbon;
@@ -95,6 +97,7 @@ class HealthReport
             $this->backup(),
             $this->drill(),
             $this->licenseSecret(),
+            $this->whatsapp(),
         ];
 
         return [
@@ -703,6 +706,56 @@ class HealthReport
             "לא הוגדר LICENSE_SERVER_SECRET — {$issued} המפתחות שהונפקו מגובבים עם APP_KEY. "
                 .'הגדרתו עכשיו תבטל את כולם בבת אחת אצל כל הלקוחות, וגם החלפת APP_KEY תעשה זאת. '
                 .'לפני שינוי כזה יש להנפיק מחדש את כל המפתחות.');
+    }
+
+    /**
+     * WhatsApp — the channel customers actually reach us on.
+     *
+     * It belongs here for the same reason the scheduler does: it fails without
+     * failing. A logged-out session or a lost webhook raises no error and shows
+     * no symptom; the ticket queue just stops filling and the team's group goes
+     * quiet, which is indistinguishable from a slow day. It ran for a whole day
+     * before anyone asked, and the only trace was a single alert message — sent,
+     * in part, over the WhatsApp that had just died.
+     *
+     * Read from what CheckWhatsappInboundJob last recorded, never by calling
+     * WAHA: this report is asked on page loads and by the external monitor, and
+     * a check that waits on somebody else's server reports their weather. The
+     * cost is that the verdict is up to an hour old, which is the right trade
+     * for an outage measured in hours.
+     */
+    private function whatsapp(): array
+    {
+        $label = 'וואטסאפ (פניות לקוחות)';
+
+        // An install that never connected WhatsApp is not an install whose
+        // WhatsApp is broken.
+        if (blank(config('billing.waha.base_url')) || blank(config('billing.waha.api_key'))) {
+            return $this->check('whatsapp', $label, self::OK, 'לא מוגדר.');
+        }
+
+        $stored = rescue(fn (): ?string => Setting::map()[CheckWhatsappInboundJob::RESULT_KEY] ?? null, null, report: false);
+        $result = filled($stored) ? json_decode((string) $stored, true) : null;
+
+        if (! is_array($result)) {
+            // Configured, and nothing has checked it yet — which is itself worth
+            // saying, because it means the hourly watch is not running.
+            return $this->check('whatsapp', $label, self::DEGRADED,
+                'טרם נבדק. הבדיקה השעתית אינה רצה, ולכן ניתוק של וואטסאפ לא יידע אף אחד.');
+        }
+
+        if (! ($result['fault'] ?? false)) {
+            return $this->check('whatsapp', $label, self::OK, (string) ($result['title'] ?? 'תקין.'));
+        }
+
+        // A session that is down stops outgoing messages too, so it is reported
+        // as down rather than degraded: nothing about this channel is working.
+        $status = ($result['state'] ?? '') === 'session_down' ? self::DOWN : self::DEGRADED;
+
+        return $this->check('whatsapp', $label, $status, trim(implode(' ', [
+            (string) ($result['title'] ?? ''),
+            (string) ($result['detail'] ?? ''),
+        ])));
     }
 
     private function check(string $key, string $label, string $status, string $detail): array

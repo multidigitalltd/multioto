@@ -15,11 +15,17 @@ use Throwable;
 /**
  * Answers one question: why is nothing arriving from WhatsApp?
  *
- * Outbound WhatsApp working proves the session is connected — and proves
- * nothing at all about inbound, which depends on a webhook registered on the
- * WAHA session pointing back at us. When it is missing, or points somewhere
- * unreachable, the panel simply stays quiet: no error, no ticket, no clue.
- * Silence is the failure mode, so the diagnosis has to be asked for explicitly.
+ * Two different things break, and they look identical from the panel. The
+ * session can be logged out, which stops BOTH directions — no customer message
+ * in, no ticket, approval or payment reminder out. Or the session can be
+ * perfectly connected while the webhook that reports inbound messages is
+ * missing or points elsewhere, in which case sending keeps working and only the
+ * ticket queue goes quiet.
+ *
+ * Either way there is no error, no ticket and no clue: silence is the failure
+ * mode. So this is asked on a schedule (CheckWhatsappInboundJob) as well as by
+ * the button, its verdict is kept where the dashboard can show it, and a fault
+ * that is still standing keeps being visible rather than being mentioned once.
  *
  * Every check is read-only and reported in plain Hebrew with the fix.
  */
@@ -32,7 +38,7 @@ class InboundDiagnosis
      * week is NOT one of them: alerting on silence that might just be a slow
      * week is how an alert becomes noise, and then the real one is ignored too.
      */
-    public const FAULTS = ['unreachable', 'not_registered', 'wrong_target', 'never_delivered', 'no_messages', 'not_processed', 'no_tickets', 'stalled'];
+    public const FAULTS = ['session_down', 'unreachable', 'not_registered', 'wrong_target', 'never_delivered', 'no_messages', 'not_processed', 'no_tickets', 'stalled'];
 
     /**
      * @return array{ok: bool, state: string, title: string, detail: string, variant: string}
@@ -42,11 +48,45 @@ class InboundDiagnosis
         $ours = route('webhooks.waha');
         $last = $this->lastEvent();
 
+        // The session first, before anything about webhooks.
+        //
+        // A WhatsApp Web session logs itself out — the phone was off too long,
+        // the linked device was removed, WAHA restarted without its data. When
+        // that happens NOTHING moves in either direction: no customer message
+        // arrives, and no ticket, approval or dunning notice goes out. It is
+        // the commonest WhatsApp failure there is.
+        //
+        // Asked first because every check below would otherwise answer about a
+        // registration that is perfectly correct and completely irrelevant, and
+        // report "registered and pointing at us" while the line is dead. Reading
+        // the reason off the webhook configuration of a logged-out session is
+        // how an outage gets diagnosed as a quiet week.
+        //
+        // One read serves both: WAHA returns the session's state and the
+        // webhooks registered on it in the same response.
         try {
-            $registered = $this->registeredWebhooks();
+            $session = $this->waha->sessionStatus();
         } catch (Throwable $e) {
             return $this->result(false, 'unreachable', 'לא ניתן לקרוא את הגדרות WAHA', 'החיבור לשרת WAHA נכשל: '.$this->short($e).' בדקו את כתובת השרת וה-API Key בסעיף הזה.');
         }
+
+        $state = $this->sessionState($session);
+
+        if ($state !== null && ! in_array($state, ['WORKING', 'UNKNOWN'], true)) {
+            return $this->result(
+                false,
+                'session_down',
+                'החיבור של וואטסאפ לטלפון נותק',
+                match ($state) {
+                    'SCAN_QR_CODE' => 'ה-session מחכה לסריקת QR — כלומר וואטסאפ מנותק מהטלפון. כל עוד זה המצב, הודעות של לקוחות לא מגיעות ושום הודעה לא יוצאת: לא פניות, לא אישורי פעולה ולא תזכורות תשלום. סרקו מחדש את ה-QR במסך WAHA.',
+                    'STARTING' => 'ה-session בהפעלה ועדיין אינו מוכן. אם הוא נשאר כך — הפעילו אותו מחדש ב-WAHA.',
+                    'FAILED', 'STOPPED' => "ה-session במצב {$state} — הוא אינו פועל. כל עוד זה המצב לא מגיעות פניות ולא יוצאות הודעות. הפעילו אותו מחדש ב-WAHA, וסרקו QR אם יידרש.",
+                    default => "ה-session במצב {$state}, שאינו מצב עבודה תקין. בדקו אותו במסך WAHA.",
+                }.$this->lastSeen($last),
+            );
+        }
+
+        $registered = $this->registeredWebhooks($session);
 
         if ($registered === []) {
             return $this->result(
@@ -279,10 +319,9 @@ class InboundDiagnosis
      *
      * @return list<array<string, mixed>>
      */
-    private function registeredWebhooks(): array
+    /** @param  array<string, mixed>  $session  the session as WAHA just described it */
+    private function registeredWebhooks(array $session): array
     {
-        $session = $this->waha->sessionStatus();
-
         return array_values(array_filter(
             (array) data_get($session, 'config.webhooks', []),
             'is_array',
@@ -352,6 +391,23 @@ class InboundDiagnosis
     /**
      * @return array{ok: bool, state: string, title: string, detail: string, variant: string}
      */
+    /**
+     * What WAHA says about the session's state, or null when it does not say.
+     *
+     * Null rather than a fault: WAHA versions differ in which field they use,
+     * and turning every silence into "the line is dead" would raise an outage
+     * about a perfectly working WhatsApp — which is the alert that teaches
+     * people to ignore the next one.
+     *
+     * @param  array<string, mixed>  $session
+     */
+    private function sessionState(array $session): ?string
+    {
+        $state = trim((string) ($session['status'] ?? $session['state'] ?? ''));
+
+        return $state === '' ? null : strtoupper($state);
+    }
+
     private function result(bool $ok, string $state, string $title, string $detail, ?string $variant = null): array
     {
         return [

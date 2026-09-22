@@ -99,6 +99,67 @@ class WhatsappInboundAlertTest extends TestCase
         Mail::assertSentCount(1);
     }
 
+    /**
+     * ניתוק סשן מוכרז כשני כיוונים, ולא כ"רק הקליטה".
+     *
+     * המשפט "שליחה החוצה ממשיכה לעבוד" הוא ההסבר למה תקלת קליטה אינה בולטת —
+     * וכאן הוא פשוט לא נכון. הרגעה שגויה בהתראה על תקלה היא גרועה מאין התראה.
+     */
+    public function test_a_disconnected_session_is_announced_as_both_directions(): void
+    {
+        Mail::fake();
+        Http::fake(['*/api/sessions/default' => Http::response([
+            'status' => 'SCAN_QR_CODE',
+            'config' => ['webhooks' => [['url' => route('webhooks.waha')]]],
+        ])]);
+
+        $this->check();
+
+        Mail::assertSent(NotificationMail::class, fn (NotificationMail $mail): bool => str_contains($mail->subjectLine, 'מנותק')
+            && str_contains($mail->bodyText, 'אישורי פעולה')
+            && ! str_contains($mail->bodyText, 'שליחה החוצה ממשיכה לעבוד'));
+    }
+
+    /**
+     * תקלה שעומדת נאמרת שוב אחרי יממה.
+     *
+     * שתיקה מוחלטת אחרי הודעה אחת היא בדיוק המצב שבו לקוחות כותבים לאיש במשך
+     * ימים. שעתי היה הופך את ההתראה לרעש; יומי הוא התזכורת שעוד אפשר לקרוא.
+     */
+    public function test_a_standing_fault_is_said_again_after_a_day(): void
+    {
+        Mail::fake();
+        $this->sessionReturns([]);
+
+        $this->check();
+        Mail::assertSentCount(1);
+
+        // Still broken an hour later — still quiet.
+        $this->travel(1)->hours();
+        $this->check();
+        Mail::assertSentCount(1);
+
+        // Still broken a day later — said again.
+        $this->travel(24)->hours();
+        $this->check();
+        Mail::assertSentCount(2);
+    }
+
+    /** המצב הנוכחי נרשם בכל ריצה, כדי שלוח הבקרה יוכל להראות תקלה שעומדת. */
+    public function test_every_run_records_the_current_verdict(): void
+    {
+        Mail::fake();
+        $this->sessionReturns([]);
+
+        $this->check();
+
+        $stored = json_decode((string) (Setting::map()[CheckWhatsappInboundJob::RESULT_KEY] ?? ''), true);
+
+        $this->assertTrue($stored['fault']);
+        $this->assertSame('not_registered', $stored['state']);
+        $this->assertNotEmpty($stored['detail']);
+    }
+
     /** תיקון מדווח פעם אחת — ככה יודעים שהתיקון תפס. */
     public function test_it_reports_recovery_once(): void
     {

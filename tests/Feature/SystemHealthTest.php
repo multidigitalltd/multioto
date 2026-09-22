@@ -6,6 +6,7 @@ use App\Enums\ChargeStatus;
 use App\Enums\SubscriptionStatus;
 use App\Http\Middleware\ThrottleHealthProbe;
 use App\Jobs\CheckMoneyIntegrityJob;
+use App\Jobs\CheckWhatsappInboundJob;
 use App\Jobs\HeartbeatJob;
 use App\Listeners\StampWorkloadProgress;
 use App\Mail\NotificationMail;
@@ -75,6 +76,102 @@ class SystemHealthTest extends TestCase
         $this->alive();
 
         $this->assertSame(HealthReport::OK, app(HealthReport::class)->status());
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | וואטסאפ — הערוץ שלקוחות באמת פונים בו
+    |--------------------------------------------------------------------------
+    |
+    | הוא נכשל בלי להיכשל, בדיוק כמו המתזמן: סשן מנותק או webhook שאבד לא זורקים
+    | שגיאה, תור הפניות פשוט מפסיק להתמלא וקבוצת הצוות שותקת — וזה נראה כמו יום
+    | רגוע. עד עכשיו כל הזכר לזה היה הודעת התראה אחת ברגע השבירה, שנשלחת בין
+    | היתר על גבי הוואטסאפ שבדיוק מת.
+    */
+    private function whatsappVerdict(array $result): void
+    {
+        config([
+            'billing.waha.base_url' => 'http://waha.test',
+            'billing.waha.api_key' => 'key',
+        ]);
+
+        Setting::put(CheckWhatsappInboundJob::RESULT_KEY, json_encode($result, JSON_UNESCAPED_UNICODE));
+    }
+
+    public function test_a_standing_whatsapp_fault_keeps_showing_on_the_dashboard(): void
+    {
+        $this->alive();
+        $this->whatsappVerdict([
+            'state' => 'not_registered',
+            'title' => 'וואטסאפ לא מדווח למערכת על הודעות נכנסות',
+            'detail' => 'לא רשום ב-WAHA שום יעד לדיווח.',
+            'fault' => true,
+            'at' => now()->toIso8601String(),
+        ]);
+
+        $problem = collect(app(HealthReport::class)->problems())->firstWhere('key', 'whatsapp');
+
+        $this->assertNotNull($problem);
+        $this->assertSame(HealthReport::DEGRADED, $problem['status']);
+        $this->assertStringContainsString('לא רשום', $problem['detail']);
+    }
+
+    /** סשן מנותק עוצר גם יציאה — זה "מושבת", לא "לבדיקה". */
+    public function test_a_disconnected_session_is_reported_as_down(): void
+    {
+        $this->alive();
+        $this->whatsappVerdict([
+            'state' => 'session_down',
+            'title' => 'החיבור של וואטסאפ לטלפון נותק',
+            'detail' => 'ה-session מחכה לסריקת QR.',
+            'fault' => true,
+            'at' => now()->toIso8601String(),
+        ]);
+
+        $this->assertSame(HealthReport::DOWN, app(HealthReport::class)->status());
+    }
+
+    public function test_a_healthy_whatsapp_is_not_reported(): void
+    {
+        $this->alive();
+        $this->whatsappVerdict([
+            'state' => 'ok',
+            'title' => 'הקליטה מוואטסאפ תקינה',
+            'detail' => 'התקבלו 12 הודעות.',
+            'fault' => false,
+            'at' => now()->toIso8601String(),
+        ]);
+
+        $this->assertSame(HealthReport::OK, app(HealthReport::class)->status());
+    }
+
+    /** התקנה שמעולם לא חיברה וואטסאפ אינה התקנה שהוואטסאפ שלה שבור. */
+    public function test_an_install_without_whatsapp_is_not_reported_as_broken(): void
+    {
+        $this->alive();
+        config(['billing.waha.base_url' => '', 'billing.waha.api_key' => '']);
+
+        $this->assertSame(HealthReport::OK, app(HealthReport::class)->status());
+    }
+
+    /**
+     * וואטסאפ מוגדר ואיש לא בדק אותו — זה עצמו ממצא.
+     *
+     * פירושו שהבדיקה השעתית אינה רצה, כלומר ניתוק של וואטסאפ לא יידע אף אחד.
+     * "אין נתונים" הוא בדיוק המצב שבו קל להניח שהכל בסדר.
+     */
+    public function test_a_configured_whatsapp_that_was_never_checked_is_worth_a_look(): void
+    {
+        $this->alive();
+        config([
+            'billing.waha.base_url' => 'http://waha.test',
+            'billing.waha.api_key' => 'key',
+        ]);
+
+        $problem = collect(app(HealthReport::class)->problems())->firstWhere('key', 'whatsapp');
+
+        $this->assertNotNull($problem);
+        $this->assertStringContainsString('טרם נבדק', $problem['detail']);
     }
 
     public function test_a_scheduler_that_stopped_reporting_is_down(): void

@@ -72,6 +72,68 @@ class WahaInboundDiagnosisTest extends TestCase
         ]);
     }
 
+    /**
+     * הסשן מנותק — וזה נבדק לפני כל השאר, גם כשהרישום מושלם.
+     *
+     * סשן מנותק עוצר את שני הכיוונים: לא נכנסות פניות ולא יוצאות הודעות. כל
+     * הבדיקות האחרות היו עונות כאן על רישום נכון לגמרי ולא רלוונטי בעליל,
+     * ומדווחות "הרישום תקין" בזמן שהקו מת.
+     */
+    public function test_a_disconnected_session_is_reported_before_anything_about_webhooks(): void
+    {
+        // Registration is perfect. The session is not.
+        Http::fake(['*/api/sessions/default' => Http::response([
+            'status' => 'SCAN_QR_CODE',
+            'config' => ['webhooks' => [['url' => route('webhooks.waha')]]],
+        ])]);
+
+        $result = app(InboundDiagnosis::class)->run();
+
+        $this->assertSame('session_down', $result['state']);
+        $this->assertFalse($result['ok']);
+        $this->assertContains('session_down', InboundDiagnosis::FAULTS);
+        // The detail has to say that sending is dead too — that is the part a
+        // reader would otherwise get wrong, because every other fault here
+        // leaves outbound working.
+        $this->assertStringContainsString('לא יוצאת', $result['detail']);
+    }
+
+    public function test_a_stopped_session_is_a_fault_too(): void
+    {
+        Http::fake(['*/api/sessions/default' => Http::response([
+            'status' => 'STOPPED',
+            'config' => ['webhooks' => [['url' => route('webhooks.waha')]]],
+        ])]);
+
+        $this->assertSame('session_down', app(InboundDiagnosis::class)->run()['state']);
+    }
+
+    /** סשן עובד אינו מפריע לאבחון הרגיל להמשיך. */
+    public function test_a_working_session_falls_through_to_the_webhook_checks(): void
+    {
+        Http::fake(['*/api/sessions/default' => Http::response([
+            'status' => 'WORKING',
+            'config' => ['webhooks' => []],
+        ])]);
+
+        $this->assertSame('not_registered', app(InboundDiagnosis::class)->run()['state']);
+    }
+
+    /**
+     * WAHA שלא מדווח מצב סשן אינו סיבה להכריז על ניתוק.
+     *
+     * גרסאות שונות של WAHA מחזירות שדות שונים, והפיכת כל שתיקה ל"הקו מת" הייתה
+     * מתריעה על וואטסאפ עובד לגמרי — וזאת התראה שמלמדת להתעלם מהבאה.
+     */
+    public function test_a_session_that_reports_no_state_is_not_called_disconnected(): void
+    {
+        $this->sessionReturns([['url' => route('webhooks.waha')]]);
+        $this->ticketMessage();
+        $this->event('message');
+
+        $this->assertNotSame('session_down', app(InboundDiagnosis::class)->run()['state']);
+    }
+
     /** אין רישום בכלל — זה הרוב המכריע של המקרים, ויש כפתור שמסדר אותו. */
     public function test_it_reports_when_nothing_is_registered(): void
     {
