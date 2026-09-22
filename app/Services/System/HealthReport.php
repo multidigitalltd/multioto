@@ -7,6 +7,7 @@ use App\Models\HealthHeartbeat;
 use App\Models\License;
 use App\Providers\SettingsServiceProvider;
 use App\Services\Backup\BackupRunner;
+use App\Services\SiteAgent\SiteAgentProduct;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\ConfigurationUrlParser;
 use Illuminate\Support\Facades\DB;
@@ -95,6 +96,7 @@ class HealthReport
             $this->backup(),
             $this->drill(),
             $this->licenseSecret(),
+            $this->siteAgent(),
         ];
 
         return [
@@ -703,6 +705,40 @@ class HealthReport
             "לא הוגדר LICENSE_SERVER_SECRET — {$issued} המפתחות שהונפקו מגובבים עם APP_KEY. "
                 .'הגדרתו עכשיו תבטל את כולם בבת אחת אצל כל הלקוחות, וגם החלפת APP_KEY תעשה זאת. '
                 .'לפני שינוי כזה יש להנפיק מחדש את כל המפתחות.');
+    }
+
+    /**
+     * The site-agent product, when it is switched on but cannot do its job.
+     *
+     * It belongs in this file for the same reason the scheduler does: it fails
+     * without failing. Meta refuses a message sent on a template name it has
+     * not approved, and the refusal never reaches a screen anyone reads — so a
+     * customer who bought the product waits for a verification code that was
+     * never going to arrive, while the subscriber list says they are set up.
+     *
+     * Silent while the product is off. A service nobody switched on is not a
+     * service that has stopped working.
+     */
+    private function siteAgent(): array
+    {
+        $label = 'סוכן וואטסאפ לאתר';
+        $product = app(SiteAgentProduct::class);
+
+        if (! $product->enabled()) {
+            return $this->check('site_agent', $label, self::OK, 'כבוי.');
+        }
+
+        $missing = $product->missing();
+
+        if ($missing === []) {
+            return $this->check('site_agent', $label, self::OK, 'מוגדר ופעיל.');
+        }
+
+        return $this->check('site_agent', $label, self::DEGRADED, implode(' ', [
+            'השירות דולק אך חסרות '.count($missing).' הגדרות:',
+            implode(', ', array_column($missing, 'label')).'.',
+            'הודעות שאנחנו מתחילים — קוד אימות ללקוח חדש, הודעה על מנוי שנפסק — נדחות בלי שגיאה שמגיעה לפאנל.',
+        ]));
     }
 
     private function check(string $key, string $label, string $status, string $detail): array

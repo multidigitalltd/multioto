@@ -503,6 +503,7 @@ class CustomerResource extends Resource
             RelationManagers\SubscriptionsRelationManager::class,
             RelationManagers\SitesRelationManager::class,
             RelationManagers\PaymentTokensRelationManager::class,
+            RelationManagers\SiteAgentSubscribersRelationManager::class,
             RelationManagers\NotificationLogsRelationManager::class,
         ];
     }
