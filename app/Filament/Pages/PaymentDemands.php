@@ -345,10 +345,19 @@ class PaymentDemands extends Page implements HasTable
                     ->visible(fn (Charge $r): bool => $r->status === ChargeStatus::Pending && $this->hasSavedCard($r))
                     ->requiresConfirmation()
                     ->modalHeading('חיוב מיידי מהכרטיס השמור')
-                    ->modalDescription(fn (Charge $r): string => 'הכרטיס השמור של הלקוח יחויב עכשיו ב-'
-                        .Money::ils($r->total_agorot)
-                        .'. עם הצלחת החיוב תיסגר הדרישה, התזכורות ייפסקו, קישור התשלום יפסיק לעבוד ותונפק חשבונית מס/קבלה. '
-                        .'שימו לב: ללקוח נשלחה בקשה לשלם בעצמו — ודאו שלא כבר שילם בהעברה, כדי לא לחייב פעמיים.')
+                    // The last sentence is the one that matters, and it is said
+                    // because it is true: Cardcom offers no way to cancel a
+                    // payment session, so a page the customer already has open
+                    // stays payable. Better that the operator knows the window
+                    // exists than believes this button closed it.
+                    ->modalDescription(fn (Charge $r): string => implode(' ', array_filter([
+                        'הכרטיס השמור של הלקוח יחויב עכשיו ב-'.Money::ils($r->total_agorot).'.',
+                        'עם הצלחת החיוב תיסגר הדרישה, התזכורות ייפסקו, קישור התשלום יפסיק לעבוד ותונפק חשבונית מס/קבלה.',
+                        'ודאו שהלקוח לא כבר שילם בהעברה — הוא התבקש לשלם בעצמו.',
+                        filled($r->cardcom_pay_url)
+                            ? 'כמו כן, עמוד תשלום שכבר נפתח אצל הלקוח נשאר פתוח לתשלום עד שיפוג — אם ישלם בו אחרי החיוב, תישלח התראה לזיכוי.'
+                            : null,
+                    ])))
                     ->modalSubmitActionLabel('חייב עכשיו')
                     ->action(function (Charge $record): void {
                         // Re-read rather than trust the row the page rendered:
