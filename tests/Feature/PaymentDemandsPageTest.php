@@ -393,6 +393,55 @@ class PaymentDemandsPageTest extends TestCase
     }
 
     /**
+     * כרטיס שפג תוקפו עדיין רשום "פעיל", ואסור לגבות ממנו.
+     *
+     * שום דבר במערכת אינו עובר על הטבלה ומסמן כרטיסים כפגי תוקף, ולכן status
+     * לבדו אינו השאלה. חיוב כזה נדחה בבנק, מסמן את הדרישה כ"נכשלה" ומוציא
+     * אותה מזרם הגבייה — בגלל כרטיס שאיש מעולם לא ניסה לתקן.
+     */
+    public function test_an_expired_card_is_not_treated_as_chargeable(): void
+    {
+        $this->actingAs(User::factory()->create());
+
+        $customer = Customer::factory()->create();
+        PaymentToken::factory()->create([
+            'customer_id' => $customer->id,
+            'status' => TokenStatus::Active,
+            'expiry_month' => 1,
+            'expiry_year' => (int) now()->subYear()->format('Y'),
+        ]);
+        $demand = $this->charge($customer->id, ['demand_sent_at' => now(), 'demand_channel' => 'email']);
+
+        $this->assertNull($demand->chargeableToken());
+
+        Livewire::test(PaymentDemands::class)
+            ->assertTableActionHidden('chargeSavedCard', $demand);
+    }
+
+    /** ...וכרטיס ברירת המחדל שפג תוקפו אינו גובר על כרטיס תקף אחר. */
+    public function test_an_expired_default_card_gives_way_to_a_live_one(): void
+    {
+        $customer = Customer::factory()->create();
+
+        $expired = PaymentToken::factory()->create([
+            'customer_id' => $customer->id,
+            'expiry_month' => 1,
+            'expiry_year' => (int) now()->subYear()->format('Y'),
+        ]);
+        $live = PaymentToken::factory()->create([
+            'customer_id' => $customer->id,
+            'expiry_month' => 12,
+            'expiry_year' => (int) now()->addYears(3)->format('Y'),
+        ]);
+
+        $customer->update(['default_token_id' => $expired->id]);
+
+        $demand = $this->charge($customer->id, ['demand_sent_at' => now()]);
+
+        $this->assertSame($live->id, $demand->fresh()->chargeableToken()?->id);
+    }
+
+    /**
      * דרישה שתלויה במנוי מוצאת את הכרטיס של הלקוח שמאחוריו.
      *
      * חיוב יכול לשאת את הלקוח ישירות או דרך המנוי, ומנפיק החשבוניות קורא אותו

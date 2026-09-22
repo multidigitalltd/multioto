@@ -123,10 +123,18 @@ class Charge extends Model
     /**
      * The card this charge would actually be taken from, if any.
      *
-     * The customer's default token when it is active, otherwise their most
-     * recent active one. A superseded or expired token is never returned — card
-     * capture marks a replaced token TokenStatus::Replaced, and charging it is
-     * how a customer who fixed their card gets declined anyway.
+     * The customer's default card when it can still take money, otherwise their
+     * most recent one that can.
+     *
+     * "Can take money" is `PaymentToken::chargeable()`, never `status` alone.
+     * Nothing in this system walks the table to restamp cards, so a card that
+     * expired two years ago still reads "פעיל" — and selecting on status would
+     * hand the charger a card every bank will decline, which then marks the
+     * demand failed and drops it out of the collection flow over a card nobody
+     * ever tried to fix.
+     *
+     * A replaced card is excluded too: card capture marks the superseded token
+     * TokenStatus::Replaced.
      *
      * One definition, because two screens disagreeing about this is a button
      * that offers to charge a card that is not there — or worse, hides itself
@@ -144,12 +152,12 @@ class Charge extends Model
 
         $default = $customer->defaultToken;
 
-        if ($default && $default->status === TokenStatus::Active) {
+        if ($default && $default->status === TokenStatus::Active && ! $default->hasExpired()) {
             return $default;
         }
 
         return $customer->paymentTokens()
-            ->where('status', TokenStatus::Active)
+            ->chargeable()
             ->latest('id')
             ->first();
     }
