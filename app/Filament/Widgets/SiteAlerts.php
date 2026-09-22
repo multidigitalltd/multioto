@@ -10,6 +10,7 @@ use Filament\Tables;
 use Filament\Tables\Table;
 use Filament\Widgets\TableWidget as BaseWidget;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 /**
@@ -73,9 +74,22 @@ class SiteAlerts extends BaseWidget
             return 0;
         }
 
-        // נקרא מבסיס הנתונים ולא מהשורות שעל המסך: מה שנרשם חייב להיות מה שבאמת
-        // ירד, וממצא שנמחק בין הבחירה לאישור כבר אינו כאן.
-        $going = SiteEvent::query()->with('site')->whereKey($keys)->get();
+        return DB::transaction(fn (): int => $this->discardLocked($keys));
+    }
+
+    /**
+     * הקריאה, המחיקה והרישום כעסקה אחת, על שורות נעולות.
+     *
+     * הקריאה מחדש נועדה לכך שהרישום יתאר את מה שבאמת ירד — ובלי נעילה היא לא
+     * משיגה את זה: שתי מחיקות מקבילות עם בחירה חופפת קוראות שתיהן את אותן
+     * שורות, ואז הראשונה מוחקת. השנייה מדווחת מספר קטן יותר ורושמת רשימה
+     * מלאה, כלומר בדיוק אי-ההתאמה שהקריאה באה למנוע.
+     *
+     * @param  list<int|string>  $keys
+     */
+    private function discardLocked(array $keys): int
+    {
+        $going = SiteEvent::query()->with('site')->whereKey($keys)->lockForUpdate()->get();
 
         if ($going->isEmpty()) {
             return 0;

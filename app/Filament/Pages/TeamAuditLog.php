@@ -11,6 +11,7 @@ use Filament\Tables\Concerns\InteractsWithTable;
 use Filament\Tables\Contracts\HasTable;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\HtmlString;
 
 /**
  * יומן פעולות הצוות — מי עשה מה ומתי. רשומה לכל יצירה/עדכון/מחיקה של ישויות
@@ -65,6 +66,29 @@ class TeamAuditLog extends Page implements HasTable
                     ->limit(60)->toggleable(),
                 Tables\Columns\TextColumn::make('ip_address')
                     ->label('כתובת IP')->placeholder('—')->toggleable(isToggledHiddenByDefault: true),
+            ])
+            ->actions([
+                // העמודה מראה את שמות השדות בלבד, וזה מספיק כשהפירוט הוא "מה
+                // השתנה בשדה". זה לא מספיק כשהרשומה עצמה היא הראיה היחידה
+                // שנשארה — מחיקה מרובה שומרת כאן את כל מה שנמחק, והתיאור לידה
+                // נחתך ב-480 תווים. בלי המסך הזה מה שנשמר אינו ניתן לקריאה.
+                Tables\Actions\Action::make('payload')
+                    ->label('פירוט מלא')
+                    ->icon('heroicon-o-document-magnifying-glass')
+                    ->color('gray')
+                    ->visible(fn (AuditLog $record): bool => is_array($record->changes) && $record->changes !== [])
+                    ->modalHeading('מה נשמר ברשומה')
+                    ->modalDescription('הנתונים כפי שנשמרו ברגע הפעולה. ערכים רגישים מוחלפים ב-[hidden] עוד לפני השמירה.')
+                    ->modalSubmitAction(false)
+                    ->modalCancelActionLabel('סגירה')
+                    ->modalContent(fn (AuditLog $record): HtmlString => new HtmlString(
+                        '<pre dir="ltr" style="white-space:pre-wrap;word-break:break-word;font-size:.8rem;line-height:1.6;max-height:60vh;overflow:auto">'
+                        .e(json_encode(
+                            $record->changes,
+                            JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES,
+                        ))
+                        .'</pre>'
+                    )),
             ])
             ->filters([
                 Tables\Filters\SelectFilter::make('event')

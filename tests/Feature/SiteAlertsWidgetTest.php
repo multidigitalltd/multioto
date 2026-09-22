@@ -2,6 +2,8 @@
 
 namespace Tests\Feature;
 
+use App\Enums\UserRole;
+use App\Filament\Pages\TeamAuditLog;
 use App\Filament\Resources\SiteResource;
 use App\Filament\Resources\SiteResource\Pages\ListSites;
 use App\Filament\Widgets\SiteAlerts;
@@ -10,6 +12,7 @@ use App\Models\Site;
 use App\Models\SiteEvent;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Collection;
 use Livewire\Livewire;
 use Tests\TestCase;
 
@@ -41,6 +44,21 @@ class SiteAlertsWidgetTest extends TestCase
         SiteEvent::record($site->id, $type, $severity, 'משתמש מנהל חדש: attacker');
 
         return SiteEvent::latest('id')->firstOrFail();
+    }
+
+    /**
+     * מספיק ממצאים עם דומיינים ארוכים כדי שתיאור הרישום ייחתך ב-480 תווים.
+     *
+     * @return Collection<int, SiteEvent>
+     */
+    private function manyLongDomainFindings(): Collection
+    {
+        return collect(range(1, 12))->map(function (int $i): SiteEvent {
+            $site = Site::factory()->create(['domain' => "a-very-long-customer-domain-number-{$i}.example.co.il"]);
+            SiteEvent::record($site->id, 'dns', 'critical', "שינוי DNS מספר {$i}");
+
+            return SiteEvent::latest('id')->firstOrFail();
+        });
     }
 
     /** ממצא שלא טופל מופיע בווידג'ט. */
@@ -145,12 +163,7 @@ class SiteAlertsWidgetTest extends TestCase
      */
     public function test_the_full_detail_survives_even_when_the_description_is_cut(): void
     {
-        $events = collect(range(1, 12))->map(function (int $i): SiteEvent {
-            $site = Site::factory()->create(['domain' => "a-very-long-customer-domain-number-{$i}.example.co.il"]);
-            SiteEvent::record($site->id, 'dns', 'critical', "שינוי DNS מספר {$i}");
-
-            return SiteEvent::latest('id')->firstOrFail();
-        });
+        $events = $this->manyLongDomainFindings();
 
         Livewire::test(SiteAlerts::class)
             ->callTableBulkAction('discardSelected', $events->all());
@@ -170,6 +183,34 @@ class SiteAlertsWidgetTest extends TestCase
             'a-very-long-customer-domain-number-12.example.co.il',
             json_encode($entry->changes, JSON_UNESCAPED_UNICODE),
         );
+    }
+
+    /**
+     * מה שנשמר ניתן גם לקריאה מתוך המערכת.
+     *
+     * עמודת "שדות שהשתנו" ביומן מציגה שמות שדות בלבד, כלומר את המילה findings.
+     * ראיה שנשמרה ואי אפשר לפתוח אותה שווה מעט מאוד — המסך הזה הוא ההבדל.
+     */
+    public function test_the_kept_detail_can_be_opened_from_the_team_log(): void
+    {
+        $this->user->forceFill(['role' => UserRole::Admin])->save();
+
+        $events = $this->manyLongDomainFindings();
+
+        Livewire::test(SiteAlerts::class)
+            ->callTableBulkAction('discardSelected', $events->all());
+
+        $entry = AuditLog::where('event', 'deleted')->latest('id')->firstOrFail();
+
+        // הדומיין האחרון נפל מחוץ לתיאור החתוך, ולכן הוא הדבר היחיד שמבדיל בין
+        // "נשמר" ל"נשמר וגם אפשר לקרוא".
+        $lastDomain = 'a-very-long-customer-domain-number-12.example.co.il';
+        $this->assertStringNotContainsString($lastDomain, $entry->description);
+
+        Livewire::test(TeamAuditLog::class)
+            ->assertTableActionExists('payload')
+            ->mountTableAction('payload', $entry)
+            ->assertSee($lastDomain);
     }
 
     /** כמה ממצאים יחד — נמחקים בפעולה אחת, ונרשמים כאחת. */
