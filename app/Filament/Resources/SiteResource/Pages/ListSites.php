@@ -4,6 +4,7 @@ namespace App\Filament\Resources\SiteResource\Pages;
 
 use App\Filament\Resources\SiteResource;
 use App\Filament\Support\SiteActions;
+use App\Filament\Widgets\SiteAlerts;
 use App\Jobs\RefreshCloudflareCountryRulesJob;
 use App\Services\Cloudflare\CloudflareClient;
 use App\Services\Cloudflare\CountryRulesSnapshot;
@@ -43,6 +44,30 @@ class ListSites extends ListRecords
             $this->countryRuleAction(),
             Actions\CreateAction::make(),
         ];
+    }
+
+    /**
+     * הממצאים שממתינים, מעל רשימת האתרים.
+     *
+     * אותו ווידג'ט שבפאנל הראשי, ובכוונה אותו אחד: מי שנכנס לאתרים מגיע לעבוד
+     * על אתרים, ולראות שם את הממצאים הפתוחים חוסך את המעבר לדשבורד כדי לגלות
+     * שיש משהו. תג הניווט כבר סופר אותם — עכשיו גם אפשר לטפל בהם מאותו מסך.
+     *
+     * הווידג'ט מסתיר את עצמו ממי שאין לו מודול הניהול.
+     */
+    protected function getHeaderWidgets(): array
+    {
+        return [
+            SiteAlerts::class,
+        ];
+    }
+
+    /**
+     * ברוחב מלא — הממצאים הם טבלה, ובחצי עמודה הפירוט שלהם נחתך.
+     */
+    public function getHeaderWidgetsColumns(): int|array
+    {
+        return 1;
     }
 
     /**
