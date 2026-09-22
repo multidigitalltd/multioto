@@ -18,6 +18,7 @@ use App\Models\Task;
 use App\Models\Ticket;
 use Filament\Widgets\StatsOverviewWidget as BaseWidget;
 use Filament\Widgets\StatsOverviewWidget\Stat;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Carbon;
 
 /**
@@ -56,9 +57,26 @@ class StatsOverview extends BaseWidget
         // plus outstanding one-off demands.
         $expectedAgorot = $mrrAgorot + $openDemandsAgorot;
 
-        $collectedThisMonth = (int) Charge::where('status', ChargeStatus::Succeeded)
-            ->where('charged_at', '>=', Carbon::now()->startOfMonth())
-            ->sum('total_agorot');
+        // What actually came in this month, split by where it came from.
+        //
+        // The total on its own does not say whether a good month was the
+        // subscriptions doing their job or one large one-off that will not
+        // repeat — which is the difference between a business that grew and a
+        // business that had a good week. Recurring income is a subscription
+        // charge; everything else (a manual charge, a paid payment demand) is
+        // one-off.
+        //
+        // Two plain sums rather than one grouped query: a boolean grouping key
+        // comes back differently from Postgres and from SQLite, and a widget
+        // whose numbers depend on which driver answered is worse than a widget
+        // that runs one more indexed query.
+        $collectedThisMonth = fn (): Builder => Charge::query()
+            ->where('status', ChargeStatus::Succeeded)
+            ->where('charged_at', '>=', Carbon::now()->startOfMonth());
+
+        $recurringThisMonth = (int) $collectedThisMonth()->whereNotNull('subscription_id')->sum('total_agorot');
+        $oneOffThisMonth = (int) $collectedThisMonth()->whereNull('subscription_id')->sum('total_agorot');
+        $collectedTotal = $recurringThisMonth + $oneOffThisMonth;
 
         // Only tickets awaiting OUR action count as "needs handling" — a ticket
         // in "ממתין ללקוח" (Pending) is waiting on the customer, so it is not a
@@ -97,8 +115,9 @@ class StatsOverview extends BaseWidget
                 ->color('success')
                 ->url(SubscriptionResource::getUrl()),
 
-            Stat::make('נגבה החודש', '₪ '.number_format($collectedThisMonth / 100))
-                ->description('חיובים שהצליחו החודש')
+            Stat::make('נגבה החודש', '₪ '.number_format($collectedTotal / 100))
+                ->description('מנויים ₪'.number_format($recurringThisMonth / 100)
+                    .' · חד-פעמי ₪'.number_format($oneOffThisMonth / 100))
                 ->icon('heroicon-o-credit-card')
                 ->color('primary')
                 ->url(ChargeResource::getUrl()),
