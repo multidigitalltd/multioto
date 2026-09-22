@@ -23,6 +23,7 @@ use App\Jobs\HeartbeatJob;
 use App\Jobs\LockOutSiteSessionsJob;
 use App\Jobs\MonitorSiteJob;
 use App\Jobs\PrunePendingSignupsJob;
+use App\Jobs\PruneSiteAgentRequestsJob;
 use App\Jobs\PurgeSiteThreatsJob;
 use App\Jobs\ReconcileChargeJob;
 use App\Jobs\RefreshCloudflareCountryRulesJob;
@@ -37,6 +38,7 @@ use App\Jobs\SendDemandRemindersJob;
 use App\Jobs\SendProactiveRemindersJob;
 use App\Jobs\SendTaskRemindersJob;
 use App\Jobs\SyncPluginReleasesJob;
+use App\Jobs\SyncSiteAgentServiceStateJob;
 use App\Jobs\WeeklyMaintenanceJob;
 use App\Models\AuditLog;
 use App\Models\Broadcast;
@@ -477,6 +479,21 @@ Schedule::job(new RequestMissingCardJob)
 // nothing outward and touches no customer.
 Schedule::job(new PrunePendingSignupsJob)
     ->dailyAt('03:40')->name('billing:prune-pending-signups')->onOneServer();
+
+// Offers to change a site that nobody answered, and the pictures they were
+// holding. The expiry already stops an old offer being confirmed; this is about
+// not keeping a customer's photograph for a change they never agreed to.
+Schedule::job(new PruneSiteAgentRequestsJob)
+    ->hourly()->name('site-agent:prune-requests')->onOneServer();
+
+// Whether each site-agent customer's service matches what they were last told.
+// The model hook already tells them the moment a subscription moves; this is
+// the net under it — a plan whose agent flag was turned off, a row changed
+// outside the app, a message that failed to send an hour ago. It sends nothing
+// when nothing is out of sync, and the job declines to speak over Shabbat on
+// its own, so no scheduling gate is needed to keep it quiet.
+Schedule::job(new SyncSiteAgentServiceStateJob)
+    ->hourly()->name('site-agent:sync-service-state')->onOneServer();
 
 // Chase the security card signup asked for and never got. Separate from the job
 // above because that one runs off subscriptions whose charge date has passed —

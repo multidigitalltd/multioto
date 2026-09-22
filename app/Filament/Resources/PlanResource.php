@@ -58,6 +58,15 @@ class PlanResource extends Resource
                             ->label('פעילה')
                             ->inline(false)
                             ->required(),
+                        // What decides, on every message a customer sends to
+                        // the agent's number, whether it answers them. A flag
+                        // rather than a name match: renaming a plan, or opening
+                        // a second one at another price, must never quietly
+                        // switch a paying customer off.
+                        Forms\Components\Toggle::make('includes_site_agent')
+                            ->label('כולל סוכן ניהול אתר בוואטסאפ')
+                            ->helperText('לקוח עם מנוי פעיל בתוכנית הזו יכול לנהל את האתר שלו מהסוכן. בלי זה — הסוכן משיב שהמנוי אינו פעיל.')
+                            ->inline(false),
                         Forms\Components\Textarea::make('description')
                             ->label('תיאור')
                             ->rows(3)

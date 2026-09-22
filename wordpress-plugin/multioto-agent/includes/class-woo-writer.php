@@ -174,6 +174,16 @@ class Multioto_Agent_Woo_Writer
             $changed['stock_quantity'] = (int) $args['stock_quantity'];
         }
 
+        // Settable on its own, because setting a quantity turns stock
+        // management ON as a side effect — and without a way to turn it off
+        // again, an undo cannot put back a product that was never managing
+        // stock in the first place.
+        if (array_key_exists('manage_stock', $args)) {
+            $manage = filter_var($args['manage_stock'], FILTER_VALIDATE_BOOLEAN);
+            $product->set_manage_stock($manage);
+            $changed['manage_stock'] = $manage;
+        }
+
         if (isset($args['stock_status'])) {
             $status = (string) $args['stock_status'];
 
@@ -363,6 +373,10 @@ class Multioto_Agent_Woo_Writer
             'manage_stock' => $product->get_manage_stock(),
             'stock_quantity' => $product->get_stock_quantity(),
             'stock_status' => $product->get_stock_status(),
+            // The featured image, by id. Products are not readable through the
+            // content tools, so this is the only way a caller can tell whether
+            // the picture it is about to replace is still the one it saw.
+            'thumbnail_id' => (int) $product->get_image_id(),
             'url' => get_permalink($product->get_id()),
         ];
     }

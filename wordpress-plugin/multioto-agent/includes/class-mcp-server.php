@@ -192,7 +192,8 @@ class Multioto_Agent_Mcp_Server
         // of the content vocabulary and not an extra.
         $tools[] = ['name' => 'wp_media_list', 'description' => 'קבצים בספריית המדיה: מזהה, כותרת, כתובת, סוג, טקסט חלופי ותאריך. אופציונלי search, mime_type, limit, page. קִראו את זה לפני העלאה — תמונה שכבר קיימת עדיף לשייך מאשר להעלות שוב.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['search' => ['type' => 'string'], 'mime_type' => ['type' => 'string'], 'limit' => ['type' => 'integer'], 'page' => ['type' => 'integer']]]];
         $tools[] = ['name' => 'wp_media_upload', 'description' => 'העלאת קובץ לספריית המדיה. filename חובה (עם סיומת), ואחד מ: url (כתובת ציבורית) או data (base64). **לתמונה חובה alt** — תיאור קצר של מה שרואים בה. אופציונלי title ו-attach_to (מזהה פריט תוכן לשיוך). מותרים JPEG, PNG, GIF, WebP ו-PDF בלבד; הסוג נקבע מתוכן הקובץ ולא מהסיומת, ו-SVG נדחה. אין ביטול להעלאה.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['filename' => ['type' => 'string'], 'url' => ['type' => 'string'], 'data' => ['type' => 'string'], 'alt' => ['type' => 'string'], 'title' => ['type' => 'string'], 'attach_to' => ['type' => 'integer']], 'required' => ['filename']]];
-        $tools[] = ['name' => 'wp_post_thumbnail_set', 'description' => 'קביעת התמונה הראשית של עמוד/פוסט. id + attachment_id (0 מסיר את התמונה הראשית). מחזיר את הקודמת לצורך ביטול.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['id' => ['type' => 'integer'], 'attachment_id' => ['type' => 'integer']], 'required' => ['id', 'attachment_id']]];
+        $tools[] = ['name' => 'wp_post_thumbnail_set', 'description' => 'קביעת התמונה הראשית של עמוד/פוסט. id + attachment_id (0 מסיר את התמונה הראשית). מחזיר את הקודמת לצורך ביטול. אופציונלי if_current — מזהה התמונה שאתם מצפים שנמצאת שם כרגע: אם היא כבר אחרת לא נכתב דבר והתשובה מחזירה changed=false עם הקיימת, כדי שלא תדרסו תמונה שמישהו שם בינתיים.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['id' => ['type' => 'integer'], 'attachment_id' => ['type' => 'integer'], 'if_current' => ['type' => 'integer']], 'required' => ['id', 'attachment_id']]];
+        $tools[] = ['name' => 'wp_media_delete', 'description' => 'מחיקת קובץ מספריית המדיה, לצמיתות. attachment_id חובה. קובץ שמשמש כתמונה ראשית של פריט תוכן נדחה — הסירו אותו משם קודם. נועד לנקות העלאה שלא ניתן היה להשתמש בה; אין לכך ביטול.', 'annotations' => $destructive, 'inputSchema' => ['type' => 'object', 'properties' => ['attachment_id' => ['type' => 'integer']], 'required' => ['attachment_id']]];
 
         // Comments. The one body of text on a site that strangers wrote — see
         // Multioto_Agent_Comments.
@@ -227,7 +228,7 @@ class Multioto_Agent_Mcp_Server
         if (Multioto_Agent_Woo_Writer::active()) {
             $tools[] = ['name' => 'wc_product_search', 'description' => 'חיפוש מוצרים לפי טקסט חופשי (שם או מק"ט). מחזיר total (כמה מוצרים תואמים בסך הכל), returned (כמה הוחזרו בעמוד הזה), page, pages ו-products — לכל אחד מזהה, שם, מק"ט, מחיר רגיל, מחיר מבצע ומלאי. השתמשו בזה כדי להפוך תיאור בדיבור ("החולצה השחורה") למזהה מוצר — וכשחוזרות כמה תוצאות, שאלו על איזה מהן מדובר במקום לנחש. אם page קטן מ-pages יש עוד עמודים — בקשו אותם עם page=2,3… כדי לעבור על כל המוצרים התואמים, ואל תתייחסו לעמוד הראשון כאילו הוא כולם.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['search' => ['type' => 'string'], 'limit' => ['type' => 'integer'], 'page' => ['type' => 'integer']], 'required' => ['search']]];
             $tools[] = ['name' => 'wc_product_get', 'description' => 'פרטי מוצר מלאים לפי מזהה: מחירים, מבצע ותאריכיו, מלאי, סטטוס וקישור.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['product_id' => ['type' => 'integer']], 'required' => ['product_id']]];
-            $tools[] = ['name' => 'wc_product_update', 'description' => 'עדכון מוצר לפי product_id. שדות אופציונליים: regular_price, sale_price (ריק = סיום המבצע), sale_from ו-sale_to (YYYY-MM-DD), stock_quantity, stock_status (instock/outofstock/onbackorder), status (publish/draft/private). מחזיר את המצב הקודם המלא לצורך ביטול. מחיר מבצע שאינו נמוך מהמחיר הרגיל נדחה.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['product_id' => ['type' => 'integer'], 'regular_price' => ['type' => 'string'], 'sale_price' => ['type' => 'string'], 'sale_from' => ['type' => 'string'], 'sale_to' => ['type' => 'string'], 'stock_quantity' => ['type' => 'integer'], 'stock_status' => ['type' => 'string'], 'status' => ['type' => 'string']], 'required' => ['product_id']]];
+            $tools[] = ['name' => 'wc_product_update', 'description' => 'עדכון מוצר לפי product_id. שדות אופציונליים: regular_price, sale_price (ריק = סיום המבצע), sale_from ו-sale_to (YYYY-MM-DD), stock_quantity, manage_stock, stock_status (instock/outofstock/onbackorder), status (publish/draft/private). מחזיר את המצב הקודם המלא לצורך ביטול. מחיר מבצע שאינו נמוך מהמחיר הרגיל נדחה.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['product_id' => ['type' => 'integer'], 'regular_price' => ['type' => 'string'], 'sale_price' => ['type' => 'string'], 'sale_from' => ['type' => 'string'], 'sale_to' => ['type' => 'string'], 'stock_quantity' => ['type' => 'integer'], 'manage_stock' => ['type' => 'boolean'], 'stock_status' => ['type' => 'string'], 'status' => ['type' => 'string']], 'required' => ['product_id']]];
             $tools[] = ['name' => 'wc_product_create', 'description' => 'יצירת מוצר חדש — תמיד כטיוטה, לעולם לא מפורסם. name חובה; אופציונלי description, short_description, regular_price, sku. הפרסום נעשה בנפרד על ידי אדם שרואה את העמוד.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['name' => ['type' => 'string'], 'description' => ['type' => 'string'], 'short_description' => ['type' => 'string'], 'regular_price' => ['type' => 'string'], 'sku' => ['type' => 'string']], 'required' => ['name']]];
             $tools[] = ['name' => 'wc_coupon_list', 'description' => 'רשימת הקופונים בחנות: קוד, סוג ההנחה, גובהה, תאריך תפוגה ומספר השימושים.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['limit' => ['type' => 'integer']]]];
             $tools[] = ['name' => 'wc_coupon_create', 'description' => 'יצירת קופון. code חובה; type = percent (ברירת מחדל) / fixed_cart / fixed_product; amount חובה; אופציונלי expires (YYYY-MM-DD), minimum_amount, usage_limit. קופון באחוזים מעל 100 או בסכום אפס נדחה.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['code' => ['type' => 'string'], 'type' => ['type' => 'string'], 'amount' => ['type' => 'number'], 'expires' => ['type' => 'string'], 'minimum_amount' => ['type' => 'string'], 'usage_limit' => ['type' => 'integer']], 'required' => ['code', 'amount']]];
@@ -283,6 +284,7 @@ class Multioto_Agent_Mcp_Server
             'wp_media_list' => 'mediaList',
             'wp_media_upload' => 'mediaUpload',
             'wp_post_thumbnail_set' => 'thumbnailSet',
+            'wp_media_delete' => 'mediaDelete',
             'wp_elementor_texts_get' => 'elementorTexts',
             'wp_elementor_text_update' => 'elementorTextUpdate',
             'wc_product_search' => 'wcProductSearch',
@@ -511,6 +513,11 @@ class Multioto_Agent_Mcp_Server
     private function thumbnailSet(array $args): string
     {
         return Multioto_Agent_Media::setThumbnail($args);
+    }
+
+    private function mediaDelete(array $args): string
+    {
+        return Multioto_Agent_Media::delete($args);
     }
 
     private function optionGet(array $args): string
@@ -1224,6 +1231,11 @@ class Multioto_Agent_Mcp_Server
             'status' => $post->post_status,
             'excerpt' => $post->post_excerpt,
             'content' => $post->post_content,
+            // The featured image, by id. Read-only elsewhere in this server,
+            // and the only way a caller can tell whether the picture it is
+            // about to replace is still the one it saw — wp_post_thumbnail_set
+            // reports what it displaced, but only after it has displaced it.
+            'thumbnail_id' => (int) get_post_thumbnail_id($post->ID),
             // Said on every read, because it decides which tool edits this page.
             // A page built with Elementor keeps its visible text elsewhere, and
             // an agent that does not know that will "successfully" edit nothing.
