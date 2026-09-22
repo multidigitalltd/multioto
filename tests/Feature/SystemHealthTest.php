@@ -174,6 +174,60 @@ class SystemHealthTest extends TestCase
         $this->assertStringContainsString('טרם נבדק', $problem['detail']);
     }
 
+    /**
+     * פסק ישן מדי אינו פסק.
+     *
+     * כל הבדיקה הזאת קוראת תשובה שמורה, ולכן היא כנה בדיוק כמו העבודה שכותבת
+     * אותה. אם אותה עבודה מפסיקה לרוץ, התשובה האחרונה נשארת כאן לנצח — ותשובה
+     * אחרונה של "תקין" הייתה משאירה את לוח הבקרה ואת /health ירוקים לאורך כל
+     * התקלה. זה בדיוק מה שהחיווי הזה נבנה כדי למנוע.
+     */
+    public function test_a_verdict_too_old_to_mean_anything_is_reported_as_unwatched(): void
+    {
+        $this->alive();
+        $this->whatsappVerdict([
+            'state' => 'ok',
+            'title' => 'הקליטה מוואטסאפ תקינה',
+            'detail' => 'התקבלו 12 הודעות.',
+            'fault' => false,
+            'at' => now()->subHours(5)->toIso8601String(),
+        ]);
+
+        $problem = collect(app(HealthReport::class)->problems())->firstWhere('key', 'whatsapp');
+
+        $this->assertNotNull($problem);
+        $this->assertStringContainsString('הפסיקה לרוץ', $problem['detail']);
+    }
+
+    /** ...אבל פסק מלפני שעה הוא עדיין תיאור של עכשיו. */
+    public function test_a_recent_verdict_is_still_believed(): void
+    {
+        $this->alive();
+        $this->whatsappVerdict([
+            'state' => 'ok',
+            'title' => 'הקליטה מוואטסאפ תקינה',
+            'detail' => 'התקבלו 12 הודעות.',
+            'fault' => false,
+            'at' => now()->subHour()->toIso8601String(),
+        ]);
+
+        $this->assertSame(HealthReport::OK, app(HealthReport::class)->status());
+    }
+
+    /** פסק בלי חותמת זמן אינו ניתן להוכחה כעדכני. */
+    public function test_a_verdict_without_a_timestamp_is_not_trusted(): void
+    {
+        $this->alive();
+        $this->whatsappVerdict([
+            'state' => 'ok',
+            'title' => 'הקליטה מוואטסאפ תקינה',
+            'detail' => 'התקבלו 12 הודעות.',
+            'fault' => false,
+        ]);
+
+        $this->assertNotSame(HealthReport::OK, app(HealthReport::class)->status());
+    }
+
     public function test_a_scheduler_that_stopped_reporting_is_down(): void
     {
         $this->alive();

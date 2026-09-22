@@ -744,6 +744,22 @@ class HealthReport
                 'טרם נבדק. הבדיקה השעתית אינה רצה, ולכן ניתוק של וואטסאפ לא יידע אף אחד.');
         }
 
+        // A verdict too old to mean anything is not a verdict.
+        //
+        // This whole check reads a stored answer, which makes it only as honest
+        // as the job that writes it. If that one job stops being dispatched, or
+        // keeps throwing before it records anything, the last answer sits here
+        // for ever — and a last answer of "fine" would keep the dashboard and
+        // /health green through an outage, which is precisely the failure this
+        // was built to end. The staleness is reported as its own fault rather
+        // than folded into the old verdict, because "nobody is watching" and
+        // "something is broken" need different fixes.
+        if ($this->stale($result['at'] ?? null)) {
+            return $this->check('whatsapp', $label, self::DEGRADED,
+                'הבדיקה השעתית של וואטסאפ הפסיקה לרוץ, ולכן המצב כאן אינו עדכני — ניתוק לא יידע אף אחד. '
+                    .'הבדיקה האחרונה: '.$this->when($result['at'] ?? null).'.');
+        }
+
         if (! ($result['fault'] ?? false)) {
             return $this->check('whatsapp', $label, self::OK, (string) ($result['title'] ?? 'תקין.'));
         }
@@ -756,6 +772,40 @@ class HealthReport
             (string) ($result['title'] ?? ''),
             (string) ($result['detail'] ?? ''),
         ])));
+    }
+
+    /**
+     * How long a stored WhatsApp verdict stays believable.
+     *
+     * The job runs hourly and does not retry (tries = 1), so a single hiccup
+     * leaves one gap. Three hours is three consecutive misses — comfortably
+     * more than a blip, comfortably less than a working day of silence.
+     */
+    private const WHATSAPP_VERDICT_STALE_HOURS = 3;
+
+    /** Is this timestamp too old to be describing the present? */
+    private function stale(mixed $at): bool
+    {
+        if (blank($at) || ! is_string($at)) {
+            // Recorded without a time, so it cannot be shown to be current.
+            return true;
+        }
+
+        return rescue(
+            fn (): bool => Carbon::parse($at)->addHours(self::WHATSAPP_VERDICT_STALE_HOURS)->isPast(),
+            true,
+            report: false,
+        );
+    }
+
+    /** The stored time in words, or an honest shrug. */
+    private function when(mixed $at): string
+    {
+        if (blank($at) || ! is_string($at)) {
+            return 'לא ידועה';
+        }
+
+        return rescue(fn (): string => Carbon::parse($at)->format('d/m/Y H:i'), 'לא ידועה', report: false);
     }
 
     private function check(string $key, string $label, string $status, string $detail): array
