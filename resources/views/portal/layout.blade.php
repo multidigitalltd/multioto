@@ -108,6 +108,12 @@
                 @if ($customer->licenses()->exists())
                     <a href="{{ route('portal.licenses') }}" @if (request()->routeIs('portal.licenses')) aria-current="page" @endif>רישיונות</a>
                 @endif
+                {{-- Same rule as the licences tab: shown to customers who have a
+                     number bound, including one whose subscription has lapsed —
+                     that is exactly the customer who needs to reach this page. --}}
+                @if ($customer->siteAgentSubscribers()->exists())
+                    <a href="{{ route('portal.site-agent') }}" @if (request()->routeIs('portal.site-agent')) aria-current="page" @endif>סוכן האתר</a>
+                @endif
                 <a href="{{ route('portal.tickets') }}" @if (request()->routeIs('portal.tickets')) aria-current="page" @endif>פניות</a>
             </nav>
         @endisset

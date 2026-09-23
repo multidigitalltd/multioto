@@ -6,6 +6,7 @@ use App\Enums\ChargeStatus;
 use App\Models\Charge;
 use App\Services\Licensing\LicenseRenewal;
 use App\Services\Licensing\PluginCheckout;
+use App\Services\SiteAgent\SiteAgentCheckout;
 
 /**
  * Move a licence's expiry the moment its charge succeeds.
@@ -25,6 +26,7 @@ class ChargeLicenseObserver
     public function __construct(
         private LicenseRenewal $renewal,
         private PluginCheckout $checkout,
+        private SiteAgentCheckout $siteAgent,
     ) {}
 
     public function created(Charge $charge): void
@@ -57,6 +59,11 @@ class ChargeLicenseObserver
             // charge whose webhook was lost — and somebody who paid must not
             // depend on which of the two happened.
             $this->checkout->fulfil($charge);
+
+            // The same for סוכן האתר, and for the same reason: the subscription,
+            // the site and the number's binding are all granted by the money
+            // arriving, and it arrives by either route.
+            $this->siteAgent->fulfil($charge);
         } catch (\Throwable $e) {
             report($e);
         }

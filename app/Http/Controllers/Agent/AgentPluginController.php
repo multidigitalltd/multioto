@@ -5,6 +5,8 @@ namespace App\Http\Controllers\Agent;
 use App\Http\Controllers\Controller;
 use App\Jobs\RefreshSiteCapabilitiesJob;
 use App\Models\Site;
+use App\Models\SiteAgentOrder;
+use App\Models\SystemLog;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -37,11 +39,17 @@ class AgentPluginController extends Controller
         // agent until someone tests the connection by hand.
         $versionChanged = $reported !== '' && $reported !== (string) $site->agent_plugin_version;
 
+        $firstEverContact = $site->mcp_last_seen_at === null;
+
         // Record the check-in: which version the site runs, and that it is alive.
         $site->forceFill([
             'agent_plugin_version' => $reported !== '' ? $reported : $site->agent_plugin_version,
             'mcp_last_seen_at' => now(),
         ])->save();
+
+        if ($firstEverContact) {
+            $this->connectSelfServeSite($site);
+        }
 
         if ($versionChanged && $site->mcp_enabled && filled($site->mcp_endpoint)) {
             RefreshSiteCapabilitiesJob::dispatch($site->id);
@@ -99,6 +107,49 @@ class AgentPluginController extends Controller
         return response()->download($path, "multioto-agent-{$version}.zip", [
             'Content-Type' => 'application/zip',
         ]);
+    }
+
+    /**
+     * A site somebody bought the agent for, saying hello for the first time.
+     *
+     * This closes the only gap in the self-serve purchase. The buyer pays,
+     * installs the plugin and pastes the three codes — and then nothing happens,
+     * because `mcp_enabled` is a switch a team member ticks, and the customer
+     * has no idea one exists. The agent answers "האתר אינו מחובר" to somebody
+     * who has just done everything right, and the sale becomes a support ticket.
+     *
+     * Deliberately narrow, because that flag is also how the team DISCONNECTS a
+     * site on purpose:
+     *
+     *  - only on a site that has never been in contact before, so re-enabling a
+     *    site somebody switched off is impossible here;
+     *  - only when a paid order for this site exists, so it applies to a
+     *    purchase rather than to any plugin that presents a valid token.
+     *
+     * Everything else stays a decision on the site's own screen.
+     */
+    private function connectSelfServeSite(Site $site): void
+    {
+        if ($site->mcp_enabled) {
+            return;
+        }
+
+        $bought = SiteAgentOrder::query()->paid()->where('site_id', $site->id)->exists();
+
+        if (! $bought) {
+            return;
+        }
+
+        // ensureAgentCredentials fills in the endpoint if it is missing; without
+        // one, "enabled" is a green light on a site nothing can call.
+        $site->ensureAgentCredentials();
+        $site->forceFill(['mcp_enabled' => true])->save();
+
+        RefreshSiteCapabilitiesJob::dispatch($site->id);
+
+        SystemLog::record('info', 'siteagent',
+            "האתר {$site->domain} התחבר בעצמו אחרי רכישה עצמית של סוכן האתר.",
+            ['site_id' => $site->id]);
     }
 
     /** A short-lived signed link to the given version's zip. */

@@ -23,6 +23,7 @@ use App\Jobs\HeartbeatJob;
 use App\Jobs\LockOutSiteSessionsJob;
 use App\Jobs\MonitorSiteJob;
 use App\Jobs\PrunePendingSignupsJob;
+use App\Jobs\PruneSiteAccessJob;
 use App\Jobs\PruneSiteAgentRequestsJob;
 use App\Jobs\PurgeSiteThreatsJob;
 use App\Jobs\ReconcileChargeJob;
@@ -485,6 +486,13 @@ Schedule::job(new PrunePendingSignupsJob)
 // not keeping a customer's photograph for a change they never agreed to.
 Schedule::job(new PruneSiteAgentRequestsJob)
     ->hourly()->name('site-agent:prune-requests')->onOneServer();
+
+// The WordPress access customers hand over so we can install for them. The
+// install screen wipes it when somebody marks the job done; this is for the
+// requests nobody closed — which is the case that would otherwise leave a live
+// admin login to a customer's site in our database indefinitely.
+Schedule::job(new PruneSiteAccessJob)
+    ->dailyAt('03:40')->name('site-agent:prune-access')->onOneServer();
 
 // Whether each site-agent customer's service matches what they were last told.
 // The model hook already tells them the moment a subscription moves; this is
