@@ -226,6 +226,8 @@ class SecurityPosture extends Page implements HasTable
             return [];
         }
 
+        $quarantineOn = ThreatQuarantine::enabled();
+
         return $rules->groupBy('type')->map(fn ($group, string $type): array => [
             'icon' => $type === SecurityRule::USER ? '👤' : '🧩',
             'title' => $type === SecurityRule::USER
@@ -235,8 +237,14 @@ class SecurityPosture extends Page implements HasTable
             // site that guards itself, and a team that believes they are would
             // add a rule and stop looking.
             'detail' => $group->map(fn (SecurityRule $rule): string => $rule->value.($rule->enabled ? '' : ' (מושהה)'))->implode(', ')
-                .' — נמצאים ומדווחים. אינם נמחקים אוטומטית: המחיקה האוטומטית נקבעת בתוסף שבאתר.',
-            'active' => $group->contains(fn (SecurityRule $rule): bool => $rule->enabled),
+                .($quarantineOn
+                    ? ' — נמצאים ומדווחים. אינם נמחקים אוטומטית: המחיקה האוטומטית נקבעת בתוסף שבאתר.'
+                    : ' — לא נבדקים כרגע: בדיקת ההסגר כבויה במערכת, וכל עוד היא כבויה אף כלל אינו נאכף.'),
+            // Gated on the same switch the enforcement reads. With the
+            // quarantine off, PurgeSiteThreatsJob returns before it looks at
+            // anything — a card that still reads "active" would be telling the
+            // team a name is being watched for on sites nobody is scanning.
+            'active' => $quarantineOn && $group->contains(fn (SecurityRule $rule): bool => $rule->enabled),
         ])->values()->all();
     }
 
@@ -385,17 +393,20 @@ class SecurityPosture extends Page implements HasTable
                     continue;
                 }
 
-                // updateOrCreate rather than insert: the same name typed twice,
-                // or a name that already exists, is an edit — not a second row
-                // the unique index would reject and the whole save with it.
-                SecurityRule::updateOrCreate(
-                    ['type' => $type, 'value' => $value],
-                    [
-                        'note' => filled($row['note'] ?? null) ? (string) $row['note'] : null,
-                        'enabled' => (bool) ($row['enabled'] ?? true),
-                        'created_by' => auth()->id(),
-                    ],
-                );
+                // firstOrNew rather than insert: the same name typed twice, or a
+                // name that already exists, is an edit — not a second row the
+                // unique index would reject and the whole save with it.
+                $rule = SecurityRule::firstOrNew(['type' => $type, 'value' => $value]);
+                $rule->note = filled($row['note'] ?? null) ? (string) $row['note'] : null;
+                $rule->enabled = (bool) ($row['enabled'] ?? true);
+
+                // Only ever on the way in. Every save submits every row on the
+                // form, so writing this each time would make whoever last
+                // opened the modal the author of every rule in it — and "who
+                // said so" is the part of a rule nobody can reconstruct later.
+                $rule->created_by ??= auth()->id();
+
+                $rule->save();
 
                 $kept[] = $type.'|'.$value;
             }

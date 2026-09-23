@@ -54,6 +54,28 @@ class ThreatQuarantine
     }
 
     /**
+     * The other half: only what the team added from the panel.
+     *
+     * Needed because the two halves are found in different ways. On a site
+     * running the guard, the built-ins are reported by the site itself — it
+     * answers from its own hard-coded list and knows nothing about these. So a
+     * panel rule has to be looked for by the panel, against the ordinary
+     * inventory, or it would be watched for on paper and on no site in practice.
+     *
+     * @return list<string>
+     */
+    public static function customUsers(): array
+    {
+        return array_values(array_diff(self::users(), self::builtInUsers()));
+    }
+
+    /** @return list<string> */
+    public static function customPlugins(): array
+    {
+        return array_values(array_diff(self::plugins(), self::builtInPlugins()));
+    }
+
+    /**
      * What the panel watches for: the built-ins, plus whatever the team added.
      *
      * The config side is the authority for automatic removal and cannot be
@@ -131,13 +153,26 @@ class ThreatQuarantine
     /**
      * Quarantined plugin slugs present in a `wp_plugin_list` response.
      *
+     * @return list<string>
+     */
+    public static function pluginsIn(string $pluginListJson): array
+    {
+        return array_values(array_intersect(self::plugins(), self::slugsIn($pluginListJson)));
+    }
+
+    /**
+     * Every plugin folder slug in a `wp_plugin_list` response, matched against
+     * nothing. Callers that watch for a narrower list than the full quarantine
+     * — the panel's own rules on a site that guards itself — intersect it
+     * themselves rather than reading the inventory a second time.
+     *
      * Read from the plugin FILE ("wp-file-manager/file_folder_manager.php"),
      * never the display name: a display name is whatever the plugin author — or
      * whoever edited the header after uploading it — decided to write there.
      *
      * @return list<string>
      */
-    public static function pluginsIn(string $pluginListJson): array
+    public static function slugsIn(string $pluginListJson): array
     {
         $decoded = json_decode(trim($pluginListJson), true);
 
@@ -163,7 +198,7 @@ class ThreatQuarantine
                 : mb_strtolower((string) preg_replace('/\.php$/i', '', $file));
         }
 
-        return array_values(array_intersect(self::plugins(), array_unique($slugs)));
+        return array_values(array_unique($slugs));
     }
 
     /**

@@ -24,6 +24,8 @@ use Illuminate\Support\Facades\Log;
  *    log on a customer's site. This drains it into the panel and alerts the team.
  *  - It sweeps sites the hooks could not reach — a user written straight into
  *    the database, a plugin folder uploaded over FTP.
+ *  - It looks for the names the team added in the panel, which the site's own
+ *    guard has never heard of and never will. Those are reported, not removed.
  *  - It covers sites still on an older plugin, where nothing is watching at all.
  *    There it does what the old tool vocabulary allows (deactivate the plugin,
  *    which is what makes it reachable) and says plainly that finishing the job
@@ -63,6 +65,105 @@ class PurgeSiteThreatsJob implements ShouldQueue
         }
 
         $this->withGuard($mcp, $team, $site, $status);
+
+        // The guard answered for the names it carries. Ours it has never heard
+        // of, so they are looked for here — see sweepOwnRules().
+        $this->sweepOwnRules($mcp, $team, $site);
+    }
+
+    /**
+     * The rules the team added from the panel, on a site that guards itself.
+     *
+     * `wp_guard_status` answers from the list hard coded in the plugin — which
+     * is the whole point: nothing sent over the network can widen what a site
+     * deletes. The cost of that guarantee is that the guard's report says
+     * nothing about a rule added in the panel, so without this pass such a rule
+     * would be watched for on paper and on no up-to-date site in practice.
+     *
+     * Worse than merely silent, in fact: CheckSitePluginChangesJob treats a
+     * matching new install as a quarantined addition, drops it from its own
+     * alert and hands it to this job. Adding a rule would then make the system
+     * report LESS about that name than before it existed.
+     *
+     * Found and reported, never removed — the same line the screen draws. And
+     * it costs an ordinary system nothing: no rules, no calls.
+     */
+    private function sweepOwnRules(McpClient $mcp, TeamNotifier $team, Site $site): void
+    {
+        $logins = ThreatQuarantine::customUsers();
+        $slugs = ThreatQuarantine::customPlugins();
+
+        if ($logins === [] && $slugs === []) {
+            return;
+        }
+
+        $foundUsers = $logins === []
+            ? []
+            : $this->quarantinedUsers($mcp, $site, $checked, $logins);
+
+        $inventory = $slugs === [] ? null : $this->read($mcp, $site, 'wp_plugin_list');
+
+        $foundPlugins = $inventory === null
+            ? []
+            : array_values(array_intersect($slugs, ThreatQuarantine::slugsIn($inventory)));
+
+        $fresh = [];
+
+        foreach ($foundUsers as $login) {
+            if ($this->noteOwnRuleFinding($site, 'משתמש', $login)) {
+                $fresh[] = "👤 משתמש: {$login}";
+            }
+        }
+
+        foreach ($foundPlugins as $slug) {
+            if ($this->noteOwnRuleFinding($site, 'תוסף', $slug)) {
+                $fresh[] = "🧩 תוסף: {$slug}";
+            }
+        }
+
+        if ($fresh === []) {
+            return;
+        }
+
+        $team->alert(
+            "🚨 כלל מעקב נמצא באתר {$site->domain}",
+            $this->customerLine($site).
+            "נמצאו פריטים מכללי המעקב שהוספתם בפאנל:\n".implode("\n", $fresh).
+            "\n\nאלה אינם מוסרים אוטומטית — המחיקה האוטומטית נקבעת ברשימה שבתוך התוסף שבאתר, ולא מהפאנל. נדרשת בדיקה ידנית.",
+            $this->siteUrl($site),
+        );
+    }
+
+    /**
+     * File a panel-rule finding, at most once a day per site and name.
+     *
+     * Nothing removes these, so the same name is found again every hour for as
+     * long as it is there. Filing it every hour would bury the one finding that
+     * is new under a hundred that are not, and a team that learns to skip this
+     * alert is worse off than one that never had it.
+     *
+     * @return bool whether this was new, and so worth an alert
+     */
+    private function noteOwnRuleFinding(Site $site, string $noun, string $target): bool
+    {
+        $title = "{$noun} מכלל מעקב נמצא באתר: {$target}";
+
+        $already = SiteEvent::where('site_id', $site->id)
+            ->where('type', 'threat_found')
+            ->where('title', $title)
+            ->where('detected_at', '>=', now()->subDay())
+            ->exists();
+
+        if ($already) {
+            return false;
+        }
+
+        SiteEvent::record($site->id, 'threat_found', 'critical', $title,
+            'זהו כלל מעקב שהוספתם בפאנל. הוא אינו נמחק אוטומטית מהאתר — המחיקה האוטומטית נקבעת ברשימה המקובעת בתוסף שבאתר. '.
+            'יש להסיר ידנית, או להחליט שהפריט תקין ולהסיר את הכלל.',
+        );
+
+        return true;
     }
 
     /**
@@ -242,14 +343,16 @@ class PurgeSiteThreatsJob implements ShouldQueue
      * @param  bool|null  $checked  set to false when neither tool could answer,
      *                              so "nothing found" is never mistaken for
      *                              "nothing there"
+     * @param  list<string>|null  $logins  a narrower list to look for; the whole
+     *                                     watch list when not given
      * @return list<string>
      */
-    private function quarantinedUsers(McpClient $mcp, Site $site, ?bool &$checked): array
+    private function quarantinedUsers(McpClient $mcp, Site $site, ?bool &$checked, ?array $logins = null): array
     {
         $checked = false;
         $found = [];
 
-        foreach (ThreatQuarantine::users() as $login) {
+        foreach ($logins ?? ThreatQuarantine::users() as $login) {
             // wp_user_list (agent 1.3.0+) searches every role. Its search is a
             // substring match, so the exact-login filter still happens here.
             $text = $this->read($mcp, $site, 'wp_user_list', ['search' => $login, 'limit' => 25]);
