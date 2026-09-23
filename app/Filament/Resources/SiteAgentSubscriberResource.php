@@ -126,12 +126,28 @@ class SiteAgentSubscriberResource extends Resource
      */
     public static function getEloquentQuery(): Builder
     {
-        return parent::getEloquentQuery()
+        return self::withState(parent::getEloquentQuery());
+    }
+
+    /**
+     * The flags the state badge is read from, added to any subscriber query.
+     *
+     * Public because this table is also rendered from the customer's own page,
+     * where the rows come from the relationship rather than from here. Without
+     * these flags the badge has nothing to read and reports every row as
+     * "אין מנוי פעיל" — a wrong answer that looks exactly like a right one.
+     *
+     * @param  Builder<SiteAgentSubscriber>  $query
+     * @return Builder<SiteAgentSubscriber>
+     */
+    public static function withState(Builder $query): Builder
+    {
+        return $query
             ->with(['customer:id,name', 'site:id,domain,customer_id'])
             ->withExists([
-                'customer as customer_subscribed' => fn (Builder $query) => $query
+                'customer as customer_subscribed' => fn (Builder $customer) => $customer
                     ->whereHas('subscriptions', fn (Builder $s) => SiteAgentAccess::entitling($s)),
-                'customer as customer_awaiting_card' => fn (Builder $query) => $query
+                'customer as customer_awaiting_card' => fn (Builder $customer) => $customer
                     ->whereHas('subscriptions', fn (Builder $s) => SiteAgentAccess::unbilled($s)),
             ]);
     }

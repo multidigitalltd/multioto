@@ -3,15 +3,18 @@
 namespace App\Filament\Pages;
 
 use App\Enums\ChargeStatus;
+use App\Enums\TokenStatus;
 use App\Filament\Concerns\OpensNewCustomer;
 use App\Filament\Concerns\OpensPaymentDemand;
 use App\Filament\Concerns\RespectsModuleAccess;
 use App\Filament\Resources\CustomerResource;
 use App\Jobs\IssueInvoiceJob;
+use App\Jobs\ProcessManualChargeJob;
 use App\Models\Charge;
 use App\Models\Customer;
 use App\Services\Billing\DemandDispatcher;
 use App\Services\Linet\LinetClient;
+use App\Support\Money;
 use Filament\Actions\Action;
 use Filament\Forms;
 use Filament\Notifications\Notification;
@@ -148,10 +151,49 @@ class PaymentDemands extends Page implements HasTable
             ->implode("\n");
     }
 
+    /**
+     * Does this demand have a card behind it that could be charged?
+     *
+     * Read from the flags loaded with the page, and following exactly the
+     * precedence `Charge::resolveCustomer()` uses — the subscription's customer
+     * first, then the charge's own. Answering it the other way round would put
+     * the button in front of one customer's card while the job charges
+     * another's.
+     *
+     * This decides only whether the button is OFFERED. What is actually charged
+     * is decided again, authoritatively, inside the job — so a flag that has
+     * gone stale since the page loaded ends in an honest "no active card"
+     * rather than in a charge against the wrong token.
+     */
+    private function hasSavedCard(Charge $charge): bool
+    {
+        $flag = $charge->subscription_id !== null
+            ? $charge->subscription_customer_has_card
+            : $charge->customer_has_card;
+
+        // The flags ride on the page's own query, so a row that reached here by
+        // any other route simply has no such attribute — and reading an absent
+        // one as "no card" would make the button quietly disappear for a
+        // customer who has one. Absent means "ask properly", not "no".
+        return $flag === null ? $charge->chargeableToken() !== null : (bool) $flag;
+    }
+
     public function table(Table $table): Table
     {
         return $table
-            ->query(self::baseQuery()->with(['customer', 'subscription.customer', 'invoice']))
+            ->query(self::baseQuery()
+                ->with(['customer', 'subscription.customer', 'invoice'])
+                // Whether a saved card exists, asked once for the whole page
+                // rather than per row: "does this customer hold an active
+                // token" is read for every line to decide whether the charge
+                // button belongs there, and asking it row by row is two
+                // queries a line on a screen that polls every 15 seconds.
+                ->withExists([
+                    'customer as customer_has_card' => fn (Builder $q) => $q
+                        ->whereHas('paymentTokens', fn (Builder $t) => $t->where('status', TokenStatus::Active)),
+                    'subscription as subscription_customer_has_card' => fn (Builder $q) => $q
+                        ->whereHas('customer.paymentTokens', fn (Builder $t) => $t->where('status', TokenStatus::Active)),
+                ]))
             ->defaultSort('demand_sent_at', 'desc')
             ->poll('15s')
             ->columns([
@@ -281,6 +323,66 @@ class PaymentDemands extends Page implements HasTable
                         Notification::make()
                             ->title('הדרישה סומנה כשולמה ✓')
                             ->body('חשבונית מס/קבלה מונפקת בלינט. עקבו במסך "חיובים".')
+                            ->success()->send();
+                    }),
+
+                // Take the money now, from the card already on file.
+                //
+                // A demand deliberately never auto-charges: it asks the customer
+                // to pay, by transfer or through a link, and waits. This is the
+                // deliberate override for the call that ends "just take it off
+                // the card" — until now that meant retyping the whole charge on
+                // the חיוב ידני screen, which leaves two rows for one debt and
+                // an open demand still sending reminders.
+                //
+                // It runs through the same job as every other one-off charge, so
+                // it inherits the same guarantees: a per-charge lock, only a
+                // still-pending row is touched, every Cardcom response is
+                // written to the row, and the invoice is issued only on success.
+                Tables\Actions\Action::make('chargeSavedCard')
+                    ->label('חייב מהכרטיס השמור')
+                    ->icon('heroicon-o-credit-card')->color('success')
+                    ->visible(fn (Charge $r): bool => $r->status === ChargeStatus::Pending && $this->hasSavedCard($r))
+                    ->requiresConfirmation()
+                    ->modalHeading('חיוב מיידי מהכרטיס השמור')
+                    // The last sentence is the one that matters, and it is said
+                    // because it is true: Cardcom offers no way to cancel a
+                    // payment session, so a page the customer already has open
+                    // stays payable. Better that the operator knows the window
+                    // exists than believes this button closed it.
+                    ->modalDescription(fn (Charge $r): string => implode(' ', array_filter([
+                        'הכרטיס השמור של הלקוח יחויב עכשיו ב-'.Money::ils($r->total_agorot).'.',
+                        'עם הצלחת החיוב תיסגר הדרישה, התזכורות ייפסקו, קישור התשלום יפסיק לעבוד ותונפק חשבונית מס/קבלה.',
+                        'ודאו שהלקוח לא כבר שילם בהעברה — הוא התבקש לשלם בעצמו.',
+                        filled($r->cardcom_pay_url)
+                            ? 'כמו כן, עמוד תשלום שכבר נפתח אצל הלקוח נשאר פתוח לתשלום עד שיפוג — אם ישלם בו אחרי החיוב, תישלח התראה לזיכוי.'
+                            : null,
+                    ])))
+                    ->modalSubmitActionLabel('חייב עכשיו')
+                    ->action(function (Charge $record): void {
+                        // Re-read rather than trust the row the page rendered:
+                        // the customer may have paid the link in the meantime,
+                        // and the table only refreshes every 15 seconds.
+                        if ($record->fresh()->status !== ChargeStatus::Pending) {
+                            Notification::make()->title('הסטטוס כבר השתנה — לא בוצע חיוב')->warning()->send();
+
+                            return;
+                        }
+
+                        if ($record->chargeableToken() === null) {
+                            Notification::make()
+                                ->title('אין ללקוח כרטיס פעיל שמור')
+                                ->body('ייתכן שהכרטיס הוחלף או פג תוקפו מאז שהמסך נטען. שלחו ללקוח קישור להזנת כרטיס.')
+                                ->danger()->send();
+
+                            return;
+                        }
+
+                        ProcessManualChargeJob::dispatch($record->id);
+
+                        Notification::make()
+                            ->title('החיוב נשלח לביצוע')
+                            ->body('החיוב רץ ברקע מול קארדקום. התוצאה תופיע כאן תוך שניות — ואם יצליח, תונפק חשבונית מס/קבלה.')
                             ->success()->send();
                     }),
 

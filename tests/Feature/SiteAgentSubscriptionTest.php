@@ -14,11 +14,13 @@ use App\Jobs\SyncSiteAgentServiceStateJob;
 use App\Models\Customer;
 use App\Models\PaymentToken;
 use App\Models\Plan;
+use App\Models\Setting;
 use App\Models\Site;
 use App\Models\SiteAgentRequest;
 use App\Models\SiteAgentSubscriber;
 use App\Models\Subscription;
 use App\Models\User;
+use App\Providers\SettingsServiceProvider;
 use App\Services\Calendar\ShabbatClock;
 use App\Services\Notifications\TeamNotifier;
 use App\Services\SiteAgent\SiteAgentBilling;
@@ -54,10 +56,15 @@ class SiteAgentSubscriptionTest extends TestCase
             'siteagent.enabled' => true,
             'siteagent.whatsapp.app_secret' => 'app-secret',
             'siteagent.whatsapp.verify_token' => 'verify-me',
-            'siteagent.whatsapp.phone_number_id' => '123456',
             'siteagent.whatsapp.token' => 'permanent-token',
             'billing.email.support_address' => 'support@multi.test',
         ]);
+
+        // As in production: the number is a stored setting, not a runtime
+        // config() override. The settings overlay reverts this key when no row
+        // backs it, so a bare config() here would be wiped by the next job.
+        Setting::put('siteagent.phone_number_id', '123456');
+        SettingsServiceProvider::refreshFromDatabase();
 
         // A Wednesday. Half of what is asserted here is about a message being
         // sent, and the quiet period would suppress it — on a real Saturday the
@@ -297,7 +304,10 @@ class SiteAgentSubscriptionTest extends TestCase
     public function test_the_lapse_notice_goes_out_as_an_approved_template(): void
     {
         Http::fake(['*' => Http::response(['messages' => [['id' => 'wamid.x']]])]);
-        config(['siteagent.whatsapp.templates.service_paused' => 'site_agent_paused']);
+        // Stored, not config()'d: the reconciliation below runs a job, and the
+        // settings overlay reverts a template name that no stored row backs.
+        Setting::put('siteagent.template_paused', 'site_agent_paused');
+        SettingsServiceProvider::refreshFromDatabase();
 
         $customer = Customer::factory()->create(['phone' => '050-1234567']);
         $site = $this->connectedSite($customer);

@@ -11,6 +11,7 @@ use App\Services\Cardcom\CardcomClient;
 use App\Services\Cardcom\CardTokenService;
 use App\Services\Notifications\TeamNotifier;
 use App\Services\Signup\CompleteSignup;
+use App\Support\Money;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Log;
@@ -207,6 +208,67 @@ class ProcessCardcomLowProfileJob implements ShouldQueue
         return true;
     }
 
+    /**
+     * A second payment landed on a debt that was already settled.
+     *
+     * Nothing is written to the charge: its row records the payment that
+     * actually settled it, and overwriting that with a later transaction would
+     * lose the one the invoice was issued against. What this does is make sure
+     * a human hears about it, with the transaction id needed to refund it —
+     * because the alternative is a customer charged twice who finds out before
+     * we do.
+     *
+     * Only a CONFIRMED success is reported. A customer who opened the page,
+     * failed, and gave up is not a duplicate payment, and alerting on that
+     * would teach the team to ignore this message.
+     */
+    private function reportDuplicatePayment(Charge $charge, string $lowProfileId): void
+    {
+        try {
+            $result = app(CardcomClient::class)->getLpResult($lowProfileId);
+            $tranId = $result['TranzactionId'] ?? ($result['TranzactionInfo']['TranzactionId'] ?? null);
+
+            if ((string) ($result['ResponseCode'] ?? '') !== '0' || blank($tranId)) {
+                return;
+            }
+
+            // The transaction that settled it. Same id means Cardcom simply
+            // redelivered the webhook for the payment we already recorded.
+            if ((string) $tranId === (string) $charge->cardcom_transaction_id) {
+                return;
+            }
+
+            $customer = $charge->resolveCustomer();
+
+            Log::warning('Cardcom hosted page paid after the charge was settled', [
+                'charge_id' => $charge->id,
+                'status' => $charge->status->value,
+                'existing_transaction_id' => $charge->cardcom_transaction_id,
+                'duplicate_transaction_id' => (string) $tranId,
+            ]);
+
+            app(TeamNotifier::class)->alert(
+                '⚠️ תשלום כפול — '.($customer?->name ?? 'לקוח לא מזוהה'),
+                implode("\n", array_filter([
+                    'לקוח: '.($customer?->name ?? '—'),
+                    'דרישה/חיוב מספר: '.$charge->id,
+                    'סכום: '.Money::ils($charge->total_agorot),
+                    'הדרישה כבר הייתה סגורה ('.$charge->status->value.'), והלקוח שילם שוב בעמוד התשלום.',
+                    'עסקה קודמת: '.($charge->cardcom_transaction_id ?: '—'),
+                    'עסקה כפולה לזיכוי: '.$tranId,
+                    'יש לזכות את העסקה הכפולה בקארדקום וליידע את הלקוח.',
+                ])),
+            );
+        } catch (\Throwable $e) {
+            // The alert is best effort; the log line above is not, and a failure
+            // here must not make the webhook retry and alert repeatedly.
+            Log::warning('Duplicate-payment alert could not be sent', [
+                'charge_id' => $charge->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
     /** A prospect whose card did not go through, and who therefore does not exist. */
     private function tellTheTeamAboutSignup(PendingSignup $pending, string $reason): void
     {
@@ -239,12 +301,26 @@ class ProcessCardcomLowProfileJob implements ShouldQueue
             return false;
         }
 
-        $charge = Charge::where('cardcom_low_profile_id', $lowProfileId)
-            ->where('status', ChargeStatus::Pending)
-            ->first();
+        $charge = Charge::where('cardcom_low_profile_id', $lowProfileId)->first();
 
         if (! $charge) {
             return false;
+        }
+
+        // The debt is already settled and the hosted page was paid anyway.
+        //
+        // Cardcom offers no way to cancel a Low Profile session, so a page the
+        // customer already has open stays payable after the team charges the
+        // saved card from the panel — or after the customer pays by transfer
+        // and the demand is marked paid. This used to be filtered out by a
+        // `status = pending` clause, which meant the second payment was taken,
+        // never recorded anywhere, and discovered only if somebody read the
+        // Cardcom statement. Money that arrives is money we say out loud.
+        if ($charge->status !== ChargeStatus::Pending) {
+            $this->reportDuplicatePayment($charge, (string) $lowProfileId);
+            $event->markProcessed();
+
+            return true;
         }
 
         $result = app(CardcomClient::class)->getLpResult((string) $lowProfileId);

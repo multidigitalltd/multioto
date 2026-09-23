@@ -70,6 +70,21 @@ class SettingsServiceProvider extends ServiceProvider
         'security.urlhaus_auth_key' => 'security.reputation.urlhaus_auth_key',
         'security.wordfence_api_key' => 'security.vulnerabilities.wordfence_api_key',
         'security.safe_browsing_key' => 'security.reputation.safe_browsing_key',
+        // סוכן וואטסאפ לניהול אתר — the product's own Meta Cloud API number and
+        // its approved templates. Configurable from the panel because the
+        // alternative was that turning the product on needed a deploy, and
+        // because a missing template name fails silently (Meta refuses the
+        // message; no screen here ever hears about it).
+        'siteagent.enabled' => 'siteagent.enabled',
+        'siteagent.phone_number_id' => 'siteagent.whatsapp.phone_number_id',
+        'siteagent.token' => 'siteagent.whatsapp.token',
+        'siteagent.app_secret' => 'siteagent.whatsapp.app_secret',
+        'siteagent.verify_token' => 'siteagent.whatsapp.verify_token',
+        'siteagent.template_language' => 'siteagent.whatsapp.templates.language',
+        'siteagent.template_verification' => 'siteagent.whatsapp.templates.verification',
+        'siteagent.template_verification_copy_button' => 'siteagent.whatsapp.templates.verification_copy_button',
+        'siteagent.template_paused' => 'siteagent.whatsapp.templates.service_paused',
+        'siteagent.template_resumed' => 'siteagent.whatsapp.templates.service_resumed',
         'waha.api_key' => 'billing.waha.api_key',
         'waha.base_url' => 'billing.waha.base_url',
         'waha.session' => 'billing.waha.session',
@@ -185,6 +200,15 @@ class SettingsServiceProvider extends ServiceProvider
         'backup.s3.bucket' => 'filesystems.disks.backups.bucket',
         'backup.s3.endpoint' => 'filesystems.disks.backups.endpoint',
         'backup.s3.path_style' => 'filesystems.disks.backups.use_path_style_endpoint',
+        // Site-agent number and templates: a field cleared in the panel must
+        // fall back to the .env value, not stay in a running worker. This one
+        // is not merely untidy — a stale template name is a name Meta has since
+        // stopped approving, and every notice sent under it is refused.
+        'siteagent.phone_number_id' => 'siteagent.whatsapp.phone_number_id',
+        'siteagent.template_language' => 'siteagent.whatsapp.templates.language',
+        'siteagent.template_verification' => 'siteagent.whatsapp.templates.verification',
+        'siteagent.template_paused' => 'siteagent.whatsapp.templates.service_paused',
+        'siteagent.template_resumed' => 'siteagent.whatsapp.templates.service_resumed',
     ];
 
     /**
@@ -211,6 +235,8 @@ class SettingsServiceProvider extends ServiceProvider
         'agent.auto_investigate_tickets',
         'agent.notify_owner_whatsapp',
         'agent.system_actions_enabled',
+        'siteagent.enabled',
+        'siteagent.template_verification_copy_button',
     ];
 
     /** Pristine config-file defaults for RESET_ON_CLEAR keys, memoized once. */

@@ -3,10 +3,8 @@
 namespace App\Jobs;
 
 use App\Enums\ChargeStatus;
-use App\Enums\TokenStatus;
 use App\Jobs\Concerns\WaitsForRestore;
 use App\Models\Charge;
-use App\Models\PaymentToken;
 use App\Services\Cardcom\CardcomClient;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -50,13 +48,21 @@ class ProcessManualChargeJob implements ShouldQueue
         }
 
         try {
-            $charge = Charge::with(['customer.defaultToken', 'customer.paymentTokens'])->find($this->chargeId);
+            // subscription.customer too: a charge may carry the customer through
+            // its subscription rather than directly, and chargeableToken() reads
+            // whichever one resolveCustomer() names.
+            $charge = Charge::with([
+                'customer.defaultToken',
+                'customer.paymentTokens',
+                'subscription.customer.defaultToken',
+                'subscription.customer.paymentTokens',
+            ])->find($this->chargeId);
 
             if (! $charge || $charge->status !== ChargeStatus::Pending) {
                 return; // Gone, or already processed.
             }
 
-            $token = $this->activeToken($charge);
+            $token = $charge->chargeableToken();
 
             if (! $token) {
                 $charge->update(['status' => ChargeStatus::Failed, 'failure_reason' => 'ללקוח אין כרטיס פעיל שמור']);
@@ -85,30 +91,5 @@ class ProcessManualChargeJob implements ShouldQueue
         } finally {
             $lock->release();
         }
-    }
-
-    /**
-     * The customer's usable card: their default token if it's active, otherwise
-     * the most recent active token. Superseded/expired tokens are never charged
-     * (card capture marks replaced tokens TokenStatus::Replaced).
-     */
-    private function activeToken(Charge $charge): ?PaymentToken
-    {
-        $customer = $charge->customer;
-
-        if (! $customer) {
-            return null;
-        }
-
-        $default = $customer->defaultToken;
-
-        if ($default && $default->status === TokenStatus::Active) {
-            return $default;
-        }
-
-        return $customer->paymentTokens()
-            ->where('status', TokenStatus::Active)
-            ->latest('id')
-            ->first();
     }
 }

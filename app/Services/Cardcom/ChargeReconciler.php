@@ -32,15 +32,41 @@ class ChargeReconciler
             return 'pending';
         }
 
-        // Hosted (walk-in) charge → look up the Low Profile result; saved-token
-        // (manual) charge → look up by the ExternalUniqTranId we sent.
-        $result = filled($charge->cardcom_low_profile_id)
-            ? $this->cardcom->getLpResult($charge->cardcom_low_profile_id)
-            : $this->cardcom->transactionByExternalId("manual-{$charge->id}");
+        // Which rail took the money is asked in the order the answer is
+        // certain, not by which id happens to be on the row.
+        //
+        // A payment demand carries a hosted page AND can be charged against the
+        // saved card from the panel, so both ids are present on the same row.
+        // Branching on the low-profile id alone asked Cardcom about a hosted
+        // session nobody paid, got "nothing here", and left a demand pending
+        // for ever — with the money already taken off the card.
+        //
+        // So the transaction WE initiated is asked about first. When none was
+        // ever initiated, Cardcom has no such external id and this costs one
+        // lookup before falling through to the hosted session, which is the
+        // same answer as before. Reconciliation only runs on charges already
+        // stuck pending, so that extra call is rare by construction.
+        $external = "manual-{$charge->id}";
+
+        if (blank($charge->cardcom_low_profile_id)) {
+            $result = $this->cardcom->transactionByExternalId($external);
+        } else {
+            // Both rails are possible on this row. The speculative lookup is
+            // rescued because for most such rows no token charge was ever
+            // initiated, and Cardcom answering that question badly must not
+            // abort a reconciliation that the hosted session can still settle.
+            // A lookup that cannot answer is not a confirmed success, which is
+            // the only thing this class ever acts on.
+            $result = rescue(fn (): array => $this->cardcom->transactionByExternalId($external), [], report: false);
+
+            if (blank($this->transactionId($result))) {
+                $result = $this->cardcom->getLpResult($charge->cardcom_low_profile_id);
+            }
+        }
 
         $code = (string) ($result['ResponseCode'] ?? '');
         $confirmedSuccess = in_array($code, ['0', '700', '701'], true);
-        $tranId = $result['TranzactionId'] ?? ($result['TranzactionInfo']['TranzactionId'] ?? null);
+        $tranId = $this->transactionId($result);
 
         if (! $confirmedSuccess || blank($tranId)) {
             return 'pending'; // Not confirmed — leave it for the next check.
@@ -56,5 +82,11 @@ class ChargeReconciler
         IssueInvoiceJob::dispatch($charge->id);
 
         return 'succeeded';
+    }
+
+    /** Cardcom puts the transaction id in one of two places depending on the call. */
+    private function transactionId(array $result): int|string|null
+    {
+        return $result['TranzactionId'] ?? ($result['TranzactionInfo']['TranzactionId'] ?? null);
     }
 }
