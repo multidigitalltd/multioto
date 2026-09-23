@@ -193,6 +193,42 @@ class ManualChargeTest extends TestCase
         Bus::assertDispatched(IssueInvoiceJob::class);
     }
 
+    /**
+     * דרישת תשלום נושאת את שני המסלולים, וההשלמה חייבת למצוא את הנכון.
+     *
+     * לדרישה יש עמוד תשלום מתארח, ואפשר גם לחייב אותה מהכרטיס השמור מהפאנל —
+     * ולכן שני המזהים יושבים על אותה שורה. בחירה לפי מזהה העמוד בלבד שאלה את
+     * קארדקום על סשן שאיש לא שילם, קיבלה "אין כאן כלום", והשאירה את הדרישה
+     * ממתינה לנצח — כשהכסף כבר ירד מהכרטיס.
+     */
+    public function test_reconcile_finds_the_saved_card_transaction_on_a_demand_that_also_has_a_hosted_page(): void
+    {
+        Bus::fake([IssueInvoiceJob::class]);
+        config(['billing.cardcom.terminal_number' => '1000', 'billing.cardcom.api_name' => 'test']);
+
+        $customer = Customer::factory()->create();
+        $charge = $this->oneOffCharge($customer, ChargeStatus::Pending);
+        $charge->update([
+            'cardcom_low_profile_id' => 'LP-88',
+            'demand_sent_at' => now(),
+        ]);
+
+        Http::fake([
+            // The hosted session was never paid...
+            '*/LowProfile/GetLpResult' => Http::response(['ResponseCode' => 1, 'Description' => 'לא שולם']),
+            // ...but the saved-card charge we initiated did go through.
+            '*/Transactions/GetTransactionByExternalUniqTran' => Http::response([
+                'ResponseCode' => 0, 'TranzactionId' => 515151,
+            ]),
+        ]);
+
+        $status = app(ChargeReconciler::class)->reconcile($charge);
+
+        $this->assertSame('succeeded', $status);
+        $this->assertSame('515151', $charge->refresh()->cardcom_transaction_id);
+        Bus::assertDispatched(IssueInvoiceJob::class);
+    }
+
     public function test_reconcile_leaves_pending_when_cardcom_has_no_matching_charge(): void
     {
         Bus::fake([IssueInvoiceJob::class]);

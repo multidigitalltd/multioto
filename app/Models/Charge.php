@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Enums\ChargeStatus;
+use App\Enums\TokenStatus;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -113,10 +114,94 @@ class Charge extends Model
                 ->orWhereHas('subscription', fn (Builder $s) => $s->where('customer_id', $customerId)));
     }
 
+    /**
+     * Money that is expected to come again, as a constraint on a charge query.
+     *
+     * "Has a subscription_id" is the obvious test and it is wrong in both
+     * directions, which is why this is a definition and not an inline `where`:
+     *
+     * - An INSTALLMENT PLAN is stored as a subscription (see ManualCharge's
+     *   "פריסה לתשלומים"), but it is one sale split into payments and it stops.
+     *   Counting its instalments as recurring income reports a business that
+     *   will keep earning from a sale that has already ended.
+     * - A RENEWING PLUGIN PLAN bought in the storefront is the opposite: the
+     *   first term is charged on a hosted page before any subscription exists,
+     *   so that charge carries no subscription_id at all. Its subscription is
+     *   created afterwards and linked to the licence, never back to the charge —
+     *   so the first term of a genuinely recurring sale reads as one-off.
+     *
+     * The plugin side is asked through the order rather than by back-filling
+     * subscription_id onto the charge, which would look tidier and would also
+     * silently stop ChargeReconciler from ever reconciling those charges — it
+     * skips anything carrying a subscription.
+     *
+     * @param  Builder<Charge>  $query
+     * @return Builder<Charge>
+     */
+    public function scopeRecurringRevenue(Builder $query): Builder
+    {
+        return $query->where(fn (Builder $q) => $q
+            ->whereHas('subscription', fn (Builder $s) => $s->whereNull('installments_total'))
+            ->orWhereHas('pluginOrder.plan', fn (Builder $p) => $p->whereNotNull('billing_interval')));
+    }
+
+    /**
+     * The storefront order this charge paid for, when it is one.
+     *
+     * Hung off the charge rather than only the other way round because the
+     * question "was this sale a renewing one" is asked from the charge.
+     */
+    public function pluginOrder(): HasOne
+    {
+        return $this->hasOne(PluginOrder::class);
+    }
+
     /** The customer behind this charge, whether one-off or via a subscription. */
     public function resolveCustomer(): ?Customer
     {
         return $this->subscription?->customer ?? $this->customer;
+    }
+
+    /**
+     * The card this charge would actually be taken from, if any.
+     *
+     * The customer's default card when it can still take money, otherwise their
+     * most recent one that can.
+     *
+     * "Can take money" is `PaymentToken::chargeable()`, never `status` alone.
+     * Nothing in this system walks the table to restamp cards, so a card that
+     * expired two years ago still reads "פעיל" — and selecting on status would
+     * hand the charger a card every bank will decline, which then marks the
+     * demand failed and drops it out of the collection flow over a card nobody
+     * ever tried to fix.
+     *
+     * A replaced card is excluded too: card capture marks the superseded token
+     * TokenStatus::Replaced.
+     *
+     * One definition, because two screens disagreeing about this is a button
+     * that offers to charge a card that is not there — or worse, hides itself
+     * from a customer who does have one. It reads the customer through
+     * resolveCustomer() for the same reason the invoice issuer does: a charge
+     * may hang off a subscription rather than carry the customer directly.
+     */
+    public function chargeableToken(): ?PaymentToken
+    {
+        $customer = $this->resolveCustomer();
+
+        if ($customer === null) {
+            return null;
+        }
+
+        $default = $customer->defaultToken;
+
+        if ($default && $default->status === TokenStatus::Active && ! $default->hasExpired()) {
+            return $default;
+        }
+
+        return $customer->paymentTokens()
+            ->chargeable()
+            ->latest('id')
+            ->first();
     }
 
     public function invoice(): HasOne
