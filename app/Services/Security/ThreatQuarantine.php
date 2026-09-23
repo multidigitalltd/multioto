@@ -2,6 +2,7 @@
 
 namespace App\Services\Security;
 
+use App\Models\SecurityRule;
 use App\Services\Agent\SitePluginInventory;
 
 /**
@@ -21,18 +22,61 @@ class ThreatQuarantine
     /** @return list<string> */
     public static function users(): array
     {
-        return array_values(array_filter(array_map(
-            static fn ($login): string => mb_strtolower(trim((string) $login)),
-            (array) config('security.quarantine.users', []),
-        )));
+        return self::watched('security.quarantine.users', SecurityRule::USER);
     }
 
     /** @return list<string> */
     public static function plugins(): array
     {
+        return self::watched('security.quarantine.plugins', SecurityRule::PLUGIN);
+    }
+
+    /**
+     * Only the two names that ship with the system, without the team's own.
+     *
+     * Kept apart because the difference matters on screen: these are the ones
+     * the companion plugin removes by itself, and a rule the team adds is not.
+     * Saying "removed automatically" over a list that mixes the two would tell
+     * the team a name is being deleted from their customers' sites when nothing
+     * is deleting it.
+     *
+     * @return list<string>
+     */
+    public static function builtInUsers(): array
+    {
+        return self::fromConfig('security.quarantine.users');
+    }
+
+    /** @return list<string> */
+    public static function builtInPlugins(): array
+    {
+        return self::fromConfig('security.quarantine.plugins');
+    }
+
+    /**
+     * What the panel watches for: the built-ins, plus whatever the team added.
+     *
+     * The config side is the authority for automatic removal and cannot be
+     * edited from here (see SecurityRule). The stored side widens what the
+     * panel LOOKS FOR and reports — and, on a site too old to guard itself,
+     * what the panel will deactivate.
+     *
+     * @return list<string>
+     */
+    private static function watched(string $configKey, string $ruleType): array
+    {
+        return array_values(array_unique(array_merge(
+            self::fromConfig($configKey),
+            SecurityRule::valuesFor($ruleType),
+        )));
+    }
+
+    /** @return list<string> */
+    private static function fromConfig(string $key): array
+    {
         return array_values(array_filter(array_map(
-            static fn ($slug): string => mb_strtolower(trim((string) $slug)),
-            (array) config('security.quarantine.plugins', []),
+            static fn ($value): string => mb_strtolower(trim((string) $value)),
+            (array) config($key, []),
         )));
     }
 
