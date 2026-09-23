@@ -114,6 +114,48 @@ class Charge extends Model
                 ->orWhereHas('subscription', fn (Builder $s) => $s->where('customer_id', $customerId)));
     }
 
+    /**
+     * Money that is expected to come again, as a constraint on a charge query.
+     *
+     * "Has a subscription_id" is the obvious test and it is wrong in both
+     * directions, which is why this is a definition and not an inline `where`:
+     *
+     * - An INSTALLMENT PLAN is stored as a subscription (see ManualCharge's
+     *   "פריסה לתשלומים"), but it is one sale split into payments and it stops.
+     *   Counting its instalments as recurring income reports a business that
+     *   will keep earning from a sale that has already ended.
+     * - A RENEWING PLUGIN PLAN bought in the storefront is the opposite: the
+     *   first term is charged on a hosted page before any subscription exists,
+     *   so that charge carries no subscription_id at all. Its subscription is
+     *   created afterwards and linked to the licence, never back to the charge —
+     *   so the first term of a genuinely recurring sale reads as one-off.
+     *
+     * The plugin side is asked through the order rather than by back-filling
+     * subscription_id onto the charge, which would look tidier and would also
+     * silently stop ChargeReconciler from ever reconciling those charges — it
+     * skips anything carrying a subscription.
+     *
+     * @param  Builder<Charge>  $query
+     * @return Builder<Charge>
+     */
+    public function scopeRecurringRevenue(Builder $query): Builder
+    {
+        return $query->where(fn (Builder $q) => $q
+            ->whereHas('subscription', fn (Builder $s) => $s->whereNull('installments_total'))
+            ->orWhereHas('pluginOrder.plan', fn (Builder $p) => $p->whereNotNull('billing_interval')));
+    }
+
+    /**
+     * The storefront order this charge paid for, when it is one.
+     *
+     * Hung off the charge rather than only the other way round because the
+     * question "was this sale a renewing one" is asked from the charge.
+     */
+    public function pluginOrder(): HasOne
+    {
+        return $this->hasOne(PluginOrder::class);
+    }
+
     /** The customer behind this charge, whether one-off or via a subscription. */
     public function resolveCustomer(): ?Customer
     {

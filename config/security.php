@@ -4,6 +4,37 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Content Security Policy
+    |--------------------------------------------------------------------------
+    |
+    | The policy itself lives in the SecurityHeaders middleware, next to the
+    | reasoning for each source it allows. These two knobs are here so a policy
+    | that turns out to block something in production can be loosened without a
+    | deploy: this header sits in front of a live billing panel with an embedded
+    | payment iframe, and "revert and redeploy" is the wrong recovery time.
+    |
+    */
+    'csp' => [
+
+        // Send the policy as a report instead of enforcing it — for watching the
+        // browser console on a deploy before switching it on for real.
+        'report_only' => (bool) env('CSP_REPORT_ONLY', false),
+
+        // Extra origins allowed inside an iframe, on top of our own.
+        //
+        // Cardcom's hosted card page is the reason this list exists: card
+        // details are typed into THEIR page inside our frame, which is what
+        // keeps the card number out of this application entirely. Change the
+        // payment page's host and this is the line that has to know about it.
+        'frame_src' => array_values(array_filter(array_map(
+            'trim',
+            explode(',', (string) env('CSP_FRAME_SRC', 'https://secure.cardcom.solutions')),
+        ))),
+
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Site vulnerability scanning
     |--------------------------------------------------------------------------
     |
