@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Enums\ChargeStatus;
+use App\Enums\TokenStatus;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -159,6 +160,48 @@ class Charge extends Model
     public function resolveCustomer(): ?Customer
     {
         return $this->subscription?->customer ?? $this->customer;
+    }
+
+    /**
+     * The card this charge would actually be taken from, if any.
+     *
+     * The customer's default card when it can still take money, otherwise their
+     * most recent one that can.
+     *
+     * "Can take money" is `PaymentToken::chargeable()`, never `status` alone.
+     * Nothing in this system walks the table to restamp cards, so a card that
+     * expired two years ago still reads "פעיל" — and selecting on status would
+     * hand the charger a card every bank will decline, which then marks the
+     * demand failed and drops it out of the collection flow over a card nobody
+     * ever tried to fix.
+     *
+     * A replaced card is excluded too: card capture marks the superseded token
+     * TokenStatus::Replaced.
+     *
+     * One definition, because two screens disagreeing about this is a button
+     * that offers to charge a card that is not there — or worse, hides itself
+     * from a customer who does have one. It reads the customer through
+     * resolveCustomer() for the same reason the invoice issuer does: a charge
+     * may hang off a subscription rather than carry the customer directly.
+     */
+    public function chargeableToken(): ?PaymentToken
+    {
+        $customer = $this->resolveCustomer();
+
+        if ($customer === null) {
+            return null;
+        }
+
+        $default = $customer->defaultToken;
+
+        if ($default && $default->status === TokenStatus::Active && ! $default->hasExpired()) {
+            return $default;
+        }
+
+        return $customer->paymentTokens()
+            ->chargeable()
+            ->latest('id')
+            ->first();
     }
 
     public function invoice(): HasOne

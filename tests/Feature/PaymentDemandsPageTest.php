@@ -3,13 +3,20 @@
 namespace Tests\Feature;
 
 use App\Enums\ChargeStatus;
+use App\Enums\TokenStatus;
 use App\Filament\Pages\PaymentDemands;
 use App\Jobs\IssueInvoiceJob;
+use App\Jobs\ProcessManualChargeJob;
 use App\Jobs\SendPaymentLinkJob;
 use App\Models\Charge;
 use App\Models\Customer;
+use App\Models\PaymentToken;
+use App\Models\Subscription;
 use App\Models\User;
+use App\Services\Cardcom\CardcomClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Bus;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Livewire\Livewire;
 use Tests\TestCase;
@@ -216,6 +223,247 @@ class PaymentDemandsPageTest extends TestCase
         $this->assertNotNull($demand->fresh()->charged_at);
         Queue::assertPushed(IssueInvoiceJob::class,
             fn (IssueInvoiceJob $job): bool => $job->chargeId === $demand->id);
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | חיוב מהכרטיס השמור
+    |--------------------------------------------------------------------------
+    |
+    | דרישת תשלום לעולם אינה גובה מעצמה — היא מבקשת מהלקוח לשלם וממתינה. הכפתור
+    | הזה הוא העקיפה המכוונת לשיחה שנגמרת ב"פשוט תורידו מהכרטיס", ועד עכשיו
+    | המשמעות שלה הייתה להקליד את החיוב מחדש במסך "חיוב ידני" — מה שמשאיר שתי
+    | שורות על חוב אחד, ודרישה פתוחה שממשיכה לשלוח תזכורות.
+    */
+
+    public function test_the_saved_card_can_be_charged_straight_from_the_demand(): void
+    {
+        Queue::fake();
+        $this->actingAs(User::factory()->create());
+
+        $customer = Customer::factory()->create();
+        PaymentToken::factory()->create(['customer_id' => $customer->id]);
+        $demand = $this->charge($customer->id, ['demand_sent_at' => now(), 'demand_channel' => 'email']);
+
+        Livewire::test(PaymentDemands::class)
+            ->callTableAction('chargeSavedCard', $demand)
+            ->assertHasNoTableActionErrors();
+
+        // The charge runs through the same job as every other one-off charge —
+        // per-charge lock, pending-only, every Cardcom response written to the
+        // row, invoice on success — rather than a second money path of its own.
+        Queue::assertPushed(ProcessManualChargeJob::class,
+            fn (ProcessManualChargeJob $job): bool => $job->chargeId === $demand->id);
+    }
+
+    /** בלי כרטיס שמור אין מה להציע. */
+    public function test_the_button_is_not_offered_without_a_saved_card(): void
+    {
+        $this->actingAs(User::factory()->create());
+
+        $customer = Customer::factory()->create();
+        $demand = $this->charge($customer->id, ['demand_sent_at' => now(), 'demand_channel' => 'email']);
+
+        Livewire::test(PaymentDemands::class)
+            ->assertTableActionHidden('chargeSavedCard', $demand);
+    }
+
+    /**
+     * כרטיס שהוחלף אינו כרטיס שמור.
+     *
+     * זה בדיוק המצב שבו לקוח כבר תיקן את הכרטיס אצלנו: חיוב הישן היה נדחה,
+     * והכפתור היה מבטיח משהו שאינו יכול לקרות.
+     */
+    public function test_a_replaced_card_does_not_count_as_a_saved_one(): void
+    {
+        $this->actingAs(User::factory()->create());
+
+        $customer = Customer::factory()->create();
+        PaymentToken::factory()->create(['customer_id' => $customer->id, 'status' => TokenStatus::Replaced]);
+        $demand = $this->charge($customer->id, ['demand_sent_at' => now(), 'demand_channel' => 'email']);
+
+        Livewire::test(PaymentDemands::class)
+            ->assertTableActionHidden('chargeSavedCard', $demand);
+    }
+
+    /** דרישה ששולמה כבר אינה ניתנת לחיוב — אין דרך חזרה מחיוב כפול. */
+    public function test_a_demand_already_paid_cannot_be_charged_again(): void
+    {
+        $this->actingAs(User::factory()->create());
+
+        $customer = Customer::factory()->create();
+        PaymentToken::factory()->create(['customer_id' => $customer->id]);
+        $demand = $this->charge($customer->id, [
+            'demand_sent_at' => now(),
+            'demand_channel' => 'email',
+            'status' => ChargeStatus::Succeeded,
+        ]);
+
+        Livewire::test(PaymentDemands::class)
+            ->assertTableActionHidden('chargeSavedCard', $demand);
+    }
+
+    /**
+     * הכרטיס הוסר בזמן שהמסך היה פתוח, והשורה שעל המסך עוד לא יודעת.
+     *
+     * הדגל שמחליט אם הכפתור מוצג נטען עם העמוד, ולכן הוא יכול להיות ישן. מה
+     * שנבדק כאן הוא התוצאה ולא השכבה שעצרה אותה: הדרישה נשארת בדיוק כפי שהייתה,
+     * ושום חיוב לא יוצא. (בפועל עוצרת אותה בדיקת הנראות, שמורצת מחדש מול השורה
+     * העדכנית; הבדיקה בתוך הפעולה עצמה היא השכבה שמאחוריה.)
+     */
+    public function test_a_card_removed_since_the_page_loaded_does_not_get_charged(): void
+    {
+        Queue::fake();
+        $this->actingAs(User::factory()->create());
+
+        $customer = Customer::factory()->create();
+        $token = PaymentToken::factory()->create(['customer_id' => $customer->id]);
+        $demand = $this->charge($customer->id, ['demand_sent_at' => now(), 'demand_channel' => 'email']);
+
+        $page = Livewire::test(PaymentDemands::class);
+
+        // The row still carries the flag computed while a card existed.
+        $demand->setAttribute('customer_has_card', true);
+        $token->update(['status' => TokenStatus::Replaced]);
+
+        $page->callTableAction('chargeSavedCard', $demand);
+
+        Queue::assertNotPushed(ProcessManualChargeJob::class);
+        $this->assertSame(ChargeStatus::Pending, $demand->fresh()->status);
+    }
+
+    /**
+     * מקצה לקצה: הכפתור, החיוב בפועל, וחשבונית המס/קבלה.
+     *
+     * הבדיקות למעלה עוצרות בשליחת העבודה לתור. זו מריצה אותה, כדי שמה שנבדק
+     * יהיה מה שקורה ללקוח ולא מה שנרשם בתור.
+     */
+    public function test_charging_the_saved_card_closes_the_demand_and_issues_the_tax_receipt(): void
+    {
+        Bus::fake([IssueInvoiceJob::class]);
+        config(['billing.cardcom.terminal_number' => '1000', 'billing.cardcom.api_name' => 'test']);
+        $this->actingAs(User::factory()->create());
+
+        $customer = Customer::factory()->create();
+        PaymentToken::factory()->create(['customer_id' => $customer->id]);
+        $demand = $this->charge($customer->id, ['demand_sent_at' => now(), 'demand_channel' => 'email']);
+
+        Http::fake(['*/Transactions/Transaction' => Http::response(['ResponseCode' => 0, 'TranzactionId' => 4242])]);
+
+        Livewire::test(PaymentDemands::class)
+            ->callTableAction('chargeSavedCard', $demand)
+            ->assertHasNoTableActionErrors();
+
+        (new ProcessManualChargeJob($demand->id))->handle(app(CardcomClient::class));
+
+        $demand->refresh();
+        $this->assertSame(ChargeStatus::Succeeded, $demand->status);
+        $this->assertNotNull($demand->charged_at);
+        // Architecture rule #6: the Cardcom answer is on the row either way.
+        $this->assertSame('4242', $demand->cardcom_transaction_id);
+        Bus::assertDispatched(IssueInvoiceJob::class,
+            fn (IssueInvoiceJob $job): bool => $job->chargeId === $demand->id);
+    }
+
+    /**
+     * חיוב שנדחה משאיר את הסיבה על השורה, ואינו מנפיק חשבונית.
+     *
+     * כלל הארכיטקטורה: חשבונית מונפקת רק אחרי חיוב שהצליח.
+     */
+    public function test_a_declined_card_leaves_the_reason_on_the_row_and_issues_nothing(): void
+    {
+        Bus::fake([IssueInvoiceJob::class]);
+        config(['billing.cardcom.terminal_number' => '1000', 'billing.cardcom.api_name' => 'test']);
+
+        $customer = Customer::factory()->create();
+        PaymentToken::factory()->create(['customer_id' => $customer->id]);
+        $demand = $this->charge($customer->id, ['demand_sent_at' => now(), 'demand_channel' => 'email']);
+
+        Http::fake(['*/Transactions/Transaction' => Http::response([
+            'ResponseCode' => 33, 'Description' => 'כרטיס חסום',
+        ])]);
+
+        (new ProcessManualChargeJob($demand->id))->handle(app(CardcomClient::class));
+
+        $demand->refresh();
+        $this->assertSame(ChargeStatus::Failed, $demand->status);
+        $this->assertSame('33', $demand->cardcom_response_code);
+        $this->assertNotNull($demand->failure_reason);
+        Bus::assertNotDispatched(IssueInvoiceJob::class);
+    }
+
+    /**
+     * כרטיס שפג תוקפו עדיין רשום "פעיל", ואסור לגבות ממנו.
+     *
+     * שום דבר במערכת אינו עובר על הטבלה ומסמן כרטיסים כפגי תוקף, ולכן status
+     * לבדו אינו השאלה. חיוב כזה נדחה בבנק, מסמן את הדרישה כ"נכשלה" ומוציא
+     * אותה מזרם הגבייה — בגלל כרטיס שאיש מעולם לא ניסה לתקן.
+     */
+    public function test_an_expired_card_is_not_treated_as_chargeable(): void
+    {
+        $this->actingAs(User::factory()->create());
+
+        $customer = Customer::factory()->create();
+        PaymentToken::factory()->create([
+            'customer_id' => $customer->id,
+            'status' => TokenStatus::Active,
+            'expiry_month' => 1,
+            'expiry_year' => (int) now()->subYear()->format('Y'),
+        ]);
+        $demand = $this->charge($customer->id, ['demand_sent_at' => now(), 'demand_channel' => 'email']);
+
+        $this->assertNull($demand->chargeableToken());
+
+        Livewire::test(PaymentDemands::class)
+            ->assertTableActionHidden('chargeSavedCard', $demand);
+    }
+
+    /** ...וכרטיס ברירת המחדל שפג תוקפו אינו גובר על כרטיס תקף אחר. */
+    public function test_an_expired_default_card_gives_way_to_a_live_one(): void
+    {
+        $customer = Customer::factory()->create();
+
+        $expired = PaymentToken::factory()->create([
+            'customer_id' => $customer->id,
+            'expiry_month' => 1,
+            'expiry_year' => (int) now()->subYear()->format('Y'),
+        ]);
+        $live = PaymentToken::factory()->create([
+            'customer_id' => $customer->id,
+            'expiry_month' => 12,
+            'expiry_year' => (int) now()->addYears(3)->format('Y'),
+        ]);
+
+        $customer->update(['default_token_id' => $expired->id]);
+
+        $demand = $this->charge($customer->id, ['demand_sent_at' => now()]);
+
+        $this->assertSame($live->id, $demand->fresh()->chargeableToken()?->id);
+    }
+
+    /**
+     * דרישה שתלויה במנוי מוצאת את הכרטיס של הלקוח שמאחוריו.
+     *
+     * חיוב יכול לשאת את הלקוח ישירות או דרך המנוי, ומנפיק החשבוניות קורא אותו
+     * דרך resolveCustomer(). כשהעבודה שגובה קראה רק את customer הישיר, לקוח עם
+     * כרטיס תקף בהחלט היה מקבל "אין ללקוח כרטיס פעיל שמור".
+     */
+    public function test_a_demand_that_hangs_off_a_subscription_finds_the_card_behind_it(): void
+    {
+        $customer = Customer::factory()->create();
+        $token = PaymentToken::factory()->create(['customer_id' => $customer->id]);
+        $subscription = Subscription::factory()->create([
+            'customer_id' => $customer->id,
+            'token_id' => $token->id,
+        ]);
+
+        $demand = $this->charge($customer->id, [
+            'customer_id' => null,
+            'subscription_id' => $subscription->id,
+            'demand_sent_at' => now(),
+        ]);
+
+        $this->assertSame($token->id, $demand->chargeableToken()?->id);
     }
 
     public function test_toggle_reminders_pauses_and_resumes_a_single_demand(): void
