@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Enums\ChargeStatus;
 use App\Enums\SubscriptionStatus;
 use App\Jobs\SendSiteAgentVerificationJob;
+use App\Mail\SiteAgentActivationMail;
 use App\Models\Charge;
 use App\Models\Customer;
 use App\Models\Plan;
@@ -18,6 +19,7 @@ use App\Providers\SettingsServiceProvider;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Testing\TestResponse;
 use Tests\TestCase;
@@ -203,6 +205,40 @@ class SiteAgentStoreTest extends TestCase
         $this->assertSame(0, Subscription::count());
         $this->assertSame(0, SiteAgentSubscriber::count());
         $this->assertSame(0, Site::count());
+    }
+
+    /**
+     * מייל ההפעלה נשלח — בלי הקודים עצמם.
+     *
+     * עמוד ההמתנה מבטיח אותו במפורש, ועמוד ההפעלה הוא כתובת אחת שקריסה של
+     * הדפדפן מוחקת. אבל הקודים הם המפתחות לאתר של הלקוח, ותיבת מייל היא דבר
+     * שמועבר, מסונכרן לטלפונים ונפרץ הרבה יותר ממה שמישהו מתכנן — אז מה שנשלח
+     * הוא הקישור לעמוד, שאפשר להפסיק להגיש.
+     */
+    public function test_the_activation_mail_is_sent_and_carries_the_link_not_the_codes(): void
+    {
+        Mail::fake();
+        $this->fakeCardcom();
+        $this->buy();
+        $order = SiteAgentOrder::sole();
+        $this->pay($order);
+
+        // Minted here the way the activation page mints them, so the assertion
+        // below compares against a real secret. Comparing against the empty
+        // string it holds before that would pass whatever the mail contained.
+        $codes = Site::sole()->ensureAgentCredentials();
+        $this->assertNotSame('', $codes['mcp_secret']);
+
+        // Queued, not sent: the mailable is ShouldQueue, so a paid order never
+        // waits on a mail server before the service is switched on.
+        Mail::assertQueued(SiteAgentActivationMail::class, function (SiteAgentActivationMail $mail) use ($order, $codes): bool {
+            $rendered = $mail->render();
+
+            return $mail->hasTo($order->buyer_email)
+                && str_contains($rendered, $order->reference)
+                && ! str_contains($rendered, $codes['mcp_secret'])
+                && ! str_contains($rendered, $codes['update_token']);
+        });
     }
 
     /** ועמוד ההמתנה אינו אומר לקונה ששילם שהוא לא שילם. */

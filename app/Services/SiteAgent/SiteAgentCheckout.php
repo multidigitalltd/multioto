@@ -6,6 +6,7 @@ use App\Enums\BillingInterval;
 use App\Enums\SiteStatus;
 use App\Enums\SubscriptionStatus;
 use App\Jobs\SendSiteAgentVerificationJob;
+use App\Mail\SiteAgentActivationMail;
 use App\Models\Charge;
 use App\Models\Customer;
 use App\Models\Plan;
@@ -18,6 +19,7 @@ use App\Models\SystemLog;
 use App\Services\Billing\ManualChargeService;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Mail;
 
 /**
  * Buying סוכן האתר without us being involved.
@@ -193,6 +195,22 @@ class SiteAgentCheckout
         // talks about are committed.
         if ($subscriber !== null) {
             SendSiteAgentVerificationJob::dispatch($subscriber->id);
+        }
+
+        // The page after payment is one browser crash away from being gone, and
+        // with it the only address that can show the connection codes again.
+        // Wrapped, because a mail server having a bad minute must not leave a
+        // paid order unfulfilled — the service is already on either way.
+        $mailed = rescue(function () use ($order): bool {
+            Mail::to($order->buyer_email)->send(new SiteAgentActivationMail($order));
+
+            return true;
+        }, false);
+
+        if (! $mailed) {
+            SystemLog::record('warning', 'siteagent',
+                "שליחת מייל ההפעלה ל{$order->buyer_email} נכשלה — השירות פעיל, יש לשלוח את הקישור ידנית.",
+                ['order_id' => $order->id, 'reference' => $order->reference]);
         }
 
         SystemLog::record('info', 'siteagent',
