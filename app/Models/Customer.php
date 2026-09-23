@@ -118,6 +118,19 @@ class Customer extends Model
         return $this->hasMany(Contact::class);
     }
 
+    /**
+     * Numbers allowed to drive this customer's sites from WhatsApp.
+     *
+     * Worth having on the customer and not only globally: when somebody rings
+     * up about a change they did not make, the first question is which phones
+     * can make one for this business — and the answer has to be on the screen
+     * the person is already looking at.
+     */
+    public function siteAgentSubscribers(): HasMany
+    {
+        return $this->hasMany(SiteAgentSubscriber::class);
+    }
+
     public function paymentTokens(): HasMany
     {
         return $this->hasMany(PaymentToken::class);

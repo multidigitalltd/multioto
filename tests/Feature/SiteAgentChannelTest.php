@@ -7,12 +7,14 @@ use App\Filament\Resources\SiteAgentSubscriberResource\Pages\ListSiteAgentSubscr
 use App\Jobs\HandleSiteAgentMessageJob;
 use App\Models\Customer;
 use App\Models\Plan;
+use App\Models\Setting;
 use App\Models\Site;
 use App\Models\SiteAgentRequest;
 use App\Models\SiteAgentSubscriber;
 use App\Models\Subscription;
 use App\Models\User;
 use App\Models\WebhookEvent;
+use App\Providers\SettingsServiceProvider;
 use App\Services\Agent\McpClient;
 use App\Services\Ai\ClaudeClient;
 use App\Services\SiteAgent\SiteAgentAccess;
@@ -51,9 +53,15 @@ class SiteAgentChannelTest extends TestCase
             'siteagent.enabled' => true,
             'siteagent.whatsapp.app_secret' => 'app-secret',
             'siteagent.whatsapp.verify_token' => 'verify-me',
-            'siteagent.whatsapp.phone_number_id' => '123456',
             'siteagent.whatsapp.token' => 'permanent-token',
         ]);
+
+        // The number itself is arranged the way production holds it — as a
+        // stored setting — and not with config(). It is one of the values the
+        // settings overlay reverts when no row backs it, so a bare config()
+        // here would be wiped again the moment anything dispatched a job.
+        Setting::put('siteagent.phone_number_id', '123456');
+        SettingsServiceProvider::refreshFromDatabase();
     }
 
     public function test_metas_subscribe_handshake_needs_the_configured_token(): void
