@@ -66,7 +66,30 @@ class PlanResource extends Resource
                         Forms\Components\Toggle::make('includes_site_agent')
                             ->label('כולל סוכן ניהול אתר בוואטסאפ')
                             ->helperText('לקוח עם מנוי פעיל בתוכנית הזו יכול לנהל את האתר שלו מהסוכן. בלי זה — הסוכן משיב שהמנוי אינו פעיל.')
-                            ->inline(false),
+                            ->inline(false)
+                            ->live(),
+
+                        // The two fields below decide whether the public
+                        // storefront has anything to sell. Without them on this
+                        // form the only way to publish a plan would be editing
+                        // the database by hand — which is the same as the page
+                        // not existing.
+                        Forms\Components\Toggle::make('is_public')
+                            ->label('מוצגת בעמוד הרכישה הציבורי')
+                            ->helperText('רק תוכניות שמסומנות כאן נמכרות ב-/site-agent. השאירו כבוי לתוכנית במחיר שסוכם עם לקוח מסוים — אחרת המחיר מתפרסם, וכל אחד יכול לקנות בו.')
+                            ->inline(false)
+                            ->visible(fn (Forms\Get $get): bool => (bool) $get('includes_site_agent')),
+
+                        Forms\Components\TextInput::make('extra_number_price_agorot')
+                            ->label('מחיר מספר מנהל נוסף (אגורות)')
+                            ->numeric()
+                            ->minValue(0)
+                            // Left empty the plan simply does not sell extra
+                            // numbers, which is not the same as giving them
+                            // away: an empty field must not put a
+                            // "הוסיפו מספר — ₪0" button on a customer's screen.
+                            ->helperText('לאותו אתר, לכל מחזור חיוב. ריק = התוכנית אינה מאפשרת מספרים נוספים כלל. 0 = מספרים נוספים כלולים ללא תשלום.')
+                            ->visible(fn (Forms\Get $get): bool => (bool) $get('includes_site_agent')),
                         Forms\Components\Textarea::make('description')
                             ->label('תיאור')
                             ->rows(3)

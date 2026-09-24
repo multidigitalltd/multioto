@@ -14,10 +14,12 @@ use App\Http\Controllers\PluginStoreController;
 use App\Http\Controllers\Portal\PortalAuthController;
 use App\Http\Controllers\Portal\PortalController;
 use App\Http\Controllers\Portal\PortalLicenseController;
+use App\Http\Controllers\Portal\PortalSiteAgentController;
 use App\Http\Controllers\PushSubscriptionController;
 use App\Http\Controllers\SignatureController;
 use App\Http\Controllers\SignupCardController;
 use App\Http\Controllers\SignupController;
+use App\Http\Controllers\SiteAgentStoreController;
 use App\Http\Controllers\SupportAttachmentController;
 use App\Http\Controllers\SupportFormController;
 use App\Http\Controllers\TasksPrintController;
@@ -297,6 +299,20 @@ Route::prefix('portal')->group(function () {
             ->middleware('throttle:5,60')->name('portal.licenses.key');
         Route::get('/licenses/{license}/download', [PortalLicenseController::class, 'download'])
             ->middleware('throttle:20,1')->name('portal.licenses.download');
+
+        /*
+         | סוכן האתר. Adding a number raises what the customer pays, and
+         | re-sending a code puts a WhatsApp message on somebody's phone, so both
+         | are throttled — a form that can be submitted twenty times a minute is
+         | one misplaced double-click away from a wrong invoice.
+         */
+        Route::get('/site-agent', [PortalSiteAgentController::class, 'index'])->name('portal.site-agent');
+        Route::post('/site-agent/numbers', [PortalSiteAgentController::class, 'addNumber'])
+            ->middleware('throttle:10,60')->name('portal.site-agent.add');
+        Route::post('/site-agent/numbers/{subscriber}/resend', [PortalSiteAgentController::class, 'resend'])
+            ->middleware('throttle:5,10')->name('portal.site-agent.resend');
+        Route::post('/site-agent/numbers/{subscriber}/revoke', [PortalSiteAgentController::class, 'revoke'])
+            ->middleware('throttle:20,1')->name('portal.site-agent.revoke');
     });
 });
 
@@ -336,6 +352,26 @@ Route::middleware('throttle:30,1')->group(function () {
     // somebody bought, and a sequential number invites reading the neighbours'.
     Route::get('/buy/order/{reference}', [PluginStoreController::class, 'done'])->name('store.done');
     Route::get('/buy/order/{reference}/download', [PluginStoreController::class, 'download'])->name('store.download');
+});
+
+/*
+ | סוכן האתר — the WhatsApp number a customer writes to in order to run their own
+ | site. Bought the same way as a plugin licence and for the same reason: a
+ | product that can only be sold by a team member opening rows by hand is not a
+ | product anybody can buy.
+ |
+ | The handover is throttled harder than the rest. It writes a customer's
+ | WordPress access, and it is the one public endpoint here that does.
+ */
+Route::middleware('throttle:30,1')->group(function () {
+    Route::get('/site-agent', [SiteAgentStoreController::class, 'show'])->name('store.agent');
+    Route::post('/site-agent', [SiteAgentStoreController::class, 'buy'])->name('store.agent.buy');
+    Route::get('/site-agent/order/{reference}', [SiteAgentStoreController::class, 'done'])->name('store.agent.done');
+    Route::get('/site-agent/order/{reference}/plugin', [SiteAgentStoreController::class, 'downloadPlugin'])
+        ->name('store.agent.plugin');
+    Route::post('/site-agent/order/{reference}/access', [SiteAgentStoreController::class, 'handover'])
+        ->middleware('throttle:10,60')
+        ->name('store.agent.access');
 });
 
 /*

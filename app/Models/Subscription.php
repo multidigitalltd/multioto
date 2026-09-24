@@ -33,7 +33,7 @@ class Subscription extends Model
         'installments_total',
         'site_id', 'token_id', 'payment_method', 'card_fallback_days', 'status',
         'current_period_start', 'current_period_end', 'next_charge_at', 'card_expiry_alerted_at',
-        'price_agorot_override', 'dunning_stage', 'canceled_at',
+        'price_agorot_override', 'agent_extra_numbers', 'dunning_stage', 'canceled_at',
     ];
 
     protected function casts(): array
@@ -47,6 +47,7 @@ class Subscription extends Model
             'next_charge_at' => 'datetime',
             'card_expiry_alerted_at' => 'datetime',
             'price_agorot_override' => 'integer',
+            'agent_extra_numbers' => 'integer',
             'installments_total' => 'integer',
             'card_fallback_days' => 'integer',
             'dunning_stage' => 'integer',
@@ -456,10 +457,41 @@ class Subscription extends Model
     /**
      * Effective base price in agorot: the per-subscription price (override) when
      * set — always the case for a free-form subscription — the plan price otherwise.
+     *
+     * Plus the additional manager numbers this subscription pays for. They are
+     * added to the price rather than billed on a second subscription so they
+     * ride everything the first one already has: one charge, one invoice line,
+     * one dunning ladder. A customer with two numbers must not be able to fall
+     * behind on half a service.
+     *
+     * An agreed special price does not include them: a price named in a
+     * conversation is the price of the service, and numbers added months later
+     * were not part of that conversation.
      */
     public function basePriceAgorot(): int
     {
-        return $this->price_agorot_override ?? $this->plan?->price_agorot ?? 0;
+        return ($this->price_agorot_override ?? $this->plan?->price_agorot ?? 0)
+            + $this->extraNumbersAgorot();
+    }
+
+    /**
+     * What the extra manager numbers add to one cycle, before VAT.
+     *
+     * Reads the plan's per-number price at charge time rather than a copy at
+     * purchase, matching how the base price already behaves: a plan's price is
+     * what its subscribers pay. Zero when the plan stopped selling extra numbers,
+     * which is the safe direction — the alternative is charging for a line item
+     * the plan can no longer name a price for.
+     */
+    public function extraNumbersAgorot(): int
+    {
+        $each = $this->plan?->extra_number_price_agorot;
+
+        if ($each === null || $this->agent_extra_numbers < 1) {
+            return 0;
+        }
+
+        return (int) $each * (int) $this->agent_extra_numbers;
     }
 
     /**

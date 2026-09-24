@@ -8,10 +8,13 @@ use App\Mail\DunningNotificationMail;
 use App\Mail\LicenseKeyMail;
 use App\Mail\MonitoringReportMail;
 use App\Mail\NotificationMail;
+use App\Mail\SiteAgentActivationMail;
 use App\Mail\TicketReplyMail;
 use App\Models\Customer;
 use App\Models\License;
+use App\Models\Plan;
 use App\Models\PluginProduct;
+use App\Models\SiteAgentOrder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
@@ -46,6 +49,7 @@ class MobileEmailTest extends TestCase
             'דוח ניטור' => ['MonitoringReportMail'],
             'כרטיס לקוח' => ['CustomerCardMail'],
             'מפתח רישיון' => ['LicenseKeyMail'],
+            'הפעלת סוכן האתר' => ['SiteAgentActivationMail'],
         ];
     }
 
@@ -78,6 +82,31 @@ class MobileEmailTest extends TestCase
                 ]);
 
                 return (new LicenseKeyMail($license, $key))->render();
+            })(),
+            'SiteAgentActivationMail' => (function (): string {
+                // The activation mail is read on a phone more than anywhere
+                // else: it arrives seconds after a purchase made on one.
+                $customer = Customer::factory()->create(['name' => 'לקוח']);
+                $plan = Plan::create([
+                    'name' => 'סוכן האתר',
+                    'price_agorot' => 14900,
+                    'vat_applies' => true,
+                    'billing_interval' => 'monthly',
+                    'active' => true,
+                    'includes_site_agent' => true,
+                ]);
+
+                return (new SiteAgentActivationMail(SiteAgentOrder::create([
+                    'reference' => SiteAgentOrder::newReference(),
+                    'customer_id' => $customer->id,
+                    'plan_id' => $plan->id,
+                    'buyer_name' => 'לקוח',
+                    'buyer_email' => 'buyer@example.test',
+                    'manager_phone' => '972501234567',
+                    'domain' => 'example.co.il',
+                    'total_agorot' => 17582,
+                    'status' => SiteAgentOrder::PAID,
+                ])))->render();
             })(),
         };
     }
