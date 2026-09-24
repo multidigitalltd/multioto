@@ -4,6 +4,8 @@ namespace Tests\Feature;
 
 use App\Enums\ChargeStatus;
 use App\Enums\SubscriptionStatus;
+use App\Enums\UserRole;
+use App\Filament\Resources\PlanResource\Pages\EditPlan;
 use App\Jobs\SendSiteAgentVerificationJob;
 use App\Mail\SiteAgentActivationMail;
 use App\Models\Charge;
@@ -15,6 +17,7 @@ use App\Models\SiteAgentOrder;
 use App\Models\SiteAgentSubscriber;
 use App\Models\SiteInstallation;
 use App\Models\Subscription;
+use App\Models\User;
 use App\Providers\SettingsServiceProvider;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -22,6 +25,7 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Testing\TestResponse;
+use Livewire\Livewire;
 use Tests\TestCase;
 
 /**
@@ -152,6 +156,38 @@ class SiteAgentStoreTest extends TestCase
 
         $this->buy(['plan' => $private->id])->assertSessionHasErrors('plan');
         $this->assertSame(0, SiteAgentOrder::count());
+    }
+
+    /**
+     * אפשר לפרסם מסלול מתוך המערכת, ולא רק בעריכת מסד הנתונים.
+     *
+     * המיגרציה מסמנת כל מסלול כלא-ציבורי, וזו ברירת המחדל הנכונה. אבל בלי שני
+     * השדות האלה במסך המסלולים, אין שום דרך באפליקציה להפוך מסלול לציבורי —
+     * publiclySellable() מחזיר תמיד רשימה ריקה, ועמוד הרכישה מחזיר 404 לנצח.
+     * תכונה שקיימת רק למי שיש לו גישה ל-psql אינה תכונה.
+     */
+    public function test_a_plan_can_be_published_from_the_panel(): void
+    {
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+
+        $plan = Plan::create([
+            'name' => 'מסלול חדש',
+            'price_agorot' => 9900,
+            'vat_applies' => true,
+            'billing_interval' => 'monthly',
+            'active' => true,
+            'includes_site_agent' => true,
+        ]);
+
+        Livewire::test(EditPlan::class, ['record' => $plan->id])
+            ->fillForm(['is_public' => true, 'extra_number_price_agorot' => 3900])
+            ->call('save')
+            ->assertHasNoFormErrors();
+
+        $plan->refresh();
+        $this->assertTrue($plan->is_public);
+        $this->assertSame(3900, $plan->extra_number_price_agorot);
+        $this->assertTrue(Plan::query()->publiclySellable()->whereKey($plan->id)->exists());
     }
 
     /**
@@ -333,11 +369,16 @@ class SiteAgentStoreTest extends TestCase
     }
 
     /**
-     * לקוח חוזר אינו הופך ללקוח שני, ואינו מקבל מנוי שני.
+     * לקוח חוזר אינו הופך ללקוח שני — אבל אתר שני הוא שירות שני.
      *
-     * שני מנויים לאותו שירות פירושם חיוב כפול ושתי סולמות גבייה על אותו אדם.
+     * לקוח אחד: החשבונית, הגבייה וכל שיחה עתידית תלויות בו, ושניים מהם פירושם
+     * שני מאזנים ושני סולמות גבייה על אותו עסק.
+     *
+     * מנוי לכל אתר: מנוי משותף היה אומר שהאתר השני שולם פעם אחת בקופה ומתחדש
+     * בתוך המחיר של הראשון — לקוח שמקבל אתר שני חינם מהחודש השני, בלי שאיש
+     * יבחין. מה שכן משותף הוא מספר נוסף לאותו אתר, וזה מקום בתשלום.
      */
-    public function test_a_returning_customer_gets_one_customer_record_and_one_subscription(): void
+    public function test_a_returning_customer_is_one_customer_and_a_second_site_is_a_second_subscription(): void
     {
         $this->fakeCardcom();
         $this->buy();
@@ -347,10 +388,51 @@ class SiteAgentStoreTest extends TestCase
         $this->pay(SiteAgentOrder::query()->latest('id')->firstOrFail(), 'tx-2');
 
         $this->assertSame(1, Customer::count());
-        $this->assertSame(1, Subscription::count());
-        // Both sites, and both numbers' bindings — only the billing is shared.
         $this->assertSame(2, Site::count());
         $this->assertSame(2, SiteAgentSubscriber::count());
+
+        $subscriptions = Subscription::all();
+        $this->assertCount(2, $subscriptions);
+        // Each one billing its own site, at the full plan price.
+        $this->assertEqualsCanonicalizing(
+            Site::pluck('id')->all(),
+            $subscriptions->pluck('site_id')->all(),
+        );
+        $this->assertSame([14900, 14900], $subscriptions->map->basePriceAgorot()->all());
+    }
+
+    /** אבל קנייה חוזרת של אותו אתר אינה פותחת מנוי שני עליו. */
+    public function test_buying_the_same_site_again_does_not_open_a_second_subscription(): void
+    {
+        $this->fakeCardcom();
+        $this->buy();
+        $this->pay(SiteAgentOrder::sole());
+
+        $this->buy();
+        $this->pay(SiteAgentOrder::query()->latest('id')->firstOrFail(), 'tx-2');
+
+        $this->assertSame(1, Subscription::count());
+        $this->assertSame(1, Site::count());
+    }
+
+    /**
+     * מסלול בלי מע״מ אינו מדווח מע״מ שלא נגבה.
+     *
+     * grossAgorot() אינו מוסיף דבר למסלול כזה, ובלי לומר זאת לחיוב הוא היה
+     * מפצל מע״מ בחזרה מתוך סכום שמעולם לא הכיל אותו — הכרטיס מחויב נכון,
+     * והחשבונית מדווחת מס שלא נלקח.
+     */
+    public function test_a_plan_without_vat_records_no_vat_on_the_charge(): void
+    {
+        $this->plan->update(['vat_applies' => false]);
+        $this->fakeCardcom();
+
+        $this->buy();
+
+        $charge = Charge::sole();
+        $this->assertSame(14900, (int) $charge->total_agorot);
+        $this->assertSame(0, (int) $charge->vat_agorot);
+        $this->assertSame(14900, (int) $charge->amount_agorot);
     }
 
     /**

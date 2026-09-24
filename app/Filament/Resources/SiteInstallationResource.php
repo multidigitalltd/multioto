@@ -145,15 +145,15 @@ class SiteInstallationResource extends Resource
                     // Asked for out loud. This is somebody's WordPress admin
                     // access, and a one-click reveal is a value that ends up on
                     // a shared screen without anybody deciding to put it there.
-                    ->requiresConfirmation()
-                    ->modalHeading('הצגת פרטי הגישה של הלקוח')
-                    ->modalDescription('הצפייה נרשמת ביומן. אל תעתיקו את הפרטים לשום מקום — הם נמחקים אצלנו בתום ההתקנה.')
-                    ->modalSubmitActionLabel('הצג')
-                    ->modalContent(fn (SiteInstallation $record) => view(
-                        'filament.modals.site-installation-access',
-                        ['installation' => $record],
-                    ))
-                    ->action(function (SiteInstallation $record): void {
+                    // Recorded on MOUNT, not on submit.
+                    //
+                    // The modal's content is rendered the moment it opens, so by
+                    // the time any submit handler could run the credential is
+                    // already on screen — and somebody who reads it and presses
+                    // Escape would leave no trace at all. The one moment that
+                    // actually coincides with "a person can now see this" is the
+                    // modal opening, so that is where the entry is written.
+                    ->mountUsing(function (SiteInstallation $record): void {
                         // The credential itself is deliberately NOT in the
                         // payload: an audit trail that copies the secret is a
                         // second, permanent place it lives.
@@ -163,7 +163,17 @@ class SiteInstallationResource extends Resource
                             $record,
                             ['method' => $record->access_method],
                         );
-                    }),
+                    })
+                    ->modalHeading('פרטי הגישה של הלקוח')
+                    ->modalDescription('הצפייה הזו נרשמה ביומן. אל תעתיקו את הפרטים לשום מקום — הם נמחקים אצלנו בתום ההתקנה.')
+                    ->modalContent(fn (SiteInstallation $record) => view(
+                        'filament.modals.site-installation-access',
+                        ['installation' => $record],
+                    ))
+                    // Nothing to submit: the modal IS the action. A confirm
+                    // button here would suggest the reading had not happened yet.
+                    ->modalSubmitAction(false)
+                    ->modalCancelActionLabel('סגירה'),
 
                 Tables\Actions\Action::make('installed')
                     ->label('הותקן')

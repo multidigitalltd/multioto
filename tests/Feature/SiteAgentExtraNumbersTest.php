@@ -237,6 +237,74 @@ class SiteAgentExtraNumbersTest extends TestCase
     }
 
     /**
+     * המונה נספר מהמציאות, ולא מונמך בעיוורון.
+     *
+     * מספרים שהצוות חיבר ממסך ההפעלה אינם מעלים את המונה — המסך ההוא מעולם לא
+     * מכר מקומות. לקוח כזה מגיע לאזור האישי עם שלושה מנהלים ומונה שאומר אפס,
+     * ולחיצה אחת על "הסרה" הייתה משאירה אותו שם: שני מנהלים עובדים, תשלום על
+     * אחד. תת-גבייה שאיש לא היה מבחין בה, על שורה שנראית עקבית לגמרי.
+     *
+     * ספירה מחדש מיישרת את זה ברגע שנוגעים בו.
+     */
+    public function test_the_count_is_taken_from_reality_rather_than_nudged(): void
+    {
+        // Two more managers, bound the way the team screen binds them: no
+        // counter moved, so the subscription still says nobody is paid for.
+        foreach (['972527654321', '972533333333'] as $phone) {
+            SiteAgentSubscriber::create([
+                'phone' => $phone,
+                'customer_id' => $this->customer->id,
+                'site_id' => $this->site->id,
+                'verified_at' => now(),
+            ]);
+        }
+
+        $this->assertSame(0, $this->subscription->fresh()->agent_extra_numbers);
+
+        $this->asCustomer()->post(route('portal.site-agent.revoke', [
+            'subscriber' => SiteAgentSubscriber::where('phone', '972533333333')->sole(),
+        ]))->assertRedirect();
+
+        // Two managers left, one of them included: one paid seat, not zero.
+        $this->assertSame(1, $this->subscription->fresh()->agent_extra_numbers);
+        $this->assertSame(14900 + 4900, $this->subscription->fresh()->basePriceAgorot());
+    }
+
+    /**
+     * מספר שנוסף לאתר אחד אינו מייקר את המנוי של אתר אחר.
+     *
+     * המוצר נמכר לפי אתר, ולכל אתר מנוי משלו. חיוב שנרשם על המנוי הלא נכון הוא
+     * חשבונית שהלקוח אינו יכול להתאים לשום דבר.
+     */
+    public function test_a_number_raises_the_price_of_its_own_sites_subscription(): void
+    {
+        $otherSite = Site::factory()->create(['customer_id' => $this->customer->id, 'domain' => 'second.co.il']);
+        $otherSubscription = Subscription::factory()->create([
+            'customer_id' => $this->customer->id,
+            'plan_id' => $this->plan->id,
+            'site_id' => $otherSite->id,
+            'status' => SubscriptionStatus::Active,
+            'price_agorot_override' => null,
+        ]);
+
+        SiteAgentSubscriber::create([
+            'phone' => '972503333333',
+            'customer_id' => $this->customer->id,
+            'site_id' => $otherSite->id,
+            'verified_at' => now(),
+        ]);
+
+        $this->asCustomer()->post(route('portal.site-agent.add'), [
+            'site_id' => $otherSite->id,
+            'phone' => '052-7654321',
+            'confirm' => '1',
+        ])->assertRedirect();
+
+        $this->assertSame(1, $otherSubscription->fresh()->agent_extra_numbers);
+        $this->assertSame(0, $this->subscription->fresh()->agent_extra_numbers);
+    }
+
+    /**
      * לקוח אחד אינו נוגע במספרים של לקוח אחר.
      *
      * הכל נשען על הלקוח שנפתר מה-session, אף פעם לא על מזהה שבכתובת.

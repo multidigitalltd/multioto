@@ -79,20 +79,26 @@ class SiteInstallationTest extends TestCase
     }
 
     /**
-     * צפייה בפרטים נרשמת — בלי להעתיק את הפרטים ליומן.
+     * הצפייה נרשמת ברגע שהחלון נפתח — לא בלחיצה שאחריו.
      *
-     * יומן ביקורת שמעתיק את הסוד הוא מקום שני, קבוע, שבו הוא חי.
+     * החלון מרנדר את הפרטים כשהוא נפתח, כך שעד שאיזשהו handler של "אישור" היה
+     * רץ הסוד כבר על המסך. מי שקרא אותו ולחץ Escape לא היה משאיר שום עקבה.
+     * הרגע היחיד שבאמת חופף ל"אדם יכול לראות את זה עכשיו" הוא פתיחת החלון.
      */
-    public function test_revealing_the_access_is_recorded_without_copying_it(): void
+    public function test_opening_the_modal_is_what_gets_recorded(): void
     {
         $this->actingAs($this->admin());
         $installation = $this->installation();
 
+        // Mounted only — nothing submitted, exactly like somebody who reads and
+        // presses Escape.
         Livewire::test(SiteInstallationResource\Pages\ListSiteInstallations::class)
-            ->callTableAction('reveal', $installation);
+            ->mountTableAction('reveal', $installation);
 
         $log = AuditLog::query()->where('event', 'access_revealed')->sole();
         $this->assertStringContainsString('dana-shop.co.il', (string) $log->description);
+        // And the entry does not copy the secret: an audit trail that carries it
+        // is a second, permanent place it lives.
         $this->assertStringNotContainsString('SECRETLINK', json_encode($log->getAttributes(), JSON_UNESCAPED_UNICODE));
     }
 

@@ -64,22 +64,6 @@ class PortalSiteAgentController extends Controller
     public function addNumber(Request $request, SiteAgentBilling $billing, WhatsAppCloudClient $whatsapp): RedirectResponse
     {
         $customer = $this->customer($request);
-        $subscription = $billing->subscriptionFor($customer);
-
-        // Only a live subscription may grow. Adding a number to a lapsed one
-        // would raise the debt of a customer whose service is already off.
-        if ($subscription === null || ! in_array($subscription->status, SiteAgentAccess::ENTITLING, true)) {
-            return back()->withErrors(['phone' => 'אפשר להוסיף מספר רק כשהמנוי פעיל. הסדירו את התשלום ונסו שוב.']);
-        }
-
-        $price = $this->extraPriceAgorot($subscription, $customer);
-
-        // Null means the plan names no price for an extra number. Adding one
-        // anyway would be giving away a paid seat quietly, for as long as
-        // nobody notices.
-        if ($price === null) {
-            return back()->withErrors(['phone' => 'המסלול הזה אינו כולל מספרים נוספים. כתבו לנו ונשדרג אתכם.']);
-        }
 
         $data = $request->validate([
             'phone' => ['required', 'string', 'max:30'],
@@ -102,6 +86,25 @@ class PortalSiteAgentController extends Controller
             return back()->withErrors(['site_id' => 'האתר אינו שלכם.']);
         }
 
+        // The subscription that carries THIS site, not merely one this customer
+        // holds: a number added to site B must raise the price of site B's
+        // service, and billing it to site A's subscription is an invoice the
+        // customer cannot reconcile against anything.
+        $subscription = $billing->subscriptionForSite($customer, $site->id);
+
+        // Only a live subscription may grow. Adding a number to a lapsed one
+        // would raise the debt of a customer whose service is already off.
+        if ($subscription === null || ! in_array($subscription->status, SiteAgentAccess::ENTITLING, true)) {
+            return back()->withErrors(['phone' => 'אפשר להוסיף מספר רק כשהמנוי על האתר הזה פעיל. הסדירו את התשלום ונסו שוב.']);
+        }
+
+        // Null means the plan names no price for an extra number. Adding one
+        // anyway would be giving away a paid seat quietly, for as long as
+        // nobody notices.
+        if ($this->extraPriceAgorot($subscription, $customer) === null) {
+            return back()->withErrors(['phone' => 'המסלול הזה אינו כולל מספרים נוספים. כתבו לנו ונשדרג אתכם.']);
+        }
+
         $phone = $whatsapp->normalize($data['phone']);
 
         if ($phone === '') {
@@ -120,7 +123,7 @@ class PortalSiteAgentController extends Controller
             return back()->withErrors(['phone' => 'המספר הזה כבר מנהל את האתר הזה.']);
         }
 
-        $subscriber = DB::transaction(function () use ($existing, $subscription, $customer, $site, $phone, $data): SiteAgentSubscriber {
+        $subscriber = DB::transaction(function () use ($existing, $subscription, $customer, $site, $phone, $data, $billing): SiteAgentSubscriber {
             $subscriber = $existing ?? new SiteAgentSubscriber([
                 'phone' => $phone,
                 'site_id' => $site->id,
@@ -136,7 +139,7 @@ class PortalSiteAgentController extends Controller
                 'revoked_reason' => null,
             ])->save();
 
-            $subscription->increment('agent_extra_numbers');
+            $billing->recountManagerSeats($subscription);
 
             return $subscriber;
         });
@@ -192,19 +195,20 @@ class PortalSiteAgentController extends Controller
         }
 
         $customer = $this->customer($request);
-        $subscription = $billing->subscriptionFor($customer);
+        $subscription = $billing->subscriptionForSite($customer, $subscriber->site_id);
 
-        DB::transaction(function () use ($subscriber, $subscription): void {
+        DB::transaction(function () use ($subscriber, $subscription, $billing): void {
             $subscriber->forceFill([
                 'revoked_at' => now(),
                 'revoked_reason' => 'הוסר על ידי הלקוח באזור האישי',
             ])->save();
 
-            // Never below zero: the first number is included in the plan, and a
-            // customer who removes everybody must not end up with a credit that
-            // makes the next invoice smaller than the plan's own price.
-            if ($subscription !== null && $subscription->agent_extra_numbers > 0) {
-                $subscription->decrement('agent_extra_numbers');
+            // Recounted, never decremented. A blind decrement removes a PAID
+            // seat whichever number was revoked — so a customer who drops the
+            // number their plan includes, while a paid extra keeps working,
+            // silently stops being charged for it.
+            if ($subscription !== null) {
+                $billing->recountManagerSeats($subscription);
             }
         });
 

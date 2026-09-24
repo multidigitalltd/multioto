@@ -90,6 +90,13 @@ class SiteAgentCheckout
                 totalAgorot: (int) $order->total_agorot,
                 description: $plan->name.' — '.$domain,
                 notes: 'רכישה עצמית של סוכן האתר',
+                // Two different reasons for the same total to carry no VAT, and
+                // the charge has to know about both. grossAgorot() already adds
+                // nothing for a plan whose price does not carry VAT on top —
+                // without saying so here, the charge would split VAT back out of
+                // a total that never contained any, and the invoice would report
+                // tax we did not take.
+                vatExempt: (bool) $customer->vat_exempt || ! $plan->vat_applies,
                 // Always: this is a subscription, and a renewal that asks for the
                 // card again every month is not a renewal.
                 withToken: true,
@@ -134,14 +141,17 @@ class SiteAgentCheckout
         DB::transaction(function () use ($order, $customer, $plan, &$subscriber): void {
             $site = $this->site($order, $customer);
 
-            // A returning customer who buys a second site does not get a second
-            // subscription for the same service — the entitlement is theirs, and
-            // two of them means being billed twice and chased on both. The
-            // second site's number simply joins the one they have.
-            $existing = $this->billing->subscriptionFor($customer);
-            $reuse = $existing !== null && $existing->status !== SubscriptionStatus::Canceled;
+            // A second SITE is a second service, at its own price.
+            //
+            // Reusing whatever subscription the customer happened to hold would
+            // mean the second site is paid for once, at checkout, and then
+            // renews inside the first site's price forever — a customer getting
+            // a second site free from month two, discovered by nobody. What IS
+            // shared is a second number on the same site, which joins this
+            // subscription as a paid seat (see the portal).
+            $existing = $this->billing->subscriptionForSite($customer, $site->id);
 
-            $subscription = $reuse ? $existing : Subscription::create([
+            $subscription = $existing ?? Subscription::create([
                 'customer_id' => $customer->id,
                 'plan_id' => $plan->id,
                 'site_id' => $site->id,

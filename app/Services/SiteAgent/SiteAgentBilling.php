@@ -53,6 +53,56 @@ class SiteAgentBilling
     }
 
     /**
+     * The subscription that carries the agent FOR ONE SITE.
+     *
+     * A customer may hold more than one: the product is sold per site, and a
+     * second site is a second service at its own price rather than a free rider
+     * on the first. Preferred in that order — this site's own subscription, then
+     * one that names no site at all (how the team screen has always opened them,
+     * and how every subscription created before sites were recorded looks).
+     */
+    public function subscriptionForSite(Customer $customer, ?int $siteId): ?Subscription
+    {
+        $candidates = Subscription::query()
+            ->with('plan')
+            ->where('customer_id', $customer->id)
+            ->whereHas('plan', fn ($query) => $query->where('includes_site_agent', true))
+            ->whereNot('status', SubscriptionStatus::Canceled)
+            ->get();
+
+        return $candidates->first(fn (Subscription $s): bool => $siteId !== null && $s->site_id === $siteId)
+            ?? $candidates->first(fn (Subscription $s): bool => $s->site_id === null);
+    }
+
+    /**
+     * Set the paid manager seats from what is actually bound.
+     *
+     * Counted rather than nudged up and down, because the two directions do not
+     * stay in step. Revoking blindly decremented whichever number was removed —
+     * so a customer who dropped the number their plan INCLUDES, while still
+     * having a paid extra, stopped being charged for the extra that was still
+     * working. That is an undercharge nobody would ever notice, on a row that
+     * looks perfectly consistent.
+     *
+     * The first number on a site is the one the plan includes; everything beyond
+     * it is paid. A subscription that names no site falls back to counting the
+     * customer's numbers, which is the only thing such a row can mean.
+     */
+    public function recountManagerSeats(Subscription $subscription): void
+    {
+        $bound = SiteAgentSubscriber::query()
+            ->whereNull('revoked_at')
+            ->when(
+                $subscription->site_id !== null,
+                fn ($query) => $query->where('site_id', $subscription->site_id),
+                fn ($query) => $query->where('customer_id', $subscription->customer_id),
+            )
+            ->count();
+
+        $subscription->update(['agent_extra_numbers' => max(0, $bound - 1)]);
+    }
+
+    /**
      * What to say when the agent is not available to this number.
      *
      * Three things, in this order, because that is the order the person on the
