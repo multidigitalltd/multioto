@@ -62,6 +62,16 @@ class ViewTicket extends ViewRecord
     /** @var array<int, TemporaryUploadedFile> */
     public array $replyFiles = [];
 
+    /**
+     * Files this send could not store, each with the reason.
+     *
+     * Not a Livewire-bound property — it exists for the length of one send, so
+     * the notice afterwards can name the file instead of counting it.
+     *
+     * @var array<int, string>
+     */
+    protected array $replyFileRefusals = [];
+
     public function mount(int|string $record): void
     {
         parent::mount($record);
@@ -237,15 +247,17 @@ class ViewTicket extends ViewRecord
         $maxKb = (int) round((int) config('billing.support.attachments.max_bytes', 10485760) / 1024);
         $this->validate(['replyFiles.*' => "file|max:{$maxKb}"]);
 
-        // Store files first so we can tell the agent up front if any were rejected
-        // (unsupported type) — otherwise a dropped file sends silently.
+        // Store files first so we can tell the agent up front which ones did not
+        // make it, and why — otherwise a dropped file sends silently.
         $stored = $this->storeReplyFiles($files);
         $rejected = count($files) - count($stored);
 
         if ($body === '' && $stored === []) {
             Notification::make()
                 ->title('לא ניתן לשלוח')
-                ->body($files !== [] ? 'הקבצים שנבחרו אינם נתמכים — נסו פורמט אחר.' : 'אין תוכן לשליחה.')
+                ->body($files !== []
+                    ? 'הקבצים שנבחרו לא נשמרו: '.implode(' · ', $this->replyFileRefusals)
+                    : 'אין תוכן לשליחה.')
                 ->warning()->send();
 
             return;
@@ -293,7 +305,9 @@ class ViewTicket extends ViewRecord
 
         Notification::make()
             ->title($channel === MessageChannel::InternalNote ? 'ההערה נשמרה' : 'המענה נשלח ללקוח')
-            ->body($rejected > 0 ? "שימו לב: {$rejected} קבצים לא צורפו (סוג קובץ לא נתמך)." : null)
+            ->body($rejected > 0
+                ? 'שימו לב — לא צורפו: '.implode(' · ', $this->replyFileRefusals)
+                : null)
             ->success()->send();
     }
 
@@ -349,8 +363,8 @@ class ViewTicket extends ViewRecord
     }
 
     /**
-     * Validate + store the agent's uploaded reply files (rejected files are
-     * skipped), returning their metadata for the message.
+     * Store the agent's uploaded reply files, returning their metadata for the
+     * message and recording the reason for any that could not be stored.
      *
      * @param  array<int, TemporaryUploadedFile>  $files
      * @return array<int, array{name: string, mime: string, size: int, path: string, disk: string}>
@@ -359,13 +373,23 @@ class ViewTicket extends ViewRecord
     {
         $store = app(AttachmentStore::class);
         $stored = [];
+        $this->replyFileRefusals = [];
 
         foreach ($files as $file) {
-            $meta = $store->store($this->record->id, $file->getClientOriginalName(), $file->get(), $file->getMimeType());
+            $reason = null;
+            $meta = $store->store($this->record->id, $file->getClientOriginalName(), $file->get(), $file->getMimeType(), $reason);
 
             if ($meta !== null) {
                 $stored[] = $meta;
+
+                continue;
             }
+
+            // No type is unsupported any more, so the reason is always something
+            // specific — a file over the cap, or one that arrived empty. Carrying
+            // it back means the notice can say which file and why instead of
+            // guessing on the agent's behalf.
+            $this->replyFileRefusals[] = $file->getClientOriginalName().' — '.($reason ?? 'לא נשמר');
         }
 
         return $stored;

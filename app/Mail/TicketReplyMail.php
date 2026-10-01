@@ -39,9 +39,14 @@ class TicketReplyMail extends Mailable
     public function attachments(): array
     {
         return collect($this->files)
+            // A row with no path is a file we refused on the way in, kept on the
+            // message so the team can see it was sent. There is nothing to
+            // attach, and asking the mailer for it would fail the whole reply.
+            ->filter(fn (array $file): bool => filled($file['path'] ?? null))
             ->map(fn (array $file): Attachment => Attachment::fromStorageDisk($file['disk'] ?? 'local', $file['path'])
                 ->as($file['name'] ?? 'attachment')
                 ->withMime($file['mime'] ?? null))
+            ->values()
             ->all();
     }
 }
