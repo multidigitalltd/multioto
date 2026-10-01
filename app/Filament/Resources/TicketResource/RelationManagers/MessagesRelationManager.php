@@ -166,7 +166,20 @@ class MessagesRelationManager extends RelationManager
             }
 
             $url = route('support.attachment', ['message' => $message->id, 'index' => $i]);
-            $links[] = '<a href="'.e($url).'" target="_blank" rel="noopener" class="text-primary-600 underline">📎 '.$name.'</a>';
+            $link = '<a href="'.e($url).'" target="_blank" rel="noopener" class="text-primary-600 underline">📎 '.$name.'</a>';
+
+            // The same warning the conversation view shows, for the same reason.
+            // This screen downloads the identical file, so a warning that appears
+            // on one of them and not the other is not a safeguard — it is a
+            // safeguard with a second door next to it.
+            if (filled($attachment['warning'] ?? null)) {
+                $icon = ($attachment['risk'] ?? '') === 'executable' ? '⛔' : '⚠️';
+                $link .= '<br><span class="text-'.(($attachment['risk'] ?? '') === 'executable' ? 'danger' : 'warning')
+                    .'-700 dark:text-'.(($attachment['risk'] ?? '') === 'executable' ? 'danger' : 'warning').'-400">'
+                    .$icon.' '.e((string) $attachment['warning']).'</span>';
+            }
+
+            $links[] = $link;
         }
 
         return implode('<br>', $links);

@@ -126,6 +126,18 @@ class AttachmentStore
     private const MACRO_EXTENSIONS = ['docm', 'xlsm', 'pptm', 'xlsb', 'dotm', 'xltm', 'potm', 'doc', 'xls', 'ppt'];
 
     /**
+     * Containers that hold a macro-capable Office file.
+     *
+     * A generic sniff is not evidence of a FORMAT, but it is evidence of a
+     * container — and this particular container is the one legacy Office macros
+     * live in, whatever the sender chose to call the file.
+     */
+    private const MACRO_CONTAINERS = [
+        'application/x-ole-storage', 'application/CDFV2', 'application/CDFV2-corrupt',
+        'application/vnd.ms-office',
+    ];
+
+    /**
      * Store an attachment, or refuse it with a reason.
      *
      * @param  string|null  $reason  set to why it was refused, for the caller to
@@ -168,9 +180,14 @@ class AttachmentStore
                 $this->humanSize($size), $this->humanSize($max)));
         }
 
-        $mime = $this->resolveMime($contents, $declaredMime);
+        // Sniffed separately and kept, not folded into the resolved type: the
+        // resolved one is for naming the file and the sniff is evidence about
+        // what is in it, and those two part ways exactly when somebody renamed
+        // something. classify() needs both.
+        $sniffed = $this->sniff($contents);
+        $mime = $this->resolveMime($sniffed, $declaredMime);
         $extension = $this->safeExtension($mime, $filename);
-        [$risk, $warning] = $this->classify($mime, $filename);
+        [$risk, $warning] = $this->classify($mime, $sniffed, $filename);
 
         return [
             'ok' => true,
@@ -249,9 +266,8 @@ class AttachmentStore
      * type — but because the risk label has to describe the bytes. A program
      * declared "application/pdf" must be labelled a program.
      */
-    protected function resolveMime(string $contents, ?string $declaredMime): string
+    protected function resolveMime(?string $sniffed, ?string $declaredMime): string
     {
-        $sniffed = $this->sniff($contents);
         $declared = $this->normaliseMime($declaredMime);
 
         if ($sniffed !== null && ! in_array($sniffed, self::GENERIC_SNIFFS, true)) {
@@ -271,31 +287,61 @@ class AttachmentStore
      *
      * @return array{0: string, 1: ?string}
      */
-    protected function classify(string $mime, string $filename): array
+    protected function classify(string $mime, ?string $sniffed, string $filename): array
     {
-        $extension = strtolower((string) pathinfo($filename, PATHINFO_EXTENSION));
+        $extension = $this->senderExtension($filename);
+        // Both types, because they can disagree and the disagreement is the
+        // interesting case. A zip named "invoice.pdf" and declared as a PDF
+        // reads as an ordinary document from the name and the declaration, and
+        // only the sniff knows it is an archive — dropping it here would lose
+        // the warning for exactly the files somebody renamed on purpose.
+        $types = array_filter([$mime, $sniffed]);
 
-        if (in_array($mime, self::EXECUTABLE_MIMES, true) || in_array($extension, self::EXECUTABLE_EXTENSIONS, true)) {
-            return [self::RISK_EXECUTABLE,
+        $risks = [];
+
+        if ($this->anyIn($types, self::EXECUTABLE_MIMES) || in_array($extension, self::EXECUTABLE_EXTENSIONS, true)) {
+            $risks[] = [self::RISK_EXECUTABLE,
                 'קובץ הפעלה. אל תפתחו אותו — הורידו רק אם אתם יודעים בוודאות מה זה ומי שלח.'];
         }
 
-        if (in_array($mime, self::ACTIVE_MIMES, true) || in_array($extension, ['html', 'htm', 'svg', 'js', 'vbs', 'hta'], true)) {
-            return [self::RISK_ACTIVE,
+        if ($this->anyIn($types, self::ACTIVE_MIMES) || in_array($extension, ['html', 'htm', 'svg', 'js', 'vbs', 'hta'], true)) {
+            $risks[] = [self::RISK_ACTIVE,
                 'מכיל קוד שמופעל בדפדפן. נפתח רק כהורדה, ולא מוצג כאן.'];
         }
 
-        if (in_array($extension, self::MACRO_EXTENSIONS, true)) {
-            return [self::RISK_MACRO,
+        // The OLE2 container IS the thing that carries legacy Office macros, so
+        // a sniff that names it is macro evidence even when the filename says
+        // something else entirely.
+        if (in_array($extension, self::MACRO_EXTENSIONS, true) || $this->anyIn($types, self::MACRO_CONTAINERS)) {
+            $risks[] = [self::RISK_MACRO,
                 'קובץ Office שעשוי להכיל מאקרו. פתחו בתצוגה מוגנת ואל תאשרו הפעלת תוכן.'];
         }
 
-        if (in_array($mime, self::ARCHIVE_MIMES, true)) {
-            return [self::RISK_ARCHIVE,
+        if ($this->anyIn($types, self::ARCHIVE_MIMES)) {
+            $risks[] = [self::RISK_ARCHIVE,
                 'ארכיון — לא בדקנו מה בתוכו. סרקו לפני פתיחה.'];
         }
 
+        // Severity order, not order of discovery: a file that is both an archive
+        // and an executable is an executable, and that is the sentence to show.
+        foreach ([self::RISK_EXECUTABLE, self::RISK_ACTIVE, self::RISK_MACRO, self::RISK_ARCHIVE] as $level) {
+            foreach ($risks as $risk) {
+                if ($risk[0] === $level) {
+                    return $risk;
+                }
+            }
+        }
+
         return [self::RISK_SAFE, null];
+    }
+
+    /**
+     * @param  list<string>  $types
+     * @param  list<string>  $haystack
+     */
+    private function anyIn(array $types, array $haystack): bool
+    {
+        return array_intersect($types, $haystack) !== [];
     }
 
     /**

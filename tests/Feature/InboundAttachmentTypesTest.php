@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Enums\MessageDirection;
 use App\Enums\WebhookSource;
+use App\Filament\Resources\TicketResource\RelationManagers\MessagesRelationManager;
 use App\Jobs\IngestEmailMessageJob;
 use App\Models\Customer;
 use App\Models\SystemLog;
@@ -259,6 +260,66 @@ class InboundAttachmentTypesTest extends TestCase
 
         $macro = $store->inspect('budget.xlsm', $this->ooxml('xl/workbook.xml'), 'application/vnd.ms-excel.sheet.macroEnabled.12');
         $this->assertSame(AttachmentStore::RISK_MACRO, $macro['risk']);
+    }
+
+    /**
+     * ההרחה הגנרית היא עדות, ולא נזרקת.
+     *
+     * zip או מסמך OLE בשם invoice.pdf ומוכרז application/pdf נראה מסמך רגיל גם
+     * מהשם וגם מההצהרה — רק ההרחה יודעת שזה ארכיון או מעטפת Office. זריקתה הייתה
+     * מאבדת את האזהרה בדיוק עבור הקבצים שמישהו שינה להם שם בכוונה.
+     */
+    public function test_a_renamed_container_is_still_warned_about(): void
+    {
+        $store = app(AttachmentStore::class);
+
+        // A zip pretending to be a PDF, by name and by declaration.
+        $zip = $store->inspect('invoice.pdf', $this->ooxml('payload/a.txt'), 'application/pdf');
+        $this->assertTrue($zip['ok']);
+        $this->assertSame(AttachmentStore::RISK_ARCHIVE, $zip['risk']);
+        $this->assertNotNull($zip['warning']);
+
+        // And an OLE2 container, which is where legacy Office macros live.
+        $ole = $store->inspect('invoice.pdf', $this->ole2(), 'application/pdf');
+        $this->assertSame(AttachmentStore::RISK_MACRO, $ole['risk']);
+    }
+
+    /**
+     * כששתי עדויות נפגשות, החמורה שבהן היא זו שמוצגת.
+     *
+     * jar הוא zip, ולכן שתי הקריאות נכונות עליו — "ארכיון" ו"תוכנה". מי שרואה
+     * "ארכיון, סרקו לפני פתיחה" על קובץ שהוא בעצם תוכנה קיבל את האזהרה הלא
+     * נכונה.
+     */
+    public function test_the_most_severe_signal_is_the_one_shown(): void
+    {
+        $verdict = app(AttachmentStore::class)
+            ->inspect('tool.jar', $this->ooxml('META-INF/MANIFEST.MF'), 'application/java-archive');
+
+        $this->assertSame(AttachmentStore::RISK_EXECUTABLE, $verdict['risk']);
+    }
+
+    /**
+     * האזהרה מופיעה גם במסך העריכה, לא רק בשיחה.
+     *
+     * TicketResource חושף את אותן הודעות גם ב-/edit, ושם כל קובץ נוצר כקישור
+     * רגיל. אזהרה שמופיעה במסך אחד ולא בשני אינה אמצעי הגנה — היא אמצעי הגנה עם
+     * דלת שנייה לידו.
+     */
+    public function test_the_edit_screen_shows_the_same_warning_as_the_conversation(): void
+    {
+        $message = $this->deliver('m-exe-edit', 'update.exe',
+            "MZ\x90\x00".str_repeat("\x00", 64), 'application/octet-stream');
+
+        $render = new \ReflectionMethod(
+            MessagesRelationManager::class,
+            'attachmentLinks',
+        );
+        $render->setAccessible(true);
+        $html = (string) $render->invoke(null, $message);
+
+        $this->assertStringContainsString('update.exe', $html);
+        $this->assertStringContainsString('אל תפתחו אותו', $html);
     }
 
     /** וקובץ רגיל אינו מקבל אזהרה בכלל — אחרת אף אזהרה לא נקראת. */
