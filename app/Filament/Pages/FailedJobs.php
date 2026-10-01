@@ -3,6 +3,7 @@
 namespace App\Filament\Pages;
 
 use App\Filament\Concerns\AdminOnly;
+use App\Filament\Concerns\CachesNavigationBadge;
 use App\Models\AuditLog;
 use App\Models\FailedJob;
 use Filament\Actions\Action;
@@ -31,6 +32,7 @@ use Illuminate\Support\Facades\Artisan;
 class FailedJobs extends Page implements HasTable
 {
     use AdminOnly;
+    use CachesNavigationBadge;
     use InteractsWithTable;
 
     protected static ?string $navigationIcon = 'heroicon-o-exclamation-triangle';
@@ -48,13 +50,8 @@ class FailedJobs extends Page implements HasTable
 
     public static function getNavigationBadge(): ?string
     {
-        try {
-            $count = FailedJob::query()->count();
-        } catch (\Throwable) {
-            return null; // טבלה חסרה לא תפיל את התפריט
-        }
-
-        return $count > 0 ? (string) $count : null;
+        // cachedBadge swallows a missing table too, so the nav never falls over.
+        return static::cachedBadge(fn (): int => FailedJob::query()->count());
     }
 
     public static function getNavigationBadgeColor(): ?string

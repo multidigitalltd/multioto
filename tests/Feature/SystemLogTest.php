@@ -8,6 +8,7 @@ use App\Models\SystemLog;
 use App\Models\User;
 use App\Services\Ai\ClaudeClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Livewire\Livewire;
 use Tests\TestCase;
@@ -62,6 +63,8 @@ class SystemLogTest extends TestCase
         $this->assertNull(SystemEventLog::getNavigationBadge());
 
         SystemLog::record('error', 'ai', 'שגיאת ספק', ['status' => 500]);
+        // Counted once a minute now; a change made this instant is not in it yet.
+        Cache::flush();
 
         $this->assertSame('1', SystemEventLog::getNavigationBadge());
 

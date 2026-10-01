@@ -12,6 +12,7 @@ use App\Models\Subscription;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Livewire\Livewire;
 use Tests\TestCase;
 
@@ -54,6 +55,10 @@ class ManualCollectionPageTest extends TestCase
             'status' => SubscriptionStatus::Active,
             'next_charge_at' => now()->subDay(),
         ]);
+
+        // The badge is counted once a minute, so a change made this instant is
+        // not in it yet — see PanelPerformanceTest.
+        Cache::flush();
 
         $this->assertSame('1', ManualCollection::getNavigationBadge());
     }

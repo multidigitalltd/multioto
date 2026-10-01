@@ -3,6 +3,7 @@
 namespace App\Filament\Pages;
 
 use App\Enums\SubscriptionStatus;
+use App\Filament\Concerns\CachesNavigationBadge;
 use App\Filament\Concerns\RespectsModuleAccess;
 use App\Filament\Support\DebtorActions;
 use App\Models\Subscription;
@@ -20,6 +21,7 @@ use Filament\Tables\Table;
  */
 class Collections extends Page implements HasTable
 {
+    use CachesNavigationBadge;
     use InteractsWithTable;
     use RespectsModuleAccess;
 
@@ -38,11 +40,9 @@ class Collections extends Page implements HasTable
     /** Show a red count badge in the nav when there are debtors. */
     public static function getNavigationBadge(): ?string
     {
-        $count = Subscription::query()
+        return static::cachedBadge(fn (): int => Subscription::query()
             ->where(fn ($query) => $query->inArrears()->orWhere(fn ($q) => $q->awaitingCardOverdue()))
-            ->count();
-
-        return $count > 0 ? (string) $count : null;
+            ->count());
     }
 
     public static function getNavigationBadgeColor(): ?string

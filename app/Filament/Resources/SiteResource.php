@@ -4,6 +4,7 @@ namespace App\Filament\Resources;
 
 use App\Enums\SiteStatus;
 use App\Enums\SiteType;
+use App\Filament\Concerns\CachesNavigationBadge;
 use App\Filament\Concerns\RespectsModuleAccess;
 use App\Filament\Resources\SiteResource\Pages;
 use App\Filament\Support\SiteActions;
@@ -25,6 +26,7 @@ use Illuminate\Support\Str;
 
 class SiteResource extends Resource
 {
+    use CachesNavigationBadge;
     use RespectsModuleAccess;
 
     protected static ?string $model = Site::class;
@@ -49,9 +51,7 @@ class SiteResource extends Resource
      */
     public static function getNavigationBadge(): ?string
     {
-        $count = SiteAlerts::pendingCount();
-
-        return $count > 0 ? (string) $count : null;
+        return static::cachedBadge(fn (): int => SiteAlerts::pendingCount());
     }
 
     public static function getNavigationBadgeColor(): ?string

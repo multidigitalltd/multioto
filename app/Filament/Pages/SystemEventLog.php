@@ -3,6 +3,7 @@
 namespace App\Filament\Pages;
 
 use App\Filament\Concerns\AdminOnly;
+use App\Filament\Concerns\CachesNavigationBadge;
 use App\Models\SystemLog;
 use Filament\Pages\Page;
 use Filament\Tables;
@@ -20,6 +21,7 @@ use Illuminate\Support\HtmlString;
 class SystemEventLog extends Page implements HasTable
 {
     use AdminOnly;
+    use CachesNavigationBadge;
     use InteractsWithTable;
 
     protected static ?string $navigationIcon = 'heroicon-o-bell-alert';
@@ -51,13 +53,9 @@ class SystemEventLog extends Page implements HasTable
     /** Red badge with the number of errors logged in the last 24 hours. */
     public static function getNavigationBadge(): ?string
     {
-        try {
-            $count = SystemLog::query()->where('level', 'error')->where('created_at', '>=', now()->subDay())->count();
-        } catch (\Throwable) {
-            return null; // never let the log table break the nav
-        }
-
-        return $count > 0 ? (string) $count : null;
+        // cachedBadge swallows a missing table too, so the nav never falls over.
+        return static::cachedBadge(fn (): int => SystemLog::query()
+            ->where('level', 'error')->where('created_at', '>=', now()->subDay())->count());
     }
 
     public static function getNavigationBadgeColor(): ?string

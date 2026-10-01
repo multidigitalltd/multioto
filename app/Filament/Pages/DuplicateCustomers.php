@@ -3,11 +3,11 @@
 namespace App\Filament\Pages;
 
 use App\Filament\Concerns\AdminOnly;
+use App\Filament\Concerns\CachesNavigationBadge;
 use App\Filament\Resources\CustomerResource;
 use App\Services\Customers\DuplicateFinder;
 use Filament\Pages\Page;
 use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\Cache;
 
 /**
  * כרטיסים כפולים — לקוחות שנפתחו פעמיים.
@@ -22,6 +22,7 @@ use Illuminate\Support\Facades\Cache;
 class DuplicateCustomers extends Page
 {
     use AdminOnly;
+    use CachesNavigationBadge;
 
     protected static ?string $navigationIcon = 'heroicon-o-users';
 
@@ -36,23 +37,27 @@ class DuplicateCustomers extends Page
     protected static string $view = 'filament.pages.duplicate-customers';
 
     /**
+     * How long this one may be stale — longer than the rest.
+     *
+     * The scan behind it reads the whole customers table, and a list of accounts
+     * that were opened twice does not change minute to minute.
+     */
+    protected static function badgeCacheSeconds(): int
+    {
+        return 300;
+    }
+
+    /**
      * Amber count in the nav — nothing when there is nothing to merge.
      *
-     * Cached for a few minutes because Filament asks EVERY navigation item for
-     * its badge on EVERY page render: without this, opening any screen in the
-     * panel would read the whole customers table to decide whether to draw a
-     * number. The page itself is never cached — someone who opens it is asking
-     * about now.
+     * Cached because Filament asks EVERY navigation item for its badge on EVERY
+     * render: without this, opening any screen in the panel would read the whole
+     * customers table to decide whether to draw a number. The page itself is
+     * never cached — someone who opens it is asking about now.
      */
     public static function getNavigationBadge(): ?string
     {
-        $count = Cache::remember(
-            'duplicate-customers-count',
-            now()->addMinutes(5),
-            fn (): int => self::groups()->count(),
-        );
-
-        return $count > 0 ? (string) $count : null;
+        return static::cachedBadge(fn (): int => self::groups()->count());
     }
 
     public static function getNavigationBadgeColor(): ?string

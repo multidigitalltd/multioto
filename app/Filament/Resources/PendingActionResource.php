@@ -3,6 +3,7 @@
 namespace App\Filament\Resources;
 
 use App\Enums\ActionStatus;
+use App\Filament\Concerns\CachesNavigationBadge;
 use App\Filament\Concerns\RespectsModuleAccess;
 use App\Filament\Resources\PendingActionResource\Pages;
 use App\Models\PendingAction;
@@ -22,6 +23,7 @@ use Illuminate\Support\Str;
  */
 class PendingActionResource extends Resource
 {
+    use CachesNavigationBadge;
     use RespectsModuleAccess;
 
     protected static ?string $model = PendingAction::class;
@@ -50,9 +52,7 @@ class PendingActionResource extends Resource
 
     public static function getNavigationBadge(): ?string
     {
-        $pending = PendingAction::where('status', ActionStatus::Pending)->count();
-
-        return $pending > 0 ? (string) $pending : null;
+        return static::cachedBadge(fn (): int => PendingAction::where('status', ActionStatus::Pending)->count());
     }
 
     public static function getNavigationBadgeColor(): ?string
