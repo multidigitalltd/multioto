@@ -153,9 +153,33 @@ class MessagesRelationManager extends RelationManager
 
         $links = [];
         foreach ($message->attachments as $i => $attachment) {
-            $url = route('support.attachment', ['message' => $message->id, 'index' => $i]);
             $name = e($attachment['name'] ?? 'קובץ מצורף');
-            $links[] = '<a href="'.e($url).'" target="_blank" rel="noopener" class="text-primary-600 underline">📎 '.$name.'</a>';
+
+            // A file the customer sent and we did not keep. Said plainly rather
+            // than linked: a link here would 404, and the team would read that
+            // as a broken panel instead of a file we refused.
+            if (filled($attachment['rejected'] ?? null)) {
+                $links[] = '<span class="text-warning-700 dark:text-warning-400">⚠️ '.$name
+                    .' — לא נשמר ('.e((string) $attachment['rejected']).')</span>';
+
+                continue;
+            }
+
+            $url = route('support.attachment', ['message' => $message->id, 'index' => $i]);
+            $link = '<a href="'.e($url).'" target="_blank" rel="noopener" class="text-primary-600 underline">📎 '.$name.'</a>';
+
+            // The same warning the conversation view shows, for the same reason.
+            // This screen downloads the identical file, so a warning that appears
+            // on one of them and not the other is not a safeguard — it is a
+            // safeguard with a second door next to it.
+            if (filled($attachment['warning'] ?? null)) {
+                $icon = ($attachment['risk'] ?? '') === 'executable' ? '⛔' : '⚠️';
+                $link .= '<br><span class="text-'.(($attachment['risk'] ?? '') === 'executable' ? 'danger' : 'warning')
+                    .'-700 dark:text-'.(($attachment['risk'] ?? '') === 'executable' ? 'danger' : 'warning').'-400">'
+                    .$icon.' '.e((string) $attachment['warning']).'</span>';
+            }
+
+            $links[] = $link;
         }
 
         return implode('<br>', $links);

@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Enums\MessageChannel;
 use App\Enums\TicketChannel;
+use App\Models\SystemLog;
 use App\Models\Ticket;
 use App\Models\User;
 use App\Models\WebhookEvent;
@@ -139,37 +140,66 @@ class IngestEmailMessageJob implements ShouldQueue
 
     /**
      * Decode and store inbound email attachments (Postmark shape:
-     * {Name, Content: base64, ContentType, ContentLength}). Rejected files are
-     * simply skipped.
+     * {Name, Content: base64, ContentType, ContentLength}).
+     *
+     * A file we will not keep is RECORDED rather than dropped. Until now every
+     * refusal was silent, which made two completely different situations look
+     * identical on the ticket — a customer who attached nothing, and a customer
+     * whose file we threw away. The second one is the customer who follows up
+     * asking why nobody looked at the invoice they sent.
      *
      * @param  array<int, array<string, mixed>>  $raw
-     * @return array<int, array{name: string, mime: string, size: int, path: string, disk: string}>
+     * @return array<int, array<string, mixed>> stored files, then refused ones
      */
     protected function storeAttachments(AttachmentStore $store, int $ticketId, array $raw): array
     {
         $out = [];
 
         foreach ($raw as $attachment) {
+            $name = (string) ($attachment['Name'] ?? $attachment['name'] ?? 'file');
+            $declared = (string) ($attachment['ContentType'] ?? $attachment['content_type'] ?? '') ?: null;
             $encoded = (string) ($attachment['Content'] ?? $attachment['content'] ?? '');
             $contents = $encoded !== '' ? base64_decode($encoded, true) : false;
 
             if ($contents === false || $contents === '') {
+                // The provider sent us something we could not read at all. Worth
+                // saying out loud: it means the message HAD a file, and we have
+                // none of it.
+                $out[] = ['name' => $name, 'size' => 0, 'rejected' => 'לא ניתן היה לקרוא את הקובץ מההודעה.'];
+
+                $this->noteRefusal($ticketId, $name, $declared, 'base64 לא תקין');
+
                 continue;
             }
 
-            $meta = $store->store(
-                $ticketId,
-                (string) ($attachment['Name'] ?? $attachment['name'] ?? 'file'),
-                $contents,
-                (string) ($attachment['ContentType'] ?? $attachment['content_type'] ?? '') ?: null,
-            );
+            $verdict = $store->inspect($name, $contents, $declared);
 
-            if ($meta !== null) {
-                $out[] = $meta;
+            if (! $verdict['ok']) {
+                $out[] = $store->refusalRecord($verdict);
+
+                $this->noteRefusal($ticketId, $name, $declared, (string) $verdict['reason']);
+
+                continue;
             }
+
+            $out[] = $store->write($ticketId, $verdict, $contents);
         }
 
         return $out;
+    }
+
+    /**
+     * Log a refused attachment, with both the declared type and our reason.
+     *
+     * This is the record that says which file types to add next. A refusal that
+     * only shows on one ticket is a refusal nobody counts, and the allow-list
+     * then only ever grows by somebody complaining.
+     */
+    protected function noteRefusal(int $ticketId, string $name, ?string $declaredMime, string $reason): void
+    {
+        SystemLog::record('warning', 'support',
+            "קובץ מצורף בפנייה #{$ticketId} לא נשמר: {$name} — {$reason}",
+            ['ticket_id' => $ticketId, 'declared_mime' => $declaredMime]);
     }
 
     /**

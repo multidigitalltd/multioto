@@ -114,23 +114,76 @@
                                 @php
                                     $url = route('support.attachment', ['message' => $message->id, 'index' => $i]);
                                     $mime = $attachment['mime'] ?? '';
+                                    $name = $attachment['name'] ?? 'קובץ מצורף';
+                                    $rejected = $attachment['rejected'] ?? null;
+                                    $warning = $attachment['warning'] ?? null;
+                                    $risk = $attachment['risk'] ?? 'safe';
+                                    // Previewed only for what the controller will
+                                    // actually serve inline. Anything else — an SVG
+                                    // above all — is a download, and an <img> or
+                                    // <video> pointing at it would just be a broken
+                                    // box next to a file that is perfectly fine.
+                                    $previewable = in_array($mime, [
+                                        'image/jpeg', 'image/png', 'image/gif', 'image/webp',
+                                        'image/avif', 'image/bmp', 'image/x-ms-bmp',
+                                    ], true);
+                                    $playable = in_array($mime, [
+                                        'audio/mpeg', 'audio/ogg', 'audio/mp4', 'audio/aac',
+                                        'audio/wav', 'audio/x-wav', 'audio/amr',
+                                    ], true);
+                                    $watchable = in_array($mime, [
+                                        'video/mp4', 'video/quicktime', 'video/3gpp', 'video/webm',
+                                    ], true);
                                 @endphp
-                                @if (str_starts_with($mime, 'image/'))
-                                    <a href="{{ $url }}" target="_blank" rel="noopener">
-                                        <img src="{{ $url }}" alt="{{ $attachment['name'] ?? 'תמונה' }}"
-                                             class="max-h-48 rounded-lg border border-gray-200 dark:border-gray-700" style="max-width: 100%;">
-                                    </a>
-                                @elseif (str_starts_with($mime, 'audio/'))
-                                    <audio controls preload="none" src="{{ $url }}" class="w-full max-w-xs"></audio>
-                                @elseif (str_starts_with($mime, 'video/'))
-                                    <video controls preload="none" src="{{ $url }}"
-                                           class="max-h-64 rounded-lg border border-gray-200 dark:border-gray-700" style="max-width: 100%;"></video>
+
+                                {{-- A file we could not keep at all (empty, or over
+                                     the cap). Shown rather than hidden: "they
+                                     attached nothing" and "we could not store it"
+                                     are different conversations, and only one of
+                                     them needs an apology. --}}
+                                @if (filled($rejected))
+                                    <div class="flex items-start gap-2 rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 text-xs text-gray-700 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300">
+                                        <x-filament::icon icon="heroicon-o-exclamation-circle" class="mt-0.5 h-4 w-4 shrink-0" />
+                                        <span><strong>{{ $name }}</strong> לא נשמר — {{ $rejected }}</span>
+                                    </div>
                                 @else
-                                    <a href="{{ $url }}" target="_blank" rel="noopener"
-                                       class="flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-xs text-primary-600 hover:underline dark:border-gray-700">
-                                        <x-filament::icon icon="heroicon-o-paper-clip" class="h-4 w-4" />
-                                        {{ $attachment['name'] ?? 'קובץ מצורף' }}
-                                    </a>
+                                    @if (filled($warning))
+                                        {{-- Before the link, never after. The whole
+                                             point of keeping a risky file is that the
+                                             person decides — and they can only decide
+                                             if they read this first. --}}
+                                        <div @class([
+                                            'flex items-start gap-2 rounded-lg border px-3 py-2 text-xs',
+                                            'border-danger-300 bg-danger-50 text-danger-800 dark:border-danger-700 dark:bg-danger-950 dark:text-danger-200' => $risk === 'executable',
+                                            'border-warning-300 bg-warning-50 text-warning-800 dark:border-warning-700 dark:bg-warning-950 dark:text-warning-200' => $risk !== 'executable',
+                                        ])>
+                                            <x-filament::icon
+                                                :icon="$risk === 'executable' ? 'heroicon-o-shield-exclamation' : 'heroicon-o-exclamation-triangle'"
+                                                class="mt-0.5 h-4 w-4 shrink-0" />
+                                            <span>{{ $warning }}</span>
+                                        </div>
+                                    @endif
+
+                                    @if ($previewable)
+                                        <a href="{{ $url }}" target="_blank" rel="noopener">
+                                            <img src="{{ $url }}" alt="{{ $name }}"
+                                                 class="max-h-48 rounded-lg border border-gray-200 dark:border-gray-700" style="max-width: 100%;">
+                                        </a>
+                                    @elseif ($playable)
+                                        <audio controls preload="none" src="{{ $url }}" class="w-full max-w-xs"></audio>
+                                    @elseif ($watchable)
+                                        <video controls preload="none" src="{{ $url }}"
+                                               class="max-h-64 rounded-lg border border-gray-200 dark:border-gray-700" style="max-width: 100%;"></video>
+                                    @else
+                                        <a href="{{ $url }}" download
+                                           class="flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-xs text-primary-600 hover:underline dark:border-gray-700">
+                                            <x-filament::icon icon="heroicon-o-arrow-down-tray" class="h-4 w-4" />
+                                            {{ $name }}
+                                            @if (($attachment['size'] ?? 0) > 0)
+                                                <span class="text-gray-400">({{ \Illuminate\Support\Number::fileSize((int) $attachment['size'], precision: 1) }})</span>
+                                            @endif
+                                        </a>
+                                    @endif
                                 @endif
                             @endforeach
                         </div>
