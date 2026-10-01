@@ -34,7 +34,17 @@ class AttachmentsTest extends TestCase
     /** A real 1x1 PNG so finfo reports image/png. */
     private const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
 
-    public function test_attachment_store_keeps_an_allowed_image_and_rejects_other_types(): void
+    /**
+     * Every type is kept now — and a payload pretending to be an image is kept
+     * as what it actually is, marked, and never written somewhere our own server
+     * could run it.
+     *
+     * The old rule refused this file, and refusing by type is what lost real
+     * work (see InboundAttachmentTypesTest). The protection that replaced it is
+     * not the label, which only informs a person: it is the stored extension
+     * and, at serve time, the forced download.
+     */
+    public function test_a_payload_pretending_to_be_an_image_is_kept_marked_and_defused(): void
     {
         Storage::fake('local');
         $store = app(AttachmentStore::class);
@@ -42,10 +52,16 @@ class AttachmentsTest extends TestCase
         $ok = $store->store(1, 'photo.png', base64_decode(self::PNG), 'image/png');
         $this->assertNotNull($ok);
         $this->assertSame('image/png', $ok['mime']);
+        $this->assertSame(AttachmentStore::RISK_SAFE, $ok['risk']);
         Storage::disk('local')->assertExists($ok['path']);
 
-        // A PHP payload (even with an image name) is sniffed as non-image and dropped.
-        $this->assertNull($store->store(1, 'shell.png', "<?php echo 'x'; ?>", 'image/png'));
+        // A PHP payload behind an image name: sniffed for what it is, kept, and
+        // labelled — the declared image/png does not get to decide.
+        $shell = $store->store(1, 'shell.png', "<?php echo 'x'; ?>", 'image/png');
+        $this->assertNotNull($shell);
+        $this->assertSame(AttachmentStore::RISK_ACTIVE, $shell['risk']);
+        $this->assertNotNull($shell['warning']);
+        $this->assertStringEndsNotWith('.php', $shell['path']);
     }
 
     public function test_the_stored_extension_comes_from_the_mime_not_the_filename(): void

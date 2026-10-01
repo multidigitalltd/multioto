@@ -727,6 +727,11 @@ return [
                 'image/heif' => 'heif',
                 'image/heic-sequence' => 'heic',   // finfo reports these for HEIF sequences
                 'image/heif-sequence' => 'heif',
+                // Screenshots from older tools and from Windows' own snipper.
+                'image/bmp' => 'bmp',
+                'image/x-ms-bmp' => 'bmp',
+                'image/tiff' => 'tiff',
+                'image/avif' => 'avif',
                 'application/pdf' => 'pdf',
                 'text/plain' => 'txt',
                 // CSV sniffs as text/csv on some libmagic versions and text/plain
@@ -742,6 +747,34 @@ return [
                 'application/vnd.openxmlformats-officedocument.presentationml.presentation' => 'pptx',
                 'application/zip' => 'zip',
                 'application/x-zip-compressed' => 'zip',
+                // OpenDocument, for the customers who do not run Office. Both
+                // sniff as a plain zip, so they are reached through the declared
+                // type (see AttachmentStore).
+                'application/vnd.oasis.opendocument.text' => 'odt',
+                'application/vnd.oasis.opendocument.spreadsheet' => 'ods',
+                'application/vnd.oasis.opendocument.presentation' => 'odp',
+                // Archives a customer sends logs or a batch of screenshots in.
+                'application/x-7z-compressed' => '7z',
+                'application/x-rar' => 'rar',
+                'application/vnd.rar' => 'rar',
+                'application/gzip' => 'gz',
+                'application/x-gzip' => 'gz',
+                'application/x-tar' => 'tar',
+                // A forwarded email, attached as a file. One of the commonest
+                // things a customer sends support ("look what I got"), and it
+                // was being refused outright.
+                'message/rfc822' => 'eml',
+                'application/vnd.ms-outlook' => 'msg',
+                // Outlook's own wrapper. Unreadable to most people, but it is
+                // the only copy of what the customer attached — refusing it
+                // leaves them with nothing at all.
+                'application/vnd.ms-tnef' => 'dat',
+                'application/ms-tnef' => 'dat',
+                'text/rtf' => 'rtf',
+                'application/rtf' => 'rtf',
+                // Deliberately NOT here: text/html and image/svg+xml. Both carry
+                // script, and neither is worth the surface — a customer with an
+                // HTML page to show us can send a screenshot or a link.
                 // Media customers commonly send on WhatsApp (voice notes, clips).
                 'audio/ogg' => 'ogg',       // WhatsApp voice notes
                 'audio/mpeg' => 'mp3',
