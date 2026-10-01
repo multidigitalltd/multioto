@@ -6,6 +6,7 @@ use App\Enums\UserRole;
 use App\Filament\Concerns\CachesNavigationBadge;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -136,6 +137,37 @@ class PanelPerformanceTest extends TestCase
 
         $this->assertSame([], $uncached,
             'These badges run a count on every panel render: '.implode(', ', $uncached));
+    }
+
+    /**
+     * מטמון שנפל אינו מסתיר את המספר.
+     *
+     * התגים האלה הם איך שאדם רואה שעבודות נכשלות או ששגיאות נערמות, והתקלה
+     * שמפילה את Redis היא בדיוק הרגע שבו המספרים האלה חשובים יותר מתמיד. שתיקה
+     * אז היא התזמון הגרוע ביותר האפשרי — אז סופרים ישר מהמסד.
+     */
+    public function test_an_unreachable_cache_falls_back_to_counting(): void
+    {
+        $screen = new class
+        {
+            use CachesNavigationBadge;
+
+            public static function badge(): ?string
+            {
+                return self::cachedBadge(fn (): int => 7);
+            }
+        };
+
+        // Every call on the cache throws, the way an unreachable store behaves.
+        Cache::swap(new class
+        {
+            public function __call(string $method, array $arguments): mixed
+            {
+                throw new \RuntimeException('cache is down');
+            }
+        });
+
+        $this->assertSame('7', $screen::badge());
     }
 
     /**

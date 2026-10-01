@@ -42,9 +42,16 @@ trait CachesNavigationBadge
      * Count through the cache, and return it the way Filament wants it: the
      * number as a string, or null for "no badge at all".
      *
-     * A failure is swallowed to null. A badge is decoration on every screen in
-     * the panel, and a count that throws — a table that does not exist yet one
-     * minute after a deploy — must not take the whole navigation down with it.
+     * Two different failures, and only one of them may hide the number:
+     *
+     *  - **The cache is unreachable.** Count anyway. These badges are how a
+     *    person sees that jobs are failing or that errors are piling up, and the
+     *    incident that takes Redis down is exactly the moment those numbers
+     *    matter most — going quiet then would be the worst possible timing.
+     *  - **The count itself throws** — a table that does not exist yet, one
+     *    minute after a deploy. Then there is no number to show, and a badge is
+     *    decoration on every screen in the panel: it must not take the whole
+     *    navigation down with it.
      */
     protected static function cachedBadge(Closure $count, ?string $key = null): ?string
     {
@@ -57,9 +64,11 @@ trait CachesNavigationBadge
                 fn (): int => (int) $count(),
             );
         } catch (\Throwable) {
-            return null;
+            // Could have been the cache or the count — ask the count directly to
+            // find out, and give up only if that fails too.
+            $value = rescue(fn (): int => (int) $count(), null, report: false);
         }
 
-        return $value > 0 ? (string) $value : null;
+        return $value !== null && $value > 0 ? (string) $value : null;
     }
 }
