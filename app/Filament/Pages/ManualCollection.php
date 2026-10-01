@@ -3,6 +3,7 @@
 namespace App\Filament\Pages;
 
 use App\Enums\ChargeStatus;
+use App\Filament\Concerns\CachesNavigationBadge;
 use App\Filament\Concerns\RespectsModuleAccess;
 use App\Filament\Support\DebtorActions;
 use App\Models\Charge;
@@ -26,6 +27,7 @@ use Illuminate\Support\Carbon;
  */
 class ManualCollection extends Page implements HasTable
 {
+    use CachesNavigationBadge;
     use InteractsWithTable;
     use RespectsModuleAccess;
 
@@ -50,9 +52,7 @@ class ManualCollection extends Page implements HasTable
     /** Amber badge with the count of subscriptions due for manual collection. */
     public static function getNavigationBadge(): ?string
     {
-        $count = Subscription::query()->dueForManualCollection()->count();
-
-        return $count > 0 ? (string) $count : null;
+        return static::cachedBadge(fn (): int => Subscription::query()->dueForManualCollection()->count());
     }
 
     public static function getNavigationBadgeColor(): ?string

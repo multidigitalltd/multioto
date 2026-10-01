@@ -5,6 +5,7 @@ namespace App\Filament\Resources;
 use App\Enums\TicketChannel;
 use App\Enums\TicketPriority;
 use App\Enums\TicketStatus;
+use App\Filament\Concerns\CachesNavigationBadge;
 use App\Filament\Concerns\RespectsModuleAccess;
 use App\Filament\Resources\TicketResource\Pages;
 use App\Models\AuditLog;
@@ -20,6 +21,7 @@ use Illuminate\Database\Eloquent\Collection;
 
 class TicketResource extends Resource
 {
+    use CachesNavigationBadge;
     use RespectsModuleAccess;
 
     protected static ?string $model = Ticket::class;
@@ -40,9 +42,7 @@ class TicketResource extends Resource
 
     public static function getNavigationBadge(): ?string
     {
-        $count = Ticket::query()->where('status', TicketStatus::Open)->count();
-
-        return $count > 0 ? (string) $count : null;
+        return static::cachedBadge(fn (): int => Ticket::query()->where('status', TicketStatus::Open)->count());
     }
 
     public static function getNavigationBadgeColor(): ?string

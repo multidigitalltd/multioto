@@ -7,6 +7,7 @@ use App\Filament\Pages\FailedJobs;
 use App\Models\FailedJob;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Livewire\Livewire;
@@ -202,12 +203,19 @@ class FailedJobsScreenTest extends TestCase
             ->assertTableActionHidden('retry', $agent);
     }
 
-    /** התג בתפריט סופר את מה שממתין. */
+    /**
+     * התג בתפריט סופר את מה שממתין.
+     *
+     * הניקוי באמצע הוא התכונה ולא עקיפה שלה: התג נספר פעם בדקה כדי שהניווט לא
+     * יריץ אחד-עשר COUNT בכל render, ולכן שינוי שנעשה באותה שנייה אינו מופיע בו
+     * מיד. המסך שמאחוריו כן חי.
+     */
     public function test_the_badge_counts_what_is_waiting(): void
     {
         $this->assertNull(FailedJobs::getNavigationBadge());
 
         $this->failure();
+        Cache::flush();
 
         $this->assertSame('1', FailedJobs::getNavigationBadge());
     }

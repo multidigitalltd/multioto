@@ -4,6 +4,7 @@ namespace App\Filament\Resources;
 
 use App\Enums\TaskStatus;
 use App\Enums\TicketPriority;
+use App\Filament\Concerns\CachesNavigationBadge;
 use App\Filament\Concerns\RespectsModuleAccess;
 use App\Filament\Resources\TaskResource\Pages;
 use App\Models\Task;
@@ -21,6 +22,7 @@ use Illuminate\Database\Eloquent\Builder;
  */
 class TaskResource extends Resource
 {
+    use CachesNavigationBadge;
     use RespectsModuleAccess;
 
     protected static ?string $model = Task::class;
@@ -39,9 +41,7 @@ class TaskResource extends Resource
 
     public static function getNavigationBadge(): ?string
     {
-        $count = Task::query()->open()->count();
-
-        return $count > 0 ? (string) $count : null;
+        return static::cachedBadge(fn (): int => Task::query()->open()->count());
     }
 
     public static function form(Form $form): Form

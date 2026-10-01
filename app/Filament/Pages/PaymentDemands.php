@@ -4,6 +4,7 @@ namespace App\Filament\Pages;
 
 use App\Enums\ChargeStatus;
 use App\Enums\TokenStatus;
+use App\Filament\Concerns\CachesNavigationBadge;
 use App\Filament\Concerns\OpensNewCustomer;
 use App\Filament\Concerns\OpensPaymentDemand;
 use App\Filament\Concerns\RespectsModuleAccess;
@@ -35,6 +36,7 @@ use Illuminate\Support\Str;
  */
 class PaymentDemands extends Page implements HasTable
 {
+    use CachesNavigationBadge;
     use InteractsWithTable;
     use OpensNewCustomer;
     use OpensPaymentDemand;
@@ -55,9 +57,7 @@ class PaymentDemands extends Page implements HasTable
     /** Amber badge with the count of still-pending demands. */
     public static function getNavigationBadge(): ?string
     {
-        $count = self::baseQuery()->where('status', ChargeStatus::Pending)->count();
-
-        return $count > 0 ? (string) $count : null;
+        return static::cachedBadge(fn (): int => self::baseQuery()->where('status', ChargeStatus::Pending)->count());
     }
 
     public static function getNavigationBadgeColor(): ?string

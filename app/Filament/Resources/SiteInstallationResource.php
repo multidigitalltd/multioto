@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources;
 
+use App\Filament\Concerns\CachesNavigationBadge;
 use App\Filament\Concerns\RespectsModuleAccess;
 use App\Models\AuditLog;
 use App\Models\SiteInstallation;
@@ -27,6 +28,7 @@ use Illuminate\Database\Eloquent\Builder;
  */
 class SiteInstallationResource extends Resource
 {
+    use CachesNavigationBadge;
     use RespectsModuleAccess;
 
     protected static ?string $model = SiteInstallation::class;
@@ -46,9 +48,9 @@ class SiteInstallationResource extends Resource
     /** Work waiting, on the navigation itself. */
     public static function getNavigationBadge(): ?string
     {
-        $open = static::getModel()::query()->where('state', SiteInstallation::READY)->count();
-
-        return $open > 0 ? (string) $open : null;
+        return static::cachedBadge(
+            fn (): int => static::getModel()::query()->where('state', SiteInstallation::READY)->count(),
+        );
     }
 
     public static function getNavigationBadgeColor(): ?string

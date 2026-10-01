@@ -13,6 +13,7 @@ use App\Models\SiteEvent;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Event;
 use Livewire\Livewire;
 use Tests\TestCase;
@@ -114,10 +115,13 @@ class SiteAlertsWidgetTest extends TestCase
         $this->assertNull(SiteResource::getNavigationBadge());
 
         $event = $this->event(severity: 'warning', type: 'dns');
+        // Counted once a minute now; a change made this instant is not in it yet.
+        Cache::flush();
 
         $this->assertSame('1', SiteResource::getNavigationBadge());
 
         $event->acknowledge($this->user);
+        Cache::flush();
 
         $this->assertNull(SiteResource::getNavigationBadge());
     }
