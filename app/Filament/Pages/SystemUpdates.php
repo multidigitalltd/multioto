@@ -75,6 +75,77 @@ class SystemUpdates extends Page
         $this->checkError = $deploy->lastCheckError();
     }
 
+    /**
+     * Tell the operator what the refresh actually found.
+     *
+     * Ordered by what the person needs to do about it, not by severity: a check
+     * that never ran is a one-line install on the server, and until somebody
+     * does it no amount of pressing this button will ever change anything.
+     */
+    protected function announceState(DeployManager $deploy): void
+    {
+        if ($this->lastCheck === null) {
+            Notification::make()
+                ->title('סוכן העדכון בשרת מעולם לא רץ')
+                ->body('ולכן אין מה לרענן — אף אחד לא בדק אם יש גרסה חדשה. '
+                    .'מתקינים אותו פעם אחת בשרת: bash docker/install-deploy-watcher.sh')
+                ->warning()
+                ->persistent()
+                ->send();
+
+            return;
+        }
+
+        if ($this->checkError !== null) {
+            Notification::make()
+                ->title('בדיקת העדכונים נכשלת')
+                ->body('היעדר הודעה על גרסה חדשה אינו אומר שאתם מעודכנים. הפירוט במסך.')
+                ->danger()
+                ->persistent()
+                ->send();
+
+            return;
+        }
+
+        if ($this->checkStale) {
+            Notification::make()
+                ->title('הסוכן הפסיק לבדוק')
+                ->body('הבדיקה האחרונה: '.($this->lastCheck['at'] ?? 'לא ידוע').'. הוא אמור לבדוק כל דקה.')
+                ->warning()
+                ->persistent()
+                ->send();
+
+            return;
+        }
+
+        if ($this->available !== null) {
+            $waiting = ($this->available['behind'] ?? '?').' שינויים ממתינים.';
+
+            // What to do next depends on whether the button is actually there to
+            // press. An update already running disables it, and an ops directory
+            // that is not writable hides it altogether — telling somebody to
+            // click either one is the same dead end this whole change is about.
+            Notification::make()
+                ->title('יש גרסה חדשה')
+                ->body(match (true) {
+                    ! $this->configured => $waiting.' סוכן העדכון אינו מוגדר בשרת, ולכן אי אפשר לעדכן מכאן — '
+                        .'צריך למשוך ידנית, או להתקין את הסוכן.',
+                    $this->pending => $waiting.' עדכון כבר התבקש ומתבצע — אין צורך ללחוץ שוב.',
+                    default => $waiting.' אפשר ללחוץ "עדכן עכשיו".',
+                })
+                ->success()
+                ->send();
+
+            return;
+        }
+
+        Notification::make()
+            ->title('אתם מעודכנים')
+            ->body('נבדק: '.($this->lastCheck['at'] ?? 'לא ידוע'))
+            ->success()
+            ->send();
+    }
+
     protected function getHeaderActions(): array
     {
         return [
@@ -82,7 +153,20 @@ class SystemUpdates extends Page
                 ->label('רענון סטטוס')
                 ->icon('heroicon-o-arrow-path')
                 ->color('gray')
-                ->action(fn (DeployManager $deploy) => $this->refreshState($deploy)),
+                // Says what it found, every time.
+                //
+                // This button re-reads what the host agent wrote; it cannot go
+                // and look for an update itself (the web process never runs a
+                // shell command). So when the agent has never run, every file it
+                // reads is absent, nothing on the page changes, and the button
+                // looks broken — which is precisely how it was reported. An
+                // answer, even "there was nothing to read and here is why", is
+                // the difference between a dead button and a diagnosis.
+                ->action(function (DeployManager $deploy): void {
+                    $this->refreshState($deploy);
+
+                    $this->announceState($deploy);
+                }),
 
             Action::make('update')
                 ->label('עדכן עכשיו')
