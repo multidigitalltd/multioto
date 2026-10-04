@@ -7,6 +7,7 @@ use App\Jobs\CheckStoreSalesJob;
 use App\Models\Site;
 use App\Models\SiteEvent;
 use App\Services\Agent\McpClient;
+use App\Services\Monitoring\ChallengePage;
 use App\Services\Notifications\TeamNotifier;
 use App\Services\Security\LayoutFingerprint;
 use App\Services\Security\SalesPulse;
@@ -139,7 +140,7 @@ class SilentFailureWatchTest extends TestCase
 
         $team = Mockery::mock(TeamNotifier::class);
         $team->shouldNotReceive('alert');
-        (new CheckSiteLayoutJob($site->id))->handle(new LayoutFingerprint, $team);
+        (new CheckSiteLayoutJob($site->id))->handle(new LayoutFingerprint, $team, new ChallengePage);
 
         $baseline = $site->fresh()->layout_snapshot['fingerprint'];
         $this->assertSame(20, $baseline['images']);
@@ -149,7 +150,7 @@ class SilentFailureWatchTest extends TestCase
         $team2->shouldReceive('alert')->once()->withArgs(fn (string $title, string $body): bool => str_contains($title, 'מבנה העמוד')
             && str_contains($body, 'הכותרת העליונה'));
 
-        (new CheckSiteLayoutJob($site->id))->handle(new LayoutFingerprint, $team2);
+        (new CheckSiteLayoutJob($site->id))->handle(new LayoutFingerprint, $team2, new ChallengePage);
 
         $snapshot = $site->fresh()->layout_snapshot;
         $this->assertSame('broken', $snapshot['status']);
@@ -173,10 +174,10 @@ class SilentFailureWatchTest extends TestCase
 
         $team = Mockery::mock(TeamNotifier::class);
         $team->shouldNotReceive('alert');
-        (new CheckSiteLayoutJob($site->id))->handle(new LayoutFingerprint, $team);
+        (new CheckSiteLayoutJob($site->id))->handle(new LayoutFingerprint, $team, new ChallengePage);
 
         // A new paragraph and one extra image — a normal edit.
-        (new CheckSiteLayoutJob($site->id))->handle(new LayoutFingerprint, $team);
+        (new CheckSiteLayoutJob($site->id))->handle(new LayoutFingerprint, $team, new ChallengePage);
 
         $this->assertSame('ok', $site->fresh()->layout_snapshot['status']);
     }
@@ -194,14 +195,14 @@ class SilentFailureWatchTest extends TestCase
 
         $silent = Mockery::mock(TeamNotifier::class);
         $silent->shouldNotReceive('alert');
-        (new CheckSiteLayoutJob($site->id))->handle(new LayoutFingerprint, $silent);
+        (new CheckSiteLayoutJob($site->id))->handle(new LayoutFingerprint, $silent, new ChallengePage);
 
         $loud = Mockery::mock(TeamNotifier::class);
         $loud->shouldReceive('alert')->once();
-        (new CheckSiteLayoutJob($site->id))->handle(new LayoutFingerprint, $loud);
+        (new CheckSiteLayoutJob($site->id))->handle(new LayoutFingerprint, $loud, new ChallengePage);
 
         // Second broken run: same breakage → no second alarm, no duplicate row.
-        (new CheckSiteLayoutJob($site->id))->handle(new LayoutFingerprint, $silent);
+        (new CheckSiteLayoutJob($site->id))->handle(new LayoutFingerprint, $silent, new ChallengePage);
 
         $this->assertSame(1, SiteEvent::where('site_id', $site->id)->where('type', 'layout_broken')->count());
     }
@@ -233,7 +234,7 @@ class SilentFailureWatchTest extends TestCase
         $team = Mockery::mock(TeamNotifier::class);
         $team->shouldNotReceive('alert');
 
-        (new CheckSiteLayoutJob($site->id))->handle(new LayoutFingerprint, $team);
+        (new CheckSiteLayoutJob($site->id))->handle(new LayoutFingerprint, $team, new ChallengePage);
 
         // Untouched: an outage is the uptime monitor's story to tell.
         $this->assertSame('ok', $site->fresh()->layout_snapshot['status']);

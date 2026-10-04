@@ -546,6 +546,26 @@ return [
         // Responses slower than this (ms) are flagged as "degraded" (not down).
         'slow_response_ms' => env('MONITOR_SLOW_RESPONSE_MS', 4000),
 
+        // "אמת שאתה אנושי" — דף אימות שמוצג במקום האתר. נפילה שבדיקת הזמינות
+        // עיוורת לה: שכבת ההגנה מחזירה את דף האתגר בקוד 200, והאתר נראה תקין.
+        'challenge' => [
+            'enabled' => env('MONITOR_CHALLENGE_ENABLED', true),
+
+            // האם דף אתגר נחשב נפילה (פותח תקלה וכרטיס ומוריד את אחוז הזמינות).
+            // כבוי כברירת מחדל, ובכוונה: מבדיקת HTTP אחת אי אפשר לדעת אם ההגנה
+            // מציגה את האתגר לכל גולש או רק לבדיקה שלנו, ו"נפילה" שגויה פותחת
+            // תקלה, כרטיס דחוף והצעת תיקון אוטומטית על אתר שעובד. ההתראה נשלחת
+            // מיד בכל מקרה; זה רק מה שנרשם בסטטיסטיקה.
+            'counts_as_down' => env('MONITOR_CHALLENGE_COUNTS_AS_DOWN', false),
+
+            // כמה מגוף העמוד נסרק. סימני אתגר יושבים ב-<head> ובתחילת הגוף.
+            'scan_bytes' => env('MONITOR_CHALLENGE_SCAN_BYTES', 65536),
+
+            // צורת "עמוד ביניים" — מעליה זה עמוד תוכן, ולא אתגר.
+            'interstitial_chars' => env('MONITOR_CHALLENGE_INTERSTITIAL_CHARS', 600),
+            'interstitial_links' => env('MONITOR_CHALLENGE_INTERSTITIAL_LINKS', 5),
+        ],
+
         // Silent-failure watch for stores: a shop that answers 200 but stopped
         // taking (or charging for) orders. Judged against the store's own
         // median, so a quiet shop is never falsely accused.

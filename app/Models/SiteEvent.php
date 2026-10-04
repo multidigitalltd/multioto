@@ -25,6 +25,7 @@ class SiteEvent extends Model
         'theme_removed' => ['🎨', 'תבנית הוסרה'],
         'reputation' => ['🛡️', 'ממצא מוניטין'],
         'defacement' => ['🚨', 'חשד להשחתת אתר'],
+        'challenge' => ['🤖', 'דף אימות אנושי במקום האתר'],
         'threat_purged' => ['🛡️', 'סימן פריצה הוסר אוטומטית'],
         'sessions_locked' => ['🔐', 'כל ההתחברויות נותקו'],
         'sessions_lock_failed' => ['🔓', 'ניתוק ההתחברויות לא הושלם'],

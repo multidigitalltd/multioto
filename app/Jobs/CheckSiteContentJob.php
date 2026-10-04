@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Models\Site;
 use App\Models\SiteEvent;
 use App\Models\SystemLog;
+use App\Services\Monitoring\ChallengePage;
 use App\Services\Notifications\TeamNotifier;
 use App\Services\Security\ContentFingerprint;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -40,7 +41,7 @@ class CheckSiteContentJob implements ShouldQueue
             ['site_id' => $this->siteId]);
     }
 
-    public function handle(ContentFingerprint $fingerprint, TeamNotifier $team): void
+    public function handle(ContentFingerprint $fingerprint, TeamNotifier $team, ChallengePage $challengePage): void
     {
         if (! config('security.defacement.enabled', true)) {
             SystemLog::record('info', 'monitoring',
@@ -85,6 +86,19 @@ class CheckSiteContentJob implements ShouldQueue
         if (! $response->successful() || trim((string) $response->body()) === '') {
             SystemLog::record('warning', 'monitoring',
                 "בדיקת השחתה לאתר {$site->domain}: דף הבית החזיר תגובה לא תקינה (סטטוס {$response->status()}) — הבדיקה דולגה כדי לא לזהם את בסיס התוכן.",
+                ['site_id' => $site->id]);
+
+            return;
+        }
+
+        // A verification page ("אמת שאתה אנושי") answers 200 with a handful of
+        // words, so its similarity to the real homepage is near zero — i.e. it
+        // looks exactly like a defacement. Fingerprinting it would raise a false
+        // "חשד להשחתת האתר" that buries the real finding, and the uptime monitor
+        // is what reports the challenge itself.
+        if (($challenge = $challengePage->detect($response->headers(), (string) $response->body())) !== null) {
+            SystemLog::record('warning', 'monitoring',
+                "בדיקת השחתה לאתר {$site->domain} דולגה — מוצג דף אימות אנושי ({$challengePage->label($challenge['vendor'])}) במקום האתר.",
                 ['site_id' => $site->id]);
 
             return;
