@@ -9,10 +9,12 @@ use App\Enums\TicketStatus;
 use App\Enums\UserRole;
 use App\Models\Incident;
 use App\Models\Site;
+use App\Models\SiteEvent;
 use App\Models\Ticket;
 use App\Models\User;
 use App\Services\Automation\ApprovalGate;
 use App\Services\Hosting\SiteDiagnostics;
+use App\Services\Monitoring\ChallengePage;
 use App\Services\Notifications\TeamNotifier;
 use Filament\Notifications\Actions\Action;
 use Filament\Notifications\Notification;
@@ -24,6 +26,11 @@ use Illuminate\Support\Facades\Log;
 /**
  * Single uptime probe for one site. Opens an incident (plus an internal
  * ticket) after N consecutive failures, and resolves it on recovery.
+ *
+ * It also reads the page it fetched, for the failure an uptime verdict cannot
+ * express: an "אמת שאתה אנושי" verification page served in place of the site,
+ * usually with a perfectly healthy 200. That one is announced immediately —
+ * see evaluateChallenge().
  */
 class MonitorSiteJob implements ShouldQueue
 {
@@ -33,7 +40,7 @@ class MonitorSiteJob implements ShouldQueue
 
     public function __construct(public int $siteId) {}
 
-    public function handle(TeamNotifier $team): void
+    public function handle(TeamNotifier $team, ChallengePage $challengePage): void
     {
         $site = Site::with('openIncident')->find($this->siteId);
 
@@ -50,28 +57,31 @@ class MonitorSiteJob implements ShouldQueue
         }
 
         $startedAt = microtime(true);
-        // A content check needs the body → GET; otherwise a cheap HEAD.
-        $needsBody = filled($site->expected_keyword);
+        $keyword = (string) $site->expected_keyword;
+        $detected = null;
+
+        // Did we actually get a page to read? A timeout tells us nothing about
+        // whether a verification page is still standing, and must never be
+        // mistaken for "it's gone" — see evaluateChallenge().
+        $readThePage = false;
 
         try {
-            $request = Http::timeout((int) config('billing.monitoring.timeout_seconds'));
-            // A content check must land on the FINAL page: follow redirects
-            // (bare→www, http→https, localized landing) so the keyword search
-            // runs against real content, not a 3xx redirect body. A plain uptime
-            // probe uses HEAD without following redirects — a 3xx still counts as
-            // up (status < 500) and we skip a body we don't need.
-            $response = $needsBody
-                ? $request->get($url)
-                : $request->withoutRedirecting()->head($url);
-
-            // Some servers reject HEAD outright (405) while serving GET just
-            // fine — retry with GET before classifying, so "no HEAD support"
-            // never reads as downtime now that 4xx counts as down.
-            if (! $needsBody && $response->status() === 405) {
-                $response = Http::timeout((int) config('billing.monitoring.timeout_seconds'))
-                    ->withoutRedirecting()
-                    ->get($url);
-            }
+            // GET, always — and following redirects, always.
+            //
+            // The probe used to send HEAD when no keyword was configured, which
+            // is cheaper but blind: a protection layer that answers 200 with an
+            // "אמת שאתה אנושי" page in place of the site is indistinguishable
+            // from a healthy homepage until you read the body. Following
+            // redirects (bare→www, http→https) is the same requirement — the
+            // challenge lives on the page we land on, not on the 301.
+            //
+            // Two consequences, both deliberate: response_ms now includes the
+            // body download for every site (it already did for keyword sites),
+            // and a redirect chain is judged by where it ENDS, so a site that
+            // redirects to a dead page is no longer reported as up.
+            $response = Http::timeout((int) config('billing.monitoring.timeout_seconds'))
+                ->withHeaders(['User-Agent' => 'MultiotoUptimeMonitor/1.0 (+uptime check)'])
+                ->get($url);
 
             $statusCode = $response->status();
 
@@ -89,8 +99,36 @@ class MonitorSiteJob implements ShouldQueue
                 default => null,
             };
 
+            $body = (string) $response->body();
+
+            // Is this a verification page standing in for the site? Checked on
+            // every response, whatever the status: the 200 case is the one the
+            // uptime verdict cannot see, and the 403 case turns a vague "כנראה
+            // הגנת בוטים" into a named finding.
+            if (config('billing.monitoring.challenge.enabled', true)) {
+                $readThePage = true;
+
+                $detected = $challengePage->detect(
+                    $response->headers(),
+                    mb_strcut($body, 0, max(4096, (int) config('billing.monitoring.challenge.scan_bytes', 65536))),
+                );
+            }
+
+            if ($detected !== null) {
+                $vendor = $challengePage->label($detected['vendor']);
+                $error = "דף אימות אנושי ({$vendor}) מוצג במקום האתר — סימן מזהה: {$detected['marker']}";
+
+                // Counting it as down opens an incident, a ticket and an
+                // auto-heal proposal, so it stays opt-in — see the config note.
+                if (config('billing.monitoring.challenge.counts_as_down', false)) {
+                    $isUp = false;
+                }
+            }
+
             // HTTP 200 but expected content missing → treat as down (WSOD/defacement).
-            if ($isUp && $needsBody && ! str_contains((string) $response->body(), (string) $site->expected_keyword)) {
+            // A challenge page has already been named above; saying the keyword
+            // is missing on top of it would only bury the real reason.
+            if ($isUp && $detected === null && $keyword !== '' && ! str_contains($body, $keyword)) {
                 $isUp = false;
                 $error = 'התוכן הצפוי חסר בעמוד';
             }
@@ -108,7 +146,14 @@ class MonitorSiteJob implements ShouldQueue
             'status_code' => $statusCode,
             'response_ms' => $responseMs,
             'error' => $error,
+            'challenge' => $detected['vendor'] ?? null,
         ]);
+
+        // Before the up/down handling: a verification page is its own event, and
+        // it must be announced whether or not it counts as downtime.
+        if ($readThePage) {
+            $this->evaluateChallenge($site, $team, $challengePage, $detected);
+        }
 
         if ($isUp) {
             $this->handleUp($site, $team);
@@ -116,6 +161,76 @@ class MonitorSiteJob implements ShouldQueue
         } else {
             $this->handleDown($site, $team, $error);
         }
+    }
+
+    /**
+     * "אמת שאתה אנושי" — התראה מיד, פעם אחת, ושוב כשזה נגמר.
+     *
+     * אתר שמציג דף אימות במקום התוכן אינו זמין לגולש, גם כשהוא מחזיר 200 — וזה
+     * בדיוק המצב שבדיקת הזמינות עיוורת לו. לכן אין כאן סף של כמה בדיקות: הבדיקה
+     * הראשונה שרואה זאת מתריעה.
+     *
+     * ההתראה נשלחת פעם אחת לכל מצב, ולא בכל בדיקה — אתר שמוגן בקביעות היה מייצר
+     * הודעה כל חמש דקות, וזו הדרך הבטוחה לגרום לצוות להפסיק לקרוא אותן.
+     *
+     * נקרא רק כשבאמת נקרא עמוד: timeout אינו ראיה לכך שדף האימות הוסר, ו"חזר
+     * להיות גלוי" על אתר שבדיוק נפל הוא בדיוק סוג הדיווח שאסור לשלוח.
+     *
+     * @param  array{vendor: string, marker: string}|null  $detected
+     */
+    protected function evaluateChallenge(Site $site, TeamNotifier $team, ChallengePage $challengePage, ?array $detected): void
+    {
+        if ($detected === null) {
+            if ($site->challenge_alerted_at === null) {
+                return; // Nothing was standing — nothing to announce.
+            }
+
+            $site->update(['challenge_alerted_at' => null]);
+
+            $team->alert(
+                '✅ דף האימות הוסר — האתר חזר להיות גלוי',
+                sprintf('האתר %s (%s) מגיש שוב את התוכן שלו ולא דף אימות.',
+                    $site->domain, $site->customer?->name ?? 'לקוח'),
+                $this->siteUrl($site),
+            );
+
+            return;
+        }
+
+        if ($site->challenge_alerted_at !== null) {
+            return; // Already announced and still standing.
+        }
+
+        $site->update(['challenge_alerted_at' => now()]);
+
+        $vendor = $challengePage->label($detected['vendor']);
+        $owner = $site->customer?->name ?? 'לקוח';
+
+        SiteEvent::record($site->id, 'challenge', 'critical',
+            'דף אימות אנושי מוצג במקום האתר',
+            sprintf('זוהה דף אתגר של %s (סימן מזהה: %s). גולש שמגיע לאתר רואה בקשת אימות ולא את התוכן.',
+                $vendor, $detected['marker']));
+
+        $team->alert(
+            '🤖 האתר מציג "אמת שאתה אנושי" במקום התוכן',
+            sprintf(
+                "האתר %s (%s) מחזיר דף אימות של %s במקום דף הבית.\nסימן מזהה: %s\n\n".
+                "מה לבדוק: האם הופעל Under Attack / Bot Fight Mode או כלל WAF חדש אצל ספק ההגנה, והאם הוא מוצג לכל גולש או רק לבדיקה שלנו.\n".
+                'לאימות מהיר — פתחו את האתר בדפדפן פרטי.',
+                $site->domain,
+                $owner,
+                $vendor,
+                $detected['marker'],
+            ),
+            $this->siteUrl($site),
+        );
+
+        $this->notifyAdminsInPanel(
+            "🤖 האתר {$site->domain} מציג דף אימות אנושי",
+            sprintf('לקוח: %s · הגנה: %s — גולש רואה בקשת אימות ולא את האתר.', $owner, $vendor),
+            'warning',
+            $this->siteUrl($site),
+        );
     }
 
     protected function handleDown(Site $site, TeamNotifier $team, ?string $error): void

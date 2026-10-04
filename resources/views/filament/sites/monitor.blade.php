@@ -11,6 +11,13 @@
         $domainDaysLeft = $domainExpiry !== null
             ? (int) ceil(now()->startOfDay()->diffInDays($domainExpiry, false))
             : null;
+
+        // "אמת שאתה אנושי" — דף אימות שמוצג במקום האתר. הדגל נדרך ונפתח בניטור
+        // עצמו; שם הספק נקרא מהבדיקה האחרונה, כדי שלא יישמר אותו מידע בשני מקומות.
+        $challengeSince = $site->challenge_alerted_at;
+        $challengeVendor = $challengeSince !== null
+            ? $site->monitorChecks()->whereNotNull('challenge')->latest('checked_at')->value('challenge')
+            : null;
     @endphp
 
     {{-- Context strip: site + customer + live state. --}}
@@ -19,11 +26,46 @@
         <x-filament::badge :color="$isDown ? 'danger' : 'success'">
             {{ $isDown ? 'לא זמין' : 'זמין' }}
         </x-filament::badge>
+        {{-- "זמין" לבדו מטעה כאן: האתר עונה, אבל מה שהוא מגיש הוא דף אימות. --}}
+        @if ($challengeSince !== null)
+            <x-filament::badge color="warning" icon="heroicon-m-shield-exclamation">
+                דף אימות אנושי
+            </x-filament::badge>
+        @endif
         @if ($site->customer)
             <a href="{{ \App\Filament\Resources\CustomerResource::getUrl('view', ['record' => $site->customer]) }}"
                class="text-primary-600 hover:underline">{{ $site->customer->name }} ←</a>
         @endif
     </div>
+
+    {{-- The site answers, and serves a verification page instead of itself. Loud
+         and at the top, because every other number on this screen reads green
+         while it is standing. --}}
+    @if ($challengeSince !== null)
+        <div class="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm dark:border-amber-800 dark:bg-amber-900/10"
+             role="alert">
+            <div class="flex items-start gap-2 text-amber-800 dark:text-amber-300">
+                <x-heroicon-o-shield-exclamation class="h-5 w-5 shrink-0" />
+                <div>
+                    <div class="font-semibold">
+                        האתר מגיש דף אימות אנושי במקום התוכן — זוהה לראשונה
+                        <time datetime="{{ $challengeSince->toIso8601String() }}">{{ $challengeSince->format('d/m/Y H:i') }}</time>.
+                    </div>
+                    <div class="mt-1 text-xs">
+                        שכבת ההגנה ({{ \App\Services\Monitoring\ChallengePage::LABELS[$challengeVendor] ?? 'לא מזוהה' }})
+                        מחזירה בקשת אימות. הבדיקה מתבצעת מהשרת שלנו ואינה יכולה להכריע אם האתגר מוצג לכל גולש
+                        או רק לבדיקה האוטומטית — לכן אחוז הזמינות לא ירד.
+                    </div>
+                    <div class="mt-2 text-xs">
+                        <span class="font-semibold">מה לעשות:</span>
+                        פתחו את האתר בחלון פרטי כדי לראות מה גולש רואה; אם גם שם מופיע האימות — בדקו אם הופעל
+                        Under&nbsp;Attack / Bot&nbsp;Fight&nbsp;Mode או כלל WAF חדש אצל ספק ההגנה. אם האתר נפתח תקין,
+                        ההגנה חוסמת את הבדיקה שלנו בלבד (סוכן הבדיקה מזדהה כ-<code>MultiotoUptimeMonitor</code>).
+                    </div>
+                </div>
+            </div>
+        </div>
+    @endif
 
     {{-- Stat cards: uptime, response time, SSL, domain — the whole health picture.
          The Filament panel's compiled CSS doesn't ship the sm:/lg:grid-cols
@@ -411,19 +453,30 @@
                  role="img"
                  aria-label="גרף מגמת זמני תגובה של {{ count($trend['points']) }} הבדיקות האחרונות. שיא {{ number_format($trend['max']) }} מילישניות.">
                 @foreach ($trend['points'] as $point)
+                    @php
+                        // דף אימות קודם לכל השאר: הוא "זמין" ולרוב מהיר, ולכן בלי
+                        // התנאי הזה הכישלון היחיד שחשוב נצבע כאן בכחול בריא.
+                        $pointLabel = match (true) {
+                            $point['challenged'] => 'דף אימות אנושי',
+                            ! $point['up'] => 'נפילה',
+                            default => number_format($point['ms']).' ms',
+                        };
+                    @endphp
+                    {{-- מפתח כפול במערך הזה נדרס בשקט, ולכן כל צבע מופיע פעם אחת
+                         בלבד עם התנאי המלא שלו. --}}
                     <div @class([
                             'flex-1 rounded-t',
-                            'bg-danger-500' => ! $point['up'],
-                            'bg-amber-500' => $point['up'] && $point['ms'] >= $slowMs,
-                            'bg-primary-500' => $point['up'] && $point['ms'] < $slowMs,
+                            'bg-danger-500' => ! $point['challenged'] && ! $point['up'],
+                            'bg-amber-500' => $point['challenged'] || ($point['up'] && $point['ms'] >= $slowMs),
+                            'bg-primary-500' => ! $point['challenged'] && $point['up'] && $point['ms'] < $slowMs,
                         ])
                         style="height: {{ max(3, $point['pct']) }}%;"
-                        title="{{ $point['at']->format('d/m/Y H:i') }} — {{ $point['up'] ? number_format($point['ms']).' ms' : 'נפילה' }}"></div>
+                        title="{{ $point['at']->format('d/m/Y H:i') }} — {{ $pointLabel }}"></div>
                 @endforeach
             </div>
             <div class="mt-2 flex flex-wrap gap-4 text-xs text-gray-500 dark:text-gray-400">
                 <span class="flex items-center gap-1"><span class="inline-block h-2 w-2 rounded-full bg-primary-500"></span> תקין</span>
-                <span class="flex items-center gap-1"><span class="inline-block h-2 w-2 rounded-full bg-amber-500"></span> איטי</span>
+                <span class="flex items-center gap-1"><span class="inline-block h-2 w-2 rounded-full bg-amber-500"></span> איטי או דף אימות</span>
                 <span class="flex items-center gap-1"><span class="inline-block h-2 w-2 rounded-full bg-danger-500"></span> נפילה</span>
             </div>
         </div>
@@ -452,13 +505,27 @@
                             </td>
                             <td class="p-2">
                                 @php
-                                    // 401/403/429 while "up" = our probe was blocked
+                                    // A named verification page outranks everything
+                                    // else: it is the one state where a 200 and a
+                                    // fast response mean the visitor saw nothing.
+                                    // 401/403/429 without one = our probe was blocked
                                     // by bot protection — the site is likely fine for
                                     // visitors, but "תקין" next to a 403 misleads.
                                     $isProtected = $check->is_up && in_array($check->status_code, [401, 403, 429], true);
+                                    $label = match (true) {
+                                        filled($check->challenge) => 'דף אימות אנושי',
+                                        ! $check->is_up => 'נפילה',
+                                        $isProtected => 'מוגן (חסימת בוט)',
+                                        default => 'תקין',
+                                    };
                                 @endphp
-                                <x-filament::badge :color="$check->is_up ? ($isProtected ? 'warning' : 'success') : 'danger'">
-                                    {{ $check->is_up ? ($isProtected ? 'מוגן (חסימת בוט)' : 'תקין') : 'נפילה' }}
+                                <x-filament::badge :color="match (true) {
+                                    filled($check->challenge) => 'warning',
+                                    ! $check->is_up => 'danger',
+                                    $isProtected => 'warning',
+                                    default => 'success',
+                                }">
+                                    {{ $label }}
                                 </x-filament::badge>
                             </td>
                             <td class="p-2">{{ $check->status_code ?? '—' }}</td>

@@ -63,10 +63,16 @@ class ProbeStatusClassificationTest extends TestCase
         }
     }
 
-    public function test_a_head_rejection_is_retried_with_get_before_counting_as_down(): void
+    /**
+     * הבדיקה מבקשת GET, לא HEAD — ולכן שרת שדוחה HEAD אינו נושא לדיון כלל.
+     *
+     * קודם נשלח HEAD כשלא הוגדרה מילת מפתח, ושרתים שמחזירים 405 לכל HEAD נקראו
+     * כנפילה; הייתה לכך עקיפה שניסתה שוב ב-GET. הגוף נדרש כיום בכל מקרה — בלעדיו
+     * אי אפשר לראות דף אימות אנושי שמוחזר בקוד 200 — ולכן העקיפה והתקלה שהיא
+     * כיסתה אינן קיימות עוד.
+     */
+    public function test_the_probe_asks_for_the_page_itself_so_a_head_hostile_server_is_moot(): void
     {
-        // Some servers 405 every HEAD while serving GET fine — that must not
-        // read as downtime.
         config(['billing.monitoring.failures_to_incident' => 1]);
         $site = Site::factory()->create([
             'domain' => 'probe.example.com',
@@ -78,6 +84,9 @@ class ProbeStatusClassificationTest extends TestCase
             : Http::response('ok', 200));
 
         MonitorSiteJob::dispatchSync($site->id);
+
+        Http::assertSent(fn ($request): bool => $request->method() === 'GET');
+        Http::assertNotSent(fn ($request): bool => $request->method() === 'HEAD');
 
         $check = $site->monitorChecks()->latest('checked_at')->first();
         $this->assertTrue($check->is_up);

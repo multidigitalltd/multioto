@@ -792,14 +792,18 @@ class ViewSite extends ViewRecord
      * Response-time trend for the sparkline — the recent probes in
      * chronological order with a bar height (percent of the window's max).
      *
-     * @return array{max: int, points: array<int, array{ms: int, up: bool, pct: int, at: Carbon}>}
+     * A probe that got a verification page instead of the site is carried
+     * through as its own kind of bar: it is "up" and usually fast, so without it
+     * the graph would paint the one failure that matters in healthy blue.
+     *
+     * @return array{max: int, points: array<int, array{ms: int, up: bool, challenged: bool, pct: int, at: Carbon}>}
      */
     public function getTrendProperty(): array
     {
         $checks = $this->record->monitorChecks()
             ->latest('checked_at')
             ->limit(self::RECENT_LIMIT)
-            ->get(['checked_at', 'response_ms', 'is_up'])
+            ->get(['checked_at', 'response_ms', 'is_up', 'challenge'])
             ->reverse()
             ->values();
 
@@ -810,6 +814,7 @@ class ViewSite extends ViewRecord
             'points' => $checks->map(fn (MonitorCheck $c): array => [
                 'ms' => (int) $c->response_ms,
                 'up' => (bool) $c->is_up,
+                'challenged' => filled($c->challenge),
                 'pct' => (int) round($c->response_ms / $max * 100),
                 'at' => $c->checked_at,
             ])->all(),

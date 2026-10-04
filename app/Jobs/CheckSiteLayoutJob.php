@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Models\Site;
 use App\Models\SiteEvent;
 use App\Models\SystemLog;
+use App\Services\Monitoring\ChallengePage;
 use App\Services\Notifications\TeamNotifier;
 use App\Services\Security\LayoutFingerprint;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -38,7 +39,7 @@ class CheckSiteLayoutJob implements ShouldQueue
             ['site_id' => $this->siteId]);
     }
 
-    public function handle(LayoutFingerprint $fingerprint, TeamNotifier $team): void
+    public function handle(LayoutFingerprint $fingerprint, TeamNotifier $team, ChallengePage $challengePage): void
     {
         if (! config('security.layout.enabled', true) && ! $this->rebaseline) {
             return;
@@ -74,6 +75,19 @@ class CheckSiteLayoutJob implements ShouldQueue
 
         if (! $response->successful()) {
             return; // Downtime is the uptime monitor's business, not ours.
+        }
+
+        // A verification page ("אמת שאתה אנושי") answers 200 and has no header,
+        // no menu and no footer — i.e. it reads as a completely broken layout.
+        // Fingerprinting it would both raise a false "המבנה נשבר" and overwrite
+        // the baseline with a page that isn't the site. The uptime monitor is
+        // what reports the challenge itself.
+        if (($challenge = $challengePage->detect($response->headers(), $response->body())) !== null) {
+            SystemLog::record('warning', 'monitoring',
+                "בדיקת מבנה העמוד לאתר {$site->domain} דולגה — מוצג דף אימות אנושי ({$challengePage->label($challenge['vendor'])}) במקום האתר.",
+                ['site_id' => $site->id]);
+
+            return;
         }
 
         $current = $fingerprint->make($response->body());

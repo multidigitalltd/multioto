@@ -9,9 +9,9 @@ use Filament\Tables\Table;
 use Filament\Widgets\TableWidget as BaseWidget;
 
 /**
- * Dashboard: sites that need attention — currently down (open incident) or with
- * a TLS certificate inside the warning window. Auto-hidden when all sites are
- * healthy.
+ * Dashboard: sites that need attention — currently down (open incident), serving
+ * an "אמת שאתה אנושי" verification page instead of the site, or with a TLS
+ * certificate inside the warning window. Auto-hidden when all sites are healthy.
  */
 class SitesInTrouble extends BaseWidget
 {
@@ -30,6 +30,9 @@ class SitesInTrouble extends BaseWidget
             ->where('monitor_enabled', true)
             ->where(fn ($q) => $q
                 ->whereHas('openIncident')
+                // A verification page answers 200, so it opens no incident by
+                // default — without this it would never reach this screen.
+                ->orWhereNotNull('challenge_alerted_at')
                 ->orWhere(fn ($q2) => $q2->whereNotNull('ssl_days_left')->where('ssl_days_left', '<=', $warn)));
     }
 
@@ -52,7 +55,11 @@ class SitesInTrouble extends BaseWidget
                 Tables\Columns\TextColumn::make('state')
                     ->label('מצב')
                     ->badge()
-                    ->getStateUsing(fn (Site $r): string => $r->openIncident ? 'לא זמין' : 'SSL עומד לפוג')
+                    ->getStateUsing(fn (Site $r): string => match (true) {
+                        (bool) $r->openIncident => 'לא זמין',
+                        $r->challenge_alerted_at !== null => 'דף אימות אנושי',
+                        default => 'SSL עומד לפוג',
+                    })
                     ->color(fn (Site $r): string => $r->openIncident ? 'danger' : 'warning'),
                 Tables\Columns\TextColumn::make('ssl_days_left')->label('SSL (ימים)')->placeholder('—'),
             ])

@@ -13,7 +13,7 @@ class MonitorCheck extends Model
     public $timestamps = false;
 
     protected $fillable = [
-        'site_id', 'checked_at', 'is_up', 'status_code', 'response_ms', 'error',
+        'site_id', 'checked_at', 'is_up', 'status_code', 'response_ms', 'error', 'challenge',
     ];
 
     protected function casts(): array
