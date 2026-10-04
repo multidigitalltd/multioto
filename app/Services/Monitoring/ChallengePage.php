@@ -15,8 +15,10 @@ namespace App\Services\Monitoring;
  *
  * 1. **חתימת ספק** — נתיב או מזהה שקיים רק בדף אתגר (`/cdn-cgi/challenge-platform/`,
  *    `_Incapsula_Resource`, `sucuri_cloudproxy_js`). אלה אינם מופיעים בעמוד תוכן.
- * 2. **סקריפט captcha** — reCAPTCHA/hCaptcha/Turnstile. מופיע גם בטפסים לגיטימיים,
- *    ולכן נדרש בנוסף שהעמוד יהיה **ביניים**: כמעט בלי טקסט וכמעט בלי קישורים.
+ * 2. **סקריפט captcha או SDK של הגנה** — reCAPTCHA/hCaptcha/Turnstile, וגם ה-SDK
+ *    של AWS WAF שאמזון מנחה להטמיע בעמודי תוכן רגילים. כולם מופיעים גם בעמודים
+ *    לגיטימיים, ולכן נדרש בנוסף שהעמוד יהיה **ביניים**: כמעט בלי טקסט וכמעט בלי
+ *    קישורים.
  * 3. **ניסוח** — "verify you are human", "רק רגע", "בודק את הדפדפן". מילים שעמוד
  *    אמיתי יכול להכיל, ולכן גם כאן נדרש מבנה של עמוד ביניים.
  *
@@ -45,11 +47,6 @@ class ChallengePage
             '_incapsula_resource',
             'incapsula incident id',
         ],
-        'aws' => [
-            'awswaf.com',
-            'aws-waf-token',
-            'awswafintegration',
-        ],
         'imunify360' => [
             // רק המזהה של דף ה-captcha. "imunify360" לבדו מופיע גם בעמודי תוכן
             // של ספקי אחסון, וחתימת ספק היא הדרגה שמכריעה לבדה.
@@ -62,19 +59,26 @@ class ChallengePage
     ];
 
     /**
-     * סקריפטים של captcha. לבדם אינם ראיה — עמוד תוכן יכול להחזיק טופס מאובטח
-     * — ולכן נדרשת גם צורת עמוד ביניים.
+     * סקריפטים של captcha ו-SDK של הגנה, לפי הספק שהם מסגירים. לבדם אינם ראיה
+     * ולכן נדרשת גם צורת עמוד ביניים.
      *
-     * @var list<string>
+     * AWS יושבת כאן ולא בחתימות הספק במכוון: אמזון מנחה אפליקציות להטמיע את
+     * `challenge.js` ואת `AwsWafIntegration` **בעמודי התוכן הרגילים**, כדי
+     * להשיג אסימון לפני שליחת בקשות — כלומר נוכחותם היא עדות לשילוב, לא לאתגר.
+     *
+     * @var array<string, string>
      */
-    private const CAPTCHA_SCRIPTS = [
-        'challenges.cloudflare.com/turnstile',
-        'cf-turnstile',
-        'google.com/recaptcha/api.js',
-        'recaptcha/api2/anchor',
-        'hcaptcha.com/1/api.js',
-        'h-captcha',
-        'friendlycaptcha',
+    private const SHAPE_GATED_SIGNATURES = [
+        'challenges.cloudflare.com/turnstile' => 'captcha',
+        'cf-turnstile' => 'captcha',
+        'google.com/recaptcha/api.js' => 'captcha',
+        'recaptcha/api2/anchor' => 'captcha',
+        'hcaptcha.com/1/api.js' => 'captcha',
+        'h-captcha' => 'captcha',
+        'friendlycaptcha' => 'captcha',
+        'awswaf.com' => 'aws',
+        'aws-waf-token' => 'aws',
+        'awswafintegration' => 'aws',
     ];
 
     /**
@@ -150,9 +154,9 @@ class ChallengePage
             return null;
         }
 
-        foreach (self::CAPTCHA_SCRIPTS as $script) {
-            if (str_contains($haystack, $script)) {
-                return ['vendor' => 'captcha', 'marker' => $script];
+        foreach (self::SHAPE_GATED_SIGNATURES as $signature => $vendor) {
+            if (str_contains($haystack, $signature)) {
+                return ['vendor' => $vendor, 'marker' => $signature];
             }
         }
 

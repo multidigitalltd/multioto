@@ -10,6 +10,7 @@ use App\Enums\UserRole;
 use App\Models\Incident;
 use App\Models\Site;
 use App\Models\SiteEvent;
+use App\Models\SystemLog;
 use App\Models\Ticket;
 use App\Models\User;
 use App\Services\Automation\ApprovalGate;
@@ -60,10 +61,10 @@ class MonitorSiteJob implements ShouldQueue
         $keyword = (string) $site->expected_keyword;
         $detected = null;
 
-        // Did we actually get a page to read? A timeout tells us nothing about
-        // whether a verification page is still standing, and must never be
-        // mistaken for "it's gone" — see evaluateChallenge().
-        $readThePage = false;
+        // Did we actually get the site's own page back? A timeout, a 404 or a 500
+        // tells us nothing about whether a verification page is still standing,
+        // and must never be mistaken for "it's gone" — see evaluateChallenge().
+        $servedRealPage = false;
 
         try {
             // GET, always — and following redirects, always.
@@ -106,7 +107,12 @@ class MonitorSiteJob implements ShouldQueue
             // uptime verdict cannot see, and the 403 case turns a vague "כנראה
             // הגנת בוטים" into a named finding.
             if (config('billing.monitoring.challenge.enabled', true)) {
-                $readThePage = true;
+                // Only a 2xx is the site's own page. A 404 or a 500 is not
+                // evidence that a verification page was taken down — it is
+                // evidence of a different problem — and announcing "חזר להיות
+                // גלוי" over a broken site is exactly the kind of false all-clear
+                // that makes every other alert suspect.
+                $servedRealPage = $response->successful();
 
                 $detected = $challengePage->detect(
                     $response->headers(),
@@ -151,9 +157,7 @@ class MonitorSiteJob implements ShouldQueue
 
         // Before the up/down handling: a verification page is its own event, and
         // it must be announced whether or not it counts as downtime.
-        if ($readThePage) {
-            $this->evaluateChallenge($site, $team, $challengePage, $detected);
-        }
+        $this->evaluateChallenge($site, $team, $challengePage, $detected, $servedRealPage);
 
         if ($isUp) {
             $this->handleUp($site, $team);
@@ -173,19 +177,41 @@ class MonitorSiteJob implements ShouldQueue
      * ההתראה נשלחת פעם אחת לכל מצב, ולא בכל בדיקה — אתר שמוגן בקביעות היה מייצר
      * הודעה כל חמש דקות, וזו הדרך הבטוחה לגרום לצוות להפסיק לקרוא אותן.
      *
-     * נקרא רק כשבאמת נקרא עמוד: timeout אינו ראיה לכך שדף האימות הוסר, ו"חזר
-     * להיות גלוי" על אתר שבדיוק נפל הוא בדיוק סוג הדיווח שאסור לשלוח.
+     * "חזר להיות גלוי" נאמר רק כשבאמת התקבל העמוד של האתר (2xx). timeout, 404 או
+     * 500 אינם ראיה לכך שדף האימות הוסר — הם ראיה לתקלה אחרת — ואישור כזה על אתר
+     * שבדיוק נפל הוא בדיוק סוג הדיווח שהופך את כל השאר לחשוד.
      *
      * @param  array{vendor: string, marker: string}|null  $detected
+     * @param  bool  $servedRealPage  האם התקבל 2xx והזיהוי אכן רץ
      */
-    protected function evaluateChallenge(Site $site, TeamNotifier $team, ChallengePage $challengePage, ?array $detected): void
-    {
-        if ($detected === null) {
-            if ($site->challenge_alerted_at === null) {
-                return; // Nothing was standing — nothing to announce.
+    protected function evaluateChallenge(
+        Site $site,
+        TeamNotifier $team,
+        ChallengePage $challengePage,
+        ?array $detected,
+        bool $servedRealPage,
+    ): void {
+        // זיהוי כבוי בזמן שדגל עומד: אי אפשר לטעון שזה נפתר — לא בדקנו — ואי
+        // אפשר להמשיך להציג "דף אימות אנושי" במסך ובלוח הבקרה על סמך קריאה
+        // שלא תתעדכן יותר. הדגל נוקה בשקט, ובלי התראת "הוסר" שתהיה שקרית.
+        if (! config('billing.monitoring.challenge.enabled', true)) {
+            if ($this->releaseChallengeFlag($site)) {
+                SystemLog::record('info', 'monitoring',
+                    "זיהוי דף אימות אנושי כבוי בהגדרות — הסימון על האתר {$site->domain} נוקה מפני שאינו נבדק יותר.",
+                    ['site_id' => $site->id]);
             }
 
-            $site->update(['challenge_alerted_at' => null]);
+            return;
+        }
+
+        if ($detected === null) {
+            if (! $servedRealPage) {
+                return; // לא ראינו את העמוד — אין מה להסיק משתיקה.
+            }
+
+            if (! $this->releaseChallengeFlag($site)) {
+                return; // Nothing was standing, or another probe announced it.
+            }
 
             $team->alert(
                 '✅ דף האימות הוסר — האתר חזר להיות גלוי',
@@ -197,11 +223,19 @@ class MonitorSiteJob implements ShouldQueue
             return;
         }
 
-        if ($site->challenge_alerted_at !== null) {
-            return; // Already announced and still standing.
+        // Claim the quiet→standing transition atomically. Probes for one site are
+        // ordinary queue jobs with no per-site uniqueness, so two can overlap and
+        // both read a null flag; only the one whose UPDATE actually flips the row
+        // may announce, or the "once per state" alert arrives twice.
+        $claimed = Site::whereKey($site->id)
+            ->whereNull('challenge_alerted_at')
+            ->update(['challenge_alerted_at' => now()]);
+
+        if ($claimed === 0) {
+            return;
         }
 
-        $site->update(['challenge_alerted_at' => now()]);
+        $site->setAttribute('challenge_alerted_at', now())->syncOriginalAttribute('challenge_alerted_at');
 
         $vendor = $challengePage->label($detected['vendor']);
         $owner = $site->customer?->name ?? 'לקוח';
@@ -331,6 +365,28 @@ class MonitorSiteJob implements ShouldQueue
                 ),
             );
         }
+    }
+
+    /**
+     * Give up a standing "verification page" flag, atomically.
+     *
+     * Returns true only for the caller whose UPDATE actually cleared the row —
+     * the one that may announce it — so two overlapping probes cannot both send
+     * the all-clear.
+     */
+    protected function releaseChallengeFlag(Site $site): bool
+    {
+        $cleared = Site::whereKey($site->id)
+            ->whereNotNull('challenge_alerted_at')
+            ->update(['challenge_alerted_at' => null]);
+
+        if ($cleared === 0) {
+            return false;
+        }
+
+        $site->setAttribute('challenge_alerted_at', null)->syncOriginalAttribute('challenge_alerted_at');
+
+        return true;
     }
 
     /** The real FlyWP driver needs a linked site; 'log' always records intent. */

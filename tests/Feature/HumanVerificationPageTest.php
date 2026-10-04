@@ -11,6 +11,7 @@ use App\Models\Site;
 use App\Models\SiteEvent;
 use App\Models\SystemLog;
 use App\Models\User;
+use App\Services\Monitoring\ChallengePage;
 use App\Services\Notifications\TeamNotifier;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -168,6 +169,93 @@ class HumanVerificationPageTest extends TestCase
         MonitorSiteJob::dispatchSync($site->id);
 
         $this->assertNotNull($site->refresh()->challenge_alerted_at);
+    }
+
+    /**
+     * 404 או 500 אחרי דף אתגר אינם "דף האימות הוסר".
+     *
+     * זו אותה שגיאה כמו ב-timeout, רק עם תגובה: שגיאת HTTP אינה ראיה לכך שהאתגר
+     * ירד — היא ראיה לתקלה אחרת — ואישור "חזר להיות גלוי" על אתר שמחזיר 500 הוא
+     * בדיוק הדיווח שהופך כל שאר ההתראות לחשודות.
+     */
+    public function test_an_http_error_does_not_announce_the_page_being_gone(): void
+    {
+        foreach ([404, 500] as $status) {
+            $site = $this->site([
+                'domain' => "err{$status}.example.com",
+                'monitor_url' => "https://err{$status}.example.com",
+                'challenge_alerted_at' => now()->subHour(),
+            ]);
+            Http::fake(["https://err{$status}.example.com" => Http::response('<html><body>שגיאה</body></html>', $status)]);
+
+            $team = Mockery::mock(TeamNotifier::class);
+            $team->shouldReceive('alert')->zeroOrMoreTimes()
+                ->withArgs(fn (string $title): bool => ! str_contains($title, 'חזר להיות גלוי'));
+            $this->app->instance(TeamNotifier::class, $team);
+
+            MonitorSiteJob::dispatchSync($site->id);
+
+            $this->assertNotNull($site->refresh()->challenge_alerted_at, "status {$status}");
+        }
+    }
+
+    /**
+     * שתי בדיקות שרצות במקביל אינן שולחות שתי התראות על אותו מצב.
+     *
+     * הבדיקות הן עבודות תור רגילות בלי ייחודיות לפי אתר, ולכן שתיים יכולות
+     * להיקרא יחד ולראות שתיהן דגל ריק. רק זו שה-UPDATE שלה באמת הפך את השורה
+     * מדווחת — אחרת "פעם אחת למצב" מגיע פעמיים.
+     */
+    public function test_two_overlapping_probes_announce_once(): void
+    {
+        $site = $this->site();
+        $this->expectAlert('אמת שאתה אנושי', times: 1);
+
+        // המצב האמיתי שנבדק כאן הוא שתי בדיקות שכל אחת **טענה** את האתר לפני
+        // שהשנייה סימנה — ולכן שני המופעים נטענים כאן מראש. הרצת שתי העבודות
+        // במלואן לא הייתה בודקת כלום: השנייה טוענת את האתר מחדש וכבר רואה את
+        // הסימון של הראשונה.
+        $stale = [Site::find($site->id), Site::find($site->id)];
+
+        $probe = new class(0) extends MonitorSiteJob
+        {
+            /** @param  array{vendor: string, marker: string}  $detected */
+            public function announce(Site $site, TeamNotifier $team, ChallengePage $page, array $detected): void
+            {
+                $this->evaluateChallenge($site, $team, $page, $detected, servedRealPage: true);
+            }
+        };
+
+        foreach ($stale as $instance) {
+            $probe->announce($instance, app(TeamNotifier::class), app(ChallengePage::class),
+                ['vendor' => 'cloudflare', 'marker' => 'cf_chl_opt']);
+        }
+
+        $this->assertNotNull($site->refresh()->challenge_alerted_at);
+        $this->assertSame(1, SiteEvent::where('site_id', $site->id)->where('type', 'challenge')->count());
+    }
+
+    /**
+     * זיהוי שכובה בזמן שדגל עומד — המסך לא נשאר תקוע על "דף אימות אנושי".
+     *
+     * אי אפשר לטעון שזה נפתר (לא בדקנו), ואי אפשר להמשיך להציג ממצא על סמך
+     * קריאה שלא תתעדכן יותר. הדגל נוקה בשקט, עם רישום ביומן ובלי התראת "הוסר"
+     * שתהיה שקרית.
+     */
+    public function test_disabling_detection_clears_a_standing_flag_without_claiming_it_was_fixed(): void
+    {
+        config(['billing.monitoring.challenge.enabled' => false]);
+        $site = $this->site(['challenge_alerted_at' => now()->subHour()]);
+        Http::fake(['https://guarded.example.com' => Http::response(self::CLOUDFLARE_PAGE, 200)]);
+
+        $team = Mockery::mock(TeamNotifier::class);
+        $team->shouldReceive('alert')->never();
+        $this->app->instance(TeamNotifier::class, $team);
+
+        MonitorSiteJob::dispatchSync($site->id);
+
+        $this->assertNull($site->refresh()->challenge_alerted_at);
+        $this->assertTrue(SystemLog::where('message', 'like', '%נוקה מפני שאינו נבדק יותר%')->exists());
     }
 
     /**

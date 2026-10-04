@@ -45,8 +45,10 @@ class ChallengePageDetectionTest extends TestCase
                 '<html><body>Request unsuccessful. Incapsula incident ID: 1234-5678</body></html>',
                 'imperva',
             ],
-            'AWS WAF' => [
-                '<html><head><script src="https://de.awswaf.com/challenge.js"></script></head><body></body></html>',
+            // AWS על עמוד ביניים — כן. על עמוד תוכן — לא, וזה הזוג שלמטה.
+            'AWS WAF interstitial' => [
+                '<html><head><script src="https://de.awswaf.com/challenge.js"></script></head>'
+                .'<body><p>Additional security check is required.</p></body></html>',
                 'aws',
             ],
             // ספק שאין לו חתימה מוכרת — נתפס לפי הניסוח, וזה כל הטעם בדרגה הזאת:
@@ -95,6 +97,14 @@ class ChallengePageDetectionTest extends TestCase
             'article about human verification' => [
                 '<html><body>'.$navigation.'<h1>מה זה "verify you are human"?</h1>'
                 .$prose.$prose.'</body></html>',
+            ],
+            // אמזון מנחה להטמיע את challenge.js וה-SDK שלה **בעמודי התוכן
+            // הרגילים**, כדי להשיג אסימון לפני שליחת בקשות. נוכחותם היא עדות
+            // לשילוב, לא לאתגר — ולכן היא לבדה אינה מכריעה.
+            'AWS WAF SDK embedded in a normal page' => [
+                '<html><head><script src="https://de.awswaf.com/challenge.js"></script>'
+                .'<script>AwsWafIntegration.getToken()</script></head><body>'
+                .$navigation.$prose.'</body></html>',
             ],
             'ordinary homepage' => [
                 '<html><head><title>החנות שלנו</title></head><body>'.$navigation.$prose.'</body></html>',
