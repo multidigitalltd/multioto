@@ -119,9 +119,20 @@ class SystemUpdates extends Page
         }
 
         if ($this->available !== null) {
+            $waiting = ($this->available['behind'] ?? '?').' שינויים ממתינים.';
+
+            // What to do next depends on whether the button is actually there to
+            // press. An update already running disables it, and an ops directory
+            // that is not writable hides it altogether — telling somebody to
+            // click either one is the same dead end this whole change is about.
             Notification::make()
                 ->title('יש גרסה חדשה')
-                ->body(($this->available['behind'] ?? '?').' שינויים ממתינים. אפשר ללחוץ "עדכן עכשיו".')
+                ->body(match (true) {
+                    ! $this->configured => $waiting.' סוכן העדכון אינו מוגדר בשרת, ולכן אי אפשר לעדכן מכאן — '
+                        .'צריך למשוך ידנית, או להתקין את הסוכן.',
+                    $this->pending => $waiting.' עדכון כבר התבקש ומתבצע — אין צורך ללחוץ שוב.',
+                    default => $waiting.' אפשר ללחוץ "עדכן עכשיו".',
+                })
                 ->success()
                 ->send();
 
