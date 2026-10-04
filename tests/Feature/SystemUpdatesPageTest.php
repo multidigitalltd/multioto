@@ -96,4 +96,41 @@ class SystemUpdatesPageTest extends TestCase
             ->assertSee('עדכון זמין')
             ->assertDontSee('· אתם מעודכנים');
     }
+
+    /**
+     * כפתור הרענון עונה, גם כשאין מה לקרוא.
+     *
+     * הכפתור קורא מחדש את מה שהסוכן בשרת כתב; הוא אינו יכול ללכת לבדוק בעצמו
+     * (תהליך הווב לעולם אינו מריץ פקודת מעטפת). כלומר כשהסוכן מעולם לא רץ, כל
+     * הקבצים שהוא קורא חסרים, שום דבר במסך לא משתנה, והכפתור נראה שבור — וכך
+     * בדיוק זה דווח. תשובה, אפילו "לא היה מה לקרוא וזו הסיבה", היא ההבדל בין
+     * כפתור מת לאבחנה.
+     */
+    public function test_the_refresh_button_says_the_agent_never_ran(): void
+    {
+
+        Livewire::test(SystemUpdates::class)
+            ->callAction('checkAgain')
+            ->assertNotified('סוכן העדכון בשרת מעולם לא רץ');
+    }
+
+    /** וכשהכל תקין הוא אומר גם את זה, עם מתי נבדק. */
+    public function test_the_refresh_button_confirms_being_up_to_date(): void
+    {
+        $this->writeCheck(['at' => now()->format('Y-m-d H:i'), 'ok' => true, 'behind' => 0]);
+
+        Livewire::test(SystemUpdates::class)
+            ->callAction('checkAgain')
+            ->assertNotified('אתם מעודכנים');
+    }
+
+    /** ובדיקה שנכשלה אינה נראית כמו "הכל בסדר". */
+    public function test_the_refresh_button_does_not_dress_a_failure_as_fine(): void
+    {
+        $this->writeCheck(['at' => now()->format('Y-m-d H:i'), 'ok' => false, 'error' => 'permission denied']);
+
+        Livewire::test(SystemUpdates::class)
+            ->callAction('checkAgain')
+            ->assertNotified('בדיקת העדכונים נכשלת');
+    }
 }
