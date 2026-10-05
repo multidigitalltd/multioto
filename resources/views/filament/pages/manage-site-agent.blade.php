@@ -36,6 +36,59 @@
         </x-filament::section>
     @endif
 
+    {{--
+        מה שאף שדה בטופס אינו יכול לומר: האם משהו בכלל מגיע ממטא.
+
+        מסירה נכנסת עוברת שני שלבים שאיש כאן אינו רואה — מטא מחליטה אם לשלוח
+        בכלל, והחתימה שלנו מחליטה אם לקבל. שני הכישלונות נראים זהים מבחוץ: הלקוח
+        כותב ולא קורה כלום. ההבחנה ביניהם היא כל הערך של הקטע הזה, כי התיקון שונה
+        לחלוטין — האחד אצל מטא, השני בשדה אחד במסך הזה.
+    --}}
+    @php $inbound = $this->inboundHealth(); @endphp
+
+    <x-filament::section
+        class="mt-6"
+        :icon="match ($inbound['verdict']) { 'ok' => 'heroicon-o-check-circle', 'rejected' => 'heroicon-o-shield-exclamation', default => 'heroicon-o-signal-slash' }"
+        :icon-color="match ($inbound['verdict']) { 'ok' => 'success', 'rejected' => 'danger', default => 'warning' }">
+        <x-slot name="heading">הודעות נכנסות ממטא</x-slot>
+
+        @if ($inbound['verdict'] === 'ok')
+            <p class="text-sm">
+                המסירה האחרונה התקבלה ואומתה
+                <strong>{{ $inbound['accepted']->diffForHumans() }}</strong>
+                ({{ $inbound['accepted']->format('d/m/Y H:i') }}). הערוץ עובד.
+            </p>
+            @if ($inbound['rejected'] !== null)
+                <p class="mt-2 text-sm text-warning-600 dark:text-warning-400">
+                    שימו לב: מסירה נדחתה גם ב-{{ $inbound['rejected']->format('d/m/Y H:i') }}.
+                    אם זה אחרי המסירה האחרונה שהתקבלה — סוד האפליקציה כאן כנראה הוחלף ואינו תואם יותר.
+                </p>
+            @endif
+        @elseif ($inbound['verdict'] === 'rejected')
+            <p class="text-sm text-danger-700 dark:text-danger-400">
+                <strong>הודעות מגיעות — ואנחנו דוחים אותן.</strong>
+                הדחייה האחרונה: {{ $inbound['rejected']->diffForHumans() }}
+                ({{ $inbound['rejected']->format('d/m/Y H:i') }}).
+            </p>
+            <p class="mt-2 text-sm">
+                משמעות הדבר אחת: <strong>סוד האפליקציה (App secret) כאן אינו זהה לזה שבאפליקציה שבמטא</strong>.
+                כל מסירה נחתמת בו, ומסירה שאי אפשר לאמת נדחית — כי משלוח שאי אפשר לאמת הוא משלוח מכל אחד.
+                העתיקו אותו מחדש מ-App settings ← Basic ← App secret, ושמרו כאן.
+            </p>
+        @else
+            <p class="text-sm text-warning-700 dark:text-warning-400">
+                <strong>לא התקבלה אף מסירה ממטא, ואף אחת גם לא נדחתה.</strong>
+                כלומר שום דבר לא הגיע עד הדלת — הבעיה אינה בהגדרות שבמסך הזה.
+            </p>
+            <ul class="mt-2 list-disc space-y-1 text-sm" style="padding-inline-start:1.25rem">
+                <li>האפליקציה במטא פורסמה? אפליקציה שלא פורסמה אינה מקבלת הודעות אמיתיות כלל.</li>
+                <li>בכתובת ה-Webhook, השדה <code>messages</code> מסומן Subscribed?</li>
+                <li>הכתובת שמוגדרת שם היא בדיוק <code dir="ltr">{{ $this->webhookUrl() }}</code>?</li>
+                <li>ההודעה נשלחה למספר הנכון, זה שמזהה המספר כאן שייך לו?</li>
+            </ul>
+        @endif
+    </x-filament::section>
+
     <form wire:submit="save" class="mt-6">
         {{ $this->form }}
 

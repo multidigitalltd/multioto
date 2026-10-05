@@ -90,6 +90,21 @@ return [
     ],
 
     /*
+    | ניטור הערוץ הנכנס.
+    |
+    | כל שאר הניטור שואל "האם האתר עונה". זה שואל את מה שאף אחד לא שאל: האם
+    | הודעה של לקוח בכלל מגיעה אלינו. הכישלון כאן שקט לחלוטין — הלקוח כותב ולא
+    | קורה כלום, בלי שגיאה ובלי שורה באף יומן.
+    */
+    'channel_watch' => [
+        'enabled' => (bool) env('SITE_AGENT_CHANNEL_WATCH', true),
+
+        // אותה תקלה מדווחת פעם ביום ולא בכל ריצה: שני המצבים נמשכים עד שמישהו
+        // מתקן, והתראה שחוזרת כל שעה היא התראה שלומדים לדלג עליה.
+        'cooldown_hours' => (int) env('SITE_AGENT_CHANNEL_WATCH_COOLDOWN_HOURS', 24),
+    ],
+
+    /*
     | How long an offer waits for a yes. Long enough to answer after a meeting,
     | short enough that a "כן" typed tomorrow cannot confirm something the
     | customer has long stopped thinking about.

@@ -2,11 +2,14 @@
 
 namespace App\Filament\Pages;
 
+use App\Enums\WebhookSource;
 use App\Filament\Clusters\Settings;
 use App\Filament\Concerns\AdminOnly;
 use App\Filament\Concerns\PersistsSettings;
 use App\Models\Setting;
+use App\Models\WebhookEvent;
 use App\Services\SiteAgent\SiteAgentProduct;
+use App\Support\WebhookRejections;
 use Filament\Forms\Components\Placeholder;
 use Filament\Forms\Components\Section;
 use Filament\Forms\Components\TextInput;
@@ -17,6 +20,7 @@ use Filament\Forms\Form;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 use Filament\Pages\SubNavigationPosition;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\HtmlString;
 
 /**
@@ -107,6 +111,55 @@ class ManageSiteAgent extends Page implements HasForms
     public function webhookUrl(): string
     {
         return route('webhooks.site-agent');
+    }
+
+    /**
+     * Is anything actually ARRIVING from Meta — and if so, are we refusing it?
+     *
+     * Every other field on this screen can be filled in correctly and the
+     * product can still be silent, because a message has to survive two steps
+     * nobody here can see: Meta deciding to deliver it at all, and our own
+     * signature check deciding to accept it. Both failures look identical from
+     * the outside — the customer writes, and nothing happens.
+     *
+     * The distinction is the whole value of this block, because the two have
+     * completely different fixes:
+     *
+     *  - **Nothing arrived, ever** → the problem is at Meta: the app is not
+     *    published, the `messages` field is not subscribed, or the callback URL
+     *    was never verified. Nothing in this panel will change that.
+     *  - **Something arrived and was refused** → the app secret here does not
+     *    match the one in the Meta app. One field, on this screen.
+     *
+     * The app secret is the one value nothing else ever exercises: the verify
+     * token is proven by Meta's handshake, the number and token by the first
+     * send, and the secret only by a real inbound delivery. So it is also the
+     * one most likely to be wrong while everything looks right.
+     *
+     * @return array{accepted: ?Carbon, rejected: ?Carbon, verdict: string}
+     */
+    public function inboundHealth(): array
+    {
+        $accepted = rescue(
+            fn (): ?Carbon => WebhookEvent::query()
+                ->where('source', WebhookSource::WhatsappCloud)
+                ->latest('created_at')
+                ->value('created_at'),
+            null,
+            report: false,
+        );
+
+        $rejected = WebhookRejections::lastAt('site-agent-whatsapp');
+
+        return [
+            'accepted' => $accepted,
+            'rejected' => $rejected,
+            'verdict' => match (true) {
+                $accepted !== null => 'ok',
+                $rejected !== null => 'rejected',
+                default => 'silent',
+            },
+        ];
     }
 
     public function form(Form $form): Form
