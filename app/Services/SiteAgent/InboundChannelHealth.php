@@ -26,6 +26,19 @@ use Illuminate\Support\Carbon;
  *
  * הקריאה יושבת במקום אחד כדי שהמסך בפאנל והניטור השעתי יגידו תמיד את אותו דבר.
  * מסך שעונה "תקין" בזמן שההתראה אומרת "דחוף" הוא מסך שלא בודקים יותר.
+ *
+ * שני דברים שהיומן לבדו אינו יכול לענות עליהם, ושניהם מחזירים בדיוק את ההתראה
+ * השקרית שהמחלקה הזאת אמורה למנוע:
+ *
+ *  1. **יומן ה-webhooks נגזם** (WEBHOOK_RETENTION_DAYS, 60 יום כברירת מחדל,
+ *     וניתן לקצר). לכן "אין רשומה" אינו "מעולם לא הגיע", וגם לא "הדחייה היא
+ *     האירוע האחרון": חלון שקצר מזיכרון הדחיות היה הופך דחייה ישנה שקדמה
+ *     למסירה תקינה ל"דחייה עכשווית". המסירה האחרונה נשמרת לכן כתאריך, בשורה
+ *     ששום דבר אינו גוזם, והדחייה נמדדת מולו.
+ *  2. **המספר הוחלף.** כל ההיסטוריה מתארת את המספר הקודם, ומספר חדש שמעולם לא
+ *     קיבל דבר היה מדווח "תקין" לנצח — כלומר דווקא השתיקה שהניטור קיים בשבילה
+ *     הייתה נעלמת. לכן הרשומה נושאת את המספר שאליו היא מתייחסת, ומספר אחר
+ *     מתחיל היסטוריה חדשה.
  */
 class InboundChannelHealth
 {
@@ -33,13 +46,15 @@ class InboundChannelHealth
     public const CHANNEL = 'site-agent-whatsapp';
 
     /**
-     * The durable "this channel has carried a message" marker.
+     * The durable record of what this channel has carried.
      *
      * Stored, not cached, and deliberately absent from SettingsServiceProvider's
      * allow-list: that map is what the settings page may override in config, and
      * this is a recorded fact, not a setting anybody edits.
+     *
+     * @var string
      */
-    private const SEEN_KEY = 'siteagent.inbound_seen_at';
+    private const RECORD_KEY = 'siteagent.inbound_channel';
 
     public function __construct(private readonly SiteAgentProduct $product) {}
 
@@ -48,13 +63,26 @@ class InboundChannelHealth
      */
     public function read(): array
     {
-        $accepted = $this->lastAccepted();
-        $rejected = WebhookRejections::lastAt(self::CHANNEL);
-        $everCarried = $accepted !== null || $this->remembered() || $this->everVerifiedByReply();
+        $record = $this->record();
 
-        if ($accepted !== null) {
-            $this->remember();
-        }
+        // A record naming another number means the number was replaced and the
+        // new one has no history yet — nothing before this moment describes it.
+        // An ABSENT record means the opposite: this installation simply predates
+        // the record, and the number may have been in use for months, so its
+        // history counts in full.
+        $replaced = $this->replaced();
+        $since = $replaced ? now() : $this->date($record['since'] ?? null);
+
+        // The last accepted delivery as far as anything still knows: the newest
+        // surviving audit row, or the durable high-water mark when that row has
+        // since been pruned — and neither one when it describes the number this
+        // installation no longer uses.
+        $accepted = $this->latest(
+            $this->loggedAcceptance($since),
+            $replaced ? null : $this->date($record['last_accepted_at'] ?? null),
+        );
+        $rejected = WebhookRejections::lastAt(self::CHANNEL);
+        $everCarried = $accepted !== null || $this->verifiedByReply($since);
 
         return [
             'accepted' => $accepted,
@@ -67,10 +95,9 @@ class InboundChannelHealth
                 // a field that is blank on this very screen.
                 ! $this->product->ready() => 'unready',
 
-                // A rejection NEWER than the last accepted delivery. Also the
-                // case when the accepted row has since been pruned: the
-                // rejection marker lives 30 days, the audit rows 60, so a
-                // rejection with no surviving acceptance is the recent event.
+                // A rejection newer than anything we ever accepted — measured
+                // against the durable date, so a short audit window cannot turn
+                // an old rejection into the current state of the channel.
                 $rejected !== null && ($accepted === null || $rejected->gt($accepted)) => 'rejected',
 
                 $everCarried => 'ok',
@@ -81,16 +108,85 @@ class InboundChannelHealth
     }
 
     /**
-     * When Meta last delivered something we accepted and recorded.
+     * Write down what the channel has carried, so pruning cannot un-know it.
      *
-     * Only ever as old as the webhook audit retention — see everCarried() for
-     * the question this one cannot answer.
+     * Called by the hourly watch rather than from read(): once an hour is as
+     * precise as this needs to be — the comparisons it feeds are measured in
+     * days — and it keeps a settings-screen visit from writing to the database.
      */
-    private function lastAccepted(): ?Carbon
+    public function observe(): void
+    {
+        rescue(function (): void {
+            $record = $this->record();
+            $replaced = $this->replaced();
+
+            // `since` is set only when the number CHANGES, never when the record
+            // is first written: a first write must not declare that a number
+            // already in use has no past.
+            $since = $replaced ? now() : $this->date($record['since'] ?? null);
+
+            $next = [
+                'number' => $this->number(),
+                'since' => $since?->toIso8601String(),
+                'last_accepted_at' => $this->latest(
+                    $this->loggedAcceptance($since),
+                    $replaced ? null : $this->date($record['last_accepted_at'] ?? null),
+                )?->toIso8601String(),
+            ];
+
+            if ($next !== $record) {
+                Setting::put(self::RECORD_KEY, (string) json_encode($next));
+            }
+        }, report: false);
+    }
+
+    /**
+     * The stored record, or an empty one when it is absent or unreadable.
+     *
+     * @return array{number?: string, since?: ?string, last_accepted_at?: ?string}
+     */
+    private function record(): array
+    {
+        return rescue(function (): array {
+            $raw = Setting::map()[self::RECORD_KEY] ?? null;
+            $decoded = blank($raw) ? null : json_decode((string) $raw, true);
+
+            return is_array($decoded) ? $decoded : [];
+        }, [], report: false);
+    }
+
+    /**
+     * Does the record describe a number we no longer use?
+     *
+     * A replaced number inherits none of its predecessor's history. Without
+     * this, a new number that never receives anything would be reported as
+     * working forever on the strength of deliveries to a different number —
+     * which is precisely the silence this whole check exists to catch.
+     */
+    private function replaced(): bool
+    {
+        $recorded = $this->record()['number'] ?? null;
+
+        return $recorded !== null && $recorded !== $this->number();
+    }
+
+    private function number(): string
+    {
+        return trim((string) config('siteagent.whatsapp.phone_number_id'));
+    }
+
+    /**
+     * The newest accepted delivery still in the audit log.
+     *
+     * Bounded below by `$since` so that deliveries to a number we no longer use
+     * are not read as proof about the number we do.
+     */
+    private function loggedAcceptance(?Carbon $since): ?Carbon
     {
         return rescue(
             fn (): ?Carbon => WebhookEvent::query()
                 ->where('source', WebhookSource::WhatsappCloud)
+                ->when($since !== null, fn ($query) => $query->where('created_at', '>=', $since))
                 ->latest('created_at')
                 ->value('created_at'),
             null,
@@ -99,43 +195,9 @@ class InboundChannelHealth
     }
 
     /**
-     * The durable fact: this channel has carried a real inbound message.
+     * The same fact for installations that predate the durable record.
      *
-     * `webhook_events` is pruned (60 days by default), so its absence does not
-     * mean "never" — and reading it as "never" would turn every channel that
-     * worked and then had a quiet season into a daily alert, which is precisely
-     * the alert a team learns to skip.
-     *
-     * So the fact is written down once, the first time it is observed, in a row
-     * nothing prunes and nothing else rewrites. Written from the read because
-     * the hourly watch is what observes it, and the write is idempotent: it is
-     * one sentence that only ever goes from unknown to true.
-     */
-    private function remembered(): bool
-    {
-        return rescue(
-            fn (): bool => filled(Setting::map()[self::SEEN_KEY] ?? null),
-            false,
-            report: false,
-        );
-    }
-
-    private function remember(): void
-    {
-        if ($this->remembered()) {
-            return;
-        }
-
-        rescue(
-            fn () => Setting::put(self::SEEN_KEY, now()->toIso8601String()),
-            report: false,
-        );
-    }
-
-    /**
-     * The same fact for installations that predate the marker.
-     *
-     * An upgrade arrives with the marker unwritten and possibly with the audit
+     * An upgrade arrives with the record unwritten and possibly with the audit
      * rows already pruned, so there has to be a second way to recognise a
      * channel that has worked. A verified subscriber is one: `verified_at` is
      * written in one place only, HandleSiteAgentMessageJob, which runs solely
@@ -143,16 +205,35 @@ class InboundChannelHealth
      * WhatsApp, and that reply reached us. Revoked rows count too, since the
      * question is historical.
      *
-     * Not sufficient on its own, which is why it is not the marker: the model
+     * Not sufficient on its own, which is why it is not the record: the model
      * clears `verified_at` whenever the phone is edited (deliberately — proof
      * about one number must not carry to another), so this can go from true
      * back to false.
      */
-    private function everVerifiedByReply(): bool
+    private function verifiedByReply(?Carbon $since): bool
     {
         return rescue(
-            fn (): bool => SiteAgentSubscriber::query()->whereNotNull('verified_at')->exists(),
+            fn (): bool => SiteAgentSubscriber::query()
+                ->whereNotNull('verified_at')
+                ->when($since !== null, fn ($query) => $query->where('verified_at', '>=', $since))
+                ->exists(),
             false,
+            report: false,
+        );
+    }
+
+    private function latest(?Carbon ...$dates): ?Carbon
+    {
+        $known = array_filter($dates);
+
+        return $known === [] ? null : max($known);
+    }
+
+    private function date(mixed $value): ?Carbon
+    {
+        return rescue(
+            fn (): ?Carbon => filled($value) ? Carbon::parse((string) $value) : null,
+            null,
             report: false,
         );
     }

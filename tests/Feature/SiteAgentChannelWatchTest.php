@@ -312,6 +312,59 @@ class SiteAgentChannelWatchTest extends TestCase
     }
 
     /**
+     * דחייה ישנה נמדדת מול התאריך העמיד, לא מול מה ששרד ביומן.
+     *
+     * חלון השמירה של היומן ניתן לקיצור (WEBHOOK_RETENTION_DAYS), ואם הוא קצר
+     * מזיכרון הדחיות — דחייה שקדמה למסירה תקינה הייתה שורדת אותה, ונקראת
+     * כ"הדחייה היא האירוע האחרון". כלומר אזעקת סוד אפליקציה, מדי יום, על ערוץ
+     * שעובד מצוין.
+     */
+    public function test_a_rejection_older_than_a_pruned_acceptance_is_not_current(): void
+    {
+        $this->subscriber();
+        WebhookRejections::record(CheckSiteAgentChannelJob::CHANNEL);
+        $this->travel(1)->hour();
+        $this->accepted();
+
+        // הניטור רואה את המסירה ורושם את תאריכה.
+        $this->expectSilence();
+        CheckSiteAgentChannelJob::dispatchSync();
+
+        // ואז היומן נגזם בחלון קצר, בזמן שהדחייה עוד זכורה.
+        WebhookEvent::query()->delete();
+        $this->travel(8)->days();
+
+        CheckSiteAgentChannelJob::dispatchSync();
+
+        $this->assertSame('ok', app(ManageSiteAgent::class)->inboundHealth()['verdict']);
+    }
+
+    /**
+     * ומספר שהוחלף אינו יורש את ההיסטוריה של קודמו.
+     *
+     * זו השתיקה שהניטור קיים בשבילה: מספר חדש שמעולם לא קיבל דבר היה מדווח
+     * "תקין" לנצח, על סמך מסירות שהגיעו למספר אחר לגמרי.
+     */
+    public function test_a_replaced_number_starts_its_history_over(): void
+    {
+        $subscriber = $this->subscriber();
+        $subscriber->update(['verified_at' => now()]);
+        $this->accepted();
+
+        $this->expectSilence();
+        CheckSiteAgentChannelJob::dispatchSync();
+        $this->assertSame('ok', app(ManageSiteAgent::class)->inboundHealth()['verdict']);
+
+        // ההחלפה קורית אחרי שהמספר הקודם עבד, ולא באותו רגע.
+        $this->travel(1)->hour();
+
+        Setting::put('siteagent.phone_number_id', '999999');
+        SettingsServiceProvider::refreshFromDatabase();
+
+        $this->assertSame('silent', app(ManageSiteAgent::class)->inboundHealth()['verdict']);
+    }
+
+    /**
      * המסך והניטור חייבים להגיד את אותו דבר.
      *
      * סוד שהוחלף בשגוי משאיר את המסירה התקינה של אתמול ברשומה. מסך שעונה

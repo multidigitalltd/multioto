@@ -54,6 +54,11 @@ class CheckSiteAgentChannelJob implements ShouldQueue
             return;
         }
 
+        // Write down what the channel has carried before judging it: the audit
+        // rows this reads are pruned, and a fact nobody recorded while it was
+        // visible becomes a channel that "never worked".
+        $health->observe();
+
         $state = $health->read();
         $rejected = $state['rejected'];
 
