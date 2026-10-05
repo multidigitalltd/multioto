@@ -42,7 +42,7 @@ return [
     | לתמיכה הייתה מנתבת בשקט בקשת עיון או מחיקה למקום אחר מזה שהוחלט עליו, וזו
     | טעות שאיש לא היה מבחין בה עד שלקוח היה מתלונן שלא נענה.
     */
-    'contact_email' => env('LEGAL_CONTACT_EMAIL') ?: 'riki@m-d.co.il',
+    'contact_email' => env('LEGAL_CONTACT_EMAIL') ?: 'service@multidigital.co.il',
 
     /*
     | תאריך העדכון האחרון של המסמכים.

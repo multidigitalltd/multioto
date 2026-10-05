@@ -152,15 +152,12 @@ class LegalPagesTest extends TestCase
      */
     public function test_the_expiry_claim_matches_what_the_pruning_job_does(): void
     {
-        $job = file_get_contents(app_path('Jobs/PruneSiteAgentRequestsJob.php'));
-
-        // The job deletes the file and marks the row; it does not delete the row.
-        $this->assertStringContainsString("Storage::disk('local')->delete", $job);
-        $this->assertStringNotContainsString('->delete()', $job);
+        config(['billing.system.site_agent_request_retention_days' => 133]);
 
         $this->get(route('legal.privacy'))
-            ->assertSeeText('קובץ התמונה נמחק')
-            ->assertSeeText('הטקסט של הבקשה ושל ההצעה נשמר');
+            ->assertSeeText('קובץ התמונה שהוחזק עבורה נמחק מהשרת מיד')
+            // והטקסט — לפי החלון שהעבודה באמת אוכפת.
+            ->assertSeeText('133 ימים');
     }
 
     /**

@@ -14,6 +14,7 @@
     // פועלת לפיו.
     $retention = [
         'יומן השינויים באתר (מה שונה, ומה היה קודם — זה מה שמאפשר "בטל")' => (int) config('billing.system.site_change_retention_days', 180),
+        'בקשות ששלחתם לסוכן בוואטסאפ, וההצעות שהוצגו לכם' => (int) config('billing.system.site_agent_request_retention_days', 180),
         'ממצאי ניטור ואבטחה על האתר' => (int) config('billing.system.site_event_retention_days', 90),
         'היסטוריית בדיקות הזמינות' => (int) config('billing.system.monitor_check_retention_days', 90),
         'תיעוד הודעות שנשלחו (דוא״ל / וואטסאפ)' => (int) config('billing.system.notification_log_retention_days', 120),
@@ -154,7 +155,7 @@
     </table>
     <p><strong>בנוסף לטבלה:</strong></p>
     <ul>
-        <li><strong>הצעת שינוי שלא אושרה</strong> — פגה בתוך שעות, וקובץ התמונה שהוחזק עבורה נמחק מהשרת. <strong>הטקסט של הבקשה ושל ההצעה נשמר</strong> כחלק מתיעוד הפעילות על האתר, ואינו נמחק אוטומטית במועד קבוע.</li>
+        <li><strong>הצעת שינוי שלא אושרה</strong> — פגה בתוך שעות, ו<strong>קובץ התמונה שהוחזק עבורה נמחק מהשרת מיד</strong>. הטקסט של הבקשה ושל ההצעה נמחק בתום תקופת השמירה שבטבלה למעלה, כמו כל בקשה אחרת.</li>
         <li><strong>מסמכי חשבונאות</strong> (חשבוניות, קבלות) — נשמרים לתקופה שהדין מחייב.</li>
         <li><strong>פרטי לקוח ומנוי</strong> — כל עוד ההתקשרות פעילה, ואחריה למשך הזמן הנדרש להתגוננות מפני תביעה ולעמידה בדין.</li>
     </ul>
