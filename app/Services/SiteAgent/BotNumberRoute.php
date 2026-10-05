@@ -1,0 +1,99 @@
+<?php
+
+namespace App\Services\SiteAgent;
+
+use App\Models\Customer;
+use App\Models\SiteAgentSubscriber;
+use App\Support\CardLink;
+
+/**
+ * ללקוח של בוט ניהול האתר — הכול מגיע מהמספר של הבוט.
+ *
+ * זו החלטה של מוצר ולא של תשתית: לקוח שמנהל את האתר שלו בשיחה עם מספר אחד אינו
+ * אמור לקבל פתאום הודעה על אותו מנוי ממספר אחר, שנראה לו כמו מספר זר. המספר
+ * הכללי נשאר למה שהוא באמת — פניות תמיכה שהלקוח פותח — ומופיע כפרט קשר לצד
+ * כתובת המייל, במקום לשמש ככתובת השולח.
+ *
+ * **מה ההודעה נושאת תלוי במי מחזיק בטלפון, וזו הנקודה העדינה כאן.**
+ *
+ * המוצר מתיר במפורש להעביר את הסוכן לעובד או לסוכנות, כלומר המספר שמחובר לבוט
+ * אינו בהכרח של בעל העסק. קישור תשלום חתום הוא הזמנה להקליד את פרטי הכרטיס של
+ * העסק, ושליחתו למספר כזה היא מסירת דף התשלום של לקוח למי שבמקרה מחזיק במכשיר.
+ * לכן קישור חתום נשלח רק כשהמספר שמחובר לבוט הוא גם המספר שברשומת הלקוח, ובכל
+ * מקרה אחר נשלח קישור לאזור האישי — שאינו מוסר דבר, כי מי שפותח אותו עדיין
+ * חייב להתחבר עם הפרטים שברשומה.
+ */
+class BotNumberRoute
+{
+    public function __construct(private readonly WhatsAppCloudClient $whatsapp) {}
+
+    /**
+     * The number this customer manages their site from, if they have one.
+     *
+     * Only a usable binding counts — verified, and not revoked. An unverified
+     * number has not proved it belongs to anybody, and a revoked one was taken
+     * away on purpose.
+     */
+    public function subscriber(Customer $customer): ?SiteAgentSubscriber
+    {
+        return rescue(
+            fn (): ?SiteAgentSubscriber => SiteAgentSubscriber::query()
+                ->where('customer_id', $customer->id)
+                ->usable()
+                ->latest('verified_at')
+                ->first(),
+            null,
+            report: false,
+        );
+    }
+
+    /** Does the bot carry this customer's messages at all? */
+    public function carries(Customer $customer): bool
+    {
+        return $this->whatsapp->configured() && $this->subscriber($customer) !== null;
+    }
+
+    /**
+     * Is this the number on the customer record itself?
+     *
+     * Compared in the normalised form both sides are stored in, so 050-1234567
+     * on the customer and 972501234567 on the subscriber are recognised as the
+     * same person rather than treated as a stranger.
+     */
+    public function isCustomerOwnNumber(SiteAgentSubscriber $subscriber): bool
+    {
+        $customer = $subscriber->customer;
+
+        if ($customer === null || $subscriber->phone === '') {
+            return false;
+        }
+
+        foreach ([$customer->phone, $customer->whatsapp_jid] as $candidate) {
+            if (blank($candidate)) {
+                continue;
+            }
+
+            if (hash_equals($subscriber->phone, $this->whatsapp->normalize((string) $candidate))) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * The payment link that is safe to send to THIS number.
+     *
+     * The signed card page only for the business's own number; for anybody
+     * else, the sign-in page, which gives away nothing — whoever opens it still
+     * has to receive a login link on the address or number the customer record
+     * carries, which is exactly the check we would otherwise have to write here
+     * and get right.
+     */
+    public function paymentLinkFor(SiteAgentSubscriber $subscriber): string
+    {
+        return $this->isCustomerOwnNumber($subscriber)
+            ? CardLink::for($subscriber->customer_id)
+            : route('portal.login');
+    }
+}

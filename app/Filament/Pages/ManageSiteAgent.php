@@ -77,6 +77,7 @@ class ManageSiteAgent extends Page implements HasForms
         'siteagent.template_verification',
         'siteagent.template_paused',
         'siteagent.template_resumed',
+        'siteagent.template_card_link',
         'siteagent.binding_ttl_minutes',
     ];
 
@@ -96,6 +97,7 @@ class ManageSiteAgent extends Page implements HasForms
                 'template_verification_copy_button' => (bool) config('siteagent.whatsapp.templates.verification_copy_button'),
                 'template_paused' => config('siteagent.whatsapp.templates.service_paused'),
                 'template_resumed' => config('siteagent.whatsapp.templates.service_resumed'),
+                'template_card_link' => config('siteagent.whatsapp.templates.card_link'),
                 'binding_ttl_minutes' => config('siteagent.binding.verification_ttl_minutes'),
             ],
         ]);
@@ -209,6 +211,12 @@ class ManageSiteAgent extends Page implements HasForms
                             ->live(onBlur: true)
                             ->autocomplete(false)
                             ->helperText('קטגוריית Utility. פרמטר אחד — הדומיין (domain).'),
+                        TextInput::make('siteagent.template_card_link')
+                            ->label('תבנית "קישור לתשלום"')
+                            ->live(onBlur: true)
+                            ->autocomplete(false)
+                            ->helperText('קטגוריית Utility. שני פרמטרים — customer_name ו-link. הקישור הוא פרמטר ולא טקסט קבוע, כי הוא אינו זהה לכולם: למספר של בעל העסק נשלח דף תשלום, ולמספר שהסוכן נמסר אליו (עובד, סוכנות) נשלח קישור לאזור האישי. בלי התבנית הזאת לא נשלחת הודעת תשלום בוואטסאפ ללקוחות הבוט — רק מייל, והפער מדווח.')
+                            ->columnSpanFull(),
                         TextInput::make('siteagent.binding_ttl_minutes')
                             ->label('תוקף קוד האימות (דקות)')
                             ->numeric()
