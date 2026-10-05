@@ -21,6 +21,7 @@ use App\Providers\SettingsServiceProvider;
 use App\Services\SiteAgent\SiteAgentProduct;
 use App\Services\System\HealthReport;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Hash;
 use Livewire\Livewire;
 use Tests\TestCase;
 
@@ -471,6 +472,81 @@ class SiteAgentProductTest extends TestCase
             ->call('save');
 
         $this->assertSame('already-stored', Setting::map()['siteagent.token'] ?? null);
+    }
+
+    /**
+     * ההנחיות שבמסך חייבות לתאר את מה שהקוד באמת שולח.
+     *
+     * תבנית Authentication מקבלת גוף שמטא כותבת, ובו משתנה מיקומי — וזה מה
+     * ש-SendSiteAgentVerificationJob שולח. תבנית Utility מקבלת גוף שאנחנו
+     * כותבים, ובו משתנה בשם. מסך שמורה לבנות את ההפך בונה תבנית שתידחה
+     * בשליחה הראשונה, בלי שגיאה שתגיע לאף מסך — וזה בדיוק המרחק בין הנחיה
+     * שגויה לבין לקוח שלא מקבל קוד ואף אחד לא יודע למה.
+     */
+    public function test_the_screen_describes_the_parameters_the_code_actually_sends(): void
+    {
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+
+        Livewire::test(ManageSiteAgent::class)
+            ->assertSeeText('{{1}}')      // Authentication — מיקומי
+            ->assertSeeText('{{domain}}') // Utility — בשם
+            ->assertDontSeeText('{{code}}');
+    }
+
+    /**
+     * תוקף הקוד נקבע מהמסך, כי הוא משפט שהלקוח קורא.
+     *
+     * תבנית האימות של מטא כותבת את המספר הזה בכותרת התחתונה ("התוקף יפוג בעוד
+     * X דקות"), ומי שכתב אותו יושב במסך הזה. כשהערך חי רק במשתנה סביבה, השניים
+     * נפרדים בשקט והלקוח שומע מספר שאינו נכון לאף כיוון: מי שממתין רבע שעה
+     * חושב שהקוד פג ומבקש חדש, והחדש מבטל את הישן שעוד עבד.
+     */
+    public function test_the_code_lifetime_is_set_from_the_screen(): void
+    {
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+
+        Livewire::test(ManageSiteAgent::class)
+            ->fillForm(['siteagent' => ['binding_ttl_minutes' => '10']])
+            ->call('save')
+            ->assertHasNoFormErrors();
+
+        SettingsServiceProvider::refreshFromDatabase();
+
+        $this->assertSame(10, (int) config('siteagent.binding.verification_ttl_minutes'));
+
+        // ותוקף שאי אפשר לכתוב בתבנית נדחה: מטא מגבילה את
+        // code_expiration_minutes ל-90 דקות, וערך מעליו הוא פער שההסבר במסך
+        // דורש לסגור ואי אפשר לסגור אותו.
+        // ותוקף שאינו שלם נדחה גם הוא: מי שסופר את הדקות עושה (int), כך ש-10.5
+        // היה נשמר, מוצג כ-10.5, ופועל כ-10 — אותו פער בדיוק.
+        foreach (['600', '10.5', '0', '-5', 'שלושים'] as $invalid) {
+            Livewire::test(ManageSiteAgent::class)
+                ->fillForm(['siteagent' => ['binding_ttl_minutes' => $invalid]])
+                ->call('save')
+                ->assertHasFormErrors(['siteagent.binding_ttl_minutes']);
+        }
+
+        SettingsServiceProvider::refreshFromDatabase();
+
+        $this->assertSame(10, (int) config('siteagent.binding.verification_ttl_minutes'));
+
+        // ולא רק נשמר: מי שסופר את הדקות באמת סופר לפי הערך הזה. אותו קוד בדיוק,
+        // תשע דקות אחרי השליחה ואחת-עשרה אחריה.
+        $customer = Customer::factory()->create();
+        $site = Site::factory()->create(['customer_id' => $customer->id]);
+        $subscriber = SiteAgentSubscriber::create([
+            'phone' => '972501234567',
+            'customer_id' => $customer->id,
+            'site_id' => $site->id,
+            'verification_code' => Hash::make('123456'),
+            'verification_sent_at' => now()->subMinutes(9),
+        ]);
+
+        $this->assertTrue($subscriber->codeIs('123456'));
+
+        $subscriber->forceFill(['verification_sent_at' => now()->subMinutes(11)])->save();
+
+        $this->assertFalse($subscriber->fresh()->codeIs('123456'));
     }
 
     /**

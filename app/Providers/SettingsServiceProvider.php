@@ -85,6 +85,14 @@ class SettingsServiceProvider extends ServiceProvider
         'siteagent.template_verification_copy_button' => 'siteagent.whatsapp.templates.verification_copy_button',
         'siteagent.template_paused' => 'siteagent.whatsapp.templates.service_paused',
         'siteagent.template_resumed' => 'siteagent.whatsapp.templates.service_resumed',
+        // How long a binding code stays usable. Editable here because the
+        // authentication template at Meta STATES this number to the customer
+        // ("התוקף יפוג בעוד 10 דקות"), and the person who writes that sentence
+        // is the person in this panel. Left in the environment, the two drift
+        // apart silently and the customer is told a number that is not true in
+        // either direction — asking for a new code while the old one still
+        // works, which then invalidates the one they were about to use.
+        'siteagent.binding_ttl_minutes' => 'siteagent.binding.verification_ttl_minutes',
         'waha.api_key' => 'billing.waha.api_key',
         'waha.base_url' => 'billing.waha.base_url',
         'waha.session' => 'billing.waha.session',
@@ -209,6 +217,7 @@ class SettingsServiceProvider extends ServiceProvider
         'siteagent.template_verification' => 'siteagent.whatsapp.templates.verification',
         'siteagent.template_paused' => 'siteagent.whatsapp.templates.service_paused',
         'siteagent.template_resumed' => 'siteagent.whatsapp.templates.service_resumed',
+        'siteagent.binding_ttl_minutes' => 'siteagent.binding.verification_ttl_minutes',
     ];
 
     /**
