@@ -209,7 +209,7 @@ class WhatsAppCloudClient
         try {
             $lookup = Http::withToken($token)->timeout($timeout)->get(sprintf(
                 'https://graph.facebook.com/%s/%s',
-                trim((string) config('siteagent.whatsapp.api_version', 'v21.0'), '/'),
+                $this->apiVersion(),
                 rawurlencode($mediaId),
             ));
 
@@ -298,11 +298,24 @@ class WhatsAppCloudClient
      *
      * Fails closed. A blank secret rejects everything rather than accepting it.
      */
+    /**
+     * Does this request even claim to be signed?
+     *
+     * The difference between "signed with the wrong secret" and "not signed at
+     * all" is the difference between Meta knocking and a scanner knocking, and
+     * only the first is worth waking anybody for. Meta signs every delivery, so
+     * a POST with no signature header was never a delivery attempt.
+     */
+    public function carriesSignature(?string $header): bool
+    {
+        return is_string($header) && Str::startsWith($header, 'sha256=');
+    }
+
     public function signatureIsValid(string $rawBody, ?string $header): bool
     {
         $secret = (string) config('siteagent.whatsapp.app_secret');
 
-        if ($secret === '' || ! is_string($header) || ! Str::startsWith($header, 'sha256=')) {
+        if ($secret === '' || ! $this->carriesSignature($header)) {
             return false;
         }
 
@@ -337,8 +350,20 @@ class WhatsAppCloudClient
     {
         return sprintf(
             'https://graph.facebook.com/%s/%s/messages',
-            trim((string) config('siteagent.whatsapp.api_version', 'v21.0'), '/'),
+            $this->apiVersion(),
             trim((string) config('siteagent.whatsapp.phone_number_id'), '/'),
         );
+    }
+
+    /**
+     * The Graph version, from the one setting that holds it.
+     *
+     * Read in one place on purpose: a version repeated at each call site is a
+     * version that gets bumped at one of them, and a retired Graph version
+     * does not degrade gracefully — every call to it fails.
+     */
+    private function apiVersion(): string
+    {
+        return trim((string) config('siteagent.whatsapp.api_version'), '/');
     }
 }

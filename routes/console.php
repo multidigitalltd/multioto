@@ -8,6 +8,7 @@ use App\Jobs\ChargeSubscriptionJob;
 use App\Jobs\ChaseMissingSecurityCardJob;
 use App\Jobs\CheckDomainExpiryJob;
 use App\Jobs\CheckMoneyIntegrityJob;
+use App\Jobs\CheckSiteAgentChannelJob;
 use App\Jobs\CheckSiteContentJob;
 use App\Jobs\CheckSiteDnsJob;
 use App\Jobs\CheckSiteLayoutJob;
@@ -493,6 +494,15 @@ Schedule::job(new PruneSiteAgentRequestsJob)
 // admin login to a customer's site in our database indefinitely.
 Schedule::job(new PruneSiteAccessJob)
     ->dailyAt('03:40')->name('site-agent:prune-access')->onOneServer();
+
+// Is anything arriving from Meta at all?
+//
+// The one failure in this product that produces no error anywhere: a customer
+// writes, nothing happens, and no screen says why. Reports only the two
+// unambiguous states — deliveries being refused (the app secret does not match)
+// and nothing ever having arrived while the service is live with subscribers.
+Schedule::job(new CheckSiteAgentChannelJob)
+    ->hourly()->name('site-agent:watch-channel')->onOneServer();
 
 // Whether each site-agent customer's service matches what they were last told.
 // The model hook already tells them the moment a subscription moves; this is

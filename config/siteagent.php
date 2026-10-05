@@ -1,5 +1,7 @@
 <?php
 
+use App\Support\GraphApiVersion;
+
 return [
 
     /*
@@ -28,8 +30,18 @@ return [
     | cannot be taken down by a phone losing its session.
     */
     'whatsapp' => [
-        // Graph API version and the number's own id, from the Meta app.
-        'api_version' => env('SITE_AGENT_WA_API_VERSION', 'v21.0'),
+        /*
+         | Graph API version and the number's own id, from the Meta app.
+         |
+         | Meta retires a version about two years after it ships, and a call to
+         | a retired version does not degrade — it fails, and the bot goes
+         | silent with no error on any screen. An explicit value is honoured
+         | only while it is no older than GraphApiVersion::FLOOR, because an
+         | installation created from an earlier `.env.example` still carries the
+         | version that was current then, and that stale value would otherwise
+         | outlive the version it names. See that class for the reasoning.
+         */
+        'api_version' => GraphApiVersion::resolve(env('SITE_AGENT_WA_API_VERSION')),
         'phone_number_id' => env('SITE_AGENT_WA_PHONE_NUMBER_ID', ''),
 
         // Permanent access token of the system user that owns the number.
@@ -87,6 +99,21 @@ return [
             // Utility category. One parameter: `domain`.
             'service_resumed' => env('SITE_AGENT_WA_TEMPLATE_RESUMED', ''),
         ],
+    ],
+
+    /*
+    | ניטור הערוץ הנכנס.
+    |
+    | כל שאר הניטור שואל "האם האתר עונה". זה שואל את מה שאף אחד לא שאל: האם
+    | הודעה של לקוח בכלל מגיעה אלינו. הכישלון כאן שקט לחלוטין — הלקוח כותב ולא
+    | קורה כלום, בלי שגיאה ובלי שורה באף יומן.
+    */
+    'channel_watch' => [
+        'enabled' => (bool) env('SITE_AGENT_CHANNEL_WATCH', true),
+
+        // אותה תקלה מדווחת פעם ביום ולא בכל ריצה: שני המצבים נמשכים עד שמישהו
+        // מתקן, והתראה שחוזרת כל שעה היא התראה שלומדים לדלג עליה.
+        'cooldown_hours' => (int) env('SITE_AGENT_CHANNEL_WATCH_COOLDOWN_HOURS', 24),
     ],
 
     /*
