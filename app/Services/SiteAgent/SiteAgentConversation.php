@@ -24,6 +24,12 @@ use Illuminate\Support\Str;
 class SiteAgentConversation
 {
     /** Words that mean yes to the offer on the table. */
+    /**
+     * The line every offer ends with. The channel recognises it and turns it
+     * into "כן" / "לא" buttons; typed answers keep working either way.
+     */
+    public const CONFIRM_PROMPT = 'לביצוע השיבו "כן". לביטול — "לא".';
+
     private const YES = ['כן', 'אשר', 'אישור', 'מאשר', 'מאשרת', 'בצע', 'תבצע', 'אוקיי', 'אוקי', 'ok', 'yes', 'כן.', '👍'];
 
     /** Words that mean no. */
@@ -261,7 +267,7 @@ class SiteAgentConversation
             'expires_at' => now()->addMinutes($minutes),
         ]);
 
-        return $request->preview."\n\n".'לביצוע השיבו "כן". לביטול — "לא".';
+        return $request->preview."\n\n".self::CONFIRM_PROMPT;
     }
 
     /**
@@ -335,7 +341,7 @@ class SiteAgentConversation
 
         return isset($plan['question'])
             ? $plan['question']
-            : $request->preview."\n\n".'לביצוע השיבו "כן". לביטול — "לא".';
+            : $request->preview."\n\n".self::CONFIRM_PROMPT;
     }
 
     /**
@@ -413,7 +419,7 @@ class SiteAgentConversation
             'expires_at' => now()->addMinutes(max(1, (int) config('siteagent.confirmation_minutes', 30))),
         ]);
 
-        return $request->refresh()->preview."\n\n".'לביצוע השיבו "כן". לביטול — "לא".';
+        return $request->refresh()->preview."\n\n".self::CONFIRM_PROMPT;
     }
 
     /**
@@ -499,7 +505,7 @@ class SiteAgentConversation
                 'expires_at' => now()->addMinutes(max(1, (int) config('siteagent.confirmation_minutes', 30))),
             ]);
 
-            return $offer['preview']."\n\n".'לביצוע השיבו "כן". לביטול — "לא".';
+            return $offer['preview']."\n\n".self::CONFIRM_PROMPT;
         }
 
         // Still short of something. The picture stays where it is and the
@@ -529,7 +535,7 @@ class SiteAgentConversation
             'expires_at' => now()->addMinutes(max(1, (int) config('siteagent.confirmation_minutes', 30))),
         ]);
 
-        return $request->refresh()->preview."\n\n".'לביצוע השיבו "כן". לביטול — "לא".';
+        return $request->refresh()->preview."\n\n".self::CONFIRM_PROMPT;
     }
 
     /**

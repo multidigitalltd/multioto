@@ -99,7 +99,7 @@ class SiteAgentAssistant
         }
 
         if ($turn->request !== null) {
-            return $turn->request->preview."\n\n".'לביצוע השיבו "כן". לביטול — "לא".';
+            return $turn->request->preview."\n\n".SiteAgentConversation::CONFIRM_PROMPT;
         }
 
         $answer = trim((string) $answer);

@@ -8,6 +8,7 @@ use App\Models\SiteAgentRequest;
 use App\Models\SiteAgentSubscriber;
 use App\Services\Agent\McpClient;
 use App\Services\Ai\ClaudeClient;
+use App\Services\Notifications\TeamNotifier;
 use App\Services\SiteAgent\SiteActionProposer;
 use App\Services\SiteAgent\SiteAgentConversation;
 use App\Services\SiteAgent\SiteAgentToolbox;
@@ -392,13 +393,60 @@ class SiteAgentCoverageTest extends TestCase
         $this->assertStringContainsString('לא נלקח גיבוי', $preview);
 
         // The first update leaves the site down.
+        $team = Mockery::mock(TeamNotifier::class);
+        $team->shouldNotReceive('alert');
+        $this->app->instance(TeamNotifier::class, $team);
         $this->siteUp = false;
         $reply = $this->talk($subscriber, 'כן');
 
-        $this->assertStringContainsString('הצוות שלנו קיבל התראה', $reply);
+        // The owner is told what happened and what was updated; it is their
+        // request on their site, so nobody else is paged for it.
+        $this->assertStringContainsString('עצרתי את שאר העדכונים', $reply);
+        $this->assertStringContainsString('עודכנו: Forms', $reply);
+        $this->assertStringNotContainsString('הצוות', $reply);
         $updates = array_values(array_filter($this->calls, fn (array $call): bool => $call[0] === 'wp_plugin_update'));
         // Stopped after the first: the second is not piled on a broken site.
         $this->assertSame([['wp_plugin_update', ['plugin' => 'forms/forms.php']]], $updates);
+    }
+
+    public function test_a_plugin_the_upgrader_left_off_is_switched_back_on(): void
+    {
+        $subscriber = $this->subscriber();
+        $active = ['elementor-pro/elementor-pro.php' => true, 'seo/seo.php' => true];
+        $this->site['wp_plugin_list'] = function () use (&$active): array {
+            return [
+                ['plugin' => 'elementor-pro/elementor-pro.php', 'name' => 'Elementor Pro', 'version' => '4.2.3', 'active' => $active['elementor-pro/elementor-pro.php'], 'update_available' => true],
+                ['plugin' => 'seo/seo.php', 'name' => 'SEO', 'version' => '2.0', 'active' => $active['seo/seo.php'], 'update_available' => true],
+            ];
+        };
+        // WordPress's upgrader deactivates a plugin before swapping its files.
+        $this->site['wp_plugin_update'] = function (array $arguments) use (&$active): string {
+            $active[$arguments['plugin']] = false;
+
+            return 'עודכן.';
+        };
+        $this->site['wp_plugin_activate'] = function (array $arguments) use (&$active): string {
+            if ($arguments['plugin'] === 'elementor-pro/elementor-pro.php') {
+                $active[$arguments['plugin']] = true;
+            }
+
+            return 'הופעל.';
+        };
+
+        $this->model(function (Closure $tool): string {
+            $tool('propose_plugin_update', ['plugins' => ['all']]);
+
+            return '';
+        });
+        $this->talk($subscriber, 'תעדכן את כל התוספים');
+
+        $reply = $this->talk($subscriber, 'כן');
+
+        $this->assertTrue($active['elementor-pro/elementor-pro.php']);
+        $this->assertContains(['wp_plugin_activate', ['plugin' => 'elementor-pro/elementor-pro.php']], $this->calls);
+        // One that would not come back is said, not left quietly off.
+        $this->assertStringContainsString('SEO לא חזר לפעול', $reply);
+        $this->assertStringNotContainsString('Elementor Pro לא חזר', $reply);
     }
 
     public function test_switching_off_a_plugin_that_breaks_the_site_is_put_back_at_once(): void
@@ -490,7 +538,7 @@ class SiteAgentCoverageTest extends TestCase
         $site = Site::factory()->create([
             'customer_id' => $customer->id, 'mcp_enabled' => true,
             'mcp_endpoint' => 'https://example.test/wp-json/md-agent/v1/mcp', 'mcp_secret' => 's',
-            'mcp_capabilities' => $capabilities ?: ['server' => ['version' => '1.8.2']],
+            'mcp_capabilities' => $capabilities ?: ['server' => ['version' => '1.8.3']],
         ]);
 
         return SiteAgentSubscriber::create([
@@ -523,6 +571,7 @@ class SiteAgentCoverageTest extends TestCase
             $this->calls[] = [$tool, $arguments];
 
             $answer = $this->site[$tool] ?? [];
+            $answer = $answer instanceof Closure ? $answer($arguments) : $answer;
 
             // A plain-text answer travels the way the plugin sends one.
             return is_string($answer) ? ['content' => [['type' => 'text', 'text' => $answer]], '_text' => true] : $answer;

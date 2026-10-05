@@ -4,9 +4,9 @@ namespace App\Services\SiteAgent;
 
 use App\Models\Site;
 use App\Models\SiteAgentRequest;
+use App\Models\SystemLog;
 use App\Services\Agent\McpClient;
 use App\Services\Agent\SiteChangeJournal;
-use App\Services\Notifications\TeamNotifier;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -38,7 +38,6 @@ class SiteActionApplier
     public function __construct(
         private McpClient $mcp,
         private SiteChangeJournal $journal,
-        private TeamNotifier $team,
     ) {}
 
     /**
@@ -797,28 +796,80 @@ class SiteActionApplier
      * Update plugins one at a time, the way the team's maintenance does: the
      * homepage must still answer after EVERY update, and the first one that
      * breaks it stops the run — one bad plugin must not be buried under four
-     * more updates — and the team hears about it at once.
+     * more updates.
+     *
+     * WordPress's upgrader deactivates an active plugin before replacing its
+     * files and leaves turning it back on to wp-admin's next screen, which
+     * never comes here. So a plugin that was active is switched back on after
+     * its update — on every plugin version, since older ones do not do it
+     * themselves — and one that will not come back is said, not left quietly
+     * off.
      *
      * @param  array<string, mixed>  $plan
      */
     private function pluginUpdate(Site $site, array $plan): array
     {
         $done = [];
+        $inactive = [];
+        $wasActive = $this->activePlugins($site);
 
         foreach ((array) $plan['plugins'] as $plugin) {
             $name = (string) $plugin['name'];
+            $file = (string) $plugin['file'];
 
-            $this->mcp->callTool($site, 'wp_plugin_update', ['plugin' => (string) $plugin['file']], self::UPDATE_TIMEOUT_SECONDS);
-            $this->journal->record($site, "בוט ניהול האתר — עודכן {$name}", 'wp_plugin_update', ['plugin' => (string) $plugin['file']],
+            $this->mcp->callTool($site, 'wp_plugin_update', ['plugin' => $file], self::UPDATE_TIMEOUT_SECONDS);
+            $this->journal->record($site, "בוט ניהול האתר — עודכן {$name}", 'wp_plugin_update', ['plugin' => $file],
                 beforeState: 'גרסה קודמת: '.(string) ($plugin['version'] ?? '?'), initiatedBy: 'site_agent');
             $done[] = $name;
+
+            if (isset($wasActive[$file]) && ! $this->reactivated($site, $file)) {
+                $inactive[] = $name;
+            }
 
             if (! $this->healthy($site)) {
                 return $this->broken($site, "אחרי עדכון התוסף {$name}", $done);
             }
         }
 
-        return $this->ok(null, 'עודכנו: '.implode(', ', $done).'. האתר נבדק אחרי כל עדכון ועולה כרגיל.');
+        return $this->ok(null, implode("\n", array_filter([
+            'עודכנו: '.implode(', ', $done).'. האתר נבדק אחרי כל עדכון ועולה כרגיל.',
+            $inactive !== []
+                ? 'שימו לב: '.implode(', ', $inactive).' לא חזר לפעול אחרי העדכון. כתבו לי "תפעיל את '.$inactive[0].'" ואנסה שוב.'
+                : null,
+        ])));
+    }
+
+    /**
+     * The plugin is active after its update — switched back on if the
+     * upgrader left it off.
+     */
+    private function reactivated(Site $site, string $file): bool
+    {
+        try {
+            if ($this->pluginActive($site, $file) === true) {
+                return true;
+            }
+
+            $this->switchPlugin($site, $file, true);
+
+            return $this->pluginActive($site, $file) === true;
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    /** @return array<string, true> plugin file => active, as the site lists them now */
+    private function activePlugins(Site $site): array
+    {
+        $active = [];
+
+        foreach ((array) $this->call($site, 'wp_plugin_list', []) as $plugin) {
+            if (is_array($plugin) && ($plugin['active'] ?? false)) {
+                $active[(string) ($plugin['plugin'] ?? '')] = true;
+            }
+        }
+
+        return $active;
     }
 
     /** @param array<string, mixed> $plan */
@@ -859,13 +910,11 @@ class SiteActionApplier
 
         if (! $this->healthy($site)) {
             $this->switchPlugin($site, $file, ! $to);
-            $this->team->alert(
-                "⚠️ {$site->domain}: שינוי תוסף מהבוט הוחזר",
-                'בעל האתר '.($to ? 'הפעיל' : 'כיבה')." את {$plan['name']} מהוואטסאפ, ודף הבית הפסיק לענות. השינוי הוחזר מיד — כדאי לוודא שהאתר תקין.",
-                rtrim((string) config('app.url'), '/')."/admin/sites/{$site->id}",
-            );
+            SystemLog::record('warning', 'site-agent',
+                "{$site->domain}: שינוי תוסף מהבוט הוחזר — בעל האתר ".($to ? 'הפעיל' : 'כיבה')." את {$plan['name']} ודף הבית הפסיק לענות.",
+                ['site_id' => $site->id]);
 
-            return $this->refuse('האתר הפסיק לענות אחרי השינוי, ולכן החזרתי אותו מיד. הצוות שלנו קיבל התראה ויבדוק.');
+            return $this->refuse('האתר הפסיק לענות אחרי השינוי, ולכן החזרתי אותו מיד. כדאי לבדוק שהאתר נראה תקין.');
         }
 
         return $this->ok(['kind' => 'plugin_toggle', 'plugin' => $file, 'active' => ! $to, 'after' => $to]);
@@ -923,20 +972,20 @@ class SiteActionApplier
     }
 
     /**
-     * An update left the site not answering: stop, tell the team now, and tell
-     * the owner the truth.
+     * An update left the site not answering: stop, and tell the owner exactly
+     * what happened and what was updated. It is their site and their request;
+     * the panel's log keeps the record.
      *
      * @param  list<string>  $done
      */
     private function broken(Site $site, string $after, array $done): array
     {
-        $this->team->alert(
-            "🚨 {$site->domain} הפסיק לענות — עדכון מהבוט",
-            "{$after} שבוצע מהוואטסאפ, דף הבית של {$site->domain} הפסיק לענות תקין. העדכונים נעצרו (עודכנו: ".implode(', ', $done).'). ייתכן שנדרש שחזור.',
-            rtrim((string) config('app.url'), '/')."/admin/sites/{$site->id}",
-        );
+        SystemLog::record('warning', 'site-agent',
+            "{$site->domain}: דף הבית הפסיק לענות {$after} שבוצע מהוואטסאפ. עודכנו: ".implode(', ', $done).'.',
+            ['site_id' => $site->id]);
 
-        return $this->refuse("האתר הפסיק לענות {$after}. עצרתי את העדכונים, והצוות שלנו קיבל התראה ומטפל בזה עכשיו.");
+        return $this->refuse("האתר הפסיק לענות {$after}, ולכן עצרתי את שאר העדכונים. עודכנו: ".implode(', ', $done)
+            .'. בדקו את האתר; אם הוא לא חוזר, כתבו לי "יומן שגיאות" ואבדוק מה קרה.');
     }
 
     // --- Helpers -------------------------------------------------------------
