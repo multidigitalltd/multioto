@@ -505,8 +505,10 @@ class SiteAgentProductTest extends TestCase
         $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
 
         Livewire::test(ManageSiteAgent::class)
-            ->assertSeeText('{{1}}')      // Authentication — מיקומי
-            ->assertSeeText('{{domain}}') // Utility — בשם
+            ->assertSeeText('{{1}}')             // Authentication — מיקומי
+            ->assertSeeText('{{domain}}')        // Utility — בשם
+            ->assertSeeText('{{customer_name}}') // קישור לתשלום
+            ->assertSeeText('{{link}}')
             ->assertDontSeeText('{{code}}');
     }
 

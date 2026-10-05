@@ -142,7 +142,7 @@
     <x-filament::section class="mt-6" icon="heroicon-o-document-text">
         <x-slot name="heading">התבניות שצריך לאשר אצל מטא</x-slot>
         <x-slot name="description">
-            שלוש תבניות, פעם אחת. עד שהן מאושרות ושמותיהן מוזנים למעלה — כל הודעה שאנחנו
+            ארבע תבניות, פעם אחת. עד שהן מאושרות ושמותיהן מוזנים למעלה — כל הודעה שאנחנו
             מתחילים נדחית על ידי מטא, בלי שגיאה שמגיעה אליכם.
         </x-slot>
 
@@ -180,6 +180,14 @@
                 <div class="font-medium text-gray-900 dark:text-gray-100">מנוי חזר — קטגוריית Utility</div>
                 <p class="mt-1 text-gray-500 dark:text-gray-400">
                     <code dir="ltr">@{{domain}}</code> הדומיין של הלקוח.
+                </p>
+            </div>
+            <div class="rounded-xl border border-gray-200 p-4 dark:border-gray-700">
+                <div class="font-medium text-gray-900 dark:text-gray-100">קישור לתשלום — קטגוריית Utility</div>
+                <p class="mt-1 text-gray-500 dark:text-gray-400">
+                    <code dir="ltr">@{{customer_name}}</code> שם הלקוח ו-<code dir="ltr">@{{link}}</code> הקישור.
+                    הקישור הוא משתנה ולא טקסט קבוע, כי הוא אינו זהה לכולם: למספר של בעל העסק
+                    נשלח דף התשלום, ולמספר שהסוכן נמסר אליו (עובד, סוכנות) נשלח קישור לאזור האישי בלבד.
                 </p>
             </div>
             <p class="text-gray-500 dark:text-gray-400">
