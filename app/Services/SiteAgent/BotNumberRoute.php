@@ -106,17 +106,21 @@ class BotNumberRoute
             return false;
         }
 
-        foreach ([$customer->phone, $customer->whatsapp_jid] as $candidate) {
-            if (blank($candidate)) {
-                continue;
-            }
-
-            if (hash_equals($subscriber->phone, $this->whatsapp->normalize((string) $candidate))) {
-                return true;
-            }
+        // The phone on the customer record, and ONLY it.
+        //
+        // `whatsapp_jid` is deliberately excluded even though it identifies the
+        // same customer: it is LEARNED, not declared. IngestWhatsappMessageJob
+        // stamps it from whoever wrote to support first and matched this
+        // customer, so an employee or an agency contacting us before the owner
+        // does becomes the customer's recorded JID. Accepting it here would
+        // classify that delegated binding as the business's own number and send
+        // it the signed card page — the exact disclosure this route exists to
+        // withhold, arriving through the back door.
+        if (blank($customer->phone)) {
+            return false;
         }
 
-        return false;
+        return hash_equals($subscriber->phone, $this->whatsapp->normalize((string) $customer->phone));
     }
 
     /**

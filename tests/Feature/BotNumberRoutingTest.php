@@ -209,6 +209,30 @@ class BotNumberRoutingTest extends TestCase
     }
 
     /**
+     * מספר שנלמד מפנייה לתמיכה אינו הוכחה שזה בעל העסק.
+     *
+     * `whatsapp_jid` נחתם על רשומת הלקוח ממי שכתב לתמיכה ראשון והותאם ללקוח
+     * הזה — כלומר עובד או סוכנות שפנו לפני הבעלים הופכים למספר הרשום. קבלתו
+     * כהוכחת בעלות הייתה מסווגת בדיוק את המספר שנמסר לאחר כ"המספר של העסק",
+     * ושולחת אליו את דף התשלום החתום. זו אותה דליפה שהמסלול קיים כדי למנוע,
+     * רק מהדלת האחורית.
+     */
+    public function test_a_jid_learned_from_support_is_not_proof_of_ownership(): void
+    {
+        $subscription = $this->subscription('0501234567', '972509999999');
+
+        // כפי ש-IngestWhatsappMessageJob עושה: המספר של העובד נחתם על הלקוח.
+        $subscription->customer->update(['whatsapp_jid' => '972509999999@c.us']);
+
+        app(CardCaptureLinkSender::class)->send($subscription->fresh());
+
+        $link = (string) data_get($this->sentBodies()[0] ?? [], 'template.components.0.parameters.1.text');
+
+        $this->assertSame(route('portal.login'), $link, 'מספר שנלמד מפנייה לתמיכה אינו מזכה בדף התשלום.');
+        $this->assertStringNotContainsString('update-card', $link);
+    }
+
+    /**
      * ומספר בוט שאינו מוגדר כרגע הוא כישלון, לא סיבה ללכת למספר הכללי.
      *
      * החלפת טוקן היא פעולה שגרתית של כמה דקות. בלי ההבחנה הזאת היא הייתה
