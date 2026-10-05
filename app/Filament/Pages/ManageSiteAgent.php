@@ -77,6 +77,7 @@ class ManageSiteAgent extends Page implements HasForms
         'siteagent.template_verification',
         'siteagent.template_paused',
         'siteagent.template_resumed',
+        'siteagent.binding_ttl_minutes',
     ];
 
     /** @var array<string, mixed> */
@@ -95,6 +96,7 @@ class ManageSiteAgent extends Page implements HasForms
                 'template_verification_copy_button' => (bool) config('siteagent.whatsapp.templates.verification_copy_button'),
                 'template_paused' => config('siteagent.whatsapp.templates.service_paused'),
                 'template_resumed' => config('siteagent.whatsapp.templates.service_resumed'),
+                'binding_ttl_minutes' => config('siteagent.binding.verification_ttl_minutes'),
             ],
         ]);
     }
@@ -192,7 +194,7 @@ class ManageSiteAgent extends Page implements HasForms
                             ->label('תבנית קוד האימות')
                             ->live(onBlur: true)
                             ->autocomplete(false)
-                            ->helperText('קטגוריית Authentication. פרמטר אחד — הקוד בן שש הספרות (בשם: code). בלעדיה לקוח חדש לא יקבל קוד ולא יוכל להתחיל.'),
+                            ->helperText('קטגוריית Authentication. הגוף שלה נכתב על ידי מטא והמשתנה בו הוא מיקומי — {{1}}, הקוד בן שש הספרות — ולא משתנה בשם. בלעדיה לקוח חדש לא יקבל קוד ולא יוכל להתחיל.'),
                         Toggle::make('siteagent.template_verification_copy_button')
                             ->label('לתבנית האימות יש כפתור העתקת קוד')
                             ->helperText('תבניות אימות של מטא מגיעות בדרך כלל עם כפתור "העתק קוד", שדורש את הקוד גם עליו. כבו אם התבנית אושרה בלי כפתור — שליחת רכיב שאינו קיים בתבנית נדחית.')
@@ -207,6 +209,19 @@ class ManageSiteAgent extends Page implements HasForms
                             ->live(onBlur: true)
                             ->autocomplete(false)
                             ->helperText('קטגוריית Utility. פרמטר אחד — הדומיין (domain).'),
+                        TextInput::make('siteagent.binding_ttl_minutes')
+                            ->label('תוקף קוד האימות (דקות)')
+                            ->numeric()
+                            ->minValue(1)
+                            ->maxValue(1440)
+                            ->placeholder('30')
+                            ->live(onBlur: true)
+                            ->autocomplete(false)
+                            // כאן כי זה לא ערך טכני אלא משפט שהלקוח קורא: תבנית
+                            // האימות של מטא כותבת את המספר הזה בכותרת התחתונה
+                            // ("התוקף יפוג בעוד X דקות"), ומי שכתב אותו יושב
+                            // במסך הזה. פער בין השניים משקר ללקוח לשני הכיוונים.
+                            ->helperText('חייב להתאים לתוקף שכתוב בתבנית האימות עצמה אצל מטא. אם התבנית אומרת ללקוח 10 דקות והערך כאן הוא 30, מי שממתין רבע שעה חושב שהקוד פג ומבקש חדש — והחדש מבטל את הישן שעוד עבד.'),
                     ])->columns(2),
             ])
             ->statePath('data');

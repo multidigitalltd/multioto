@@ -21,6 +21,7 @@ use App\Providers\SettingsServiceProvider;
 use App\Services\SiteAgent\SiteAgentProduct;
 use App\Services\System\HealthReport;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Hash;
 use Livewire\Livewire;
 use Tests\TestCase;
 
@@ -471,6 +472,46 @@ class SiteAgentProductTest extends TestCase
             ->call('save');
 
         $this->assertSame('already-stored', Setting::map()['siteagent.token'] ?? null);
+    }
+
+    /**
+     * תוקף הקוד נקבע מהמסך, כי הוא משפט שהלקוח קורא.
+     *
+     * תבנית האימות של מטא כותבת את המספר הזה בכותרת התחתונה ("התוקף יפוג בעוד
+     * X דקות"), ומי שכתב אותו יושב במסך הזה. כשהערך חי רק במשתנה סביבה, השניים
+     * נפרדים בשקט והלקוח שומע מספר שאינו נכון לאף כיוון: מי שממתין רבע שעה
+     * חושב שהקוד פג ומבקש חדש, והחדש מבטל את הישן שעוד עבד.
+     */
+    public function test_the_code_lifetime_is_set_from_the_screen(): void
+    {
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+
+        Livewire::test(ManageSiteAgent::class)
+            ->fillForm(['siteagent' => ['binding_ttl_minutes' => '10']])
+            ->call('save')
+            ->assertHasNoFormErrors();
+
+        SettingsServiceProvider::refreshFromDatabase();
+
+        $this->assertSame(10, (int) config('siteagent.binding.verification_ttl_minutes'));
+
+        // ולא רק נשמר: מי שסופר את הדקות באמת סופר לפי הערך הזה. אותו קוד בדיוק,
+        // תשע דקות אחרי השליחה ואחת-עשרה אחריה.
+        $customer = Customer::factory()->create();
+        $site = Site::factory()->create(['customer_id' => $customer->id]);
+        $subscriber = SiteAgentSubscriber::create([
+            'phone' => '972501234567',
+            'customer_id' => $customer->id,
+            'site_id' => $site->id,
+            'verification_code' => Hash::make('123456'),
+            'verification_sent_at' => now()->subMinutes(9),
+        ]);
+
+        $this->assertTrue($subscriber->codeIs('123456'));
+
+        $subscriber->forceFill(['verification_sent_at' => now()->subMinutes(11)])->save();
+
+        $this->assertFalse($subscriber->fresh()->codeIs('123456'));
     }
 
     /**
