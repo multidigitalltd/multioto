@@ -302,7 +302,7 @@ Route::prefix('portal')->group(function () {
             ->middleware('throttle:20,1')->name('portal.licenses.download');
 
         /*
-         | סוכן האתר. Adding a number raises what the customer pays, and
+         | בוט ניהול האתר. Adding a number raises what the customer pays, and
          | re-sending a code puts a WhatsApp message on somebody's phone, so both
          | are throttled — a form that can be submitted twenty times a minute is
          | one misplaced double-click away from a wrong invoice.
@@ -356,7 +356,7 @@ Route::middleware('throttle:30,1')->group(function () {
 });
 
 /*
- | סוכן האתר — the WhatsApp number a customer writes to in order to run their own
+ | בוט ניהול האתר — the WhatsApp number a customer writes to in order to run their own
  | site. Bought the same way as a plugin licence and for the same reason: a
  | product that can only be sold by a team member opening rows by hand is not a
  | product anybody can buy.

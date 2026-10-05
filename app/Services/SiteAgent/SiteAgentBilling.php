@@ -118,8 +118,8 @@ class SiteAgentBilling
         $subscription?->setRelation('customer', $subscriber->customer);
 
         $reason = match ($subscription?->status) {
-            SubscriptionStatus::PastDue, SubscriptionStatus::Suspended => 'התשלום על מנוי ניהול האתר לא נקלט, ולכן הסוכן מושהה.',
-            SubscriptionStatus::Canceled => 'מנוי ניהול האתר הסתיים, ולכן הסוכן מושהה.',
+            SubscriptionStatus::PastDue, SubscriptionStatus::Suspended => 'התשלום על מנוי ניהול האתר לא נקלט, ולכן הבוט מושהה.',
+            SubscriptionStatus::Canceled => 'מנוי ניהול האתר הסתיים, ולכן הבוט מושהה.',
             default => 'מנוי ניהול האתר אינו פעיל כרגע, ולכן איני יכול לבצע שינויים.',
         };
 
@@ -165,7 +165,7 @@ class SiteAgentBilling
     public function resumedMessage(SiteAgentSubscriber $subscriber): string
     {
         return implode("\n", [
-            '✅ מנוי ניהול האתר פעיל שוב, והסוכן חזר לעבוד.',
+            '✅ מנוי ניהול האתר פעיל שוב, והבוט חזר לעבוד.',
             '',
             'אפשר להמשיך לכתוב לי מה לשנות באתר '.($subscriber->site?->domain ?? 'שלכם').'.',
         ]);

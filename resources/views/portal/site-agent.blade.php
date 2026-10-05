@@ -1,6 +1,6 @@
 @extends('portal.layout')
 
-@section('title', 'סוכן האתר')
+@section('title', 'בוט ניהול האתר')
 
 @php
     use App\Http\Controllers\Portal\PortalSiteAgentController as Agent;
@@ -9,7 +9,7 @@
 @endphp
 
 @section('content')
-    <h1>סוכן האתר</h1>
+    <h1>בוט ניהול האתר</h1>
 
     @if (! $entitled)
         {{-- Said first and plainly. Everything below still shows their numbers,
@@ -17,7 +17,7 @@
              them concludes the product is broken rather than unpaid. --}}
         <div class="card">
             <h2 style="margin-top:0;">המנוי אינו פעיל כרגע</h2>
-            <p>הסוכן אינו עונה כל עוד המנוי אינו פעיל. <strong>האתר עצמו ממשיך לעבוד כרגיל</strong>, ושום שינוי שכבר בוצע לא בוטל.</p>
+            <p>הבוט אינו עונה כל עוד המנוי אינו פעיל. <strong>האתר עצמו ממשיך לעבוד כרגיל</strong>, ושום שינוי שכבר בוצע לא בוטל.</p>
             <p class="muted">
                 <a href="{{ route('portal.debt') }}">לתשלומים פתוחים ולעדכון אמצעי תשלום</a>
             </p>

@@ -20,7 +20,7 @@ use Filament\Pages\SubNavigationPosition;
 use Illuminate\Support\HtmlString;
 
 /**
- * סוכן וואטסאפ לניהול אתר — הגדרות המוצר.
+ * בוט ניהול אתר — הגדרות המוצר.
  *
  * Until this screen existed the product could only be switched on by editing
  * .env and redeploying, which had two consequences worth stating plainly. The
@@ -51,9 +51,9 @@ class ManageSiteAgent extends Page implements HasForms
 
     protected static SubNavigationPosition $subNavigationPosition = SubNavigationPosition::Start;
 
-    protected static ?string $navigationLabel = 'סוכן וואטסאפ לאתר';
+    protected static ?string $navigationLabel = 'בוט ניהול אתר';
 
-    protected static ?string $title = 'סוכן וואטסאפ לניהול אתר — הגדרות המוצר';
+    protected static ?string $title = 'בוט ניהול אתר — הגדרות המוצר';
 
     protected static ?int $navigationSort = 85;
 
@@ -234,7 +234,7 @@ class ManageSiteAgent extends Page implements HasForms
         }
 
         Notification::make()
-            ->title('הגדרות סוכן האתר נשמרו')
+            ->title('הגדרות בוט ניהול האתר נשמרו')
             ->success()
             ->send();
     }

@@ -48,7 +48,7 @@ class SiteAgentOverview extends BaseWidget
 
     protected static ?int $sort = -40;
 
-    protected ?string $heading = 'סוכן וואטסאפ לניהול אתר';
+    protected ?string $heading = 'בוט ניהול אתר';
 
     protected function getStats(): array
     {
@@ -93,7 +93,7 @@ class SiteAgentOverview extends BaseWidget
 
         $stats[] = Stat::make('מושהים — לא משלמים', $numbers['paused'])
             ->description($numbers['paused'] > 0
-                ? 'הסוכן שותק אצלם עד שהמנוי יחודש'
+                ? 'הבוט שותק אצלם עד שהמנוי יחודש'
                 : 'כל מספר פעיל מכוסה במנוי')
             ->icon('heroicon-o-pause-circle')
             ->color($numbers['paused'] > 0 ? 'warning' : 'success')

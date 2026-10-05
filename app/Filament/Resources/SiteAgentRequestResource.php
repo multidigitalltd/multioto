@@ -13,7 +13,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 
 /**
- * יומן סוכן האתר — what customers changed on their own sites, and when.
+ * יומן בוט ניהול האתר — what customers changed on their own sites, and when.
  *
  * The agent edits live websites on a customer's say-so, with no one from the
  * team in the loop. That is the product, and it is also why this screen exists:
@@ -34,11 +34,11 @@ class SiteAgentRequestResource extends Resource
 
     protected static ?string $navigationGroup = 'ניהול';
 
-    protected static ?string $navigationLabel = 'יומן סוכן האתר';
+    protected static ?string $navigationLabel = 'יומן בוט ניהול האתר';
 
     protected static ?string $modelLabel = 'בקשה';
 
-    protected static ?string $pluralModelLabel = 'בקשות לסוכן האתר';
+    protected static ?string $pluralModelLabel = 'בקשות לבוט ניהול האתר';
 
     protected static ?int $navigationSort = 9;
 

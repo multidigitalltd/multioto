@@ -405,7 +405,7 @@ class SiteAgentSubscriptionTest extends TestCase
         $subscription->update(['status' => SubscriptionStatus::PastDue]);
         $this->sync();
 
-        $this->assertMessageContains('הסוכן מושהה');
+        $this->assertMessageContains('הבוט מושהה');
         // The first thing a business owner fears is that something of theirs
         // was switched off.
         $this->assertMessageContains('האתר עצמו ממשיך לעבוד כרגיל');

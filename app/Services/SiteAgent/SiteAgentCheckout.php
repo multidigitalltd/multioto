@@ -22,7 +22,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
 
 /**
- * Buying סוכן האתר without us being involved.
+ * Buying בוט ניהול האתר without us being involved.
  *
  * The team's activation screen already opens the three rows this product needs
  * — a subscription on a plan carrying the agent flag, a site, a verified number
@@ -89,7 +89,7 @@ class SiteAgentCheckout
                 customer: $customer,
                 totalAgorot: (int) $order->total_agorot,
                 description: $plan->name.' — '.$domain,
-                notes: 'רכישה עצמית של סוכן האתר',
+                notes: 'רכישה עצמית של בוט ניהול האתר',
                 // Two different reasons for the same total to carry no VAT, and
                 // the charge has to know about both. grossAgorot() already adds
                 // nothing for a plan whose price does not carry VAT on top —
@@ -224,7 +224,7 @@ class SiteAgentCheckout
         }
 
         SystemLog::record('info', 'siteagent',
-            "רכישה עצמית של סוכן האתר הושלמה: {$order->domain} ({$order->buyer_email})",
+            "רכישה עצמית של בוט ניהול האתר הושלמה: {$order->domain} ({$order->buyer_email})",
             ['order_id' => $order->id, 'install_mode' => $order->install_mode]);
 
         return $order->fresh();

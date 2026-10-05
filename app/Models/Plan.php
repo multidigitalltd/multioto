@@ -37,7 +37,7 @@ class Plan extends Model
     }
 
     /**
-     * Plans a stranger may buy סוכן האתר on, in the order they should be read.
+     * Plans a stranger may buy בוט ניהול האתר on, in the order they should be read.
      *
      * Three conditions, and dropping any one of them sells something we cannot
      * deliver: inactive is a plan that was withdrawn, a plan without the agent

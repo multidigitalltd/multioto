@@ -148,7 +148,7 @@ class AgentPluginController extends Controller
         RefreshSiteCapabilitiesJob::dispatch($site->id);
 
         SystemLog::record('info', 'siteagent',
-            "האתר {$site->domain} התחבר בעצמו אחרי רכישה עצמית של סוכן האתר.",
+            "האתר {$site->domain} התחבר בעצמו אחרי רכישה עצמית של בוט ניהול האתר.",
             ['site_id' => $site->id]);
     }
 

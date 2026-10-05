@@ -32,7 +32,7 @@ class SiteAgentActivationMail extends Mailable implements ShouldQueue
 
     public function envelope(): Envelope
     {
-        return new Envelope(subject: "סוכן האתר פעיל — {$this->order->domain}");
+        return new Envelope(subject: "בוט ניהול האתר פעיל — {$this->order->domain}");
     }
 
     public function content(): Content

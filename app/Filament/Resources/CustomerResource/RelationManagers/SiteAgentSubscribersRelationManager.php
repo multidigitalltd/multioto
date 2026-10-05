@@ -25,7 +25,7 @@ class SiteAgentSubscribersRelationManager extends RelationManager
 {
     protected static string $relationship = 'siteAgentSubscribers';
 
-    protected static ?string $title = 'סוכן וואטסאפ לאתר';
+    protected static ?string $title = 'בוט ניהול אתר';
 
     protected static ?string $icon = 'heroicon-o-chat-bubble-left-right';
 

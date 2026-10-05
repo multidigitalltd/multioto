@@ -29,7 +29,7 @@ use Filament\Pages\Page;
 use Illuminate\Support\Facades\DB;
 
 /**
- * הפעלת סוכן האתר — מסך אחד שפותח את המנוי ומחבר את המספר.
+ * הפעלת בוט ניהול האתר — מסך אחד שפותח את המנוי ומחבר את המספר.
  *
  * Selling this product used to mean three screens in the right order: open a
  * subscription on a plan whose agent flag is set, add the number, send it a
@@ -53,9 +53,9 @@ class ActivateSiteAgent extends Page implements HasForms
 
     protected static ?int $navigationSort = 8;
 
-    protected static ?string $navigationLabel = 'הפעלת סוכן לאתר';
+    protected static ?string $navigationLabel = 'הפעלת בוט ניהול אתר';
 
-    protected static ?string $title = 'הפעלת סוכן וואטסאפ לניהול אתר';
+    protected static ?string $title = 'הפעלת בוט ניהול אתר';
 
     protected static string $view = 'filament.pages.activate-site-agent';
 
@@ -104,7 +104,7 @@ class ActivateSiteAgent extends Page implements HasForms
                     ])->columns(2),
 
                 Section::make('המנוי')
-                    ->description('התשלום החודשי על השירות. המסלול חייב להיות מסומן כ"כולל סוכן ניהול אתר" — זה מה שמפעיל את הסוכן בפועל.')
+                    ->description('התשלום החודשי על השירות. המסלול חייב להיות מסומן כ"כולל סוכן ניהול אתר" — זה מה שמפעיל את הבוט בפועל.')
                     ->schema([
                         Select::make('plan_id')
                             ->label('מסלול')
@@ -146,7 +146,7 @@ class ActivateSiteAgent extends Page implements HasForms
                         Toggle::make('send_code')
                             ->label('שלח קוד אימות עכשיו')
                             ->inline(false)
-                            ->helperText('אפשר לכבות ולשלוח בהמשך ממסך מנויי הסוכן.'),
+                            ->helperText('אפשר לכבות ולשלוח בהמשך ממסך מנויי הבוט.'),
                     ])->columns(2),
             ])
             ->statePath('data');
@@ -203,7 +203,7 @@ class ActivateSiteAgent extends Page implements HasForms
 
         if (in_array($live?->status, [SubscriptionStatus::PastDue, SubscriptionStatus::Suspended], true)) {
             return $customer->name.' — יש מנוי קיים לסוכן בפיגור תשלום. המספר יצורף אליו; '
-                .'הסוכן יענה רק אחרי שהחוב יוסדר.';
+                .'הבוט יענה רק אחרי שהחוב יוסדר.';
         }
 
         return $customer->name.' — '.($customer->hasActiveCard()
@@ -261,14 +261,14 @@ class ActivateSiteAgent extends Page implements HasForms
 
         if ($site?->customer === null || ! $site->mcp_enabled || blank($site->mcp_endpoint)) {
             Notification::make()->title('האתר אינו מחובר לתוסף')
-                ->body('בלי חיבור הסוכן אינו יכול לפעול, ולכן אין מה להפעיל עליו מנוי.')
+                ->body('בלי חיבור הבוט אינו יכול לפעול, ולכן אין מה להפעיל עליו מנוי.')
                 ->danger()->send();
 
             return;
         }
 
         if ($plan === null || ! $plan->includes_site_agent || ! $plan->active) {
-            Notification::make()->title('המסלול אינו כולל את סוכן האתר')
+            Notification::make()->title('המסלול אינו כולל את בוט ניהול האתר')
                 ->body('רק מסלול פעיל שמסומן "כולל סוכן ניהול אתר" מפעיל את השירות.')
                 ->danger()->send();
 
@@ -342,21 +342,21 @@ class ActivateSiteAgent extends Page implements HasForms
         }
 
         Notification::make()
-            ->title($reuse ? 'המספר צורף למנוי הקיים' : 'המנוי נפתח והסוכן מוכן')
+            ->title($reuse ? 'המספר צורף למנוי הקיים' : 'המנוי נפתח והבוט מוכן')
             ->body(implode(' ', array_filter([
                 $reuse ? 'ללקוח כבר יש מנוי לסוכן, ולכן לא נפתח מנוי נוסף.' : null,
                 // Said out loud rather than left to be discovered: the number is
                 // bound, and the agent will still refuse it until the arrears
                 // are settled.
                 in_array($subscription->status, [SubscriptionStatus::PastDue, SubscriptionStatus::Suspended], true)
-                    ? 'שימו לב: המנוי הקיים בפיגור תשלום — הסוכן לא יענה עד שיוסדר.'
+                    ? 'שימו לב: המנוי הקיים בפיגור תשלום — הבוט לא יענה עד שיוסדר.'
                     : null,
                 $subscription->status === SubscriptionStatus::Trialing
                     ? 'נשלח ללקוח קישור להזנת כרטיס — החיוב יתחיל כשהכרטיס יוזן.'
                     : null,
                 ($data['send_code'] ?? false)
                     ? 'קוד האימות נשלח למספר; הלקוח צריך לשלוח אותו חזרה באותה שיחה.'
-                    : 'לא נשלח קוד אימות — אפשר לשלוח ממסך מנויי הסוכן.',
+                    : 'לא נשלח קוד אימות — אפשר לשלוח ממסך מנויי הבוט.',
             ])))
             ->success()
             ->send();

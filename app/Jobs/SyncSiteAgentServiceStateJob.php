@@ -131,8 +131,8 @@ class SyncSiteAgentServiceStateJob implements ShouldQueue
             $actual === SiteAgentSubscriber::STATE_PAUSED ? 'warning' : 'info',
             'site-agent',
             $actual === SiteAgentSubscriber::STATE_PAUSED
-                ? 'סוכן האתר '.($subscriber->site?->domain ?? '').' הושהה — אין מנוי פעיל'
-                : 'סוכן האתר '.($subscriber->site?->domain ?? '').' חזר לפעול',
+                ? 'בוט ניהול האתר '.($subscriber->site?->domain ?? '').' הושהה — אין מנוי פעיל'
+                : 'בוט ניהול האתר '.($subscriber->site?->domain ?? '').' חזר לפעול',
             ['subscriber_id' => $subscriber->id, 'customer_id' => $subscriber->customer_id],
         );
     }

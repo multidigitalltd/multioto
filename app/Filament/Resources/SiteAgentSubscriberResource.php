@@ -35,11 +35,11 @@ class SiteAgentSubscriberResource extends Resource
 
     protected static ?string $navigationGroup = 'ניהול';
 
-    protected static ?string $navigationLabel = 'סוכן וואטסאפ לאתר';
+    protected static ?string $navigationLabel = 'בוט ניהול אתר';
 
     protected static ?string $modelLabel = 'מנוי סוכן';
 
-    protected static ?string $pluralModelLabel = 'מנויי סוכן האתר';
+    protected static ?string $pluralModelLabel = 'מנויי בוט ניהול האתר';
 
     protected static ?int $navigationSort = 7;
 

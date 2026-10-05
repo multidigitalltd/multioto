@@ -10,7 +10,7 @@ use App\Models\Subscription;
 use Illuminate\Database\Eloquent\Builder;
 
 /**
- * סוכן האתר כמוצר — האם הוא יכול לעבוד, מי משלם עליו, ומה הוא עושה.
+ * בוט ניהול האתר כמוצר — האם הוא יכול לעבוד, מי משלם עליו, ומה הוא עושה.
  *
  * Everything else about this product answers a question about one customer:
  * may this number act, what does this request say, when did it lapse. Nobody
@@ -54,7 +54,7 @@ class SiteAgentProduct
                 'number',
                 'מספר הוואטסאפ',
                 filled(config('siteagent.whatsapp.phone_number_id')) && filled(config('siteagent.whatsapp.token')),
-                'חסר מזהה מספר או טוקן. בלעדיהם הסוכן אינו יכול לשלוח דבר.',
+                'חסר מזהה מספר או טוקן. בלעדיהם הבוט אינו יכול לשלוח דבר.',
             ),
             $this->requirement(
                 'app_secret',
@@ -79,13 +79,13 @@ class SiteAgentProduct
                 'template_paused',
                 'תבנית "המנוי מושהה"',
                 filled($templates['service_paused'] ?? null),
-                'חסרה. לקוח שהמנוי שלו נפסק לא יקבל הודעה על כך, והסוכן פשוט ישתוק בלי הסבר.',
+                'חסרה. לקוח שהמנוי שלו נפסק לא יקבל הודעה על כך, והבוט פשוט ישתוק בלי הסבר.',
             ),
             $this->requirement(
                 'template_resumed',
                 'תבנית "המנוי חזר"',
                 filled($templates['service_resumed'] ?? null),
-                'חסרה. לקוח ששילם וחידש לא יקבל הודעה שהסוכן חזר לעבוד.',
+                'חסרה. לקוח ששילם וחידש לא יקבל הודעה שהבוט חזר לעבוד.',
             ),
         ];
     }

@@ -31,7 +31,7 @@
             <x-slot name="heading">השירות מוגדר ופעיל</x-slot>
             <p class="text-sm text-gray-500 dark:text-gray-400">
                 המספר יכול לשלוח ולקבל, והתבניות מוגדרות. מכאן ואילך מפעילים לקוח חדש
-                במסך <strong>הפעלת סוכן לאתר</strong>.
+                במסך <strong>הפעלת בוט ניהול אתר</strong>.
             </p>
         </x-filament::section>
     @endif

@@ -824,7 +824,7 @@ class HealthReport
      */
     private function siteAgent(): array
     {
-        $label = 'סוכן וואטסאפ לאתר';
+        $label = 'בוט ניהול אתר';
         $product = app(SiteAgentProduct::class);
 
         if (! $product->enabled()) {

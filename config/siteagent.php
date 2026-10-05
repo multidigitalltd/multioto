@@ -4,7 +4,7 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | סוכן האתר — the product a site owner subscribes to
+    | בוט ניהול האתר — the product a site owner subscribes to
     |--------------------------------------------------------------------------
     |
     | A dedicated WhatsApp number a customer writes to in order to run their own
