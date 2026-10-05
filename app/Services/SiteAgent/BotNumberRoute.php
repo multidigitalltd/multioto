@@ -70,10 +70,25 @@ class BotNumberRoute
         }, null, report: false);
     }
 
-    /** Does the bot carry this customer's messages at all? */
+    /**
+     * Does the bot carry this customer's messages at all?
+     *
+     * A fact about the CUSTOMER, and deliberately not about whether the client
+     * happens to be configured this minute. Mixing the two would mean that a
+     * token being rotated — a few minutes, a routine act — quietly sends that
+     * customer's signed payment page out over the support number instead,
+     * which is the one thing this route exists to prevent. A client that cannot
+     * send is a failure to report, not a different number to use.
+     */
     public function carries(Customer $customer): bool
     {
-        return $this->whatsapp->configured() && $this->subscriber($customer) !== null;
+        return $this->subscriber($customer) !== null;
+    }
+
+    /** Can the bot's number actually send right now? */
+    public function available(): bool
+    {
+        return $this->whatsapp->configured();
     }
 
     /**

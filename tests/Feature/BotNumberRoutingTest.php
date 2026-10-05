@@ -126,14 +126,18 @@ class BotNumberRoutingTest extends TestCase
      */
     public function test_without_a_template_the_message_is_skipped_and_recorded(): void
     {
-        Setting::put('siteagent.template_card_link', '');
-        SettingsServiceProvider::refreshFromDatabase();
-
+        // ישירות ב-config ולא דרך ההגדרות: ברירות המחדל הפריסטיניות מזוכרות
+        // פעם אחת לכל התהליך, כך שניקוי הגדרה מחזיר את הערך שהיה בזיכרון בזמן
+        // שקובץ בדיקות אחר רץ — ומה שנבדק כאן תלוי אז בסדר ההרצה.
         $subscription = $this->subscription('0501234567', '972501234567');
+
+        // אחרי יצירת הרשומות ולא לפניה: כתיבה למסד מרעננת את שכבת ההגדרות על
+        // גבי ה-config, ולכן ערך שנקבע קודם נדרס בדרך.
+        config(['siteagent.whatsapp.templates.card_link' => '']);
 
         $result = app(CardCaptureLinkSender::class)->send($subscription);
 
-        $this->assertSame([], $result['sent'] === [] ? [] : array_filter(
+        $this->assertEmpty(array_filter(
             $result['sent'],
             fn (string $channel): bool => str_contains($channel, 'וואטסאפ'),
         ));
@@ -201,6 +205,33 @@ class BotNumberRoutingTest extends TestCase
         $result = app(CardCaptureLinkSender::class)->send($subscription);
 
         $this->assertContains('וואטסאפ (ההודעה כבויה בהגדרות)', $result['skipped']);
+        Http::assertNothingSent();
+    }
+
+    /**
+     * ומספר בוט שאינו מוגדר כרגע הוא כישלון, לא סיבה ללכת למספר הכללי.
+     *
+     * החלפת טוקן היא פעולה שגרתית של כמה דקות. בלי ההבחנה הזאת היא הייתה
+     * שולחת את דף התשלום החתום של הלקוח ממספר שהוא אינו מזהה — בדיוק מה שהמסלול
+     * הזה קיים כדי למנוע.
+     */
+    public function test_an_unconfigured_bot_number_fails_rather_than_falling_back(): void
+    {
+        $waha = \Mockery::mock(WahaClient::class);
+        $waha->shouldNotReceive('sendMessage');
+        $this->app->instance(WahaClient::class, $waha);
+
+        $subscription = $this->subscription('0501234567', '972501234567');
+
+        config(['siteagent.whatsapp.token' => '']);
+
+        $result = app(CardCaptureLinkSender::class)->send($subscription);
+
+        $this->assertNotEmpty(array_filter(
+            $result['failed'],
+            fn (string $reason): bool => str_contains($reason, 'אינו מוגדר'),
+        ));
+
         Http::assertNothingSent();
     }
 

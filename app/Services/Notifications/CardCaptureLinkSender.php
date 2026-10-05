@@ -222,6 +222,19 @@ class CardCaptureLinkSender
             return [$sent, $failed, $skipped];
         }
 
+        // Configured-and-broken is a failure, never a reason to reach for the
+        // support number: a token mid-rotation would otherwise put this
+        // customer's signed payment page on a number they do not recognise.
+        if (! $this->bot->available()) {
+            $failed[] = 'וואטסאפ: המספר של הבוט אינו מוגדר כרגע';
+
+            SystemLog::record('error', 'site-agent', 'לא נשלחה הודעת תשלום — המספר של הבוט אינו מוגדר', [
+                'customer_id' => $customer->id,
+            ]);
+
+            return [$sent, $failed, $skipped];
+        }
+
         if ($template === '') {
             $skipped[] = 'וואטסאפ (אין תבנית מאושרת לקישור תשלום — ההודעה נשלחה במייל בלבד)';
 
