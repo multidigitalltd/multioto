@@ -21,8 +21,24 @@
      */
     use App\Support\Money;
 
+    /*
+     | One plan is the shape this product is sold in, but the query behind
+     | $plans does not promise it — and a page that quotes the FIRST plan's terms
+     | while a buyer has selected the second is a page that sold a per-message
+     | charge, or withheld a trial, without saying so.
+     |
+     | So: every plan prints its OWN terms (the loop below), the form repeats the
+     | ones that change what is charged beside each option, and anything written
+     | as a single sentence about "the plan" is printed only when there is in fact
+     | one. $headline is used exclusively where "the first/cheapest" is the honest
+     | reading — the hero, and the default selection.
+     */
     $headline = $plans->first();
     $single = $plans->count() === 1;
+
+    // Only promised where EVERY plan carries it. "ניסיון חינם" in the hero over a
+    // list where one plan has none is the hero making a promise the page breaks.
+    $allHaveTrial = $plans->every(fn ($plan) => $plan->hasTrial());
 
     // Plan figures for the running total, by id. Net agorot only — the page
     // quotes net, and the VAT line says so once rather than per row.
@@ -33,6 +49,10 @@
         'interval' => $plan->intervalLabel(),
         'vat' => (bool) $plan->vat_applies,
         'trial' => (int) $plan->trial_days,
+        // The usage charge cannot be part of a total — it is not known yet — but
+        // it must follow the selection, or picking a plan that bills messages
+        // leaves the figure beside the button belonging to one that does not.
+        'message' => $plan->messageNetLabel(),
     ]]);
 
     $anySellsExtra = $plans->contains(fn ($plan) => $plan->sellsExtraNumbers());
@@ -275,7 +295,7 @@
 
 <header class="hero">
     <div class="wrap">
-        @if ($headline->hasTrial())
+        @if ($allHaveTrial)
             <p class="badge"><span aria-hidden="true">✨</span> {{ $headline->trial_days }} ימים ניסיון חינם</p>
         @endif
 
@@ -286,13 +306,15 @@
         </p>
 
         <p class="hero-price">
-            <span class="amount">{{ Money::ils((int) $headline->price_agorot) }} {{ $headline->intervalLabel() }}</span>
+            {{-- $plans is ordered by price, so the first is the cheapest. With
+                 more than one, "מ־" rather than a figure stated as the price. --}}
+            <span class="amount">{{ $single ? '' : 'מ־' }}{{ Money::ils((int) $headline->price_agorot) }} {{ $headline->intervalLabel() }}</span>
             @if ($headline->vat_applies)
                 <span class="vat">+ מע״מ</span>
             @endif
         </p>
 
-        <a class="cta" href="#buy">מתחילים — {{ $headline->hasTrial() ? $headline->trial_days.' ימים בחינם' : 'רכישה' }}</a>
+        <a class="cta" href="#buy">מתחילים — {{ $allHaveTrial ? $headline->trial_days.' ימים בחינם' : 'רכישה' }}</a>
     </div>
 </header>
 
@@ -375,28 +397,34 @@
     {{-- ====================== Pricing ====================== --}}
 
     <section aria-labelledby="price-title">
-        <h2 id="price-title">המחיר</h2>
+        <h2 id="price-title">{{ $single ? 'המחיר' : 'המסלולים' }}</h2>
         <p class="section-lead">כל המחירים בעמוד זה הם לפני מע״מ.</p>
 
-        <div class="price-card">
-            <p class="name" style="margin:0">{{ $headline->name }}</p>
+        {{-- A card per plan, each stating ITS OWN terms. The trial, the price of
+             an extra number and the per-message charge are what a buyer is
+             actually agreeing to, and they differ between plans — printing the
+             first plan's set above a list the buyer can choose from is how
+             somebody buys a usage charge they were never shown. --}}
+        @foreach ($plans as $plan)
+        <div class="price-card" @unless ($loop->first) style="margin-top:1rem" @endunless>
+            <p class="name" style="margin:0">{{ $plan->name }}</p>
             <p class="big" style="margin:.2rem 0 0">
-                {{ Money::ils((int) $headline->price_agorot) }} {{ $headline->intervalLabel() }}
-                @if ($headline->vat_applies)
+                {{ Money::ils((int) $plan->price_agorot) }} {{ $plan->intervalLabel() }}
+                @if ($plan->vat_applies)
                     <span class="vat">+ מע״מ</span>
                 @endif
             </p>
 
-            @if (filled($headline->description))
-                <p class="note" style="margin:.4rem 0 0">{{ $headline->description }}</p>
+            @if (filled($plan->description))
+                <p class="note" style="margin:.4rem 0 0">{{ $plan->description }}</p>
             @endif
 
             <dl class="includes">
-                @if ($headline->hasTrial())
+                @if ($plan->hasTrial())
                     <div>
-                        <dt><span class="tick" aria-hidden="true">✓</span> {{ $headline->trial_days }} ימים ניסיון חינם.</dt>
+                        <dt><span class="tick" aria-hidden="true">✓</span> {{ $plan->trial_days }} ימים ניסיון חינם.</dt>
                         <dd>
-                            מזינים כרטיס ולא מחויבים — החיוב הראשון ביום ה־{{ $headline->trial_days + 1 }},
+                            מזינים כרטיס ולא מחויבים — החיוב הראשון ביום ה־{{ $plan->trial_days + 1 }},
                             ואפשר לבטל לפני כן. תזכורת תישלח יומיים קודם.
                         </dd>
                     </div>
@@ -407,21 +435,21 @@
                     <dd>— כלול במחיר.</dd>
                 </div>
 
-                @if ($headline->sellsExtraNumbers())
+                @if ($plan->sellsExtraNumbers())
                     <div>
                         <dt><span class="tick" aria-hidden="true">✓</span> מספר נוסף:</dt>
-                        <dd>{{ $headline->extraNumberNetLabel() }} — אפשר להוסיף כאן בקנייה, או בכל שלב מהאזור האישי.</dd>
+                        <dd>{{ $plan->extraNumberNetLabel() }} — אפשר להוסיף כאן בקנייה, או בכל שלב מהאזור האישי.</dd>
                     </div>
                 @endif
 
                 {{-- Said here, in the price, and not in a footnote. A charge a
                      customer discovers on their first invoice is a charge they
                      dispute, however reasonable it is. --}}
-                @if ($headline->billsMessages())
+                @if ($plan->billsMessages())
                     <div>
                         <dt><span class="tick" aria-hidden="true">✓</span> הודעות:</dt>
                         <dd>
-                            לכל הודעה שהבוט שולח לכם — {{ $headline->messageNetLabel() }}, נגבה בחידוש החודשי לפי הספירה.
+                            לכל הודעה שהבוט שולח לכם — {{ $plan->messageNetLabel() }}, נגבה בחידוש החודשי לפי הספירה.
                             קודי אימות והודעות מערכת אינם נספרים, והודעות בתקופת הניסיון אינן מחויבות.
                             את הספירה אפשר לראות בכל רגע באזור האישי, או לשאול את הבוט "כמה הודעות שלחתי החודש?".
                         </dd>
@@ -434,6 +462,7 @@
                 </div>
             </dl>
         </div>
+        @endforeach
     </section>
 
     {{-- ====================== The form ====================== --}}
@@ -441,7 +470,7 @@
     <section id="buy" aria-labelledby="buy-title">
         <h2 id="buy-title">הרשמה</h2>
         <p class="section-lead">
-            @if ($headline->hasTrial())
+            @if ($allHaveTrial)
                 מזינים כרטיס, לא מחויבים היום, ואפשר לבטל בתוך {{ $headline->trial_days }} הימים.
             @else
                 התשלום מתבצע בעמוד מאובטח של חברת הסליקה.
@@ -472,9 +501,24 @@
                         <label class="opt" for="plan-{{ $plan->id }}">
                             <input type="radio" name="plan" id="plan-{{ $plan->id }}" value="{{ $plan->id }}"
                                    required @checked(old('plan', $headline->id) == $plan->id)>
+                            {{-- The terms that change what is charged, repeated
+                                 beside the option itself. The cards above state
+                                 them in full, but this is the control somebody
+                                 actually clicks, and a buyer who scrolled past
+                                 the cards must not pick a plan whose usage
+                                 charge or missing trial they never saw. --}}
                             <span class="body">
                                 <span class="title">{{ $plan->name }}</span>
                                 <span class="meta">{{ $plan->netPriceLabel() }}</span>
+                                @if ($plan->hasTrial())
+                                    <span class="meta">{{ $plan->trial_days }} ימים ניסיון חינם, עם כרטיס ובלי חיוב.</span>
+                                @endif
+                                @if ($plan->billsMessages())
+                                    <span class="meta">בנוסף {{ $plan->messageNetLabel() }} לכל הודעה שהבוט שולח לכם.</span>
+                                @endif
+                                @if ($plan->sellsExtraNumbers())
+                                    <span class="meta">מספר נוסף: {{ $plan->extraNumberNetLabel() }}.</span>
+                                @endif
                                 @if (filled($plan->description))
                                     <span class="meta">{{ $plan->description }}</span>
                                 @endif
@@ -563,7 +607,10 @@
             @endif
 
             {{-- The running total. Filled in by script; without one it states the
-                 plan price, which is what the figure is when nothing is added. --}}
+                 default selection's price, which is what the figure is when
+                 nothing has been added or chosen. The figure follows the chosen
+                 plan — including its per-message charge, which cannot be part of
+                 a total but must not belong to a different plan either. --}}
             <p class="total" id="total" role="status" aria-live="polite">
                 <span class="figure" id="total-figure">{{ $headline->netPriceLabel() }}</span><br>
                 <span class="note" id="total-note">
@@ -571,6 +618,9 @@
                         היום לא תחויבו. החיוב הראשון בתום {{ $headline->trial_days }} ימי הניסיון.
                     @else
                         סה״כ לתשלום היום.
+                    @endif
+                    @if ($headline->billsMessages())
+                        ובנוסף {{ $headline->messageNetLabel() }} לכל הודעה שהבוט שולח לכם.
                     @endif
                 </span>
             </p>
@@ -620,7 +670,7 @@
             @error('terms')<p class="error" id="terms-error">{{ $message }}</p>@enderror
 
             <button type="submit">
-                {{ $headline->hasTrial() ? 'מתחילים את תקופת הניסיון' : 'מעבר לתשלום מאובטח' }}
+                {{ $allHaveTrial ? 'מתחילים את תקופת הניסיון' : 'מעבר לתשלום מאובטח' }}
             </button>
         </form>
     </section>
@@ -668,24 +718,33 @@
                 </p>
             </details>
 
-            @if ($headline->billsMessages())
+            {{-- Shown when ANY plan has it, so the answer is never missing. A
+                 figure is quoted only where there is one plan to quote — with
+                 several it points back at the cards, which state each plan's
+                 own, rather than naming one plan's price as "the" price. --}}
+            @if ($plans->contains(fn ($plan) => $plan->billsMessages()))
                 <details>
                     <summary>למה יש חיוב על הודעות, ואיך אני יודע כמה?</summary>
                     <p>
                         כל הודעה שהבוט שולח לכם בוואטסאפ עולה לנו כסף למטא, ולכן היא מחויבת:
-                        {{ $headline->messageNetLabel() }} להודעה, נגבה בחידוש החודשי לפי הספירה של
-                        אותו מחזור. קודי אימות והודעות מערכת אינם נספרים, והודעות בתקופת הניסיון
-                        אינן מחויבות. הספירה גלויה באזור האישי, ואפשר גם לשאול את הבוט
-                        "כמה הודעות שלחתי החודש?" ולקבל גם את הסכום עד כה.
+                        {{ $single ? $headline->messageNetLabel().' להודעה' : 'המחיר להודעה מופיע בכל מסלול למעלה' }},
+                        נגבה בחידוש החודשי לפי הספירה של אותו מחזור. קודי אימות והודעות מערכת
+                        אינם נספרים, והודעות בתקופת הניסיון אינן מחויבות. הספירה גלויה באזור
+                        האישי, ואפשר גם לשאול את הבוט "כמה הודעות שלחתי החודש?" ולקבל גם את
+                        הסכום עד כה.
                     </p>
                 </details>
             @endif
 
-            @if ($headline->hasTrial())
+            @if ($plans->contains(fn ($plan) => $plan->hasTrial()))
                 <details>
                     <summary>מה קורה בסוף תקופת הניסיון?</summary>
                     <p>
-                        ביום ה־{{ $headline->trial_days + 1 }} יוצא החיוב הראשון, בכרטיס שהזנתם.
+                        @if ($single)
+                            ביום ה־{{ $headline->trial_days + 1 }} יוצא החיוב הראשון, בכרטיס שהזנתם.
+                        @else
+                            ביום שאחרי היום האחרון יוצא החיוב הראשון, בכרטיס שהזנתם.
+                        @endif
                         תזכורת נשלחת יומיים לפני. ביטול לפני כן — ולא תחויבו בכלל.
                         הניסיון הוא פעם אחת ללקוח ופעם אחת לאתר.
                     </p>
@@ -800,14 +859,24 @@
                     : money(plan.extra) + ' ' + plan.interval + vat;
             }
 
+            var text;
+
             if (plan.trial > 0) {
-                note.textContent = 'היום לא תחויבו. החיוב הראשון בתום ' + plan.trial + ' ימי הניסיון'
+                text = 'היום לא תחויבו. החיוב הראשון בתום ' + plan.trial + ' ימי הניסיון'
                     + (extras > 0 ? ', וכולל ' + extras + ' מספרים נוספים.' : '.');
             } else {
-                note.textContent = extras > 0
+                text = extras > 0
                     ? 'סה״כ לתשלום היום, כולל ' + extras + ' מספרים נוספים.'
                     : 'סה״כ לתשלום היום.';
             }
+
+            // The usage charge belongs to the plan that is selected, not to the
+            // one the page happened to render first.
+            if (plan.message) {
+                text += ' ובנוסף ' + plan.message + ' לכל הודעה שהבוט שולח לכם.';
+            }
+
+            note.textContent = text;
         }
 
         form.addEventListener('input', update);

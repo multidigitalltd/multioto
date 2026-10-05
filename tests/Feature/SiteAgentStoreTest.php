@@ -164,6 +164,42 @@ class SiteAgentStoreTest extends TestCase
     }
 
     /**
+     * וכשיש יותר ממסלול אחד — כל מסלול אומר את התנאים של עצמו.
+     *
+     * השאילתה מאחורי העמוד אינה מבטיחה מסלול אחד, ועמוד שמצטט את התנאים של
+     * הראשון מעל רשימה שאפשר לבחור ממנה הוא עמוד שמכר חיוב לפי הודעות בלי
+     * לומר זאת: הקונה בחר במסלול השני, וראה את תקופת הניסיון ומחיר ההודעה של
+     * הראשון.
+     */
+    public function test_every_selectable_plan_states_its_own_billing_terms(): void
+    {
+        $this->plan->update(['trial_days' => 7, 'message_price_agorot' => 0]);
+
+        $pro = Plan::create([
+            'name' => 'בוט ניהול האתר — פרו', 'price_agorot' => 29900,
+            // המסלול היקר מחייב על הודעות, והזול לא. זה בדיוק הפער שבו קונה
+            // קונה חיוב חוזר שלא הוצג לו.
+            'message_price_agorot' => 25, 'extra_number_price_agorot' => 7900, 'trial_days' => 0,
+            'vat_applies' => true, 'billing_interval' => 'monthly',
+            'active' => true, 'is_public' => true, 'includes_site_agent' => true,
+        ]);
+
+        $page = $this->get(route('store.agent'))->assertOk();
+
+        // שני המסלולים, כל אחד עם המחיר שלו.
+        $page->assertSee($this->plan->name)->assertSee($pro->name)
+            ->assertSee('149.00')->assertSee('299.00')
+            // והחיוב על ההודעות של היקר מוצג, אף שהוא אינו הראשון.
+            ->assertSee('0.25')
+            ->assertSee('79.00')
+            // כאן יש בחירה, ולכן יש radio.
+            ->assertSee('type="radio" name="plan"', false);
+
+        // והכותרת אינה מבטיחה ניסיון כשלא לכל מסלול יש אחד.
+        $page->assertDontSee('ימים ניסיון חינם</p>', false);
+    }
+
+    /**
      * החיוב על ההודעות מופיע במחיר, ולא בהערת שוליים.
      *
      * חיוב שלקוח מגלה בחשבונית הראשונה הוא חיוב שעליו מתווכחים, כמה שהוא הוגן.
@@ -178,14 +214,21 @@ class SiteAgentStoreTest extends TestCase
             ->assertSee('הודעות');
     }
 
-    /** ומסלול בלי חיוב על הודעות אינו מבטיח חיוב שלא קיים. */
+    /**
+     * ומסלול בלי חיוב על הודעות אינו מבטיח חיוב שלא קיים.
+     *
+     * נבדק על הטקסט שהעמוד אומר ולא על מקור העמוד: הסקריפט שמעדכן את הסכום
+     * מחזיק את המשפט הזה כתבנית בכל מצב, ומחרוזת שקיימת תמיד אינה יכולה להעיד
+     * על מה שהוצג.
+     */
     public function test_a_plan_that_does_not_bill_messages_promises_no_such_charge(): void
     {
         $this->plan->update(['message_price_agorot' => 0]);
 
         $this->get(route('store.agent'))
             ->assertOk()
-            ->assertDontSee('לכל הודעה שהבוט שולח');
+            ->assertDontSee('<dt><span class="tick" aria-hidden="true">✓</span> הודעות:</dt>', false)
+            ->assertDontSee('למה יש חיוב על הודעות');
     }
 
     /** תקופת ניסיון מוצגת בכל מקום שהיא משנה בו את מה שקורה היום. */
