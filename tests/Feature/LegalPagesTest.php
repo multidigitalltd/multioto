@@ -155,9 +155,32 @@ class LegalPagesTest extends TestCase
         config(['billing.system.site_agent_request_retention_days' => 133]);
 
         $this->get(route('legal.privacy'))
-            ->assertSeeText('קובץ התמונה שהוחזק עבורה נמחק מהשרת מיד')
+            // הניקוי רץ אחת לשעה, ולכן קובץ של הצעה שפגה מעצמה אינו נמחק באותו
+            // רגע. "מיד" היה הבטחה שלוח הזמנים אינו מקיים.
+            ->assertSeeText('בתוך שעה')
+            ->assertDontSeeText('נמחק מהשרת מיד')
             // והטקסט — לפי החלון שהעבודה באמת אוכפת.
             ->assertSeeText('133 ימים');
+    }
+
+    /**
+     * חלון 0 פירושו שהמחיקה מושבתת — ולא שהיא מיידית.
+     *
+     * forgetOld() יוצאת בלי למחוק דבר כשהערך אינו חיובי, כך ש"0 ימים" בטבלה היה
+     * הופך הגדרה שמשביתה מחיקה להבטחה למחיקה מיידית. היפוך מלא של ההתנהגות,
+     * במשפט שלקוח מסתמך עליו.
+     */
+    public function test_a_disabled_window_is_not_shown_as_zero_days(): void
+    {
+        config(['billing.system.site_agent_request_retention_days' => 0]);
+
+        // לפי סדר ההופעה ולא כחיפוש מחרוזת: "0 ימים" הוא תת-מחרוזת של
+        // "180 ימים" ושל "90 ימים", כך שחיפוש פשוט היה עובר תמיד — או נכשל
+        // תמיד — בלי קשר לשורה שנבדקת.
+        $this->get(route('legal.privacy'))->assertSeeTextInOrder([
+            'בקשות ששלחתם לסוכן בוואטסאפ, וההצעות שהוצגו לכם',
+            'המחיקה האוטומטית מושבתת',
+        ]);
     }
 
     /**
