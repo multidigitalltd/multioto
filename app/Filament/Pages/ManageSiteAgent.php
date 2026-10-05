@@ -2,14 +2,12 @@
 
 namespace App\Filament\Pages;
 
-use App\Enums\WebhookSource;
 use App\Filament\Clusters\Settings;
 use App\Filament\Concerns\AdminOnly;
 use App\Filament\Concerns\PersistsSettings;
 use App\Models\Setting;
-use App\Models\WebhookEvent;
+use App\Services\SiteAgent\InboundChannelHealth;
 use App\Services\SiteAgent\SiteAgentProduct;
-use App\Support\WebhookRejections;
 use Filament\Forms\Components\Placeholder;
 use Filament\Forms\Components\Section;
 use Filament\Forms\Components\TextInput;
@@ -136,30 +134,15 @@ class ManageSiteAgent extends Page implements HasForms
      * send, and the secret only by a real inbound delivery. So it is also the
      * one most likely to be wrong while everything looks right.
      *
-     * @return array{accepted: ?Carbon, rejected: ?Carbon, verdict: string}
+     * Read through the same service the hourly watch uses, not re-derived here:
+     * a screen that answers "ok" while the alert says "danger" is a screen
+     * nobody checks a second time.
+     *
+     * @return array{accepted: ?Carbon, rejected: ?Carbon, everCarried: bool, verdict: string}
      */
     public function inboundHealth(): array
     {
-        $accepted = rescue(
-            fn (): ?Carbon => WebhookEvent::query()
-                ->where('source', WebhookSource::WhatsappCloud)
-                ->latest('created_at')
-                ->value('created_at'),
-            null,
-            report: false,
-        );
-
-        $rejected = WebhookRejections::lastAt('site-agent-whatsapp');
-
-        return [
-            'accepted' => $accepted,
-            'rejected' => $rejected,
-            'verdict' => match (true) {
-                $accepted !== null => 'ok',
-                $rejected !== null => 'rejected',
-                default => 'silent',
-            },
-        ];
+        return app(InboundChannelHealth::class)->read();
     }
 
     public function form(Form $form): Form

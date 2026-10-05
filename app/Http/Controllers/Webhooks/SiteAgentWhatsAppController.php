@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Webhooks;
 
 use App\Enums\WebhookSource;
 use App\Http\Controllers\Controller;
+use App\Jobs\CheckSiteAgentChannelJob;
 use App\Jobs\HandleSiteAgentMessageJob;
 use App\Models\WebhookEvent;
 use App\Services\SiteAgent\WhatsAppCloudClient;
@@ -31,9 +32,14 @@ class SiteAgentWhatsAppController extends Controller
         $provided = (string) $request->query('hub_verify_token', '');
 
         // A blank configured token must never mean "anybody may subscribe".
+        //
+        // Deliberately NOT recorded as a rejection: this is a public GET that
+        // any scanner reaches, and the rejection counter drives an alert whose
+        // one stated cause is a mismatched app secret. A passing crawler must
+        // not be able to tell the team their secret is wrong. A real handshake
+        // failure is never silent either way — Meta says so on the spot, in the
+        // dialog where the admin just clicked Verify.
         if ($token === '' || ! hash_equals($token, $provided)) {
-            WebhookRejections::record('site-agent-whatsapp');
-
             abort(403);
         }
 
@@ -45,7 +51,9 @@ class SiteAgentWhatsAppController extends Controller
         // Verified against the RAW body: re-encoding a decoded payload changes
         // key order and spacing, and the signature would never match again.
         if (! $client->signatureIsValid($request->getContent(), $request->header('X-Hub-Signature-256'))) {
-            WebhookRejections::record('site-agent-whatsapp');
+            // The one rejection worth watching, and the only one whose cause is
+            // unambiguous: a body signed with a secret that is not ours.
+            WebhookRejections::record(CheckSiteAgentChannelJob::CHANNEL);
 
             abort(403);
         }

@@ -28,8 +28,17 @@ return [
     | cannot be taken down by a phone losing its session.
     */
     'whatsapp' => [
-        // Graph API version and the number's own id, from the Meta app.
-        'api_version' => env('SITE_AGENT_WA_API_VERSION', 'v21.0'),
+        /*
+         | Graph API version and the number's own id, from the Meta app.
+         |
+         | Meta retires a Graph version about two years after it ships, and a
+         | call to a retired version does not degrade — it fails. v21.0 shipped
+         | in October 2024, so it is at the end of that road right now; v26.0
+         | leaves the same two years ahead of us. Worth revisiting roughly
+         | yearly, which is why the version is a single setting and not spelled
+         | out at the call sites.
+         */
+        'api_version' => env('SITE_AGENT_WA_API_VERSION') ?: 'v26.0',
         'phone_number_id' => env('SITE_AGENT_WA_PHONE_NUMBER_ID', ''),
 
         // Permanent access token of the system user that owns the number.

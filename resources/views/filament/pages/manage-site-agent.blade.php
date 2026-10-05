@@ -48,16 +48,33 @@
 
     <x-filament::section
         class="mt-6"
-        :icon="match ($inbound['verdict']) { 'ok' => 'heroicon-o-check-circle', 'rejected' => 'heroicon-o-shield-exclamation', default => 'heroicon-o-signal-slash' }"
-        :icon-color="match ($inbound['verdict']) { 'ok' => 'success', 'rejected' => 'danger', default => 'warning' }">
+        :icon="match ($inbound['verdict']) { 'ok' => 'heroicon-o-check-circle', 'rejected' => 'heroicon-o-shield-exclamation', 'unready' => 'heroicon-o-ellipsis-horizontal-circle', default => 'heroicon-o-signal-slash' }"
+        :icon-color="match ($inbound['verdict']) { 'ok' => 'success', 'rejected' => 'danger', 'unready' => 'gray', default => 'warning' }">
         <x-slot name="heading">הודעות נכנסות ממטא</x-slot>
 
-        @if ($inbound['verdict'] === 'ok')
-            <p class="text-sm">
-                המסירה האחרונה התקבלה ואומתה
-                <strong>{{ $inbound['accepted']->diffForHumans() }}</strong>
-                ({{ $inbound['accepted']->format('d/m/Y H:i') }}). הערוץ עובד.
+        @if ($inbound['verdict'] === 'unready')
+            {{-- לא אומרים "שום דבר לא הגיע" על מוצר שעדיין לא מוגדר: זה היה
+                 שולח את מנהל המערכת לחפש אצל מטא שדה שריק כאן, במסך הזה. --}}
+            <p class="text-sm text-gray-600 dark:text-gray-400">
+                הבדיקה הזאת תתחיל לעבוד אחרי שהשירות יופעל וההגדרות יושלמו.
+                מה שחסר מופיע למעלה, במצב המוצר.
             </p>
+        @elseif ($inbound['verdict'] === 'ok')
+            @if ($inbound['accepted'] !== null)
+                <p class="text-sm">
+                    המסירה האחרונה התקבלה ואומתה
+                    <strong>{{ $inbound['accepted']->diffForHumans() }}</strong>
+                    ({{ $inbound['accepted']->format('d/m/Y H:i') }}). הערוץ עובד.
+                </p>
+            @else
+                {{-- יומן ה-webhooks נמחק אחרי תקופת השמירה, ולכן "אין רשומה"
+                     אינו "לא עבד מעולם": מספר שאומת ענה בוואטסאפ, וזו הוכחה
+                     שאינה נמחקת. --}}
+                <p class="text-sm">
+                    הערוץ עבד — מספר אומת בתשובה שהגיעה דרכו. המסירה האחרונה
+                    מוקדמת מתקופת שמירת יומן ה-webhooks, ולכן אין לה תאריך מדויק כאן.
+                </p>
+            @endif
             @if ($inbound['rejected'] !== null)
                 <p class="mt-2 text-sm text-warning-600 dark:text-warning-400">
                     שימו לב: מסירה נדחתה גם ב-{{ $inbound['rejected']->format('d/m/Y H:i') }}.

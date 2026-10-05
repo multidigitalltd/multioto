@@ -3,19 +3,15 @@
 namespace App\Jobs;
 
 use App\Enums\UserRole;
-use App\Enums\WebhookSource;
 use App\Models\SiteAgentSubscriber;
 use App\Models\SystemLog;
 use App\Models\User;
-use App\Models\WebhookEvent;
 use App\Services\Notifications\TeamNotifier;
-use App\Services\SiteAgent\SiteAgentProduct;
-use App\Support\WebhookRejections;
+use App\Services\SiteAgent\InboundChannelHealth;
 use Filament\Notifications\Actions\Action;
 use Filament\Notifications\Notification;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
-use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 
 /**
@@ -39,6 +35,9 @@ use Illuminate\Support\Facades\Cache;
  *
  * שקט אחרי שכן הגיעו הודעות אינו מדווח, בכוונה. לקוחות אינם כותבים כל שעה,
  * והתראה על יום שקט היא התראה שלומדים להתעלם ממנה — ואז גם האמיתית נבלעת.
+ *
+ * מה המצב בפועל נקרא מ-InboundChannelHealth, אותו מקום שממנו קורא גם המסך
+ * בפאנל: התראה שמקשרת למסך שאומר משהו אחר היא התראה שמפסיקים לבדוק.
  */
 class CheckSiteAgentChannelJob implements ShouldQueue
 {
@@ -47,27 +46,22 @@ class CheckSiteAgentChannelJob implements ShouldQueue
     public int $tries = 1;
 
     /** The rejection counter the inbound controller writes to. */
-    public const CHANNEL = 'site-agent-whatsapp';
+    public const CHANNEL = InboundChannelHealth::CHANNEL;
 
-    public function handle(TeamNotifier $team, SiteAgentProduct $product): void
+    public function handle(TeamNotifier $team, InboundChannelHealth $health): void
     {
         if (! config('siteagent.channel_watch.enabled', true)) {
             return;
         }
 
-        // Nothing to watch while the product is switched off or half-configured:
-        // the readiness panel already says what is missing, and repeating it as
-        // an alert every hour is how a team learns to skip these.
-        if (! $product->ready()) {
-            return;
-        }
+        $state = $health->read();
+        $rejected = $state['rejected'];
 
-        $accepted = $this->lastAccepted();
-        $rejected = WebhookRejections::lastAt(self::CHANNEL);
-
-        // Rejected AFTER the last accepted delivery — or rejected with nothing
-        // ever accepted. Either way the secret in use now is the wrong one.
-        if ($rejected !== null && ($accepted === null || $rejected->gt($accepted))) {
+        // 'unready' — switched off or half-configured — is not reported: the
+        // readiness panel already says what is missing, and repeating it as an
+        // hourly alert is how a team learns to skip these. 'ok' is not reported
+        // either, and neither is a quiet season on a channel that has worked.
+        if ($state['verdict'] === 'rejected' && $rejected !== null) {
             $this->report(
                 $team,
                 'rejected',
@@ -85,8 +79,8 @@ class CheckSiteAgentChannelJob implements ShouldQueue
             return;
         }
 
-        if ($accepted !== null) {
-            return; // The channel has carried a real message. Nothing to say.
+        if ($state['verdict'] !== 'silent') {
+            return;
         }
 
         // Never anything, in either direction. Only worth reporting once there
@@ -106,19 +100,6 @@ class CheckSiteAgentChannelJob implements ShouldQueue
             "• האם השדה messages מסומן Subscribed בכתובת ה-Webhook\n".
             '• האם הכתובת שמוגדרת שם היא '.route('webhooks.site-agent'),
             'warning',
-        );
-    }
-
-    /** When Meta last delivered something we accepted and recorded. */
-    private function lastAccepted(): ?Carbon
-    {
-        return rescue(
-            fn (): ?Carbon => WebhookEvent::query()
-                ->where('source', WebhookSource::WhatsappCloud)
-                ->latest('created_at')
-                ->value('created_at'),
-            null,
-            report: false,
         );
     }
 

@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Enums\UserRole;
 use App\Enums\WebhookSource;
+use App\Filament\Pages\ManageSiteAgent;
 use App\Jobs\CheckSiteAgentChannelJob;
 use App\Models\Customer;
 use App\Models\Setting;
@@ -160,6 +161,29 @@ class SiteAgentChannelWatchTest extends TestCase
         CheckSiteAgentChannelJob::dispatchSync();
     }
 
+    /**
+     * ערוץ שעבד ואז שתק יותר מתקופת שמירת היומן — עדיין "עבד".
+     *
+     * הבדיקה הזאת היא על הבאג שהיה כאן: `webhook_events` נמחק אחרי 60 יום, כך
+     * שערוץ עובד שעבר עונה שקטה היה מתחיל להתריע "מעולם לא התקבלה הודעה" מדי
+     * יום — בדיוק ההתראה שלומדים לדלג עליה, ועל ערוץ שאין בו שום תקלה.
+     */
+    public function test_a_pruned_audit_log_does_not_turn_a_working_channel_into_never(): void
+    {
+        $subscriber = $this->subscriber();
+        $subscriber->update(['verified_at' => now()]);
+        $this->accepted();
+
+        // כפי שהגוזם עושה: הרשומה נמחקת, המספר המאומת נשאר.
+        WebhookEvent::query()->delete();
+        $this->travel(90)->days();
+        $this->expectSilence();
+
+        CheckSiteAgentChannelJob::dispatchSync();
+
+        $this->assertSame('ok', app(ManageSiteAgent::class)->inboundHealth()['verdict']);
+    }
+
     /** מוצר שאינו מוכן אינו מדווח — מסך המוכנות כבר אומר מה חסר. */
     public function test_an_unready_product_is_left_to_its_readiness_screen(): void
     {
@@ -169,6 +193,10 @@ class SiteAgentChannelWatchTest extends TestCase
         $this->expectSilence();
 
         CheckSiteAgentChannelJob::dispatchSync();
+
+        // והמסך אומר את אותו דבר: "עדיין לא מוגדר", ולא "שום דבר לא הגיע עד
+        // הדלת, הבעיה אינה כאן" — שהיה שולח לחפש אצל מטא שדה שריק כאן.
+        $this->assertSame('unready', app(ManageSiteAgent::class)->inboundHealth()['verdict']);
     }
 
     /** וכיבוי מפורש משתיק את הניטור. */
@@ -202,6 +230,40 @@ class SiteAgentChannelWatchTest extends TestCase
         // attention, the log answers "since when".
         $this->assertSame(3, SystemLog::where('source', 'site-agent')
             ->where('message', 'like', '%דוחים אותן%')->count());
+    }
+
+    /**
+     * סורק שעובר בכתובת אינו יכול לספר לצוות שהסוד שלהם שגוי.
+     *
+     * ה-GET של ההצטרפות הוא נקודת קצה ציבורית שכל אחד מגיע אליה, וההתראה על
+     * דחייה אומרת סיבה אחת ומוחלטת: סוד אפליקציה שאינו תואם. אם כל בקשה בלי
+     * טוקן הייתה נרשמת כדחייה, כל בוט חולף היה מדליק אזעקה שמפנה את מנהל
+     * המערכת לתקן שדה תקין לגמרי.
+     */
+    public function test_a_failed_subscribe_handshake_does_not_raise_the_secret_alarm(): void
+    {
+        $this->subscriber();
+        $this->expectAlert('מעולם לא התקבלה הודעה'); // silent — not 'rejected'
+
+        $this->get(route('webhooks.site-agent.verify', ['hub_verify_token' => 'wrong']))
+            ->assertForbidden();
+
+        CheckSiteAgentChannelJob::dispatchSync();
+    }
+
+    /**
+     * המסך והניטור חייבים להגיד את אותו דבר.
+     *
+     * סוד שהוחלף בשגוי משאיר את המסירה התקינה של אתמול ברשומה. מסך שעונה
+     * "תקין" מתוכה בזמן שההתראה אומרת "דחוף" הוא מסך שלא בודקים יותר.
+     */
+    public function test_the_panel_agrees_with_the_watch_after_a_fresh_rejection(): void
+    {
+        $this->accepted();
+        $this->travel(2)->hours();
+        WebhookRejections::record(CheckSiteAgentChannelJob::CHANNEL);
+
+        $this->assertSame('rejected', app(ManageSiteAgent::class)->inboundHealth()['verdict']);
     }
 
     /** ההתראה מגיעה גם לפעמון בפאנל, לא רק לוואטסאפ ולמייל. */

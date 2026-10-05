@@ -209,7 +209,7 @@ class WhatsAppCloudClient
         try {
             $lookup = Http::withToken($token)->timeout($timeout)->get(sprintf(
                 'https://graph.facebook.com/%s/%s',
-                trim((string) config('siteagent.whatsapp.api_version', 'v21.0'), '/'),
+                $this->apiVersion(),
                 rawurlencode($mediaId),
             ));
 
@@ -337,8 +337,20 @@ class WhatsAppCloudClient
     {
         return sprintf(
             'https://graph.facebook.com/%s/%s/messages',
-            trim((string) config('siteagent.whatsapp.api_version', 'v21.0'), '/'),
+            $this->apiVersion(),
             trim((string) config('siteagent.whatsapp.phone_number_id'), '/'),
         );
+    }
+
+    /**
+     * The Graph version, from the one setting that holds it.
+     *
+     * Read in one place on purpose: a version repeated at each call site is a
+     * version that gets bumped at one of them, and a retired Graph version
+     * does not degrade gracefully — every call to it fails.
+     */
+    private function apiVersion(): string
+    {
+        return trim((string) config('siteagent.whatsapp.api_version'), '/');
     }
 }
