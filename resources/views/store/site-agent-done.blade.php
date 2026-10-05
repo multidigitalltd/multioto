@@ -85,7 +85,7 @@
              browser, and telling a customer who just paid that they did not is
              how a completed sale becomes a support call and a chargeback. --}}
         <p class="lead">
-            אנחנו ממתינים לאישור מחברת הסליקה. זה לוקח בדרך כלל כמה שניות —
+            {{ $order->isTrial() ? 'אנחנו ממתינים לאישור הכרטיס מחברת הסליקה (ללא חיוב).' : 'אנחנו ממתינים לאישור מחברת הסליקה.' }} זה לוקח בדרך כלל כמה שניות —
             רעננו את העמוד בעוד רגע.
         </p>
         <div class="warn">
@@ -102,6 +102,14 @@
         <p class="lead">
             בוט ניהול האתר הופעל עבור <strong dir="ltr">{{ $order->domain }}</strong>.
         </p>
+
+        @if ($order->isTrial())
+            <div class="ok">
+                <strong>{{ $order->trial_days }} ימי ניסיון בחינם התחילו.</strong>
+                הכרטיס נשמר ולא חויב. החיוב הראשון יהיה ב־{{ $order->subscription?->trial_ends_at?->format('d/m/Y') }},
+                ונשלח לכם תזכורת יומיים לפני. לא מתאים? כתבו לנו לפני התאריך ולא תחויבו.
+            </div>
+        @endif
 
         <div class="ok">
             <strong>עכשיו בדקו את הוואטסאפ במספר {{ $order->manager_phone }}</strong> —

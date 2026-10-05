@@ -54,12 +54,22 @@ return new class extends Migration
 
         Schema::table('subscriptions', function (Blueprint $table) {
             $table->timestamp('trial_ends_at')->nullable()->after('status');
+            // The "your trial ends in two days" email, sent once.
+            $table->timestamp('trial_reminded_at')->nullable()->after('trial_ends_at');
+        });
+
+        Schema::table('site_agent_orders', function (Blueprint $table) {
+            // A trial order captures a card and charges nothing: it is matched
+            // back on the hosted card page's id rather than on a charge.
+            $table->unsignedSmallInteger('trial_days')->default(0)->after('total_agorot');
+            $table->string('cardcom_low_profile_id', 64)->nullable()->index()->after('charge_id');
         });
     }
 
     public function down(): void
     {
-        Schema::table('subscriptions', fn (Blueprint $table) => $table->dropColumn('trial_ends_at'));
+        Schema::table('site_agent_orders', fn (Blueprint $table) => $table->dropColumn(['trial_days', 'cardcom_low_profile_id']));
+        Schema::table('subscriptions', fn (Blueprint $table) => $table->dropColumn(['trial_ends_at', 'trial_reminded_at']));
         Schema::table('plans', fn (Blueprint $table) => $table->dropColumn(['message_price_agorot', 'trial_days']));
         Schema::dropIfExists('site_agent_usage');
     }

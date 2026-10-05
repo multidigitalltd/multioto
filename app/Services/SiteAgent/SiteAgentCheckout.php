@@ -5,6 +5,7 @@ namespace App\Services\SiteAgent;
 use App\Enums\BillingInterval;
 use App\Enums\SiteStatus;
 use App\Enums\SubscriptionStatus;
+use App\Enums\TokenStatus;
 use App\Jobs\SendSiteAgentVerificationJob;
 use App\Mail\SiteAgentActivationMail;
 use App\Models\Charge;
@@ -17,6 +18,8 @@ use App\Models\SiteInstallation;
 use App\Models\Subscription;
 use App\Models\SystemLog;
 use App\Services\Billing\ManualChargeService;
+use App\Services\Cardcom\CardcomClient;
+use App\Support\CardcomWebhook;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
@@ -41,6 +44,7 @@ class SiteAgentCheckout
         private ManualChargeService $charges,
         private WhatsAppCloudClient $whatsapp,
         private SiteAgentBilling $billing,
+        private CardcomClient $cardcom,
     ) {}
 
     /**
@@ -78,11 +82,16 @@ class SiteAgentCheckout
             'manager_name' => filled($buyer['manager_name'] ?? null) ? $buyer['manager_name'] : null,
             'domain' => $domain,
             'total_agorot' => $plan->grossAgorot((bool) $customer->vat_exempt),
+            'trial_days' => $this->trialDaysFor($plan, $customer, $domain),
             'install_mode' => in_array($buyer['install_mode'] ?? null, SiteAgentOrder::INSTALL_MODES, true)
                 ? $buyer['install_mode']
                 : SiteAgentOrder::INSTALL_SELF,
             'status' => SiteAgentOrder::PENDING,
         ]);
+
+        if ($order->isTrial()) {
+            return ['order' => $order, 'url' => $this->trialCardPage($order, $customer)];
+        }
 
         try {
             $page = $this->charges->createHostedPage(
@@ -129,6 +138,41 @@ class SiteAgentCheckout
             return $order;
         }
 
+        return $this->grant($order);
+    }
+
+    /**
+     * The card for a free trial was captured — open the trial.
+     *
+     * Called from the Cardcom webhook once the token is on file, matched on the
+     * hosted page's own id. Nothing was charged, and nothing will be until the
+     * trial ends (see EndSiteAgentTrialsJob).
+     */
+    public function fulfilTrial(string $lowProfileId): ?SiteAgentOrder
+    {
+        if ($lowProfileId === '') {
+            return null;
+        }
+
+        $order = SiteAgentOrder::query()->where('cardcom_low_profile_id', $lowProfileId)->first();
+
+        if ($order === null || ! $order->isTrial() || $order->isFulfilled()) {
+            return $order;
+        }
+
+        // The webhook stores the card before calling here. A trial without one
+        // would end with nothing to charge, which is the outcome the card at
+        // signup exists to prevent.
+        if ($order->customer?->paymentTokens()->where('status', TokenStatus::Active)->doesntExist()) {
+            return $order;
+        }
+
+        return $this->grant($order);
+    }
+
+    /** Switch the service on for a paid or trial order. */
+    private function grant(SiteAgentOrder $order): ?SiteAgentOrder
+    {
         $customer = $order->customer;
         $plan = $order->plan;
 
@@ -155,13 +199,22 @@ class SiteAgentCheckout
                 'customer_id' => $customer->id,
                 'plan_id' => $plan->id,
                 'site_id' => $site->id,
-                // The card was captured with this charge and the first cycle is
-                // paid, so it collects itself from here on.
-                'status' => SubscriptionStatus::Active,
                 'token_id' => $customer->paymentTokens()->latest('id')->value('id'),
-                'current_period_start' => now()->toDateString(),
-                'current_period_end' => $this->periodEnd($plan)->toDateString(),
-                'next_charge_at' => $this->periodEnd($plan),
+                ...($order->isTrial() ? [
+                    // Free until the trial ends; the first charge is dated the
+                    // moment it does, and EndSiteAgentTrialsJob hands it to
+                    // the ordinary renewal from there.
+                    'status' => SubscriptionStatus::Trialing,
+                    'trial_ends_at' => now()->addDays((int) $order->trial_days),
+                    'next_charge_at' => now()->addDays((int) $order->trial_days),
+                ] : [
+                    // The card was captured with this charge and the first cycle is
+                    // paid, so it collects itself from here on.
+                    'status' => SubscriptionStatus::Active,
+                    'current_period_start' => now()->toDateString(),
+                    'current_period_end' => $this->periodEnd($plan)->toDateString(),
+                    'next_charge_at' => $this->periodEnd($plan),
+                ]),
             ]);
 
             // Re-used rather than created blindly: the same number may already
@@ -259,6 +312,63 @@ class SiteAgentCheckout
             'status' => SiteStatus::Active,
             'mcp_enabled' => false,
         ]);
+    }
+
+    /**
+     * How many free days this buyer gets: the plan's trial, once.
+     *
+     * Once per customer and once per website. A trial that could be taken again
+     * with a new email for the same site, or by the same business for each of
+     * its sites in turn, is a free product with extra steps.
+     */
+    private function trialDaysFor(Plan $plan, Customer $customer, string $domain): int
+    {
+        if (! $plan->hasTrial()) {
+            return 0;
+        }
+
+        $hadTrial = SiteAgentOrder::query()
+            ->where('trial_days', '>', 0)
+            ->where('status', SiteAgentOrder::PAID)
+            ->where(fn ($q) => $q->where('customer_id', $customer->id)->orWhere('domain', $domain))
+            ->exists();
+
+        $hadService = $this->billing->subscriptionFor($customer) !== null;
+
+        return $hadTrial || $hadService ? 0 : (int) $plan->trial_days;
+    }
+
+    /**
+     * The card page for a trial: the card is validated and kept, nothing charged.
+     *
+     * The same hosted page a customer uses to update their card, so the card
+     * number never touches us and the webhook path is the one already proven.
+     */
+    private function trialCardPage(SiteAgentOrder $order, Customer $customer): string
+    {
+        $done = route('store.agent.done', ['reference' => $order->reference]);
+
+        try {
+            $page = $this->cardcom->createTokenLowProfile($customer->id, $done, $done, CardcomWebhook::url());
+        } catch (\Throwable $e) {
+            $order->update(['status' => SiteAgentOrder::FAILED]);
+
+            throw $e;
+        }
+
+        if (! str_starts_with((string) $page['url'], 'https://') || blank($page['low_profile_id'])) {
+            $order->update(['status' => SiteAgentOrder::FAILED]);
+
+            throw new \RuntimeException('לא הצלחנו לפתוח את עמוד הכרטיס. נסו שוב בעוד רגע.');
+        }
+
+        $order->update(['cardcom_low_profile_id' => $page['low_profile_id']]);
+
+        // The marker the webhook clears once this exact session is handled, so
+        // a manual "sync card" cannot process it a second time.
+        $customer->update(['pending_card_lp_id' => $page['low_profile_id']]);
+
+        return (string) $page['url'];
     }
 
     private function periodEnd(Plan $plan): Carbon
