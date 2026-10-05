@@ -8,7 +8,7 @@
      * menu the guide names concludes the installation is broken.
      *
      * Expects:
-     *   $codes        ['panel_url', 'mcp_secret', 'update_token'] — the keys to the site
+     *   $codes        ['mcp_secret', 'update_token'] — the keys to the site
      *   $downloadUrl  where the plugin zip is downloaded from
      *   $checkSlot    optional HTML-free string: what to do after saving (varies by page)
      *   $helpUrl      optional link for "we'll do it for you"
@@ -42,9 +42,13 @@
             <span class="ig-path">הגדרות ← Multi Digital Agent</span>.
             מעתיקים כל ערך לשדה שבאותו שם, ולוחצים <span class="ig-path">שמירת שינויים</span>.
 
+            {{-- Two codes, not three. The panel address is a constant inside the
+                 plugin and has no field to paste into, so listing it sent a
+                 customer looking for a row that is not on the screen — and a
+                 customer who cannot find the field the guide names concludes the
+                 installation is broken. --}}
             <div class="ig-codes">
                 @foreach ([
-                    'panel_url' => 'כתובת הפאנל',
                     'mcp_secret' => 'מפתח MCP',
                     'update_token' => 'טוקן עדכון',
                 ] as $key => $label)

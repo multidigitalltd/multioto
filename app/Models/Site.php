@@ -144,8 +144,8 @@ class Site extends Model
 
     /**
      * Make sure the site has a full, usable set of connection codes and return
-     * them ready to copy into the companion plugin: panel URL, MCP endpoint,
-     * MCP secret and update token. Missing pieces are generated (a random secret,
+     * them ready to copy into the companion plugin: MCP endpoint, MCP secret and
+     * update token. Missing pieces are generated (a random secret,
      * the conventional endpoint, a fresh token) so a manager never has to invent
      * anything — the panel is the single source of truth. The "connection active"
      * toggle is left untouched — enabling stays an explicit choice.
@@ -175,8 +175,10 @@ class Site extends Model
             $this->generateAgentToken();
         }
 
+        // No panel address among them. It is a constant inside the plugin, with
+        // no field to paste it into, so handing one out could only ever be copied
+        // somewhere it does not belong.
         return [
-            'panel_url' => rtrim((string) config('app.url'), '/'),
             'mcp_endpoint' => (string) $this->mcp_endpoint,
             'mcp_secret' => (string) $this->mcp_secret,
             // Empty when a pre-existing token can't be shown — the view then

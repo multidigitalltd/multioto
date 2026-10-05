@@ -151,6 +151,35 @@ class AgentPluginCompatibilityTest extends TestCase
         }
     }
 
+    /**
+     * The panel address is a constant, not a field anybody can set.
+     *
+     * It is the same address on every installation, so the row only ever existed
+     * to be filled in wrong. And it is not merely cosmetic: the update token is
+     * presented as a bearer credential to whatever that address names, so a value
+     * an admin session can write is a value that can redirect the token. Removing
+     * the row alone would leave the key still accepted on save — this asserts the
+     * handler does not read it either.
+     *
+     * Read with comments stripped, so the notes explaining all of this are not
+     * mistaken for the code they warn about.
+     */
+    public function test_the_panel_address_is_not_a_field_the_settings_page_accepts(): void
+    {
+        $source = $this->code(self::PLUGIN_DIR.'/includes/class-settings.php');
+
+        $this->assertStringNotContainsString('[platform_url]', $source,
+            'The settings form still renders an input for the panel address.');
+
+        $this->assertStringNotContainsString("\$input['platform_url']", $source,
+            'sanitize() still reads the panel address from the posted input, so a crafted POST can still set it.');
+
+        // Still ANSWERED, just not asked: the updater reads this key to build the
+        // address it presents the update token to, so it must keep coming back.
+        $this->assertStringContainsString("'platform_url' => self::platformUrl()", $source,
+            'get() must keep returning the constant address the updater relies on.');
+    }
+
     public function test_the_shipped_version_matches_what_the_panel_offers(): void
     {
         $main = file_get_contents(self::PLUGIN_DIR.'/multioto-agent.php');
