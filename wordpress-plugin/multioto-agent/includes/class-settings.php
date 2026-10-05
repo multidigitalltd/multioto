@@ -6,11 +6,14 @@ if (! defined('ABSPATH')) {
 
 /**
  * Connection settings for the Multi Digital platform:
- *  - platform_url:  the panel base URL (for self-updates).
  *  - mcp_secret:    the shared secret the platform presents when it calls us.
  *  - update_token:  the token we present to the platform for self-updates.
  *
  * Secrets are stored non-autoloaded and never printed back into the form.
+ *
+ * The panel address is NOT one of them. It is the same address for every
+ * installation, so it is a constant here rather than a field: a value that never
+ * differs is a field whose only possible use is to be filled in wrong.
  */
 class Multioto_Agent_Settings
 {
@@ -41,15 +44,43 @@ class Multioto_Agent_Settings
     public static function get(): array
     {
         $stored = get_option(self::OPTION, []);
-        $url = (string) ($stored['platform_url'] ?? '');
 
         return [
-            // Fall back to the constant panel address when nothing was saved, so
-            // a fresh install is already pointed at the panel.
-            'platform_url' => $url !== '' ? $url : self::DEFAULT_PLATFORM_URL,
+            // Always the constant, never what the option happens to hold.
+            //
+            // Deliberately ignoring a stored value rather than preferring it:
+            // the field that used to write one is gone, so anything still in
+            // there was typed by somebody or left by an older version, and the
+            // update token is presented to whatever this address names. A value
+            // we no longer offer any way to correct must not be the one the
+            // plugin trusts.
+            'platform_url' => self::platformUrl(),
             'mcp_secret' => (string) ($stored['mcp_secret'] ?? ''),
             'update_token' => (string) ($stored['update_token'] ?? ''),
         ];
+    }
+
+    /**
+     * The panel this installation talks to.
+     *
+     * The constant, unless wp-config.php defines MULTIOTO_PLATFORM_URL — the one
+     * escape hatch, for pointing a staging site at a staging panel. It lives in
+     * wp-config rather than in the database on purpose: editing it needs file
+     * access to the server, so no admin session and no stored option can redirect
+     * where the update token is sent. Anything that is not an http(s) address is
+     * ignored outright.
+     */
+    public static function platformUrl(): string
+    {
+        if (defined('MULTIOTO_PLATFORM_URL')) {
+            $override = untrailingslashit(trim((string) constant('MULTIOTO_PLATFORM_URL')));
+
+            if (preg_match('#^https?://#i', $override) === 1 && esc_url_raw($override) === $override) {
+                return $override;
+            }
+        }
+
+        return self::DEFAULT_PLATFORM_URL;
     }
 
     public function addMenu(): void
@@ -84,12 +115,14 @@ class Multioto_Agent_Settings
         $current = self::get();
         $input = is_array($input) ? $input : [];
 
-        $url = esc_url_raw(trim((string) ($input['platform_url'] ?? '')));
         $secret = trim((string) ($input['mcp_secret'] ?? ''));
         $token = trim((string) ($input['update_token'] ?? ''));
 
+        // `platform_url` is not read from the input at all, and is not written
+        // back either. Dropping only the form row would leave the key still
+        // accepted here, so a crafted POST to options.php could point the plugin
+        // — and the update token it presents — at an address of its own choosing.
         return [
-            'platform_url' => $url !== '' ? untrailingslashit($url) : $current['platform_url'],
             'mcp_secret' => $secret !== '' ? $secret : $current['mcp_secret'],
             'update_token' => $token !== '' ? $token : $current['update_token'],
         ];
@@ -138,7 +171,11 @@ class Multioto_Agent_Settings
         }
 
         $current = self::get();
-        $connected = $current['mcp_secret'] !== '' && $current['platform_url'] !== '';
+
+        // The secret alone. The panel address is a constant now, so including it
+        // in the test was asking whether a hard-coded string is non-empty — a
+        // condition that cannot fail, and so says nothing.
+        $connected = $current['mcp_secret'] !== '';
         ?>
         <div class="wrap" dir="rtl" style="text-align:right;">
             <h1>Multi Digital Agent</h1>
@@ -148,12 +185,6 @@ class Multioto_Agent_Settings
             <form method="post" action="options.php">
                 <?php settings_fields(self::OPTION); ?>
                 <table class="form-table" role="presentation">
-                    <tr>
-                        <th scope="row"><label for="mo_url">כתובת הפאנל</label></th>
-                        <td><input name="<?php echo esc_attr(self::OPTION); ?>[platform_url]" id="mo_url" type="url"
-                                   class="regular-text" value="<?php echo esc_attr($current['platform_url']); ?>"
-                                   placeholder="<?php echo esc_attr(self::DEFAULT_PLATFORM_URL); ?>"></td>
-                    </tr>
                     <tr>
                         <th scope="row"><label for="mo_secret">מפתח MCP</label></th>
                         <td><input name="<?php echo esc_attr(self::OPTION); ?>[mcp_secret]" id="mo_secret" type="password"
