@@ -5,6 +5,7 @@ namespace App\Services\SiteAgent;
 use App\Models\Customer;
 use App\Models\SiteAgentSubscriber;
 use App\Support\CardLink;
+use Illuminate\Support\Collection;
 
 /**
  * ללקוח של בוט ניהול האתר — הכול מגיע מהמספר של הבוט.
@@ -36,15 +37,37 @@ class BotNumberRoute
      */
     public function subscriber(Customer $customer): ?SiteAgentSubscriber
     {
-        return rescue(
-            fn (): ?SiteAgentSubscriber => SiteAgentSubscriber::query()
+        return rescue(function () use ($customer): ?SiteAgentSubscriber {
+            /** @var Collection<int, SiteAgentSubscriber> $bindings */
+            $bindings = SiteAgentSubscriber::query()
                 ->where('customer_id', $customer->id)
                 ->usable()
                 ->latest('verified_at')
-                ->first(),
-            null,
-            report: false,
-        );
+                ->get();
+
+            if ($bindings->isEmpty()) {
+                return null;
+            }
+
+            // The business's own number first, whenever it is among them.
+            //
+            // A customer may hold several bindings at once — the owner plus an
+            // employee, or a manager per site — and extra managers are usually
+            // added AFTER the owner. Taking the most recent would therefore
+            // send the owner's payment notice to a manager, with only the
+            // sign-in link, while the owner's own binding sat right there
+            // unused; on a multi-site customer it could even land with the
+            // manager of a different site entirely.
+            foreach ($bindings as $binding) {
+                $binding->setRelation('customer', $customer);
+
+                if ($this->isCustomerOwnNumber($binding)) {
+                    return $binding;
+                }
+            }
+
+            return $bindings->first();
+        }, null, report: false);
     }
 
     /** Does the bot carry this customer's messages at all? */

@@ -133,7 +133,16 @@ class CardCaptureLinkSender
         // A customer who manages their site through the bot hears from the bot,
         // never from the support number. See BotNumberRoute.
         if ($this->bot->carries($customer)) {
-            [$sent, $failed, $skipped] = $this->overBotNumber($customer, $sent, $failed, $skipped);
+            // The operator's on/off switch for this notice governs both routes.
+            // The approved template supplies the WORDING on this one, not the
+            // decision to send at all — a notice switched off in the settings
+            // that still reaches a third of the customers is a switch nobody
+            // can trust again.
+            if (! $this->templates->isEnabled($key, 'whatsapp')) {
+                $skipped[] = 'וואטסאפ (ההודעה כבויה בהגדרות)';
+            } else {
+                [$sent, $failed, $skipped] = $this->overBotNumber($customer, $sent, $failed, $skipped);
+            }
         } else {
             $whatsappTo = $customer->whatsappRecipient();
 

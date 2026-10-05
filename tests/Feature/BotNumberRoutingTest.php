@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\Customer;
+use App\Models\NotificationTemplate;
 use App\Models\Setting;
 use App\Models\Site;
 use App\Models\SiteAgentSubscriber;
@@ -146,6 +147,60 @@ class BotNumberRoutingTest extends TestCase
             ->where('message', 'like', '%חסרה תבנית%')->exists());
 
         // ושום דבר לא יצא מהמספר הכללי במקום.
+        Http::assertNothingSent();
+    }
+
+    /**
+     * המספר של בעל העסק מנצח גם כשהוא לא האחרון שאומת.
+     *
+     * ללקוח יכולים להיות כמה מספרים מחוברים בבת אחת — הבעלים ועוד עובד, או
+     * מנהל לכל אתר — ומנהלים נוספים נרשמים בדרך כלל **אחרי** הבעלים. בחירת
+     * האחרון הייתה שולחת את הודעת התשלום של הבעלים למנהל, עם קישור לאזור האישי
+     * בלבד, בזמן שהמספר של הבעלים יושב שם ולא בשימוש.
+     */
+    public function test_the_owner_binding_wins_over_a_manager_added_later(): void
+    {
+        $subscription = $this->subscription('0501234567', '972501234567');
+        $customer = $subscription->customer;
+
+        // מנהל שנוסף אחר כך, ולכן הוא האחרון שאומת.
+        $this->travel(1)->hour();
+        SiteAgentSubscriber::create([
+            'phone' => '972509999999',
+            'customer_id' => $customer->id,
+            'site_id' => Site::factory()->create(['customer_id' => $customer->id])->id,
+            'verified_at' => now(),
+        ]);
+
+        app(CardCaptureLinkSender::class)->send($subscription);
+
+        $body = $this->sentBodies()[0] ?? [];
+
+        $this->assertSame('972501234567', data_get($body, 'to'), 'הודעת התשלום אמורה ללכת לבעלים.');
+        $this->assertStringContainsString(
+            '/billing/update-card/',
+            (string) data_get($body, 'template.components.0.parameters.1.text'),
+        );
+    }
+
+    /**
+     * והודעה שכובתה בהגדרות אינה נשלחת גם ללקוחות הבוט.
+     *
+     * התבנית המאושרת קובעת את הנוסח, לא את ההחלטה אם לשלוח בכלל. מתג שמכבה
+     * הודעה ובכל זאת היא מגיעה לחלק מהלקוחות הוא מתג שאי אפשר לסמוך עליו שוב.
+     */
+    public function test_a_notice_switched_off_in_settings_is_not_sent_over_the_bot(): void
+    {
+        NotificationTemplate::updateOrCreate(
+            ['key' => 'card.capture', 'channel' => 'whatsapp'],
+            ['body' => 'גוף כלשהו', 'enabled' => false],
+        );
+
+        $subscription = $this->subscription('0501234567', '972501234567');
+
+        $result = app(CardCaptureLinkSender::class)->send($subscription);
+
+        $this->assertContains('וואטסאפ (ההודעה כבויה בהגדרות)', $result['skipped']);
         Http::assertNothingSent();
     }
 
