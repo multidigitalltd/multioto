@@ -21,7 +21,7 @@ enum WebhookSource: string implements HasLabel
             self::Linet => 'לינט',
             self::Email => 'אימייל',
             self::Kesher => 'קשר',
-            self::WhatsappCloud => 'וואטסאפ רשמי (סוכן האתר)',
+            self::WhatsappCloud => 'וואטסאפ רשמי (בוט ניהול האתר)',
         };
     }
 }

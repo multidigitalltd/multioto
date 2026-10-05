@@ -5,7 +5,7 @@ use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
 
 /**
- * Selling סוכן האתר without us: a page to buy it on, and a price for a second
+ * Selling בוט ניהול האתר without us: a page to buy it on, and a price for a second
  * manager's number.
  *
  * Until now the product could only be sold by a team member opening three rows

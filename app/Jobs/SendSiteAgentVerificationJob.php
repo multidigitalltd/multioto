@@ -87,7 +87,7 @@ class SendSiteAgentVerificationJob implements ShouldQueue
             ]);
 
             $team->alert(
-                'קוד אימות לסוכן האתר לא נשלח',
+                'קוד אימות לבוט ניהול האתר לא נשלח',
                 'לא הצלחנו לשלוח קוד אימות ל'.($subscriber->site?->domain ?? 'לקוח').'. בדקו את חיבור הוואטסאפ ושלחו שוב.',
             );
 

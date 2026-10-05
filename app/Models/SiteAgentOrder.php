@@ -10,7 +10,7 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Support\Str;
 
 /**
- * One stranger's purchase of סוכן האתר, from the form to the working service.
+ * One stranger's purchase of בוט ניהול האתר, from the form to the working service.
  *
  * It exists because the buyer leaves. They go to Cardcom's page and what comes
  * back is a webhook, minutes later, into a process with no browser and no

@@ -19,7 +19,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>סוכן האתר — {{ $paid ? 'הפעלה' : 'סטטוס ההזמנה' }}</title>
+    <title>בוט ניהול האתר — {{ $paid ? 'הפעלה' : 'סטטוס ההזמנה' }}</title>
     <meta name="robots" content="noindex, nofollow">
     <style>
         :root {
@@ -100,7 +100,7 @@
     @else
         <h1>השירות פעיל 🎉</h1>
         <p class="lead">
-            סוכן האתר הופעל עבור <strong dir="ltr">{{ $order->domain }}</strong>.
+            בוט ניהול האתר הופעל עבור <strong dir="ltr">{{ $order->domain }}</strong>.
         </p>
 
         <div class="ok">
@@ -208,7 +208,7 @@
                     </div>
                 </li>
                 <li>
-                    שמרו. זהו — שלחו הודעה לוואטסאפ ותראו שהסוכן עונה.
+                    שמרו. זהו — שלחו הודעה לוואטסאפ ותראו שהבוט עונה.
                 </li>
             </ol>
 

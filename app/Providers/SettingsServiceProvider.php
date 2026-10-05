@@ -70,7 +70,7 @@ class SettingsServiceProvider extends ServiceProvider
         'security.urlhaus_auth_key' => 'security.reputation.urlhaus_auth_key',
         'security.wordfence_api_key' => 'security.vulnerabilities.wordfence_api_key',
         'security.safe_browsing_key' => 'security.reputation.safe_browsing_key',
-        // סוכן וואטסאפ לניהול אתר — the product's own Meta Cloud API number and
+        // בוט ניהול אתר — the product's own Meta Cloud API number and
         // its approved templates. Configurable from the panel because the
         // alternative was that turning the product on needed a deploy, and
         // because a missing template name fails silently (Meta refuses the

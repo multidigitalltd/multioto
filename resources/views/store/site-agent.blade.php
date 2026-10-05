@@ -1,6 +1,6 @@
 @php
     /**
-     * עמוד המכירה של סוכן האתר.
+     * עמוד המכירה של בוט ניהול האתר.
      *
      * The form asks for one thing the plugin store never had to: the phone
      * number that will drive the site. It is the product — not a contact detail
@@ -14,7 +14,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>סוכן האתר — ניהול האתר מווטסאפ</title>
+    <title>בוט ניהול האתר — ניהול האתר מווטסאפ</title>
     <meta name="description" content="שולחים הודעה בוואטסאפ, והאתר מתעדכן. שינוי טקסט, החלפת תמונה, עדכון מחיר — באישור שלכם, בלי להיכנס לוורדפרס.">
     <style>
         :root {
@@ -76,7 +76,7 @@
 </head>
 <body>
 <main>
-    <h1>סוכן האתר</h1>
+    <h1>בוט ניהול האתר</h1>
     <p class="lead">שולחים הודעה בוואטסאפ — והאתר מתעדכן. בלי להיכנס לוורדפרס, בלי לחכות לאף אחד.</p>
 
     <ul class="does">
@@ -91,7 +91,7 @@
          between a product and a risk. --}}
     <p class="lead">
         <strong>כל שינוי מוצג לכם לאישור בצ׳אט לפני שהוא מבוצע</strong>, ולכל שינוי יש ביטול.
-        הסוכן אינו נוגע בעיצוב, בקוד או במסד הנתונים.
+        הבוט אינו נוגע בעיצוב, בקוד או במסד הנתונים.
     </p>
 
     <h2>המסלול</h2>
@@ -156,7 +156,7 @@
         <input id="domain" name="domain" type="text" required dir="ltr" placeholder="example.co.il"
                value="{{ old('domain') }}"
                aria-describedby="domain-hint @error('domain') domain-error @enderror">
-        <p class="hint" id="domain-hint">האתר שהסוכן ינהל. אתר וורדפרס.</p>
+        <p class="hint" id="domain-hint">האתר שהבוט ינהל. אתר וורדפרס.</p>
         @error('domain')<p class="error" id="domain-error">{{ $message }}</p>@enderror
 
         <h2>המספר שינהל את האתר</h2>

@@ -445,7 +445,7 @@ class ConsoleAgent
                 'input_schema' => ['type' => 'object', 'properties' => ['site_id' => ['type' => 'integer'], 'filename' => ['type' => 'string'], 'url' => ['type' => 'string'], 'alt' => ['type' => 'string'], 'title' => ['type' => 'string'], 'attach_to' => ['type' => 'integer']], 'required' => ['site_id', 'filename', 'url']]],
             ['name' => 'propose_set_featured_image', 'description' => 'הצע קביעת תמונה ראשית לעמוד/פוסט. site_id + id + attachment_id (0 מסיר). את attachment_id מקבלים מ-read_site_media או מהעלאה שאושרה.',
                 'input_schema' => ['type' => 'object', 'properties' => ['site_id' => ['type' => 'integer'], 'id' => ['type' => 'integer'], 'attachment_id' => ['type' => 'integer']], 'required' => ['site_id', 'id', 'attachment_id']]],
-            ['name' => 'investigate_site', 'description' => 'שלח את סוכן האתר לבדוק אתר מחובר (קריאה בלבד; תיקון יוצע לאישור). site_id + goal.',
+            ['name' => 'investigate_site', 'description' => 'שלח בדיקה אוטומטית לאתר מחובר (קריאה בלבד; תיקון יוצע לאישור). site_id + goal.',
                 'input_schema' => $obj(['site_id' => $int, 'goal' => $str], ['site_id'])],
             ['name' => 'draft_broadcast', 'description' => 'הכן טיוטת דיוור ללקוחות (תמיכה ← דיוורים). לא נשלח דבר — נוצרת טיוטה שהמנהל עורך ושולח בעצמו. brief: תיאור בשורה של מה רוצים להגיד, והסוכן ינסח. לחלופין אפשר להעביר subject ו-body מוכנים. is_marketing חובה: true לפרסומת (מבצע, הצעה, שירות חדש), false להודעת שירות (תחזוקה, אבטחה, שינוי בשירות) — קבע לפי התוכן, ובספק בחר true. קהל היעד: audience_status — active (ברירת מחדל) / suspended / churned / all; plan_names — לצמצום ללקוחות בחבילות מסוימות (שמות החבילות כפי שהם במערכת); customer_ids — לצמצום ללקוחות מסוימים. אם ביקשו קהל מצומצם, ציין אותו כאן ואל תשאיר את ברירת המחדל.',
                 'input_schema' => $obj([
@@ -2003,7 +2003,7 @@ class ConsoleAgent
             throw $e;
         }
 
-        return ['content' => "סוכן האתר נשלח לבדוק את {$site->domain} — התוצאה תופיע כאן בצ׳אט בסיום, וכל תיקון יוצע לאישור."];
+        return ['content' => "נשלחה בדיקה אוטומטית לאתר {$site->domain} — התוצאה תופיע כאן בצ׳אט בסיום, וכל תיקון יוצע לאישור."];
     }
 
     /**

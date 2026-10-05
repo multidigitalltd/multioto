@@ -14,7 +14,7 @@ use Illuminate\View\View;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
 /**
- * The page somebody buys סוכן האתר on, and the one they land on afterwards.
+ * The page somebody buys בוט ניהול האתר on, and the one they land on afterwards.
  *
  * Public, so everything here assumes a stranger: the form is validated, the
  * order is addressed by its own random reference rather than a row id, and no

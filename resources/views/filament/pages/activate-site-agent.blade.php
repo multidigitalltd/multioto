@@ -3,7 +3,7 @@
         {{ $this->form }}
 
         <x-filament::button type="submit" size="lg">
-            הפעלת הסוכן
+            הפעלת הבוט
         </x-filament::button>
     </form>
 </x-filament-panels::page>

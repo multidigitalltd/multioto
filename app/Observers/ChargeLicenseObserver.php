@@ -60,7 +60,7 @@ class ChargeLicenseObserver
             // depend on which of the two happened.
             $this->checkout->fulfil($charge);
 
-            // The same for סוכן האתר, and for the same reason: the subscription,
+            // The same for בוט ניהול האתר, and for the same reason: the subscription,
             // the site and the number's binding are all granted by the money
             // arriving, and it arrives by either route.
             $this->siteAgent->fulfil($charge);
