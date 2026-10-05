@@ -171,6 +171,29 @@ class BotNumberRoute
      * carries, which is exactly the check we would otherwise have to write here
      * and get right.
      */
+    /**
+     * The link that is safe to put in a message aimed at a bare recipient.
+     *
+     * Used where the recipient is not a bot binding but whatever address the
+     * customer record happens to carry — the dunning path is the live example.
+     * `whatsappRecipient()` prefers `whatsapp_jid`, which is LEARNED from
+     * whoever wrote to support first and matched this customer, so it can be an
+     * employee or an agency. A signed card page sent there is a business's
+     * payment form handed to somebody who merely answered a support thread.
+     *
+     * Only an address the customer record itself declares earns the signed
+     * page. Everything else gets the sign-in page, which gives away nothing.
+     */
+    public function paymentLinkForRecipient(Customer $customer, ?string $recipient): string
+    {
+        $declared = $this->whatsapp->normalize((string) $customer->phone);
+        $aimedAt = $this->whatsapp->normalize((string) $recipient);
+
+        return $declared !== '' && $aimedAt !== '' && hash_equals($declared, $aimedAt)
+            ? CardLink::for($customer->id)
+            : route('portal.login');
+    }
+
     public function paymentLinkFor(SiteAgentSubscriber $subscriber): string
     {
         return $this->isCustomerOwnNumber($subscriber)

@@ -23,6 +23,7 @@ use App\Models\Subscription;
 use App\Models\User;
 use App\Services\Billing\ManualChargeService;
 use App\Services\Notifications\TemplateEngine;
+use App\Services\SiteAgent\BotNumberRoute;
 use App\Services\Support\BroadcastAudience;
 use App\Services\Support\BroadcastRenderer;
 use App\Services\Waha\WahaClient;
@@ -56,7 +57,7 @@ class NotificationLogTest extends TestCase
             'status' => DunningStatus::Queued,
         ]);
 
-        (new SendDunningNotificationJob($event->id))->handle(app(WahaClient::class));
+        (new SendDunningNotificationJob($event->id))->handle(app(WahaClient::class), app(BotNumberRoute::class));
 
         $log = NotificationLog::sole();
         $this->assertSame('email', $log->channel);
