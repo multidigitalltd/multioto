@@ -31,7 +31,7 @@ class Subscription extends Model
     protected $fillable = [
         'customer_id', 'plan_id', 'external_ref', 'name', 'billing_interval', 'vat_applies',
         'installments_total',
-        'site_id', 'token_id', 'payment_method', 'card_fallback_days', 'status',
+        'site_id', 'token_id', 'payment_method', 'card_fallback_days', 'status', 'trial_ends_at', 'trial_reminded_at',
         'current_period_start', 'current_period_end', 'next_charge_at', 'card_expiry_alerted_at',
         'price_agorot_override', 'agent_extra_numbers', 'dunning_stage', 'canceled_at',
     ];
@@ -45,6 +45,8 @@ class Subscription extends Model
             'current_period_start' => 'date',
             'current_period_end' => 'date',
             'next_charge_at' => 'datetime',
+            'trial_ends_at' => 'datetime',
+            'trial_reminded_at' => 'datetime',
             'card_expiry_alerted_at' => 'datetime',
             'price_agorot_override' => 'integer',
             'agent_extra_numbers' => 'integer',

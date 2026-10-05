@@ -196,6 +196,23 @@ class Multioto_Agent_Woo_Writer
             $changed['stock_status'] = $status;
         }
 
+        if (isset($args['name'])) {
+            $name = trim(sanitize_text_field((string) $args['name']));
+
+            if ($name === '') {
+                throw new Multioto_Agent_Rpc_Error(-32602, 'שם מוצר אינו יכול להיות ריק.');
+            }
+
+            $product->set_name($name);
+            $changed['name'] = $name;
+        }
+
+        if (isset($args['short_description'])) {
+            $short = wp_kses_post((string) $args['short_description']);
+            $product->set_short_description($short);
+            $changed['short_description'] = $short;
+        }
+
         if (isset($args['status'])) {
             $status = (string) $args['status'];
 
@@ -373,6 +390,9 @@ class Multioto_Agent_Woo_Writer
             'manage_stock' => $product->get_manage_stock(),
             'stock_quantity' => $product->get_stock_quantity(),
             'stock_status' => $product->get_stock_status(),
+            // Part of the summary because the summary IS the undo snapshot: a
+            // rename or a new blurb is only reversible if the old one is here.
+            'short_description' => $product->get_short_description(),
             // The featured image, by id. Products are not readable through the
             // content tools, so this is the only way a caller can tell whether
             // the picture it is about to replace is still the one it saw.

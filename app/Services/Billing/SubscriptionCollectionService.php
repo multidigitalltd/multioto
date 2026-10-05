@@ -10,6 +10,7 @@ use App\Jobs\RestoreSiteJob;
 use App\Jobs\SendMonthlyMonitoringReportJob;
 use App\Models\Charge;
 use App\Models\Subscription;
+use App\Services\SiteAgent\SiteAgentUsageMeter;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -81,11 +82,16 @@ class SubscriptionCollectionService
                     ->whereDate('period_start', $periodStart)
                     ->max('attempt_number') + 1;
 
+                // The same breakdown a card renewal uses: plan, extra numbers,
+                // and the messages sent since the last invoice.
+                $breakdown = app(RenewalBreakdown::class)->for($subscription, $periodStart, $periodEnd, now());
+
                 $charge = $subscription->charges()->create([
                     'customer_id' => $subscription->customer_id,
-                    'amount_agorot' => $subscription->basePriceAgorot(),
-                    'vat_agorot' => $subscription->vatAgorot(),
-                    'total_agorot' => $subscription->totalChargeAgorot(),
+                    'amount_agorot' => $breakdown['amount_agorot'],
+                    'vat_agorot' => $breakdown['vat_agorot'],
+                    'total_agorot' => $breakdown['total_agorot'],
+                    'lines' => $breakdown['lines'],
                     'currency' => config('billing.currency'),
                     // Recorded here, not inferred at invoicing time: this money
                     // arrived by transfer / standing order / cheque, whatever
@@ -99,6 +105,8 @@ class SubscriptionCollectionService
                     'period_end' => $periodEnd,
                     'charged_at' => now(),
                 ]);
+
+                app(SiteAgentUsageMeter::class)->settle($charge);
 
                 $wasSuspended = $subscription->status === SubscriptionStatus::Suspended;
 

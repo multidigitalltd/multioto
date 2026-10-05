@@ -70,6 +70,16 @@ class SiteAgentRequestResource extends Resource
         SiteAgentRequest::OP_PRICE => 'שינוי מחיר',
         SiteAgentRequest::OP_STOCK => 'שינוי מלאי',
         SiteAgentRequest::OP_IMAGE => 'החלפת תמונה',
+        SiteAgentRequest::OP_PRODUCT => 'עדכון מוצר',
+        SiteAgentRequest::OP_PRODUCT_CREATE => 'מוצר חדש',
+        SiteAgentRequest::OP_ORDER_STATUS => 'סטטוס הזמנה',
+        SiteAgentRequest::OP_ORDER_NOTE => 'הערה להזמנה',
+        SiteAgentRequest::OP_SUBSCRIPTION_STATUS => 'סטטוס מנוי',
+        SiteAgentRequest::OP_POST_CREATE => 'פוסט/עמוד חדש',
+        SiteAgentRequest::OP_POST_UPDATE => 'עדכון פוסט/עמוד',
+        SiteAgentRequest::OP_USER_CREATE => 'משתמש חדש',
+        SiteAgentRequest::OP_USER_ROLE => 'שינוי תפקיד',
+        SiteAgentRequest::OP_COUPON => 'קופון חדש',
     ];
 
     private const STATES = [

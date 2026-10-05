@@ -3,6 +3,7 @@
 namespace App\Services\SiteAgent;
 
 use App\Models\Site;
+use App\Models\SiteAgentMessage;
 use App\Models\SiteAgentRequest;
 use App\Models\SiteAgentSubscriber;
 use App\Models\SystemLog;
@@ -37,6 +38,7 @@ class SiteAgentConversation
         private ImageChangePlanner $images,
         private SiteChangeApplier $applier,
         private WhatsAppCloudClient $whatsapp,
+        private SiteAgentAssistant $assistant,
     ) {}
 
     /**
@@ -59,7 +61,11 @@ class SiteAgentConversation
         // both see no offer pending and both create one, so the customer is
         // shown two previews and their "כן" answers only the newer. Everything
         // that reads the conversation and then writes it belongs inside here.
-        $lock = Cache::lock("site-agent:conversation:{$subscriber->id}", 180);
+        // Held for as long as one turn can run. The assistant's turn reads the
+        // site and calls the model several times; a lock that lapsed in the
+        // middle of it would let the next message read a conversation this one
+        // is still writing.
+        $lock = Cache::lock("site-agent:conversation:{$subscriber->id}", 600);
 
         try {
             // WAITS for its turn rather than giving up on it. The job runs once
@@ -67,7 +73,17 @@ class SiteAgentConversation
             // dropped here is the customer's instruction — or their "כן" —
             // thrown away in silence. Queueing behind the message before it is
             // what they expect; being ignored is not.
-            return $lock->block(90, fn (): string => $this->act($subscriber, $text, $messageId, $mediaId));
+            return $lock->block(90, function () use ($subscriber, $text, $messageId, $mediaId): string {
+                $reply = $this->act($subscriber, $text, $messageId, $mediaId);
+
+                // Every turn, whichever path answered it — a "כן" and its
+                // "בוצע" are as much a part of what the assistant must know
+                // next time as a question about orders.
+                $this->assistant->remember($subscriber, SiteAgentMessage::USER, $mediaId !== null ? trim('[תמונה] '.$text) : $text);
+                $this->assistant->remember($subscriber, SiteAgentMessage::ASSISTANT, $reply);
+
+                return $reply;
+            });
         } catch (LockTimeoutException) {
             // Ninety seconds behind a turn that is still running. Saying so is
             // the honest answer, and the customer can repeat themselves.
@@ -144,7 +160,34 @@ class SiteAgentConversation
             return $this->revertLast($subscriber);
         }
 
-        return $this->propose($subscriber, $text, $messageId);
+        return $this->converse($subscriber, $text, $messageId)
+            ?? $this->propose($subscriber, $text, $messageId);
+    }
+
+    /**
+     * Hand the message to the assistant, if it can take it.
+     *
+     * Null means it could not — AI off, provider down, nothing usable back —
+     * and the fixed planners answer instead, as they did before it existed.
+     * Page text stays with the page planner even when the assistant runs: it
+     * knows Elementor and how to quote a page exactly, and the assistant hands
+     * those requests over rather than re-learning that.
+     */
+    private function converse(SiteAgentSubscriber $subscriber, string $text, ?string $messageId): ?string
+    {
+        $site = $subscriber->site;
+
+        if ($site === null || ! $this->assistant->available()) {
+            return null;
+        }
+
+        return $this->assistant->handle(
+            $subscriber,
+            $site,
+            $text,
+            $messageId,
+            fn (string $instruction): string => $this->propose($subscriber, $instruction, $messageId, tryShop: false),
+        );
     }
 
     /**
@@ -562,7 +605,8 @@ class SiteAgentConversation
 
             // The page moved under us between the preview and the yes.
             if ($result['reason'] === SiteChangeApplier::STALE) {
-                return 'העמוד השתנה מאז שהצגתי לכם את השינוי, ולכן לא ביצעתי אותו — כדי לא למחוק עריכה של מישהו אחר. '
+                return ($this->isPageOperation($request) ? 'העמוד השתנה' : 'זה השתנה באתר')
+                    .' מאז שהצגתי לכם את השינוי, ולכן לא ביצעתי אותו — כדי לא למחוק עריכה של מישהו אחר. '
                     .'בקשו שוב ואציג הצעה מעודכנת.';
             }
 
@@ -583,9 +627,24 @@ class SiteAgentConversation
             ['request_id' => $request->id, 'site_id' => $request->site_id]);
 
         $window = max(1, (int) config('siteagent.undo_minutes', 1440));
+        $done = isset($result['done']) ? "\n".$result['done'] : '';
 
-        return '✅ בוצע.'."\n\n".'אם משהו לא נראה טוב — כתבו "בטל" ואחזיר לקדמותו (עד '
+        // An undo is promised only where there is one. A note already emailed
+        // or a user already invited cannot be taken back, and the owner was
+        // told so in the preview — saying "כתבו בטל" now would be a promise
+        // the next message breaks.
+        if ($result['restore'] === null && in_array($request->operation, SiteAgentRequest::MANAGEMENT_OPERATIONS, true)) {
+            return '✅ בוצע.'.$done;
+        }
+
+        return '✅ בוצע.'.$done."\n\n".'אם משהו לא נראה טוב — כתבו "בטל" ואחזיר לקדמותו (עד '
             .($window >= 60 ? intdiv($window, 60).' שעות' : $window.' דקות').').';
+    }
+
+    /** A text change on a page or post, as opposed to the shop or the site's records. */
+    private function isPageOperation(SiteAgentRequest $request): bool
+    {
+        return in_array($request->operation, [SiteAgentRequest::OP_APPEND, SiteAgentRequest::OP_REPLACE, SiteAgentRequest::OP_TITLE], true);
     }
 
     /** Put the last applied change back. */
@@ -625,7 +684,14 @@ class SiteAgentConversation
                 // carrying on would erase it, which is the one thing an undo
                 // must never do.
                 if ($result['reason'] === SiteChangeApplier::STALE) {
-                    return data_get($last->restore, 'kind') === 'product'
+                    $kind = (string) data_get($last->restore, 'kind', 'page');
+
+                    if (! in_array($kind, ['page', 'elementor', 'thumbnail', 'product'], true)) {
+                        return 'זה השתנה באתר אחרי השינוי שביצעתי, ולכן לא החזרתי אותו — שחזור היה מוחק את השינוי החדש. '
+                            .'אפשר לומר לי בדיוק מה להחזיר ואציג הצעה.';
+                    }
+
+                    return $kind === 'product'
                         ? 'המוצר השתנה אחרי השינוי שביצעתי — ייתכן שנמכר ממנו משהו או שמישהו עדכן אותו. '
                             .'לא החזרתי, כדי לא למחוק את השינוי החדש. אפשר לומר לי בדיוק מה להחזיר.'
                         : 'העמוד נערך אחרי השינוי שביצעתי, ולכן לא החזרתי אותו — שחזור היה מוחק את העריכה החדשה. '

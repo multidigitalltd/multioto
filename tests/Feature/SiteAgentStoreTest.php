@@ -354,7 +354,7 @@ class SiteAgentStoreTest extends TestCase
         $this->get(route('store.agent.done', ['reference' => $order->reference]))
             ->assertOk()
             ->assertSee('מפתח MCP')
-            ->assertSee('טוקן עדכונים')
+            ->assertSee('טוקן עדכון')
             ->assertSee(Site::sole()->fresh()->mcp_secret);
     }
 

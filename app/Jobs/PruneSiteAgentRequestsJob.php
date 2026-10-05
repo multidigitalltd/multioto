@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Models\SiteAgentMessage;
 use App\Models\SiteAgentRequest;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -22,6 +23,11 @@ use Illuminate\Support\Facades\Storage;
  * stayed in the table for good: what they asked for, what we offered back, the
  * preview of their own content. The picture was handled; the words were not,
  * and a privacy policy cannot promise a window that nothing enforces.
+ *
+ * **After a few days** — the assistant's transcript. It exists only so the
+ * next message is understood in context, and its answers quote the site's own
+ * customers: names, phones, what they ordered. Kept far shorter than the
+ * requests, for exactly that reason.
  */
 class PruneSiteAgentRequestsJob implements ShouldQueue
 {
@@ -33,6 +39,17 @@ class PruneSiteAgentRequestsJob implements ShouldQueue
     {
         $this->expireUnanswered();
         $this->forgetOld();
+        $this->forgetTranscript();
+    }
+
+    /** The conversation memory, past the few days it is kept for. */
+    private function forgetTranscript(): void
+    {
+        $days = max(1, (int) config('siteagent.assistant.transcript_days', 7));
+
+        SiteAgentMessage::query()
+            ->where('created_at', '<', now()->subDays($days))
+            ->chunkById(500, fn ($messages) => SiteAgentMessage::query()->whereKey($messages->modelKeys())->delete());
     }
 
     /** Offers whose time ran out: close them, and drop the held picture. */

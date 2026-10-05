@@ -78,6 +78,7 @@ class ManageSiteAgent extends Page implements HasForms
         'siteagent.template_paused',
         'siteagent.template_resumed',
         'siteagent.template_card_link',
+        'siteagent.template_report',
         'siteagent.binding_ttl_minutes',
     ];
 
@@ -98,6 +99,7 @@ class ManageSiteAgent extends Page implements HasForms
                 'template_paused' => config('siteagent.whatsapp.templates.service_paused'),
                 'template_resumed' => config('siteagent.whatsapp.templates.service_resumed'),
                 'template_card_link' => config('siteagent.whatsapp.templates.card_link'),
+                'template_report' => config('siteagent.whatsapp.templates.report_ready'),
                 'binding_ttl_minutes' => config('siteagent.binding.verification_ttl_minutes'),
             ],
         ]);
@@ -217,6 +219,11 @@ class ManageSiteAgent extends Page implements HasForms
                             ->autocomplete(false)
                             ->helperText('קטגוריית Utility. שני פרמטרים — customer_name ו-link. הקישור הוא פרמטר ולא טקסט קבוע, כי הוא אינו זהה לכולם: למספר של בעל העסק נשלח דף תשלום, ולמספר שהסוכן נמסר אליו (עובד, סוכנות) נשלח קישור לאזור האישי. בלי התבנית הזאת לא נשלחת הודעת תשלום בוואטסאפ ללקוחות הבוט — רק מייל, והפער מדווח.')
                             ->columnSpanFull(),
+                        TextInput::make('siteagent.template_report')
+                            ->label('תבנית "הדוח מוכן"')
+                            ->live(onBlur: true)
+                            ->autocomplete(false)
+                            ->helperText('קטגוריית Utility. שלושה פרמטרים: title, domain, summary. נשלחת לדוח קבוע כשבעל האתר לא כתב לבוט ב־24 השעות האחרונות; הגוף צריך להזמין אותו להשיב "דוח" לקבלת הדוח המלא. למשל: "{{title}} של {{domain}}: {{summary}}. השיבו דוח לקבלת הדוח המלא." ריק = דוח כזה לא נשלח.'),
                         TextInput::make('siteagent.binding_ttl_minutes')
                             ->label('תוקף קוד האימות (דקות)')
                             ->numeric()

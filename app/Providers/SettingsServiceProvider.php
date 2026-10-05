@@ -86,6 +86,7 @@ class SettingsServiceProvider extends ServiceProvider
         'siteagent.template_paused' => 'siteagent.whatsapp.templates.service_paused',
         'siteagent.template_resumed' => 'siteagent.whatsapp.templates.service_resumed',
         'siteagent.template_card_link' => 'siteagent.whatsapp.templates.card_link',
+        'siteagent.template_report' => 'siteagent.whatsapp.templates.report_ready',
         // How long a binding code stays usable. Editable here because the
         // authentication template at Meta STATES this number to the customer
         // ("התוקף יפוג בעוד 10 דקות"), and the person who writes that sentence
@@ -219,6 +220,7 @@ class SettingsServiceProvider extends ServiceProvider
         'siteagent.template_paused' => 'siteagent.whatsapp.templates.service_paused',
         'siteagent.template_resumed' => 'siteagent.whatsapp.templates.service_resumed',
         'siteagent.template_card_link' => 'siteagent.whatsapp.templates.card_link',
+        'siteagent.template_report' => 'siteagent.whatsapp.templates.report_ready',
         'siteagent.binding_ttl_minutes' => 'siteagent.binding.verification_ttl_minutes',
     ];
 

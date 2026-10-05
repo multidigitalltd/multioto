@@ -11,6 +11,7 @@ use App\Services\Cardcom\CardcomClient;
 use App\Services\Cardcom\CardTokenService;
 use App\Services\Notifications\TeamNotifier;
 use App\Services\Signup\CompleteSignup;
+use App\Services\SiteAgent\SiteAgentCheckout;
 use App\Support\Money;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -105,6 +106,12 @@ class ProcessCardcomLowProfileJob implements ShouldQueue
             // (which would duplicate the token and re-charge). Only clear when it
             // still points at THIS session, so a newer capture isn't erased.
             $customer->update(['pending_card_lp_id' => null]);
+        }
+
+        // A site-agent trial was waiting on exactly this card. Opened here,
+        // after the card is on file, because the card is the condition.
+        if ($token !== null && $lowProfileId) {
+            app(SiteAgentCheckout::class)->fulfilTrial((string) $lowProfileId);
         }
 
         $event->markProcessed();

@@ -6,6 +6,7 @@ use App\Enums\BillingInterval;
 use App\Enums\SubscriptionStatus;
 use App\Models\SiteAgentRequest;
 use App\Models\SiteAgentSubscriber;
+use App\Models\SiteAgentUsage;
 use App\Models\Subscription;
 use Illuminate\Database\Eloquent\Builder;
 
@@ -201,13 +202,17 @@ class SiteAgentProduct
      * daily count reads as "nobody is using this" on a perfectly healthy
      * Tuesday.
      *
-     * @return array{awaiting: int, applied: int, failed: int}
+     * @return array{awaiting: int, applied: int, failed: int, messages_month: int, messages_unbilled: int}
      */
     public function activity(): array
     {
         $since = now()->subWeek();
 
         return [
+            // Calendar month for the tile; the invoices count per billing
+            // cycle, which is what messages_unbilled is waiting for.
+            'messages_month' => (int) SiteAgentUsage::query()->where('sent_at', '>=', now()->startOfMonth())->count(),
+            'messages_unbilled' => (int) SiteAgentUsage::query()->where('billable', true)->whereNull('charge_id')->count(),
             'awaiting' => (int) SiteAgentRequest::query()->awaitingConfirmation()->count(),
             'applied' => (int) SiteAgentRequest::query()
                 ->where('state', SiteAgentRequest::APPLIED)

@@ -11,7 +11,9 @@ use App\Jobs\Concerns\WaitsForRestore;
 use App\Models\Charge;
 use App\Models\Subscription;
 use App\Services\Billing\DunningMachine;
+use App\Services\Billing\RenewalBreakdown;
 use App\Services\Cardcom\CardcomClient;
+use App\Services\SiteAgent\SiteAgentUsageMeter;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Carbon;
@@ -191,10 +193,16 @@ class ChargeSubscriptionJob implements ShouldQueue
             ->whereDate('period_start', $periodStart)
             ->max('attempt_number') + 1;
 
+        // The plan, the extra numbers and the messages sent so far — see
+        // RenewalBreakdown. Counted up to now: the messages counted here are
+        // exactly the ones this charge stamps if it succeeds.
+        $breakdown = app(RenewalBreakdown::class)->for($subscription, $periodStart, $periodEnd, now());
+
         return $subscription->charges()->create([
-            'amount_agorot' => $subscription->basePriceAgorot(),
-            'vat_agorot' => $subscription->vatAgorot(),
-            'total_agorot' => $subscription->totalChargeAgorot(),
+            'amount_agorot' => $breakdown['amount_agorot'],
+            'vat_agorot' => $breakdown['vat_agorot'],
+            'total_agorot' => $breakdown['total_agorot'],
+            'lines' => $breakdown['lines'],
             'currency' => config('billing.currency'),
             // Everything this job collects runs on a card, including a fallback
             // charge for a subscription nominally paid by transfer — and the
@@ -215,6 +223,10 @@ class ChargeSubscriptionJob implements ShouldQueue
     protected function activatePaidPeriod(Subscription $subscription, Charge $charge): void
     {
         $wasSuspended = $subscription->status === SubscriptionStatus::Suspended;
+
+        // The messages this charge billed are now billed; the next renewal
+        // counts from here.
+        app(SiteAgentUsageMeter::class)->settle($charge);
 
         $subscription->update([
             'status' => SubscriptionStatus::Active,

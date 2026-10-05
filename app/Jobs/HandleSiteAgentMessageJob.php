@@ -8,6 +8,7 @@ use App\Models\WebhookEvent;
 use App\Services\SiteAgent\SiteAgentAccess;
 use App\Services\SiteAgent\SiteAgentBilling;
 use App\Services\SiteAgent\SiteAgentConversation;
+use App\Services\SiteAgent\SiteAgentUsageMeter;
 use App\Services\SiteAgent\SiteChoice;
 use App\Services\SiteAgent\WhatsAppCloudClient;
 use Illuminate\Contracts\Cache\LockTimeoutException;
@@ -51,8 +52,13 @@ class HandleSiteAgentMessageJob implements ShouldQueue
      * off mid-flight runs no catch and no finally, the request stays `applying`
      * for ever, the customer's photograph is never cleaned up, and with one
      * attempt the instruction is simply lost with nothing to say so.
+     *
+     * The assistant adds its own turn in front: reads and model calls capped
+     * by siteagent.assistant.budget_seconds (240), one more model call to
+     * answer (90), and — when it hands page text over — the planner path above
+     * on top. Roughly 1,000 seconds on the slowest path, so 1,200.
      */
-    public int $timeout = 900;
+    public int $timeout = 1200;
 
     public function __construct(public int $webhookEventId) {}
 
@@ -61,6 +67,7 @@ class HandleSiteAgentMessageJob implements ShouldQueue
         WhatsAppCloudClient $whatsapp,
         SiteAgentConversation $conversation,
         SiteChoice $choice,
+        SiteAgentUsageMeter $meter,
     ): void {
         $event = WebhookEvent::find($this->webhookEventId);
 
@@ -152,13 +159,22 @@ class HandleSiteAgentMessageJob implements ShouldQueue
             $reply = $this->answerFor($decision['status'], $subscriber);
         }
 
-        if ($reply !== '' && $whatsapp->sendText($from, $reply) === null) {
+        $delivered = $reply !== '' ? $whatsapp->sendText($from, $reply) : null;
+
+        if ($reply !== '' && $delivered === null) {
             // The customer is holding a phone that shows their message
             // delivered and no answer. Nothing else in the system would notice.
             Log::warning('SiteAgent: reply could not be delivered', [
                 'webhook_event_id' => $event->id,
                 'status' => $decision['status'],
             ]);
+        }
+
+        // Billed per reply the service delivered — and only to a number that
+        // is entitled to it. A refusal to an unpaid or unknown number is the
+        // system talking about itself, and nobody is billed for that.
+        if ($delivered !== null && $decision['status'] === SiteAgentAccess::ALLOWED && $subscriber !== null) {
+            $meter->record($subscriber, $delivered);
         }
 
         $event->markProcessed();
