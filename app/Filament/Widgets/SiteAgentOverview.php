@@ -12,7 +12,7 @@ use Filament\Widgets\StatsOverviewWidget as BaseWidget;
 use Filament\Widgets\StatsOverviewWidget\Stat;
 
 /**
- * סוכן הוואטסאפ לאתר, על לוח הבקרה.
+ * בוט ניהול האתר, על לוח הבקרה.
  *
  * The product had screens — a subscriber list, a journal, an activation form —
  * and no presence. Nothing on the dashboard said it existed, which for a thing

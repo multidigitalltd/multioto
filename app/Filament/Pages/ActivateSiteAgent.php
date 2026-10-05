@@ -87,7 +87,7 @@ class ActivateSiteAgent extends Page implements HasForms
         return $form
             ->schema([
                 Section::make('האתר')
-                    ->description('רק אתרים שהתוסף מחובר בהם. בלי חיבור לסוכן אין ידיים, והמנוי היה נפתח על שירות שאינו יכול לפעול.')
+                    ->description('רק אתרים שהתוסף מחובר בהם. בלי חיבור לבוט אין ידיים, והמנוי היה נפתח על שירות שאינו יכול לפעול.')
                     ->schema([
                         Select::make('site_id')
                             ->label('אתר')
@@ -104,7 +104,7 @@ class ActivateSiteAgent extends Page implements HasForms
                     ])->columns(2),
 
                 Section::make('המנוי')
-                    ->description('התשלום החודשי על השירות. המסלול חייב להיות מסומן כ"כולל סוכן ניהול אתר" — זה מה שמפעיל את הבוט בפועל.')
+                    ->description('התשלום החודשי על השירות. המסלול חייב להיות מסומן כ"כולל בוט ניהול אתר" — זה מה שמפעיל את הבוט בפועל.')
                     ->schema([
                         Select::make('plan_id')
                             ->label('מסלול')
@@ -112,7 +112,7 @@ class ActivateSiteAgent extends Page implements HasForms
                             ->required()
                             ->live()
                             ->helperText(fn (): ?string => $this->agentPlans() === []
-                                ? 'אין מסלול שמסומן כ"כולל סוכן ניהול אתר". צרו אותו במסך המסלולים ואז חזרו לכאן.'
+                                ? 'אין מסלול שמסומן כ"כולל בוט ניהול אתר". צרו אותו במסך המסלולים ואז חזרו לכאן.'
                                 : null),
                         TextInput::make('price_override')
                             ->label('מחיר מיוחד (₪, אופציונלי)')
@@ -198,11 +198,11 @@ class ActivateSiteAgent extends Page implements HasForms
         $live = app(SiteAgentBilling::class)->subscriptionFor($customer);
 
         if (in_array($live?->status, SiteAgentAccess::ENTITLING, true)) {
-            return $customer->name.' — כבר יש מנוי פעיל לסוכן. המספר החדש יצורף אליו, בלי לפתוח מנוי שני.';
+            return $customer->name.' — כבר יש מנוי פעיל לבוט. המספר החדש יצורף אליו, בלי לפתוח מנוי שני.';
         }
 
         if (in_array($live?->status, [SubscriptionStatus::PastDue, SubscriptionStatus::Suspended], true)) {
-            return $customer->name.' — יש מנוי קיים לסוכן בפיגור תשלום. המספר יצורף אליו; '
+            return $customer->name.' — יש מנוי קיים לבוט בפיגור תשלום. המספר יצורף אליו; '
                 .'הבוט יענה רק אחרי שהחוב יוסדר.';
         }
 
@@ -269,7 +269,7 @@ class ActivateSiteAgent extends Page implements HasForms
 
         if ($plan === null || ! $plan->includes_site_agent || ! $plan->active) {
             Notification::make()->title('המסלול אינו כולל את בוט ניהול האתר')
-                ->body('רק מסלול פעיל שמסומן "כולל סוכן ניהול אתר" מפעיל את השירות.')
+                ->body('רק מסלול פעיל שמסומן "כולל בוט ניהול אתר" מפעיל את השירות.')
                 ->danger()->send();
 
             return;
@@ -344,7 +344,7 @@ class ActivateSiteAgent extends Page implements HasForms
         Notification::make()
             ->title($reuse ? 'המספר צורף למנוי הקיים' : 'המנוי נפתח והבוט מוכן')
             ->body(implode(' ', array_filter([
-                $reuse ? 'ללקוח כבר יש מנוי לסוכן, ולכן לא נפתח מנוי נוסף.' : null,
+                $reuse ? 'ללקוח כבר יש מנוי לבוט, ולכן לא נפתח מנוי נוסף.' : null,
                 // Said out loud rather than left to be discovered: the number is
                 // bound, and the agent will still refuse it until the arrears
                 // are settled.

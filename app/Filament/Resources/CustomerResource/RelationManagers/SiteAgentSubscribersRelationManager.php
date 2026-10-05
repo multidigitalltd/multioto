@@ -64,6 +64,6 @@ class SiteAgentSubscribersRelationManager extends RelationManager
             // The site is what varies on this screen; the customer never does.
             ->heading('מספרים שמנהלים את האתרים של הלקוח')
             ->emptyStateHeading('אין מספרים מחוברים')
-            ->emptyStateDescription('הלקוח אינו משתמש בסוכן הוואטסאפ לניהול האתר.');
+            ->emptyStateDescription('הלקוח אינו משתמש בבוט ניהול האתר.');
     }
 }

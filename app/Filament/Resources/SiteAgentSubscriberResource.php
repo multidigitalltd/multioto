@@ -37,7 +37,7 @@ class SiteAgentSubscriberResource extends Resource
 
     protected static ?string $navigationLabel = 'בוט ניהול אתר';
 
-    protected static ?string $modelLabel = 'מנוי סוכן';
+    protected static ?string $modelLabel = 'מנוי בוט';
 
     protected static ?string $pluralModelLabel = 'מנויי בוט ניהול האתר';
 
@@ -62,7 +62,7 @@ class SiteAgentSubscriberResource extends Resource
                             ->all())
                         ->searchable()
                         ->required()
-                        ->helperText('רק אתרים מחוברים לתוסף. בלי חיבור אין לסוכן ידיים.')
+                        ->helperText('רק אתרים מחוברים לתוסף. בלי חיבור אין לבוט ידיים.')
                         // The customer is the site's, never chosen separately:
                         // two dropdowns would let somebody bind a number to
                         // customer A and site B, and the entitlement check would

@@ -64,8 +64,8 @@ class PlanResource extends Resource
                         // a second one at another price, must never quietly
                         // switch a paying customer off.
                         Forms\Components\Toggle::make('includes_site_agent')
-                            ->label('כולל סוכן ניהול אתר בוואטסאפ')
-                            ->helperText('לקוח עם מנוי פעיל בתוכנית הזו יכול לנהל את האתר שלו מהסוכן. בלי זה — הסוכן משיב שהמנוי אינו פעיל.')
+                            ->label('כולל בוט ניהול אתר בוואטסאפ')
+                            ->helperText('לקוח עם מנוי פעיל בתוכנית הזו יכול לנהל את האתר שלו מהבוט. בלי זה — הבוט משיב שהמנוי אינו פעיל.')
                             ->inline(false)
                             ->live(),
 
