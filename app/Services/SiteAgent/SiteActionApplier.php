@@ -5,6 +5,9 @@ namespace App\Services\SiteAgent;
 use App\Models\Site;
 use App\Models\SiteAgentRequest;
 use App\Services\Agent\McpClient;
+use App\Services\Agent\SiteChangeJournal;
+use App\Services\Notifications\TeamNotifier;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 
 /**
@@ -28,7 +31,14 @@ use Illuminate\Support\Str;
  */
 class SiteActionApplier
 {
-    public function __construct(private McpClient $mcp) {}
+    /** Plugin and theme downloads can be slow. */
+    private const UPDATE_TIMEOUT_SECONDS = 120;
+
+    public function __construct(
+        private McpClient $mcp,
+        private SiteChangeJournal $journal,
+        private TeamNotifier $team,
+    ) {}
 
     /**
      * @return array{ok: bool, reason: string|null, message: string|null, restore: array<string, mixed>|null, done?: string}
@@ -48,6 +58,20 @@ class SiteActionApplier
                 SiteAgentRequest::OP_USER_ROLE => $this->userRole($site, $plan),
                 SiteAgentRequest::OP_COUPON => $this->coupon($site, $plan),
                 SiteAgentRequest::OP_PRODUCT_CREATE => $this->productCreate($site, $plan),
+                SiteAgentRequest::OP_COMMENT => $this->comment($site, $plan),
+                SiteAgentRequest::OP_TERM_CREATE => $this->termCreate($site, $plan),
+                SiteAgentRequest::OP_POST_TERMS => $this->postTerms($site, $plan),
+                SiteAgentRequest::OP_FIELDS => $this->fields($site, $plan),
+                SiteAgentRequest::OP_MENU_ADD => $this->menuAdd($site, $plan),
+                SiteAgentRequest::OP_MENU_UPDATE => $this->menuUpdate($site, $plan),
+                SiteAgentRequest::OP_MENU_REMOVE => $this->menuRemove($site, $plan),
+                SiteAgentRequest::OP_TRASH => $this->trash($site, $plan),
+                SiteAgentRequest::OP_COUPON_EXPIRE => $this->couponExpire($site, $plan),
+                SiteAgentRequest::OP_CACHE_FLUSH => $this->cacheFlush($site),
+                SiteAgentRequest::OP_PLUGIN_UPDATE => $this->pluginUpdate($site, $plan),
+                SiteAgentRequest::OP_THEME_UPDATE => $this->themeUpdate($site, $plan),
+                SiteAgentRequest::OP_PLUGIN_TOGGLE => $this->pluginToggle($site, $plan),
+                SiteAgentRequest::OP_MEDIA_DELETE => $this->mediaDelete($site, $plan),
                 default => $this->refuse('פעולה לא מוכרת.'),
             };
         } catch (\Throwable $e) {
@@ -58,7 +82,8 @@ class SiteActionApplier
     /** Does a `restore` of this kind belong here? */
     public function reverts(string $kind): bool
     {
-        return in_array($kind, ['order_status', 'subscription_status', 'created_post', 'post', 'user_role', 'coupon'], true);
+        return in_array($kind, ['order_status', 'subscription_status', 'created_post', 'post', 'user_role', 'coupon',
+            'comment', 'post_terms', 'fields', 'menu_added', 'menu_item', 'trashed', 'plugin_toggle'], true);
     }
 
     /**
@@ -75,6 +100,13 @@ class SiteActionApplier
                 'post' => $this->revertPost($site, $restore),
                 'user_role' => $this->revertUserRole($site, $restore),
                 'coupon' => $this->revertCoupon($site, $restore),
+                'comment' => $this->revertComment($site, $restore),
+                'post_terms' => $this->revertPostTerms($site, $restore),
+                'fields' => $this->revertFields($site, $restore),
+                'menu_added' => $this->revertMenuAdd($site, $restore),
+                'menu_item' => $this->revertMenuUpdate($site, $restore),
+                'trashed' => $this->revertTrash($site, $restore),
+                'plugin_toggle' => $this->revertPluginToggle($site, $restore),
                 default => $this->refuse('אין לי גיבוי לשחזור הבקשה הזו.'),
             };
         } catch (\Throwable $e) {
@@ -369,11 +401,471 @@ class SiteActionApplier
         $created = $this->call($site, 'wc_product_create', (array) $plan['fields']);
         $id = (int) ($created['id'] ?? 0);
 
-        // No undo: a draft is invisible to shoppers, and there is no tool that
-        // deletes a product — which is the right way round for a phone.
-        return $this->ok(null, $id > 0
-            ? "המוצר נוצר כטיוטה (מזהה {$id}). כשתרצו לפרסם אותו — כתבו לי."
-            : null);
+        if ($id <= 0) {
+            return $this->failure('product create returned no id');
+        }
+
+        $missing = $this->completeNewProduct($site, $id, (array) ($plan['extra'] ?? []), (array) ($plan['category_ids'] ?? []));
+        $live = ($plan['extra']['status'] ?? null) === 'publish' && ! in_array('הפרסום', $missing, true);
+
+        // No undo: there is no tool that deletes a product — which is the right
+        // way round for a phone. Unpublishing is an ordinary product update.
+        return $this->ok(null, implode("\n", array_filter([
+            $live
+                ? "המוצר נוצר ופורסם באתר (מזהה {$id})."
+                : "המוצר נוצר כטיוטה (מזהה {$id}). כשתרצו לפרסם אותו — כתבו לי.",
+            $missing !== []
+                ? 'לא הושלמו: '.implode(', ', $missing).'. המוצר קיים, ואפשר לבקש את זה שוב.'
+                : null,
+            'לתמונה למוצר — שלחו אותה כאן עם שם המוצר.',
+        ])));
+    }
+
+    /**
+     * Sale price, stock, publishing and categories on a product just created.
+     *
+     * The product already exists by now, so a failure here is reported as what
+     * did not happen rather than as a failed request: calling the whole thing a
+     * failure would invite a second "כן" and a second, duplicate product.
+     *
+     * @param  array<string, mixed>  $extra
+     * @param  list<int>  $categoryIds
+     * @return list<string> what could not be completed, in the owner's words
+     */
+    private function completeNewProduct(Site $site, int $id, array $extra, array $categoryIds): array
+    {
+        $missing = [];
+
+        if ($categoryIds !== []) {
+            try {
+                $this->call($site, 'wp_post_terms_set', [
+                    'id' => $id, 'taxonomy' => 'product_cat', 'term_ids' => array_map('intval', $categoryIds), 'mode' => 'replace',
+                ]);
+            } catch (\Throwable) {
+                $missing[] = 'הקטגוריות';
+            }
+        }
+
+        // Categories first: a product published before it is filed shows up
+        // under "Uncategorized" for as long as the next call takes.
+        if ($extra !== []) {
+            try {
+                $this->call($site, 'wc_product_update', ['product_id' => $id, ...$extra]);
+            } catch (\Throwable) {
+                $missing = [...$missing, ...array_values(array_filter([
+                    isset($extra['sale_price']) ? 'מחיר המבצע' : null,
+                    isset($extra['stock_quantity']) ? 'המלאי' : null,
+                    isset($extra['status']) ? 'הפרסום' : null,
+                ]))];
+            }
+        }
+
+        return $missing;
+    }
+
+    // --- Comments, categories, fields ---------------------------------------
+
+    /** @param array<string, mixed> $plan */
+    private function comment(Site $site, array $plan): array
+    {
+        $id = (int) $plan['comment_id'];
+
+        if ($this->commentStatus($site, $id) !== (string) $plan['from']) {
+            return $this->refuse(SiteChangeApplier::STALE);
+        }
+
+        $result = $this->call($site, 'wp_comment_moderate', ['comment_id' => $id, 'status' => (string) $plan['to']]);
+        $previous = (string) data_get($result, 'previous.status', '');
+
+        return $this->ok($previous !== '' ? [
+            'kind' => 'comment',
+            'comment_id' => $id,
+            'status' => $previous,
+            'after' => (string) $plan['to'],
+        ] : null);
+    }
+
+    /** @param array<string, mixed> $restore */
+    private function revertComment(Site $site, array $restore): array
+    {
+        $id = (int) $restore['comment_id'];
+
+        if ($this->commentStatus($site, $id) !== (string) $restore['after']) {
+            return $this->refuse(SiteChangeApplier::STALE);
+        }
+
+        $this->call($site, 'wp_comment_moderate', ['comment_id' => $id, 'status' => (string) $restore['status']]);
+
+        return $this->ok(null);
+    }
+
+    /** @param array<string, mixed> $plan */
+    private function termCreate(Site $site, array $plan): array
+    {
+        $created = $this->call($site, 'wp_term_create', (array) $plan['fields']);
+
+        return $this->ok(null, isset($created['created_id']) ? "נוצרה (מזהה {$created['created_id']})." : null);
+    }
+
+    /** @param array<string, mixed> $plan */
+    private function postTerms(Site $site, array $plan): array
+    {
+        $id = (int) $plan['id'];
+        $taxonomy = (string) $plan['taxonomy'];
+
+        if (! $this->sameIds($this->termIds($site, $id, $taxonomy), (array) ($plan['current_ids'] ?? []))) {
+            return $this->refuse(SiteChangeApplier::STALE);
+        }
+
+        $result = $this->call($site, 'wp_post_terms_set', [
+            'id' => $id, 'taxonomy' => $taxonomy, 'terms' => (array) $plan['terms'], 'mode' => (string) $plan['mode'],
+        ]);
+
+        return $this->ok(isset($result['previous']['term_ids'], $result['term_ids']) ? [
+            'kind' => 'post_terms',
+            'id' => $id,
+            'taxonomy' => $taxonomy,
+            'term_ids' => array_map('intval', (array) $result['previous']['term_ids']),
+            'after' => array_map('intval', (array) $result['term_ids']),
+        ] : null);
+    }
+
+    /** @param array<string, mixed> $restore */
+    private function revertPostTerms(Site $site, array $restore): array
+    {
+        $id = (int) $restore['id'];
+        $taxonomy = (string) $restore['taxonomy'];
+
+        if (! $this->sameIds($this->termIds($site, $id, $taxonomy), (array) $restore['after'])) {
+            return $this->refuse(SiteChangeApplier::STALE);
+        }
+
+        $this->call($site, 'wp_post_terms_set', [
+            'id' => $id, 'taxonomy' => $taxonomy, 'term_ids' => (array) $restore['term_ids'], 'mode' => 'replace',
+        ]);
+
+        return $this->ok(null);
+    }
+
+    /** @param array<string, mixed> $plan */
+    private function fields(Site $site, array $plan): array
+    {
+        $id = (int) $plan['id'];
+        $fields = (array) $plan['fields'];
+
+        if (! $this->sameFields($this->fieldValues($site, $id, array_keys($fields)), (array) ($plan['current'] ?? []))) {
+            return $this->refuse(SiteChangeApplier::STALE);
+        }
+
+        $result = $this->call($site, 'wp_fields_update', ['id' => $id, 'fields' => $fields]);
+        $previous = (array) ($result['previous'] ?? []);
+
+        // A structured value (a list, an object) cannot be put back from here
+        // without flattening it, so a change that replaced one keeps no undo
+        // rather than an undo that would empty the field.
+        $restorable = $previous !== [] && array_filter($previous, fn ($value): bool => $value !== null && ! is_scalar($value)) === [];
+
+        return $this->ok($restorable ? [
+            'kind' => 'fields',
+            'id' => $id,
+            // An empty previous value is restored as empty, never skipped.
+            'fields' => array_map(fn ($value): string => (string) $value, $previous),
+            'after' => $this->fieldValues($site, $id, array_keys($fields)),
+        ] : null);
+    }
+
+    /** @param array<string, mixed> $restore */
+    private function revertFields(Site $site, array $restore): array
+    {
+        $id = (int) $restore['id'];
+        $after = (array) $restore['after'];
+
+        if (! $this->sameFields($this->fieldValues($site, $id, array_keys($after)), $after)) {
+            return $this->refuse(SiteChangeApplier::STALE);
+        }
+
+        $this->call($site, 'wp_fields_update', ['id' => $id, 'fields' => (array) $restore['fields']]);
+
+        return $this->ok(null);
+    }
+
+    // --- Menus ---------------------------------------------------------------
+
+    /** @param array<string, mixed> $plan */
+    private function menuAdd(Site $site, array $plan): array
+    {
+        $added = (int) ($this->call($site, 'wp_menu_item_add', (array) $plan['fields'])['added_item_id'] ?? 0);
+        $after = $added > 0 ? $this->menuItem($site, $added) : null;
+
+        // The undo removes it only while it is still the item we added.
+        return $this->ok($after !== null ? ['kind' => 'menu_added', 'item_id' => $added, 'after' => $after] : null);
+    }
+
+    /** @param array<string, mixed> $restore */
+    private function revertMenuAdd(Site $site, array $restore): array
+    {
+        $itemId = (int) $restore['item_id'];
+
+        $live = $this->menuItem($site, $itemId);
+
+        if ($live === null) {
+            return $this->refuse('הפריט כבר אינו בתפריט.');
+        }
+
+        if (! $this->sameFields($live, (array) ($restore['after'] ?? []))) {
+            return $this->refuse(SiteChangeApplier::STALE);
+        }
+
+        $this->call($site, 'wp_menu_item_unlink', ['item_id' => $itemId]);
+
+        return $this->ok(null);
+    }
+
+    /** @param array<string, mixed> $plan */
+    private function menuUpdate(Site $site, array $plan): array
+    {
+        $itemId = (int) $plan['item_id'];
+        $live = $this->menuItem($site, $itemId);
+
+        if ($live === null || ! $this->sameFields($live, (array) ($plan['current'] ?? []))) {
+            return $this->refuse(SiteChangeApplier::STALE);
+        }
+
+        $this->call($site, 'wp_menu_item_update', ['item_id' => $itemId, ...(array) $plan['fields']]);
+
+        return $this->ok([
+            'kind' => 'menu_item',
+            'item_id' => $itemId,
+            'fields' => (array) $plan['current'],
+            'after' => array_intersect_key((array) $this->menuItem($site, $itemId), (array) $plan['fields']),
+        ]);
+    }
+
+    /** @param array<string, mixed> $restore */
+    private function revertMenuUpdate(Site $site, array $restore): array
+    {
+        $itemId = (int) $restore['item_id'];
+        $live = $this->menuItem($site, $itemId);
+
+        if ($live === null || ! $this->sameFields($live, (array) $restore['after'])) {
+            return $this->refuse(SiteChangeApplier::STALE);
+        }
+
+        $this->call($site, 'wp_menu_item_update', ['item_id' => $itemId, ...(array) $restore['fields']]);
+
+        return $this->ok(null);
+    }
+
+    /** @param array<string, mixed> $plan */
+    private function menuRemove(Site $site, array $plan): array
+    {
+        $live = $this->menuItem($site, (int) $plan['item_id']);
+
+        if ($live === null || ! $this->sameFields($live, (array) ($plan['current'] ?? []))) {
+            return $this->refuse(SiteChangeApplier::STALE);
+        }
+
+        $this->call($site, 'wp_menu_item_unlink', ['item_id' => (int) $plan['item_id']]);
+
+        return $this->ok(null);
+    }
+
+    // --- Trash, coupons, cache -----------------------------------------------
+
+    /** @param array<string, mixed> $plan */
+    private function trash(Site $site, array $plan): array
+    {
+        $id = (int) $plan['id'];
+        $live = $this->post($site, $id);
+
+        if ($live === null || $live['status'] !== (string) $plan['status']) {
+            return $this->refuse(SiteChangeApplier::STALE);
+        }
+
+        $this->call($site, 'wp_content_trash', ['id' => $id]);
+        SiteChangePlanner::forget($site);
+
+        return $this->ok(($plan['restorable'] ?? false) === true ? ['kind' => 'trashed', 'id' => $id] : null);
+    }
+
+    /** @param array<string, mixed> $restore */
+    private function revertTrash(Site $site, array $restore): array
+    {
+        $this->call($site, 'wp_content_restore', ['id' => (int) $restore['id']]);
+        SiteChangePlanner::forget($site);
+
+        return $this->ok(null);
+    }
+
+    /** @param array<string, mixed> $plan */
+    private function couponExpire(Site $site, array $plan): array
+    {
+        $code = (string) $plan['code'];
+        $coupon = collect($this->call($site, 'wc_coupon_list', ['limit' => 100]))
+            ->first(fn ($item): bool => is_array($item) && mb_strtolower((string) ($item['code'] ?? '')) === $code);
+
+        if ($coupon === null || (string) ($coupon['expires'] ?? '') !== (string) ($plan['expires'] ?? '')) {
+            return $this->refuse(SiteChangeApplier::STALE);
+        }
+
+        $this->call($site, 'wc_coupon_expire', ['code' => $code]);
+
+        return $this->ok(null);
+    }
+
+    private function cacheFlush(Site $site): array
+    {
+        $this->call($site, 'wp_cache_flush', []);
+
+        return $this->ok(null);
+    }
+
+    // --- Plugins, themes, media ---------------------------------------------
+
+    /**
+     * Update plugins one at a time, the way the team's maintenance does: the
+     * homepage must still answer after EVERY update, and the first one that
+     * breaks it stops the run — one bad plugin must not be buried under four
+     * more updates — and the team hears about it at once.
+     *
+     * @param  array<string, mixed>  $plan
+     */
+    private function pluginUpdate(Site $site, array $plan): array
+    {
+        $done = [];
+
+        foreach ((array) $plan['plugins'] as $plugin) {
+            $name = (string) $plugin['name'];
+
+            $this->mcp->callTool($site, 'wp_plugin_update', ['plugin' => (string) $plugin['file']], self::UPDATE_TIMEOUT_SECONDS);
+            $this->journal->record($site, "בוט ניהול האתר — עודכן {$name}", 'wp_plugin_update', ['plugin' => (string) $plugin['file']],
+                beforeState: 'גרסה קודמת: '.(string) ($plugin['version'] ?? '?'), initiatedBy: 'site_agent');
+            $done[] = $name;
+
+            if (! $this->healthy($site)) {
+                return $this->broken($site, "אחרי עדכון התוסף {$name}", $done);
+            }
+        }
+
+        return $this->ok(null, 'עודכנו: '.implode(', ', $done).'. האתר נבדק אחרי כל עדכון ועולה כרגיל.');
+    }
+
+    /** @param array<string, mixed> $plan */
+    private function themeUpdate(Site $site, array $plan): array
+    {
+        $name = (string) $plan['name'];
+
+        $this->mcp->callTool($site, 'wp_theme_update', ['stylesheet' => (string) $plan['stylesheet']], self::UPDATE_TIMEOUT_SECONDS);
+        $this->journal->record($site, "בוט ניהול האתר — עודכנה התבנית {$name}", 'wp_theme_update',
+            ['stylesheet' => (string) $plan['stylesheet']], initiatedBy: 'site_agent');
+
+        if (! $this->healthy($site)) {
+            return $this->broken($site, "אחרי עדכון התבנית {$name}", [$name]);
+        }
+
+        return $this->ok(null, 'האתר נבדק אחרי העדכון ועולה כרגיל.');
+    }
+
+    /**
+     * Switch a plugin — and switch it straight back if the site stops
+     * answering. Unlike an update, a toggle can be undone on the spot, so
+     * there is no reason to leave a broken site waiting for anybody.
+     *
+     * @param  array<string, mixed>  $plan
+     */
+    private function pluginToggle(Site $site, array $plan): array
+    {
+        $file = (string) $plan['plugin'];
+        $to = (bool) $plan['to'];
+
+        if ($this->pluginActive($site, $file) !== (bool) $plan['from']) {
+            return $this->refuse(SiteChangeApplier::STALE);
+        }
+
+        $this->switchPlugin($site, $file, $to);
+        $this->journal->record($site, 'בוט ניהול האתר — '.($to ? 'הופעל' : 'כובה').' '.$plan['name'],
+            $to ? 'wp_plugin_activate' : 'wp_plugin_deactivate', ['plugin' => $file], initiatedBy: 'site_agent');
+
+        if (! $this->healthy($site)) {
+            $this->switchPlugin($site, $file, ! $to);
+            $this->team->alert(
+                "⚠️ {$site->domain}: שינוי תוסף מהבוט הוחזר",
+                'בעל האתר '.($to ? 'הפעיל' : 'כיבה')." את {$plan['name']} מהוואטסאפ, ודף הבית הפסיק לענות. השינוי הוחזר מיד — כדאי לוודא שהאתר תקין.",
+                rtrim((string) config('app.url'), '/')."/admin/sites/{$site->id}",
+            );
+
+            return $this->refuse('האתר הפסיק לענות אחרי השינוי, ולכן החזרתי אותו מיד. הצוות שלנו קיבל התראה ויבדוק.');
+        }
+
+        return $this->ok(['kind' => 'plugin_toggle', 'plugin' => $file, 'active' => ! $to, 'after' => $to]);
+    }
+
+    /** @param array<string, mixed> $restore */
+    private function revertPluginToggle(Site $site, array $restore): array
+    {
+        $file = (string) $restore['plugin'];
+
+        if ($this->pluginActive($site, $file) !== (bool) $restore['after']) {
+            return $this->refuse(SiteChangeApplier::STALE);
+        }
+
+        $this->switchPlugin($site, $file, (bool) $restore['active']);
+
+        return $this->ok(null);
+    }
+
+    /** @param array<string, mixed> $plan */
+    private function mediaDelete(Site $site, array $plan): array
+    {
+        // The plugin itself refuses a file that is a featured image somewhere.
+        $this->call($site, 'wp_media_delete', ['attachment_id' => (int) $plan['attachment_id']]);
+
+        return $this->ok(null);
+    }
+
+    private function switchPlugin(Site $site, string $file, bool $active): void
+    {
+        $this->mcp->callTool($site, $active ? 'wp_plugin_activate' : 'wp_plugin_deactivate', ['plugin' => $file], 60);
+    }
+
+    private function pluginActive(Site $site, string $file): ?bool
+    {
+        foreach ((array) $this->call($site, 'wp_plugin_list', []) as $plugin) {
+            if (is_array($plugin) && (string) ($plugin['plugin'] ?? '') === $file) {
+                return (bool) ($plugin['active'] ?? false);
+            }
+        }
+
+        return null;
+    }
+
+    /** Is the homepage still answering? The same test the weekly maintenance uses. */
+    private function healthy(Site $site): bool
+    {
+        try {
+            return Http::timeout((int) config('billing.monitoring.timeout_seconds', 10))
+                ->get($site->homepageUrl())
+                ->successful();
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    /**
+     * An update left the site not answering: stop, tell the team now, and tell
+     * the owner the truth.
+     *
+     * @param  list<string>  $done
+     */
+    private function broken(Site $site, string $after, array $done): array
+    {
+        $this->team->alert(
+            "🚨 {$site->domain} הפסיק לענות — עדכון מהבוט",
+            "{$after} שבוצע מהוואטסאפ, דף הבית של {$site->domain} הפסיק לענות תקין. העדכונים נעצרו (עודכנו: ".implode(', ', $done).'). ייתכן שנדרש שחזור.',
+            rtrim((string) config('app.url'), '/')."/admin/sites/{$site->id}",
+        );
+
+        return $this->refuse("האתר הפסיק לענות {$after}. עצרתי את העדכונים, והצוות שלנו קיבל התראה ומטפל בזה עכשיו.");
     }
 
     // --- Helpers -------------------------------------------------------------
@@ -449,6 +941,78 @@ class SiteActionApplier
         }
 
         return true;
+    }
+
+    private function commentStatus(Site $site, int $id): ?string
+    {
+        foreach ((array) ($this->call($site, 'wp_comment_list', ['status' => 'all', 'id' => $id, 'limit' => 50])['comments'] ?? []) as $comment) {
+            if ((int) ($comment['id'] ?? 0) === $id) {
+                return (string) ($comment['status'] ?? '');
+            }
+        }
+
+        return null;
+    }
+
+    /** @return list<int>|null */
+    private function termIds(Site $site, int $id, string $taxonomy): ?array
+    {
+        $terms = $this->call($site, 'wp_post_terms_get', ['id' => $id, 'taxonomy' => $taxonomy]);
+
+        return isset($terms['term_ids']) ? array_map('intval', (array) $terms['term_ids']) : null;
+    }
+
+    /** The same set of ids, whatever order the site lists them in. */
+    private function sameIds(?array $live, array $expected): bool
+    {
+        if ($live === null) {
+            return false;
+        }
+
+        $expected = array_map('intval', $expected);
+        sort($live);
+        sort($expected);
+
+        return $live === $expected;
+    }
+
+    /**
+     * @param  list<string>  $keys
+     * @return array<string, string>
+     */
+    private function fieldValues(Site $site, int $id, array $keys): array
+    {
+        $values = $this->call($site, 'wp_fields_get', ['id' => $id]);
+        $values = (array) ($values['fields'] ?? $values);
+        $out = [];
+
+        foreach ($keys as $key) {
+            $value = $values[$key] ?? '';
+            // A structured value is compared as itself, never as "": a field
+            // that became a list since the preview must not read as unchanged.
+            $out[$key] = is_scalar($value) ? (string) $value : (string) json_encode($value);
+        }
+
+        return $out;
+    }
+
+    /** @return array{title: string, url: string, parent_id: string, order: string}|null */
+    private function menuItem(Site $site, int $itemId): ?array
+    {
+        foreach ((array) $this->call($site, 'wp_menu_list', []) as $menu) {
+            foreach ((array) ($menu['items'] ?? []) as $item) {
+                if ((int) ($item['item_id'] ?? 0) === $itemId) {
+                    return [
+                        'title' => (string) ($item['title'] ?? ''),
+                        'url' => (string) ($item['url'] ?? ''),
+                        'parent_id' => (string) ($item['parent_id'] ?? '0'),
+                        'order' => (string) ($item['order'] ?? '0'),
+                    ];
+                }
+            }
+        }
+
+        return null;
     }
 
     private function orderLabel(string $status): string

@@ -156,6 +156,43 @@ class Multioto_Agent_Terms
      *
      * @param  array<string, mixed>  $args
      */
+    /**
+     * The terms one item carries in one taxonomy, right now.
+     *
+     * The other half of setPostTerms(): an undo that restores the previous set
+     * has to be able to see first whether anybody re-categorised the item
+     * since — otherwise it puts back yesterday's categories over today's.
+     *
+     * @param  array<string, mixed>  $args
+     */
+    public static function postTerms(array $args): string
+    {
+        $taxonomy = self::taxonomy($args);
+        $postId = (int) ($args['id'] ?? 0);
+        $post = $postId > 0 ? get_post($postId) : null;
+
+        if (! $post instanceof WP_Post) {
+            throw new Multioto_Agent_Rpc_Error(-32602, "פריט תוכן #{$postId} לא נמצא.");
+        }
+
+        $terms = wp_get_object_terms($postId, $taxonomy);
+
+        if (is_wp_error($terms)) {
+            throw new Multioto_Agent_Rpc_Error(-32000, $terms->get_error_message());
+        }
+
+        return wp_json_encode([
+            'id' => $postId,
+            'taxonomy' => $taxonomy,
+            'term_ids' => array_map(static function ($term): int {
+                return (int) $term->term_id;
+            }, $terms),
+            'terms' => array_map(static function ($term): string {
+                return (string) $term->name;
+            }, $terms),
+        ], JSON_UNESCAPED_UNICODE);
+    }
+
     public static function setPostTerms(array $args): string
     {
         $taxonomy = self::taxonomy($args);

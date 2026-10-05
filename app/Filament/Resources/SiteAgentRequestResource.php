@@ -80,6 +80,20 @@ class SiteAgentRequestResource extends Resource
         SiteAgentRequest::OP_USER_CREATE => 'משתמש חדש',
         SiteAgentRequest::OP_USER_ROLE => 'שינוי תפקיד',
         SiteAgentRequest::OP_COUPON => 'קופון חדש',
+        SiteAgentRequest::OP_COMMENT => 'טיפול בתגובה',
+        SiteAgentRequest::OP_TERM_CREATE => 'קטגוריה חדשה',
+        SiteAgentRequest::OP_POST_TERMS => 'שיוך לקטגוריות',
+        SiteAgentRequest::OP_FIELDS => 'שדות מותאמים',
+        SiteAgentRequest::OP_MENU_ADD => 'פריט תפריט חדש',
+        SiteAgentRequest::OP_MENU_UPDATE => 'עדכון פריט תפריט',
+        SiteAgentRequest::OP_MENU_REMOVE => 'הסרה מתפריט',
+        SiteAgentRequest::OP_TRASH => 'העברה לפח',
+        SiteAgentRequest::OP_COUPON_EXPIRE => 'סיום קופון',
+        SiteAgentRequest::OP_CACHE_FLUSH => 'ניקוי מטמון',
+        SiteAgentRequest::OP_PLUGIN_UPDATE => 'עדכון תוספים',
+        SiteAgentRequest::OP_THEME_UPDATE => 'עדכון תבנית',
+        SiteAgentRequest::OP_PLUGIN_TOGGLE => 'הפעלה/כיבוי תוסף',
+        SiteAgentRequest::OP_MEDIA_DELETE => 'מחיקת קובץ מדיה',
     ];
 
     private const STATES = [

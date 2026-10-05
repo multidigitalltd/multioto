@@ -8,6 +8,7 @@ use App\Models\WebhookEvent;
 use App\Services\SiteAgent\SiteAgentAccess;
 use App\Services\SiteAgent\SiteAgentBilling;
 use App\Services\SiteAgent\SiteAgentConversation;
+use App\Services\SiteAgent\SiteAgentPitch;
 use App\Services\SiteAgent\SiteAgentUsageMeter;
 use App\Services\SiteAgent\SiteChoice;
 use App\Services\SiteAgent\WhatsAppCloudClient;
@@ -156,7 +157,7 @@ class HandleSiteAgentMessageJob implements ShouldQueue
                     $mediaId !== '' ? $mediaId : null,
                 );
         } else {
-            $reply = $this->answerFor($decision['status'], $subscriber);
+            $reply = $this->answerFor($decision['status'], $subscriber, $from);
         }
 
         $delivered = $reply !== '' ? $whatsapp->sendText($from, $reply) : null;
@@ -358,7 +359,7 @@ class HandleSiteAgentMessageJob implements ShouldQueue
      * nothing back, concludes the business is broken — and they are not wrong
      * to.
      */
-    private function answerFor(string $status, ?SiteAgentSubscriber $subscriber): string
+    private function answerFor(string $status, ?SiteAgentSubscriber $subscriber, string $from): string
     {
         $support = (string) config('billing.email.support_address');
         $contact = $support !== '' ? "\nלכל שאלה: {$support}" : '';
@@ -380,10 +381,12 @@ class HandleSiteAgentMessageJob implements ShouldQueue
             SiteAgentAccess::SITE_DISCONNECTED => 'המנוי פעיל, אבל אין כרגע חיבור לאתר ולכן איני יכול לפעול בו. '
                 .'הצוות שלנו קיבל התראה ויטפל.'.$contact,
 
-            // An unknown number and a switched-off product get the same answer
-            // on purpose: neither tells a stranger whether a given number is
-            // registered here, which is not theirs to learn by probing.
-            default => 'המספר הזה אינו רשום לשירות ניהול האתר.'.$contact,
+            // Somebody who found the bot's number and is not a customer yet:
+            // what it does and where to join. Every registered number got its
+            // own answer above, so this tells a stranger nothing about anyone.
+            SiteAgentAccess::UNKNOWN_NUMBER => app(SiteAgentPitch::class)->message($from),
+
+            default => 'שירות ניהול האתר אינו פעיל כרגע.'.$contact,
         };
     }
 }

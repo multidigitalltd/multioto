@@ -467,6 +467,85 @@ class SiteAgentAssistantTest extends TestCase
         $this->assertNotContains('wp_content_trash', array_column($this->calls, 0));
     }
 
+    public function test_a_new_product_is_created_filed_and_published_on_one_yes(): void
+    {
+        $subscriber = $this->subscriber();
+        $this->site['wp_term_list'] = ['terms' => [['id' => 12, 'name' => 'חולצות'], ['id' => 13, 'name' => 'חולצות ילדים']]];
+        $this->site['wc_product_create'] = ['id' => 90, 'status' => 'draft'];
+
+        $this->model(function (Closure $tool): string {
+            $tool('propose_product_create', [
+                'name' => 'חולצת פשתן', 'regular_price' => '120', 'sale_price' => '99.90',
+                'stock_quantity' => 5, 'categories' => ['חולצות'], 'publish' => true,
+            ]);
+
+            return '';
+        });
+
+        $preview = $this->talk($subscriber, 'תעלה מוצר חדש חולצת פשתן');
+
+        $this->assertStringContainsString('🛒 מוצר חדש: חולצת פשתן', $preview);
+        $this->assertStringContainsString('מחיר מבצע: 99.90', $preview);
+        $this->assertStringContainsString('קטגוריות: חולצות', $preview);
+        $this->assertStringContainsString('יפורסם באתר מיד', $preview);
+
+        $this->calls = [];
+        $done = $this->talk($subscriber, 'כן');
+
+        $this->assertStringContainsString('נוצר ופורסם', $done);
+        $this->assertSame(['wc_product_create', 'wp_post_terms_set', 'wc_product_update'], array_column($this->calls, 0));
+        // Filed under the category the owner named, and only that one.
+        $this->assertSame([12], $this->calls[1][1]['term_ids']);
+        $this->assertSame('replace', $this->calls[1][1]['mode']);
+        $this->assertSame(['product_id' => 90, 'sale_price' => '99.90', 'stock_quantity' => 5, 'status' => 'publish'], $this->calls[2][1]);
+    }
+
+    public function test_a_new_product_is_not_published_without_a_price_or_filed_under_a_missing_category(): void
+    {
+        $subscriber = $this->subscriber();
+        $this->site['wp_term_list'] = ['terms' => [['id' => 13, 'name' => 'חולצות ילדים']]];
+
+        $this->model(function (Closure $tool): string {
+            $unpriced = $tool('propose_product_create', ['name' => 'כובע', 'publish' => true]);
+            $this->assertTrue($unpriced['is_error']);
+            $this->assertStringContainsString('צריך מחיר', $unpriced['content']);
+
+            $missing = $tool('propose_product_create', ['name' => 'כובע', 'regular_price' => '50', 'categories' => ['חולצות']]);
+            $this->assertTrue($missing['is_error']);
+            $this->assertStringContainsString('אין באתר קטגוריית מוצרים', $missing['content']);
+
+            $sale = $tool('propose_product_create', ['name' => 'כובע', 'regular_price' => '50', 'sale_price' => '50']);
+            $this->assertTrue($sale['is_error']);
+
+            return '';
+        });
+
+        $this->talk($subscriber, 'מוצר חדש');
+        $this->assertSame(0, SiteAgentRequest::count());
+    }
+
+    public function test_a_created_product_whose_follow_up_fails_is_reported_not_retried(): void
+    {
+        $subscriber = $this->subscriber();
+        $this->site['wc_product_create'] = ['id' => 91, 'status' => 'draft'];
+        $this->site['wc_product_update'] = fn () => throw new \RuntimeException('timeout');
+
+        $this->model(function (Closure $tool): string {
+            $tool('propose_product_create', ['name' => 'כובע', 'regular_price' => '50', 'publish' => true]);
+
+            return '';
+        });
+
+        $this->talk($subscriber, 'מוצר חדש');
+        $done = $this->talk($subscriber, 'כן');
+
+        // The product exists: calling the request failed would invite a second
+        // "כן" and a duplicate product.
+        $this->assertStringContainsString('נוצר כטיוטה', $done);
+        $this->assertStringContainsString('לא הושלמו: הפרסום', $done);
+        $this->assertSame(SiteAgentRequest::APPLIED, SiteAgentRequest::sole()->state);
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────
 
     /** @param array<string, mixed> $capabilities */
