@@ -161,6 +161,7 @@ class Multioto_Agent_Mcp_Server
             ['name' => 'wp_salts_rotate', 'description' => 'החלפת שמונת מפתחות ההצפנה (Secret Keys / Salts) ב-wp-config.php במפתחות אקראיים חדשים. התוצאה: כל המשתמשים באתר מנותקים ונדרשים להתחבר מחדש, וכל עוגיית התחברות ישנה מפסיקה להיות תקפה. אינו נוגע בסיסמאות, בתוכן או במסד הנתונים. מפתחות המוגדרים מחוץ ל-wp-config.php אינם מוחלפים והפעולה נכשלת במפורש.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => (object) []]],
             ['name' => 'wp_sessions_destroy', 'description' => 'ניתוק כל המשתמשים המחוברים לאתר: מחיקת אסימוני ההתחברות (session tokens) של כל המשתמשים, כך שכל דפדפן מחובר נדרש להתחבר מחדש. אינו נוגע בסיסמאות, בתוכן או בקבצים. משלים את wp_salts_rotate ופועל גם כששרת אינו מאפשר כתיבה ל-wp-config.php.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => (object) []]],
             ['name' => 'wp_plugin_update', 'description' => 'עדכון תוסף לגרסה האחרונה לפי slug.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['plugin' => ['type' => 'string']], 'required' => ['plugin']]],
+            ['name' => 'wp_theme_update', 'description' => 'עדכון תבנית מותקנת לגרסה שוורדפרס מציע לה, לפי stylesheet (מתוך wp_theme_list).', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['stylesheet' => ['type' => 'string']], 'required' => ['stylesheet']]],
             ['name' => 'wp_core_update', 'description' => 'עדכון ליבת וורדפרס (WordPress core) לגרסה היציבה האחרונה. מחזיר את הגרסה לפני ואחרי. אם כבר מעודכן — לא מבצע דבר. לפני העדכון נשמרת נקודת שחזור (הגרסה הקודמת) לצורך Rollback.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => (object) []]],
             ['name' => 'wp_core_rollback', 'description' => 'שחזור ליבת וורדפרס לגרסה שנשמרה בנקודת השחזור לפני העדכון האחרון (או לגרסה שצוינה ב-version). מתקין מחדש את קבצי הגרסה מ-wordpress.org. שים לב: שדרוג מסד הנתונים אינו הפיך — שחזור בטוח בעיקר לעדכוני תחזוקה (minor/patch).', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['version' => ['type' => 'string']]]],
             ['name' => 'wp_plugin_activate', 'description' => 'הפעלת תוסף לפי קובץ.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['plugin' => ['type' => 'string']], 'required' => ['plugin']]],
@@ -282,6 +283,7 @@ class Multioto_Agent_Mcp_Server
             'wp_salts_rotate' => 'saltsRotate',
             'wp_sessions_destroy' => 'sessionsDestroy',
             'wp_plugin_update' => 'pluginUpdate',
+            'wp_theme_update' => 'themeUpdate',
             'wp_core_update' => 'coreUpdate',
             'wp_core_rollback' => 'coreRollback',
             'wp_menu_list' => 'menuList',
@@ -403,6 +405,7 @@ class Multioto_Agent_Mcp_Server
     private function themeList(): string
     {
         $active = get_stylesheet();
+        $updates = get_site_transient('update_themes');
         $out = [];
 
         foreach (wp_get_themes() as $slug => $theme) {
@@ -411,6 +414,7 @@ class Multioto_Agent_Mcp_Server
                 'name' => $theme->get('Name'),
                 'version' => $theme->get('Version'),
                 'active' => ((string) $slug === $active),
+                'update_available' => isset($updates->response[(string) $slug]),
             ];
         }
 
@@ -918,6 +922,40 @@ class Multioto_Agent_Mcp_Server
      * before and after so the caller can confirm the change; a site already on
      * the latest version is left untouched and reported as such.
      */
+    /**
+     * Update one installed theme to the version WordPress offers for it.
+     *
+     * The same path wp-admin takes (Theme_Upgrader), so a theme that comes from
+     * a marketplace with its own updater updates exactly as it would there.
+     */
+    private function themeUpdate(array $args): string
+    {
+        $stylesheet = sanitize_key((string) ($args['stylesheet'] ?? ''));
+
+        if ($stylesheet === '' || ! wp_get_theme($stylesheet)->exists()) {
+            throw new Multioto_Agent_Rpc_Error(-32602, "התבנית {$stylesheet} אינה מותקנת.");
+        }
+
+        require_once ABSPATH.'wp-admin/includes/file.php';
+        require_once ABSPATH.'wp-admin/includes/theme.php';
+        require_once ABSPATH.'wp-admin/includes/class-wp-upgrader.php';
+
+        wp_update_themes();
+
+        $upgrader = new Theme_Upgrader(new Automatic_Upgrader_Skin);
+        $result = $upgrader->upgrade($stylesheet);
+
+        if (is_wp_error($result)) {
+            throw new Multioto_Agent_Rpc_Error(-32000, $result->get_error_message());
+        }
+
+        if ($result === false || $result === null) {
+            return "לא נמצא עדכון עבור התבנית {$stylesheet} (ייתכן שהיא כבר מעודכנת).";
+        }
+
+        return "התבנית {$stylesheet} עודכנה.";
+    }
+
     private function coreUpdate(): string
     {
         require_once ABSPATH.'wp-admin/includes/file.php';

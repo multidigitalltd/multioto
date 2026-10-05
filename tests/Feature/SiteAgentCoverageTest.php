@@ -14,6 +14,7 @@ use App\Services\SiteAgent\SiteAgentToolbox;
 use Closure;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Http;
 use Mockery;
 use Tests\TestCase;
 
@@ -42,16 +43,14 @@ class SiteAgentCoverageTest extends TestCase
         // Security and incident response — the team's, behind its own approval gate.
         'wp_guard_status' => 'security', 'wp_guard_purge' => 'security', 'wp_guard_rules' => 'security',
         'wp_salts_rotate' => 'security', 'wp_sessions_destroy' => 'security', 'wp_admin_list' => 'security',
-        // Diagnostics that expose configuration and server paths.
-        'wp_option_get' => 'diagnostics', 'wp_error_log_tail' => 'diagnostics',
-        // Updates and plugin switches can take a site down; they run under the
-        // team's maintenance, with backups, not from a chat.
-        'wp_plugin_update' => 'maintenance', 'wp_core_update' => 'maintenance', 'wp_core_rollback' => 'maintenance',
-        'wp_plugin_activate' => 'maintenance', 'wp_plugin_deactivate' => 'maintenance',
+        // Raw configuration values.
+        'wp_option_get' => 'configuration',
+        // WordPress itself — a failed core update is a site the team restores,
+        // so it stays under the team's maintenance. (Plugins and themes are
+        // updated from the bot, with a health check after each.)
+        'wp_core_update' => 'core', 'wp_core_rollback' => 'core',
         // Code on the server — never from a phone.
         'wp_file_list' => 'code', 'wp_file_get' => 'code', 'wp_file_put' => 'code',
-        // Permanent deletion of a file other pages may still use.
-        'wp_media_delete' => 'permanent',
     ];
 
     /** Plugin tools the bot reaches through its fixed planners rather than a tool of its own. */
@@ -69,6 +68,8 @@ class SiteAgentCoverageTest extends TestCase
 
     private array $calls = [];
 
+    private bool $siteUp = true;
+
     private array $site = [];
 
     protected function setUp(): void
@@ -78,6 +79,9 @@ class SiteAgentCoverageTest extends TestCase
         config(['siteagent.enabled' => true, 'siteagent.assistant.enabled' => true]);
         Cache::flush();
         $this->fakeSite();
+
+        // The homepage answers unless a test takes it down.
+        Http::fake(fn () => Http::response($this->siteUp ? 'ok' : 'error', $this->siteUp ? 200 : 500));
     }
 
     public function test_every_plugin_capability_is_reachable_or_deliberately_excluded(): void
@@ -367,6 +371,117 @@ class SiteAgentCoverageTest extends TestCase
         $this->assertNotContains('wc_coupon_expire', array_column($this->calls, 0));
     }
 
+    public function test_plugins_are_updated_one_by_one_and_stop_when_the_site_breaks(): void
+    {
+        $subscriber = $this->subscriber();
+        $this->site['wp_plugin_list'] = [
+            ['plugin' => 'forms/forms.php', 'name' => 'Forms', 'version' => '1.0', 'active' => true, 'update_available' => true],
+            ['plugin' => 'seo/seo.php', 'name' => 'SEO', 'version' => '2.0', 'active' => true, 'update_available' => true],
+            ['plugin' => 'cache/cache.php', 'name' => 'Cache', 'version' => '3.0', 'active' => true, 'update_available' => false],
+        ];
+
+        $this->model(function (Closure $tool): string {
+            $tool('propose_plugin_update', ['plugins' => ['all']]);
+
+            return '';
+        });
+
+        $preview = $this->talk($subscriber, 'תעדכן את כל התוספים');
+        $this->assertStringContainsString('Forms (עכשיו 1.0)', $preview);
+        $this->assertStringNotContainsString('Cache', $preview);
+        $this->assertStringContainsString('לא נלקח גיבוי', $preview);
+
+        // The first update leaves the site down.
+        $this->siteUp = false;
+        $reply = $this->talk($subscriber, 'כן');
+
+        $this->assertStringContainsString('הצוות שלנו קיבל התראה', $reply);
+        $updates = array_values(array_filter($this->calls, fn (array $call): bool => $call[0] === 'wp_plugin_update'));
+        // Stopped after the first: the second is not piled on a broken site.
+        $this->assertSame([['wp_plugin_update', ['plugin' => 'forms/forms.php']]], $updates);
+    }
+
+    public function test_switching_off_a_plugin_that_breaks_the_site_is_put_back_at_once(): void
+    {
+        $subscriber = $this->subscriber();
+        $this->site['wp_plugin_list'] = [['plugin' => 'slider/slider.php', 'name' => 'Slider', 'active' => true, 'update_available' => false]];
+
+        $this->model(function (Closure $tool): string {
+            $tool('propose_plugin_toggle', ['plugin' => 'Slider', 'active' => false]);
+
+            return '';
+        });
+        $this->assertStringContainsString('יפסיק לעבוד', $this->talk($subscriber, 'תכבה את הסליידר'));
+
+        $this->siteUp = false;
+        $reply = $this->talk($subscriber, 'כן');
+
+        $this->assertStringContainsString('החזרתי אותו מיד', $reply);
+        $this->assertContains(['wp_plugin_deactivate', ['plugin' => 'slider/slider.php']], $this->calls);
+        $this->assertContains(['wp_plugin_activate', ['plugin' => 'slider/slider.php']], $this->calls);
+    }
+
+    public function test_the_shop_and_security_plugins_are_never_switched_off_from_a_phone(): void
+    {
+        $subscriber = $this->subscriber();
+        $this->site['wp_plugin_list'] = [
+            ['plugin' => 'woocommerce/woocommerce.php', 'name' => 'WooCommerce', 'active' => true],
+            ['plugin' => 'wordfence/wordfence.php', 'name' => 'Wordfence Security', 'active' => true],
+        ];
+
+        $this->model(function (Closure $tool): string {
+            foreach (['WooCommerce', 'Wordfence Security'] as $plugin) {
+                $result = $tool('propose_plugin_toggle', ['plugin' => $plugin, 'active' => false]);
+                $this->assertTrue($result['is_error'], $plugin);
+            }
+
+            return '';
+        });
+
+        $this->talk($subscriber, 'תכבה');
+        $this->assertSame(0, SiteAgentRequest::count());
+    }
+
+    public function test_a_media_file_is_deleted_only_after_a_warning_that_it_is_final(): void
+    {
+        $subscriber = $this->subscriber();
+        $this->site['wp_media_list'] = ['items' => [['id' => 61, 'title' => 'banner-old', 'url' => 'https://example.test/banner-old.jpg']]];
+
+        $this->model(function (Closure $tool): string {
+            $tool('find_media', ['search' => 'banner']);
+            $tool('propose_media_delete', ['attachment_id' => 61]);
+
+            return '';
+        });
+
+        $this->assertStringContainsString('אין ביטול ואין פח', $this->talk($subscriber, 'תמחק את הבאנר הישן'));
+
+        $this->site['wp_media_delete'] = ['deleted_id' => 61];
+        $reply = $this->talk($subscriber, 'כן');
+
+        $this->assertContains(['wp_media_delete', ['attachment_id' => 61]], $this->calls);
+        $this->assertStringNotContainsString('בטל', $reply);
+    }
+
+    public function test_the_error_log_reaches_the_model_without_the_servers_internals(): void
+    {
+        $subscriber = $this->subscriber();
+        $this->site['wp_error_log_tail'] = 'PHP Fatal error in /home/u1/public_html/wp-content/plugins/forms/inc/a.php on line 9 from 10.1.2.3 DB_PASSWORD=hunter2';
+
+        $this->model(function (Closure $tool): string {
+            $log = $tool('site_errors', [])['content'];
+
+            $this->assertStringContainsString('plugins/forms/a.php', $log);
+            $this->assertStringNotContainsString('/home/u1', $log);
+            $this->assertStringNotContainsString('10.1.2.3', $log);
+            $this->assertStringNotContainsString('hunter2', $log);
+
+            return 'תוסף הטפסים מתקלקל.';
+        });
+
+        $this->talk($subscriber, 'למה הטופס לא עובד?');
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────
 
     private function subscriber(array $capabilities = []): SiteAgentSubscriber
@@ -407,9 +522,14 @@ class SiteAgentCoverageTest extends TestCase
         $mcp->shouldReceive('callTool')->andReturnUsing(function (Site $site, string $tool, array $arguments = []) {
             $this->calls[] = [$tool, $arguments];
 
-            return $this->site[$tool] ?? [];
+            $answer = $this->site[$tool] ?? [];
+
+            // A plain-text answer travels the way the plugin sends one.
+            return is_string($answer) ? ['content' => [['type' => 'text', 'text' => $answer]], '_text' => true] : $answer;
         });
-        $mcp->shouldReceive('textContent')->andReturnUsing(fn ($result): string => json_encode($result, JSON_UNESCAPED_UNICODE));
+        $mcp->shouldReceive('textContent')->andReturnUsing(fn ($result): string => ($result['_text'] ?? false) === true
+            ? (string) $result['content'][0]['text']
+            : json_encode($result, JSON_UNESCAPED_UNICODE));
         $this->app->instance(McpClient::class, $mcp);
     }
 }

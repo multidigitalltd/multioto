@@ -5,6 +5,9 @@ namespace App\Services\SiteAgent;
 use App\Models\Site;
 use App\Models\SiteAgentRequest;
 use App\Services\Agent\McpClient;
+use App\Services\Agent\SiteChangeJournal;
+use App\Services\Notifications\TeamNotifier;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 
 /**
@@ -28,7 +31,14 @@ use Illuminate\Support\Str;
  */
 class SiteActionApplier
 {
-    public function __construct(private McpClient $mcp) {}
+    /** Plugin and theme downloads can be slow. */
+    private const UPDATE_TIMEOUT_SECONDS = 120;
+
+    public function __construct(
+        private McpClient $mcp,
+        private SiteChangeJournal $journal,
+        private TeamNotifier $team,
+    ) {}
 
     /**
      * @return array{ok: bool, reason: string|null, message: string|null, restore: array<string, mixed>|null, done?: string}
@@ -58,6 +68,10 @@ class SiteActionApplier
                 SiteAgentRequest::OP_TRASH => $this->trash($site, $plan),
                 SiteAgentRequest::OP_COUPON_EXPIRE => $this->couponExpire($site, $plan),
                 SiteAgentRequest::OP_CACHE_FLUSH => $this->cacheFlush($site),
+                SiteAgentRequest::OP_PLUGIN_UPDATE => $this->pluginUpdate($site, $plan),
+                SiteAgentRequest::OP_THEME_UPDATE => $this->themeUpdate($site, $plan),
+                SiteAgentRequest::OP_PLUGIN_TOGGLE => $this->pluginToggle($site, $plan),
+                SiteAgentRequest::OP_MEDIA_DELETE => $this->mediaDelete($site, $plan),
                 default => $this->refuse('פעולה לא מוכרת.'),
             };
         } catch (\Throwable $e) {
@@ -69,7 +83,7 @@ class SiteActionApplier
     public function reverts(string $kind): bool
     {
         return in_array($kind, ['order_status', 'subscription_status', 'created_post', 'post', 'user_role', 'coupon',
-            'comment', 'post_terms', 'fields', 'menu_added', 'menu_item', 'trashed'], true);
+            'comment', 'post_terms', 'fields', 'menu_added', 'menu_item', 'trashed', 'plugin_toggle'], true);
     }
 
     /**
@@ -92,6 +106,7 @@ class SiteActionApplier
                 'menu_added' => $this->revertMenuAdd($site, $restore),
                 'menu_item' => $this->revertMenuUpdate($site, $restore),
                 'trashed' => $this->revertTrash($site, $restore),
+                'plugin_toggle' => $this->revertPluginToggle($site, $restore),
                 default => $this->refuse('אין לי גיבוי לשחזור הבקשה הזו.'),
             };
         } catch (\Throwable $e) {
@@ -648,6 +663,154 @@ class SiteActionApplier
         $this->call($site, 'wp_cache_flush', []);
 
         return $this->ok(null);
+    }
+
+    // --- Plugins, themes, media ---------------------------------------------
+
+    /**
+     * Update plugins one at a time, the way the team's maintenance does: the
+     * homepage must still answer after EVERY update, and the first one that
+     * breaks it stops the run — one bad plugin must not be buried under four
+     * more updates — and the team hears about it at once.
+     *
+     * @param  array<string, mixed>  $plan
+     */
+    private function pluginUpdate(Site $site, array $plan): array
+    {
+        $done = [];
+
+        foreach ((array) $plan['plugins'] as $plugin) {
+            $name = (string) $plugin['name'];
+
+            $this->mcp->callTool($site, 'wp_plugin_update', ['plugin' => (string) $plugin['file']], self::UPDATE_TIMEOUT_SECONDS);
+            $this->journal->record($site, "בוט ניהול האתר — עודכן {$name}", 'wp_plugin_update', ['plugin' => (string) $plugin['file']],
+                beforeState: 'גרסה קודמת: '.(string) ($plugin['version'] ?? '?'), initiatedBy: 'site_agent');
+            $done[] = $name;
+
+            if (! $this->healthy($site)) {
+                return $this->broken($site, "אחרי עדכון התוסף {$name}", $done);
+            }
+        }
+
+        return $this->ok(null, 'עודכנו: '.implode(', ', $done).'. האתר נבדק אחרי כל עדכון ועולה כרגיל.');
+    }
+
+    /** @param array<string, mixed> $plan */
+    private function themeUpdate(Site $site, array $plan): array
+    {
+        $name = (string) $plan['name'];
+
+        $this->mcp->callTool($site, 'wp_theme_update', ['stylesheet' => (string) $plan['stylesheet']], self::UPDATE_TIMEOUT_SECONDS);
+        $this->journal->record($site, "בוט ניהול האתר — עודכנה התבנית {$name}", 'wp_theme_update',
+            ['stylesheet' => (string) $plan['stylesheet']], initiatedBy: 'site_agent');
+
+        if (! $this->healthy($site)) {
+            return $this->broken($site, "אחרי עדכון התבנית {$name}", [$name]);
+        }
+
+        return $this->ok(null, 'האתר נבדק אחרי העדכון ועולה כרגיל.');
+    }
+
+    /**
+     * Switch a plugin — and switch it straight back if the site stops
+     * answering. Unlike an update, a toggle can be undone on the spot, so
+     * there is no reason to leave a broken site waiting for anybody.
+     *
+     * @param  array<string, mixed>  $plan
+     */
+    private function pluginToggle(Site $site, array $plan): array
+    {
+        $file = (string) $plan['plugin'];
+        $to = (bool) $plan['to'];
+
+        if ($this->pluginActive($site, $file) !== (bool) $plan['from']) {
+            return $this->refuse(SiteChangeApplier::STALE);
+        }
+
+        $this->switchPlugin($site, $file, $to);
+        $this->journal->record($site, 'בוט ניהול האתר — '.($to ? 'הופעל' : 'כובה').' '.$plan['name'],
+            $to ? 'wp_plugin_activate' : 'wp_plugin_deactivate', ['plugin' => $file], initiatedBy: 'site_agent');
+
+        if (! $this->healthy($site)) {
+            $this->switchPlugin($site, $file, ! $to);
+            $this->team->alert(
+                "⚠️ {$site->domain}: שינוי תוסף מהבוט הוחזר",
+                'בעל האתר '.($to ? 'הפעיל' : 'כיבה')." את {$plan['name']} מהוואטסאפ, ודף הבית הפסיק לענות. השינוי הוחזר מיד — כדאי לוודא שהאתר תקין.",
+                rtrim((string) config('app.url'), '/')."/admin/sites/{$site->id}",
+            );
+
+            return $this->refuse('האתר הפסיק לענות אחרי השינוי, ולכן החזרתי אותו מיד. הצוות שלנו קיבל התראה ויבדוק.');
+        }
+
+        return $this->ok(['kind' => 'plugin_toggle', 'plugin' => $file, 'active' => ! $to, 'after' => $to]);
+    }
+
+    /** @param array<string, mixed> $restore */
+    private function revertPluginToggle(Site $site, array $restore): array
+    {
+        $file = (string) $restore['plugin'];
+
+        if ($this->pluginActive($site, $file) !== (bool) $restore['after']) {
+            return $this->refuse(SiteChangeApplier::STALE);
+        }
+
+        $this->switchPlugin($site, $file, (bool) $restore['active']);
+
+        return $this->ok(null);
+    }
+
+    /** @param array<string, mixed> $plan */
+    private function mediaDelete(Site $site, array $plan): array
+    {
+        // The plugin itself refuses a file that is a featured image somewhere.
+        $this->call($site, 'wp_media_delete', ['attachment_id' => (int) $plan['attachment_id']]);
+
+        return $this->ok(null);
+    }
+
+    private function switchPlugin(Site $site, string $file, bool $active): void
+    {
+        $this->mcp->callTool($site, $active ? 'wp_plugin_activate' : 'wp_plugin_deactivate', ['plugin' => $file], 60);
+    }
+
+    private function pluginActive(Site $site, string $file): ?bool
+    {
+        foreach ((array) $this->call($site, 'wp_plugin_list', []) as $plugin) {
+            if (is_array($plugin) && (string) ($plugin['plugin'] ?? '') === $file) {
+                return (bool) ($plugin['active'] ?? false);
+            }
+        }
+
+        return null;
+    }
+
+    /** Is the homepage still answering? The same test the weekly maintenance uses. */
+    private function healthy(Site $site): bool
+    {
+        try {
+            return Http::timeout((int) config('billing.monitoring.timeout_seconds', 10))
+                ->get($site->homepageUrl())
+                ->successful();
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    /**
+     * An update left the site not answering: stop, tell the team now, and tell
+     * the owner the truth.
+     *
+     * @param  list<string>  $done
+     */
+    private function broken(Site $site, string $after, array $done): array
+    {
+        $this->team->alert(
+            "🚨 {$site->domain} הפסיק לענות — עדכון מהבוט",
+            "{$after} שבוצע מהוואטסאפ, דף הבית של {$site->domain} הפסיק לענות תקין. העדכונים נעצרו (עודכנו: ".implode(', ', $done).'). ייתכן שנדרש שחזור.',
+            rtrim((string) config('app.url'), '/')."/admin/sites/{$site->id}",
+        );
+
+        return $this->refuse("האתר הפסיק לענות {$after}. עצרתי את העדכונים, והצוות שלנו קיבל התראה ומטפל בזה עכשיו.");
     }
 
     // --- Helpers -------------------------------------------------------------

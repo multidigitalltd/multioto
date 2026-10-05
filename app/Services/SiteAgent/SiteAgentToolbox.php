@@ -109,6 +109,9 @@ class SiteAgentToolbox
         'site_health' => ['wp_health',
             'מצב האתר: גרסאות וורדפרס ו-PHP, SSL ותוספים פעילים.',
             [], []],
+        'site_errors' => ['wp_error_log_tail',
+            'השורות האחרונות ביומן השגיאות של האתר — כשבעל האתר שואל למה משהו לא עובד או למה האתר איטי. סכמו במילים פשוטות; לעולם אל תצטטו שורות גולמיות.',
+            ['lines' => ['type' => 'integer']], []],
         'list_plugins' => ['wp_plugin_list',
             'התוספים המותקנים באתר והאם יש להם עדכון.',
             [], []],
@@ -192,6 +195,10 @@ class SiteAgentToolbox
 
         $limit = max(1000, (int) config('siteagent.assistant.tool_result_chars', 6000));
 
+        if ($pluginTool === 'wp_error_log_tail') {
+            $text = $this->redact($text);
+        }
+
         return [
             'content' => Str::limit($text, $limit, ' …[קוצר]'),
             'is_error' => false,
@@ -215,6 +222,32 @@ class SiteAgentToolbox
             ->all();
 
         return $known === [] || in_array($pluginTool, $known, true);
+    }
+
+    /**
+     * An error log with the server's internals taken out.
+     *
+     * A log names absolute paths, database hosts, sometimes a query with a
+     * value in it. The owner needs "the contact-form plugin fails on line 80",
+     * not where the files live on the server — and none of it should travel to
+     * the model or into a WhatsApp transcript.
+     */
+    private function redact(string $log): string
+    {
+        $patterns = [
+            // A plugin's or theme's file: keep which plugin, drop the server path.
+            '#(?:/[\w.\-]+)*/(plugins|themes)/([\w.\-]+)/(?:[\w.\-]+/)*([\w.\-]+\.php)#u' => '$1/$2/$3',
+            // Any other absolute path: keep the file name, drop where it lives.
+            '#(?<![\w.\-])(?:/[\w.\-]+)+/([\w.\-]+\.php)#u' => '…/$1',
+            '#(?<![\w.\-])(?:/[\w.\-]+){2,}/?#u' => '…',
+            // Emails, IP addresses, and anything shaped like a key or token.
+            '/[\w.+\-]+@[\w\-]+\.[\w.\-]+/u' => '[email]',
+            '/\b\d{1,3}(?:\.\d{1,3}){3}\b/' => '[ip]',
+            '/\b[A-Za-z0-9_\-]{32,}\b/' => '[…]',
+            '/(password|passwd|pwd|secret|token|key)\s*[=:]\s*\S+/i' => '$1=[…]',
+        ];
+
+        return (string) preg_replace(array_keys($patterns), array_values($patterns), $log);
     }
 
     /**

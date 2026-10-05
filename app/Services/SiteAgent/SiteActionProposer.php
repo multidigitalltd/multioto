@@ -101,7 +101,21 @@ class SiteActionProposer
         'propose_comment_moderation', 'propose_term_create', 'propose_item_terms', 'propose_fields_update',
         'propose_menu_item_add', 'propose_menu_item_update', 'propose_menu_item_remove',
         'propose_trash', 'propose_coupon_expire', 'propose_cache_flush',
+        'propose_plugin_update', 'propose_theme_update', 'propose_plugin_toggle', 'propose_media_delete',
     ];
+
+    /**
+     * Plugins that are never switched off from a phone: the connection itself,
+     * the shop, the page builder, and anything that guards the site. Switching
+     * one off is how a site loses its checkout, its pages or its protection in
+     * a single "כן".
+     */
+    private const CRITICAL_PLUGINS = '/^(multioto-agent|woocommerce|woocommerce-subscriptions|elementor|elementor-pro)\//';
+
+    private const SECURITY_PLUGIN_NAMES = '/security|firewall|wordfence|sucuri|solid|ithemes|limit.?login|two.?factor|2fa|recaptcha/i';
+
+    /** How many plugin updates one "כן" may carry — each one is checked on its own. */
+    private const MAX_UPDATES = 10;
 
     private const COMMENT_STATUSES = ['approve' => 'מאושרת', 'hold' => 'ממתינה לאישור', 'spam' => 'ספאם', 'trash' => 'בפח'];
 
@@ -142,7 +156,8 @@ class SiteActionProposer
      */
     public function pluginTools(): array
     {
-        return array_values(array_unique(array_column($this->catalogue(), 1)));
+        // One proposal switches plugins both ways; its row names only one.
+        return array_values(array_unique([...array_column($this->catalogue(), 1), 'wp_plugin_activate']));
     }
 
     /**
@@ -223,6 +238,18 @@ class SiteActionProposer
             ['propose_coupon_expire', 'wc_coupon_expire',
                 'הצעה לסיים קופון היום (הוא לא נמחק): code מתוך list_coupons.',
                 ['code' => ['type' => 'string']], ['code']],
+            ['propose_plugin_update', 'wp_plugin_update',
+                'הצעה לעדכן תוספים שיש להם עדכון (לפי plugin_list). plugins = שמות או קבצי התוספים, או ["all"] לכל מה שממתין לעדכון (עד 10). אחרי כל עדכון נבדק שהאתר עולה.',
+                ['plugins' => ['type' => 'array', 'items' => ['type' => 'string']]], ['plugins']],
+            ['propose_theme_update', 'wp_theme_update',
+                'הצעה לעדכן תבנית שיש לה עדכון: stylesheet מתוך list_themes. אחרי העדכון נבדק שהאתר עולה.',
+                ['stylesheet' => ['type' => 'string']], ['stylesheet']],
+            ['propose_plugin_toggle', 'wp_plugin_deactivate',
+                'הצעה להפעיל (active=true) או לכבות (active=false) תוסף מותקן: plugin = שם או קובץ מתוך list_plugins. תוספים קריטיים (החנות, אלמנטור, אבטחה, תוסף החיבור) אינם נכבים מכאן.',
+                ['plugin' => ['type' => 'string'], 'active' => ['type' => 'boolean']], ['plugin', 'active']],
+            ['propose_media_delete', 'wp_media_delete',
+                'הצעה למחוק קובץ מספריית המדיה לפי attachment_id מתוך find_media. מחיקה סופית — אין ביטול.',
+                ['attachment_id' => ['type' => 'integer']], ['attachment_id']],
             ['propose_cache_flush', 'wp_cache_flush',
                 'הצעה לנקות את המטמון של האתר — כשבעל האתר אומר ששינוי לא מופיע באתר.',
                 [], []],
@@ -1392,6 +1419,195 @@ class SiteActionProposer
         }
 
         return ['', null];
+    }
+
+    // --- Plugins, themes, media ---------------------------------------------
+
+    /**
+     * @param  array<string, mixed>  $input
+     * @param  list<int>  $seen
+     */
+    private function proposePluginUpdate(Site $site, array $input, array $seen): array
+    {
+        $asked = array_values(array_filter(array_map(fn ($name): string => trim((string) $name), (array) ($input['plugins'] ?? []))));
+        $all = array_map('strtolower', $asked) === ['all'];
+
+        $pending = array_values(array_filter((array) $this->json($site, 'wp_plugin_list', []),
+            fn ($plugin): bool => is_array($plugin) && ($plugin['update_available'] ?? false) === true));
+
+        if ($pending === []) {
+            return $this->error('אין כרגע תוספים שממתינים לעדכון.');
+        }
+
+        $chosen = $all ? $pending : array_values(array_filter($pending, fn (array $plugin): bool => $this->named($plugin, $asked)));
+
+        if ($chosen === []) {
+            return $this->error('אף אחד מהתוספים שביקשתם אינו ממתין לעדכון. ממתינים: '.implode(', ', array_column($pending, 'name')).'.');
+        }
+
+        if (count($chosen) > self::MAX_UPDATES) {
+            return $this->error('יותר מ-'.self::MAX_UPDATES.' תוספים בבת אחת — בחרו עד '.self::MAX_UPDATES.'.');
+        }
+
+        return [
+            'plan' => [
+                'operation' => SiteAgentRequest::OP_PLUGIN_UPDATE,
+                'plugins' => array_map(fn (array $plugin): array => [
+                    'file' => (string) $plugin['plugin'],
+                    'name' => (string) ($plugin['name'] ?? $plugin['plugin']),
+                    'version' => (string) ($plugin['version'] ?? ''),
+                ], $chosen),
+                'summary' => 'עדכון '.count($chosen).' תוספים',
+            ],
+            'preview' => implode("\n", [
+                '🔌 לעדכן '.count($chosen).' תוספים:',
+                ...array_map(fn (array $plugin): string => '• '.($plugin['name'] ?? $plugin['plugin']).' (עכשיו '.($plugin['version'] ?? '?').')', $chosen),
+                '',
+                'אחד אחרי השני, ואחרי כל אחד נבדק שהאתר עולה. אם לא — עוצרים מיד והצוות שלנו מקבל התראה.',
+                'אין ביטול אוטומטי לעדכון, ולא נלקח גיבוי של האתר מכאן.',
+            ]),
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $input
+     * @param  list<int>  $seen
+     */
+    private function proposeThemeUpdate(Site $site, array $input, array $seen): array
+    {
+        $stylesheet = trim((string) ($input['stylesheet'] ?? ''));
+
+        $theme = collect((array) $this->json($site, 'wp_theme_list', []))
+            ->first(fn ($item): bool => is_array($item) && ((string) ($item['stylesheet'] ?? '') === $stylesheet || mb_strtolower((string) ($item['name'] ?? '')) === mb_strtolower($stylesheet)));
+
+        if ($theme === null) {
+            return $this->error("התבנית {$stylesheet} אינה מותקנת. בדקו עם list_themes.");
+        }
+
+        if (($theme['update_available'] ?? false) !== true) {
+            return $this->error('לתבנית הזו אין עדכון ממתין.');
+        }
+
+        return [
+            'plan' => [
+                'operation' => SiteAgentRequest::OP_THEME_UPDATE,
+                'stylesheet' => (string) $theme['stylesheet'],
+                'name' => (string) ($theme['name'] ?? $theme['stylesheet']),
+                'summary' => 'עדכון התבנית '.($theme['name'] ?? $theme['stylesheet']),
+            ],
+            'preview' => implode("\n", array_filter([
+                '🎨 לעדכן את התבנית '.($theme['name'] ?? $theme['stylesheet']).' (עכשיו '.($theme['version'] ?? '?').')',
+                ($theme['active'] ?? false) ? 'זו התבנית הפעילה — העיצוב של כל האתר נשען עליה.' : null,
+                'אחרי העדכון נבדק שהאתר עולה; אם לא — הצוות מקבל התראה מיד. אין ביטול אוטומטי, ושינויים שנעשו ישירות בקבצי התבנית יידרסו.',
+            ])),
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $input
+     * @param  list<int>  $seen
+     */
+    private function proposePluginToggle(Site $site, array $input, array $seen): array
+    {
+        $asked = trim((string) ($input['plugin'] ?? ''));
+        $active = filter_var($input['active'] ?? null, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+
+        if ($asked === '' || $active === null) {
+            return $this->error('צריך plugin ו-active (true להפעלה, false לכיבוי).');
+        }
+
+        $plugin = collect((array) $this->json($site, 'wp_plugin_list', []))
+            ->first(fn ($item): bool => is_array($item) && $this->named($item, [$asked]));
+
+        if ($plugin === null) {
+            return $this->error("התוסף {$asked} אינו מותקן. בדקו עם list_plugins.");
+        }
+
+        $file = (string) $plugin['plugin'];
+        $name = (string) ($plugin['name'] ?? $file);
+
+        if ((bool) ($plugin['active'] ?? false) === $active) {
+            return $this->error("התוסף {$name} כבר ".($active ? 'פעיל' : 'כבוי').'.');
+        }
+
+        if (! $active && (preg_match(self::CRITICAL_PLUGINS, $file) === 1 || preg_match(self::SECURITY_PLUGIN_NAMES, $name.' '.$file) === 1)) {
+            return $this->error("את {$name} לא מכבים מכאן — הוא מחזיק את החנות, את העמודים, את האבטחה או את החיבור לבוט. זה נעשה מול הצוות.");
+        }
+
+        return [
+            'plan' => [
+                'operation' => SiteAgentRequest::OP_PLUGIN_TOGGLE,
+                'plugin' => $file,
+                'name' => $name,
+                'from' => ! $active,
+                'to' => $active,
+                'summary' => ($active ? 'הפעלת' : 'כיבוי').' התוסף '.$name,
+            ],
+            'preview' => implode("\n", [
+                '🔌 '.($active ? 'להפעיל' : 'לכבות').' את התוסף '.$name,
+                $active
+                    ? 'תוסף שמופעל מתחיל לרוץ מיד בכל עמוד באתר.'
+                    : '⚠️ כל מה באתר שתלוי בו יפסיק לעבוד — טפסים, כפתורים או עמודים שהוא מציג.',
+                'אחרי השינוי נבדק שהאתר עולה; אם לא — השינוי מוחזר מיד. אפשר גם לכתוב "בטל".',
+            ]),
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $input
+     * @param  list<int>  $seen
+     */
+    private function proposeMediaDelete(Site $site, array $input, array $seen): array
+    {
+        $id = (int) ($input['attachment_id'] ?? 0);
+
+        if (! $this->wasSeen($id, $seen)) {
+            return $this->unseen('הקובץ', 'find_media');
+        }
+
+        $media = (array) $this->json($site, 'wp_media_list', ['limit' => 100]);
+        $item = collect((array) ($media['items'] ?? $media['media'] ?? $media))
+            ->first(fn ($file): bool => is_array($file) && (int) ($file['id'] ?? 0) === $id);
+
+        if ($item === null) {
+            return $this->error('לא מצאתי את הקובץ בין 100 הקבצים האחרונים. חפשו אותו עם find_media לפי שם.');
+        }
+
+        return [
+            'plan' => [
+                'operation' => SiteAgentRequest::OP_MEDIA_DELETE,
+                'attachment_id' => $id,
+                'summary' => 'מחיקת הקובץ '.($item['title'] ?? "#{$id}"),
+            ],
+            'preview' => implode("\n", array_filter([
+                '🗑️ למחוק לצמיתות מספריית המדיה: '.($item['title'] ?? "#{$id}"),
+                isset($item['url']) ? (string) $item['url'] : null,
+                '⚠️ אין ביטול ואין פח — הקובץ נמחק מהשרת. אם הוא מופיע בתוך טקסט של עמוד, שם תופיע תמונה שבורה.',
+                'קובץ שמשמש כתמונה ראשית של עמוד או מוצר לא יימחק.',
+            ])),
+        ];
+    }
+
+    /**
+     * Is this plugin the one asked for — by its file, its folder or its name?
+     *
+     * @param  array<string, mixed>  $plugin
+     * @param  list<string>  $asked
+     */
+    private function named(array $plugin, array $asked): bool
+    {
+        $file = mb_strtolower((string) ($plugin['plugin'] ?? ''));
+        $name = mb_strtolower((string) ($plugin['name'] ?? ''));
+
+        foreach ($asked as $wanted) {
+            $wanted = mb_strtolower($wanted);
+
+            if ($wanted !== '' && ($wanted === $file || $wanted === $name || $wanted === strtok($file, '/'))) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     // --- Helpers -------------------------------------------------------------

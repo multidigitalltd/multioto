@@ -90,6 +90,10 @@ class SiteAgentRequestResource extends Resource
         SiteAgentRequest::OP_TRASH => 'העברה לפח',
         SiteAgentRequest::OP_COUPON_EXPIRE => 'סיום קופון',
         SiteAgentRequest::OP_CACHE_FLUSH => 'ניקוי מטמון',
+        SiteAgentRequest::OP_PLUGIN_UPDATE => 'עדכון תוספים',
+        SiteAgentRequest::OP_THEME_UPDATE => 'עדכון תבנית',
+        SiteAgentRequest::OP_PLUGIN_TOGGLE => 'הפעלה/כיבוי תוסף',
+        SiteAgentRequest::OP_MEDIA_DELETE => 'מחיקת קובץ מדיה',
     ];
 
     private const STATES = [
