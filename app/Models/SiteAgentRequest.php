@@ -59,10 +59,48 @@ class SiteAgentRequest extends Model
     /** Put an image the customer sent onto a page or product. */
     public const OP_IMAGE = 'set_image';
 
+    /** Change several fields of one product at once (name, prices, stock, status). */
+    public const OP_PRODUCT = 'update_product';
+
+    /** Create a product — always as a draft. */
+    public const OP_PRODUCT_CREATE = 'create_product';
+
+    /** Move an order along its ordinary path (processing, completed, …). */
+    public const OP_ORDER_STATUS = 'order_status';
+
+    /** Add a note to an order, private or to the buyer. */
+    public const OP_ORDER_NOTE = 'order_note';
+
+    /** Pause, resume or cancel a renewing subscription. */
+    public const OP_SUBSCRIPTION_STATUS = 'subscription_status';
+
+    /** Create a post or page. */
+    public const OP_POST_CREATE = 'create_post';
+
+    /** Change a post's title, status or excerpt. */
+    public const OP_POST_UPDATE = 'update_post';
+
+    /** Add a user to the site (never an administrator). */
+    public const OP_USER_CREATE = 'create_user';
+
+    /** Move a user to another role (never to or from administrator). */
+    public const OP_USER_ROLE = 'user_role';
+
+    /** Create a coupon. */
+    public const OP_COUPON = 'create_coupon';
+
+    /** The operations the assistant proposes, carried out by SiteActionApplier. */
+    public const MANAGEMENT_OPERATIONS = [
+        self::OP_PRODUCT_CREATE, self::OP_ORDER_STATUS, self::OP_ORDER_NOTE,
+        self::OP_SUBSCRIPTION_STATUS, self::OP_POST_CREATE, self::OP_POST_UPDATE,
+        self::OP_USER_CREATE, self::OP_USER_ROLE, self::OP_COUPON,
+    ];
+
     /** Everything the agent is allowed to do, in one list. */
     public const OPERATIONS = [
         self::OP_APPEND, self::OP_REPLACE, self::OP_TITLE,
-        self::OP_PRICE, self::OP_STOCK, self::OP_IMAGE,
+        self::OP_PRICE, self::OP_STOCK, self::OP_IMAGE, self::OP_PRODUCT,
+        ...self::MANAGEMENT_OPERATIONS,
     ];
 
     protected $fillable = [

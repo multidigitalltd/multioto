@@ -51,8 +51,13 @@ class HandleSiteAgentMessageJob implements ShouldQueue
      * off mid-flight runs no catch and no finally, the request stays `applying`
      * for ever, the customer's photograph is never cleaned up, and with one
      * attempt the instruction is simply lost with nothing to say so.
+     *
+     * The assistant adds its own turn in front: reads and model calls capped
+     * by siteagent.assistant.budget_seconds (240), one more model call to
+     * answer (90), and — when it hands page text over — the planner path above
+     * on top. Roughly 1,000 seconds on the slowest path, so 1,200.
      */
-    public int $timeout = 900;
+    public int $timeout = 1200;
 
     public function __construct(public int $webhookEventId) {}
 

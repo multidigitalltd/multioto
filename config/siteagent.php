@@ -165,4 +165,29 @@ return [
     */
     'site_choice_minutes' => (int) env('SITE_AGENT_SITE_CHOICE_MINUTES', 1440),
 
+    /*
+    | העוזר — ה-AI שמנהל את השיחה.
+    |
+    | במקום שלושה מתכננים קבועים (טקסט בעמוד, מחיר/מלאי, תמונה), מודל עם כלים:
+    | קורא מהאתר בזמן אמת (הזמנות, מוצרים, פוסטים, משתמשים, לידים, מנויים, דוח
+    | מכירות) ועונה, ומציע שינוי — שמתבצע רק אחרי "כן", בדיוק כמו קודם. כבוי או
+    | כשה-AI אינו זמין, השיחה חוזרת למתכננים הקבועים.
+    |
+    | history_messages / history_hours: כמה מהשיחה הקודמת המודל רואה, כדי
+    | ש"ומה עם ההזמנה השנייה?" יובן. transcript_days: כמה זמן נשמר התמליל עצמו —
+    | קצר בכוונה, כי תשובות על לידים והזמנות מכילות פרטים של לקוחות הקצה.
+    |
+    | max_turns / budget_seconds: תקרה על סבב אחד, כדי שהודעה אחת לא תחזיק את
+    | התור ואת נעילת השיחה דקות ארוכות.
+    */
+    'assistant' => [
+        'enabled' => (bool) env('SITE_AGENT_ASSISTANT', true),
+        'history_messages' => (int) env('SITE_AGENT_ASSISTANT_HISTORY', 12),
+        'history_hours' => (int) env('SITE_AGENT_ASSISTANT_HISTORY_HOURS', 12),
+        'transcript_days' => (int) env('SITE_AGENT_ASSISTANT_TRANSCRIPT_DAYS', 7),
+        'max_turns' => (int) env('SITE_AGENT_ASSISTANT_MAX_TURNS', 6),
+        'budget_seconds' => (int) env('SITE_AGENT_ASSISTANT_BUDGET_SECONDS', 240),
+        'tool_result_chars' => (int) env('SITE_AGENT_ASSISTANT_TOOL_RESULT_CHARS', 6000),
+    ],
+
 ];

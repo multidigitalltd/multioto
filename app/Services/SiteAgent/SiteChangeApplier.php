@@ -27,7 +27,11 @@ class SiteChangeApplier
     /** Thrown so the caller can tell the customer in their own words. */
     public const STALE = 'stale';
 
-    public function __construct(private McpClient $mcp, private SiteChangePlanner $planner) {}
+    public function __construct(
+        private McpClient $mcp,
+        private SiteChangePlanner $planner,
+        private SiteActionApplier $actions,
+    ) {}
 
     /**
      * @return array{ok: bool, reason: string|null, message: string|null, restore: array<string, mixed>|null}
@@ -41,8 +45,12 @@ class SiteChangeApplier
             return $this->refuse('הבקשה חסרה אתר.');
         }
 
+        if (in_array($request->operation, SiteAgentRequest::MANAGEMENT_OPERATIONS, true)) {
+            return $this->actions->apply($site, $request);
+        }
+
         return match ($request->operation) {
-            SiteAgentRequest::OP_PRICE, SiteAgentRequest::OP_STOCK => $this->applyProduct($site, $plan),
+            SiteAgentRequest::OP_PRICE, SiteAgentRequest::OP_STOCK, SiteAgentRequest::OP_PRODUCT => $this->applyProduct($site, $plan),
             SiteAgentRequest::OP_IMAGE => $this->applyImage($site, $plan),
             default => $this->applyPage($site, $request, $plan),
         };
@@ -680,6 +688,10 @@ class SiteChangeApplier
         }
 
         $kind = (string) ($restore['kind'] ?? 'page');
+
+        if ($this->actions->reverts($kind)) {
+            return $this->actions->revert($site, $restore);
+        }
 
         if ($kind === 'product') {
             return $this->revertProduct($site, $restore);
