@@ -295,6 +295,24 @@ class SiteActionProposer
     // --- Products ------------------------------------------------------------
 
     /**
+     * A new product, as a photograph's caption described it.
+     *
+     * The same validation and the same preview as a typed request: a product
+     * does not get looser rules for arriving with a picture.
+     *
+     * @param  array<string, mixed>  $input
+     * @return array{plan: array<string, mixed>, preview: string}|array{error: string}
+     */
+    public function newProduct(Site $site, array $input): array
+    {
+        try {
+            return $this->proposeProductCreate($site, $input, []);
+        } catch (\Throwable $e) {
+            return $this->error('לא הצלחתי לקרוא את הנתונים מהאתר: '.Str::limit($e->getMessage(), 300));
+        }
+    }
+
+    /**
      * @param  array<string, mixed>  $input
      * @param  list<int>  $seen
      */
@@ -422,7 +440,9 @@ class SiteActionProposer
                 $publish
                     ? 'המוצר יפורסם באתר מיד וייפתח לרכישה.'
                     : 'המוצר ייווצר כטיוטה, ולא יוצג באתר עד שתבקשו לפרסם אותו.',
-                'לתמונה: אחרי שהמוצר נוצר, שלחו אותה כאן עם שם המוצר.',
+                isset($input['image_alt'])
+                    ? '📷 התמונה ששלחתם תהיה התמונה הראשית ("'.$this->quote((string) $input['image_alt']).'")'
+                    : 'לתמונה: אחרי שהמוצר נוצר, שלחו אותה כאן עם שם המוצר.',
             ], fn (?string $line): bool => $line !== null)),
         ];
     }

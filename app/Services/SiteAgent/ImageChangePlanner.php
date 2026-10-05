@@ -25,11 +25,13 @@ class ImageChangePlanner
 
     /**
      * @param  list<array{id: int, title: string}>  $targets  pages and products the image could go on
-     * @return array{operation: string, target_id: int, target_title: string, alt: string, summary: string}|array{question: string}|null
+     * @return array{operation: string, target_id: int, target_title: string, alt: string, summary: string}|array{new_product: array<string, mixed>, alt: string}|array{question: string}|null
      */
     public function plan(Site $site, string $caption, array $targets): ?array
     {
-        if (! $this->ai->isEnabled() || $targets === []) {
+        // No targets is a site with no pages to show — a new product with this
+        // picture is still something it can be asked for.
+        if (! $this->ai->isEnabled()) {
             return null;
         }
 
@@ -51,8 +53,15 @@ class ImageChangePlanner
                     'can_do' => ['type' => 'boolean'],
                     'target_id' => ['type' => 'integer'],
                     'alt' => ['type' => 'string'],
-                    'needs' => ['type' => 'string', 'enum' => ['target', 'alt', 'both']],
+                    'needs' => ['type' => 'string', 'enum' => ['target', 'alt', 'both', 'name']],
                     'summary' => ['type' => 'string'],
+                    'new_product' => ['type' => 'boolean'],
+                    'name' => ['type' => 'string'],
+                    'regular_price' => ['type' => 'string'],
+                    'sale_price' => ['type' => 'string'],
+                    'stock_quantity' => ['type' => 'integer'],
+                    'short_description' => ['type' => 'string'],
+                    'publish' => ['type' => 'boolean'],
                 ],
                 'required' => ['can_do'],
             ],
@@ -60,6 +69,10 @@ class ImageChangePlanner
 
         if (! is_array($result)) {
             return null;
+        }
+
+        if (($result['new_product'] ?? false) === true) {
+            return $this->newProduct($result);
         }
 
         if (($result['can_do'] ?? false) !== true) {
@@ -86,9 +99,47 @@ class ImageChangePlanner
         ];
     }
 
+    /**
+     * A photograph of a product that does not exist yet.
+     *
+     * Only what the caption says is passed on — the proposer validates it and
+     * builds the preview from it, exactly as for a typed request. Without a
+     * name there is nothing to create, and without a description the picture
+     * cannot go up; both are asked for rather than invented.
+     *
+     * @param  array<string, mixed>  $result
+     * @return array{new_product: array<string, mixed>, alt: string}|array{question: string}
+     */
+    private function newProduct(array $result): array
+    {
+        $name = trim((string) ($result['name'] ?? ''));
+        $alt = trim((string) ($result['alt'] ?? ''));
+
+        if ($name === '') {
+            return ['question' => $this->question('name')];
+        }
+
+        if ($alt === '') {
+            return ['question' => $this->question('alt')];
+        }
+
+        return [
+            'new_product' => array_filter([
+                'name' => $name,
+                'regular_price' => trim((string) ($result['regular_price'] ?? '')),
+                'sale_price' => trim((string) ($result['sale_price'] ?? '')),
+                'stock_quantity' => $result['stock_quantity'] ?? null,
+                'short_description' => trim((string) ($result['short_description'] ?? '')),
+                'publish' => ($result['publish'] ?? false) === true ? true : null,
+            ], fn ($value): bool => $value !== null && $value !== ''),
+            'alt' => $alt,
+        ];
+    }
+
     private function question(string $needs): string
     {
         return match ($needs) {
+            'name' => 'איך לקרוא למוצר החדש, ובכמה למכור אותו?',
             'target' => 'לאיזה עמוד או מוצר לשים את התמונה?',
             'alt' => 'איך לתאר את התמונה במילה או שתיים? התיאור נדרש כדי שהאתר יישאר נגיש.',
             default => 'לאיזה עמוד או מוצר לשים את התמונה, ואיך לתאר אותה (התיאור נדרש לנגישות)?',
@@ -103,6 +154,9 @@ class ImageChangePlanner
             '- target_id: מזהה העמוד או המוצר מהרשימה שניתנה לך בלבד. אל תמציא מזהה.',
             '- alt: תיאור קצר בעברית של מה שרואים בתמונה, לקוראי מסך. זהו תיאור של התוכן, לא של המיקום.',
             '  "התמונה החדשה" או "תמונה לדף הבית" אינם תיאור. "כיכר לחם על שולחן עץ" הוא תיאור.',
+            '- אם הכיתוב מבקש ליצור מוצר חדש בחנות עם התמונה ("מוצר חדש", "תעלה אותו ב-89", "תוסיף לחנות") — new_product=true,',
+            '  name = שם המוצר מהכיתוב, regular_price = המחיר בספרות בלבד (למשל 89 או 89.90), sale_price/stock_quantity/short_description רק אם נאמרו,',
+            '  publish=true רק אם ביקש לפרסם. alt = תיאור התמונה. בלי target_id. אם אין שם — new_product=true ו-name ריק.',
             '- אם הכיתוב אינו אומר לאן התמונה הולכת — can_do=false ו-needs=target.',
             '- אם הכיתוב אומר לאן אך אינו מתאר את התמונה — can_do=false ו-needs=alt.',
             '- אם חסרים שניהם — can_do=false ו-needs=both.',

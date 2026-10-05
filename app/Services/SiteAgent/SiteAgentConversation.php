@@ -39,6 +39,7 @@ class SiteAgentConversation
         private SiteChangeApplier $applier,
         private WhatsAppCloudClient $whatsapp,
         private SiteAgentAssistant $assistant,
+        private SiteActionProposer $proposer,
     ) {}
 
     /**
@@ -293,6 +294,8 @@ class SiteAgentConversation
             return 'קיבלתי את התמונה, אבל לא הצלחתי להבין לאן לשים אותה.';
         }
 
+        [$plan, $offer] = $this->newProductOffer($site, $plan);
+
         $minutes = max(1, (int) config('siteagent.confirmation_minutes', 30));
 
         // Held on a private disk, not in the database row: an eight-megabyte
@@ -308,22 +311,24 @@ class SiteAgentConversation
             'customer_id' => $subscriber->customer_id,
             'message' => Str::limit($caption !== '' ? $caption : '[תמונה]', 2000),
             'inbound_message_id' => $messageId,
-            'operation' => SiteAgentRequest::OP_IMAGE,
-            'plan' => [
-                ...$plan,
-                'image_path' => $path,
-                'extension' => $media['extension'],
-                'caption' => $caption,
-                // What is on the target now, so the execution can tell whether
-                // somebody put a different picture there in the meantime.
-                'thumbnail_id' => isset($plan['target_id'])
-                    ? $this->planner->thumbnailOf($site, (int) $plan['target_id'])
-                    : null,
-            ],
+            'operation' => $offer !== null ? SiteAgentRequest::OP_PRODUCT_CREATE : SiteAgentRequest::OP_IMAGE,
+            'plan' => $offer !== null
+                ? [...$offer['plan'], 'image_path' => $path, 'extension' => $media['extension'], 'caption' => $caption]
+                : [
+                    ...$plan,
+                    'image_path' => $path,
+                    'extension' => $media['extension'],
+                    'caption' => $caption,
+                    // What is on the target now, so the execution can tell whether
+                    // somebody put a different picture there in the meantime.
+                    'thumbnail_id' => isset($plan['target_id'])
+                        ? $this->planner->thumbnailOf($site, (int) $plan['target_id'])
+                        : null,
+                ],
             // A question is not an offer, so there is nothing to preview and
             // nothing a "כן" could confirm — the row exists to hold the picture
             // and the caption while we wait for the missing half.
-            'preview' => isset($plan['question']) ? null : $this->preview($plan),
+            'preview' => $offer['preview'] ?? (isset($plan['question']) ? null : $this->preview($plan)),
             'state' => SiteAgentRequest::AWAITING,
             'expires_at' => now()->addMinutes($minutes),
         ]);
@@ -412,6 +417,37 @@ class SiteAgentConversation
     }
 
     /**
+     * A photograph meant as a new product, turned into the same offer a typed
+     * request would make.
+     *
+     * Returns the image plan unchanged and no offer when the photograph is
+     * for an existing page or product. When the proposer refuses — a price
+     * that is not a price, publishing without one — its reason becomes the
+     * question, and the photograph waits for the answer instead of being
+     * sent again.
+     *
+     * @param  array<string, mixed>  $plan
+     * @return array{0: array<string, mixed>, 1: array{plan: array<string, mixed>, preview: string}|null}
+     */
+    private function newProductOffer(Site $site, array $plan): array
+    {
+        if (! isset($plan['new_product'])) {
+            return [$plan, null];
+        }
+
+        $offer = $this->proposer->newProduct($site, [...(array) $plan['new_product'], 'image_alt' => (string) $plan['alt']]);
+
+        if (isset($offer['error'])) {
+            return [['question' => $offer['error']], null];
+        }
+
+        return [$plan, [
+            'plan' => [...$offer['plan'], 'image_alt' => (string) $plan['alt']],
+            'preview' => $offer['preview'],
+        ]];
+    }
+
+    /**
      * Is this row a question we asked about an image, rather than an offer?
      *
      * An offer has a preview and can be confirmed; this has neither, and the
@@ -450,6 +486,20 @@ class SiteAgentConversation
 
         if ($next === null) {
             return 'קיבלתי את התמונה, אבל לא הצלחתי להבין לאן לשים אותה.';
+        }
+
+        [$next, $offer] = $this->newProductOffer($site, $next);
+
+        if ($offer !== null) {
+            $request->update([
+                'operation' => SiteAgentRequest::OP_PRODUCT_CREATE,
+                'plan' => [...$offer['plan'], 'image_path' => $plan['image_path'], 'extension' => $plan['extension'] ?? 'jpg', 'caption' => $caption],
+                'message' => Str::limit($caption, 2000),
+                'preview' => $offer['preview'],
+                'expires_at' => now()->addMinutes(max(1, (int) config('siteagent.confirmation_minutes', 30))),
+            ]);
+
+            return $offer['preview']."\n\n".'לביצוע השיבו "כן". לביטול — "לא".';
         }
 
         // Still short of something. The picture stays where it is and the

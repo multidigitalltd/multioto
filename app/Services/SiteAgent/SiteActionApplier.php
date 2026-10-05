@@ -8,6 +8,7 @@ use App\Services\Agent\McpClient;
 use App\Services\Agent\SiteChangeJournal;
 use App\Services\Notifications\TeamNotifier;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
 /**
@@ -406,6 +407,10 @@ class SiteActionApplier
         }
 
         $missing = $this->completeNewProduct($site, $id, (array) ($plan['extra'] ?? []), (array) ($plan['category_ids'] ?? []));
+
+        if (isset($plan['image_path']) && ! $this->attachPhoto($site, $id, $plan)) {
+            $missing[] = 'התמונה';
+        }
         $live = ($plan['extra']['status'] ?? null) === 'publish' && ! in_array('הפרסום', $missing, true);
 
         // No undo: there is no tool that deletes a product — which is the right
@@ -417,7 +422,7 @@ class SiteActionApplier
             $missing !== []
                 ? 'לא הושלמו: '.implode(', ', $missing).'. המוצר קיים, ואפשר לבקש את זה שוב.'
                 : null,
-            'לתמונה למוצר — שלחו אותה כאן עם שם המוצר.',
+            isset($plan['image_path']) ? null : 'לתמונה למוצר — שלחו אותה כאן עם שם המוצר.',
         ])));
     }
 
@@ -461,6 +466,59 @@ class SiteActionApplier
         }
 
         return $missing;
+    }
+
+    /**
+     * The photograph the product was created from, as its main image.
+     *
+     * The filename is ours, never the sender's, and the description the owner
+     * approved is the alt text — the plugin refuses an image without one. A
+     * picture uploaded but not attached is taken back out of the library, so
+     * a retry does not leave orphans behind. The file on our disk goes either
+     * way: it was held only for this.
+     *
+     * @param  array<string, mixed>  $plan
+     */
+    private function attachPhoto(Site $site, int $productId, array $plan): bool
+    {
+        $path = (string) $plan['image_path'];
+        $disk = Storage::disk('local');
+        $bytes = $disk->exists($path) ? (string) $disk->get($path) : '';
+        $attachmentId = 0;
+
+        try {
+            if ($bytes === '' || trim((string) ($plan['image_alt'] ?? '')) === '') {
+                return false;
+            }
+
+            // The upload gets the longer allowance: a phone photo is megabytes.
+            $uploaded = json_decode($this->mcp->textContent($this->mcp->callTool($site, 'wp_media_upload', [
+                'filename' => 'whatsapp-'.now()->format('Ymd-His').'-'.Str::random(6).'.'.($plan['extension'] ?? 'jpg'),
+                'data' => base64_encode($bytes),
+                'alt' => (string) $plan['image_alt'],
+            ], 120)), true);
+            $attachmentId = (int) data_get($uploaded, 'id', data_get($uploaded, 'attachment_id', 0));
+
+            if ($attachmentId <= 0) {
+                return false;
+            }
+
+            $this->call($site, 'wp_post_thumbnail_set', ['id' => $productId, 'attachment_id' => $attachmentId, 'if_current' => 0]);
+
+            return true;
+        } catch (\Throwable) {
+            if ($attachmentId > 0) {
+                try {
+                    $this->call($site, 'wp_media_delete', ['attachment_id' => $attachmentId]);
+                } catch (\Throwable) {
+                    // Housekeeping; the owner is already told the image is missing.
+                }
+            }
+
+            return false;
+        } finally {
+            $disk->delete($path);
+        }
     }
 
     // --- Comments, categories, fields ---------------------------------------
