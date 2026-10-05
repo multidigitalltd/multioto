@@ -56,26 +56,41 @@
             מתחילים נדחית על ידי מטא, בלי שגיאה שמגיעה אליכם.
         </x-slot>
 
+        @php
+            // המשתנים מוצגים בדיוק בצורה שהמערכת שולחת בה, לפי המתג למעלה.
+            // הצגת {{1}} למי שבנה תבנית עם שמות (או להפך) היא הנחיה לבנות תבנית
+            // שתידחה בשליחה הראשונה, בלי שגיאה שתגיע למסך הזה.
+            $named = (bool) config('siteagent.whatsapp.templates.named_parameters', true);
+            $var = fn (string $name, int $position): string => $named ? '{{'.$name.'}}' : '{{'.$position.'}}';
+        @endphp
+
         <div class="space-y-4 text-sm">
             <div class="rounded-xl border border-gray-200 p-4 dark:border-gray-700">
                 <div class="font-medium text-gray-900 dark:text-gray-100">קוד אימות — קטגוריית Authentication</div>
                 <p class="mt-1 text-gray-500 dark:text-gray-400">
                     נשלחת למספר שמעולם לא כתב אלינו, ולכן חייבת להיות תבנית.
-                    <code>@{{1}}</code> הוא הקוד בן שש הספרות.
+                    <code>{{ $var('code', 1) }}</code> הוא הקוד בן שש הספרות.
                 </p>
             </div>
             <div class="rounded-xl border border-gray-200 p-4 dark:border-gray-700">
                 <div class="font-medium text-gray-900 dark:text-gray-100">מנוי מושהה — קטגוריית Utility</div>
                 <p class="mt-1 text-gray-500 dark:text-gray-400">
-                    <code>@{{1}}</code> הדומיין של הלקוח, <code>@{{2}}</code> מה לעשות כדי לחדש.
+                    <code>{{ $var('domain', 1) }}</code> הדומיין של הלקוח. הקישור לחידוש
+                    (<code>{{ rtrim(config('app.url'), '/') }}/portal/login</code>) נכתב
+                    כטקסט קבוע בגוף התבנית ואינו משתנה.
                 </p>
             </div>
             <div class="rounded-xl border border-gray-200 p-4 dark:border-gray-700">
                 <div class="font-medium text-gray-900 dark:text-gray-100">מנוי חזר — קטגוריית Utility</div>
                 <p class="mt-1 text-gray-500 dark:text-gray-400">
-                    <code>@{{1}}</code> הדומיין של הלקוח.
+                    <code>{{ $var('domain', 1) }}</code> הדומיין של הלקוח.
                 </p>
             </div>
+            <p class="text-gray-500 dark:text-gray-400">
+                מטא דוחה תבנית שהגוף שלה <strong>מתחיל או מסתיים במשתנה</strong>, ושני משתנים צמודים —
+                לכן צריך משפט לפני המשתנה הראשון ואחרי האחרון. אל תוסיפו Header, Footer או כפתורים
+                מעבר לכפתור העתקת הקוד בתבנית האימות: המערכת שולחת רכיב גוף בלבד, ורכיב שאינו קיים בתבנית נדחה.
+            </p>
         </div>
     </x-filament::section>
 </x-filament-panels::page>

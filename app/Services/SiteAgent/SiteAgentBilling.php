@@ -6,7 +6,6 @@ use App\Enums\SubscriptionStatus;
 use App\Models\Customer;
 use App\Models\SiteAgentSubscriber;
 use App\Models\Subscription;
-use App\Support\CardLink;
 
 /**
  * The money side of the product, said in words a site owner can act on.
@@ -22,8 +21,6 @@ use App\Support\CardLink;
  */
 class SiteAgentBilling
 {
-    public function __construct(private WhatsAppCloudClient $whatsapp) {}
-
     /**
      * The subscription that carries the agent for this customer, if any.
      *
@@ -134,38 +131,34 @@ class SiteAgentBilling
             // of theirs was switched off.
             'האתר עצמו ממשיך לעבוד כרגיל, ושום שינוי שכבר בוצע לא בוטל.',
             '',
-            $this->recovery($subscriber, $subscription),
+            $this->recovery(),
         ]));
     }
 
     /**
-     * The same two facts, as positional parameters for the approved template.
+     * The one thing that varies, for the approved template: which site.
      *
      * Used when the notice is the one WE start, which is outside any service
-     * window and therefore has to be a template. The wording lives in the
-     * template Meta approved; what varies — which site, and what to do about it
-     * — comes from here, so the two never say different things.
+     * window and therefore has to be a template.
      *
-     * @return list<string> {{1}} the domain · {{2}} what to do next
+     * The way back — "sign in to your account" and the address — is NOT a
+     * parameter. It is the same sentence for every customer in every state, so
+     * passing it in would be sending a constant over the wire and asking Meta
+     * to render it; as fixed text in the approved body it is reviewed once,
+     * cannot be truncated or mangled by the parameter rules, and leaves a
+     * template with a single variable to get wrong.
+     *
+     * @return array<string, string> the domain
      */
     public function pausedTemplateParameters(SiteAgentSubscriber $subscriber): array
     {
-        $subscription = $subscriber->customer !== null
-            ? $this->subscriptionFor($subscriber->customer)
-            : null;
-
-        $subscription?->setRelation('customer', $subscriber->customer);
-
-        return [
-            $subscriber->site?->domain ?? '',
-            $this->recovery($subscriber, $subscription),
-        ];
+        return ['domain' => $subscriber->site?->domain ?? ''];
     }
 
-    /** @return list<string> {{1}} the domain */
+    /** @return array<string, string> the domain */
     public function resumedTemplateParameters(SiteAgentSubscriber $subscriber): array
     {
-        return [$subscriber->site?->domain ?? ''];
+        return ['domain' => $subscriber->site?->domain ?? ''];
     }
 
     /** What to say when it comes back. Short: the good news is the message. */
@@ -179,66 +172,38 @@ class SiteAgentBilling
     }
 
     /**
-     * The one actionable line — and the decision about whether a payment link
-     * may be sent to THIS number at all.
+     * The one actionable line: where to go and renew.
      *
-     * A card link is an invitation to enter a business's card details, so it
-     * goes only to the number the customer record itself carries. The product
-     * allows a business to hand the agent to an employee or to an agency, and
-     * handing them a payment page for their client's business by way of a
-     * courtesy notification is not a thing we get to do quietly.
+     * Used by the free-text message — the one a customer gets when they write
+     * to the agent themselves, inside the service window. The template says the
+     * same thing in its own approved body; the two are kept saying it the same
+     * way on purpose, because somebody who writes a week after the notice
+     * should not get a different answer than the notice gave.
      *
-     * It is also withheld from a customer who pays by transfer or standing
-     * order: sending them a card page tells them to pay a second time, by a
-     * method they explicitly did not choose.
+     * It points at the personal area's SIGN-IN page, and that is the whole
+     * design. A signed card-update link is an invitation to type a business's
+     * card details, and this product deliberately lets a business hand the
+     * agent to an employee or to an agency — so a notice that carried such a
+     * link would be mailing a payment page for somebody else's business to
+     * whoever happens to hold that phone. The sign-in page gives away nothing:
+     * whoever opens it still has to receive a login link on the address or
+     * number the customer record itself carries, which is exactly the check we
+     * would otherwise have to write here and get right.
+     *
+     * The same line therefore suits every case — arrears, cancellation, a
+     * customer who pays by transfer — because what is on the other side of it
+     * is their own account, showing what is actually owed.
      */
-    private function recovery(SiteAgentSubscriber $subscriber, ?Subscription $subscription): string
+    private function recovery(): string
     {
         $support = trim((string) config('billing.email.support_address'));
         $contact = $support !== '' ? 'לכל שאלה: '.$support : 'לכל שאלה אנחנו כאן.';
 
-        $inArrears = in_array($subscription?->status, [
-            SubscriptionStatus::PastDue,
-            SubscriptionStatus::Suspended,
-        ], true);
-
-        if (! $inArrears || $subscription->isManuallyCollected() || ! $this->isCustomerOwnNumber($subscriber)) {
-            return 'לחידוש המנוי דברו איתנו ונפעיל מחדש. '.$contact;
-        }
-
         return implode("\n", [
-            'לעדכון אמצעי התשלום ולחידוש מיידי:',
-            CardLink::for($subscriber->customer_id),
+            'לחידוש המנוי ולעדכון אמצעי התשלום היכנסו לאזור האישי:',
+            route('portal.login'),
             '',
             $contact,
         ]);
-    }
-
-    /**
-     * Is this the number on the customer record itself?
-     *
-     * Compared in the normalised form both sides are stored in, so 050-1234567
-     * on the customer and 972501234567 on the subscriber are recognised as the
-     * same person rather than treated as a stranger.
-     */
-    private function isCustomerOwnNumber(SiteAgentSubscriber $subscriber): bool
-    {
-        $customer = $subscriber->customer;
-
-        if ($customer === null || $subscriber->phone === '') {
-            return false;
-        }
-
-        foreach ([$customer->phone, $customer->whatsapp_jid] as $candidate) {
-            if (blank($candidate)) {
-                continue;
-            }
-
-            if (hash_equals($subscriber->phone, $this->whatsapp->normalize((string) $candidate))) {
-                return true;
-            }
-        }
-
-        return false;
     }
 }

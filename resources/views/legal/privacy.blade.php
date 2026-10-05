@@ -12,13 +12,19 @@
     // "ניהול שמירת נתונים" כותב. מפתח שגוי כאן לא היה נכשל ברעש: הוא היה מציג
     // את ברירת המחדל הקבועה בשקט, כלומר מסמך שמצהיר מספר שאינו המספר שהמערכת
     // פועלת לפיו.
+    // `off_at_zero` מסמן את השורה שעבודת הניקוי שלה באמת מכבדת 0 כ"אל תמחק".
+    // רק אחת כזאת קיימת: forgetOld() יוצאת מוקדם על ערך לא חיובי. שאר העבודות
+    // מעבירות את המספר ישירות ל-subDays(), כך ש-0 אצלן מוחק כמעט הכול בריצה
+    // הבאה — ותווית "המחיקה מושבתת" עליהן הייתה היפוך של ההתנהגות, בדיוק ההפך
+    // מהבעיה שהתווית נולדה לפתור.
     $retention = [
-        'יומן השינויים באתר (מה שונה, ומה היה קודם — זה מה שמאפשר "בטל")' => (int) config('billing.system.site_change_retention_days', 180),
-        'ממצאי ניטור ואבטחה על האתר' => (int) config('billing.system.site_event_retention_days', 90),
-        'היסטוריית בדיקות הזמינות' => (int) config('billing.system.monitor_check_retention_days', 90),
-        'תיעוד הודעות שנשלחו (דוא״ל / וואטסאפ)' => (int) config('billing.system.notification_log_retention_days', 120),
-        'תיעוד פניות נכנסות מספקים חיצוניים' => (int) config('billing.system.webhook_retention_days', 60),
-        'יומן הביקורת של פעולות במערכת' => (int) config('security.audit.retention_days', 365),
+        ['label' => 'יומן השינויים באתר (מה שונה, ומה היה קודם — זה מה שמאפשר "בטל")', 'days' => (int) config('billing.system.site_change_retention_days', 180)],
+        ['label' => 'בקשות ששלחתם לסוכן בוואטסאפ, וההצעות שהוצגו לכם', 'days' => (int) config('billing.system.site_agent_request_retention_days', 180), 'off_at_zero' => true],
+        ['label' => 'ממצאי ניטור ואבטחה על האתר', 'days' => (int) config('billing.system.site_event_retention_days', 90)],
+        ['label' => 'היסטוריית בדיקות הזמינות', 'days' => (int) config('billing.system.monitor_check_retention_days', 90)],
+        ['label' => 'תיעוד הודעות שנשלחו (דוא״ל / וואטסאפ)', 'days' => (int) config('billing.system.notification_log_retention_days', 120)],
+        ['label' => 'תיעוד פניות נכנסות מספקים חיצוניים', 'days' => (int) config('billing.system.webhook_retention_days', 60)],
+        ['label' => 'יומן הביקורת של פעולות במערכת', 'days' => (int) config('security.audit.retention_days', 365)],
     ];
 @endphp
 
@@ -147,14 +153,26 @@
             <tr><th scope="col">סוג המידע</th><th scope="col">נשמר</th></tr>
         </thead>
         <tbody>
-            @foreach ($retention as $label => $days)
-                <tr><th scope="row">{{ $label }}</th><td>{{ $days }} ימים</td></tr>
+            @foreach ($retention as $row)
+                {{-- בשורה שהניקוי שלה מכבד 0, אפס פירושו "אל תמחק" — ו"0 ימים"
+                     היה הופך הגדרה שמשביתה מחיקה להבטחה למחיקה מיידית. --}}
+                <tr>
+                    <th scope="row">{{ $row['label'] }}</th>
+                    <td>
+                        @if (($row['off_at_zero'] ?? false) && $row['days'] <= 0)
+                            נשמר עד להודעה אחרת — המחיקה האוטומטית מושבתת כרגע
+                        @else
+                            {{ max(0, $row['days']) }} ימים
+                        @endif
+                    </td>
+                </tr>
             @endforeach
         </tbody>
     </table>
     <p><strong>בנוסף לטבלה:</strong></p>
     <ul>
-        <li><strong>הצעת שינוי שלא אושרה</strong> — פגה בתוך שעות, וקובץ התמונה שהוחזק עבורה נמחק מהשרת. <strong>הטקסט של הבקשה ושל ההצעה נשמר</strong> כחלק מתיעוד הפעילות על האתר, ואינו נמחק אוטומטית במועד קבוע.</li>
+        <li><strong>קובץ תמונה שהוחזק עבור הצעה</strong> — נמחק מהשרת ברגע שההצעה נסגרת (אושרה, בוטלה או הוחלפה). הצעה שפגה מעצמה בלי תשובה נסגרת בסריקה התקופתית, ולכן הקובץ שלה נמחק <strong>בתוך שעה</strong> ולא באותו רגע.</li>
+        <li><strong>הטקסט של הבקשה ושל ההצעה</strong> — נמחק בתום תקופת השמירה שבטבלה למעלה, כמו כל בקשה אחרת.</li>
         <li><strong>מסמכי חשבונאות</strong> (חשבוניות, קבלות) — נשמרים לתקופה שהדין מחייב.</li>
         <li><strong>פרטי לקוח ומנוי</strong> — כל עוד ההתקשרות פעילה, ואחריה למשך הזמן הנדרש להתגוננות מפני תביעה ולעמידה בדין.</li>
     </ul>

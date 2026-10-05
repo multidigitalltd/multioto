@@ -62,7 +62,16 @@ return [
         'templates' => [
             'language' => env('SITE_AGENT_WA_TEMPLATE_LANGUAGE', 'he'),
 
-            // Authentication category. {{1}} is the six-digit code.
+            /*
+            | המשתנים בגוף התבנית הם בשם ולא במספר: {{domain}} ולא {{1}}. מטא
+            | דוחה היום מספרים בממשק יצירת התבניות, ולכן אין כאן בחירה לעשות.
+            | השמות ששולחת המערכת: code (אימות), domain (השהיה), domain (חידוש).
+            | הקישור לאזור האישי אינו משתנה — הוא טקסט קבוע בגוף התבנית, כי הוא
+            | אותו משפט לכל לקוח ובכל מצב. שם התבנית עצמה — לבחירתכם, ומוזן למטה.
+            */
+
+            // Authentication category. One parameter: the six-digit code
+            // (named `code` when the template uses named variables).
             'verification' => env('SITE_AGENT_WA_TEMPLATE_VERIFICATION', ''),
 
             // Meta's authentication templates carry a copy-code button, which
@@ -71,10 +80,11 @@ return [
             // is rejected.
             'verification_copy_button' => (bool) env('SITE_AGENT_WA_TEMPLATE_VERIFICATION_COPY_BUTTON', true),
 
-            // Utility category. {{1}} is the domain, {{2}} is what to do next.
+            // Utility category. One parameter: `domain`. The way back is
+            // fixed text in the approved body, not a parameter.
             'service_paused' => env('SITE_AGENT_WA_TEMPLATE_PAUSED', ''),
 
-            // Utility category. {{1}} is the domain.
+            // Utility category. One parameter: `domain`.
             'service_resumed' => env('SITE_AGENT_WA_TEMPLATE_RESUMED', ''),
         ],
     ],

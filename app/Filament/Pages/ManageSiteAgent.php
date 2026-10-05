@@ -156,7 +156,7 @@ class ManageSiteAgent extends Page implements HasForms
                             ->label('תבנית קוד האימות')
                             ->live(onBlur: true)
                             ->autocomplete(false)
-                            ->helperText('קטגוריית Authentication. {{1}} הוא הקוד בן שש הספרות. בלעדיה לקוח חדש לא יקבל קוד ולא יוכל להתחיל.'),
+                            ->helperText('קטגוריית Authentication. פרמטר אחד — הקוד בן שש הספרות (בשם: code). בלעדיה לקוח חדש לא יקבל קוד ולא יוכל להתחיל.'),
                         Toggle::make('siteagent.template_verification_copy_button')
                             ->label('לתבנית האימות יש כפתור העתקת קוד')
                             ->helperText('תבניות אימות של מטא מגיעות בדרך כלל עם כפתור "העתק קוד", שדורש את הקוד גם עליו. כבו אם התבנית אושרה בלי כפתור — שליחת רכיב שאינו קיים בתבנית נדחית.')
@@ -165,12 +165,12 @@ class ManageSiteAgent extends Page implements HasForms
                             ->label('תבנית "המנוי מושהה"')
                             ->live(onBlur: true)
                             ->autocomplete(false)
-                            ->helperText('קטגוריית Utility. {{1}} הדומיין, {{2}} מה לעשות עכשיו.'),
+                            ->helperText('קטגוריית Utility. פרמטר אחד — הדומיין (domain). הקישור לאזור האישי נכתב כטקסט קבוע בגוף התבנית.'),
                         TextInput::make('siteagent.template_resumed')
                             ->label('תבנית "המנוי חזר"')
                             ->live(onBlur: true)
                             ->autocomplete(false)
-                            ->helperText('קטגוריית Utility. {{1}} הדומיין.'),
+                            ->helperText('קטגוריית Utility. פרמטר אחד — הדומיין (domain).'),
                     ])->columns(2),
             ])
             ->statePath('data');

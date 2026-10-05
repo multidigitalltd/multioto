@@ -152,15 +152,52 @@ class LegalPagesTest extends TestCase
      */
     public function test_the_expiry_claim_matches_what_the_pruning_job_does(): void
     {
-        $job = file_get_contents(app_path('Jobs/PruneSiteAgentRequestsJob.php'));
-
-        // The job deletes the file and marks the row; it does not delete the row.
-        $this->assertStringContainsString("Storage::disk('local')->delete", $job);
-        $this->assertStringNotContainsString('->delete()', $job);
+        config(['billing.system.site_agent_request_retention_days' => 133]);
 
         $this->get(route('legal.privacy'))
-            ->assertSeeText('קובץ התמונה נמחק')
-            ->assertSeeText('הטקסט של הבקשה ושל ההצעה נשמר');
+            // הניקוי רץ אחת לשעה, ולכן קובץ של הצעה שפגה מעצמה אינו נמחק באותו
+            // רגע. "מיד" היה הבטחה שלוח הזמנים אינו מקיים.
+            ->assertSeeText('בתוך שעה')
+            ->assertDontSeeText('נמחק מהשרת מיד')
+            // והטקסט — לפי החלון שהעבודה באמת אוכפת.
+            ->assertSeeText('133 ימים');
+    }
+
+    /**
+     * חלון 0 פירושו שהמחיקה מושבתת — ולא שהיא מיידית.
+     *
+     * forgetOld() יוצאת בלי למחוק דבר כשהערך אינו חיובי, כך ש"0 ימים" בטבלה היה
+     * הופך הגדרה שמשביתה מחיקה להבטחה למחיקה מיידית. היפוך מלא של ההתנהגות,
+     * במשפט שלקוח מסתמך עליו.
+     */
+    public function test_a_disabled_window_is_not_shown_as_zero_days(): void
+    {
+        config(['billing.system.site_agent_request_retention_days' => 0]);
+
+        // לפי סדר ההופעה ולא כחיפוש מחרוזת: "0 ימים" הוא תת-מחרוזת של
+        // "180 ימים" ושל "90 ימים", כך שחיפוש פשוט היה עובר תמיד — או נכשל
+        // תמיד — בלי קשר לשורה שנבדקת.
+        $this->get(route('legal.privacy'))->assertSeeTextInOrder([
+            'בקשות ששלחתם לסוכן בוואטסאפ, וההצעות שהוצגו לכם',
+            'המחיקה האוטומטית מושבתת',
+        ]);
+    }
+
+    /**
+     * והתווית הזאת שייכת רק לשורה שהניקוי שלה באמת מכבד אפס.
+     *
+     * שאר העבודות מעבירות את המספר ישירות ל-subDays(), כך ש-0 אצלן מוחק כמעט
+     * הכול בריצה הבאה. "המחיקה מושבתת" עליהן היה היפוך של ההתנהגות — בדיוק
+     * ההפך מהבעיה שהתווית נולדה לפתור.
+     */
+    public function test_the_disabled_label_is_not_claimed_for_jobs_that_ignore_zero(): void
+    {
+        config(['security.audit.retention_days' => 0]);
+
+        $this->get(route('legal.privacy'))->assertSeeTextInOrder([
+            'יומן הביקורת של פעולות במערכת',
+            '0 ימים',
+        ]);
     }
 
     /**

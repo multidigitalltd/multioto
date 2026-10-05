@@ -62,7 +62,25 @@ class WhatsAppCloudClient
      * Templates are accepted at any time, window or no window, so a proactive
      * message never has to ask whether one is open.
      *
-     * @param  list<string|int>  $parameters  positional body parameters ({{1}}, {{2}}, …)
+     * The form of each body parameter follows the KEY, and that is not a style
+     * choice — the two template categories genuinely differ:
+     *
+     *  - **Utility/Marketing**, where we write the body ourselves: Meta's editor
+     *    refuses numeric placeholders now ("lowercase with single underscores"),
+     *    so the variables have names and each parameter must carry
+     *    `parameter_name`. Pass `['domain' => …]`.
+     *  - **Authentication**, where Meta writes the body: the OTP placeholder is
+     *    preset and has no name to give, so the code goes positionally. Pass
+     *    `[$code]`.
+     *
+     * Getting it the wrong way round is rejected by Meta, and a rejected
+     * template is a customer who hears nothing with no error reaching any screen
+     * here. The call site knows the category for certain, so it decides — rather
+     * than a setting somebody has to keep in step with Meta's UI.
+     *
+     * @param  array<string|int, string|int>  $parameters  body parameters: keyed
+     *                                                     by variable name, or a
+     *                                                     plain list for an OTP
      * @param  string|null  $copyCode  the code for an authentication template's
      *                                 copy-code button; omitted for utility ones
      */
@@ -75,15 +93,23 @@ class WhatsAppCloudClient
         $components = [];
 
         if ($parameters !== []) {
-            $components[] = [
-                'type' => 'body',
-                'parameters' => array_map(
-                    // Meta rejects a parameter containing a newline or a tab, and
-                    // a rejected template is a customer who hears nothing.
-                    fn ($value): array => ['type' => 'text', 'text' => trim(preg_replace('/\s+/u', ' ', (string) $value) ?? '')],
-                    array_values($parameters),
-                ),
-            ];
+            $body = [];
+
+            foreach ($parameters as $variable => $value) {
+                // Meta rejects a parameter containing a newline or a tab, and
+                // a rejected template is a customer who hears nothing.
+                $parameter = ['type' => 'text', 'text' => trim(preg_replace('/\s+/u', ' ', (string) $value) ?? '')];
+
+                // A string key is a named variable; an integer key is a list,
+                // which is how an authentication template's preset OTP is sent.
+                if (is_string($variable)) {
+                    $parameter['parameter_name'] = $variable;
+                }
+
+                $body[] = $parameter;
+            }
+
+            $components[] = ['type' => 'body', 'parameters' => $body];
         }
 
         if ($copyCode !== null) {

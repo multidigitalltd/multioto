@@ -674,6 +674,14 @@ return [
 
         // Per-site event feed (site_events) and audit runs (site_audits) — both
         // are diagnostics that age out of usefulness quickly.
+        // Site-agent requests: what a customer asked for over WhatsApp, what we
+        // offered, and what was carried out. The image was already deleted the
+        // moment the question closed — this is the TEXT, and until now nothing
+        // removed it. Matched to the site-change journal, because a request and
+        // the change it produced are two halves of the same record and there is
+        // no sense in keeping one after the other is gone.
+        'site_agent_request_retention_days' => env('SITE_AGENT_REQUEST_RETENTION_DAYS', 180),
+
         'site_event_retention_days' => env('SITE_EVENT_RETENTION_DAYS', 90),
         'site_audit_retention_days' => env('SITE_AUDIT_RETENTION_DAYS', 180),
 

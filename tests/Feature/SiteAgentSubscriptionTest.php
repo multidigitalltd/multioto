@@ -295,6 +295,11 @@ class SiteAgentSubscriptionTest extends TestCase
 
         $code = data_get($body, 'template.components.0.parameters.0.text');
         $this->assertMatchesRegularExpression('/^\d{6}$/', (string) $code);
+        // POSITIONAL, and that is not an oversight: an authentication template's
+        // body is written by Meta and its OTP placeholder has no name to give,
+        // so a named parameter here is rejected and the customer never receives
+        // the code. The utility templates, whose bodies we write, are named.
+        $this->assertArrayNotHasKey('parameter_name', (array) data_get($body, 'template.components.0.parameters.0'));
         // Meta's authentication templates carry a copy-code button, and the
         // code has to be repeated on it or the send is rejected.
         $this->assertSame($code, data_get($body, 'template.components.1.parameters.0.text'));
@@ -320,16 +325,22 @@ class SiteAgentSubscriptionTest extends TestCase
         $this->sync();
 
         $body = Http::recorded()->last()[0]->data();
-        $parameters = array_column(data_get($body, 'template.components.0.parameters', []), 'text');
+        // Keyed by the template's own variable names — the only form Meta
+        // accepts now, and the form the editor forces when a template is built.
+        $parameters = array_column(
+            data_get($body, 'template.components.0.parameters', []),
+            'text',
+            'parameter_name',
+        );
 
         $this->assertSame('site_agent_paused', data_get($body, 'template.name'));
-        $this->assertSame($site->domain, $parameters[0] ?? null);
-        // The way back rides in the template's own parameter: a template send
-        // does not open a window, so no free-text message can follow it.
-        $this->assertStringContainsString('/billing/update-card/', $parameters[1] ?? '');
+        // One variable, and it is the site. The way back is fixed text in the
+        // body Meta approved — the same sentence for every customer, so sending
+        // it as a parameter would be shipping a constant over the wire.
+        $this->assertSame(['domain' => $site->domain], $parameters);
         // Meta rejects a parameter carrying a newline, and a rejected template
         // is a customer who hears nothing at all.
-        $this->assertStringNotContainsString("\n", $parameters[1] ?? '');
+        $this->assertStringNotContainsString("\n", $parameters['domain'] ?? '');
     }
 
     public function test_a_code_that_could_not_be_delivered_is_never_stamped(): void
@@ -424,7 +435,16 @@ class SiteAgentSubscriptionTest extends TestCase
         $this->assertSame(SiteAgentSubscriber::STATE_ACTIVE, $subscriber->fresh()->notified_service_state);
     }
 
-    public function test_the_card_link_goes_only_to_the_number_on_the_customer_record(): void
+    /**
+     * אף נמען אינו מקבל עמוד להקלדת כרטיס — כולם מקבלים את האזור האישי.
+     *
+     * המוצר מאפשר לעסק למסור את הסוכן לעובד או למשרד פרסום, ולכן ההודעה הזאת
+     * מגיעה לפעמים למי שאינו בעל העסק. קודם הייתה כאן בדיקה מי הנמען לפני
+     * שליחת קישור להקלדת כרטיס; כעת אין קישור כזה בכלל, ולכן אין גם מה לדלוף:
+     * עמוד הכניסה לאזור האישי אינו חושף דבר, ומי שפותח אותו עדיין חייב לקבל
+     * קישור כניסה לכתובת או למספר שרשומים על הלקוח עצמו.
+     */
+    public function test_no_recipient_is_sent_a_card_entry_page(): void
     {
         Http::fake(['*' => Http::response(['messages' => [['id' => 'wamid.x']]])]);
 
@@ -441,14 +461,12 @@ class SiteAgentSubscriptionTest extends TestCase
         $subscription->update(['status' => SubscriptionStatus::Suspended]);
         $this->sync();
 
-        $ownerBody = $this->bodySentTo($owner->phone);
-        $staffBody = $this->bodySentTo($staff->phone);
+        foreach ([$owner, $staff] as $subscriber) {
+            $body = $this->bodySentTo($subscriber->phone);
 
-        $this->assertStringContainsString('/billing/update-card/', $ownerBody);
-        // Handing an agency or an employee a card-entry page for their client's
-        // business, by way of a courtesy notification, is not ours to do quietly.
-        $this->assertStringNotContainsString('/billing/update-card/', $staffBody);
-        $this->assertStringContainsString('דברו איתנו', $staffBody);
+            $this->assertStringNotContainsString('/billing/update-card/', $body);
+            $this->assertStringContainsString('/portal/login', $body);
+        }
     }
 
     public function test_a_customer_who_pays_by_transfer_is_not_sent_a_card_page(): void
