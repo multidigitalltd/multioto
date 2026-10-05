@@ -110,6 +110,59 @@ class Plan extends Model
         return Money::ils($this->grossAgorot($vatExempt)).' '.$this->intervalLabel();
     }
 
+    /*
+    |--------------------------------------------------------------------------
+    | Prices as a business reads them: before VAT, with the VAT said out loud
+    |--------------------------------------------------------------------------
+    |
+    | The buyer here is a business, and a business compares net prices because
+    | the VAT comes back to it. Quoting it gross reads as 18% more expensive
+    | than every competitor quoting net.
+    |
+    | So these say the net figure AND that VAT is added — never the net figure
+    | alone, which would be the same sentence a customer later disputes against
+    | their invoice. Where VAT does not apply to the plan at all, the suffix is
+    | omitted rather than printed as a promise of a tax nobody will charge.
+    |
+    | The gross helpers above stay exactly as they are: everything that bills,
+    | invoices or tells an existing customer what they will pay goes through
+    | them, VAT-exempt flag included. These are for the shop window only.
+    |
+    */
+
+    /** "₪149 לחודש + מע״מ" — the net price, with the VAT named rather than hidden. */
+    public function netPriceLabel(): string
+    {
+        return Money::ils((int) $this->price_agorot).' '.$this->intervalLabel().$this->vatSuffix();
+    }
+
+    /** The net price of one extra manager number per cycle, or null when none are sold. */
+    public function extraNumberNetLabel(): ?string
+    {
+        if (! $this->sellsExtraNumbers()) {
+            return null;
+        }
+
+        if ((int) $this->extra_number_price_agorot === 0) {
+            return 'ללא תוספת תשלום';
+        }
+
+        return Money::ils((int) $this->extra_number_price_agorot).' '.$this->intervalLabel().$this->vatSuffix();
+    }
+
+    /** The net price of one bot message, or null when messages are not billed. */
+    public function messageNetLabel(): ?string
+    {
+        return $this->billsMessages()
+            ? Money::ils((int) $this->message_price_agorot).$this->vatSuffix()
+            : null;
+    }
+
+    private function vatSuffix(): string
+    {
+        return $this->vat_applies ? ' + מע״מ' : '';
+    }
+
     public function intervalLabel(): string
     {
         return $this->billing_interval === BillingInterval::Yearly ? 'לשנה' : 'לחודש';

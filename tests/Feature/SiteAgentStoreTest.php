@@ -126,12 +126,77 @@ class SiteAgentStoreTest extends TestCase
     | ----------------------------------------------------------------
     */
 
-    public function test_the_page_shows_the_price_the_buyer_will_actually_pay(): void
+    /**
+     * המחירים בעמוד הם לפני מע״מ, והמע״מ נאמר במפורש לידם.
+     *
+     * הקונה כאן הוא עסק, והוא משווה מחירי נטו כי המע״מ חוזר אליו: מחיר ברוטו
+     * נקרא כ-18% יותר יקר מכל מי שמצטט נטו. אבל מחיר נטו בלי שהמע״מ נאמר הוא
+     * בדיוק המשפט שעליו מתווכחים אחר כך מול החשבונית — ולכן נבדקים שני הדברים
+     * יחד, וגם שהברוטו עצמו אינו מופיע כמחיר.
+     */
+    public function test_the_page_quotes_net_prices_and_says_the_vat_out_loud(): void
     {
+        $page = $this->get(route('store.agent'))->assertOk();
+
+        $page->assertSee('149.00')      // המסלול, נטו
+            ->assertSee('49.00')        // מספר נוסף, נטו
+            ->assertSee('+ מע״מ', false)
+            // ולא הברוטו: 149 + 18% ו-49 + 18%. בלי זה המבחן עובר גם על עמוד
+            // שמציג את שני הסוגים זה לצד זה, כלומר על עמוד שלא תוקן.
+            ->assertDontSee('175.82')
+            ->assertDontSee('57.82');
+    }
+
+    /**
+     * מסלול אחד אינו מוצג כבחירה.
+     *
+     * קבוצת radio של אפשרות אחת היא החלטה שהקונה צריך לקבל על שום דבר, והיא
+     * נראית כאילו חסרות אפשרויות אחרות שלא נטענו.
+     */
+    public function test_a_single_plan_is_not_presented_as_a_choice(): void
+    {
+        $this->assertSame(1, Plan::query()->publiclySellable()->count());
+
         $this->get(route('store.agent'))
             ->assertOk()
-            ->assertSee('175.82')   // 149 ₪ + מע״מ
-            ->assertSee('57.82');   // מספר נוסף: 49 ₪ + מע״מ
+            ->assertDontSee('type="radio" name="plan"', false)
+            ->assertSee('type="hidden" name="plan" value="'.$this->plan->id.'"', false);
+    }
+
+    /**
+     * החיוב על ההודעות מופיע במחיר, ולא בהערת שוליים.
+     *
+     * חיוב שלקוח מגלה בחשבונית הראשונה הוא חיוב שעליו מתווכחים, כמה שהוא הוגן.
+     */
+    public function test_the_charge_for_messages_is_disclosed_with_its_price(): void
+    {
+        $this->plan->update(['message_price_agorot' => 12]);
+
+        $this->get(route('store.agent'))
+            ->assertOk()
+            ->assertSee('0.12')
+            ->assertSee('הודעות');
+    }
+
+    /** ומסלול בלי חיוב על הודעות אינו מבטיח חיוב שלא קיים. */
+    public function test_a_plan_that_does_not_bill_messages_promises_no_such_charge(): void
+    {
+        $this->plan->update(['message_price_agorot' => 0]);
+
+        $this->get(route('store.agent'))
+            ->assertOk()
+            ->assertDontSee('לכל הודעה שהבוט שולח');
+    }
+
+    /** תקופת ניסיון מוצגת בכל מקום שהיא משנה בו את מה שקורה היום. */
+    public function test_the_trial_is_stated_where_it_changes_what_happens_today(): void
+    {
+        $this->plan->update(['trial_days' => 7]);
+
+        $this->get(route('store.agent'))
+            ->assertOk()
+            ->assertSee('7 ימים ניסיון חינם')
+            ->assertSee('היום לא תחויבו');
     }
 
     /**
@@ -319,6 +384,128 @@ class SiteAgentStoreTest extends TestCase
         $this->assertNull($subscriber->verified_at);
 
         Queue::assertPushed(SendSiteAgentVerificationJob::class);
+    }
+
+    /*
+    | ----------------------------------------------------------------
+    | מספרים נוספים בקנייה
+    | ----------------------------------------------------------------
+    */
+
+    /**
+     * מספר נוסף שנקנה — משולם במחזור הראשון, ולא רק מהשני.
+     *
+     * אחרת העסקה היא "המסלול בלבד" והמושב מופיע לראשונה בחידוש: מחזור חינם לכל
+     * מספר נוסף, שאף אחד לא מוצא.
+     */
+    public function test_an_extra_number_is_paid_for_in_the_first_cycle_too(): void
+    {
+        $this->fakeCardcom();
+
+        $this->buy(['extra_phones' => ['052-7654321', '053-1112222']])
+            ->assertRedirect('https://secure.cardcom.solutions/pay/abc');
+
+        $order = SiteAgentOrder::sole();
+
+        // 149 + 2×49, ועוד 18% מע״מ על הסך.
+        $this->assertSame(17582 + (2 * 5782), $order->total_agorot);
+        $this->assertSame(['972527654321', '972531112222'], $order->extraPhones());
+    }
+
+    /**
+     * ובתשלום — כל מספר נקשר, כל אחד מקבל קוד משלו, והמנוי מחויב על המושבים.
+     *
+     * הספירה נעשית ממה שבאמת נקשר ולא מההזמנה, כי זו אותה ספירה שהאזור האישי
+     * מריץ בכל הוספה או ביטול — ורק היא שומרת על מחיר החידוש ועל המספרים
+     * שעובדים מלהיפרד זה מזה.
+     */
+    public function test_paying_binds_every_extra_number_and_bills_the_seats(): void
+    {
+        Queue::fake([SendSiteAgentVerificationJob::class]);
+        $this->fakeCardcom();
+        $this->buy(['extra_phones' => ['052-7654321', '053-1112222']]);
+
+        $this->pay(SiteAgentOrder::sole());
+
+        $this->assertSame(
+            ['972501234567', '972527654321', '972531112222'],
+            SiteAgentSubscriber::query()->orderBy('id')->pluck('phone')->all(),
+        );
+
+        // אף אחד מהם אינו מאומת: לקשור זה לא להוכיח מי מחזיק בטלפון.
+        $this->assertSame(0, SiteAgentSubscriber::query()->whereNotNull('verified_at')->count());
+
+        // שלושה קודים, אחד לכל מספר.
+        Queue::assertPushed(SendSiteAgentVerificationJob::class, 3);
+
+        // המושבים שמעל המספר שהמסלול כולל — שניים.
+        $this->assertSame(2, (int) Subscription::sole()->agent_extra_numbers);
+    }
+
+    /**
+     * אותו מספר שנכתב בשתי צורות אינו שני מושבים.
+     *
+     * "050-123-4567" ו-"972501234567" הם אותו טלפון, ולחייב עליהם פעמיים זה
+     * לחייב על מושב שלא קיים — ולכן גם הטלפון של הקונה עצמו אינו נמכר לו שוב,
+     * המסלול כבר כולל אותו.
+     */
+    public function test_the_same_phone_written_twice_is_not_two_seats(): void
+    {
+        $this->fakeCardcom();
+
+        $this->buy(['extra_phones' => ['050-123-4567', '0527654321', '972527654321']]);
+
+        $order = SiteAgentOrder::sole();
+
+        // רק 052 נותר: הראשון הוא הטלפון של הקונה, והשלישי הוא אותו 052.
+        $this->assertSame(['972527654321'], $order->extraPhones());
+        $this->assertSame(17582 + 5782, $order->total_agorot);
+    }
+
+    /** תיבה ריקה אינה מספר, ואינה מחירו. */
+    public function test_blank_boxes_are_not_charged_for(): void
+    {
+        $this->fakeCardcom();
+
+        $this->buy(['extra_phones' => ['', '   ', '']]);
+
+        $order = SiteAgentOrder::sole();
+        $this->assertSame([], $order->extraPhones());
+        $this->assertSame(17582, $order->total_agorot);
+    }
+
+    /**
+     * מסלול שאינו מוכר מספרים נוספים אינו מוכר אותם גם למי ששולח אותם בכל זאת.
+     *
+     * הטופס אינו מציג את השדות, אבל בקשת POST אינה הטופס. בלי הבדיקה הזאת
+     * המספרים היו נקשרים — ובמחיר null, כלומר בחינם.
+     */
+    public function test_a_plan_that_sells_no_extra_numbers_does_not_bind_posted_ones(): void
+    {
+        $this->plan->update(['extra_number_price_agorot' => null]);
+        Queue::fake([SendSiteAgentVerificationJob::class]);
+        $this->fakeCardcom();
+
+        $this->buy(['extra_phones' => ['052-7654321']]);
+
+        $order = SiteAgentOrder::sole();
+        $this->assertSame([], $order->extraPhones());
+        $this->assertSame(17582, $order->total_agorot);
+
+        $this->pay($order);
+        $this->assertSame(1, SiteAgentSubscriber::count());
+    }
+
+    /** ויותר מהתקרה — נדחה, ולא הופך לעמוד תשלום על עשרים מושבים. */
+    public function test_more_numbers_than_the_cap_are_refused(): void
+    {
+        Http::fake();
+
+        $this->buy(['extra_phones' => ['0521111111', '0522222222', '0523333333', '0524444444']])
+            ->assertSessionHasErrors('extra_phones');
+
+        $this->assertSame(0, SiteAgentOrder::count());
+        Http::assertNothingSent();
     }
 
     /**

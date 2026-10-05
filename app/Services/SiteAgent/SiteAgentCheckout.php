@@ -50,7 +50,7 @@ class SiteAgentCheckout
     /**
      * Start a purchase: record the order and hand back the payment page.
      *
-     * @param  array{name: string, email: string, phone: string, manager_name: ?string, domain: string, install_mode: string}  $buyer
+     * @param  array{name: string, email: string, phone: string, manager_name: ?string, domain: string, install_mode: string, extra_phones?: list<string>}  $buyer
      * @return array{order: SiteAgentOrder, url: string}
      */
     public function start(Plan $plan, array $buyer): array
@@ -65,6 +65,7 @@ class SiteAgentCheckout
             throw new \RuntimeException('מספר הוואטסאפ אינו תקין.');
         }
 
+        $extras = $this->extraPhones($plan, $buyer['extra_phones'] ?? [], $phone);
         $domain = Site::stripScheme(trim($buyer['domain']));
 
         // Created now, not at payment: the invoice, the renewal and every later
@@ -80,8 +81,14 @@ class SiteAgentCheckout
             'buyer_email' => $buyer['email'],
             'manager_phone' => $phone,
             'manager_name' => filled($buyer['manager_name'] ?? null) ? $buyer['manager_name'] : null,
+            'extra_phones' => $extras,
             'domain' => $domain,
-            'total_agorot' => $plan->grossAgorot((bool) $customer->vat_exempt),
+            // The plan plus whatever extra numbers were bought with it, both at
+            // this customer's VAT treatment. Charging the plan alone and letting
+            // the seats appear at the first renewal would mean the first cycle of
+            // every extra number is free, found by nobody.
+            'total_agorot' => $plan->grossAgorot((bool) $customer->vat_exempt)
+                + (count($extras) * (int) ($plan->extraNumberGrossAgorot((bool) $customer->vat_exempt) ?? 0)),
             'trial_days' => $this->trialDaysFor($plan, $customer, $domain),
             'install_mode' => in_array($buyer['install_mode'] ?? null, SiteAgentOrder::INSTALL_MODES, true)
                 ? $buyer['install_mode']
@@ -121,6 +128,49 @@ class SiteAgentCheckout
         $order->update(['charge_id' => $page['charge']->id]);
 
         return ['order' => $order, 'url' => $page['url']];
+    }
+
+    /**
+     * The extra manager numbers this order may actually buy.
+     *
+     * Normalised the same way the primary number is, so "050-111-2222" and
+     * "972501112222" cannot both be bought as two seats on one phone. Four
+     * refusals, each of which would otherwise be a charge for nothing:
+     *
+     *   - the plan does not sell extra numbers at all;
+     *   - a number that does not normalise to anything;
+     *   - the buyer's own number, which the plan already includes;
+     *   - the same number twice.
+     *
+     * Dropped rather than rejected, because the form has already validated what
+     * a buyer can see and fix. What is left here are the collisions only
+     * normalisation reveals, and silently charging for one of those is worse
+     * than quietly buying one seat fewer than the boxes that were filled in.
+     *
+     * @param  list<string>  $phones
+     * @return list<string>
+     */
+    private function extraPhones(Plan $plan, array $phones, string $primary): array
+    {
+        if (! $plan->sellsExtraNumbers()) {
+            return [];
+        }
+
+        $seen = [$primary => true];
+        $kept = [];
+
+        foreach ($phones as $phone) {
+            $normalised = $this->whatsapp->normalize(is_string($phone) ? $phone : '');
+
+            if ($normalised === '' || isset($seen[$normalised])) {
+                continue;
+            }
+
+            $seen[$normalised] = true;
+            $kept[] = $normalised;
+        }
+
+        return $kept;
     }
 
     /**
@@ -180,9 +230,10 @@ class SiteAgentCheckout
             return $order;
         }
 
-        $subscriber = null;
+        /** @var list<int> $toVerify */
+        $toVerify = [];
 
-        DB::transaction(function () use ($order, $customer, $plan, &$subscriber): void {
+        DB::transaction(function () use ($order, $customer, $plan, &$toVerify): void {
             $site = $this->site($order, $customer);
 
             // A second SITE is a second service, at its own price.
@@ -221,18 +272,26 @@ class SiteAgentCheckout
             // be bound to this site from an earlier attempt, and colliding with
             // the unique key here would fail a payment that has already left the
             // customer's card.
-            $subscriber = SiteAgentSubscriber::firstOrNew([
-                'phone' => $order->manager_phone,
-                'site_id' => $site->id,
-            ]);
+            $toVerify[] = $this->bind($site->id, $customer->id, (string) $order->manager_phone, $order->manager_name)->id;
 
-            $subscriber->fill([
-                'customer_id' => $customer->id,
-                'name' => $order->manager_name ?: $subscriber->name,
-            ])->forceFill([
-                'revoked_at' => null,
-                'revoked_reason' => null,
-            ])->save();
+            // The extra numbers bought with the order, each its own binding and
+            // each getting its own code: a number that has not answered one
+            // cannot touch the site, however it was paid for.
+            foreach ($order->extraPhones() as $extra) {
+                $toVerify[] = $this->bind($site->id, $customer->id, $extra, null)->id;
+            }
+
+            // Counted from what is actually bound, never from the order.
+            //
+            // An order whose numbers collided on normalisation, or whose site
+            // already carried one of them, must renew on the seats that exist
+            // rather than on the boxes that were filled in. This is the same
+            // recount the portal runs whenever a number is added or revoked, and
+            // it is the only thing that keeps the renewal price and the working
+            // numbers from drifting apart — so it runs for an existing
+            // subscription too, where skipping it would leave a seat that works
+            // every month and is billed in none.
+            $this->billing->recountManagerSeats($subscription);
 
             if ($order->wantsUsToInstall()) {
                 SiteInstallation::firstOrCreate(
@@ -256,8 +315,8 @@ class SiteAgentCheckout
 
         // Outside the transaction: nothing external may run before the rows it
         // talks about are committed.
-        if ($subscriber !== null) {
-            SendSiteAgentVerificationJob::dispatch($subscriber->id);
+        foreach ($toVerify as $subscriberId) {
+            SendSiteAgentVerificationJob::dispatch($subscriberId);
         }
 
         // The page after payment is one browser crash away from being gone, and
@@ -281,6 +340,33 @@ class SiteAgentCheckout
             ['order_id' => $order->id, 'install_mode' => $order->install_mode]);
 
         return $order->fresh();
+    }
+
+    /**
+     * One number bound to one site, ready to be sent its verification code.
+     *
+     * Re-used rather than created blindly: the same number may already be bound
+     * to this site from an earlier attempt, and colliding with the unique key
+     * here would fail a payment that has already left the customer's card. A
+     * binding that had been revoked is brought back — the money for it has just
+     * arrived — but never marked verified, which only answering the code does.
+     */
+    private function bind(int $siteId, int $customerId, string $phone, ?string $name): SiteAgentSubscriber
+    {
+        $subscriber = SiteAgentSubscriber::firstOrNew([
+            'phone' => $phone,
+            'site_id' => $siteId,
+        ]);
+
+        $subscriber->fill([
+            'customer_id' => $customerId,
+            'name' => $name ?: $subscriber->name,
+        ])->forceFill([
+            'revoked_at' => null,
+            'revoked_reason' => null,
+        ])->save();
+
+        return $subscriber;
     }
 
     /**

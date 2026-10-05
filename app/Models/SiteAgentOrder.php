@@ -42,7 +42,7 @@ class SiteAgentOrder extends Model
 
     protected $fillable = [
         'reference', 'customer_id', 'plan_id',
-        'buyer_name', 'buyer_email', 'manager_phone', 'manager_name',
+        'buyer_name', 'buyer_email', 'manager_phone', 'manager_name', 'extra_phones',
         'domain', 'site_id', 'total_agorot', 'install_mode', 'status',
         'charge_id', 'subscription_id', 'fulfilled_at', 'trial_days', 'cardcom_low_profile_id',
     ];
@@ -58,7 +58,28 @@ class SiteAgentOrder extends Model
         return [
             'total_agorot' => 'integer',
             'fulfilled_at' => 'datetime',
+            'extra_phones' => 'array',
         ];
+    }
+
+    /**
+     * The additional manager numbers bought with this order, normalised.
+     *
+     * Always a list of non-empty strings, whatever the column holds: the row may
+     * predate the column, and a cast array is only as well-shaped as what was
+     * written into it. Everything downstream of here creates bindings and raises
+     * a price, so neither may act on a null or a stray blank.
+     *
+     * @return list<string>
+     */
+    public function extraPhones(): array
+    {
+        $phones = is_array($this->extra_phones) ? $this->extra_phones : [];
+
+        return array_values(array_unique(array_filter(
+            array_map(fn ($phone): string => is_string($phone) ? trim($phone) : '', $phones),
+            fn (string $phone): bool => $phone !== '',
+        )));
     }
 
     public function customer(): BelongsTo
