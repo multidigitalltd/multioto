@@ -89,11 +89,55 @@ class SiteAgentRequest extends Model
     /** Create a coupon. */
     public const OP_COUPON = 'create_coupon';
 
+    /** Approve, hold, spam or trash a comment. */
+    public const OP_COMMENT = 'moderate_comment';
+
+    /** Create a category or tag. */
+    public const OP_TERM_CREATE = 'create_term';
+
+    /** Set the categories/tags of a post or product. */
+    public const OP_POST_TERMS = 'set_post_terms';
+
+    /** Change custom fields (ACF and the like) on an item. */
+    public const OP_FIELDS = 'update_fields';
+
+    /** Add, change or remove a menu item. */
+    public const OP_MENU_ADD = 'menu_item_add';
+
+    public const OP_MENU_UPDATE = 'menu_item_update';
+
+    public const OP_MENU_REMOVE = 'menu_item_remove';
+
+    /** Move a post or page to the trash. */
+    public const OP_TRASH = 'trash_content';
+
+    /** End a coupon today. */
+    public const OP_COUPON_EXPIRE = 'expire_coupon';
+
+    /** Clear the site's cache. */
+    public const OP_CACHE_FLUSH = 'flush_cache';
+
+    /** Update plugins (one or several), checking the site after each. */
+    public const OP_PLUGIN_UPDATE = 'update_plugins';
+
+    /** Update one theme, checking the site after it. */
+    public const OP_THEME_UPDATE = 'update_theme';
+
+    /** Switch a plugin on or off. */
+    public const OP_PLUGIN_TOGGLE = 'toggle_plugin';
+
+    /** Delete a file from the media library — permanently. */
+    public const OP_MEDIA_DELETE = 'delete_media';
+
     /** The operations the assistant proposes, carried out by SiteActionApplier. */
     public const MANAGEMENT_OPERATIONS = [
         self::OP_PRODUCT_CREATE, self::OP_ORDER_STATUS, self::OP_ORDER_NOTE,
         self::OP_SUBSCRIPTION_STATUS, self::OP_POST_CREATE, self::OP_POST_UPDATE,
         self::OP_USER_CREATE, self::OP_USER_ROLE, self::OP_COUPON,
+        self::OP_COMMENT, self::OP_TERM_CREATE, self::OP_POST_TERMS, self::OP_FIELDS,
+        self::OP_MENU_ADD, self::OP_MENU_UPDATE, self::OP_MENU_REMOVE,
+        self::OP_TRASH, self::OP_COUPON_EXPIRE, self::OP_CACHE_FLUSH,
+        self::OP_PLUGIN_UPDATE, self::OP_THEME_UPDATE, self::OP_PLUGIN_TOGGLE, self::OP_MEDIA_DELETE,
     ];
 
     /** Everything the agent is allowed to do, in one list. */
