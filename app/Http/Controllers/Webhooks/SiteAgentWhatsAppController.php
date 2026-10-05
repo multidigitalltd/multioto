@@ -90,10 +90,16 @@ class SiteAgentWhatsAppController extends Controller
     private function messages(array $payload): array
     {
         $found = [];
+        $ours = trim((string) config('siteagent.whatsapp.phone_number_id'));
 
         foreach ((array) data_get($payload, 'entry', []) as $entry) {
             foreach ((array) data_get($entry, 'changes', []) as $change) {
                 $value = (array) data_get($change, 'value', []);
+
+                if (! $this->addressedToOurNumber($value, $ours)) {
+                    continue;
+                }
+
                 $contact = (array) data_get($value, 'contacts.0', []);
 
                 foreach ((array) data_get($value, 'messages', []) as $message) {
@@ -111,5 +117,35 @@ class SiteAgentWhatsAppController extends Controller
         }
 
         return $found;
+    }
+
+    /**
+     * Was this delivery addressed to the agent's number, or to a sibling?
+     *
+     * Meta subscribes webhooks **per WhatsApp Business Account, not per number**.
+     * A business whose account holds several numbers — a support line, a sales
+     * line, this product's line — therefore gets every message for all of them
+     * delivered to the same endpoint. Without this check a customer writing to
+     * the support number would be answered by the site agent, and worse, an
+     * instruction typed there would be carried out against a site.
+     *
+     * The rule is deliberately asymmetric:
+     *
+     *  - A payload naming a DIFFERENT number is refused. That is the sibling
+     *    case, and it is the one that actually happens.
+     *  - A payload naming no number at all is accepted. Meta always sends
+     *    `metadata.phone_number_id`, so its absence means the envelope shape
+     *    changed — and failing closed on that would silently drop every
+     *    customer message until somebody noticed, which is a far worse outcome
+     *    than the case this guard exists for. The delivery is already proven to
+     *    be Meta's by its signature before it reaches here.
+     *
+     * @param  array<string, mixed>  $value
+     */
+    private function addressedToOurNumber(array $value, string $ours): bool
+    {
+        $addressed = trim((string) data_get($value, 'metadata.phone_number_id', ''));
+
+        return $ours === '' || $addressed === '' || $addressed === $ours;
     }
 }

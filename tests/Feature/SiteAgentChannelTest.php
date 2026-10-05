@@ -692,7 +692,7 @@ class SiteAgentChannelTest extends TestCase
     }
 
     /** @return array<string, mixed> */
-    private function envelope(string $from, string $text): array
+    private function envelope(string $from, string $text, ?string $toNumberId = null): array
     {
         return [
             'object' => 'whatsapp_business_account',
@@ -702,6 +702,10 @@ class SiteAgentChannelTest extends TestCase
                     'field' => 'messages',
                     'value' => [
                         'messaging_product' => 'whatsapp',
+                        // Which of the account's numbers the message arrived at.
+                        // Meta sends this on every delivery, and a WhatsApp
+                        // Business Account commonly holds more than one number.
+                        'metadata' => ['phone_number_id' => $toNumberId ?? '123456'],
                         'contacts' => [['profile' => ['name' => 'דנה'], 'wa_id' => $from]],
                         'messages' => [[
                             'from' => $from,
@@ -877,5 +881,40 @@ class SiteAgentChannelTest extends TestCase
         });
         $mcp->shouldReceive('textContent')->andReturnUsing(fn ($result): string => json_encode($result));
         $this->app->instance(McpClient::class, $mcp);
+    }
+
+    /**
+     * הודעה שנשלחה למספר אחר באותו חשבון — אינה של הסוכן.
+     *
+     * מטא רושמת webhooks **לכל חשבון העסק, לא למספר**. חשבון שמחזיק גם קו תמיכה
+     * וגם את המספר של המוצר הזה מקבל את שתי התיבות לאותה כתובת — ובלי הסינון
+     * הזה לקוח שכותב לקו התמיכה היה נענה על ידי סוכן האתר, והוראה שנכתבה שם
+     * הייתה מתבצעת על אתר.
+     */
+    public function test_a_message_to_another_number_in_the_account_is_ignored(): void
+    {
+        Queue::fake();
+
+        $body = json_encode($this->envelope('972501234567', 'שלום', toNumberId: '999999'));
+
+        // 200, because Meta must not be told to redeliver something we meant to
+        // drop — but nothing is recorded and nothing is queued.
+        $this->postSigned($body)->assertOk();
+
+        $this->assertSame(0, WebhookEvent::count());
+        Queue::assertNothingPushed();
+    }
+
+    /** ולמספר שלנו — מתקבלת כרגיל. */
+    public function test_a_message_to_our_own_number_is_accepted(): void
+    {
+        Queue::fake();
+
+        $body = json_encode($this->envelope('972501234567', 'שלום', toNumberId: '123456'));
+
+        $this->postSigned($body)->assertOk();
+
+        $this->assertSame(1, WebhookEvent::count());
+        Queue::assertPushed(HandleSiteAgentMessageJob::class, 1);
     }
 }

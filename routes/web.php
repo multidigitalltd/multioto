@@ -9,6 +9,7 @@ use App\Http\Controllers\CsatController;
 use App\Http\Controllers\CustomerCardPdfController;
 use App\Http\Controllers\HealthController;
 use App\Http\Controllers\IntegrationKeysFallbackController;
+use App\Http\Controllers\LegalController;
 use App\Http\Controllers\MarketingPreferencesController;
 use App\Http\Controllers\PluginStoreController;
 use App\Http\Controllers\Portal\PortalAuthController;
@@ -363,6 +364,17 @@ Route::middleware('throttle:30,1')->group(function () {
  | The handover is throttled harder than the rest. It writes a customer's
  | WordPress access, and it is the one public endpoint here that does.
  */
+/*
+ | תנאי שימוש ומדיניות פרטיות — פומביים, בלי התחברות ובלי תנאי.
+ |
+ | בכוונה מחוץ לכל קבוצה מוגנת או מותנית: תיבת הסימון בעמוד הרכישה מבקשת מאדם
+ | לאשר אותם לפני שיש לו חשבון, מטא טוענת את עמוד הפרטיות בעצמה לפני שהיא
+ | מאשרת אפליקציה שמדברת עם לקוחות, והחוק מחייב שיהיו נגישים. מסמך שמותנה
+ | במשהו הוא מסמך שבמקרה הגרוע אי אפשר לקרוא בדיוק כשצריך אותו.
+ */
+Route::get('/privacy', [LegalController::class, 'privacy'])->name('legal.privacy');
+Route::get('/terms', [LegalController::class, 'terms'])->name('legal.terms');
+
 Route::middleware('throttle:30,1')->group(function () {
     Route::get('/site-agent', [SiteAgentStoreController::class, 'show'])->name('store.agent');
     Route::post('/site-agent', [SiteAgentStoreController::class, 'buy'])->name('store.agent.buy');

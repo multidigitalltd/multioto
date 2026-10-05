@@ -217,7 +217,7 @@
                    @checked(old('terms'))
                    @error('terms') aria-invalid="true" aria-describedby="terms-error" @enderror>
             <label for="terms" style="margin:0;font-weight:400">
-                קראתי ואני מאשר/ת את תנאי השימוש ומדיניות הפרטיות, ואת החידוש האוטומטי של המנוי.
+                קראתי ואני מאשר/ת את <a href="{{ route('legal.terms') }}" target="_blank" rel="noopener">תנאי השימוש</a> ו<a href="{{ route('legal.privacy') }}" target="_blank" rel="noopener">מדיניות הפרטיות</a>, ואת החידוש האוטומטי של המנוי.
             </label>
         </div>
         @error('terms')<p class="error" id="terms-error">{{ $message }}</p>@enderror
@@ -227,6 +227,9 @@
 
     <p class="foot">
         התשלום מתבצע בעמוד מאובטח של חברת הסליקה. פרטי האשראי אינם נשמרים אצלנו.
+        <br>
+        <a href="{{ route('legal.terms') }}">תנאי שימוש</a> ·
+        <a href="{{ route('legal.privacy') }}">מדיניות פרטיות</a>
     </p>
 </main>
 </body>
