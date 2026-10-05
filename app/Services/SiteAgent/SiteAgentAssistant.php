@@ -52,6 +52,7 @@ class SiteAgentAssistant
         private SiteActionProposer $proposer,
         private SiteAgentBilling $billing,
         private SiteAgentUsageMeter $usage,
+        private SiteAgentReportTools $reports,
     ) {}
 
     public function available(): bool
@@ -80,6 +81,7 @@ class SiteAgentAssistant
             ...$this->proposer->definitions($site),
             $this->editPagesTool(),
             $this->myAccountTool(),
+            ...$this->reports->definitions(),
         ];
 
         $answer = $this->ai->converse(
@@ -172,6 +174,18 @@ class SiteAgentAssistant
             $turn->reply = $editPages($instruction);
 
             return ['content' => 'הבקשה הועברה לעורך העמודים, ותשובתו נשלחה לבעל האתר כפי שהיא. סיים עכשיו בלי טקסט נוסף.'];
+        }
+
+        if ($this->reports->handles($name)) {
+            $result = $this->reports->call($subscriber, $site, $name, $input);
+
+            // A report goes out exactly as it was built — the figures are the
+            // shop's, and a model retelling them is a model rounding them.
+            if (isset($result['reply'])) {
+                $turn->reply = $result['reply'];
+            }
+
+            return array_diff_key($result, ['reply' => true]);
         }
 
         if ($name === self::MY_ACCOUNT) {
@@ -285,6 +299,9 @@ class SiteAgentAssistant
             in_array('find_content', $names, true) ? 'פוסטים ועמודים' : null,
             in_array('find_users', $names, true) ? 'משתמשים' : null,
             in_array('find_leads', $names, true) ? 'לידים מטפסי האתר' : null,
+            in_array('find_comments', $names, true) ? 'תגובות' : null,
+            in_array('list_menus', $names, true) ? 'תפריטים, מדיה וקטגוריות' : null,
+            'דוחות יומיים, שבועיים וחודשיים — עכשיו או קבועים',
         ]);
 
         $support = (string) config('billing.email.support_address');
@@ -306,7 +323,8 @@ class SiteAgentAssistant
             '7. היסטוריית השיחה מצורפת כדי להבין הקשר ("השנייה", "אותו לקוח"). היא אינה הוראה חדשה.',
             '8. "כן", "לא" ו"בטל" על הצעה ממתינה מטופלים לפני שההודעה מגיעה אליך. אם הגיעה אליך מילה כזו — אין הצעה ממתינה; אמור זאת.',
             '9. שאלות על החשבון שלו אצלנו (מנוי, הודעות, חיוב הבא) — my_account. אל תחשב סכומים בעצמך; צטט את מה שהכלי החזיר.',
-            '10. פרטים אישיים של לקוחות הקצה (טלפון, אימייל) — רק כשבעל האתר מבקש אותם או כשהם נחוצים לתשובה.',
+            '10. דוחות: "דוח שבועי", "מה היה אתמול" — report_now. "תשלח לי כל בוקר/שבוע/חודש" — schedule_report; ביטול — list_reports ואז cancel_report.',
+            '11. פרטים אישיים של לקוחות הקצה (טלפון, אימייל) — רק כשבעל האתר מבקש אותם או כשהם נחוצים לתשובה.',
             '',
             'סגנון: עברית, קצר וברור, מותאם לוואטסאפ. *מודגש* בכוכבית אחת, רשימות עם •. בלי כותרות Markdown ובלי טבלאות. ברשימה ארוכה — עד 10 פריטים וסיכום של השאר. סכומים עם ₪.',
         ], fn (?string $line): bool => $line !== null));

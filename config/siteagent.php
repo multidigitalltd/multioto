@@ -98,6 +98,13 @@ return [
 
             // Utility category. One parameter: `domain`.
             'service_resumed' => env('SITE_AGENT_WA_TEMPLATE_RESUMED', ''),
+
+            // Utility category. Three parameters: `title` ("דוח יומי 05/10/2026"),
+            // `domain`, and `summary` (one line: "7 הזמנות · ₪2,340 · 3 לידים").
+            // Used for a scheduled report when the owner has not written in the
+            // last 24 hours; the body should invite them to reply "דוח" for the
+            // full report. Blank = such reports are skipped and logged.
+            'report_ready' => env('SITE_AGENT_WA_TEMPLATE_REPORT', ''),
         ],
     ],
 

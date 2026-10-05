@@ -44,6 +44,15 @@ class Multioto_Agent_Leads
         $days = max(1, min(366, (int) ($args['days'] ?? 30)));
         $search = trim(sanitize_text_field((string) ($args['search'] ?? '')));
         $since = time() - $days * DAY_IN_SECONDS;
+        $until = PHP_INT_MAX;
+
+        // Whole days in the site's calendar when a report asks for them.
+        $range = Multioto_Agent_Store_Admin::dateRange($args, function_exists('wp_timezone') ? wp_timezone() : new DateTimeZone('UTC'));
+
+        if ($range !== null) {
+            $since = $range[0]->getTimestamp();
+            $until = $range[1]->modify('+1 day')->getTimestamp() - 1;
+        }
 
         $readers = [
             'elementor' => 'elementor',
@@ -69,6 +78,11 @@ class Multioto_Agent_Leads
                 $leads[] = ['source' => $source] + $lead;
             }
         }
+
+        // The readers look back from $since; a closed period also has an end.
+        $leads = array_values(array_filter($leads, static function (array $lead) use ($until): bool {
+            return $lead['timestamp'] <= $until;
+        }));
 
         if ($search !== '') {
             $leads = array_values(array_filter($leads, static function (array $lead) use ($search): bool {

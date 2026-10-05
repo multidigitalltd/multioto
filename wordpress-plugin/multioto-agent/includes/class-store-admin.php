@@ -247,23 +247,36 @@ class Multioto_Agent_Store_Admin
     {
         self::requireWoo();
 
-        $days = max(1, min(366, (int) ($args['days'] ?? 30)));
         $timezone = function_exists('wp_timezone') ? wp_timezone() : new DateTimeZone('UTC');
+        $range = self::dateRange($args, $timezone);
 
-        // Whole days in the SHOP's calendar: "the last 7 days" ending at
-        // midnight UTC would cut an Israeli Saturday night in half.
-        $today = new DateTimeImmutable('today', $timezone);
-        $from = $today->modify('-'.($days - 1).' days');
+        if ($range !== null) {
+            // An explicit period — "yesterday", "last month" — for a report
+            // that has to cover whole days that are already over.
+            list($from, $to) = $range;
+            $days = (int) $from->diff($to)->days + 1;
+            $end = $to->modify('+1 day')->getTimestamp() - 1;
+            $today = $to;
+        } else {
+            $days = max(1, min(366, (int) ($args['days'] ?? 30)));
+
+            // Whole days in the SHOP's calendar: "the last 7 days" ending at
+            // midnight UTC would cut an Israeli Saturday night in half.
+            $today = new DateTimeImmutable('today', $timezone);
+            $from = $today->modify('-'.($days - 1).' days');
+            $end = time();
+        }
+
         $previousFrom = $from->modify('-'.$days.' days');
 
-        $current = self::periodTotals($from->getTimestamp(), time(), true);
+        $current = self::periodTotals($from->getTimestamp(), $end, true);
         $previous = self::periodTotals($previousFrom->getTimestamp(), $from->getTimestamp() - 1, false);
 
         $waiting = wc_get_orders([
             'limit' => 500,
             'type' => 'shop_order',
             'status' => ['pending', 'on-hold'],
-            'date_created' => '>='.$from->getTimestamp(),
+            'date_created' => $from->getTimestamp().'...'.$end,
             'return' => 'ids',
         ]);
 
@@ -358,6 +371,34 @@ class Multioto_Agent_Store_Admin
             'top' => $top,
             'truncated' => count($orders) >= self::REPORT_CAP,
         ];
+    }
+
+    /**
+     * `from` and `to` as whole days in the shop's calendar, or null when the
+     * caller asked by `days` instead. Strict Y-m-d, at most a year, never
+     * backwards — a report is not the place for a lenient date parser.
+     *
+     * @param  array<string, mixed>  $args
+     * @return array{0: DateTimeImmutable, 1: DateTimeImmutable}|null
+     */
+    public static function dateRange(array $args, DateTimeZone $timezone): ?array
+    {
+        $rawFrom = trim((string) ($args['from'] ?? ''));
+        $rawTo = trim((string) ($args['to'] ?? ''));
+
+        if ($rawFrom === '' && $rawTo === '') {
+            return null;
+        }
+
+        $from = DateTimeImmutable::createFromFormat('!Y-m-d', $rawFrom, $timezone);
+        $to = DateTimeImmutable::createFromFormat('!Y-m-d', $rawTo, $timezone);
+
+        if (! $from || ! $to || $from->format('Y-m-d') !== $rawFrom || $to->format('Y-m-d') !== $rawTo
+            || $to < $from || (int) $from->diff($to)->days > 366) {
+            throw new Multioto_Agent_Rpc_Error(-32602, 'from ו-to חייבים להיות תאריכים בפורמט YYYY-MM-DD, from לא אחרי to, ועד שנה.');
+        }
+
+        return [$from, $to];
     }
 
     // --- Subscriptions (WooCommerce Subscriptions) ---------------------------
