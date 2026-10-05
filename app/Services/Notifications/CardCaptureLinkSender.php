@@ -134,7 +134,26 @@ class CardCaptureLinkSender
 
         // A customer who manages their site through the bot hears from the bot,
         // never from the support number. See BotNumberRoute.
-        if ($this->bot->carries($customer)) {
+        //
+        // And when we cannot find out which it is, nothing goes out over
+        // WhatsApp at all. "We could not tell" must never resolve to the
+        // riskier of the two answers: the support-number branch would carry a
+        // signed payment page to a number this route may have been withholding
+        // it from.
+        try {
+            $bound = $this->bot->carries($customer);
+        } catch (\Throwable $e) {
+            $failed[] = 'וואטסאפ: לא ניתן היה לקבוע אם ללקוח יש מספר מחובר';
+
+            SystemLog::record('error', 'site-agent', 'ניתוב הודעת תשלום נכשל — לא ניתן לקרוא את המספרים המחוברים', [
+                'customer_id' => $customer->id,
+                'error' => Str::limit($e->getMessage(), 200),
+            ]);
+
+            $bound = null;
+        }
+
+        if ($bound === true) {
             // The operator's on/off switch for this notice governs both routes.
             // The approved template supplies the WORDING on this one, not the
             // decision to send at all — a notice switched off in the settings
@@ -145,7 +164,7 @@ class CardCaptureLinkSender
             } else {
                 [$sent, $failed, $skipped] = $this->overBotNumber($customer, $siteId, $sent, $failed, $skipped);
             }
-        } else {
+        } elseif ($bound === false) {
             $whatsappTo = $customer->whatsappRecipient();
 
             if (filled($whatsappTo)) {
@@ -217,8 +236,15 @@ class CardCaptureLinkSender
      */
     private function overBotNumber(Customer $customer, ?int $siteId, array $sent, array $failed, array $skipped): array
     {
-        $subscriber = $this->bot->subscriber($customer, $siteId);
         $template = trim((string) config('siteagent.whatsapp.templates.card_link'));
+
+        try {
+            $subscriber = $this->bot->subscriber($customer, $siteId);
+        } catch (\Throwable $e) {
+            $failed[] = 'וואטסאפ: לא ניתן היה לקרוא את המספרים המחוברים';
+
+            return [$sent, $failed, $skipped];
+        }
 
         // A bot customer with no number for THIS site. The support number is
         // still not an option — a delegate of another site must not receive it

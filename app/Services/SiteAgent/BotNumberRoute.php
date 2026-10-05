@@ -37,49 +37,53 @@ class BotNumberRoute
      */
     public function subscriber(Customer $customer, ?int $siteId = null): ?SiteAgentSubscriber
     {
-        return rescue(function () use ($customer, $siteId): ?SiteAgentSubscriber {
-            /** @var Collection<int, SiteAgentSubscriber> $bindings */
-            $bindings = SiteAgentSubscriber::query()
-                ->where('customer_id', $customer->id)
-                ->usable()
-                ->latest('verified_at')
-                ->get();
+        // No rescue here, deliberately. Swallowing a lookup failure would turn
+        // "we could not find out" into "this customer has no bot number", and
+        // the caller would then take the support-number path with a signed
+        // payment page in hand. A question this route cannot answer has to stop
+        // the send, not pick the riskier answer — see deliver() in
+        // CardCaptureLinkSender, which fails closed on it.
+        /** @var Collection<int, SiteAgentSubscriber> $bindings */
+        $bindings = SiteAgentSubscriber::query()
+            ->where('customer_id', $customer->id)
+            ->usable()
+            ->latest('verified_at')
+            ->get();
 
-            if ($bindings->isEmpty()) {
-                return null;
+        if ($bindings->isEmpty()) {
+            return null;
+        }
+
+        // The business's own number first, whenever it is among them.
+        //
+        // A customer may hold several bindings at once — the owner plus an
+        // employee, or a manager per site — and extra managers are usually
+        // added AFTER the owner. Taking the most recent would therefore
+        // send the owner's payment notice to a manager, with only the
+        // sign-in link, while the owner's own binding sat right there
+        // unused; on a multi-site customer it could even land with the
+        // manager of a different site entirely.
+        foreach ($bindings as $binding) {
+            $binding->setRelation('customer', $customer);
+
+            if ($this->isCustomerOwnNumber($binding)) {
+                return $binding;
             }
+        }
 
-            // The business's own number first, whenever it is among them.
-            //
-            // A customer may hold several bindings at once — the owner plus an
-            // employee, or a manager per site — and extra managers are usually
-            // added AFTER the owner. Taking the most recent would therefore
-            // send the owner's payment notice to a manager, with only the
-            // sign-in link, while the owner's own binding sat right there
-            // unused; on a multi-site customer it could even land with the
-            // manager of a different site entirely.
-            foreach ($bindings as $binding) {
-                $binding->setRelation('customer', $customer);
+        // No owner number. A delegate may stand in — but only the delegate
+        // of the site this notice is actually about.
+        //
+        // A customer can hold a different manager per site, and the newest
+        // of them is not "the customer's number" in any sense: sending site
+        // A's payment notice to site B's manager discloses one client's
+        // billing to another's agency. When that site has nobody, nobody is
+        // the right answer, and the caller reports the skip.
+        if ($siteId !== null) {
+            return $bindings->firstWhere('site_id', $siteId);
+        }
 
-                if ($this->isCustomerOwnNumber($binding)) {
-                    return $binding;
-                }
-            }
-
-            // No owner number. A delegate may stand in — but only the delegate
-            // of the site this notice is actually about.
-            //
-            // A customer can hold a different manager per site, and the newest
-            // of them is not "the customer's number" in any sense: sending site
-            // A's payment notice to site B's manager discloses one client's
-            // billing to another's agency. When that site has nobody, nobody is
-            // the right answer, and the caller reports the skip.
-            if ($siteId !== null) {
-                return $bindings->firstWhere('site_id', $siteId);
-            }
-
-            return $bindings->first();
-        }, null, report: false);
+        return $bindings->first();
     }
 
     /**

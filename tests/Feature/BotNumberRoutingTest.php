@@ -11,6 +11,7 @@ use App\Models\Subscription;
 use App\Models\SystemLog;
 use App\Providers\SettingsServiceProvider;
 use App\Services\Notifications\CardCaptureLinkSender;
+use App\Services\SiteAgent\BotNumberRoute;
 use App\Services\Waha\WahaClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -211,6 +212,35 @@ class BotNumberRoutingTest extends TestCase
         $result = app(CardCaptureLinkSender::class)->send($subscription);
 
         $this->assertContains('וואטסאפ (ההודעה כבויה בהגדרות)', $result['skipped']);
+        Http::assertNothingSent();
+    }
+
+    /**
+     * שאלה שאי אפשר לענות עליה עוצרת את השליחה, ולא בוחרת בתשובה המסוכנת.
+     *
+     * אם שליפת המספרים המחוברים נכשלת, "לא ידוע" אינו "אין מספר מחובר": הנפילה
+     * לענף השני מוציאה קישור תשלום חתום דרך המספר הכללי — אולי בדיוק למספר
+     * שהמסלול הזה היה מונע ממנו אותו.
+     */
+    public function test_a_failed_binding_lookup_stops_the_send_instead_of_falling_back(): void
+    {
+        $subscription = $this->subscription('0501234567', '972501234567');
+
+        $waha = \Mockery::mock(WahaClient::class);
+        $waha->shouldNotReceive('sendMessage');
+        $this->app->instance(WahaClient::class, $waha);
+
+        $route = \Mockery::mock(BotNumberRoute::class);
+        $route->shouldReceive('carries')->andThrow(new \RuntimeException('db is down'));
+        $this->app->instance(BotNumberRoute::class, $route);
+
+        $result = app(CardCaptureLinkSender::class)->send($subscription);
+
+        $this->assertNotEmpty(array_filter(
+            $result['failed'],
+            fn (string $reason): bool => str_contains($reason, 'לא ניתן היה לקבוע'),
+        ));
+
         Http::assertNothingSent();
     }
 
