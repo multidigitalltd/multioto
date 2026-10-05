@@ -8,6 +8,7 @@ use App\Jobs\CheckSiteAgentChannelJob;
 use App\Jobs\HandleSiteAgentMessageJob;
 use App\Models\WebhookEvent;
 use App\Services\SiteAgent\WhatsAppCloudClient;
+use App\Support\WebhookDeliveries;
 use App\Support\WebhookRejections;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
@@ -65,6 +66,14 @@ class SiteAgentWhatsAppController extends Controller
 
             abort(403);
         }
+
+        // Meta reached us and the body proved to be hers. Recorded BEFORE the
+        // sibling-number filter below, because that filter is what otherwise
+        // erases the evidence: a webhook is subscribed per business account, so
+        // a message to a sibling number proves this channel works even though
+        // nothing comes of it here. Without this line, an account busy with
+        // other numbers still reports "no message ever arrived".
+        WebhookDeliveries::record(CheckSiteAgentChannelJob::CHANNEL);
 
         foreach ($this->messages($request->json()->all()) as $message) {
             $id = (string) ($message['id'] ?? '');

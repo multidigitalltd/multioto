@@ -17,6 +17,7 @@ use App\Providers\SettingsServiceProvider;
 use App\Services\Notifications\TeamNotifier;
 use App\Support\WebhookRejections;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Testing\TestResponse;
 use Mockery;
 use Tests\TestCase;
 
@@ -76,6 +77,34 @@ class SiteAgentChannelWatchTest extends TestCase
             'external_id' => 'wamid.'.bin2hex(random_bytes(4)),
             'payload' => [],
         ]);
+    }
+
+    /**
+     * מסירה אמיתית של מטא, חתומה כהלכה, אל מזהה המספר שנמסר.
+     *
+     * חתומה באמת ולא מדומה: אימות החתימה הוא השער שכל השאר תלוי בו, ובדיקה
+     * שעוקפת אותו בודקת מסלול שלא קיים בייצור.
+     */
+    private function signedDelivery(string $phoneNumberId): TestResponse
+    {
+        $body = (string) json_encode([
+            'object' => 'whatsapp_business_account',
+            'entry' => [['changes' => [['value' => [
+                'metadata' => ['phone_number_id' => $phoneNumberId],
+                'contacts' => [['profile' => ['name' => 'דנה']]],
+                'messages' => [[
+                    'id' => 'wamid.'.bin2hex(random_bytes(4)),
+                    'from' => '972501234567',
+                    'type' => 'text',
+                    'text' => ['body' => 'שלום'],
+                ]],
+            ]]]]],
+        ]);
+
+        return $this->call('POST', route('webhooks.site-agent'), [], [], [], [
+            'CONTENT_TYPE' => 'application/json',
+            'HTTP_X_HUB_SIGNATURE_256' => 'sha256='.hash_hmac('sha256', $body, 'secret'),
+        ], $body);
     }
 
     private function expectAlert(string $contains): void
@@ -362,6 +391,39 @@ class SiteAgentChannelWatchTest extends TestCase
         SettingsServiceProvider::refreshFromDatabase();
 
         $this->assertSame('silent', app(ManageSiteAgent::class)->inboundHealth()['verdict']);
+    }
+
+    /**
+     * מסירה למספר אחות אינה "שתיקה" — היא הוכחה שהערוץ עובד.
+     *
+     * הוובהוק נרשם לפי חשבון הוואטסאפ ולא לפי מספר, ולכן חשבון שמחזיק גם קו
+     * תמיכה מעביר אותו לאותה כתובת. הסינון נכון, אבל בלי הרישום הזה הוא גם מוחק
+     * את העדות — ומערכת שמקבלת מאות הודעות לאחיות של המספר שלנו הייתה מדווחת
+     * "הבעיה אצל מטא" ושולחת לפרסם אפליקציה שכבר פורסמה.
+     */
+    public function test_a_delivery_for_a_sibling_number_is_not_silence(): void
+    {
+        $this->subscriber();
+        $this->expectAlert('לא למספר שלנו');
+
+        $this->signedDelivery('777777')->assertOk();
+
+        CheckSiteAgentChannelJob::dispatchSync();
+
+        $this->assertSame('foreign', app(ManageSiteAgent::class)->inboundHealth()['verdict']);
+    }
+
+    /** ומסירה למספר שלנו היא כמובן ערוץ עובד, לא "זר". */
+    public function test_a_delivery_for_our_own_number_reads_as_working(): void
+    {
+        $this->subscriber();
+        $this->expectSilence();
+
+        $this->signedDelivery('123456')->assertOk();
+
+        CheckSiteAgentChannelJob::dispatchSync();
+
+        $this->assertSame('ok', app(ManageSiteAgent::class)->inboundHealth()['verdict']);
     }
 
     /**

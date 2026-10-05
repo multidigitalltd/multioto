@@ -84,6 +84,28 @@ class CheckSiteAgentChannelJob implements ShouldQueue
             return;
         }
 
+        // Deliveries arrive and verify, but none has ever been for our number.
+        // Reported without waiting for a subscriber: the configured number is
+        // either absent from the subscribed account or mistyped, and neither
+        // fixes itself by somebody signing up.
+        if ($state['verdict'] === 'foreign') {
+            $this->report(
+                $team,
+                'foreign',
+                '🔀 בוט ניהול האתר: מטא מוסרת, אבל לא למספר שלנו',
+                'מסירות מגיעות ועוברות אימות חתימה — הערוץ עצמו תקין לחלוטין. אבל אף אחת מהן אינה למספר '.
+                "שמוגדר כאן, ולכן אף הודעה לא מטופלת.\n\n".
+                'הוובהוק נרשם לפי חשבון הוואטסאפ ולא לפי מספר, כך שחשבון שמחזיק כמה מספרים מעביר את כולם '.
+                "לאותה כתובת — ואנחנו מסננים את מה שאינו שלנו.\n\n".
+                "שתי האפשרויות, ואין שלישית:\n".
+                "• מזהה המספר (Phone number ID) שמוגדר בפאנל אינו של המספר שאליו כותבים\n".
+                '• המספר אינו נמצא בחשבון הוואטסאפ שהאפליקציה רשומה אליו',
+                'warning',
+            );
+
+            return;
+        }
+
         if ($state['verdict'] !== 'silent') {
             return;
         }
@@ -162,9 +184,11 @@ class CheckSiteAgentChannelJob implements ShouldQueue
         if ($admins->isNotEmpty()) {
             Notification::make()
                 ->title($title)
-                ->body($state === 'rejected'
-                    ? 'סוד האפליקציה בפאנל אינו תואם לזה שבמטא — כל הודעה נכנסת נדחית.'
-                    : 'שום הודעה לא הגיעה מעולם. הבעיה אצל מטא, לא בהגדרות.')
+                ->body(match ($state) {
+                    'rejected' => 'סוד האפליקציה בפאנל אינו תואם לזה שבמטא — כל הודעה נכנסת נדחית.',
+                    'foreign' => 'הערוץ תקין, אבל אף מסירה אינה למספר שמוגדר כאן. התקלה במספר, לא בערוץ.',
+                    default => 'שום הודעה לא הגיעה מעולם. הבעיה אצל מטא, לא בהגדרות.',
+                })
                 ->icon('heroicon-o-chat-bubble-left-right')
                 ->color($colour)
                 ->actions([Action::make('settings')->label('הגדרות הבוט')->url($url)])

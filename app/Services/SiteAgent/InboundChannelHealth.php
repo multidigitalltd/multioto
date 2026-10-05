@@ -6,6 +6,7 @@ use App\Enums\WebhookSource;
 use App\Models\Setting;
 use App\Models\SiteAgentSubscriber;
 use App\Models\WebhookEvent;
+use App\Support\WebhookDeliveries;
 use App\Support\WebhookRejections;
 use Illuminate\Support\Carbon;
 
@@ -39,10 +40,17 @@ use Illuminate\Support\Carbon;
  *     קיבל דבר היה מדווח "תקין" לנצח — כלומר דווקא השתיקה שהניטור קיים בשבילה
  *     הייתה נעלמת. לכן הרשומה נושאת את המספר שאליו היא מתייחסת, ומספר אחר
  *     מתחיל היסטוריה חדשה.
+ *
+ * ויש מצב שלישי שנראה כמו שתיקה ואינו שתיקה כלל: **מטא מוסרת ואנחנו מאמתים,
+ * אבל אף הודעה אינה למספר שלנו.** הוובהוק נרשם לפי חשבון הוואטסאפ ולא לפי מספר,
+ * כך שחשבון שמחזיק גם קו תמיכה או קו מכירות מעביר את כולם לאותה כתובת — ואנחנו
+ * מסננים את מה שאינו שלנו. הערוץ במקרה כזה תקין לחלוטין, והתקלה היא במספר: הוא
+ * אינו בחשבון שנרשם, או שמזהה המספר שבפאנל אינו שלו. אמירת "הבעיה אצל מטא"
+ * כאן הייתה שולחת לפרסם אפליקציה שכבר פורסמה.
  */
 class InboundChannelHealth
 {
-    /** The rejection counter the inbound controller writes to. */
+    /** The counters the inbound controller writes to, rejected and delivered. */
     public const CHANNEL = 'site-agent-whatsapp';
 
     /**
@@ -59,7 +67,7 @@ class InboundChannelHealth
     public function __construct(private readonly SiteAgentProduct $product) {}
 
     /**
-     * @return array{accepted: ?Carbon, rejected: ?Carbon, everCarried: bool, verdict: 'unready'|'rejected'|'ok'|'silent'}
+     * @return array{accepted: ?Carbon, rejected: ?Carbon, delivered: ?Carbon, everCarried: bool, verdict: 'unready'|'rejected'|'ok'|'foreign'|'silent'}
      */
     public function read(): array
     {
@@ -82,11 +90,13 @@ class InboundChannelHealth
             $replaced ? null : $this->date($record['last_accepted_at'] ?? null),
         );
         $rejected = WebhookRejections::lastAt(self::CHANNEL);
+        $delivered = WebhookDeliveries::lastAt(self::CHANNEL);
         $everCarried = $accepted !== null || $this->verifiedByReply($since);
 
         return [
             'accepted' => $accepted,
             'rejected' => $rejected,
+            'delivered' => $delivered,
             'everCarried' => $everCarried,
             'verdict' => match (true) {
                 // Half-configured or switched off: the readiness section already
@@ -101,6 +111,12 @@ class InboundChannelHealth
                 $rejected !== null && ($accepted === null || $rejected->gt($accepted)) => 'rejected',
 
                 $everCarried => 'ok',
+
+                // Meta delivers and we verify — but nothing has ever been for
+                // our number. The channel is provably fine, so "the problem is
+                // at Meta" would send the fixer to publish an app that is
+                // already published. The fault is the number itself.
+                $delivered !== null => 'foreign',
 
                 default => 'silent',
             },
