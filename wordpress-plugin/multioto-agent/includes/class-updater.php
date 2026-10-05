@@ -15,6 +15,9 @@ class Multioto_Agent_Updater
 {
     private const CACHE_KEY = 'multioto_agent_update_check';
 
+    /** The outcome of the last check-in, for the settings screen. */
+    private const LAST_CHECKIN = 'multioto_agent_last_checkin';
+
     public function boot(): void
     {
         add_filter('pre_set_site_transient_update_plugins', [$this, 'injectUpdate']);
@@ -109,6 +112,38 @@ class Multioto_Agent_Updater
     }
 
     /**
+     * Say hello to the panel now, rather than at WordPress's next update check.
+     *
+     * Called when the codes are saved. The update check is what tells the panel
+     * a site exists — it is also what switches on a site somebody bought by
+     * themselves — and WordPress runs it about twice a day. Without this, an
+     * owner who just did everything right waits hours for a bot that says
+     * "האתר אינו מחובר", and concludes they did something wrong.
+     *
+     * The outcome is kept so the settings screen can say which of the things
+     * that go wrong here actually went wrong.
+     *
+     * @return string ok | no_token | rejected | unreachable
+     */
+    public static function checkInNow(): string
+    {
+        delete_transient(self::CACHE_KEY);
+
+        $result = self::contact();
+        update_option(self::LAST_CHECKIN, ['status' => $result['status'], 'at' => time()], false);
+
+        return $result['status'];
+    }
+
+    /** @return array{status: string, at: int}|null */
+    public static function lastCheckIn(): ?array
+    {
+        $last = get_option(self::LAST_CHECKIN);
+
+        return is_array($last) && isset($last['status']) ? $last : null;
+    }
+
+    /**
      * Fetch the update manifest from the platform, cached briefly to avoid a
      * network call on every admin page load.
      *
@@ -122,10 +157,20 @@ class Multioto_Agent_Updater
             return $cached;
         }
 
+        return self::contact()['data'];
+    }
+
+    /**
+     * One request to the panel's update endpoint — which is also the check-in.
+     *
+     * @return array{status: string, data: array<string,mixed>|null}
+     */
+    private static function contact(): array
+    {
         $settings = Multioto_Agent_Settings::get();
 
         if ($settings['platform_url'] === '' || $settings['update_token'] === '') {
-            return null;
+            return ['status' => 'no_token', 'data' => null];
         }
 
         $url = $settings['platform_url'].'/agent/plugin/update?version='.rawurlencode(MULTIOTO_AGENT_VERSION);
@@ -139,18 +184,24 @@ class Multioto_Agent_Updater
             ],
         ]);
 
-        if (is_wp_error($response) || (int) wp_remote_retrieve_response_code($response) !== 200) {
-            return null;
+        if (is_wp_error($response)) {
+            return ['status' => 'unreachable', 'data' => null];
+        }
+
+        $code = (int) wp_remote_retrieve_response_code($response);
+
+        if ($code === 401 || $code === 403) {
+            return ['status' => 'rejected', 'data' => null];
         }
 
         $data = json_decode((string) wp_remote_retrieve_body($response), true);
 
-        if (! is_array($data)) {
-            return null;
+        if ($code !== 200 || ! is_array($data)) {
+            return ['status' => 'unreachable', 'data' => null];
         }
 
         set_transient(self::CACHE_KEY, $data, 6 * HOUR_IN_SECONDS);
 
-        return $data;
+        return ['status' => 'ok', 'data' => $data];
     }
 }

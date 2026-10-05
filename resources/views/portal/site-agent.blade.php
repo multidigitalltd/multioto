@@ -24,6 +24,26 @@
         </div>
     @endif
 
+    @if ($connections->isNotEmpty())
+        {{-- First on the page: an unconnected site is the one thing that
+             stops everything else here from working. --}}
+        <div class="card">
+            <h2 style="margin-top:0;">חיבור האתרים</h2>
+            <ul class="connections">
+                @foreach ($connections as $connection)
+                    @php($status = Agent::connectionStatus($connection))
+                    <li>
+                        <span dir="ltr">{{ $connection->domain }}</span> —
+                        <strong>{{ $status['label'] }}</strong>
+                        <a href="{{ route('portal.site-agent.connect', ['site' => $connection]) }}">
+                            {{ $status['state'] === 'connected' ? 'קודים ומדריך' : 'להתקנה ולקודי החיבור' }}<span class="visually-hidden"> של {{ $connection->domain }}</span>
+                        </a>
+                    </li>
+                @endforeach
+            </ul>
+        </div>
+    @endif
+
     <div class="card">
         <h2 style="margin-top:0;">המספרים שמנהלים את האתרים שלכם</h2>
 
@@ -163,6 +183,10 @@
     @endif
 
     <style>
+        .connections { list-style: none; padding: 0; margin: 0; }
+        .connections li { padding: .4rem 0; border-bottom: 1px solid var(--border, #c2c8d0); }
+        .connections li:last-child { border-bottom: 0; }
+        .connections a { margin-inline-start: .5rem; }
         .agent-form .field { margin-bottom: 1rem; text-align: start; }
         .agent-form label { display: block; font-weight: 600; margin-bottom: .35rem; }
         .agent-form input[type=text], .agent-form input[type=tel], .agent-form select {

@@ -308,6 +308,12 @@ Route::prefix('portal')->group(function () {
          | one misplaced double-click away from a wrong invoice.
          */
         Route::get('/site-agent', [PortalSiteAgentController::class, 'index'])->name('portal.site-agent');
+        Route::get('/site-agent/plugin', [PortalSiteAgentController::class, 'plugin'])
+            ->middleware('throttle:20,60')->name('portal.site-agent.plugin');
+        Route::get('/site-agent/sites/{site}/connect', [PortalSiteAgentController::class, 'connect'])
+            ->name('portal.site-agent.connect');
+        Route::post('/site-agent/sites/{site}/check', [PortalSiteAgentController::class, 'check'])
+            ->middleware('throttle:6,10')->name('portal.site-agent.check');
         Route::post('/site-agent/numbers', [PortalSiteAgentController::class, 'addNumber'])
             ->middleware('throttle:10,60')->name('portal.site-agent.add');
         Route::post('/site-agent/numbers/{subscriber}/resend', [PortalSiteAgentController::class, 'resend'])

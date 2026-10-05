@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Portal;
 
 use App\Http\Controllers\Controller;
+use App\Jobs\RefreshSiteCapabilitiesJob;
 use App\Jobs\SendSiteAgentVerificationJob;
 use App\Models\Customer;
 use App\Models\Site;
@@ -18,6 +19,7 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
 /**
  * הסוכן שלי — the numbers that drive this customer's sites, and adding another.
@@ -48,8 +50,96 @@ class PortalSiteAgentController extends Controller
             'entitled' => app(SiteAgentAccess::class)->subscribed($customer),
             'numbers' => $this->numbers($customer),
             'sites' => $this->sites($customer),
+            'connections' => $this->agentSites($customer),
             'extraPrice' => $this->extraPriceAgorot($subscription, $customer),
         ]);
+    }
+
+    /**
+     * Connecting one site: the plugin, the codes, and the guide — in the one
+     * place a customer can always come back to.
+     *
+     * Until now the codes were shown only on the page after a self-serve
+     * purchase. A customer who closed it, lost the email, or was set up by the
+     * team had nowhere to find them, and every such install became an email
+     * to us asking for the keys.
+     *
+     * The codes are the keys to the site, so they are shown only to the
+     * customer who owns it, and only while the service is paid for.
+     */
+    public function connect(Request $request, Site $site): View
+    {
+        $customer = $this->customer($request);
+        $this->authorizeSite($customer, $site);
+
+        $entitled = app(SiteAgentAccess::class)->subscribed($customer);
+
+        return view('portal.site-agent-connect', [
+            'site' => $site,
+            'entitled' => $entitled,
+            'codes' => $entitled ? $site->ensureAgentCredentials() : null,
+            'status' => self::connectionStatus($site),
+        ]);
+    }
+
+    /** The plugin zip, for a signed-in customer whose service is paid for. */
+    public function plugin(Request $request): BinaryFileResponse
+    {
+        abort_unless(app(SiteAgentAccess::class)->subscribed($this->customer($request)), 403, 'המנוי אינו פעיל.');
+
+        $version = (string) config('agent.plugin.current_version');
+        $path = base_path("wordpress-plugin/releases/multioto-agent-{$version}.zip");
+
+        abort_unless(is_file($path), 404, 'קובץ התוסף אינו זמין כרגע. כתבו לנו ונשלח אותו.');
+
+        return response()->download($path, "multioto-agent-{$version}.zip", ['Content-Type' => 'application/zip']);
+    }
+
+    /**
+     * "בדקו שוב" — ask the site now instead of at the next scheduled check.
+     *
+     * Queued, never done inside the request: it is a call to the customer's own
+     * server, which may be slow or behind a challenge page. Only a site that is
+     * already switched on can be asked; before that, the plugin is what calls us.
+     */
+    public function check(Request $request, Site $site): RedirectResponse
+    {
+        $this->authorizeSite($this->customer($request), $site);
+
+        if (! $site->mcp_enabled) {
+            return back()->with('status', 'האתר עדיין לא דיווח שהתוסף הותקן. אחרי שמירת הקודים בתוסף זה קורה תוך דקה.');
+        }
+
+        RefreshSiteCapabilitiesJob::dispatch($site->id);
+
+        return back()->with('status', 'בודקים את החיבור. רעננו את העמוד בעוד כחצי דקה.');
+    }
+
+    /**
+     * Where a site stands, from not installed to answering.
+     *
+     * @return array{state: string, label: string, detail: string}
+     */
+    public static function connectionStatus(Site $site): array
+    {
+        if ($site->mcp_enabled && $site->mcp_last_seen_at !== null) {
+            return ['state' => 'connected', 'label' => 'מחובר ✓',
+                'detail' => 'הבוט מחובר לאתר'.($site->agent_plugin_version ? " (תוסף {$site->agent_plugin_version})" : '')
+                    .'. נבדק לאחרונה '.$site->mcp_last_seen_at->diffForHumans().'.'];
+        }
+
+        if ($site->mcp_enabled) {
+            return ['state' => 'checking', 'label' => 'בבדיקה',
+                'detail' => 'התוסף הותקן, והפאנל עדיין לא הצליח לדבר איתו. אם זה נמשך יותר מכמה דקות — ראו "החיבור לא עובד?" במדריך.'];
+        }
+
+        if ($site->agent_plugin_version !== null) {
+            return ['state' => 'pending', 'label' => 'ממתין להפעלה',
+                'detail' => 'התוסף הותקן ודיווח לנו. הצוות שלנו יפעיל את החיבור — בדרך כלל באותו יום עסקים.'];
+        }
+
+        return ['state' => 'not_installed', 'label' => 'לא מחובר',
+            'detail' => 'התוסף עדיין לא הותקן באתר, או שהקודים לא נשמרו בו.'];
     }
 
     /**
@@ -238,6 +328,27 @@ class PortalSiteAgentController extends Controller
             ->orderBy('domain')
             ->pluck('domain', 'id')
             ->all();
+    }
+
+    /**
+     * The sites this customer runs the agent on: every site one of their
+     * numbers is bound to, whatever state that number is in.
+     *
+     * @return Collection<int, Site>
+     */
+    private function agentSites(Customer $customer): Collection
+    {
+        return Site::query()
+            ->where('customer_id', $customer->id)
+            ->whereIn('id', SiteAgentSubscriber::query()->where('customer_id', $customer->id)->select('site_id'))
+            ->orderBy('domain')
+            ->get(['id', 'domain', 'mcp_enabled', 'mcp_last_seen_at', 'agent_plugin_version']);
+    }
+
+    /** A site in the URL is checked against the signed-in customer, never trusted. */
+    private function authorizeSite(Customer $customer, Site $site): void
+    {
+        abort_unless((int) $site->customer_id === (int) $customer->id, 404);
     }
 
     /**

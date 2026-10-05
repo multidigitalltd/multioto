@@ -112,7 +112,7 @@
                      number bound, including one whose subscription has lapsed —
                      that is exactly the customer who needs to reach this page. --}}
                 @if ($customer->siteAgentSubscribers()->exists())
-                    <a href="{{ route('portal.site-agent') }}" @if (request()->routeIs('portal.site-agent')) aria-current="page" @endif>בוט ניהול האתר</a>
+                    <a href="{{ route('portal.site-agent') }}" @if (request()->routeIs('portal.site-agent*')) aria-current="page" @endif>בוט ניהול האתר</a>
                 @endif
                 <a href="{{ route('portal.tickets') }}" @if (request()->routeIs('portal.tickets')) aria-current="page" @endif>פניות</a>
             </nav>

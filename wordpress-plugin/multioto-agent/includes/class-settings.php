@@ -26,6 +26,15 @@ class Multioto_Agent_Settings
     {
         add_action('admin_menu', [$this, 'addMenu']);
         add_action('admin_init', [$this, 'register']);
+
+        // Codes saved for the first time, or changed: tell the panel at once.
+        add_action('add_option_'.self::OPTION, [$this, 'afterSave'], 10, 0);
+        add_action('update_option_'.self::OPTION, [$this, 'afterSave'], 10, 0);
+    }
+
+    public function afterSave(): void
+    {
+        Multioto_Agent_Updater::checkInNow();
     }
 
     /** @return array{platform_url:string,mcp_secret:string,update_token:string} */
@@ -86,6 +95,42 @@ class Multioto_Agent_Settings
         ];
     }
 
+    /**
+     * What the last contact with the panel says, in words an owner can act on.
+     *
+     * "מחובר" used to mean only that a key had been pasted — a key nobody had
+     * yet checked. Now it means the panel answered.
+     */
+    private function statusLine(bool $hasSecret): string
+    {
+        if (! $hasSecret) {
+            return '⚠️ לא מחובר — הדביקו את הקודים מהאזור האישי ושמרו.';
+        }
+
+        $last = Multioto_Agent_Updater::lastCheckIn();
+        $status = $last !== null ? (string) $last['status'] : '';
+
+        if ($status === 'ok') {
+            return '✅ מחובר לפאנל';
+        }
+
+        if ($status === 'rejected') {
+            return '⚠️ הפאנל לא זיהה את טוקן העדכון. העתיקו אותו שוב מהאזור האישי, בלי רווחים, ושמרו.';
+        }
+
+        if ($status === 'unreachable') {
+            return '⚠️ לא הצלחנו להגיע לפאנל מהשרת של האתר. ייתכן שחומת אש או תוסף אבטחה חוסמים בקשות יוצאות.';
+        }
+
+        if ($status === 'no_token') {
+            return '⚠️ מפתח MCP נשמר, אבל חסר טוקן עדכון — בלעדיו הפאנל לא יודע שהאתר הותקן.';
+        }
+
+        // Saved by a version before the check-in on save existed: the next
+        // scheduled update check reports in by itself.
+        return '⏳ הקודים נשמרו. החיבור ייבדק אוטומטית בשעות הקרובות.';
+    }
+
     public function render(): void
     {
         if (! current_user_can('manage_options')) {
@@ -98,7 +143,7 @@ class Multioto_Agent_Settings
         <div class="wrap" dir="rtl" style="text-align:right;">
             <h1>Multi Digital Agent</h1>
             <p>חיבור האתר לפאנל התפעול של Multi Digital. הערכים מתקבלים מהצוות בעת חיבור האתר.</p>
-            <p><strong>סטטוס:</strong> <?php echo $connected ? '✅ מחובר' : '⚠️ לא מחובר'; ?></p>
+            <p><strong>סטטוס:</strong> <?php echo esc_html($this->statusLine($connected)); ?></p>
 
             <form method="post" action="options.php">
                 <?php settings_fields(self::OPTION); ?>

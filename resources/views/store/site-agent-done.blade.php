@@ -192,30 +192,11 @@
         @endif
 
         @if ($codes !== null && ! $order->wantsUsToInstall())
-            <h2>התקנת התוסף — 3 שלבים</h2>
-            <ol>
-                <li>
-                    הורידו את קובץ התוסף והתקינו אותו באתר:
-                    <strong>תוספים ← הוסף תוסף ← העלאת תוסף</strong>, ואז <strong>הפעל</strong>.
-                    <a class="btn" href="{{ route('store.agent.plugin', ['reference' => $order->reference]) }}">הורדת קובץ התוסף</a>
-                </li>
-                <li>
-                    בתפריט וורדפרס: <strong>הגדרות ← Multioto</strong>, והדביקו את שלושת הערכים:
-                    <div class="codes">
-                        <div class="code"><span class="k">כתובת הפאנל</span><span class="v">{{ $codes['panel_url'] }}</span></div>
-                        <div class="code"><span class="k">מפתח MCP</span><span class="v">{{ $codes['mcp_secret'] }}</span></div>
-                        <div class="code"><span class="k">טוקן עדכונים</span><span class="v">{{ $codes['update_token'] }}</span></div>
-                    </div>
-                </li>
-                <li>
-                    שמרו. זהו — שלחו הודעה לוואטסאפ ותראו שהבוט עונה.
-                </li>
-            </ol>
-
-            <div class="warn">
-                שלושת הערכים האלה הם המפתחות לאתר שלכם. אל תשלחו אותם באימייל ואל תפרסמו אותם —
-                מי שמחזיק בהם יכול לשנות את האתר.
-            </div>
+            @include('partials.agent-install-guide', [
+                'codes' => $codes,
+                'downloadUrl' => route('store.agent.plugin', ['reference' => $order->reference]),
+                'checkSlot' => 'שלחו הודעה לבוט בוואטסאפ ותראו שהוא עונה. מצב החיבור מופיע גם באזור האישי, בלשונית "בוט ניהול האתר".',
+            ])
         @endif
 
         <h2>הקישור הזה</h2>
