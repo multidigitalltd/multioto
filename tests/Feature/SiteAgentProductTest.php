@@ -475,6 +475,25 @@ class SiteAgentProductTest extends TestCase
     }
 
     /**
+     * ההנחיות שבמסך חייבות לתאר את מה שהקוד באמת שולח.
+     *
+     * תבנית Authentication מקבלת גוף שמטא כותבת, ובו משתנה מיקומי — וזה מה
+     * ש-SendSiteAgentVerificationJob שולח. תבנית Utility מקבלת גוף שאנחנו
+     * כותבים, ובו משתנה בשם. מסך שמורה לבנות את ההפך בונה תבנית שתידחה
+     * בשליחה הראשונה, בלי שגיאה שתגיע לאף מסך — וזה בדיוק המרחק בין הנחיה
+     * שגויה לבין לקוח שלא מקבל קוד ואף אחד לא יודע למה.
+     */
+    public function test_the_screen_describes_the_parameters_the_code_actually_sends(): void
+    {
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+
+        Livewire::test(ManageSiteAgent::class)
+            ->assertSeeText('{{1}}')      // Authentication — מיקומי
+            ->assertSeeText('{{domain}}') // Utility — בשם
+            ->assertDontSeeText('{{code}}');
+    }
+
+    /**
      * תוקף הקוד נקבע מהמסך, כי הוא משפט שהלקוח קורא.
      *
      * תבנית האימות של מטא כותבת את המספר הזה בכותרת התחתונה ("התוקף יפוג בעוד

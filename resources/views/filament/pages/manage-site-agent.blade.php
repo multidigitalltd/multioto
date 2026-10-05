@@ -146,26 +146,32 @@
             מתחילים נדחית על ידי מטא, בלי שגיאה שמגיעה אליכם.
         </x-slot>
 
-        @php
-            // המשתנים מוצגים בדיוק בצורה שהמערכת שולחת בה, לפי המתג למעלה.
-            // הצגת {{1}} למי שבנה תבנית עם שמות (או להפך) היא הנחיה לבנות תבנית
-            // שתידחה בשליחה הראשונה, בלי שגיאה שתגיע למסך הזה.
-            $named = (bool) config('siteagent.whatsapp.templates.named_parameters', true);
-            $var = fn (string $name, int $position): string => $named ? '{{'.$name.'}}' : '{{'.$position.'}}';
-        @endphp
+        {{--
+            צורת המשתנה אינה עניין של העדפה אלא של הקטגוריה, ולכן אין כאן מתג:
 
+            Authentication — מטא כותבת את הגוף בעצמה, והמשתנה בו מיקומי ({{1}}).
+            אין לו שם שאפשר לתת לו, ומשתנה בשם נדחה בשליחה.
+
+            Utility — הגוף נכתב על ידינו, והמשתנים בו בשמות ({{domain}}). מטא
+            דורשת אותיות קטנות וקו תחתון יחיד.
+
+            זה היה מתג שנשען על הגדרה שאינה קיימת, ולכן תמיד הציג שם גם לתבנית
+            האימות — כלומר הנחה לבנות בדיוק את התבנית שתידחה בשליחה הראשונה,
+            בלי שגיאה שתגיע למסך הזה.
+        --}}
         <div class="space-y-4 text-sm">
             <div class="rounded-xl border border-gray-200 p-4 dark:border-gray-700">
                 <div class="font-medium text-gray-900 dark:text-gray-100">קוד אימות — קטגוריית Authentication</div>
                 <p class="mt-1 text-gray-500 dark:text-gray-400">
                     נשלחת למספר שמעולם לא כתב אלינו, ולכן חייבת להיות תבנית.
-                    <code>{{ $var('code', 1) }}</code> הוא הקוד בן שש הספרות.
+                    את הגוף כותבת מטא, והמשתנה בו <strong>מיקומי</strong>:
+                    <code dir="ltr">@{{1}}</code> הוא הקוד בן שש הספרות.
                 </p>
             </div>
             <div class="rounded-xl border border-gray-200 p-4 dark:border-gray-700">
                 <div class="font-medium text-gray-900 dark:text-gray-100">מנוי מושהה — קטגוריית Utility</div>
                 <p class="mt-1 text-gray-500 dark:text-gray-400">
-                    <code>{{ $var('domain', 1) }}</code> הדומיין של הלקוח. הקישור לחידוש
+                    <code dir="ltr">@{{domain}}</code> הדומיין של הלקוח. הקישור לחידוש
                     (<code>{{ rtrim(config('app.url'), '/') }}/portal/login</code>) נכתב
                     כטקסט קבוע בגוף התבנית ואינו משתנה.
                 </p>
@@ -173,7 +179,7 @@
             <div class="rounded-xl border border-gray-200 p-4 dark:border-gray-700">
                 <div class="font-medium text-gray-900 dark:text-gray-100">מנוי חזר — קטגוריית Utility</div>
                 <p class="mt-1 text-gray-500 dark:text-gray-400">
-                    <code>{{ $var('domain', 1) }}</code> הדומיין של הלקוח.
+                    <code dir="ltr">@{{domain}}</code> הדומיין של הלקוח.
                 </p>
             </div>
             <p class="text-gray-500 dark:text-gray-400">
