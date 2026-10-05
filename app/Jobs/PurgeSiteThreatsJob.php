@@ -24,8 +24,12 @@ use Illuminate\Support\Facades\Log;
  *    log on a customer's site. This drains it into the panel and alerts the team.
  *  - It sweeps sites the hooks could not reach — a user written straight into
  *    the database, a plugin folder uploaded over FTP.
- *  - It looks for the names the team added in the panel, which the site's own
- *    guard has never heard of and never will. Those are reported, not removed.
+ *  - It hands the site the names the team marked "delete immediately" in the
+ *    panel, and reads back what the site is actually enforcing. The site bounds
+ *    that list itself (never the agent, never user #1, never the last admin, a
+ *    cap per sweep), so what the panel sends is a request and not an authority.
+ *  - It looks for the rest of the team's names — the watch-only ones, which the
+ *    site's own guard has never heard of and never will. Those are reported.
  *  - It covers sites still on an older plugin, where nothing is watching at all.
  *    There it does what the old tool vocabulary allows (deactivate the plugin,
  *    which is what makes it reachable) and says plainly that finishing the job
@@ -64,11 +68,92 @@ class PurgeSiteThreatsJob implements ShouldQueue
             return;
         }
 
+        // Hand the site the rules marked "delete immediately" BEFORE deciding
+        // what to purge, so a rule added a minute ago is acted on in this run
+        // rather than the next one.
+        $status = $this->syncAutoRemoveRules($mcp, $site, $status, $holdsOurRules);
+
         $this->withGuard($mcp, $team, $site, $status);
 
         // The guard answered for the names it carries. Ours it has never heard
         // of, so they are looked for here — see sweepOwnRules().
-        $this->sweepOwnRules($mcp, $team, $site);
+        $this->sweepOwnRules($mcp, $team, $site, $holdsOurRules);
+    }
+
+    /**
+     * Give the site the "delete immediately" list, and read back what it holds.
+     *
+     * Pushed on every run where it differs from what the site reports, which is
+     * also the repair: a site restored from a backup comes back with the list it
+     * had on the day of the backup, and nothing else would ever notice.
+     *
+     * `panel_rules` missing from the status is how an older plugin announces that
+     * it cannot hold a list at all. That is not an error to report — most sites
+     * will be in that state the day this ships — but it does mean an auto-remove
+     * rule is not auto-removing there, which sweepOwnRules() then says.
+     *
+     * @param  array<string, mixed>  $status
+     * @param  bool|null  $holdsOurRules  set to whether the site is enforcing them
+     * @return array<string, mixed> the status, re-read when a push changed it
+     */
+    private function syncAutoRemoveRules(McpClient $mcp, Site $site, array $status, ?bool &$holdsOurRules): array
+    {
+        $holdsOurRules = false;
+
+        if (! array_key_exists('panel_rules', $status)) {
+            return $status; // Plugin older than 1.7.0 — nothing to push to.
+        }
+
+        $holdsOurRules = true;
+
+        $wanted = [
+            'users' => ThreatQuarantine::autoRemoveUsers(),
+            'plugins' => ThreatQuarantine::autoRemovePlugins(),
+        ];
+
+        $held = [
+            'users' => $this->sortedStrings(data_get($status, 'panel_rules.users', [])),
+            'plugins' => $this->sortedStrings(data_get($status, 'panel_rules.plugins', [])),
+        ];
+
+        if ($held === ['users' => $this->sortedStrings($wanted['users']), 'plugins' => $this->sortedStrings($wanted['plugins'])]) {
+            return $status; // Already in force — no call, no noise.
+        }
+
+        try {
+            $mcp->callTool($site, 'wp_guard_rules', $wanted);
+
+            // Re-read rather than assume: the site refuses anything it will not
+            // hold, and what it is actually enforcing is the only answer worth
+            // acting on — a push reported as sent is not a push that landed.
+            return $this->guardStatus($mcp, $site);
+        } catch (\Throwable $e) {
+            // The list did not land, so nothing here is enforcing it. Saying so
+            // is what makes sweepOwnRules look for these names instead.
+            $holdsOurRules = false;
+
+            Log::warning('PurgeSiteThreatsJob: pushing auto-remove rules failed', [
+                'site' => $site->id, 'error' => $e->getMessage(),
+            ]);
+
+            return $status;
+        }
+    }
+
+    /**
+     * @param  mixed  $values
+     * @return list<string>
+     */
+    private function sortedStrings($values): array
+    {
+        $out = array_values(array_unique(array_filter(array_map(
+            static fn ($value): string => mb_strtolower(trim((string) $value)),
+            is_array($values) ? $values : [],
+        ), static fn (string $value): bool => $value !== '')));
+
+        sort($out);
+
+        return $out;
     }
 
     /**
@@ -87,11 +172,21 @@ class PurgeSiteThreatsJob implements ShouldQueue
      *
      * Found and reported, never removed — the same line the screen draws. And
      * it costs an ordinary system nothing: no rules, no calls.
+     *
+     * @param  bool  $holdsOurRules  whether the site accepted the "delete
+     *                               immediately" list. When it did, those names
+     *                               are reported through its own guard log and
+     *                               looking for them here would file every
+     *                               finding twice. When it did not — an older
+     *                               plugin, or a push that failed — they are
+     *                               swept here, because a rule marked for
+     *                               deletion that is neither deleted nor
+     *                               reported is the worst of the three.
      */
-    private function sweepOwnRules(McpClient $mcp, TeamNotifier $team, Site $site): void
+    private function sweepOwnRules(McpClient $mcp, TeamNotifier $team, Site $site, bool $holdsOurRules): void
     {
-        $logins = ThreatQuarantine::customUsers();
-        $slugs = ThreatQuarantine::customPlugins();
+        $logins = $holdsOurRules ? ThreatQuarantine::reportOnlyUsers() : ThreatQuarantine::customUsers();
+        $slugs = $holdsOurRules ? ThreatQuarantine::reportOnlyPlugins() : ThreatQuarantine::customPlugins();
 
         if ($logins === [] && $slugs === []) {
             return;
@@ -107,17 +202,25 @@ class PurgeSiteThreatsJob implements ShouldQueue
             ? []
             : array_values(array_intersect($slugs, ThreatQuarantine::slugsIn($inventory)));
 
+        // A name that reaches this method is one nothing deleted. Two very
+        // different reasons for that, and the team has to be told which: a rule
+        // that was never meant to delete, or one marked "delete immediately" on
+        // a site whose plugin cannot enforce it. The second is the dangerous
+        // one, because somebody ticked a box and believes it is handled.
+        $unenforced = array_merge(ThreatQuarantine::autoRemoveUsers(), ThreatQuarantine::autoRemovePlugins());
+
         $fresh = [];
+        $anyUnenforced = false;
 
-        foreach ($foundUsers as $login) {
-            if ($this->noteOwnRuleFinding($site, 'משתמש', $login)) {
-                $fresh[] = "👤 משתמש: {$login}";
-            }
-        }
+        foreach ([['משתמש', '👤', $foundUsers], ['תוסף', '🧩', $foundPlugins]] as [$noun, $icon, $found]) {
+            foreach ($found as $target) {
+                $marked = in_array($target, $unenforced, true);
 
-        foreach ($foundPlugins as $slug) {
-            if ($this->noteOwnRuleFinding($site, 'תוסף', $slug)) {
-                $fresh[] = "🧩 תוסף: {$slug}";
+                if ($this->noteOwnRuleFinding($site, $noun, $target, $marked)) {
+                    $fresh[] = "{$icon} {$noun}: {$target}".($marked ? ' — מסומן "מחק מיד" ולא נמחק' : '');
+                }
+
+                $anyUnenforced = $anyUnenforced || $marked;
             }
         }
 
@@ -126,10 +229,15 @@ class PurgeSiteThreatsJob implements ShouldQueue
         }
 
         $team->alert(
-            "🚨 כלל מעקב נמצא באתר {$site->domain}",
+            $anyUnenforced
+                ? "🚨 כלל \"מחק מיד\" לא נאכף באתר {$site->domain}"
+                : "🚨 כלל מעקב נמצא באתר {$site->domain}",
             $this->customerLine($site).
             "נמצאו פריטים מכללי המעקב שהוספתם בפאנל:\n".implode("\n", $fresh).
-            "\n\nאלה אינם מוסרים אוטומטית — המחיקה האוטומטית נקבעת ברשימה שבתוך התוסף שבאתר, ולא מהפאנל. נדרשת בדיקה ידנית.",
+            "\n\n".($anyUnenforced
+                ? 'פריט שסומן "מחק מיד" נמצא ולא נמחק: תוסף הסוכן באתר הזה ('.($site->agent_plugin_version ?: 'גרסה לא ידועה')
+                    .') ישן מכדי להחזיק את הרשימה. יש לעדכן אותו ל-1.7.0 ומעלה, ועד אז למחוק ידנית — עכשיו.'
+                : 'אלה אינם מוסרים אוטומטית: הם נוספו למעקב בלבד. נדרשת בדיקה ידנית, או סימון "מחק מיד" אם ברור שהם תמיד פריצה.'),
             $this->siteUrl($site),
         );
     }
@@ -142,11 +250,14 @@ class PurgeSiteThreatsJob implements ShouldQueue
      * is new under a hundred that are not, and a team that learns to skip this
      * alert is worse off than one that never had it.
      *
+     * @param  bool  $markedForRemoval  the rule says delete, and this site did not
      * @return bool whether this was new, and so worth an alert
      */
-    private function noteOwnRuleFinding(Site $site, string $noun, string $target): bool
+    private function noteOwnRuleFinding(Site $site, string $noun, string $target, bool $markedForRemoval = false): bool
     {
-        $title = "{$noun} מכלל מעקב נמצא באתר: {$target}";
+        $title = $markedForRemoval
+            ? "{$noun} שסומן \"מחק מיד\" לא נמחק באתר: {$target}"
+            : "{$noun} מכלל מעקב נמצא באתר: {$target}";
 
         $already = SiteEvent::where('site_id', $site->id)
             ->where('type', 'threat_found')
@@ -159,8 +270,11 @@ class PurgeSiteThreatsJob implements ShouldQueue
         }
 
         SiteEvent::record($site->id, 'threat_found', 'critical', $title,
-            'זהו כלל מעקב שהוספתם בפאנל. הוא אינו נמחק אוטומטית מהאתר — המחיקה האוטומטית נקבעת ברשימה המקובעת בתוסף שבאתר. '.
-            'יש להסיר ידנית, או להחליט שהפריט תקין ולהסיר את הכלל.',
+            $markedForRemoval
+                ? 'הכלל מסומן "מחק מיד", אך תוסף הסוכן באתר הזה ('.($site->agent_plugin_version ?: 'גרסה לא ידועה')
+                    .') ישן מכדי להחזיק את הרשימה ולכן לא מחק דבר. יש לעדכן אותו ל-1.7.0 ומעלה, ועד אז למחוק ידנית.'
+                : 'זהו כלל מעקב שהוספתם בפאנל, לאיתור ודיווח בלבד — הוא אינו מסומן "מחק מיד" ולכן שום דבר לא הסיר אותו. '.
+                    'יש להסיר ידנית, או להחליט שהפריט תקין ולהסיר את הכלל.',
         );
 
         return true;
@@ -410,13 +524,20 @@ class PurgeSiteThreatsJob implements ShouldQueue
             $target = (string) ($action['target'] ?? '');
             $noun = ($action['kind'] ?? '') === 'user' ? 'משתמש' : 'תוסף';
 
+            // Which list authorised it, as the site reported it. "The plugin's
+            // own hard-coded list" and "a rule somebody ticked in the panel" are
+            // different facts about a deletion on a customer's site, and only
+            // one of them can be changed by whoever holds the panel.
+            $byRule = ($action['source'] ?? 'builtin') === 'panel';
+            $origin = $byRule ? ' (כלל מהפאנל)' : '';
+
             SiteEvent::record(
                 $site->id,
                 $result === 'removed' ? 'threat_purged' : 'threat_found',
                 'critical',
                 $result === 'removed'
-                    ? "{$noun} בהסגר הוסר אוטומטית: {$target}"
-                    : "{$noun} בהסגר לא הוסר: {$target}",
+                    ? "{$noun} בהסגר הוסר אוטומטית{$origin}: {$target}"
+                    : "{$noun} בהסגר לא הוסר{$origin}: {$target}",
                 (string) ($action['detail'] ?? ''),
             );
         }
@@ -429,6 +550,7 @@ class PurgeSiteThreatsJob implements ShouldQueue
 
         $lines = collect($actions)->map(function (array $a): string {
             $icon = ($a['kind'] ?? '') === 'user' ? '👤' : '🧩';
+            $origin = ($a['source'] ?? 'builtin') === 'panel' ? ' [כלל מהפאנל]' : '';
             $verb = [
                 'removed' => 'הוסר',
                 'deactivated' => 'כובה (הקבצים נשארו)',
@@ -436,7 +558,7 @@ class PurgeSiteThreatsJob implements ShouldQueue
                 'failed' => 'ההסרה נכשלה',
             ][$a['result'] ?? ''] ?? (string) ($a['result'] ?? '');
 
-            return "{$icon} {$a['target']} — {$verb}\n   ".trim((string) ($a['detail'] ?? ''));
+            return "{$icon} {$a['target']}{$origin} — {$verb}\n   ".trim((string) ($a['detail'] ?? ''));
         })->implode("\n");
 
         $team->alert(

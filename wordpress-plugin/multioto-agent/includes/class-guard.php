@@ -5,7 +5,7 @@ if (! defined('ABSPATH')) {
 }
 
 /**
- * The two intrusions we do not wait to discuss.
+ * The intrusions we do not wait to discuss.
  *
  * An administrator called `sys_maint` and the wp-file-manager plugin are not
  * ambiguous findings — they are the pair a compromised WordPress site gets
@@ -14,20 +14,31 @@ if (! defined('ABSPATH')) {
  * appear, without asking anyone, because the window between "detected" and
  * "approved by a human" is the window the intruder is inside the site.
  *
- * Three things make that safe to do automatically:
+ * Those two are HARD-CODED and need no instruction from anybody.
  *
- * The list is HARD-CODED, not passed in. Nothing the platform sends can widen
- * it, so even a fully compromised panel cannot use this to delete an
- * administrator or a plugin of its choosing — it can only ask for these two.
+ * From 1.7.0 the team can also mark a name in the panel as "delete immediately",
+ * and that list IS sent over the network — which gives up a guarantee this file
+ * used to make, so it is worth being exact about what replaced it. The old
+ * guarantee was absolute: a fully compromised panel could not order one deletion
+ * it had not already been given. What stands now is narrower and enforced HERE,
+ * where no instruction can reach it:
  *
- * Nothing is deleted blind. A user's content is reassigned to the oldest
- * remaining administrator rather than destroyed, and the last administrator on
- * a site is never deleted at all: locking the owner out is a worse outcome than
- * the account we were trying to remove, so that case is reported for a person
- * instead.
+ *  - Never this plugin. An order to delete the agent cannot be used to blind the
+ *    site before doing something else to it.
+ *  - Never user #1, for a name that came from the panel. On nearly every install
+ *    that is the owner's own account.
+ *  - Never the last administrator, for any name at all (as before).
+ *  - At most PUSHED_PER_SWEEP panel-ordered removals in one sweep, so an order to
+ *    delete everything gets a handful and a report, not a site.
+ *  - A name is a name: a login with no whitespace or separators, a plugin folder
+ *    matching one strict pattern. Nothing path-shaped is accepted, on the way in
+ *    OR on the way back out of the option it is stored in.
  *
- * And every action is written to a log the panel drains, so a removal that
- * happened while nobody was watching still reaches the team.
+ * Nothing is deleted blind either way. A user's content is reassigned to the
+ * oldest remaining administrator rather than destroyed, and every action is
+ * written to a log the panel drains — carrying WHICH list authorised it, because
+ * "the site decided this by itself" and "the panel told it to" are different
+ * facts and a reviewer needs to tell them apart.
  */
 class Multioto_Agent_Guard
 {
@@ -42,6 +53,29 @@ class Multioto_Agent_Guard
 
     /** Plugin folder slugs removed on sight. */
     const PLUGINS = ['wp-file-manager'];
+
+    /** Names the panel marked "delete immediately", as this site received them. */
+    const PUSHED_OPTION = 'multioto_agent_guard_pushed';
+
+    /** How many names of each kind this site will hold on the panel's behalf. */
+    const PUSHED_MAX = 50;
+
+    /**
+     * Panel-ordered removals allowed in one sweep.
+     *
+     * The cap is about the bulk case and nothing else: a panel that has been
+     * taken over and orders every account on the site destroyed gets this many
+     * and then a log entry saying it stopped. It is not a defence against a
+     * targeted order — nothing here can be — which is why the never-lists above
+     * exist alongside it.
+     */
+    const PUSHED_PER_SWEEP = 5;
+
+    /** Refused however it is asked for: deleting this is deleting the watchman. */
+    const NEVER_PLUGINS = ['multioto-agent'];
+
+    /** Refused for a PANEL rule: on nearly every install this is the owner. */
+    const NEVER_USER_IDS = [1];
 
     const LOG_OPTION = 'multioto_agent_guard_log';
 
@@ -83,7 +117,7 @@ class Multioto_Agent_Guard
     {
         $slug = $this->slugOf((string) $plugin);
 
-        if ($slug !== '' && in_array($slug, self::PLUGINS, true)) {
+        if ($slug !== '' && $this->pluginSource($slug) !== '') {
             $this->purgePlugin($slug);
         }
     }
@@ -125,32 +159,231 @@ class Multioto_Agent_Guard
     public function sweep(): array
     {
         $actions = [];
+        $budget = self::PUSHED_PER_SWEEP;
 
-        foreach (self::USERS as $login) {
+        foreach ($this->watchedUsers() as $login) {
+            $fromPanel = $this->userSource($login) === 'panel';
+
+            if ($fromPanel && $budget <= 0) {
+                // Say which name was left, not just that something was: a log
+                // entry nobody can act on is the same as no log entry.
+                $actions[] = $this->log('user', $login, 'skipped', sprintf(
+                    'הסריקה עצרה לאחר %d הסרות מכללי הפאנל. השם הזה לא נבדק בסריקה הזאת ויטופל בסריקה הבאה.',
+                    self::PUSHED_PER_SWEEP,
+                ), 'panel');
+
+                break;
+            }
+
             $action = $this->purgeUser($login);
 
-            if ($action !== null) {
-                $actions[] = $action;
+            if ($action === null) {
+                continue;
+            }
+
+            $actions[] = $action;
+
+            if ($fromPanel) {
+                $budget--;
             }
         }
 
-        return array_merge($actions, $this->sweepPlugins());
+        return array_merge($actions, $this->sweepPlugins($budget));
     }
 
-    /** @return list<array<string, mixed>> */
-    private function sweepPlugins(): array
+    /**
+     * @param  int  $budget  panel-ordered removals still allowed this sweep
+     * @return list<array<string, mixed>>
+     */
+    private function sweepPlugins(int $budget = self::PUSHED_PER_SWEEP): array
     {
         $actions = [];
 
-        foreach (self::PLUGINS as $slug) {
+        foreach ($this->watchedPlugins() as $slug) {
+            $fromPanel = $this->pluginSource($slug) === 'panel';
+
+            if ($fromPanel && $budget <= 0) {
+                $actions[] = $this->log('plugin', $slug, 'skipped', sprintf(
+                    'הסריקה עצרה לאחר %d הסרות מכללי הפאנל. התוסף הזה לא נבדק בסריקה הזאת ויטופל בסריקה הבאה.',
+                    self::PUSHED_PER_SWEEP,
+                ), 'panel');
+
+                break;
+            }
+
             $action = $this->purgePlugin($slug);
 
-            if ($action !== null) {
-                $actions[] = $action;
+            if ($action === null) {
+                continue;
+            }
+
+            $actions[] = $action;
+
+            if ($fromPanel) {
+                $budget--;
             }
         }
 
         return $actions;
+    }
+
+    /**
+     * Replace the panel's "delete immediately" list on this site.
+     *
+     * Everything is re-read from the stored option at the moment of deletion, so
+     * this method is a gate and not a source of authority: what it refuses here
+     * is refused again there.
+     *
+     * @param  mixed  $users
+     * @param  mixed  $plugins
+     * @return array<string, mixed> what was accepted, and what was not
+     */
+    public function setPushedRules($users, $plugins): array
+    {
+        $refused = [];
+
+        $accepted = [
+            'users' => $this->sanitise(is_array($users) ? $users : [], 'user', $refused),
+            'plugins' => $this->sanitise(is_array($plugins) ? $plugins : [], 'plugin', $refused),
+        ];
+
+        $before = ['users' => $this->pushedList('users'), 'plugins' => $this->pushedList('plugins')];
+
+        if ($before !== $accepted) {
+            update_option(self::PUSHED_OPTION, $accepted, false);
+
+            // Not into the log the panel drains: that log is a record of what was
+            // done TO the site, and the panel already knows what it sent. The
+            // site's own error log is where a reviewer looks for "who widened
+            // this, and when" if the panel's story is the thing in doubt.
+            error_log(sprintf(
+                '[multioto-agent] guard rules set by panel: users=%s plugins=%s',
+                implode(',', $accepted['users']) ?: '-',
+                implode(',', $accepted['plugins']) ?: '-',
+            ));
+        }
+
+        return [
+            'users' => $accepted['users'],
+            'plugins' => $accepted['plugins'],
+            'refused' => array_values(array_unique($refused)),
+            'max' => self::PUSHED_MAX,
+            'never_plugins' => self::NEVER_PLUGINS,
+        ];
+    }
+
+    /**
+     * Names this site watches for: the hard-coded ones first, then the panel's.
+     *
+     * Order is not cosmetic. The per-sweep cap only ever applies to the panel's
+     * half, so the two built-ins must be reached before any budget can run out —
+     * a flood of panel rules must never be able to crowd out the removal this
+     * file was written for.
+     *
+     * @return list<string>
+     */
+    private function watchedUsers(): array
+    {
+        return array_values(array_unique(array_merge(self::USERS, $this->pushedList('users'))));
+    }
+
+    /** @return list<string> */
+    private function watchedPlugins(): array
+    {
+        return array_values(array_unique(array_merge(self::PLUGINS, $this->pushedList('plugins'))));
+    }
+
+    /** Which list a name is on: 'builtin', 'panel', or '' for neither. */
+    private function userSource(string $login): string
+    {
+        $login = strtolower(trim($login));
+
+        if (in_array($login, self::USERS, true)) {
+            return 'builtin';
+        }
+
+        return in_array($login, $this->pushedList('users'), true) ? 'panel' : '';
+    }
+
+    private function pluginSource(string $slug): string
+    {
+        $slug = strtolower(trim($slug));
+
+        if (in_array($slug, self::PLUGINS, true)) {
+            return 'builtin';
+        }
+
+        return in_array($slug, $this->pushedList('plugins'), true) ? 'panel' : '';
+    }
+
+    /**
+     * The stored panel list for one kind.
+     *
+     * Validated on the way OUT as well as in, and that is deliberate: this is an
+     * ordinary wp_options row, so anything with database access to the site can
+     * write it — an intruder included. A list that decides what gets deleted is
+     * not something to read back on trust.
+     *
+     * @return list<string>
+     */
+    private function pushedList(string $kind): array
+    {
+        $stored = get_option(self::PUSHED_OPTION, []);
+
+        if (! is_array($stored) || ! isset($stored[$kind]) || ! is_array($stored[$kind])) {
+            return [];
+        }
+
+        $refused = [];
+
+        return $this->sanitise($stored[$kind], $kind === 'users' ? 'user' : 'plugin', $refused);
+    }
+
+    /**
+     * Normalise a received list, dropping anything this site will not hold.
+     *
+     * @param  array<int|string, mixed>  $values
+     * @param  list<string>  $refused  collects what was dropped, for the reply
+     * @return list<string>
+     */
+    private function sanitise(array $values, string $kind, array &$refused): array
+    {
+        $out = [];
+
+        foreach ($values as $value) {
+            $value = strtolower(trim((string) $value));
+
+            if ($value === '' || in_array($value, $out, true)) {
+                continue;
+            }
+
+            if (! $this->isName($value, $kind) || count($out) >= self::PUSHED_MAX) {
+                $refused[] = $value;
+
+                continue;
+            }
+
+            $out[] = $value;
+        }
+
+        return $out;
+    }
+
+    /**
+     * Is this a bare name rather than something path-shaped?
+     *
+     * A plugin slug reaches the filesystem (WP_PLUGIN_DIR.'/'.$slug), so it is
+     * held to one strict pattern — no separators, no dots, nothing that could
+     * climb out of the plugins directory even before removeDirectory() refuses
+     * it. A login never touches a path, so it only has to be a login.
+     */
+    private function isName(string $value, string $kind): bool
+    {
+        if ($kind === 'plugin') {
+            return (bool) preg_match('/^[a-z0-9][a-z0-9_-]{0,98}$/', $value);
+        }
+
+        return strlen($value) <= 60 && ! preg_match('/[\s\/\\\\]/', $value);
     }
 
     /**
@@ -161,7 +394,9 @@ class Multioto_Agent_Guard
      */
     public function purgeUser(string $login): ?array
     {
-        if (! $this->isQuarantinedLogin($login)) {
+        $source = $this->userSource($login);
+
+        if ($source === '') {
             return null; // Not on the list — this method has no other vocabulary.
         }
 
@@ -173,7 +408,19 @@ class Multioto_Agent_Guard
 
         require_once ABSPATH.'wp-admin/includes/user.php';
 
-        $reassignTo = $this->oldestOtherAdministrator((int) $user->ID);
+        $userId = (int) $user->ID;
+
+        // A name that arrived over the network never deletes the install's first
+        // account. On nearly every WordPress site that is the owner, and it is
+        // the single account whose loss cannot be undone from here.
+        if ($source === 'panel' && in_array($userId, self::NEVER_USER_IDS, true)) {
+            return $this->log('user', $login, 'skipped', sprintf(
+                'המשתמש #%d הוא החשבון הראשון באתר — כלל שהגיע מהפאנל אינו מוחק אותו. אם זה אכן חשבון של פורץ, יש לטפל ידנית.',
+                $userId,
+            ), $source);
+        }
+
+        $reassignTo = $this->oldestOtherAdministrator($userId);
         $isAdmin = in_array('administrator', (array) $user->roles, true);
 
         // The one case where removing the account is the worse outcome: it is
@@ -182,15 +429,14 @@ class Multioto_Agent_Guard
         if ($isAdmin && $reassignTo === null) {
             return $this->log('user', $login, 'skipped', sprintf(
                 'המשתמש #%d הוא מנהל האתר היחיד — מחיקתו הייתה נועלת את הבעלים בחוץ. נדרש טיפול ידני מיידי.',
-                $user->ID,
-            ));
+                $userId,
+            ), $source);
         }
 
-        $userId = (int) $user->ID;
         $deleted = wp_delete_user($userId, $reassignTo);
 
         if (! $deleted) {
-            return $this->log('user', $login, 'failed', "מחיקת המשתמש #{$userId} נכשלה.");
+            return $this->log('user', $login, 'failed', "מחיקת המשתמש #{$userId} נכשלה.", $source);
         }
 
         $roles = implode(', ', (array) $user->roles);
@@ -200,7 +446,7 @@ class Multioto_Agent_Guard
             $userId,
             $isAdmin ? 'מנהל' : ($roles !== '' ? $roles : 'ללא תפקיד'),
             $reassignTo === null ? '—' : $reassignTo,
-        ));
+        ), $source);
     }
 
     /**
@@ -211,8 +457,19 @@ class Multioto_Agent_Guard
      */
     public function purgePlugin(string $slug): ?array
     {
-        if (! in_array($slug, self::PLUGINS, true)) {
+        $source = $this->pluginSource($slug);
+
+        if ($source === '') {
             return null;
+        }
+
+        // Refused however it was asked for. An order to remove the agent would
+        // take the site off the monitoring that would have reported whatever
+        // came next — so this is the one removal that is never an improvement.
+        if (in_array($slug, self::NEVER_PLUGINS, true)) {
+            return $this->log('plugin', $slug, 'skipped',
+                'התוסף הזה הוא סוכן הניטור עצמו. הסרתו הייתה מנתקת את האתר מהפאנל, ולכן היא נדחית תמיד.',
+                $source);
         }
 
         $directory = WP_PLUGIN_DIR.'/'.$slug;
@@ -246,7 +503,7 @@ class Multioto_Agent_Guard
         $deleted = $files !== [] ? delete_plugins($files) : false;
 
         if ($deleted === true) {
-            return $this->log('plugin', $slug, 'removed', 'התוסף כובה ונמחק מהשרת.');
+            return $this->log('plugin', $slug, 'removed', 'התוסף כובה ונמחק מהשרת.', $source);
         }
 
         // delete_plugins() needs a writable filesystem and only knows about
@@ -254,12 +511,12 @@ class Multioto_Agent_Guard
         // directory is removed directly — bounded to this hard-coded slug
         // inside the plugins directory, never to a path anybody passed in.
         if (is_dir($directory) && $this->removeDirectory($directory)) {
-            return $this->log('plugin', $slug, 'removed', 'התוסף כובה ותיקיית הקבצים שלו נמחקה.');
+            return $this->log('plugin', $slug, 'removed', 'התוסף כובה ותיקיית הקבצים שלו נמחקה.', $source);
         }
 
         return $this->log('plugin', $slug, $files !== [] ? 'deactivated' : 'failed', is_dir($directory)
             ? 'התוסף כובה אך מחיקת הקבצים נכשלה (הרשאות כתיבה) — הקבצים עדיין על השרת ויש להסירם ידנית.'
-            : 'לא ניתן היה להסיר את התוסף.');
+            : 'לא ניתן היה להסיר את התוסף.', $source);
     }
 
     /**
@@ -274,7 +531,7 @@ class Multioto_Agent_Guard
 
         $usersPresent = [];
 
-        foreach (self::USERS as $login) {
+        foreach ($this->watchedUsers() as $login) {
             if (get_user_by('login', $login) instanceof WP_User) {
                 $usersPresent[] = $login;
             }
@@ -282,7 +539,7 @@ class Multioto_Agent_Guard
 
         $pluginsPresent = [];
 
-        foreach (self::PLUGINS as $slug) {
+        foreach ($this->watchedPlugins() as $slug) {
             if (is_dir(WP_PLUGIN_DIR.'/'.$slug)) {
                 $pluginsPresent[] = $slug;
             }
@@ -291,6 +548,13 @@ class Multioto_Agent_Guard
         return [
             'version' => MULTIOTO_AGENT_VERSION,
             'quarantine' => ['users' => self::USERS, 'plugins' => self::PLUGINS],
+            // What this site is holding on the panel's behalf, read back from the
+            // option rather than echoed from the request: the panel compares this
+            // with what it meant to send, so a push that silently did not land —
+            // or a list an intruder edited in the database — is visible there
+            // instead of being assumed.
+            'panel_rules' => ['users' => $this->pushedList('users'), 'plugins' => $this->pushedList('plugins')],
+            'panel_limits' => ['max' => self::PUSHED_MAX, 'per_sweep' => self::PUSHED_PER_SWEEP, 'never_plugins' => self::NEVER_PLUGINS],
             // Anything still here after the sweep needs a person: it means the
             // removal was refused (last administrator) or could not be written.
             'present' => ['users' => $usersPresent, 'plugins' => $pluginsPresent],
@@ -325,7 +589,7 @@ class Multioto_Agent_Guard
      *
      * @return array<string, mixed>
      */
-    private function log(string $kind, string $target, string $result, string $detail): array
+    private function log(string $kind, string $target, string $result, string $detail, string $source = 'builtin'): array
     {
         $id = $this->lastId() + 1;
 
@@ -336,6 +600,10 @@ class Multioto_Agent_Guard
             'target' => $target,
             'result' => $result,
             'detail' => $detail,
+            // Which list authorised this. "The site decided by itself" and "the
+            // panel told it to" are different facts, and only one of them can be
+            // changed by somebody who takes over the panel.
+            'source' => $source === 'panel' ? 'panel' : 'builtin',
         ];
 
         $entries = array_values(array_filter((array) get_option(self::LOG_OPTION, []), 'is_array'));
@@ -350,14 +618,14 @@ class Multioto_Agent_Guard
 
         // Also to the site's own error log: if this plugin is the next thing
         // the intruder removes, the trail survives outside its options.
-        error_log(sprintf('[multioto-agent] guard %s %s: %s — %s', $kind, $target, $result, $detail));
+        error_log(sprintf('[multioto-agent] guard %s %s (%s): %s — %s', $kind, $target, $entry['source'], $result, $detail));
 
         return $entry;
     }
 
     private function isQuarantinedLogin(string $login): bool
     {
-        return in_array(strtolower(trim($login)), self::USERS, true);
+        return $this->userSource($login) !== '';
     }
 
     /** The plugin folder from a plugin file ("a/b.php" → "a", "b.php" → "b"). */
