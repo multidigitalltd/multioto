@@ -212,6 +212,11 @@ class ManageSiteAgent extends Page implements HasForms
                         TextInput::make('siteagent.binding_ttl_minutes')
                             ->label('תוקף קוד האימות (דקות)')
                             ->numeric()
+                            // שלם, כי מי שסופר את הדקות עושה (int) על הערך:
+                            // 10.5 היה נשמר, מוצג כ-10.5, ופועל כ-10 — בדיוק
+                            // הפער בין מה שכתוב למה שקורה שהשדה הזה קיים כדי
+                            // לסגור.
+                            ->rule('integer')
                             ->minValue(1)
                             // 90 ולא יותר, כי זה הגבול של מטא ל-
                             // code_expiration_minutes בתבנית Authentication.
