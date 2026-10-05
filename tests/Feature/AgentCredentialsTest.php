@@ -21,7 +21,10 @@ class AgentCredentialsTest extends TestCase
 
         $codes = $site->ensureAgentCredentials();
 
-        $this->assertSame(rtrim(config('app.url'), '/'), $codes['panel_url']);
+        // No panel address. The plugin holds it as a constant and offers no field
+        // for it, so handing one to a customer to copy is an instruction that
+        // cannot be followed.
+        $this->assertArrayNotHasKey('panel_url', $codes);
         $this->assertSame('https://shop.example.com/wp-json/md-agent/v1/mcp', $codes['mcp_endpoint']);
         $this->assertNotEmpty($codes['mcp_secret']);
         $this->assertNotEmpty($codes['update_token']);

@@ -88,6 +88,14 @@ class SiteAgentProduct
                 filled($templates['service_resumed'] ?? null),
                 'חסרה. לקוח ששילם וחידש לא יקבל הודעה שהבוט חזר לעבוד.',
             ),
+            $this->requirement(
+                'template_card_link',
+                'תבנית "קישור לתשלום"',
+                filled($templates['card_link'] ?? null),
+                'חסרה. ללקוחות הבוט לא תישלח הודעת תשלום בוואטסאפ — רק מייל. '
+                    .'אין נפילה למספר הכללי במכוון, ולכן הפער הזה שקט בוואטסאפ עד שהתבנית מוגדרת.',
+                blocking: false,
+            ),
         ];
     }
 
@@ -107,10 +115,17 @@ class SiteAgentProduct
         return array_values(array_filter($this->readiness(), fn (array $check): bool => ! $check['ready']));
     }
 
-    /** Everything the product needs is in place. */
+    /**
+     * Everything the product needs in order to be SOLD is in place.
+     *
+     * Advisory gaps are deliberately not counted. A missing card-link template
+     * means a bot customer's payment reminder goes by email only and the skip
+     * is reported — a real gap, shown as one on the settings screen, but not a
+     * reason to take the shop off the air and refuse new customers.
+     */
     public function ready(): bool
     {
-        return $this->missing() === [];
+        return array_filter($this->missing(), fn (array $check): bool => $check['blocking'] ?? true) === [];
     }
 
     /**
@@ -240,12 +255,21 @@ class SiteAgentProduct
     }
 
     /** @return array{key: string, label: string, ready: bool, detail: string} */
-    private function requirement(string $key, string $label, bool $ready, string $detail): array
+    /**
+     * @param  bool  $blocking  false for a gap that is real but does not make
+     *                          the product unsellable — it is shown and it is
+     *                          counted as missing on the screen, and `ready()`
+     *                          ignores it. Without this distinction the only
+     *                          two options are hiding a genuine gap or 404ing
+     *                          the shop over something the email still covers.
+     */
+    private function requirement(string $key, string $label, bool $ready, string $detail, bool $blocking = true): array
     {
         return [
             'key' => $key,
             'label' => $label,
             'ready' => $ready,
+            'blocking' => $blocking,
             'detail' => $ready ? 'מוגדר.' : $detail,
         ];
     }

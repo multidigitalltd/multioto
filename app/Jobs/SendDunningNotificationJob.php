@@ -8,6 +8,7 @@ use App\Enums\NotificationType;
 use App\Mail\DunningNotificationMail;
 use App\Models\DunningEvent;
 use App\Models\NotificationLog;
+use App\Services\SiteAgent\BotNumberRoute;
 use App\Services\Waha\WahaClient;
 use App\Support\CardLink;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -28,7 +29,7 @@ class SendDunningNotificationJob implements ShouldQueue
 
     public function __construct(public int $dunningEventId) {}
 
-    public function handle(WahaClient $waha): void
+    public function handle(WahaClient $waha, BotNumberRoute $route): void
     {
         $event = DunningEvent::with(['subscription.customer', 'subscription.plan', 'subscription.license', 'charge'])
             ->find($this->dunningEventId);
@@ -39,11 +40,20 @@ class SendDunningNotificationJob implements ShouldQueue
 
         $customer = $event->subscription->customer;
 
+        // The signed card page only where the address is one the customer
+        // record declares. On WhatsApp the recipient may be a learned JID —
+        // an employee or an agency who once wrote to support — and a payment
+        // form for somebody else's business is not ours to hand out. See
+        // BotNumberRoute::paymentLinkForRecipient().
+        $updateLink = $event->channel === DunningChannel::Whatsapp
+            ? $route->paymentLinkForRecipient($customer, $customer->whatsappRecipient())
+            : CardLink::for($customer->id);
+
         $replacements = [
             'name' => $customer->name,
             'plan' => $event->subscription->planName(),
             'amount' => number_format(($event->charge?->total_agorot ?? $event->subscription->totalChargeAgorot()) / 100, 2),
-            'update_link' => CardLink::for($customer->id),
+            'update_link' => $updateLink,
             // Only the licence templates use this. Supplied unconditionally so a
             // template that wants it never renders a bare ":until", and phrased
             // rather than left blank when there is no date to give.

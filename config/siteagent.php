@@ -104,6 +104,24 @@ return [
             // Utility category. One parameter: `domain`.
             'service_resumed' => env('SITE_AGENT_WA_TEMPLATE_RESUMED', ''),
 
+            /*
+            | Utility category. Two parameters: `customer_name` and `link`.
+            |
+            | `link` is deliberately a parameter rather than fixed text, because
+            | it is not the same sentence for everybody: the business's own
+            | number gets the signed card page, and a number the agent was
+            | handed to — an employee, an agency — gets the sign-in page
+            | instead. See BotNumberRoute for why that distinction is not
+            | optional.
+            |
+            | Without this template nothing is sent over the bot's number: a
+            | business-initiated message outside the service window needs an
+            | approved template, and the general support number is not a
+            | fallback for this product by design. The email still goes, and
+            | the gap is reported rather than swallowed.
+            */
+            'card_link' => env('SITE_AGENT_WA_TEMPLATE_CARD_LINK', ''),
+
             // Utility category. Three parameters: `title` ("דוח יומי 05/10/2026"),
             // `domain`, and `summary` (one line: "7 הזמנות · ₪2,340 · 3 לידים").
             // Used for a scheduled report when the owner has not written in the

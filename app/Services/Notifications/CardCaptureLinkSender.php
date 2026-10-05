@@ -8,6 +8,9 @@ use App\Mail\DunningNotificationMail;
 use App\Models\Customer;
 use App\Models\NotificationLog;
 use App\Models\Subscription;
+use App\Models\SystemLog;
+use App\Services\SiteAgent\BotNumberRoute;
+use App\Services\SiteAgent\WhatsAppCloudClient;
 use App\Services\Waha\WahaClient;
 use App\Support\CardLink;
 use Illuminate\Support\Facades\Mail;
@@ -21,7 +24,12 @@ use Illuminate\Support\Str;
  */
 class CardCaptureLinkSender
 {
-    public function __construct(private WahaClient $waha, private TemplateEngine $templates) {}
+    public function __construct(
+        private WahaClient $waha,
+        private TemplateEngine $templates,
+        private BotNumberRoute $bot,
+        private WhatsAppCloudClient $whatsapp,
+    ) {}
 
     /**
      * @param  string|null  $templateKey  Force a specific template (e.g. 'card.expiring').
@@ -56,7 +64,9 @@ class CardCaptureLinkSender
             ? 'card.capture_debt'
             : 'card.capture');
 
-        return $this->deliver($customer, $key, $data, $link);
+        // The subscription knows which site this notice is about, and the
+        // route needs it: a delegate stands in only for their own site.
+        return $this->deliver($customer, $key, $data, $link, $subscription->site_id);
     }
 
     /**
@@ -113,7 +123,7 @@ class CardCaptureLinkSender
      * @param  array<string, scalar|null>  $data
      * @return array{link: string, sent: array<int, string>, failed: array<int, string>, skipped: array<int, string>}
      */
-    private function deliver(Customer $customer, string $key, array $data, string $link): array
+    private function deliver(Customer $customer, string $key, array $data, string $link, ?int $siteId = null): array
     {
         $sent = [];
         $failed = [];
@@ -122,21 +132,55 @@ class CardCaptureLinkSender
         // delivery errors, so the queue job never retries an intentional skip.
         $skipped = [];
 
-        $whatsappTo = $customer->whatsappRecipient();
+        // A customer who manages their site through the bot hears from the bot,
+        // never from the support number. See BotNumberRoute.
+        //
+        // And when we cannot find out which it is, nothing goes out over
+        // WhatsApp at all. "We could not tell" must never resolve to the
+        // riskier of the two answers: the support-number branch would carry a
+        // signed payment page to a number this route may have been withholding
+        // it from.
+        try {
+            $bound = $this->bot->carries($customer);
+        } catch (\Throwable $e) {
+            $failed[] = 'וואטסאפ: לא ניתן היה לקבוע אם ללקוח יש מספר מחובר';
 
-        if (filled($whatsappTo)) {
-            $tpl = $this->templates->render($key, 'whatsapp', $data);
+            SystemLog::record('error', 'site-agent', 'ניתוב הודעת תשלום נכשל — לא ניתן לקרוא את המספרים המחוברים', [
+                'customer_id' => $customer->id,
+                'error' => Str::limit($e->getMessage(), 200),
+            ]);
 
-            if ($tpl === null) {
+            $bound = null;
+        }
+
+        if ($bound === true) {
+            // The operator's on/off switch for this notice governs both routes.
+            // The approved template supplies the WORDING on this one, not the
+            // decision to send at all — a notice switched off in the settings
+            // that still reaches a third of the customers is a switch nobody
+            // can trust again.
+            if (! $this->templates->isEnabled($key, 'whatsapp')) {
                 $skipped[] = 'וואטסאפ (ההודעה כבויה בהגדרות)';
             } else {
-                try {
-                    $this->waha->sendMessage($whatsappTo, $tpl['body']);
-                    $sent[] = 'וואטסאפ';
-                    NotificationLog::record('whatsapp', NotificationType::CardLink, $whatsappTo, null, $tpl['body'], $customer->id);
-                } catch (\Throwable $e) {
-                    $failed[] = 'וואטסאפ: '.$this->reason($e);
-                    NotificationLog::record('whatsapp', NotificationType::CardLink, $whatsappTo, null, $tpl['body'], $customer->id, 'failed', $e->getMessage());
+                [$sent, $failed, $skipped] = $this->overBotNumber($customer, $siteId, $sent, $failed, $skipped);
+            }
+        } elseif ($bound === false) {
+            $whatsappTo = $customer->whatsappRecipient();
+
+            if (filled($whatsappTo)) {
+                $tpl = $this->templates->render($key, 'whatsapp', $data);
+
+                if ($tpl === null) {
+                    $skipped[] = 'וואטסאפ (ההודעה כבויה בהגדרות)';
+                } else {
+                    try {
+                        $this->waha->sendMessage($whatsappTo, $tpl['body']);
+                        $sent[] = 'וואטסאפ';
+                        NotificationLog::record('whatsapp', NotificationType::CardLink, $whatsappTo, null, $tpl['body'], $customer->id);
+                    } catch (\Throwable $e) {
+                        $failed[] = 'וואטסאפ: '.$this->reason($e);
+                        NotificationLog::record('whatsapp', NotificationType::CardLink, $whatsappTo, null, $tpl['body'], $customer->id, 'failed', $e->getMessage());
+                    }
                 }
             }
         }
@@ -163,6 +207,106 @@ class CardCaptureLinkSender
         }
 
         return ['link' => $link, 'sent' => $sent, 'failed' => $failed, 'skipped' => $skipped];
+    }
+
+    /**
+     * The WhatsApp leg for a customer the bot carries.
+     *
+     * Three things differ from the support-number path, and each one is the
+     * point rather than a detail:
+     *
+     *  - **The recipient** is the number bound to the bot, because that is the
+     *    conversation this customer already has about this subscription.
+     *  - **The link** is chosen by who holds that phone — see BotNumberRoute.
+     *  - **The wording** is the approved template's, not ours. Meta allows free
+     *    text only inside the 24-hour window a customer's own message opens,
+     *    and a payment reminder is by definition sent to somebody who has not
+     *    just written.
+     *
+     * With no approved template there is no way to say it over this number, and
+     * the support number is not a fallback for this product. The email still
+     * goes out, the skip says exactly why, and it is written to the log —
+     * because a missing template is a configuration gap somebody has to close,
+     * not a steady state.
+     *
+     * @param  array<int, string>  $sent
+     * @param  array<int, string>  $failed
+     * @param  array<int, string>  $skipped
+     * @return array{0: array<int, string>, 1: array<int, string>, 2: array<int, string>}
+     */
+    private function overBotNumber(Customer $customer, ?int $siteId, array $sent, array $failed, array $skipped): array
+    {
+        $template = trim((string) config('siteagent.whatsapp.templates.card_link'));
+
+        try {
+            $subscriber = $this->bot->subscriber($customer, $siteId);
+        } catch (\Throwable $e) {
+            $failed[] = 'וואטסאפ: לא ניתן היה לקרוא את המספרים המחוברים';
+
+            return [$sent, $failed, $skipped];
+        }
+
+        // A bot customer with no number for THIS site. The support number is
+        // still not an option — a delegate of another site must not receive it
+        // — so the notice goes by email and the gap is stated rather than
+        // leaving an empty report that reads like nothing was attempted.
+        if ($subscriber === null) {
+            $skipped[] = 'וואטסאפ (אין מספר מחובר לאתר הזה)';
+
+            return [$sent, $failed, $skipped];
+        }
+
+        // Configured-and-broken is a failure, never a reason to reach for the
+        // support number: a token mid-rotation would otherwise put this
+        // customer's signed payment page on a number they do not recognise.
+        if (! $this->bot->available()) {
+            $failed[] = 'וואטסאפ: המספר של הבוט אינו מוגדר כרגע';
+
+            SystemLog::record('error', 'site-agent', 'לא נשלחה הודעת תשלום — המספר של הבוט אינו מוגדר', [
+                'customer_id' => $customer->id,
+            ]);
+
+            return [$sent, $failed, $skipped];
+        }
+
+        if ($template === '') {
+            // לא נאמר כאן "נשלח במייל": רגל המייל עוד לא רצה, והיא עשויה
+            // להיות כבויה, בלי כתובת, או להיכשל — ואז הדיווח טוען שמשהו נמסר
+            // כשדבר לא נמסר.
+            $skipped[] = 'וואטסאפ (אין תבנית מאושרת לקישור תשלום)';
+
+            SystemLog::record('warning', 'site-agent', 'לא נשלחה הודעת תשלום בוואטסאפ — חסרה תבנית', [
+                'customer_id' => $customer->id,
+                'setting' => 'siteagent.template_card_link',
+            ]);
+
+            return [$sent, $failed, $skipped];
+        }
+
+        $subscriber->setRelation('customer', $customer);
+        $link = $this->bot->paymentLinkFor($subscriber);
+
+        $id = $this->whatsapp->sendTemplate($subscriber->phone, $template, [
+            'customer_name' => $customer->name,
+            'link' => $link,
+        ]);
+
+        if ($id === null) {
+            $reason = $this->whatsapp->lastError();
+            $failed[] = 'וואטסאפ: '.($reason ?: 'השליחה נדחתה');
+
+            NotificationLog::record(
+                'whatsapp', NotificationType::CardLink, $subscriber->phone, null,
+                $template, $customer->id, 'failed', (string) $reason,
+            );
+
+            return [$sent, $failed, $skipped];
+        }
+
+        $sent[] = 'וואטסאפ (מהמספר של הבוט)';
+        NotificationLog::record('whatsapp', NotificationType::CardLink, $subscriber->phone, null, $link, $customer->id);
+
+        return [$sent, $failed, $skipped];
     }
 
     private function reason(\Throwable $e): string
