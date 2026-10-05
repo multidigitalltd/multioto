@@ -67,7 +67,7 @@ class InboundChannelHealth
     public function __construct(private readonly SiteAgentProduct $product) {}
 
     /**
-     * @return array{accepted: ?Carbon, rejected: ?Carbon, delivered: ?Carbon, everCarried: bool, verdict: 'unready'|'rejected'|'ok'|'foreign'|'silent'}
+     * @return array{accepted: ?Carbon, rejected: ?Carbon, delivered: ?Carbon, verified: ?Carbon, everCarried: bool, verdict: 'unready'|'rejected'|'ok'|'foreign'|'silent'}
      */
     public function read(): array
     {
@@ -79,7 +79,7 @@ class InboundChannelHealth
         // the record, and the number may have been in use for months, so its
         // history counts in full.
         $replaced = $this->replaced();
-        $since = $replaced ? now() : $this->date($record['since'] ?? null);
+        $since = $replaced ? $this->numberChangedAt() : $this->date($record['since'] ?? null);
 
         // The last accepted delivery as far as anything still knows: the newest
         // surviving audit row, or the durable high-water mark when that row has
@@ -109,6 +109,10 @@ class InboundChannelHealth
             'accepted' => $accepted,
             'rejected' => $rejected,
             'delivered' => $delivered,
+            // Exposed so the screen can order a rejection against the same
+            // event the verdict used. A screen that warns about a secret the
+            // verdict has already cleared contradicts itself in writing.
+            'verified' => $verified,
             'everCarried' => $everCarried,
             'verdict' => match (true) {
                 // Half-configured or switched off: the readiness section already
@@ -154,7 +158,14 @@ class InboundChannelHealth
             // `since` is set only when the number CHANGES, never when the record
             // is first written: a first write must not declare that a number
             // already in use has no past.
-            $since = $replaced ? now() : $this->date($record['since'] ?? null);
+            //
+            // And it is the moment the number was CHANGED, not the moment this
+            // hourly run noticed. Up to an hour can pass between the two, and
+            // dating the boundary from the run would throw away every delivery
+            // the new number received in that gap — turning "messages arrive,
+            // just not for your number" into "nothing ever reached the door",
+            // which sends the fixer to Meta instead of to the number.
+            $since = $replaced ? $this->numberChangedAt() : $this->date($record['since'] ?? null);
 
             $next = [
                 'number' => $this->number(),
@@ -212,6 +223,24 @@ class InboundChannelHealth
     private function number(): string
     {
         return trim((string) config('siteagent.whatsapp.phone_number_id'));
+    }
+
+    /**
+     * When the configured number was last changed.
+     *
+     * Taken from the settings row that holds it, which is the only record of
+     * the moment itself. An installation configured from the environment has no
+     * such row and no such moment either, so "now" is the honest answer there.
+     */
+    private function numberChangedAt(): Carbon
+    {
+        return rescue(
+            fn (): Carbon => Setting::query()
+                ->whereKey('siteagent.phone_number_id')
+                ->value('updated_at') ?? now(),
+            now(),
+            report: false,
+        );
     }
 
     /**

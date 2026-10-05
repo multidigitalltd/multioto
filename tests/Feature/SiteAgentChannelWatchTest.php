@@ -505,6 +505,38 @@ class SiteAgentChannelWatchTest extends TestCase
         $this->assertSame('foreign', app(ManageSiteAgent::class)->inboundHealth()['verdict']);
     }
 
+    /**
+     * מסירה שהגיעה בין ההחלפה לבין הריצה הבאה אינה אובדת.
+     *
+     * הבדיקה השעתית יכולה לשים לב להחלפה שעה אחרי שקרתה. תיארוך הגבול מרגע
+     * הריצה היה זורק כל מסירה שהמספר החדש קיבל בפער הזה — והופך "מגיעות הודעות,
+     * רק לא למספר שלך" ל"שום דבר לא הגיע עד הדלת", שזה בדיוק התיקון השגוי.
+     */
+    public function test_a_delivery_between_the_change_and_the_next_run_still_counts(): void
+    {
+        $this->subscriber();
+
+        // ההתראות עצמן אינן הנושא כאן, והמצב משתנה תוך כדי.
+        $team = Mockery::mock(TeamNotifier::class);
+        $team->shouldReceive('alert')->zeroOrMoreTimes();
+        $this->app->instance(TeamNotifier::class, $team);
+
+        // קודם כול רשומה שמכירה את המספר הישן — בלעדיה אין בכלל "החלפה".
+        CheckSiteAgentChannelJob::dispatchSync();
+
+        // המספר מוחלף, ורק אחר כך מגיעה מסירה — לפני שהבדיקה השעתית רצה שוב.
+        Setting::put('siteagent.phone_number_id', '999999');
+        SettingsServiceProvider::refreshFromDatabase();
+
+        $this->travel(20)->minutes();
+        $this->signedDelivery('777777')->assertOk();
+
+        $this->travel(20)->minutes();
+        CheckSiteAgentChannelJob::dispatchSync();
+
+        $this->assertSame('foreign', app(ManageSiteAgent::class)->inboundHealth()['verdict']);
+    }
+
     /** ומסירה למספר שלנו היא כמובן ערוץ עובד, לא "זר". */
     public function test_a_delivery_for_our_own_number_reads_as_working(): void
     {
