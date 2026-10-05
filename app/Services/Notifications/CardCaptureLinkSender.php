@@ -64,7 +64,9 @@ class CardCaptureLinkSender
             ? 'card.capture_debt'
             : 'card.capture');
 
-        return $this->deliver($customer, $key, $data, $link);
+        // The subscription knows which site this notice is about, and the
+        // route needs it: a delegate stands in only for their own site.
+        return $this->deliver($customer, $key, $data, $link, $subscription->site_id);
     }
 
     /**
@@ -121,7 +123,7 @@ class CardCaptureLinkSender
      * @param  array<string, scalar|null>  $data
      * @return array{link: string, sent: array<int, string>, failed: array<int, string>, skipped: array<int, string>}
      */
-    private function deliver(Customer $customer, string $key, array $data, string $link): array
+    private function deliver(Customer $customer, string $key, array $data, string $link, ?int $siteId = null): array
     {
         $sent = [];
         $failed = [];
@@ -141,7 +143,7 @@ class CardCaptureLinkSender
             if (! $this->templates->isEnabled($key, 'whatsapp')) {
                 $skipped[] = 'וואטסאפ (ההודעה כבויה בהגדרות)';
             } else {
-                [$sent, $failed, $skipped] = $this->overBotNumber($customer, $sent, $failed, $skipped);
+                [$sent, $failed, $skipped] = $this->overBotNumber($customer, $siteId, $sent, $failed, $skipped);
             }
         } else {
             $whatsappTo = $customer->whatsappRecipient();
@@ -213,12 +215,18 @@ class CardCaptureLinkSender
      * @param  array<int, string>  $skipped
      * @return array{0: array<int, string>, 1: array<int, string>, 2: array<int, string>}
      */
-    private function overBotNumber(Customer $customer, array $sent, array $failed, array $skipped): array
+    private function overBotNumber(Customer $customer, ?int $siteId, array $sent, array $failed, array $skipped): array
     {
-        $subscriber = $this->bot->subscriber($customer);
+        $subscriber = $this->bot->subscriber($customer, $siteId);
         $template = trim((string) config('siteagent.whatsapp.templates.card_link'));
 
+        // A bot customer with no number for THIS site. The support number is
+        // still not an option — a delegate of another site must not receive it
+        // — so the notice goes by email and the gap is stated rather than
+        // leaving an empty report that reads like nothing was attempted.
         if ($subscriber === null) {
+            $skipped[] = 'וואטסאפ (אין מספר מחובר לאתר הזה)';
+
             return [$sent, $failed, $skipped];
         }
 
@@ -236,7 +244,10 @@ class CardCaptureLinkSender
         }
 
         if ($template === '') {
-            $skipped[] = 'וואטסאפ (אין תבנית מאושרת לקישור תשלום — ההודעה נשלחה במייל בלבד)';
+            // לא נאמר כאן "נשלח במייל": רגל המייל עוד לא רצה, והיא עשויה
+            // להיות כבויה, בלי כתובת, או להיכשל — ואז הדיווח טוען שמשהו נמסר
+            // כשדבר לא נמסר.
+            $skipped[] = 'וואטסאפ (אין תבנית מאושרת לקישור תשלום)';
 
             SystemLog::record('warning', 'site-agent', 'לא נשלחה הודעת תשלום בוואטסאפ — חסרה תבנית', [
                 'customer_id' => $customer->id,

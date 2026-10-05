@@ -147,6 +147,12 @@ class BotNumberRoutingTest extends TestCase
             fn (string $reason): bool => str_contains($reason, 'אין תבנית מאושרת'),
         ));
 
+        // ולא נטען שם שההודעה נשלחה במייל — רגל המייל עוד לא רצה.
+        $this->assertEmpty(array_filter(
+            $result['skipped'],
+            fn (string $reason): bool => str_contains($reason, 'מייל'),
+        ));
+
         $this->assertTrue(SystemLog::where('source', 'site-agent')
             ->where('message', 'like', '%חסרה תבנית%')->exists());
 
@@ -205,6 +211,68 @@ class BotNumberRoutingTest extends TestCase
         $result = app(CardCaptureLinkSender::class)->send($subscription);
 
         $this->assertContains('וואטסאפ (ההודעה כבויה בהגדרות)', $result['skipped']);
+        Http::assertNothingSent();
+    }
+
+    /**
+     * מנהל של אתר אחר אינו תחליף למנהל של האתר שההודעה עליו.
+     *
+     * ללקוח יכולים להיות אתרים אחדים, לכל אחד מנהל משלו. שליחת הודעת התשלום של
+     * אתר א' למנהל של אתר ב' חושפת את החיוב של לקוח אחד בפני הסוכנות של אחר.
+     * כשלאתר הנכון אין מנהל — אין למי לשלוח, וזו התשובה הנכונה.
+     */
+    public function test_a_manager_of_another_site_is_not_a_stand_in(): void
+    {
+        $customer = Customer::factory()->create(['phone' => '0501111111']);
+        $siteA = Site::factory()->create(['customer_id' => $customer->id]);
+        $siteB = Site::factory()->create(['customer_id' => $customer->id]);
+
+        // מנהל רק לאתר ב', ואין מספר של הבעלים בכלל.
+        SiteAgentSubscriber::create([
+            'phone' => '972502222222',
+            'customer_id' => $customer->id,
+            'site_id' => $siteB->id,
+            'verified_at' => now(),
+        ]);
+
+        $forSiteA = Subscription::factory()->create([
+            'customer_id' => $customer->id,
+            'site_id' => $siteA->id,
+        ]);
+
+        $waha = \Mockery::mock(WahaClient::class);
+        $waha->shouldNotReceive('sendMessage');
+        $this->app->instance(WahaClient::class, $waha);
+
+        $result = app(CardCaptureLinkSender::class)->send($forSiteA);
+
+        // לא למנהל של אתר ב', ולא דרך המספר הכללי — ונאמר למה.
+        Http::assertNothingSent();
+        $this->assertNotEmpty(array_filter(
+            $result['skipped'],
+            fn (string $reason): bool => str_contains($reason, 'אין מספר מחובר לאתר'),
+        ));
+    }
+
+    /**
+     * והמתג הראשי של המוצר עוצר גם את ההודעות היוצאות.
+     *
+     * זה המתג שמושכים באירוע. מוצר שכובה וממשיך לכתוב ללקוחות מהמספר שלו הוא
+     * מתג שלא עבד.
+     */
+    public function test_the_master_switch_stops_outgoing_notices_too(): void
+    {
+        $subscription = $this->subscription('0501234567', '972501234567');
+
+        config(['siteagent.enabled' => false]);
+
+        $result = app(CardCaptureLinkSender::class)->send($subscription);
+
+        $this->assertNotEmpty(array_filter(
+            $result['failed'],
+            fn (string $reason): bool => str_contains($reason, 'אינו מוגדר'),
+        ));
+
         Http::assertNothingSent();
     }
 

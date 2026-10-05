@@ -35,9 +35,9 @@ class BotNumberRoute
      * number has not proved it belongs to anybody, and a revoked one was taken
      * away on purpose.
      */
-    public function subscriber(Customer $customer): ?SiteAgentSubscriber
+    public function subscriber(Customer $customer, ?int $siteId = null): ?SiteAgentSubscriber
     {
-        return rescue(function () use ($customer): ?SiteAgentSubscriber {
+        return rescue(function () use ($customer, $siteId): ?SiteAgentSubscriber {
             /** @var Collection<int, SiteAgentSubscriber> $bindings */
             $bindings = SiteAgentSubscriber::query()
                 ->where('customer_id', $customer->id)
@@ -66,6 +66,18 @@ class BotNumberRoute
                 }
             }
 
+            // No owner number. A delegate may stand in — but only the delegate
+            // of the site this notice is actually about.
+            //
+            // A customer can hold a different manager per site, and the newest
+            // of them is not "the customer's number" in any sense: sending site
+            // A's payment notice to site B's manager discloses one client's
+            // billing to another's agency. When that site has nobody, nobody is
+            // the right answer, and the caller reports the skip.
+            if ($siteId !== null) {
+                return $bindings->firstWhere('site_id', $siteId);
+            }
+
             return $bindings->first();
         }, null, report: false);
     }
@@ -80,15 +92,23 @@ class BotNumberRoute
      * which is the one thing this route exists to prevent. A client that cannot
      * send is a failure to report, not a different number to use.
      */
-    public function carries(Customer $customer): bool
+    public function carries(Customer $customer, ?int $siteId = null): bool
     {
-        return $this->subscriber($customer) !== null;
+        return $this->subscriber($customer, $siteId) !== null;
     }
 
-    /** Can the bot's number actually send right now? */
+    /**
+     * Can the bot's number actually send right now?
+     *
+     * The master switch counts. It is the control somebody reaches for during
+     * an incident, and a product that keeps writing to customers from its own
+     * number after being switched off is a switch that did not work. Unlike the
+     * support-number path, "cannot send" here means the notice is reported, not
+     * re-routed.
+     */
     public function available(): bool
     {
-        return $this->whatsapp->configured();
+        return (bool) config('siteagent.enabled') && $this->whatsapp->configured();
     }
 
     /**
