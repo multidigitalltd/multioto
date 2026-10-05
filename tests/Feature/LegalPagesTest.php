@@ -72,9 +72,36 @@ class LegalPagesTest extends TestCase
      */
     public function test_retention_windows_follow_the_configuration(): void
     {
-        config(['billing.monitoring.site_change_retention_days' => 211]);
+        // billing.system.* — המפתחות שעבודות הניקוי עצמן קוראות. הגרסה הראשונה
+        // של הבדיקה הזאת דרסה מפתח שאינו קיים, וראתה את ברירת המחדל הקבועה
+        // חוזרת במקרה: היא עברה בלי להוכיח דבר, ובדיוק הסתירה את התקלה.
+        config([
+            'billing.system.site_change_retention_days' => 211,
+            'billing.system.monitor_check_retention_days' => 77,
+        ]);
 
-        $this->get(route('legal.privacy'))->assertSeeText('211 ימים');
+        $this->get(route('legal.privacy'))
+            ->assertSeeText('211 ימים')
+            ->assertSeeText('77 ימים');
+    }
+
+    /**
+     * המפתחות שהמסמך קורא הם המפתחות שהניקוי קורא.
+     *
+     * השמירה האמיתית היא התנהגות של עבודה מתוזמנת; המסמך הוא הצהרה עליה. שני
+     * המקורות חייבים להיות אותו מקור, אחרת ההצהרה מתיישנת בשקט ברגע שמישהו
+     * משנה הגדרה — וזו הצהרה שקרית לרגולטור וללקוח.
+     */
+    public function test_the_document_reads_the_same_keys_the_pruning_reads(): void
+    {
+        $document = file_get_contents(resource_path('views/legal/privacy.blade.php'));
+        $schedule = file_get_contents(base_path('routes/console.php'));
+
+        foreach (['site_change_retention_days', 'site_event_retention_days', 'monitor_check_retention_days'] as $key) {
+            $this->assertStringContainsString("billing.system.{$key}", $document);
+            $this->assertStringContainsString("billing.system.{$key}", $schedule,
+                'המסמך מצטט מפתח שהניקוי אינו קורא — אחד משניהם זז.');
+        }
     }
 
     /** וכך גם חלון הביטול בתנאי השימוש. */
@@ -85,6 +112,55 @@ class LegalPagesTest extends TestCase
         $this->get(route('legal.terms'))
             ->assertSeeText('2 שעות')
             ->assertSeeText('45 דקות');
+    }
+
+    /**
+     * חלון שאינו מתחלק בשעה נאמר בדקות, ולא מעוגל כלפי מעלה.
+     *
+     * עיגול כאן מרחיב התחייבות חוזית: 90 דקות שמוצגות כ"שעתיים" הן הבטחה
+     * שהקוד מסרב לקיים בדקה ה-91.
+     */
+    public function test_an_uneven_undo_window_is_not_rounded_up(): void
+    {
+        config(['siteagent.undo_minutes' => 90]);
+
+        $this->get(route('legal.terms'))
+            ->assertSeeText('90 דקות')
+            ->assertDontSeeText('2 שעות');
+    }
+
+    /**
+     * כתובת ריקה ב-.env נקראת כ"לא הוגדר" ולא כ"ריק".
+     *
+     * מי שהעתיק את .env.example כפי שהוא מגיע עם השורה ריקה ולא חסרה, ו-env()
+     * מחזיר אז מחרוזת ריקה בלי לגעת בברירת המחדל — כלומר קישור mailto ריק
+     * דווקא אצל מי שלא שינה כלום.
+     */
+    public function test_a_blank_contact_address_falls_back_instead_of_rendering_empty(): void
+    {
+        $this->assertNotSame('', trim((string) config('legal.contact_email')));
+
+        $this->get(route('legal.privacy'))->assertDontSee('mailto:"', false);
+    }
+
+    /**
+     * מה שנאמר על הצעה שפגה הוא מה שהקוד עושה.
+     *
+     * עבודת הניקוי מוחקת את קובץ התמונה ומסמנת את ההצעה כפגה — היא אינה מוחקת
+     * את השורה. מסמך שמבטיח מחיקה של תוכן הבקשה היה הצהרה שקרית על מידע של
+     * לקוח, וזו הטענה הכי מסוכנת שאפשר לכתוב בעמוד כזה.
+     */
+    public function test_the_expiry_claim_matches_what_the_pruning_job_does(): void
+    {
+        $job = file_get_contents(app_path('Jobs/PruneSiteAgentRequestsJob.php'));
+
+        // The job deletes the file and marks the row; it does not delete the row.
+        $this->assertStringContainsString("Storage::disk('local')->delete", $job);
+        $this->assertStringNotContainsString('->delete()', $job);
+
+        $this->get(route('legal.privacy'))
+            ->assertSeeText('קובץ התמונה נמחק')
+            ->assertSeeText('הטקסט של הבקשה ושל ההצעה נשמר');
     }
 
     /**

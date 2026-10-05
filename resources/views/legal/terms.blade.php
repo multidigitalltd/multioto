@@ -7,7 +7,17 @@
     קורא, ולא נכתבים כמספר בטקסט שיתיישן בשקט.
 --}}
 @php
-    $undoHours = max(1, (int) round(((int) config('siteagent.undo_minutes', 1440)) / 60));
+    /*
+     * חלון הביטול, כפי שהוא באמת ולא מעוגל.
+     *
+     * עיגול כלפי מעלה היה מרחיב התחייבות חוזית: 90 דקות היו מוצגות כ"שעתיים",
+     * בזמן ש-scopeRevertable מפסיקה לקבל ביטול אחרי 90 דקות בדיוק. לכן שעות
+     * מוצגות רק כשהחלון מתחלק בשעה שלמה, ואחרת הוא נאמר בדקות.
+     */
+    $undoMinutes = max(1, (int) config('siteagent.undo_minutes', 1440));
+    $undoWindow = $undoMinutes % 60 === 0
+        ? intdiv($undoMinutes, 60).' שעות'
+        : $undoMinutes.' דקות';
     $confirmMinutes = (int) config('siteagent.confirmation_minutes', 30);
 @endphp
 
@@ -44,7 +54,7 @@
         <li>הסוכן מנסח <strong>הצעת שינוי</strong> ומציג לכם בדיוק מה ישתנה.</li>
         <li><strong>שום דבר לא מתבצע עד שאתם מאשרים.</strong> הצעה שלא אושרה פגה מאליה
             בתוך {{ $confirmMinutes }} דקות.</li>
-        <li>אחרי הביצוע אפשר לבטל ולהחזיר את המצב הקודם, בתוך {{ $undoHours }} שעות.</li>
+        <li>אחרי הביצוע אפשר לבטל ולהחזיר את המצב הקודם, בתוך {{ $undoWindow }}.</li>
     </ol>
 
     <h2 id="limits">מה הסוכן לא עושה</h2>
