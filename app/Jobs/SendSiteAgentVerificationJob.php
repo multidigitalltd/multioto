@@ -63,7 +63,7 @@ class SendSiteAgentVerificationJob implements ShouldQueue
             ? $whatsapp->sendTemplate(
                 $subscriber->phone,
                 $template,
-                [$code],
+                ['code' => $code],
                 copyCode: (bool) config('siteagent.whatsapp.templates.verification_copy_button', true) ? $code : null,
             )
             : $whatsapp->sendText($subscriber->phone, implode("\n", [

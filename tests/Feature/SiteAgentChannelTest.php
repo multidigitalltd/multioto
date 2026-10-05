@@ -332,9 +332,9 @@ class SiteAgentChannelTest extends TestCase
         $this->deliver('972501234567', 'תעדכן מחיר');
 
         // "אינו פעיל" and nothing else is how a customer who wants to keep
-        // paying concludes the product is broken. The fix is one tap away, and
-        // this is the moment they are asking for it.
-        $this->assertReplyContains('/billing/update-card/');
+        // paying concludes the product is broken. The way back is one tap away,
+        // and this is the moment they are asking for it.
+        $this->assertReplyContains('/portal/login');
     }
 
     public function test_a_subscription_to_something_else_does_not_buy_the_agent(): void

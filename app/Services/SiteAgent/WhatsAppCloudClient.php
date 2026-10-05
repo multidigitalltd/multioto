@@ -62,7 +62,18 @@ class WhatsAppCloudClient
      * Templates are accepted at any time, window or no window, so a proactive
      * message never has to ask whether one is open.
      *
-     * @param  list<string|int>  $parameters  positional body parameters ({{1}}, {{2}}, …)
+     * Body parameters are NAMED — `{{domain}}`, not `{{1}}`.
+     *
+     * Meta's template editor refuses numeric placeholders outright now ("must
+     * be lowercase with single underscores"), so every template built today is
+     * named, and the two forms are not interchangeable on the wire: positional
+     * parameters sent to a named template are rejected and the customer simply
+     * hears nothing, with no error reaching any screen here. Supporting both
+     * would mean carrying a switch that must match a decision made in somebody
+     * else's UI, and being wrong about it fails silently — so there is one form.
+     *
+     * @param  array<string, string|int>  $parameters  body parameters, keyed by
+     *                                                 the template's variable name
      * @param  string|null  $copyCode  the code for an authentication template's
      *                                 copy-code button; omitted for utility ones
      */
@@ -75,15 +86,19 @@ class WhatsAppCloudClient
         $components = [];
 
         if ($parameters !== []) {
-            $components[] = [
-                'type' => 'body',
-                'parameters' => array_map(
+            $body = [];
+
+            foreach ($parameters as $variable => $value) {
+                $body[] = [
+                    'type' => 'text',
+                    'parameter_name' => (string) $variable,
                     // Meta rejects a parameter containing a newline or a tab, and
                     // a rejected template is a customer who hears nothing.
-                    fn ($value): array => ['type' => 'text', 'text' => trim(preg_replace('/\s+/u', ' ', (string) $value) ?? '')],
-                    array_values($parameters),
-                ),
-            ];
+                    'text' => trim(preg_replace('/\s+/u', ' ', (string) $value) ?? ''),
+                ];
+            }
+
+            $components[] = ['type' => 'body', 'parameters' => $body];
         }
 
         if ($copyCode !== null) {
