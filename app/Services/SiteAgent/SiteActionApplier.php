@@ -207,7 +207,9 @@ class SiteActionApplier
         return $this->ok($after === null ? null : [
             'kind' => 'created_post',
             'post_id' => $id,
-            'after' => ['title' => $after['title'], 'content' => $after['content']],
+            // All four: a draft somebody went on to publish, or gave an excerpt,
+            // is work done after ours, and the undo must not throw it away.
+            'after' => $after,
         ], isset($created['url']) ? 'קישור: '.$created['url'] : null);
     }
 

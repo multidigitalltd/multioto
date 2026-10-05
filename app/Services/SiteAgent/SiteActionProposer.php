@@ -521,6 +521,16 @@ class SiteActionProposer
             return $this->error('status חייב להיות draft או publish.');
         }
 
+        // What goes live has to be what the owner read. A preview quotes only
+        // the beginning of a long text, so a long text is created as a draft —
+        // to be read in full on the site and published from there or with
+        // propose_post_update — never published on a "כן" to a fragment.
+        $shortened = $status === 'publish' && mb_strlen($content) > self::PREVIEW_TEXT;
+
+        if ($shortened) {
+            $status = 'draft';
+        }
+
         $kind = $type === 'page' ? 'עמוד' : ($type === 'post' ? 'פוסט' : "פריט ({$type})");
 
         return [
@@ -532,6 +542,7 @@ class SiteActionProposer
             'preview' => implode("\n", array_filter([
                 "📝 {$kind} חדש: \"{$title}\"",
                 'סטטוס: '.self::POST_STATUSES[$status].($status === 'publish' ? ' — יופיע באתר מיד' : ' — לא יופיע באתר עד שתפרסמו'),
+                $shortened ? 'התוכן ארוך מכדי להציג כאן במלואו, ולכן הוא ייווצר כטיוטה. קראו אותו באתר, ואז בקשו ממני לפרסם.' : null,
                 $excerpt !== '' ? 'תקציר: "'.$this->quote($excerpt).'"' : null,
                 'תוכן:',
                 '"'.$this->quote($content).'"',

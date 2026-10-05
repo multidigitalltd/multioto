@@ -425,6 +425,48 @@ class SiteAgentAssistantTest extends TestCase
         $this->assertSame(['היום'], SiteAgentMessage::pluck('body')->all());
     }
 
+    public function test_a_long_post_is_never_published_on_a_yes_to_part_of_it(): void
+    {
+        $subscriber = $this->subscriber();
+        $long = str_repeat('פסקה ארוכה. ', 200);
+
+        $this->model(function (Closure $tool) use ($long): string {
+            $tool('propose_post_create', ['title' => 'מבצע', 'content' => $long, 'status' => 'publish']);
+
+            return '';
+        });
+
+        $preview = $this->talk($subscriber, 'תפרסם פוסט על המבצע');
+
+        // The owner cannot read all of it here, so it does not go live from here.
+        $this->assertStringContainsString('ייווצר כטיוטה', $preview);
+        $this->assertSame('draft', SiteAgentRequest::sole()->plan['fields']['status']);
+    }
+
+    public function test_undoing_a_created_post_spares_one_published_since(): void
+    {
+        $subscriber = $this->subscriber();
+        $this->site['wp_content_create'] = ['created_id' => 80, 'status' => 'draft'];
+        $this->site['wp_content_get'] = ['id' => 80, 'title' => 'מבצע', 'content' => 'תוכן', 'status' => 'draft', 'excerpt' => ''];
+
+        $this->model(function (Closure $tool): string {
+            $tool('propose_post_create', ['title' => 'מבצע', 'content' => 'תוכן']);
+
+            return '';
+        });
+        $this->talk($subscriber, 'פוסט');
+        $this->talk($subscriber, 'כן');
+
+        // Published in wp-admin afterwards, title and text untouched.
+        $this->site['wp_content_get'] = ['id' => 80, 'title' => 'מבצע', 'content' => 'תוכן', 'status' => 'publish', 'excerpt' => ''];
+        $this->calls = [];
+
+        $reply = $this->talk($subscriber, 'בטל');
+
+        $this->assertStringContainsString('לא החזרתי', $reply);
+        $this->assertNotContains('wp_content_trash', array_column($this->calls, 0));
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────
 
     /** @param array<string, mixed> $capabilities */

@@ -299,10 +299,14 @@ class Multioto_Agent_Store_Admin
     {
         $paid = function_exists('wc_get_is_paid_statuses') ? wc_get_is_paid_statuses() : ['processing', 'completed'];
 
+        // A fully refunded order leaves the paid statuses for `refunded`. It was
+        // still a sale, and its refund still happened — left out, both would
+        // vanish from the report and the month would look smaller and cleaner
+        // than it was.
         $orders = (array) wc_get_orders([
             'limit' => self::REPORT_CAP,
             'type' => 'shop_order',
-            'status' => $paid,
+            'status' => array_values(array_unique(array_merge($paid, ['refunded']))),
             'date_created' => $from.'...'.$to,
             'return' => 'objects',
         ]);
