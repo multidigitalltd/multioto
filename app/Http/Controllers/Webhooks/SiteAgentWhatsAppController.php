@@ -8,6 +8,7 @@ use App\Jobs\CheckSiteAgentChannelJob;
 use App\Jobs\HandleSiteAgentMessageJob;
 use App\Models\WebhookEvent;
 use App\Services\SiteAgent\WhatsAppCloudClient;
+use App\Support\WebhookDeliveries;
 use App\Support\WebhookRejections;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
@@ -66,7 +67,25 @@ class SiteAgentWhatsAppController extends Controller
             abort(403);
         }
 
-        foreach ($this->messages($request->json()->all()) as $message) {
+        $payload = $request->json()->all();
+
+        // A customer's message reached us and the body proved to be Meta's.
+        // Recorded BEFORE the sibling-number filter below, because that filter
+        // is what otherwise erases the evidence: a webhook is subscribed per
+        // business account, so a message to a sibling number proves this
+        // channel works even though nothing comes of it here.
+        //
+        // Only an envelope actually CARRYING an inbound message counts. The
+        // same endpoint receives delivery receipts and read markers for the
+        // messages we send, and those prove nothing about anybody writing to
+        // us — counting them would turn "nobody has ever written" into
+        // "messages arrive, just not for your number" the moment we send our
+        // first verification code.
+        if ($this->carriesInboundMessage($payload)) {
+            WebhookDeliveries::record(CheckSiteAgentChannelJob::CHANNEL);
+        }
+
+        foreach ($this->messages($payload) as $message) {
             $id = (string) ($message['id'] ?? '');
 
             if ($id === '') {
@@ -103,6 +122,31 @@ class SiteAgentWhatsAppController extends Controller
      * @param  array<string, mixed>  $payload
      * @return list<array<string, mixed>>
      */
+    /**
+     * Does this envelope carry an inbound message from anybody?
+     *
+     * Deliberately NOT filtered by number: the question is whether a person
+     * wrote to any number in the subscribed account, which is what proves the
+     * channel itself carries traffic. Deliberately NOT satisfied by a status
+     * callback either — those are receipts for messages WE sent, and a product
+     * that reads its own receipts as "customers are writing to us" has learned
+     * nothing about the only thing it was watching for.
+     *
+     * @param  array<string, mixed>  $payload
+     */
+    private function carriesInboundMessage(array $payload): bool
+    {
+        foreach ((array) data_get($payload, 'entry', []) as $entry) {
+            foreach ((array) data_get($entry, 'changes', []) as $change) {
+                if ((array) data_get($change, 'value.messages', []) !== []) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     private function messages(array $payload): array
     {
         $found = [];

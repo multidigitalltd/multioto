@@ -81,14 +81,31 @@ class SendSiteAgentVerificationJob implements ShouldQueue
             // Stamping a code nobody received leaves the team waiting for a
             // reply to a message that was never delivered, and the customer
             // waiting for a service they paid for. Somebody has to be told.
+            //
+            // And told WHAT, not just that. "Check the WhatsApp connection"
+            // fits an unapproved template, a template approved in another
+            // language, an expired token and a closed window equally badly
+            // while naming none of them — so Meta's own sentence is carried
+            // through to the alert, where the person who can fix it reads it.
+            $reason = $whatsapp->lastError();
+
             SystemLog::record('error', 'site-agent', 'קוד האימות לא נשלח', [
                 'subscriber_id' => $subscriber->id,
                 'site_id' => $subscriber->site_id,
+                'template' => $template !== '' ? $template : '(טקסט חופשי)',
+                'error' => $reason,
             ]);
 
             $team->alert(
                 'קוד אימות לבוט ניהול האתר לא נשלח',
-                'לא הצלחנו לשלוח קוד אימות ל'.($subscriber->site?->domain ?? 'לקוח').'. בדקו את חיבור הוואטסאפ ושלחו שוב.',
+                implode("\n", array_filter([
+                    'לא הצלחנו לשלוח קוד אימות ל'.($subscriber->site?->domain ?? 'לקוח').'.',
+                    filled($reason) ? "\nמטא אמרה: ".$reason : null,
+                    $template !== ''
+                        ? "\nהתבנית שנשלחה: {$template} (שפה: ".config('siteagent.whatsapp.templates.language', 'he').')'
+                        : "\nנשלח כטקסט חופשי — לא מוגדרת תבנית אימות, ומספר שטרם כתב לנו אינו יכול לקבל טקסט חופשי.",
+                    filled($reason) ? null : "\nבדקו את חיבור הוואטסאפ ושלחו שוב.",
+                ])),
             );
 
             return;

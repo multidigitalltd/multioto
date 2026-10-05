@@ -17,6 +17,8 @@ use App\Providers\SettingsServiceProvider;
 use App\Services\Notifications\TeamNotifier;
 use App\Support\WebhookRejections;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Testing\TestResponse;
 use Mockery;
 use Tests\TestCase;
 
@@ -76,6 +78,34 @@ class SiteAgentChannelWatchTest extends TestCase
             'external_id' => 'wamid.'.bin2hex(random_bytes(4)),
             'payload' => [],
         ]);
+    }
+
+    /**
+     * מסירה אמיתית של מטא, חתומה כהלכה, אל מזהה המספר שנמסר.
+     *
+     * חתומה באמת ולא מדומה: אימות החתימה הוא השער שכל השאר תלוי בו, ובדיקה
+     * שעוקפת אותו בודקת מסלול שלא קיים בייצור.
+     */
+    private function signedDelivery(string $phoneNumberId): TestResponse
+    {
+        $body = (string) json_encode([
+            'object' => 'whatsapp_business_account',
+            'entry' => [['changes' => [['value' => [
+                'metadata' => ['phone_number_id' => $phoneNumberId],
+                'contacts' => [['profile' => ['name' => 'דנה']]],
+                'messages' => [[
+                    'id' => 'wamid.'.bin2hex(random_bytes(4)),
+                    'from' => '972501234567',
+                    'type' => 'text',
+                    'text' => ['body' => 'שלום'],
+                ]],
+            ]]]]],
+        ]);
+
+        return $this->call('POST', route('webhooks.site-agent'), [], [], [], [
+            'CONTENT_TYPE' => 'application/json',
+            'HTTP_X_HUB_SIGNATURE_256' => 'sha256='.hash_hmac('sha256', $body, 'secret'),
+        ], $body);
     }
 
     private function expectAlert(string $contains): void
@@ -362,6 +392,162 @@ class SiteAgentChannelWatchTest extends TestCase
         SettingsServiceProvider::refreshFromDatabase();
 
         $this->assertSame('silent', app(ManageSiteAgent::class)->inboundHealth()['verdict']);
+    }
+
+    /**
+     * מסירה למספר אחות אינה "שתיקה" — היא הוכחה שהערוץ עובד.
+     *
+     * הוובהוק נרשם לפי חשבון הוואטסאפ ולא לפי מספר, ולכן חשבון שמחזיק גם קו
+     * תמיכה מעביר אותו לאותה כתובת. הסינון נכון, אבל בלי הרישום הזה הוא גם מוחק
+     * את העדות — ומערכת שמקבלת מאות הודעות לאחיות של המספר שלנו הייתה מדווחת
+     * "הבעיה אצל מטא" ושולחת לפרסם אפליקציה שכבר פורסמה.
+     */
+    public function test_a_delivery_for_a_sibling_number_is_not_silence(): void
+    {
+        $this->subscriber();
+        $this->expectAlert('לא למספר שלנו');
+
+        $this->signedDelivery('777777')->assertOk();
+
+        CheckSiteAgentChannelJob::dispatchSync();
+
+        $this->assertSame('foreign', app(ManageSiteAgent::class)->inboundHealth()['verdict']);
+    }
+
+    /**
+     * אישור מסירה על הודעה ש**אנחנו** שלחנו אינו עדות לכלום.
+     *
+     * אותה כתובת מקבלת גם קבלות מסירה וקריאה על ההודעות היוצאות שלנו. לספור
+     * אותן כ"מסירה הגיעה" היה הופך את "אף אחד מעולם לא כתב" ל"מגיעות הודעות, רק
+     * לא למספר שלך" — ברגע שנשלח את קוד האימות הראשון. כלומר בדיוק ברגע שבו
+     * מישהו מסתכל על המסך.
+     */
+    public function test_a_status_receipt_for_our_own_message_is_not_evidence(): void
+    {
+        $this->subscriber();
+        $this->expectAlert('מעולם לא התקבלה הודעה'); // silent — not 'foreign'
+
+        $body = (string) json_encode([
+            'object' => 'whatsapp_business_account',
+            'entry' => [['changes' => [['value' => [
+                'metadata' => ['phone_number_id' => '123456'],
+                'statuses' => [['id' => 'wamid.out', 'status' => 'delivered']],
+            ]]]]],
+        ]);
+
+        $this->call('POST', route('webhooks.site-agent'), [], [], [], [
+            'CONTENT_TYPE' => 'application/json',
+            'HTTP_X_HUB_SIGNATURE_256' => 'sha256='.hash_hmac('sha256', $body, 'secret'),
+        ], $body)->assertOk();
+
+        CheckSiteAgentChannelJob::dispatchSync();
+    }
+
+    /**
+     * מסירה מאוחרת מוכיחה שהסוד תקין, ומבטלת דחייה ישנה.
+     *
+     * אחרת סוד שתוקן היה ממשיך להתריע 30 יום, בזמן שכל מסירה שעוברת אימות היא
+     * הוכחה חיה שהסוד שבשימוש עכשיו הוא הנכון.
+     */
+    public function test_a_later_delivery_clears_an_earlier_rejection(): void
+    {
+        $this->subscriber();
+        WebhookRejections::record(CheckSiteAgentChannelJob::CHANNEL);
+        $this->travel(1)->hour();
+        $this->expectAlert('לא למספר שלנו'); // foreign — not 'rejected'
+
+        $this->signedDelivery('777777')->assertOk();
+
+        CheckSiteAgentChannelJob::dispatchSync();
+    }
+
+    /**
+     * ועדות מסירה אינה שורדת החלפת מספר.
+     *
+     * זיכרון המסירות הוא 30 יום. בלי הגבלה למספר, החלפת מספר הייתה מסווגת את
+     * המספר החדש מיד כ"עובד אבל מכוון למקום אחר", על סמך מסירה שנצפתה כשמספר
+     * אחר לגמרי היה מוגדר.
+     */
+    public function test_delivery_evidence_does_not_survive_a_replaced_number(): void
+    {
+        $this->subscriber();
+        $this->expectAlert('לא למספר שלנו');
+
+        $this->signedDelivery('777777')->assertOk();
+        CheckSiteAgentChannelJob::dispatchSync();
+        $this->assertSame('foreign', app(ManageSiteAgent::class)->inboundHealth()['verdict']);
+
+        $this->travel(1)->hour();
+        Setting::put('siteagent.phone_number_id', '999999');
+        SettingsServiceProvider::refreshFromDatabase();
+
+        $this->assertSame('silent', app(ManageSiteAgent::class)->inboundHealth()['verdict']);
+    }
+
+    /**
+     * והעדות שורדת את פקיעת ה-cache.
+     *
+     * אחרת ערוץ שאובחן כמכוון למקום אחר היה חוזר אחרי 30 יום לטעון ששום מסירה
+     * לא הגיעה מעולם — וסותר את מה שכבר ידענו ואמרנו למישהו.
+     */
+    public function test_delivery_evidence_outlives_the_cache(): void
+    {
+        $this->subscriber();
+        $this->expectAlert('לא למספר שלנו');
+
+        $this->signedDelivery('777777')->assertOk();
+        CheckSiteAgentChannelJob::dispatchSync();
+
+        // כפי שה-cache עושה מעצמו אחרי 30 יום.
+        Cache::forget('webhook.delivered.'.CheckSiteAgentChannelJob::CHANNEL);
+        $this->travel(40)->days();
+
+        $this->assertSame('foreign', app(ManageSiteAgent::class)->inboundHealth()['verdict']);
+    }
+
+    /**
+     * מסירה שהגיעה בין ההחלפה לבין הריצה הבאה אינה אובדת.
+     *
+     * הבדיקה השעתית יכולה לשים לב להחלפה שעה אחרי שקרתה. תיארוך הגבול מרגע
+     * הריצה היה זורק כל מסירה שהמספר החדש קיבל בפער הזה — והופך "מגיעות הודעות,
+     * רק לא למספר שלך" ל"שום דבר לא הגיע עד הדלת", שזה בדיוק התיקון השגוי.
+     */
+    public function test_a_delivery_between_the_change_and_the_next_run_still_counts(): void
+    {
+        $this->subscriber();
+
+        // ההתראות עצמן אינן הנושא כאן, והמצב משתנה תוך כדי.
+        $team = Mockery::mock(TeamNotifier::class);
+        $team->shouldReceive('alert')->zeroOrMoreTimes();
+        $this->app->instance(TeamNotifier::class, $team);
+
+        // קודם כול רשומה שמכירה את המספר הישן — בלעדיה אין בכלל "החלפה".
+        CheckSiteAgentChannelJob::dispatchSync();
+
+        // המספר מוחלף, ורק אחר כך מגיעה מסירה — לפני שהבדיקה השעתית רצה שוב.
+        Setting::put('siteagent.phone_number_id', '999999');
+        SettingsServiceProvider::refreshFromDatabase();
+
+        $this->travel(20)->minutes();
+        $this->signedDelivery('777777')->assertOk();
+
+        $this->travel(20)->minutes();
+        CheckSiteAgentChannelJob::dispatchSync();
+
+        $this->assertSame('foreign', app(ManageSiteAgent::class)->inboundHealth()['verdict']);
+    }
+
+    /** ומסירה למספר שלנו היא כמובן ערוץ עובד, לא "זר". */
+    public function test_a_delivery_for_our_own_number_reads_as_working(): void
+    {
+        $this->subscriber();
+        $this->expectSilence();
+
+        $this->signedDelivery('123456')->assertOk();
+
+        CheckSiteAgentChannelJob::dispatchSync();
+
+        $this->assertSame('ok', app(ManageSiteAgent::class)->inboundHealth()['verdict']);
     }
 
     /**

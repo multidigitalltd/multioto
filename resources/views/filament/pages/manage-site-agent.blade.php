@@ -48,7 +48,7 @@
 
     <x-filament::section
         class="mt-6"
-        :icon="match ($inbound['verdict']) { 'ok' => 'heroicon-o-check-circle', 'rejected' => 'heroicon-o-shield-exclamation', 'unready' => 'heroicon-o-ellipsis-horizontal-circle', default => 'heroicon-o-signal-slash' }"
+        :icon="match ($inbound['verdict']) { 'ok' => 'heroicon-o-check-circle', 'rejected' => 'heroicon-o-shield-exclamation', 'unready' => 'heroicon-o-ellipsis-horizontal-circle', 'foreign' => 'heroicon-o-arrows-right-left', default => 'heroicon-o-signal-slash' }"
         :icon-color="match ($inbound['verdict']) { 'ok' => 'success', 'rejected' => 'danger', 'unready' => 'gray', default => 'warning' }">
         <x-slot name="heading">הודעות נכנסות ממטא</x-slot>
 
@@ -76,9 +76,12 @@
                 </p>
             @endif
             @if ($inbound['rejected'] !== null)
-                <p class="mt-2 text-sm text-warning-600 dark:text-warning-400">
-                    שימו לב: מסירה נדחתה גם ב-{{ $inbound['rejected']->format('d/m/Y H:i') }}.
-                    אם זה אחרי המסירה האחרונה שהתקבלה — סוד האפליקציה כאן כנראה הוחלף ואינו תואם יותר.
+                {{-- מסירה תקינה שהגיעה אחרי הדחייה היא הוכחה חיה שהסוד שבשימוש
+                     עכשיו הוא הנכון. אזהרה שאומרת "הסוד כנראה אינו תואם" מעל
+                     חיווי שאומר "הערוץ עובד" היא מסך שסותר את עצמו בכתב. --}}
+                <p class="mt-2 text-sm text-gray-600 dark:text-gray-400">
+                    לידיעה: מסירה נדחתה ב-{{ $inbound['rejected']->format('d/m/Y H:i') }}, ומאז התקבלה
+                    מסירה שעברה אימות — כלומר הסוד שמוגדר כאן תקין, והדחייה ההיא כבר אינה תקלה פתוחה.
                 </p>
             @endif
         @elseif ($inbound['verdict'] === 'rejected')
@@ -92,6 +95,23 @@
                 כל מסירה נחתמת בו, ומסירה שאי אפשר לאמת נדחית — כי משלוח שאי אפשר לאמת הוא משלוח מכל אחד.
                 העתיקו אותו מחדש מ-App settings ← Basic ← App secret, ושמרו כאן.
             </p>
+        @elseif ($inbound['verdict'] === 'foreign')
+            {{-- הערוץ מוכיח את עצמו, והתקלה היא במספר. אמירת "הבעיה אצל מטא"
+                 כאן הייתה שולחת לפרסם אפליקציה שכבר פורסמה. --}}
+            <p class="text-sm text-warning-700 dark:text-warning-400">
+                <strong>מסירות מגיעות ועוברות אימות — אבל אף אחת אינה למספר שמוגדר כאן.</strong>
+                האחרונה: {{ $inbound['delivered']->diffForHumans() }}
+                ({{ $inbound['delivered']->format('d/m/Y H:i') }}).
+            </p>
+            <p class="mt-2 text-sm">
+                כלומר <strong>הערוץ עצמו תקין לחלוטין</strong>: האפליקציה מחוברת, הכתובת נכונה והסוד נכון.
+                הוובהוק נרשם לפי חשבון הוואטסאפ ולא לפי מספר, כך שחשבון שמחזיק כמה מספרים מעביר את כולם
+                לאותה כתובת — ואנחנו מסננים את מה שאינו שלנו.
+            </p>
+            <ul class="mt-2 list-disc space-y-1 text-sm" style="padding-inline-start:1.25rem">
+                <li>מזהה המספר (Phone number ID) שמוגדר כאן הוא של המספר שאליו כותבים?</li>
+                <li>המספר נמצא בחשבון הוואטסאפ שהאפליקציה רשומה אליו?</li>
+            </ul>
         @else
             <p class="text-sm text-warning-700 dark:text-warning-400">
                 <strong>לא התקבלה אף מסירה ממטא, ואף אחת גם לא נדחתה.</strong>

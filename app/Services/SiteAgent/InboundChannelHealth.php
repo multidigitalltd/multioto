@@ -6,6 +6,7 @@ use App\Enums\WebhookSource;
 use App\Models\Setting;
 use App\Models\SiteAgentSubscriber;
 use App\Models\WebhookEvent;
+use App\Support\WebhookDeliveries;
 use App\Support\WebhookRejections;
 use Illuminate\Support\Carbon;
 
@@ -39,10 +40,17 @@ use Illuminate\Support\Carbon;
  *     קיבל דבר היה מדווח "תקין" לנצח — כלומר דווקא השתיקה שהניטור קיים בשבילה
  *     הייתה נעלמת. לכן הרשומה נושאת את המספר שאליו היא מתייחסת, ומספר אחר
  *     מתחיל היסטוריה חדשה.
+ *
+ * ויש מצב שלישי שנראה כמו שתיקה ואינו שתיקה כלל: **מטא מוסרת ואנחנו מאמתים,
+ * אבל אף הודעה אינה למספר שלנו.** הוובהוק נרשם לפי חשבון הוואטסאפ ולא לפי מספר,
+ * כך שחשבון שמחזיק גם קו תמיכה או קו מכירות מעביר את כולם לאותה כתובת — ואנחנו
+ * מסננים את מה שאינו שלנו. הערוץ במקרה כזה תקין לחלוטין, והתקלה היא במספר: הוא
+ * אינו בחשבון שנרשם, או שמזהה המספר שבפאנל אינו שלו. אמירת "הבעיה אצל מטא"
+ * כאן הייתה שולחת לפרסם אפליקציה שכבר פורסמה.
  */
 class InboundChannelHealth
 {
-    /** The rejection counter the inbound controller writes to. */
+    /** The counters the inbound controller writes to, rejected and delivered. */
     public const CHANNEL = 'site-agent-whatsapp';
 
     /**
@@ -59,7 +67,7 @@ class InboundChannelHealth
     public function __construct(private readonly SiteAgentProduct $product) {}
 
     /**
-     * @return array{accepted: ?Carbon, rejected: ?Carbon, everCarried: bool, verdict: 'unready'|'rejected'|'ok'|'silent'}
+     * @return array{accepted: ?Carbon, rejected: ?Carbon, delivered: ?Carbon, verified: ?Carbon, everCarried: bool, verdict: 'unready'|'rejected'|'ok'|'foreign'|'silent'}
      */
     public function read(): array
     {
@@ -71,7 +79,7 @@ class InboundChannelHealth
         // the record, and the number may have been in use for months, so its
         // history counts in full.
         $replaced = $this->replaced();
-        $since = $replaced ? now() : $this->date($record['since'] ?? null);
+        $since = $replaced ? $this->numberChangedAt() : $this->date($record['since'] ?? null);
 
         // The last accepted delivery as far as anything still knows: the newest
         // surviving audit row, or the durable high-water mark when that row has
@@ -82,11 +90,29 @@ class InboundChannelHealth
             $replaced ? null : $this->date($record['last_accepted_at'] ?? null),
         );
         $rejected = WebhookRejections::lastAt(self::CHANNEL);
+
+        // Bounded by `since` and dropped on replacement for the same reason the
+        // accepted date is: a delivery observed while another number was
+        // configured says nothing about this one, and would otherwise report a
+        // brand-new number as a working channel aimed elsewhere.
+        $delivered = $this->latest(
+            $this->after($since, WebhookDeliveries::lastAt(self::CHANNEL)),
+            $replaced ? null : $this->date($record['last_delivered_at'] ?? null),
+        );
+
+        // Anything that proves the current secret validates: our own message, or
+        // a sibling's. Both are a signed body we verified.
+        $verified = $this->latest($accepted, $delivered);
         $everCarried = $accepted !== null || $this->verifiedByReply($since);
 
         return [
             'accepted' => $accepted,
             'rejected' => $rejected,
+            'delivered' => $delivered,
+            // Exposed so the screen can order a rejection against the same
+            // event the verdict used. A screen that warns about a secret the
+            // verdict has already cleared contradicts itself in writing.
+            'verified' => $verified,
             'everCarried' => $everCarried,
             'verdict' => match (true) {
                 // Half-configured or switched off: the readiness section already
@@ -95,12 +121,21 @@ class InboundChannelHealth
                 // a field that is blank on this very screen.
                 ! $this->product->ready() => 'unready',
 
-                // A rejection newer than anything we ever accepted — measured
-                // against the durable date, so a short audit window cannot turn
-                // an old rejection into the current state of the channel.
-                $rejected !== null && ($accepted === null || $rejected->gt($accepted)) => 'rejected',
+                // A rejection newer than anything we have since verified —
+                // measured against the durable date, so a short audit window
+                // cannot turn an old rejection into the current state of the
+                // channel. A later delivery counts as much as a later accepted
+                // message: both are a body signed with the secret in use now,
+                // which is exactly what the rejection claims is wrong.
+                $rejected !== null && ($verified === null || $rejected->gt($verified)) => 'rejected',
 
                 $everCarried => 'ok',
+
+                // Meta delivers and we verify — but nothing has ever been for
+                // our number. The channel is provably fine, so "the problem is
+                // at Meta" would send the fixer to publish an app that is
+                // already published. The fault is the number itself.
+                $delivered !== null => 'foreign',
 
                 default => 'silent',
             },
@@ -123,7 +158,14 @@ class InboundChannelHealth
             // `since` is set only when the number CHANGES, never when the record
             // is first written: a first write must not declare that a number
             // already in use has no past.
-            $since = $replaced ? now() : $this->date($record['since'] ?? null);
+            //
+            // And it is the moment the number was CHANGED, not the moment this
+            // hourly run noticed. Up to an hour can pass between the two, and
+            // dating the boundary from the run would throw away every delivery
+            // the new number received in that gap — turning "messages arrive,
+            // just not for your number" into "nothing ever reached the door",
+            // which sends the fixer to Meta instead of to the number.
+            $since = $replaced ? $this->numberChangedAt() : $this->date($record['since'] ?? null);
 
             $next = [
                 'number' => $this->number(),
@@ -131,6 +173,14 @@ class InboundChannelHealth
                 'last_accepted_at' => $this->latest(
                     $this->loggedAcceptance($since),
                     $replaced ? null : $this->date($record['last_accepted_at'] ?? null),
+                )?->toIso8601String(),
+                // Persisted for the same reason the accepted date is: the cache
+                // marker expires, and a channel diagnosed as aimed elsewhere
+                // would then quietly revert to "no delivery ever arrived" —
+                // contradicting what we already knew and told somebody.
+                'last_delivered_at' => $this->latest(
+                    $this->after($since, WebhookDeliveries::lastAt(self::CHANNEL)),
+                    $replaced ? null : $this->date($record['last_delivered_at'] ?? null),
                 )?->toIso8601String(),
             ];
 
@@ -143,7 +193,7 @@ class InboundChannelHealth
     /**
      * The stored record, or an empty one when it is absent or unreadable.
      *
-     * @return array{number?: string, since?: ?string, last_accepted_at?: ?string}
+     * @return array{number?: string, since?: ?string, last_accepted_at?: ?string, last_delivered_at?: ?string}
      */
     private function record(): array
     {
@@ -173,6 +223,24 @@ class InboundChannelHealth
     private function number(): string
     {
         return trim((string) config('siteagent.whatsapp.phone_number_id'));
+    }
+
+    /**
+     * When the configured number was last changed.
+     *
+     * Taken from the settings row that holds it, which is the only record of
+     * the moment itself. An installation configured from the environment has no
+     * such row and no such moment either, so "now" is the honest answer there.
+     */
+    private function numberChangedAt(): Carbon
+    {
+        return rescue(
+            fn (): Carbon => Setting::query()
+                ->whereKey('siteagent.phone_number_id')
+                ->value('updated_at') ?? now(),
+            now(),
+            report: false,
+        );
     }
 
     /**
@@ -220,6 +288,16 @@ class InboundChannelHealth
             false,
             report: false,
         );
+    }
+
+    /** The date, unless it belongs to the stretch before this number's history. */
+    private function after(?Carbon $since, ?Carbon $date): ?Carbon
+    {
+        if ($date === null || $since === null) {
+            return $date;
+        }
+
+        return $date->gte($since) ? $date : null;
     }
 
     private function latest(?Carbon ...$dates): ?Carbon
