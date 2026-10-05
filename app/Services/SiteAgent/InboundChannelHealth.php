@@ -3,6 +3,7 @@
 namespace App\Services\SiteAgent;
 
 use App\Enums\WebhookSource;
+use App\Models\Setting;
 use App\Models\SiteAgentSubscriber;
 use App\Models\WebhookEvent;
 use App\Support\WebhookRejections;
@@ -31,6 +32,15 @@ class InboundChannelHealth
     /** The rejection counter the inbound controller writes to. */
     public const CHANNEL = 'site-agent-whatsapp';
 
+    /**
+     * The durable "this channel has carried a message" marker.
+     *
+     * Stored, not cached, and deliberately absent from SettingsServiceProvider's
+     * allow-list: that map is what the settings page may override in config, and
+     * this is a recorded fact, not a setting anybody edits.
+     */
+    private const SEEN_KEY = 'siteagent.inbound_seen_at';
+
     public function __construct(private readonly SiteAgentProduct $product) {}
 
     /**
@@ -40,7 +50,11 @@ class InboundChannelHealth
     {
         $accepted = $this->lastAccepted();
         $rejected = WebhookRejections::lastAt(self::CHANNEL);
-        $everCarried = $accepted !== null || $this->everVerifiedByReply();
+        $everCarried = $accepted !== null || $this->remembered() || $this->everVerifiedByReply();
+
+        if ($accepted !== null) {
+            $this->remember();
+        }
 
         return [
             'accepted' => $accepted,
@@ -85,17 +99,54 @@ class InboundChannelHealth
     }
 
     /**
-     * Durable proof that the channel has carried a real inbound message.
+     * The durable fact: this channel has carried a real inbound message.
      *
      * `webhook_events` is pruned (60 days by default), so its absence does not
      * mean "never" — and reading it as "never" would turn every channel that
      * worked and then had a quiet season into a daily alert, which is precisely
      * the alert a team learns to skip.
      *
-     * A verified subscriber is the unpruned answer: `verified_at` is written in
-     * one place only, HandleSiteAgentMessageJob, which runs solely from an
-     * accepted delivery. Somebody replied with their code over WhatsApp, and
-     * that reply reached us. Revoked rows count too — the question is historical.
+     * So the fact is written down once, the first time it is observed, in a row
+     * nothing prunes and nothing else rewrites. Written from the read because
+     * the hourly watch is what observes it, and the write is idempotent: it is
+     * one sentence that only ever goes from unknown to true.
+     */
+    private function remembered(): bool
+    {
+        return rescue(
+            fn (): bool => filled(Setting::map()[self::SEEN_KEY] ?? null),
+            false,
+            report: false,
+        );
+    }
+
+    private function remember(): void
+    {
+        if ($this->remembered()) {
+            return;
+        }
+
+        rescue(
+            fn () => Setting::put(self::SEEN_KEY, now()->toIso8601String()),
+            report: false,
+        );
+    }
+
+    /**
+     * The same fact for installations that predate the marker.
+     *
+     * An upgrade arrives with the marker unwritten and possibly with the audit
+     * rows already pruned, so there has to be a second way to recognise a
+     * channel that has worked. A verified subscriber is one: `verified_at` is
+     * written in one place only, HandleSiteAgentMessageJob, which runs solely
+     * from an accepted delivery — somebody replied with their code over
+     * WhatsApp, and that reply reached us. Revoked rows count too, since the
+     * question is historical.
+     *
+     * Not sufficient on its own, which is why it is not the marker: the model
+     * clears `verified_at` whenever the phone is edited (deliberately — proof
+     * about one number must not carry to another), so this can go from true
+     * back to false.
      */
     private function everVerifiedByReply(): bool
     {

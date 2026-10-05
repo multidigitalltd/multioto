@@ -252,6 +252,66 @@ class SiteAgentChannelWatchTest extends TestCase
     }
 
     /**
+     * POST ללא חתימה כלל אינו ניסיון מסירה.
+     *
+     * מטא חותמת כל מסירה, ולכן בקשה בלי כותרת חתימה מעולם לא הייתה מסירה — היא
+     * סורק. בלי ההבחנה הזאת די ב-POST ריק אחד מהאינטרנט כדי להדליק אזעקה
+     * שמספרת לצוות שסוד האפליקציה שלו שגוי, פעם ביום, 30 יום.
+     */
+    public function test_an_unsigned_post_is_not_a_delivery_attempt(): void
+    {
+        $this->subscriber();
+        $this->expectAlert('מעולם לא התקבלה הודעה'); // silent — not 'rejected'
+
+        $this->postJson(route('webhooks.site-agent'), ['object' => 'whatsapp_business_account'])
+            ->assertForbidden();
+
+        CheckSiteAgentChannelJob::dispatchSync();
+    }
+
+    /** אבל חתימה שקיימת ואינה תואמת — כן, וזו הדחייה היחידה שמדווחת. */
+    public function test_a_wrongly_signed_post_is_reported(): void
+    {
+        $this->subscriber();
+        $this->expectAlert('דוחים אותן');
+
+        $this->call('POST', route('webhooks.site-agent'), [], [], [], [
+            'CONTENT_TYPE' => 'application/json',
+            'HTTP_X_HUB_SIGNATURE_256' => 'sha256='.str_repeat('a', 64),
+        ], '{"object":"whatsapp_business_account"}')->assertForbidden();
+
+        CheckSiteAgentChannelJob::dispatchSync();
+    }
+
+    /**
+     * והעובדה שהערוץ עבד נרשמת במקום ששום דבר לא מוחק ושום דבר אחר לא משנה.
+     *
+     * מספר מאומת אינו מספיק לבד: המודל מאפס `verified_at` בכל עריכת טלפון,
+     * בכוונה — הוכחה על מספר אחד לא עוברת לאחר. כלומר אחרי גזימת היומן, עריכת
+     * המספר של המנוי היחיד הייתה מחזירה את הערוץ למצב "מעולם לא עבד".
+     */
+    public function test_the_fact_that_the_channel_worked_outlives_a_phone_edit(): void
+    {
+        $subscriber = $this->subscriber();
+        $subscriber->update(['verified_at' => now()]);
+        $this->accepted();
+
+        // הניטור רואה את המסירה ורושם את העובדה.
+        $this->expectSilence();
+        CheckSiteAgentChannelJob::dispatchSync();
+
+        // ואז: היומן נגזם, והמספר נערך — מה שמאפס את האימות.
+        WebhookEvent::query()->delete();
+        $subscriber->update(['phone' => '972509999999']);
+        $this->assertNull($subscriber->fresh()->verified_at);
+
+        $this->travel(90)->days();
+        CheckSiteAgentChannelJob::dispatchSync();
+
+        $this->assertSame('ok', app(ManageSiteAgent::class)->inboundHealth()['verdict']);
+    }
+
+    /**
      * המסך והניטור חייבים להגיד את אותו דבר.
      *
      * סוד שהוחלף בשגוי משאיר את המסירה התקינה של אתמול ברשומה. מסך שעונה

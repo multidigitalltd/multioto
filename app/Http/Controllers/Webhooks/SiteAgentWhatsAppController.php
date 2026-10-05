@@ -50,10 +50,18 @@ class SiteAgentWhatsAppController extends Controller
     {
         // Verified against the RAW body: re-encoding a decoded payload changes
         // key order and spacing, and the signature would never match again.
-        if (! $client->signatureIsValid($request->getContent(), $request->header('X-Hub-Signature-256'))) {
-            // The one rejection worth watching, and the only one whose cause is
-            // unambiguous: a body signed with a secret that is not ours.
-            WebhookRejections::record(CheckSiteAgentChannelJob::CHANNEL);
+        $signature = $request->header('X-Hub-Signature-256');
+
+        if (! $client->signatureIsValid($request->getContent(), $signature)) {
+            // Recorded only when the request CLAIMS a signature we could not
+            // verify — the one rejection whose cause is unambiguous, and the
+            // only one that means Meta knocked. A POST with no signature header
+            // was never a delivery attempt (Meta signs every one of them), and
+            // counting it would let any scanner tell the team their app secret
+            // is wrong and send them to re-paste a field that is perfectly fine.
+            if ($client->carriesSignature($signature)) {
+                WebhookRejections::record(CheckSiteAgentChannelJob::CHANNEL);
+            }
 
             abort(403);
         }

@@ -1,5 +1,7 @@
 <?php
 
+use App\Support\GraphApiVersion;
+
 return [
 
     /*
@@ -31,14 +33,15 @@ return [
         /*
          | Graph API version and the number's own id, from the Meta app.
          |
-         | Meta retires a Graph version about two years after it ships, and a
-         | call to a retired version does not degrade — it fails. v21.0 shipped
-         | in October 2024, so it is at the end of that road right now; v26.0
-         | leaves the same two years ahead of us. Worth revisiting roughly
-         | yearly, which is why the version is a single setting and not spelled
-         | out at the call sites.
+         | Meta retires a version about two years after it ships, and a call to
+         | a retired version does not degrade — it fails, and the bot goes
+         | silent with no error on any screen. An explicit value is honoured
+         | only while it is no older than GraphApiVersion::FLOOR, because an
+         | installation created from an earlier `.env.example` still carries the
+         | version that was current then, and that stale value would otherwise
+         | outlive the version it names. See that class for the reasoning.
          */
-        'api_version' => env('SITE_AGENT_WA_API_VERSION') ?: 'v26.0',
+        'api_version' => GraphApiVersion::resolve(env('SITE_AGENT_WA_API_VERSION')),
         'phone_number_id' => env('SITE_AGENT_WA_PHONE_NUMBER_ID', ''),
 
         // Permanent access token of the system user that owns the number.
