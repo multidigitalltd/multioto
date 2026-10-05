@@ -219,8 +219,17 @@ class ManageSiteAgent extends Page implements HasForms
                         TextInput::make('siteagent.binding_ttl_minutes')
                             ->label('תוקף קוד האימות (דקות)')
                             ->numeric()
+                            // שלם, כי מי שסופר את הדקות עושה (int) על הערך:
+                            // 10.5 היה נשמר, מוצג כ-10.5, ופועל כ-10 — בדיוק
+                            // הפער בין מה שכתוב למה שקורה שהשדה הזה קיים כדי
+                            // לסגור.
+                            ->rule('integer')
                             ->minValue(1)
-                            ->maxValue(1440)
+                            // 90 ולא יותר, כי זה הגבול של מטא ל-
+                            // code_expiration_minutes בתבנית Authentication.
+                            // ערך גבוה ממנו הוא ערך שאי אפשר לכתוב בתבנית, כלומר
+                            // פער שההסבר כאן דורש לסגור ואי אפשר לסגור אותו.
+                            ->maxValue(90)
                             ->placeholder('30')
                             ->live(onBlur: true)
                             ->autocomplete(false)
@@ -228,7 +237,7 @@ class ManageSiteAgent extends Page implements HasForms
                             // האימות של מטא כותבת את המספר הזה בכותרת התחתונה
                             // ("התוקף יפוג בעוד X דקות"), ומי שכתב אותו יושב
                             // במסך הזה. פער בין השניים משקר ללקוח לשני הכיוונים.
-                            ->helperText('חייב להתאים לתוקף שכתוב בתבנית האימות עצמה אצל מטא. אם התבנית אומרת ללקוח 10 דקות והערך כאן הוא 30, מי שממתין רבע שעה חושב שהקוד פג ומבקש חדש — והחדש מבטל את הישן שעוד עבד.'),
+                            ->helperText('חייב להתאים לתוקף שכתוב בתבנית האימות עצמה אצל מטא (עד 90 דקות — זה הגבול שלה). אם התבנית אומרת ללקוח 10 דקות והערך כאן הוא 30, מי שממתין רבע שעה חושב שהקוד פג ומבקש חדש — והחדש מבטל את הישן שעוד עבד.'),
                     ])->columns(2),
             ])
             ->statePath('data');
@@ -236,14 +245,20 @@ class ManageSiteAgent extends Page implements HasForms
 
     public function save(): void
     {
-        Setting::put('siteagent.enabled', data_get($this->data, 'siteagent.enabled') ? '1' : '0');
+        // Validated state, not the raw component data: the field rules are the
+        // only thing standing between a replayed Livewire request and a code
+        // lifetime of minus one, or of a year. Reading $this->data straight
+        // through would mean every rule on this form is decoration.
+        $state = $this->form->getState();
+
+        Setting::put('siteagent.enabled', data_get($state, 'siteagent.enabled') ? '1' : '0');
         Setting::put(
             'siteagent.template_verification_copy_button',
-            data_get($this->data, 'siteagent.template_verification_copy_button') ? '1' : '0',
+            data_get($state, 'siteagent.template_verification_copy_button') ? '1' : '0',
         );
 
         foreach (self::TEXT as $key) {
-            $value = data_get($this->data, $key);
+            $value = data_get($state, $key);
 
             if (filled($value)) {
                 Setting::put($key, trim((string) $value));
@@ -257,7 +272,7 @@ class ManageSiteAgent extends Page implements HasForms
         $rejected = false;
 
         foreach (self::SECRETS as $key) {
-            $value = data_get($this->data, $key);
+            $value = data_get($state, $key);
 
             // A "secret" equal to the operator's own panel password is a
             // browser-autofill artefact, not a credential. The integrations

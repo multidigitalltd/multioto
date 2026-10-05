@@ -514,6 +514,22 @@ class SiteAgentProductTest extends TestCase
 
         $this->assertSame(10, (int) config('siteagent.binding.verification_ttl_minutes'));
 
+        // ותוקף שאי אפשר לכתוב בתבנית נדחה: מטא מגבילה את
+        // code_expiration_minutes ל-90 דקות, וערך מעליו הוא פער שההסבר במסך
+        // דורש לסגור ואי אפשר לסגור אותו.
+        // ותוקף שאינו שלם נדחה גם הוא: מי שסופר את הדקות עושה (int), כך ש-10.5
+        // היה נשמר, מוצג כ-10.5, ופועל כ-10 — אותו פער בדיוק.
+        foreach (['600', '10.5', '0', '-5', 'שלושים'] as $invalid) {
+            Livewire::test(ManageSiteAgent::class)
+                ->fillForm(['siteagent' => ['binding_ttl_minutes' => $invalid]])
+                ->call('save')
+                ->assertHasFormErrors(['siteagent.binding_ttl_minutes']);
+        }
+
+        SettingsServiceProvider::refreshFromDatabase();
+
+        $this->assertSame(10, (int) config('siteagent.binding.verification_ttl_minutes'));
+
         // ולא רק נשמר: מי שסופר את הדקות באמת סופר לפי הערך הזה. אותו קוד בדיוק,
         // תשע דקות אחרי השליחה ואחת-עשרה אחריה.
         $customer = Customer::factory()->create();
