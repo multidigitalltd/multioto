@@ -496,6 +496,40 @@ class SiteAgentStoreTest extends TestCase
         $this->assertSame(1, SiteAgentSubscriber::count());
     }
 
+    /**
+     * וכל מספר שנקנה נאמר לקונה — אחרת יש לו מספרים שלא יעבדו ולא ידע למה.
+     *
+     * כל קישור דורש קוד שנענה לפני שהוא יכול לעשות משהו, ואין מסך אחר שאומר
+     * את זה. קונה ששילם על שני מספרים נוספים ושמע על קוד אחד הוא קונה עם שני
+     * מספרים מתים.
+     */
+    public function test_every_number_that_was_bought_is_announced_with_its_own_code(): void
+    {
+        Queue::fake([SendSiteAgentVerificationJob::class]);
+        Mail::fake();
+        $this->fakeCardcom();
+        $this->buy(['extra_phones' => ['052-7654321', '053-1112222']]);
+
+        $order = SiteAgentOrder::sole();
+        $this->pay($order);
+
+        $this->get(route('store.agent.done', ['reference' => $order->fresh()->reference]))
+            ->assertOk()
+            ->assertSee('972501234567')
+            ->assertSee('972527654321')
+            ->assertSee('972531112222')
+            ->assertSee('לכל אחד נשלח קוד משלו');
+
+        // Queued, not sent: the mailable is ShouldQueue, so a paid order never
+        // waits on a mail server before the service is switched on.
+        Mail::assertQueued(SiteAgentActivationMail::class, function (SiteAgentActivationMail $mail): bool {
+            $rendered = $mail->render();
+
+            return str_contains($rendered, '972527654321')
+                && str_contains($rendered, '972531112222');
+        });
+    }
+
     /** ויותר מהתקרה — נדחה, ולא הופך לעמוד תשלום על עשרים מושבים. */
     public function test_more_numbers_than_the_cap_are_refused(): void
     {
