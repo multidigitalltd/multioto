@@ -24,6 +24,26 @@
         </div>
     @endif
 
+    @if ($usage !== null)
+        <div class="card">
+            <h2 style="margin-top:0;">השימוש במחזור הנוכחי</h2>
+            <dl class="usage">
+                <div><dt>הודעות שהבוט שלח</dt><dd>{{ number_format($usage['sent']) }}</dd></div>
+                @if ($usage['unit_gross_agorot'] !== null)
+                    <div><dt>יחויבו בחיוב הבא</dt><dd>{{ number_format($usage['billable']) }} × {{ \App\Support\Money::ils($usage['unit_gross_agorot']) }}</dd></div>
+                    <div><dt>סכום ההודעות עד עכשיו</dt><dd>{{ \App\Support\Money::ils($usage['estimate_gross_agorot']) }}</dd></div>
+                @endif
+                @if ($usage['next_charge_at'])
+                    <div><dt>החיוב הבא</dt><dd>{{ $usage['next_charge_at']->format('d/m/Y') }}</dd></div>
+                @endif
+            </dl>
+            <p class="muted" style="font-size:.9rem;margin-bottom:0;">
+                בחיוב החודשי יופיעו שורות נפרדות: המנוי, מספרים נוספים (אם יש), וההודעות שנשלחו מאז החיוב הקודם.
+                קודי אימות והודעות מערכת אינם נספרים. אפשר גם לשאול את הבוט: "כמה הודעות שלחתי החודש?"
+            </p>
+        </div>
+    @endif
+
     @if ($connections->isNotEmpty())
         {{-- First on the page: an unconnected site is the one thing that
              stops everything else here from working. --}}
@@ -183,6 +203,9 @@
     @endif
 
     <style>
+        .usage { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: .75rem; margin: 0 0 .75rem; }
+        .usage dt { color: var(--muted); font-size: .9rem; }
+        .usage dd { margin: 0; font-size: 1.25rem; font-weight: 700; }
         .connections { list-style: none; padding: 0; margin: 0; }
         .connections li { padding: .4rem 0; border-bottom: 1px solid var(--border, #c2c8d0); }
         .connections li:last-child { border-bottom: 0; }

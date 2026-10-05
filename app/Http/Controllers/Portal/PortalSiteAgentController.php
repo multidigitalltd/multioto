@@ -12,6 +12,7 @@ use App\Models\Subscription;
 use App\Models\SystemLog;
 use App\Services\SiteAgent\SiteAgentAccess;
 use App\Services\SiteAgent\SiteAgentBilling;
+use App\Services\SiteAgent\SiteAgentUsageMeter;
 use App\Services\SiteAgent\WhatsAppCloudClient;
 use App\Support\Money;
 use Illuminate\Contracts\View\View;
@@ -39,7 +40,7 @@ use Symfony\Component\HttpFoundation\BinaryFileResponse;
  */
 class PortalSiteAgentController extends Controller
 {
-    public function index(Request $request, SiteAgentBilling $billing): View
+    public function index(Request $request, SiteAgentBilling $billing, SiteAgentUsageMeter $meter): View
     {
         $customer = $this->customer($request);
         $subscription = $billing->subscriptionFor($customer);
@@ -51,6 +52,7 @@ class PortalSiteAgentController extends Controller
             'numbers' => $this->numbers($customer),
             'sites' => $this->sites($customer),
             'connections' => $this->agentSites($customer),
+            'usage' => $subscription !== null ? $meter->current($subscription) : null,
             'extraPrice' => $this->extraPriceAgorot($subscription, $customer),
         ]);
     }
