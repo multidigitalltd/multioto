@@ -295,9 +295,11 @@ class SiteAgentSubscriptionTest extends TestCase
 
         $code = data_get($body, 'template.components.0.parameters.0.text');
         $this->assertMatchesRegularExpression('/^\d{6}$/', (string) $code);
-        // Named, not positional: Meta's editor refuses numeric placeholders, so
-        // every template is built with names and a positional send is rejected.
-        $this->assertSame('code', data_get($body, 'template.components.0.parameters.0.parameter_name'));
+        // POSITIONAL, and that is not an oversight: an authentication template's
+        // body is written by Meta and its OTP placeholder has no name to give,
+        // so a named parameter here is rejected and the customer never receives
+        // the code. The utility templates, whose bodies we write, are named.
+        $this->assertArrayNotHasKey('parameter_name', (array) data_get($body, 'template.components.0.parameters.0'));
         // Meta's authentication templates carry a copy-code button, and the
         // code has to be repeated on it or the send is rejected.
         $this->assertSame($code, data_get($body, 'template.components.1.parameters.0.text'));

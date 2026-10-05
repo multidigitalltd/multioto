@@ -48,7 +48,7 @@ class SiteAgentTemplateParametersTest extends TestCase
         return $sent;
     }
 
-    /** כל פרמטר יוצא עם השם שהתבנית מכירה. */
+    /** תבנית שאנחנו כותבים את גופה — כל פרמטר יוצא עם שמו. */
     public function test_parameters_go_out_with_their_names(): void
     {
         app(WhatsAppCloudClient::class)->sendTemplate('972501234567', 'site_agent_paused', [
@@ -57,8 +57,8 @@ class SiteAgentTemplateParametersTest extends TestCase
         ]);
 
         $this->assertSame([
-            ['type' => 'text', 'parameter_name' => 'domain', 'text' => 'example.co.il'],
-            ['type' => 'text', 'parameter_name' => 'action', 'text' => 'לחידוש המנוי דברו איתנו'],
+            ['type' => 'text', 'text' => 'example.co.il', 'parameter_name' => 'domain'],
+            ['type' => 'text', 'text' => 'לחידוש המנוי דברו איתנו', 'parameter_name' => 'action'],
         ], $this->sentParameters());
     }
 
@@ -79,5 +79,19 @@ class SiteAgentTemplateParametersTest extends TestCase
 
         $this->assertStringNotContainsString("\n", $action);
         $this->assertStringContainsString('https://example.test/card', $action);
+    }
+
+    /**
+     * ותבנית אימות — הקוד יוצא בלי שם, כי אין לו שם לתת.
+     *
+     * את הגוף של תבנית Authentication כותבת מטא, וה-placeholder של הקוד מוגדר
+     * מראש. פרמטר בשם נדחה שם, והלקוח החדש פשוט לא מקבל את הקוד שמפעיל את מה
+     * שזה עתה שילם עליו — הכישלון היקר ביותר במוצר הזה.
+     */
+    public function test_an_authentication_code_goes_out_without_a_name(): void
+    {
+        app(WhatsAppCloudClient::class)->sendTemplate('972501234567', 'site_agent_code', ['123456'], copyCode: '123456');
+
+        $this->assertSame([['type' => 'text', 'text' => '123456']], $this->sentParameters());
     }
 }

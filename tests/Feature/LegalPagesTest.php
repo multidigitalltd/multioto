@@ -184,6 +184,23 @@ class LegalPagesTest extends TestCase
     }
 
     /**
+     * והתווית הזאת שייכת רק לשורה שהניקוי שלה באמת מכבד אפס.
+     *
+     * שאר העבודות מעבירות את המספר ישירות ל-subDays(), כך ש-0 אצלן מוחק כמעט
+     * הכול בריצה הבאה. "המחיקה מושבתת" עליהן היה היפוך של ההתנהגות — בדיוק
+     * ההפך מהבעיה שהתווית נולדה לפתור.
+     */
+    public function test_the_disabled_label_is_not_claimed_for_jobs_that_ignore_zero(): void
+    {
+        config(['security.audit.retention_days' => 0]);
+
+        $this->get(route('legal.privacy'))->assertSeeTextInOrder([
+            'יומן הביקורת של פעולות במערכת',
+            '0 ימים',
+        ]);
+    }
+
+    /**
      * תיבת הסימון מקשרת למה שהיא מבקשת לאשר.
      *
      * זו הבעיה שהתחילה את כל זה: אישור חובה על מסמכים שאי אפשר היה לפתוח.

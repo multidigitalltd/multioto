@@ -63,7 +63,11 @@ class SendSiteAgentVerificationJob implements ShouldQueue
             ? $whatsapp->sendTemplate(
                 $subscriber->phone,
                 $template,
-                ['code' => $code],
+                // Positional, not named: an authentication template's body is
+                // written by Meta and its OTP placeholder has no name to give,
+                // so a named parameter here is rejected and the customer never
+                // receives the code that activates what they just paid for.
+                [$code],
                 copyCode: (bool) config('siteagent.whatsapp.templates.verification_copy_button', true) ? $code : null,
             )
             : $whatsapp->sendText($subscriber->phone, implode("\n", [
