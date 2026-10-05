@@ -87,7 +87,8 @@ class SecurityRulesTest extends TestCase
             ->firstWhere('title', 'תוספים שהוספתם למעקב');
 
         $this->assertNotNull($own);
-        $this->assertStringContainsString('אינם נמחקים אוטומטית', $own['detail']);
+        $this->assertStringContainsString('מדווח בלבד', $own['detail']);
+        $this->assertStringNotContainsString('(מחק מיד)', $own['detail']);
     }
 
     /**
@@ -275,7 +276,13 @@ class SecurityRulesTest extends TestCase
         ]];
     }
 
-    /** `wp_guard_status` on a site where the plugin's own list found nothing. */
+    /**
+     * `wp_guard_status` on a site where the plugin's own list found nothing.
+     *
+     * No `panel_rules` key: that is exactly how a plugin older than 1.7.0
+     * announces it cannot hold a "delete immediately" list, which most sites
+     * will be the day this ships.
+     */
     private function cleanGuard(): array
     {
         return $this->toolResult(json_encode([
@@ -283,6 +290,37 @@ class SecurityRulesTest extends TestCase
             'actions' => [],
             'last_id' => 0,
         ]));
+    }
+
+    /**
+     * The same, from a 1.7.0 site — which reports the list it is holding.
+     *
+     * @param  list<string>  $users
+     * @param  list<string>  $plugins
+     */
+    private function guard17(array $users = [], array $plugins = [], array $present = ['users' => [], 'plugins' => []], array $actions = []): array
+    {
+        return $this->toolResult(json_encode([
+            'present' => $present,
+            'actions' => $actions,
+            'last_id' => 0,
+            'panel_rules' => ['users' => $users, 'plugins' => $plugins],
+            'panel_limits' => ['max' => 50, 'per_sweep' => 5, 'never_plugins' => ['multioto-agent']],
+        ]));
+    }
+
+    /** Was a given tool called at all? */
+    private function called(string $tool): bool
+    {
+        $seen = false;
+
+        Http::recorded(function ($request) use ($tool, &$seen): void {
+            if (data_get($request->data(), 'params.name') === $tool) {
+                $seen = true;
+            }
+        });
+
+        return $seen;
     }
 
     private function sweep(Site $site): void
@@ -318,7 +356,7 @@ class SecurityRulesTest extends TestCase
         // threat that is still on the site is worse than no shield at all.
         $this->assertSame('threat_found', $event->type);
         $this->assertStringContainsString('wp-shell-kit', $event->title);
-        $this->assertStringContainsString('אינו נמחק אוטומטית', (string) $event->detail);
+        $this->assertStringContainsString('לאיתור ודיווח בלבד', (string) $event->detail);
     }
 
     /** אותו דבר לשם משתמש, שנקרא בכלי אחר. */
@@ -396,5 +434,197 @@ class SecurityRulesTest extends TestCase
 
         Http::assertSentCount(1);
         $this->assertSame(0, SiteEvent::where('site_id', $site->id)->count());
+    }
+
+    // ---- "מחק מיד" ----------------------------------------------------------
+
+    /** כלל רגיל אינו נשלח לאתר בכלל — הוא לאיתור, ואין מה לאכוף. */
+    public function test_a_watch_only_rule_is_never_pushed_to_a_site(): void
+    {
+        SecurityRule::create(['type' => SecurityRule::PLUGIN, 'value' => 'wp-shell-kit']);
+        $site = $this->guardedSite();
+
+        Http::fakeSequence()
+            ->push($this->guard17())
+            ->push($this->toolResult(json_encode([])));
+
+        $this->sweep($site);
+
+        $this->assertFalse($this->called('wp_guard_rules'));
+    }
+
+    /** כלל שמסומן "מחק מיד" נשלח לאתר שיכול להחזיק אותו. */
+    public function test_a_delete_rule_is_pushed_to_a_site_that_can_hold_it(): void
+    {
+        SecurityRule::create(['type' => SecurityRule::PLUGIN, 'value' => 'wp-shell-kit', 'auto_remove' => true]);
+        SecurityRule::create(['type' => SecurityRule::USER, 'value' => 'intruder', 'auto_remove' => true]);
+        $site = $this->guardedSite();
+
+        Http::fakeSequence()
+            ->push($this->guard17())                                   // nothing held yet
+            ->push($this->toolResult(json_encode(['users' => ['intruder'], 'plugins' => ['wp-shell-kit']])))
+            ->push($this->guard17(['intruder'], ['wp-shell-kit']));     // re-read
+
+        $this->sweep($site);
+
+        Http::assertSent(fn ($request): bool => data_get($request->data(), 'params.name') === 'wp_guard_rules'
+            && data_get($request->data(), 'params.arguments.plugins') === ['wp-shell-kit']
+            && data_get($request->data(), 'params.arguments.users') === ['intruder']);
+    }
+
+    /**
+     * רשימה שהאתר כבר מחזיק אינה נשלחת שוב.
+     *
+     * הסריקה הזאת רצה כל שעה על כל אתר מחובר. דחיפה בכל פעם הייתה קריאה נוספת
+     * לכל אתר בכל שעה בשביל אפס שינוי.
+     */
+    public function test_a_list_already_in_force_is_not_pushed_again(): void
+    {
+        SecurityRule::create(['type' => SecurityRule::PLUGIN, 'value' => 'wp-shell-kit', 'auto_remove' => true]);
+        $site = $this->guardedSite();
+
+        Http::fake(['*' => Http::response($this->guard17([], ['wp-shell-kit']))]);
+
+        $this->sweep($site);
+
+        $this->assertFalse($this->called('wp_guard_rules'));
+        Http::assertSentCount(1);
+    }
+
+    /**
+     * אתר שעזב וחזר מגיבוי מקבל את הרשימה מחדש.
+     *
+     * אתר ששוחזר חוזר עם ה-option שהיה לו ביום הגיבוי, ושום דבר אחר לא היה שם
+     * לב. ההשוואה מול מה שהאתר מדווח היא גם התיקון.
+     */
+    public function test_a_site_holding_a_stale_list_is_corrected(): void
+    {
+        SecurityRule::create(['type' => SecurityRule::PLUGIN, 'value' => 'wp-shell-kit', 'auto_remove' => true]);
+        $site = $this->guardedSite();
+
+        Http::fakeSequence()
+            ->push($this->guard17([], ['something-else']))   // what the backup had
+            ->push($this->toolResult(json_encode(['plugins' => ['wp-shell-kit']])))
+            ->push($this->guard17([], ['wp-shell-kit']));
+
+        $this->sweep($site);
+
+        $this->assertTrue($this->called('wp_guard_rules'));
+    }
+
+    /**
+     * כלל שנאכף באתר אינו מדווח גם מכאן.
+     *
+     * האתר מוחק ורושם ביומן שלו, והפאנל מרוקן את היומן — כלומר חיפוש נוסף מכאן
+     * היה מייצר שני דיווחים על אותו ממצא, ואחד מהם היה אומר "לא הוסר" על משהו
+     * שדווקא כן הוסר.
+     */
+    public function test_a_pushed_rule_is_not_also_reported_by_the_panel_sweep(): void
+    {
+        SecurityRule::create(['type' => SecurityRule::PLUGIN, 'value' => 'wp-shell-kit', 'auto_remove' => true]);
+        $site = $this->guardedSite();
+
+        Http::fake(['*' => Http::response($this->guard17([], ['wp-shell-kit']))]);
+
+        $this->sweep($site);
+
+        // One call: the status. No inventory read, no second finding.
+        Http::assertSentCount(1);
+        $this->assertSame(0, SiteEvent::where('site_id', $site->id)->count());
+    }
+
+    /**
+     * הדיווח שהתכונה הזאת חייבת: "סימנת מחק מיד, ובאתר הזה זה לא קרה".
+     *
+     * זה המצב המסוכן — לא זה שבו שום דבר לא נמחק, אלא זה שבו מישהו סימן תיבה
+     * ומאמין שהטיפול בוצע. אתר עם תוסף ישן אינו יכול להחזיק את הרשימה, ולכן
+     * הכלל נסרק מכאן ומדווח במפורש כלא נאכף, עם גרסת התוסף שחוסמת אותו.
+     */
+    public function test_a_delete_rule_on_an_old_plugin_is_reported_as_not_enforced(): void
+    {
+        SecurityRule::create(['type' => SecurityRule::PLUGIN, 'value' => 'wp-shell-kit', 'auto_remove' => true]);
+        $site = $this->guardedSite();
+        $site->update(['agent_plugin_version' => '1.6.2']);
+
+        Http::fakeSequence()
+            ->push($this->cleanGuard())   // no panel_rules — cannot hold a list
+            ->push($this->toolResult(json_encode([['plugin' => 'wp-shell-kit/loader.php']])));
+
+        $this->sweep($site);
+
+        $event = SiteEvent::where('site_id', $site->id)->sole();
+        $this->assertStringContainsString('מחק מיד', $event->title);
+        $this->assertStringContainsString('1.6.2', (string) $event->detail);
+        $this->assertStringContainsString('1.7.0', (string) $event->detail);
+    }
+
+    /** דחיפה שנכשלה חוזרת לדיווח, ולא מניחה שהכלל נאכף. */
+    public function test_a_failed_push_falls_back_to_reporting(): void
+    {
+        SecurityRule::create(['type' => SecurityRule::PLUGIN, 'value' => 'wp-shell-kit', 'auto_remove' => true]);
+        $site = $this->guardedSite();
+
+        Http::fakeSequence()
+            ->push($this->guard17())
+            ->pushStatus(500)                                                      // the push fails
+            ->push($this->toolResult(json_encode([['plugin' => 'wp-shell-kit/loader.php']])));
+
+        $this->sweep($site);
+
+        $this->assertStringContainsString(
+            'wp-shell-kit',
+            SiteEvent::where('site_id', $site->id)->sole()->title,
+        );
+    }
+
+    /** הכרטיס שמבטיח מחיקה אוטומטית מונה גם כלל שסומן "מחק מיד". */
+    public function test_the_deletion_card_lists_a_rule_marked_for_immediate_removal(): void
+    {
+        $this->actingAs($this->admin());
+        SecurityRule::create(['type' => SecurityRule::USER, 'value' => 'intruder', 'auto_remove' => true]);
+
+        $card = collect(Livewire::test(SecurityPosture::class)->instance()->rules())
+            ->firstWhere('title', 'משתמשים שנמחקים מיד עם הופעתם');
+
+        $this->assertStringContainsString('sys_maint', $card['detail']);
+        $this->assertStringContainsString('intruder', $card['detail']);
+        // And the difference between the two halves is not glossed over.
+        $this->assertStringContainsString('1.7.0', $card['detail']);
+    }
+
+    /** השמירה אומרת בחזרה מה נמחק, בשמו. */
+    public function test_the_save_says_which_rules_delete(): void
+    {
+        $this->actingAs($this->admin());
+
+        Livewire::test(SecurityPosture::class)
+            ->callAction('manageRules', data: ['rules' => [
+                ['type' => SecurityRule::PLUGIN, 'value' => 'wp-shell-kit', 'note' => null, 'enabled' => true, 'auto_remove' => true],
+                ['type' => SecurityRule::USER, 'value' => 'watched', 'note' => null, 'enabled' => true, 'auto_remove' => false],
+            ]])
+            ->assertNotified();
+
+        $this->assertTrue(SecurityRule::where('value', 'wp-shell-kit')->sole()->auto_remove);
+        $this->assertFalse(SecurityRule::where('value', 'watched')->sole()->auto_remove);
+        $this->assertSame(['wp-shell-kit'], ThreatQuarantine::autoRemovePlugins());
+        $this->assertSame([], ThreatQuarantine::autoRemoveUsers());
+    }
+
+    /** וכלל מושהה אינו נדחף, גם אם הוא מסומן "מחק מיד". */
+    public function test_a_disabled_delete_rule_is_not_pushed(): void
+    {
+        SecurityRule::create([
+            'type' => SecurityRule::PLUGIN, 'value' => 'wp-shell-kit',
+            'enabled' => false, 'auto_remove' => true,
+        ]);
+
+        $this->assertSame([], ThreatQuarantine::autoRemovePlugins());
+
+        $site = $this->guardedSite();
+        Http::fake(['*' => Http::response($this->guard17())]);
+
+        $this->sweep($site);
+
+        $this->assertFalse($this->called('wp_guard_rules'));
     }
 }

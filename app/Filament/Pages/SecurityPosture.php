@@ -66,12 +66,16 @@ class SecurityPosture extends Page implements HasTable
     public function rules(): array
     {
         $quarantineOn = ThreatQuarantine::enabled();
-        // The BUILT-IN lists, not everything watched: these two cards promise
-        // automatic deletion, and that promise is only true of the names the
-        // site's own plugin carries. A rule the team added is watched and
-        // reported, and appears below under its own heading.
+        // These two cards promise automatic deletion, so they list exactly what
+        // is deleted automatically: the names the site's plugin carries itself,
+        // plus the team's own rules marked "מחק מיד" — which really are deleted,
+        // and so belong here rather than under "watched". The difference between
+        // the two halves is stated in the card, because it is a real one: the
+        // built-ins work on every version, a panel rule needs 1.7.0 on the site.
         $users = ThreatQuarantine::builtInUsers();
         $plugins = ThreatQuarantine::builtInPlugins();
+        $deletingUsers = ThreatQuarantine::autoRemoveUsers();
+        $deletingPlugins = ThreatQuarantine::autoRemovePlugins();
         $rotation = (bool) config('security.key_rotation.enabled', true);
 
         return [
@@ -79,18 +83,14 @@ class SecurityPosture extends Page implements HasTable
             [
                 'icon' => '👤',
                 'title' => 'משתמשים שנמחקים מיד עם הופעתם',
-                'detail' => $users === []
-                    ? 'לא מוגדר אף שם משתמש.'
-                    : implode(', ', $users).' — נמחקים בלי לבקש אישור, בכל אתר שהתוסף מותקן בו.',
-                'active' => $quarantineOn && $users !== [],
+                'detail' => $this->deletedAutomatically($users, $deletingUsers, 'שם משתמש'),
+                'active' => $quarantineOn && ($users !== [] || $deletingUsers !== []),
             ],
             [
                 'icon' => '🧩',
                 'title' => 'תוספים שנמחקים מיד עם התקנתם',
-                'detail' => $plugins === []
-                    ? 'לא מוגדר אף תוסף.'
-                    : implode(', ', $plugins).' — נמחקים בלי לבקש אישור, בכל אתר שהתוסף מותקן בו.',
-                'active' => $quarantineOn && $plugins !== [],
+                'detail' => $this->deletedAutomatically($plugins, $deletingPlugins, 'תוסף'),
+                'active' => $quarantineOn && ($plugins !== [] || $deletingPlugins !== []),
             ],
             [
                 'icon' => '🔐',
@@ -113,6 +113,40 @@ class SecurityPosture extends Page implements HasTable
                 'active' => $quarantineOn,
             ],
         ];
+    }
+
+    /**
+     * One card's text for the things that really are deleted without asking.
+     *
+     * The two halves are not interchangeable and the sentence says so. A built-in
+     * works on every site with the plugin, from any version, and needs no
+     * instruction. A rule the team marked "מחק מיד" is sent to the site and only
+     * enforced from plugin 1.7.0 — so an older site reports it instead, and a
+     * card that quietly merged the two would promise a deletion that is not
+     * happening on part of the estate.
+     *
+     * @param  list<string>  $builtIn
+     * @param  list<string>  $deleting
+     */
+    private function deletedAutomatically(array $builtIn, array $deleting, string $noun): string
+    {
+        if ($builtIn === [] && $deleting === []) {
+            return "לא מוגדר אף {$noun}.";
+        }
+
+        $lines = [];
+
+        if ($builtIn !== []) {
+            $lines[] = implode(', ', $builtIn).' — מקובעים בתוסף שבאתר, נמחקים בלי לבקש אישור בכל אתר שהתוסף מותקן בו.';
+        }
+
+        if ($deleting !== []) {
+            $lines[] = 'מהכללים שלכם: '.implode(', ', $deleting)
+                .' — נמחקים ברגע שהם מופיעים, באתרים עם תוסף 1.7.0 ומעלה. באתר עם תוסף ישן הכלל מדווח ואינו מוחק, '
+                .'ותתקבל התראה נפרדת שאומרת זאת.';
+        }
+
+        return implode(' ', $lines);
     }
 
     /** Sites the enforcement cannot reach at all — it protects none of them. */
@@ -236,10 +270,12 @@ class SecurityPosture extends Page implements HasTable
             // Said in full every time: these are NOT removed automatically on a
             // site that guards itself, and a team that believes they are would
             // add a rule and stop looking.
-            'detail' => $group->map(fn (SecurityRule $rule): string => $rule->value.($rule->enabled ? '' : ' (מושהה)'))->implode(', ')
+            'detail' => $group->map(fn (SecurityRule $rule): string => $rule->value
+                .($rule->enabled ? '' : ' (מושהה)')
+                .($rule->auto_remove ? ' (מחק מיד)' : ''))->implode(', ')
                 .($quarantineOn
-                    ? ' — נמצאים ומדווחים. אינם נמחקים אוטומטית: המחיקה האוטומטית נקבעת בתוסף שבאתר.'
-                    : ' — לא נבדקים כרגע: בדיקת ההסגר כבויה במערכת, וכל עוד היא כבויה אף כלל אינו נאכף.'),
+                    ? ' — נמצאים ומדווחים. מה שמסומן "מחק מיד" גם נמחק מהאתר; השאר מדווח בלבד.'
+                    : ' — לא נבדקים כרגע: בדיקת ההסגר כבויה במערכת, וכל עוד היא כבויה אף כלל אינו נאכף, גם לא "מחק מיד".'),
             // Gated on the same switch the enforcement reads. With the
             // quarantine off, PurgeSiteThreatsJob returns before it looks at
             // anything — a card that still reads "active" would be telling the
@@ -307,19 +343,22 @@ class SecurityPosture extends Page implements HasTable
             ->modalHeading('כללי מעקב משלכם')
             ->modalDescription(
                 'שם משתמש או תוסף שראיתם באתר פרוץ ואתם רוצים שהמערכת תחפש בכל האתרים. '
-                .'כלל שמוסיפים כאן נמצא ומדווח — הוא אינו נמחק אוטומטית: המחיקה האוטומטית נקבעת בתוסף שמותקן באתר עצמו, '
-                .'כדי ששום דבר שנשלח ברשת לא יוכל להרחיב את מה שאתר מוחק. באתר עם תוסף ישן (לפני 1.5.0) המערכת גם תכבה תוסף תואם.'
+                .'כלל רגיל נמצא ומדווח, ולא נוגע בכלום. כלל שמסומן "מחק מיד" נשלח לאתרים, ושם נמחק ברגע שהוא מופיע — '
+                .'בלי אישור ובלי המתנה לסריקה (דורש תוסף 1.7.0 ומעלה באתר; בתוסף ישן הכלל מדווח בלבד, והמערכת תכבה תוסף תואם). '
+                .'את הגבולות על המחיקה אוכף התוסף שבאתר ואי אפשר להרחיב אותם מכאן: לעולם לא סוכן הניטור עצמו, '
+                .'לעולם לא המשתמש הראשון באתר, לעולם לא המנהל האחרון, ולא יותר מחמש הסרות בסריקה.'
             )
             ->modalSubmitActionLabel('שמירת הכללים')
             ->fillForm(fn (): array => [
                 'rules' => SecurityRule::query()
                     ->orderBy('type')->orderBy('value')
-                    ->get(['type', 'value', 'note', 'enabled'])
+                    ->get(['type', 'value', 'note', 'enabled', 'auto_remove'])
                     ->map(fn (SecurityRule $rule): array => [
                         'type' => $rule->type,
                         'value' => $rule->value,
                         'note' => $rule->note,
                         'enabled' => $rule->enabled,
+                        'auto_remove' => $rule->auto_remove,
                     ])->all(),
             ])
             ->form([
@@ -362,8 +401,16 @@ class SecurityPosture extends Page implements HasTable
                             ->label('פעיל')
                             ->default(true)
                             ->inline(false),
+                        // Off by default, and that is the point: a rule is added
+                        // to look for something. Deleting it from a customer's
+                        // site is a second decision, and it is ticked on its own.
+                        Forms\Components\Toggle::make('auto_remove')
+                            ->label('מחק מיד')
+                            ->default(false)
+                            ->inline(false)
+                            ->helperText('נמחק מהאתר ברגע שהוא מופיע, בלי אישור. סמנו רק כשברור שהפריט הוא תמיד פריצה.'),
                     ])
-                    ->columns(4)
+                    ->columns(5)
                     ->columnSpanFull(),
             ])
             ->action(function (array $data): void {
@@ -399,6 +446,7 @@ class SecurityPosture extends Page implements HasTable
                 $rule = SecurityRule::firstOrNew(['type' => $type, 'value' => $value]);
                 $rule->note = filled($row['note'] ?? null) ? (string) $row['note'] : null;
                 $rule->enabled = (bool) ($row['enabled'] ?? true);
+                $rule->auto_remove = (bool) ($row['auto_remove'] ?? false);
 
                 // Only ever on the way in. Every save submits every row on the
                 // form, so writing this each time would make whoever last
@@ -417,9 +465,17 @@ class SecurityPosture extends Page implements HasTable
                 ->each(fn (SecurityRule $rule) => $rule->delete());
         });
 
+        // The count of DELETING rules is said back, by name. Somebody who ticked
+        // the wrong row has one chance to notice, and it is this sentence.
+        $deleting = array_merge(ThreatQuarantine::autoRemoveUsers(), ThreatQuarantine::autoRemovePlugins());
+
         Notification::make()
             ->title('כללי המעקב נשמרו')
-            ->body(count($kept).' כללים פעילים. הם ייבדקו בסריקה הבאה, ואפשר גם להריץ סריקה עכשיו.')
+            ->body(count($kept).' כללים פעילים. '.($deleting === []
+                ? 'אף אחד מהם אינו מוחק — כולם לאיתור ודיווח.'
+                : 'מסומנים "מחק מיד" ('.count($deleting).'): '.implode(', ', $deleting)
+                    .' — יימחקו מהאתרים ברגע שיופיעו, בלי אישור.')
+                .' הרשימה נשלחת לאתרים בסריקה הבאה, ואפשר להריץ סריקה עכשיו.')
             ->success()
             ->send();
     }

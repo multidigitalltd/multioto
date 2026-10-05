@@ -153,7 +153,8 @@ class Multioto_Agent_Mcp_Server
             ['name' => 'wp_theme_list', 'description' => 'רשימת התבניות (themes) המותקנות ואיזו פעילה.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => (object) []]],
             ['name' => 'wp_admin_list', 'description' => 'רשימת המשתמשים בעלי תפקיד מנהל (administrator): שם משתמש, אימייל ותאריך רישום.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => (object) []]],
             ['name' => 'wp_guard_status', 'description' => 'מצב שומר החדירות: מה ברשימת ההסגר (משתמשים ותוספים שמוסרים אוטומטית עם הופעתם), מה מהם נמצא באתר כרגע, ומה השומר כבר הסיר. after_id מחזיר רק פעולות חדשות מהמזהה שכבר נקרא.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['after_id' => ['type' => 'integer']]]],
-            ['name' => 'wp_guard_purge', 'description' => 'הרצת שומר החדירות עכשיו: מחיקת משתמש או תוסף שנמצא ברשימת ההסגר הקבועה של התוסף. הרשימה מקודדת בתוסף ואינה מקבלת פרמטרים — לא ניתן להסיר דרך הכלי הזה שום משתמש או תוסף אחר.', 'annotations' => $destructive, 'inputSchema' => ['type' => 'object', 'properties' => (object) []]],
+            ['name' => 'wp_guard_purge', 'description' => 'הרצת שומר החדירות עכשיו: מחיקת משתמש או תוסף שנמצא ברשימת ההסגר של התוסף — הרשימה המקובעת בקוד, בתוספת שמות שסומנו במפורש "מחק מיד" בפאנל ונשמרו באתר דרך wp_guard_rules. אינו מקבל פרמטרים: לא ניתן להסיר דרך הכלי הזה שום משתמש או תוסף שאינו על אחת מהרשימות האלה.', 'annotations' => $destructive, 'inputSchema' => ['type' => 'object', 'properties' => (object) []]],
+            ['name' => 'wp_guard_rules', 'description' => 'קביעת רשימת ה"מחק מיד" שהאתר מחזיק עבור הפאנל: שמות משתמשים ו-slug של תוספים שיימחקו ברגע שיופיעו. מחליף את הרשימה כולה (רשימה ריקה מבטלת). האתר אוכף גבולות משלו שאי אפשר להרחיב מכאן: לעולם לא סוכן הניטור עצמו, לעולם לא המשתמש הראשון באתר מכלל שהגיע מהפאנל, לעולם לא המנהל האחרון, ולא יותר ממספר מוגבל של הסרות בסריקה. מחזיר מה נשמר ומה נדחה.', 'annotations' => $destructive, 'inputSchema' => ['type' => 'object', 'properties' => ['users' => ['type' => 'array', 'items' => ['type' => 'string']], 'plugins' => ['type' => 'array', 'items' => ['type' => 'string']]]]],
             ['name' => 'wp_option_get', 'description' => 'קריאת הגדרה בטוחה מרשימה מוגדרת מראש.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['name' => ['type' => 'string']], 'required' => ['name']]],
             ['name' => 'wp_error_log_tail', 'description' => 'שורות אחרונות מיומן השגיאות (אם מופעל).', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['lines' => ['type' => 'integer']]]],
             ['name' => 'wp_cache_flush', 'description' => 'ניקוי מטמון אובייקטים ו-OPcache.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => (object) []]],
@@ -251,6 +252,7 @@ class Multioto_Agent_Mcp_Server
             'wp_admin_list' => 'adminList',
             'wp_guard_status' => 'guardStatus',
             'wp_guard_purge' => 'guardPurge',
+            'wp_guard_rules' => 'guardRules',
             'wp_option_get' => 'optionGet',
             'wp_error_log_tail' => 'errorLogTail',
             'wp_cache_flush' => 'cacheFlush',
@@ -407,6 +409,23 @@ class Multioto_Agent_Mcp_Server
      * What the intrusion guard is watching for, what is present right now, and
      * what it has already removed on its own.
      */
+    /**
+     * Store the panel's "delete immediately" list on this site.
+     *
+     * The guard re-validates and bounds everything at the moment of deletion, so
+     * what this accepts is not the same as what it will act on — see
+     * Multioto_Agent_Guard for the rails that cannot be widened from here.
+     */
+    private function guardRules(array $args): string
+    {
+        $guard = new Multioto_Agent_Guard;
+
+        return wp_json_encode(
+            $guard->setPushedRules($args['users'] ?? [], $args['plugins'] ?? []),
+            JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT,
+        );
+    }
+
     private function guardStatus(array $args): string
     {
         $guard = new Multioto_Agent_Guard;

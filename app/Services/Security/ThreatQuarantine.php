@@ -76,6 +76,46 @@ class ThreatQuarantine
     }
 
     /**
+     * The panel rules marked "delete immediately".
+     *
+     * These are the only thing the panel ever asks a site to add to what it
+     * deletes. They are pushed to each site, which re-validates and bounds them
+     * itself — the panel's list is a request, never an authority.
+     *
+     * @return list<string>
+     */
+    public static function autoRemoveUsers(): array
+    {
+        return SecurityRule::valuesFor(SecurityRule::USER, autoRemovingOnly: true);
+    }
+
+    /** @return list<string> */
+    public static function autoRemovePlugins(): array
+    {
+        return SecurityRule::valuesFor(SecurityRule::PLUGIN, autoRemovingOnly: true);
+    }
+
+    /**
+     * Panel rules that are watched and reported but never deleted.
+     *
+     * The split matters to the sweep and not only to the screen: an auto-remove
+     * rule on a site that accepted it is reported through the site's own guard
+     * log, so looking for it a second time here would file every finding twice.
+     *
+     * @return list<string>
+     */
+    public static function reportOnlyUsers(): array
+    {
+        return array_values(array_diff(self::customUsers(), self::autoRemoveUsers()));
+    }
+
+    /** @return list<string> */
+    public static function reportOnlyPlugins(): array
+    {
+        return array_values(array_diff(self::customPlugins(), self::autoRemovePlugins()));
+    }
+
+    /**
      * What the panel watches for: the built-ins, plus whatever the team added.
      *
      * The config side is the authority for automatic removal and cannot be
