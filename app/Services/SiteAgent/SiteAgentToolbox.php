@@ -94,6 +94,15 @@ class SiteAgentToolbox
         'get_page_texts' => ['wp_elementor_texts_get',
             'הטקסטים שמופיעים בפועל בעמוד שבנוי באלמנטור, לפי id.',
             ['id' => ['type' => 'integer']], ['id']],
+        'get_item_terms' => ['wp_post_terms_get',
+            'הקטגוריות/התגיות שמשויכות כרגע לפריט (פוסט, עמוד או מוצר) בטקסונומיה אחת — למשל category או product_cat.',
+            ['id' => ['type' => 'integer'], 'taxonomy' => ['type' => 'string']], ['id', 'taxonomy']],
+        'field_schema' => ['wp_fields_schema',
+            'השדות המותאמים שמוגדרים לסוג תוכן (type): מפתח, תווית, סוג ואפשרויות. קִראו לפני הצעה לעדכן שדה.',
+            ['type' => ['type' => 'string']], ['type']],
+        'list_themes' => ['wp_theme_list',
+            'התבניות (themes) המותקנות ואיזו פעילה.',
+            [], []],
         'shipping_zones' => ['wc_shipping_zones_list',
             'אזורי המשלוח של החנות: אזורים, שיטות משלוח, מחירים וסף למשלוח חינם.',
             [], []],
@@ -110,7 +119,8 @@ class SiteAgentToolbox
      * under one of these is remembered for the rest of the turn, and a proposal
      * may only name an id that was seen — see SiteAgentAssistant.
      */
-    private const ID_KEYS = ['id', 'order_id', 'product_id', 'subscription_id', 'user_id', 'number', 'created_id', 'updated_id'];
+    private const ID_KEYS = ['id', 'order_id', 'product_id', 'subscription_id', 'user_id', 'number', 'created_id', 'updated_id',
+        'item_id', 'comment_id', 'term_id', 'menu_id', 'post_id'];
 
     public function __construct(private McpClient $mcp) {}
 
@@ -140,6 +150,17 @@ class SiteAgentToolbox
         }
 
         return $tools;
+    }
+
+    /**
+     * Every plugin tool a read can reach — for the coverage check that keeps
+     * the bot in step with what the plugin can do.
+     *
+     * @return list<string>
+     */
+    public static function pluginTools(): array
+    {
+        return array_values(array_unique(array_column(self::READS, 0)));
     }
 
     public function isRead(string $name): bool

@@ -48,6 +48,16 @@ class SiteActionApplier
                 SiteAgentRequest::OP_USER_ROLE => $this->userRole($site, $plan),
                 SiteAgentRequest::OP_COUPON => $this->coupon($site, $plan),
                 SiteAgentRequest::OP_PRODUCT_CREATE => $this->productCreate($site, $plan),
+                SiteAgentRequest::OP_COMMENT => $this->comment($site, $plan),
+                SiteAgentRequest::OP_TERM_CREATE => $this->termCreate($site, $plan),
+                SiteAgentRequest::OP_POST_TERMS => $this->postTerms($site, $plan),
+                SiteAgentRequest::OP_FIELDS => $this->fields($site, $plan),
+                SiteAgentRequest::OP_MENU_ADD => $this->menuAdd($site, $plan),
+                SiteAgentRequest::OP_MENU_UPDATE => $this->menuUpdate($site, $plan),
+                SiteAgentRequest::OP_MENU_REMOVE => $this->menuRemove($site, $plan),
+                SiteAgentRequest::OP_TRASH => $this->trash($site, $plan),
+                SiteAgentRequest::OP_COUPON_EXPIRE => $this->couponExpire($site, $plan),
+                SiteAgentRequest::OP_CACHE_FLUSH => $this->cacheFlush($site),
                 default => $this->refuse('פעולה לא מוכרת.'),
             };
         } catch (\Throwable $e) {
@@ -58,7 +68,8 @@ class SiteActionApplier
     /** Does a `restore` of this kind belong here? */
     public function reverts(string $kind): bool
     {
-        return in_array($kind, ['order_status', 'subscription_status', 'created_post', 'post', 'user_role', 'coupon'], true);
+        return in_array($kind, ['order_status', 'subscription_status', 'created_post', 'post', 'user_role', 'coupon',
+            'comment', 'post_terms', 'fields', 'menu_added', 'menu_item', 'trashed'], true);
     }
 
     /**
@@ -75,6 +86,12 @@ class SiteActionApplier
                 'post' => $this->revertPost($site, $restore),
                 'user_role' => $this->revertUserRole($site, $restore),
                 'coupon' => $this->revertCoupon($site, $restore),
+                'comment' => $this->revertComment($site, $restore),
+                'post_terms' => $this->revertPostTerms($site, $restore),
+                'fields' => $this->revertFields($site, $restore),
+                'menu_added' => $this->revertMenuAdd($site, $restore),
+                'menu_item' => $this->revertMenuUpdate($site, $restore),
+                'trashed' => $this->revertTrash($site, $restore),
                 default => $this->refuse('אין לי גיבוי לשחזור הבקשה הזו.'),
             };
         } catch (\Throwable $e) {
@@ -376,6 +393,236 @@ class SiteActionApplier
             : null);
     }
 
+    // --- Comments, categories, fields ---------------------------------------
+
+    /** @param array<string, mixed> $plan */
+    private function comment(Site $site, array $plan): array
+    {
+        $id = (int) $plan['comment_id'];
+
+        if ($this->commentStatus($site, $id) !== (string) $plan['from']) {
+            return $this->refuse(SiteChangeApplier::STALE);
+        }
+
+        $result = $this->call($site, 'wp_comment_moderate', ['comment_id' => $id, 'status' => (string) $plan['to']]);
+        $previous = (string) data_get($result, 'previous.status', '');
+
+        return $this->ok($previous !== '' ? [
+            'kind' => 'comment',
+            'comment_id' => $id,
+            'status' => $previous,
+            'after' => (string) $plan['to'],
+        ] : null);
+    }
+
+    /** @param array<string, mixed> $restore */
+    private function revertComment(Site $site, array $restore): array
+    {
+        $id = (int) $restore['comment_id'];
+
+        if ($this->commentStatus($site, $id) !== (string) $restore['after']) {
+            return $this->refuse(SiteChangeApplier::STALE);
+        }
+
+        $this->call($site, 'wp_comment_moderate', ['comment_id' => $id, 'status' => (string) $restore['status']]);
+
+        return $this->ok(null);
+    }
+
+    /** @param array<string, mixed> $plan */
+    private function termCreate(Site $site, array $plan): array
+    {
+        $created = $this->call($site, 'wp_term_create', (array) $plan['fields']);
+
+        return $this->ok(null, isset($created['created_id']) ? "נוצרה (מזהה {$created['created_id']})." : null);
+    }
+
+    /** @param array<string, mixed> $plan */
+    private function postTerms(Site $site, array $plan): array
+    {
+        $id = (int) $plan['id'];
+        $taxonomy = (string) $plan['taxonomy'];
+
+        if (! $this->sameIds($this->termIds($site, $id, $taxonomy), (array) ($plan['current_ids'] ?? []))) {
+            return $this->refuse(SiteChangeApplier::STALE);
+        }
+
+        $result = $this->call($site, 'wp_post_terms_set', [
+            'id' => $id, 'taxonomy' => $taxonomy, 'terms' => (array) $plan['terms'], 'mode' => (string) $plan['mode'],
+        ]);
+
+        return $this->ok(isset($result['previous']['term_ids'], $result['term_ids']) ? [
+            'kind' => 'post_terms',
+            'id' => $id,
+            'taxonomy' => $taxonomy,
+            'term_ids' => array_map('intval', (array) $result['previous']['term_ids']),
+            'after' => array_map('intval', (array) $result['term_ids']),
+        ] : null);
+    }
+
+    /** @param array<string, mixed> $restore */
+    private function revertPostTerms(Site $site, array $restore): array
+    {
+        $id = (int) $restore['id'];
+        $taxonomy = (string) $restore['taxonomy'];
+
+        if (! $this->sameIds($this->termIds($site, $id, $taxonomy), (array) $restore['after'])) {
+            return $this->refuse(SiteChangeApplier::STALE);
+        }
+
+        $this->call($site, 'wp_post_terms_set', [
+            'id' => $id, 'taxonomy' => $taxonomy, 'term_ids' => (array) $restore['term_ids'], 'mode' => 'replace',
+        ]);
+
+        return $this->ok(null);
+    }
+
+    /** @param array<string, mixed> $plan */
+    private function fields(Site $site, array $plan): array
+    {
+        $id = (int) $plan['id'];
+        $fields = (array) $plan['fields'];
+
+        if (! $this->sameFields($this->fieldValues($site, $id, array_keys($fields)), (array) ($plan['current'] ?? []))) {
+            return $this->refuse(SiteChangeApplier::STALE);
+        }
+
+        $result = $this->call($site, 'wp_fields_update', ['id' => $id, 'fields' => $fields]);
+        $previous = (array) ($result['previous'] ?? []);
+
+        return $this->ok($previous !== [] ? [
+            'kind' => 'fields',
+            'id' => $id,
+            // An empty previous value is restored as empty, never skipped.
+            'fields' => array_map(fn ($value): string => is_scalar($value) ? (string) $value : '', $previous),
+            'after' => $this->fieldValues($site, $id, array_keys($fields)),
+        ] : null);
+    }
+
+    /** @param array<string, mixed> $restore */
+    private function revertFields(Site $site, array $restore): array
+    {
+        $id = (int) $restore['id'];
+        $after = (array) $restore['after'];
+
+        if (! $this->sameFields($this->fieldValues($site, $id, array_keys($after)), $after)) {
+            return $this->refuse(SiteChangeApplier::STALE);
+        }
+
+        $this->call($site, 'wp_fields_update', ['id' => $id, 'fields' => (array) $restore['fields']]);
+
+        return $this->ok(null);
+    }
+
+    // --- Menus ---------------------------------------------------------------
+
+    /** @param array<string, mixed> $plan */
+    private function menuAdd(Site $site, array $plan): array
+    {
+        $added = (int) ($this->call($site, 'wp_menu_item_add', (array) $plan['fields'])['added_item_id'] ?? 0);
+
+        return $this->ok($added > 0 ? ['kind' => 'menu_added', 'item_id' => $added] : null);
+    }
+
+    /** @param array<string, mixed> $restore */
+    private function revertMenuAdd(Site $site, array $restore): array
+    {
+        $itemId = (int) $restore['item_id'];
+
+        if ($this->menuItem($site, $itemId) === null) {
+            return $this->refuse('הפריט כבר אינו בתפריט.');
+        }
+
+        $this->call($site, 'wp_menu_item_unlink', ['item_id' => $itemId]);
+
+        return $this->ok(null);
+    }
+
+    /** @param array<string, mixed> $plan */
+    private function menuUpdate(Site $site, array $plan): array
+    {
+        $itemId = (int) $plan['item_id'];
+        $live = $this->menuItem($site, $itemId);
+
+        if ($live === null || ! $this->sameFields($live, (array) ($plan['current'] ?? []))) {
+            return $this->refuse(SiteChangeApplier::STALE);
+        }
+
+        $this->call($site, 'wp_menu_item_update', ['item_id' => $itemId, ...(array) $plan['fields']]);
+
+        return $this->ok([
+            'kind' => 'menu_item',
+            'item_id' => $itemId,
+            'fields' => (array) $plan['current'],
+            'after' => array_intersect_key((array) $this->menuItem($site, $itemId), (array) $plan['fields']),
+        ]);
+    }
+
+    /** @param array<string, mixed> $restore */
+    private function revertMenuUpdate(Site $site, array $restore): array
+    {
+        $itemId = (int) $restore['item_id'];
+        $live = $this->menuItem($site, $itemId);
+
+        if ($live === null || ! $this->sameFields($live, (array) $restore['after'])) {
+            return $this->refuse(SiteChangeApplier::STALE);
+        }
+
+        $this->call($site, 'wp_menu_item_update', ['item_id' => $itemId, ...(array) $restore['fields']]);
+
+        return $this->ok(null);
+    }
+
+    /** @param array<string, mixed> $plan */
+    private function menuRemove(Site $site, array $plan): array
+    {
+        $this->call($site, 'wp_menu_item_unlink', ['item_id' => (int) $plan['item_id']]);
+
+        return $this->ok(null);
+    }
+
+    // --- Trash, coupons, cache -----------------------------------------------
+
+    /** @param array<string, mixed> $plan */
+    private function trash(Site $site, array $plan): array
+    {
+        $id = (int) $plan['id'];
+        $live = $this->post($site, $id);
+
+        if ($live === null || $live['status'] !== (string) $plan['status']) {
+            return $this->refuse(SiteChangeApplier::STALE);
+        }
+
+        $this->call($site, 'wp_content_trash', ['id' => $id]);
+        SiteChangePlanner::forget($site);
+
+        return $this->ok(($plan['restorable'] ?? false) === true ? ['kind' => 'trashed', 'id' => $id] : null);
+    }
+
+    /** @param array<string, mixed> $restore */
+    private function revertTrash(Site $site, array $restore): array
+    {
+        $this->call($site, 'wp_content_restore', ['id' => (int) $restore['id']]);
+        SiteChangePlanner::forget($site);
+
+        return $this->ok(null);
+    }
+
+    /** @param array<string, mixed> $plan */
+    private function couponExpire(Site $site, array $plan): array
+    {
+        $this->call($site, 'wc_coupon_expire', ['code' => (string) $plan['code']]);
+
+        return $this->ok(null);
+    }
+
+    private function cacheFlush(Site $site): array
+    {
+        $this->call($site, 'wp_cache_flush', []);
+
+        return $this->ok(null);
+    }
+
     // --- Helpers -------------------------------------------------------------
 
     /**
@@ -449,6 +696,71 @@ class SiteActionApplier
         }
 
         return true;
+    }
+
+    private function commentStatus(Site $site, int $id): ?string
+    {
+        foreach ((array) ($this->call($site, 'wp_comment_list', ['status' => 'all', 'limit' => 100])['comments'] ?? []) as $comment) {
+            if ((int) ($comment['id'] ?? 0) === $id) {
+                return (string) ($comment['status'] ?? '');
+            }
+        }
+
+        return null;
+    }
+
+    /** @return list<int>|null */
+    private function termIds(Site $site, int $id, string $taxonomy): ?array
+    {
+        $terms = $this->call($site, 'wp_post_terms_get', ['id' => $id, 'taxonomy' => $taxonomy]);
+
+        return isset($terms['term_ids']) ? array_map('intval', (array) $terms['term_ids']) : null;
+    }
+
+    /** The same set of ids, whatever order the site lists them in. */
+    private function sameIds(?array $live, array $expected): bool
+    {
+        if ($live === null) {
+            return false;
+        }
+
+        $expected = array_map('intval', $expected);
+        sort($live);
+        sort($expected);
+
+        return $live === $expected;
+    }
+
+    /**
+     * @param  list<string>  $keys
+     * @return array<string, string>
+     */
+    private function fieldValues(Site $site, int $id, array $keys): array
+    {
+        $values = $this->call($site, 'wp_fields_get', ['id' => $id]);
+        $values = (array) ($values['fields'] ?? $values);
+        $out = [];
+
+        foreach ($keys as $key) {
+            $value = $values[$key] ?? '';
+            $out[$key] = is_scalar($value) ? (string) $value : '';
+        }
+
+        return $out;
+    }
+
+    /** @return array{title: string, url: string}|null */
+    private function menuItem(Site $site, int $itemId): ?array
+    {
+        foreach ((array) $this->call($site, 'wp_menu_list', []) as $menu) {
+            foreach ((array) ($menu['items'] ?? []) as $item) {
+                if ((int) ($item['item_id'] ?? 0) === $itemId) {
+                    return ['title' => (string) ($item['title'] ?? ''), 'url' => (string) ($item['url'] ?? '')];
+                }
+            }
+        }
+
+        return null;
     }
 
     private function orderLabel(string $status): string

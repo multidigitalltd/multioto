@@ -178,6 +178,7 @@ class Multioto_Agent_Mcp_Server
             ['name' => 'wp_fields_get', 'description' => 'הערכים הנוכחיים של השדות המותאמים בפריט תוכן לפי id.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['id' => ['type' => 'integer']], 'required' => ['id']]],
             ['name' => 'wp_fields_update', 'description' => 'עדכון שדות מותאמים בפריט תוכן. fields = אובייקט של מפתח→ערך. עובד דרך ACF כשהוא פעיל, אחרת דרך meta רגיל (JetEngine). מחזיר את הערכים הקודמים לצורך ביטול. שדות פנימיים (מתחילים בקו תחתון) חסומים.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['id' => ['type' => 'integer'], 'fields' => ['type' => 'object']], 'required' => ['id', 'fields']]],
             ['name' => 'wp_content_trash', 'description' => 'העברת עמוד/פוסט לפח לפי id (הפיך — ניתן לשחזר מהפח).', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['id' => ['type' => 'integer']], 'required' => ['id']]],
+            ['name' => 'wp_content_restore', 'description' => 'שחזור פריט מהפח לפי id, למצב שהיה בו לפני שהועבר לפח.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['id' => ['type' => 'integer']], 'required' => ['id']]],
             ['name' => 'wp_file_list', 'description' => 'רשימת קבצים/תיקיות בתוך wp-content לפי path יחסי (ברירת מחדל: השורש של wp-content). לתיקון קוד — לאיתור הקובץ.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['path' => ['type' => 'string']]]],
             ['name' => 'wp_file_get', 'description' => 'קריאת תוכן קובץ בתוך wp-content לפי path יחסי (לבדיקת קוד לפני תיקון).', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['path' => ['type' => 'string']], 'required' => ['path']]],
             ['name' => 'wp_file_put', 'description' => 'כתיבת תוכן לקובץ לתיקון קוד. path יחסי בתוך wp-content ומוגבל ל-themes/plugins/mu-plugins. קובצי PHP נבדקים תחבירית לפני שמירה. תמיד קִראו קודם עם wp_file_get ושמרו גיבוי לביטול.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['path' => ['type' => 'string'], 'content' => ['type' => 'string']], 'required' => ['path', 'content']]],
@@ -206,6 +207,7 @@ class Multioto_Agent_Mcp_Server
         $tools[] = ['name' => 'wp_term_list', 'description' => 'המונחים בטקסונומיה: מזהה, שם, slug, הורה וכמה פריטים משויכים. taxonomy חובה; אופציונלי search ו-limit. קִראו את זה לפני שיוך — שיוך עובד לפי מונחים קיימים בלבד.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['taxonomy' => ['type' => 'string'], 'search' => ['type' => 'string'], 'limit' => ['type' => 'integer']], 'required' => ['taxonomy']]];
         $tools[] = ['name' => 'wp_term_create', 'description' => 'יצירת מונח (קטגוריה/תגית). taxonomy + name; אופציונלי slug, description ו-parent (מזהה קטגוריית אב). יצירה היא פעולה נפרדת בכוונה — כדי ששם שגוי בשיוך ייכשל במקום ליצור קטגוריה כפולה בשקט.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['taxonomy' => ['type' => 'string'], 'name' => ['type' => 'string'], 'slug' => ['type' => 'string'], 'description' => ['type' => 'string'], 'parent' => ['type' => 'integer']], 'required' => ['taxonomy', 'name']]];
         $tools[] = ['name' => 'wp_post_terms_set', 'description' => 'שיוך פריט תוכן לקטגוריות/תגיות קיימות. id + taxonomy + term_ids (מזהים) ו/או terms (שמות מדויקים). mode: add (ברירת מחדל — הוספה למה שכבר משויך) או replace (החלפת הרשימה כולה). שם או מזהה שאינם קיימים נדחים ואינם נוצרים. מחזיר את הרשימה הקודמת לצורך ביטול.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['id' => ['type' => 'integer'], 'taxonomy' => ['type' => 'string'], 'term_ids' => ['type' => 'array', 'items' => ['type' => 'integer']], 'terms' => ['type' => 'array', 'items' => ['type' => 'string']], 'mode' => ['type' => 'string']], 'required' => ['id', 'taxonomy']]];
+        $tools[] = ['name' => 'wp_post_terms_get', 'description' => 'הקטגוריות/התגיות שמשויכות כרגע לפריט תוכן (כולל מוצר) בטקסונומיה אחת: מזהים ושמות.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['id' => ['type' => 'integer'], 'taxonomy' => ['type' => 'string']], 'required' => ['id', 'taxonomy']]];
 
         // Elementor tools — advertised only where Elementor is running, so a
         // site that never uses it is not offered a vocabulary it has no use for.
@@ -304,6 +306,8 @@ class Multioto_Agent_Mcp_Server
             'wp_term_list' => 'termList',
             'wp_term_create' => 'termCreate',
             'wp_post_terms_set' => 'postTermsSet',
+            'wp_post_terms_get' => 'postTermsGet',
+            'wp_content_restore' => 'contentRestore',
             'wp_media_list' => 'mediaList',
             'wp_media_upload' => 'mediaUpload',
             'wp_post_thumbnail_set' => 'thumbnailSet',
@@ -541,6 +545,11 @@ class Multioto_Agent_Mcp_Server
     private function termCreate(array $args): string
     {
         return Multioto_Agent_Terms::create($args);
+    }
+
+    private function postTermsGet(array $args): string
+    {
+        return Multioto_Agent_Terms::postTerms($args);
     }
 
     private function postTermsSet(array $args): string
@@ -1611,6 +1620,44 @@ class Multioto_Agent_Mcp_Server
      * report that, not return the pages and let somebody conclude the property
      * listings were deleted.
      */
+    /**
+     * Take an item back out of the trash — the undo of wp_content_trash.
+     *
+     * Only from the trash, and back to what it was before it went in (WordPress
+     * keeps that on the post), so a restore never publishes something that was
+     * a draft.
+     */
+    private function contentRestore(array $args): string
+    {
+        $id = (int) ($args['id'] ?? 0);
+        $post = $id > 0 ? get_post($id) : null;
+
+        if (! $post || $post->post_status !== 'trash' || ! in_array($post->post_type, $this->editableTypes(), true)) {
+            throw new Multioto_Agent_Rpc_Error(-32602, "הפריט {$id} אינו בפח.");
+        }
+
+        // Since WordPress 5.6 an untrashed post comes back as a draft unless
+        // told otherwise — which would make "undo" quietly unpublish a page.
+        // The core helper restores the status it had when it was trashed.
+        $restorePrevious = function_exists('wp_untrash_post_set_previous_status');
+
+        if ($restorePrevious) {
+            add_filter('wp_untrash_post_status', 'wp_untrash_post_set_previous_status', 10, 3);
+        }
+
+        $restored = wp_untrash_post($post->ID);
+
+        if ($restorePrevious) {
+            remove_filter('wp_untrash_post_status', 'wp_untrash_post_set_previous_status', 10);
+        }
+
+        if (! $restored) {
+            throw new Multioto_Agent_Rpc_Error(-32000, "לא ניתן לשחזר את הפריט {$post->ID} מהפח.");
+        }
+
+        return wp_json_encode(['restored_id' => (int) $post->ID, 'status' => get_post_status($post->ID)], JSON_UNESCAPED_UNICODE);
+    }
+
     private function contentType(array $args): string
     {
         $type = strtolower(trim((string) ($args['type'] ?? 'page')));

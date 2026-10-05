@@ -98,7 +98,12 @@ class SiteActionProposer
         'propose_product_update', 'propose_product_create', 'propose_order_status', 'propose_order_note',
         'propose_subscription_status', 'propose_post_create', 'propose_post_update', 'propose_text_edit',
         'propose_user_create', 'propose_user_role', 'propose_coupon',
+        'propose_comment_moderation', 'propose_term_create', 'propose_item_terms', 'propose_fields_update',
+        'propose_menu_item_add', 'propose_menu_item_update', 'propose_menu_item_remove',
+        'propose_trash', 'propose_coupon_expire', 'propose_cache_flush',
     ];
+
+    private const COMMENT_STATUSES = ['approve' => 'מאושרת', 'hold' => 'ממתינה לאישור', 'spam' => 'ספאם', 'trash' => 'בפח'];
 
     /** How much of a long text the preview quotes before saying how much more there is. */
     private const PREVIEW_TEXT = 1200;
@@ -112,7 +117,42 @@ class SiteActionProposer
      */
     public function definitions(Site $site): array
     {
-        $tools = [
+        $out = [];
+
+        foreach ($this->catalogue() as [$name, $pluginTool, $description, $properties, $required]) {
+            if ($this->toolbox->siteHas($site, $pluginTool)) {
+                $out[] = [
+                    'name' => $name,
+                    'description' => $description,
+                    'input_schema' => array_filter(['type' => 'object', 'properties' => $properties === [] ? (object) [] : $properties, 'required' => $required],
+                        fn ($value): bool => $value !== []),
+                ];
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * Every plugin tool a proposal leads to — for the coverage check that keeps
+     * the bot in step with what the plugin can do. Read off the same catalogue
+     * the definitions come from, so the two cannot disagree.
+     *
+     * @return list<string>
+     */
+    public function pluginTools(): array
+    {
+        return array_values(array_unique(array_column($this->catalogue(), 1)));
+    }
+
+    /**
+     * name, plugin tool, description, properties, required — one row per proposal.
+     *
+     * @return list<array{0: string, 1: string, 2: string, 3: array<string, mixed>, 4: list<string>}>
+     */
+    private function catalogue(): array
+    {
+        return [
             ['propose_product_update', 'wc_product_update',
                 'הצעה לעדכן מוצר קיים: שם, תיאור קצר, מחיר רגיל, מחיר מבצע (ריק = סיום המבצע), תאריכי מבצע (YYYY-MM-DD), כמות במלאי, מצב מלאי (instock/outofstock/onbackorder), סטטוס (publish/draft/private). רק השדות שמשתנים.',
                 ['product_id' => ['type' => 'integer'], 'name' => ['type' => 'string'], 'short_description' => ['type' => 'string'],
@@ -155,21 +195,38 @@ class SiteActionProposer
                 'הצעה ליצור קופון. type = percent / fixed_cart / fixed_product; amount; אופציונלי expires (YYYY-MM-DD), minimum_amount, usage_limit.',
                 ['code' => ['type' => 'string'], 'type' => ['type' => 'string'], 'amount' => ['type' => 'string'], 'expires' => ['type' => 'string'],
                     'minimum_amount' => ['type' => 'string'], 'usage_limit' => ['type' => 'integer']], ['code', 'amount']],
+            ['propose_comment_moderation', 'wp_comment_moderate',
+                'הצעה לטפל בתגובה: status = approve (אישור) / hold (החזרה להמתנה) / spam / trash (לפח). comment_id מתוך find_comments.',
+                ['comment_id' => ['type' => 'integer'], 'status' => ['type' => 'string', 'enum' => array_keys(self::COMMENT_STATUSES)]], ['comment_id', 'status']],
+            ['propose_term_create', 'wp_term_create',
+                'הצעה ליצור קטגוריה או תגית חדשה: taxonomy (למשל category, post_tag, product_cat), name, ואופציונלי parent (מזהה קטגוריית אב).',
+                ['taxonomy' => ['type' => 'string'], 'name' => ['type' => 'string'], 'parent' => ['type' => 'integer']], ['taxonomy', 'name']],
+            ['propose_item_terms', 'wp_post_terms_set',
+                'הצעה לשייך פוסט, עמוד או מוצר לקטגוריות/תגיות קיימות לפי שמן: id, taxonomy, terms (שמות מדויקים), mode = add (הוספה, ברירת מחדל) או replace (החלפת כל הרשימה).',
+                ['id' => ['type' => 'integer'], 'taxonomy' => ['type' => 'string'], 'terms' => ['type' => 'array', 'items' => ['type' => 'string']],
+                    'mode' => ['type' => 'string', 'enum' => ['add', 'replace']]], ['id', 'taxonomy', 'terms']],
+            ['propose_fields_update', 'wp_fields_update',
+                'הצעה לעדכן שדות מותאמים (ACF וכדומה) בפריט: id ו-fields = אובייקט מפתח→ערך טקסט/מספר. רק מפתחות שקיימים בפריט או בהגדרת השדות (field_schema).',
+                ['id' => ['type' => 'integer'], 'fields' => ['type' => 'object']], ['id', 'fields']],
+            ['propose_menu_item_add', 'wp_menu_item_add',
+                'הצעה להוסיף פריט לתפריט: menu (שם או מזהה מתוך list_menus), title, ואחד מ: page_id (עמוד קיים) או url. אופציונלי parent_id (פריט הורה).',
+                ['menu' => ['type' => 'string'], 'title' => ['type' => 'string'], 'page_id' => ['type' => 'integer'], 'url' => ['type' => 'string'], 'parent_id' => ['type' => 'integer']], ['menu', 'title']],
+            ['propose_menu_item_update', 'wp_menu_item_update',
+                'הצעה לשנות טקסט או קישור של פריט קיים בתפריט: item_id מתוך list_menus, title ו/או url.',
+                ['item_id' => ['type' => 'integer'], 'title' => ['type' => 'string'], 'url' => ['type' => 'string']], ['item_id']],
+            ['propose_menu_item_remove', 'wp_menu_item_unlink',
+                'הצעה להסיר פריט מתפריט (העמוד עצמו נשאר): item_id מתוך list_menus.',
+                ['item_id' => ['type' => 'integer']], ['item_id']],
+            ['propose_trash', 'wp_content_trash',
+                'הצעה להעביר פוסט או עמוד לפח לפי id. הפיך — אפשר לבטל.',
+                ['id' => ['type' => 'integer']], ['id']],
+            ['propose_coupon_expire', 'wc_coupon_expire',
+                'הצעה לסיים קופון היום (הוא לא נמחק): code מתוך list_coupons.',
+                ['code' => ['type' => 'string']], ['code']],
+            ['propose_cache_flush', 'wp_cache_flush',
+                'הצעה לנקות את המטמון של האתר — כשבעל האתר אומר ששינוי לא מופיע באתר.',
+                [], []],
         ];
-
-        $out = [];
-
-        foreach ($tools as [$name, $pluginTool, $description, $properties, $required]) {
-            if ($this->toolbox->siteHas($site, $pluginTool)) {
-                $out[] = [
-                    'name' => $name,
-                    'description' => $description,
-                    'input_schema' => ['type' => 'object', 'properties' => $properties, 'required' => $required],
-                ];
-            }
-        }
-
-        return $out;
     }
 
     /**
@@ -837,6 +894,472 @@ class SiteActionProposer
                 $usage > 0 ? "עד {$usage} שימושים" : null,
             ], fn (?string $line): bool => $line !== null)),
         ];
+    }
+
+    // --- Comments, categories, fields ---------------------------------------
+
+    /**
+     * @param  array<string, mixed>  $input
+     * @param  list<int>  $seen
+     */
+    private function proposeCommentModeration(Site $site, array $input, array $seen): array
+    {
+        $id = (int) ($input['comment_id'] ?? 0);
+        $status = (string) ($input['status'] ?? '');
+
+        if (! $this->wasSeen($id, $seen)) {
+            return $this->unseen('התגובה', 'find_comments');
+        }
+
+        if (! array_key_exists($status, self::COMMENT_STATUSES)) {
+            return $this->error('status חייב להיות approve, hold, spam או trash. מחיקה סופית אינה אפשרית מכאן.');
+        }
+
+        $comment = collect((array) ($this->json($site, 'wp_comment_list', ['status' => 'all', 'limit' => 100])['comments'] ?? []))
+            ->first(fn ($item): bool => (int) ($item['id'] ?? 0) === $id);
+
+        if ($comment === null) {
+            return $this->error('התגובה לא נמצאה בין 100 התגובות האחרונות. חפשו אותה עם find_comments.');
+        }
+
+        $from = (string) ($comment['status'] ?? '');
+
+        if ($from === $status) {
+            return $this->error('התגובה כבר '.self::COMMENT_STATUSES[$status].'.');
+        }
+
+        return [
+            'plan' => [
+                'operation' => SiteAgentRequest::OP_COMMENT,
+                'comment_id' => $id,
+                'from' => $from,
+                'to' => $status,
+                'summary' => "תגובה #{$id}: {$from} → {$status}",
+            ],
+            'preview' => implode("\n", [
+                '💬 תגובה של '.trim((string) ($comment['author'] ?? '')).' על "'.($comment['post_title'] ?? '').'":',
+                '"'.$this->quote((string) ($comment['text'] ?? '')).'"',
+                'מצב: '.(self::COMMENT_STATUSES[$from] ?? $from).' ← '.self::COMMENT_STATUSES[$status],
+            ]),
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $input
+     * @param  list<int>  $seen
+     */
+    private function proposeTermCreate(Site $site, array $input, array $seen): array
+    {
+        $taxonomy = strtolower(trim((string) ($input['taxonomy'] ?? '')));
+        $name = trim((string) ($input['name'] ?? ''));
+        $parent = (int) ($input['parent'] ?? 0);
+
+        if (preg_match('/^[a-z0-9_\-]{1,32}$/', $taxonomy) !== 1 || $name === '' || mb_strlen($name) > 100) {
+            return $this->error('צריך taxonomy תקין (למשל category או product_cat) ושם של עד 100 תווים.');
+        }
+
+        if ($parent > 0 && ! $this->wasSeen($parent, $seen)) {
+            return $this->unseen('קטגוריית האב', 'find_terms');
+        }
+
+        // An existing name is a duplicate in waiting — the shop would then
+        // carry two "מבצעים" and nobody could tell which one a product is in.
+        $existing = collect((array) ($this->json($site, 'wp_term_list', ['taxonomy' => $taxonomy, 'search' => $name, 'limit' => 20])['terms'] ?? []))
+            ->first(fn ($term): bool => mb_strtolower((string) ($term['name'] ?? '')) === mb_strtolower($name));
+
+        if ($existing !== null) {
+            return $this->error("כבר קיימת \"{$name}\" (מזהה ".($existing['id'] ?? '?').'). אפשר לשייך אליה עם propose_item_terms.');
+        }
+
+        return [
+            'plan' => [
+                'operation' => SiteAgentRequest::OP_TERM_CREATE,
+                'fields' => array_filter(['taxonomy' => $taxonomy, 'name' => $name, 'parent' => $parent > 0 ? $parent : null]),
+                'summary' => "קטגוריה חדשה: {$name}",
+            ],
+            'preview' => implode("\n", array_filter([
+                "🏷️ קטגוריה חדשה: \"{$name}\" ({$taxonomy})",
+                $parent > 0 ? "בתוך קטגוריה #{$parent}" : null,
+                'אין ביטול אוטומטי ליצירת קטגוריה — קטגוריה ריקה אינה מוצגת באתר, ואפשר למחוק אותה בניהול.',
+            ])),
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $input
+     * @param  list<int>  $seen
+     */
+    private function proposeItemTerms(Site $site, array $input, array $seen): array
+    {
+        $id = (int) ($input['id'] ?? 0);
+        $taxonomy = strtolower(trim((string) ($input['taxonomy'] ?? '')));
+        $names = array_values(array_filter(array_map(fn ($name): string => trim((string) $name), (array) ($input['terms'] ?? []))));
+        $mode = (string) ($input['mode'] ?? 'add');
+
+        if (! $this->wasSeen($id, $seen)) {
+            return $this->unseen('הפריט', 'find_content או find_products');
+        }
+
+        if ($names === [] || ! in_array($mode, ['add', 'replace'], true)) {
+            return $this->error('צריך לפחות קטגוריה אחת, ו-mode = add או replace.');
+        }
+
+        $current = $this->json($site, 'wp_post_terms_get', ['id' => $id, 'taxonomy' => $taxonomy]);
+
+        if (! isset($current['term_ids'])) {
+            return $this->error('לא הצלחתי לקרוא את הקטגוריות של הפריט. ודאו שה-taxonomy נכון (list_taxonomies).');
+        }
+
+        $before = (array) ($current['terms'] ?? []);
+        $after = $mode === 'replace' ? $names : array_values(array_unique([...$before, ...$names]));
+
+        if ($after == $before) {
+            return $this->error('הפריט כבר משויך בדיוק לקטגוריות האלה.');
+        }
+
+        return [
+            'plan' => [
+                'operation' => SiteAgentRequest::OP_POST_TERMS,
+                'id' => $id,
+                'taxonomy' => $taxonomy,
+                'terms' => $names,
+                'mode' => $mode,
+                'current_ids' => array_map('intval', (array) $current['term_ids']),
+                'summary' => "שיוך פריט #{$id} ל-{$taxonomy}",
+            ],
+            'preview' => implode("\n", [
+                "🗂️ פריט #{$id} — {$taxonomy}",
+                'עכשיו: '.($before !== [] ? implode(', ', $before) : '—'),
+                'אחרי: '.implode(', ', $after),
+                'קטגוריה שאינה קיימת לא תיווצר — השיוך ייכשל ותצטרכו ליצור אותה קודם.',
+            ]),
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $input
+     * @param  list<int>  $seen
+     */
+    private function proposeFieldsUpdate(Site $site, array $input, array $seen): array
+    {
+        $id = (int) ($input['id'] ?? 0);
+        $fields = (array) ($input['fields'] ?? []);
+
+        if (! $this->wasSeen($id, $seen)) {
+            return $this->unseen('הפריט', 'find_content');
+        }
+
+        if ($fields === [] || count($fields) > 10) {
+            return $this->error('צריך בין שדה אחד לעשרה.');
+        }
+
+        foreach ($fields as $key => $value) {
+            if (! is_string($key) || str_starts_with($key, '_') || ! (is_scalar($value) || $value === null)) {
+                return $this->error("השדה {$key} אינו שדה שאפשר לעדכן מכאן (רק ערכי טקסט או מספר, לא שדות פנימיים או רשימות).");
+            }
+        }
+
+        $post = $this->json($site, 'wp_content_get', ['id' => $id]);
+
+        if (! isset($post['id'])) {
+            return $this->error("פריט התוכן {$id} לא נמצא.");
+        }
+
+        $current = (array) ($post['fields'] ?? []);
+        $known = array_keys($current);
+
+        // A key the item does not have may still be defined for its type.
+        // Anything else would create a field nobody reads.
+        if (array_diff(array_keys($fields), $known) !== []) {
+            $schema = (array) $this->json($site, 'wp_fields_schema', ['type' => (string) ($post['type'] ?? 'post')]);
+            $known = [...$known, ...array_column(isset($schema['fields']) ? (array) $schema['fields'] : $schema, 'key')];
+        }
+
+        $unknown = array_diff(array_keys($fields), $known);
+
+        if ($unknown !== []) {
+            return $this->error('השדות האלה לא מוגדרים לפריט: '.implode(', ', $unknown).'. בדקו את השמות עם field_schema.');
+        }
+
+        $fields = array_map(fn ($value): string => (string) $value, $fields);
+        $lines = ['🧩 '.($post['title'] ?? "פריט #{$id}")];
+
+        foreach ($fields as $key => $value) {
+            $was = $current[$key] ?? '';
+            $lines[] = "{$key}: ".(is_scalar($was) && (string) $was !== '' ? (string) $was : '—').' ← '.($value !== '' ? $value : '—');
+        }
+
+        return [
+            'plan' => [
+                'operation' => SiteAgentRequest::OP_FIELDS,
+                'id' => $id,
+                'fields' => $fields,
+                // What the owner saw, so the execution can refuse when somebody
+                // changed the same field in wp-admin since.
+                'current' => array_map(fn ($value): string => is_scalar($value) ? (string) $value : '',
+                    array_intersect_key($current, $fields) + array_fill_keys(array_keys($fields), '')),
+                'summary' => 'עדכון שדות ב'.($post['title'] ?? "#{$id}"),
+            ],
+            'preview' => implode("\n", $lines),
+        ];
+    }
+
+    // --- Menus ---------------------------------------------------------------
+
+    /**
+     * @param  array<string, mixed>  $input
+     * @param  list<int>  $seen
+     */
+    private function proposeMenuItemAdd(Site $site, array $input, array $seen): array
+    {
+        $menu = trim((string) ($input['menu'] ?? ''));
+        $title = trim((string) ($input['title'] ?? ''));
+        $pageId = (int) ($input['page_id'] ?? 0);
+        $url = trim((string) ($input['url'] ?? ''));
+        $parent = (int) ($input['parent_id'] ?? 0);
+
+        if ($menu === '' || $title === '' || mb_strlen($title) > 80) {
+            return $this->error('צריך menu ו-title של עד 80 תווים.');
+        }
+
+        if (($pageId > 0) === ($url !== '')) {
+            return $this->error('צריך אחד בדיוק: page_id (עמוד קיים) או url.');
+        }
+
+        if ($pageId > 0 && ! $this->wasSeen($pageId, $seen)) {
+            return $this->unseen('העמוד', 'find_content');
+        }
+
+        if ($url !== '' && ! preg_match('#^(https?://|/)#', $url)) {
+            return $this->error('url חייב להתחיל ב-https:// או ב-/.');
+        }
+
+        $menus = (array) $this->json($site, 'wp_menu_list', []);
+        $target = $this->menuNamed($menus, $menu);
+
+        if ($target === null) {
+            return $this->error("אין תפריט בשם {$menu}. התפריטים: ".implode(', ', array_column($menus, 'menu')).'.');
+        }
+
+        if ($parent > 0 && ! in_array($parent, array_column((array) ($target['items'] ?? []), 'item_id'), true)) {
+            return $this->error('פריט ההורה אינו בתפריט הזה.');
+        }
+
+        return [
+            'plan' => [
+                'operation' => SiteAgentRequest::OP_MENU_ADD,
+                'fields' => array_filter(['menu' => (string) $target['menu_id'], 'title' => $title, 'page_id' => $pageId ?: null,
+                    'url' => $url ?: null, 'parent_id' => $parent ?: null]),
+                'summary' => "פריט חדש בתפריט {$target['menu']}: {$title}",
+            ],
+            'preview' => implode("\n", array_filter([
+                "🧭 תפריט \"{$target['menu']}\" — פריט חדש: \"{$title}\"",
+                $pageId > 0 ? "מקשר לעמוד #{$pageId}" : "מקשר ל: {$url}",
+                $parent > 0 ? "תחת פריט #{$parent}" : null,
+            ])),
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $input
+     * @param  list<int>  $seen
+     */
+    private function proposeMenuItemUpdate(Site $site, array $input, array $seen): array
+    {
+        $itemId = (int) ($input['item_id'] ?? 0);
+        $fields = array_filter([
+            'title' => isset($input['title']) ? trim((string) $input['title']) : null,
+            'url' => isset($input['url']) ? trim((string) $input['url']) : null,
+        ], fn ($value): bool => $value !== null && $value !== '');
+
+        if (! $this->wasSeen($itemId, $seen)) {
+            return $this->unseen('פריט התפריט', 'list_menus');
+        }
+
+        if ($fields === []) {
+            return $this->error('צריך title ו/או url.');
+        }
+
+        if (isset($fields['url']) && ! preg_match('#^(https?://|/)#', $fields['url'])) {
+            return $this->error('url חייב להתחיל ב-https:// או ב-/.');
+        }
+
+        [$menu, $item] = $this->menuItem($site, $itemId);
+
+        if ($item === null) {
+            return $this->error("פריט התפריט {$itemId} לא נמצא.");
+        }
+
+        $current = ['title' => (string) ($item['title'] ?? ''), 'url' => (string) ($item['url'] ?? '')];
+        $fields = array_filter($fields, fn (string $value, string $key): bool => $current[$key] !== $value, ARRAY_FILTER_USE_BOTH);
+
+        if ($fields === []) {
+            return $this->error('הפריט כבר כזה.');
+        }
+
+        $lines = ["🧭 תפריט \"{$menu}\""];
+
+        foreach ($fields as $key => $value) {
+            $lines[] = ($key === 'title' ? 'טקסט' : 'קישור').": \"{$current[$key]}\" ← \"{$value}\"";
+        }
+
+        return [
+            'plan' => [
+                'operation' => SiteAgentRequest::OP_MENU_UPDATE,
+                'item_id' => $itemId,
+                'fields' => $fields,
+                'current' => array_intersect_key($current, $fields),
+                'summary' => "עדכון פריט תפריט #{$itemId}",
+            ],
+            'preview' => implode("\n", $lines),
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $input
+     * @param  list<int>  $seen
+     */
+    private function proposeMenuItemRemove(Site $site, array $input, array $seen): array
+    {
+        $itemId = (int) ($input['item_id'] ?? 0);
+
+        if (! $this->wasSeen($itemId, $seen)) {
+            return $this->unseen('פריט התפריט', 'list_menus');
+        }
+
+        [$menu, $item] = $this->menuItem($site, $itemId);
+
+        if ($item === null) {
+            return $this->error("פריט התפריט {$itemId} לא נמצא.");
+        }
+
+        return [
+            'plan' => [
+                'operation' => SiteAgentRequest::OP_MENU_REMOVE,
+                'item_id' => $itemId,
+                'summary' => "הסרת \"{$item['title']}\" מהתפריט {$menu}",
+            ],
+            'preview' => implode("\n", [
+                "🧭 להסיר מהתפריט \"{$menu}\": \"{$item['title']}\"",
+                'העמוד עצמו נשאר באתר. אין ביטול אוטומטי — אם תתחרטו, אוסיף את הפריט מחדש.',
+            ]),
+        ];
+    }
+
+    // --- Trash, coupons, cache -----------------------------------------------
+
+    /**
+     * @param  array<string, mixed>  $input
+     * @param  list<int>  $seen
+     */
+    private function proposeTrash(Site $site, array $input, array $seen): array
+    {
+        $id = (int) ($input['id'] ?? 0);
+
+        if (! $this->wasSeen($id, $seen)) {
+            return $this->unseen('הפריט', 'find_content');
+        }
+
+        $post = $this->json($site, 'wp_content_get', ['id' => $id]);
+
+        if (! isset($post['id'])) {
+            return $this->error("פריט התוכן {$id} לא נמצא.");
+        }
+
+        $title = (string) ($post['title'] ?? '');
+        // Only a plugin that can take it back out of the trash is promised an undo.
+        $restorable = $this->toolbox->siteHas($site, 'wp_content_restore');
+
+        return [
+            'plan' => [
+                'operation' => SiteAgentRequest::OP_TRASH,
+                'id' => $id,
+                'title' => $title,
+                'status' => (string) ($post['status'] ?? ''),
+                'restorable' => $restorable,
+                'summary' => "העברה לפח: {$title}",
+            ],
+            'preview' => implode("\n", [
+                "🗑️ להעביר לפח: \"{$title}\" (".$this->postLabel((string) ($post['status'] ?? '')).')',
+                ($post['status'] ?? '') === 'publish' ? 'הוא ייעלם מהאתר מיד.' : 'הוא אינו מוצג באתר ממילא.',
+                $restorable
+                    ? 'אפשר להחזיר אותו — "בטל" יוציא אותו מהפח למצב שהיה בו.'
+                    : 'אפשר לשחזר אותו מהפח בניהול האתר (ביטול מכאן ידרוש עדכון של תוסף הסוכן).',
+            ]),
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $input
+     * @param  list<int>  $seen
+     */
+    private function proposeCouponExpire(Site $site, array $input, array $seen): array
+    {
+        $code = Str::lower(trim((string) ($input['code'] ?? '')));
+
+        $coupon = collect((array) $this->json($site, 'wc_coupon_list', ['limit' => 100]))
+            ->first(fn ($item): bool => Str::lower((string) ($item['code'] ?? '')) === $code);
+
+        if ($coupon === null) {
+            return $this->error("לא מצאתי קופון בקוד {$code}. בדקו עם list_coupons.");
+        }
+
+        return [
+            'plan' => [
+                'operation' => SiteAgentRequest::OP_COUPON_EXPIRE,
+                'code' => $code,
+                'summary' => "סיום הקופון {$code}",
+            ],
+            'preview' => implode("\n", [
+                '🏷️ לסיים את הקופון '.Str::upper($code).' היום',
+                'תוקף נוכחי: '.($coupon['expires'] ?? 'ללא').' · שימושים עד כה: '.($coupon['usage_count'] ?? 0),
+                'הקופון לא נמחק, והזמנות שהשתמשו בו ממשיכות להציג את ההנחה. אין ביטול אוטומטי — קופון חדש אפשר ליצור בכל עת.',
+            ]),
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $input
+     * @param  list<int>  $seen
+     */
+    private function proposeCacheFlush(Site $site, array $input, array $seen): array
+    {
+        return [
+            'plan' => ['operation' => SiteAgentRequest::OP_CACHE_FLUSH, 'summary' => 'ניקוי מטמון'],
+            'preview' => implode("\n", [
+                '🧹 לנקות את המטמון של האתר',
+                'לא משנה שום תוכן. האתר עשוי להיטען לאט יותר בדקה הראשונה.',
+            ]),
+        ];
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $menus
+     * @return array<string, mixed>|null
+     */
+    private function menuNamed(array $menus, string $menu): ?array
+    {
+        foreach ($menus as $candidate) {
+            if ((string) ($candidate['menu_id'] ?? '') === $menu || mb_strtolower((string) ($candidate['menu'] ?? '')) === mb_strtolower($menu)) {
+                return $candidate;
+            }
+        }
+
+        return null;
+    }
+
+    /** @return array{0: string, 1: array<string, mixed>|null} the menu's name and the item */
+    private function menuItem(Site $site, int $itemId): array
+    {
+        foreach ((array) $this->json($site, 'wp_menu_list', []) as $menu) {
+            foreach ((array) ($menu['items'] ?? []) as $item) {
+                if ((int) ($item['item_id'] ?? 0) === $itemId) {
+                    return [(string) ($menu['menu'] ?? ''), $item];
+                }
+            }
+        }
+
+        return ['', null];
     }
 
     // --- Helpers -------------------------------------------------------------
