@@ -294,7 +294,7 @@ class SiteAgentAssistant
         $names = array_column($tools, 'name');
         $areas = array_filter([
             in_array('find_orders', $names, true) ? 'הזמנות ודוחות מכירות' : null,
-            in_array('find_products', $names, true) ? 'מוצרים, מחירים, מלאי וקופונים' : null,
+            in_array('find_products', $names, true) ? 'מוצרים — יצירת מוצרים חדשים ועדכון קיימים, מחירים, מבצעים, מלאי וקופונים' : null,
             in_array('find_subscriptions', $names, true) ? 'מנויים מתחדשים' : null,
             in_array('find_content', $names, true) ? 'פוסטים ועמודים' : null,
             in_array('find_users', $names, true) ? 'משתמשים' : null,

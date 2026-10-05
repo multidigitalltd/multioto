@@ -401,11 +401,66 @@ class SiteActionApplier
         $created = $this->call($site, 'wc_product_create', (array) $plan['fields']);
         $id = (int) ($created['id'] ?? 0);
 
-        // No undo: a draft is invisible to shoppers, and there is no tool that
-        // deletes a product — which is the right way round for a phone.
-        return $this->ok(null, $id > 0
-            ? "המוצר נוצר כטיוטה (מזהה {$id}). כשתרצו לפרסם אותו — כתבו לי."
-            : null);
+        if ($id <= 0) {
+            return $this->failure('product create returned no id');
+        }
+
+        $missing = $this->completeNewProduct($site, $id, (array) ($plan['extra'] ?? []), (array) ($plan['category_ids'] ?? []));
+        $live = ($plan['extra']['status'] ?? null) === 'publish' && ! in_array('הפרסום', $missing, true);
+
+        // No undo: there is no tool that deletes a product — which is the right
+        // way round for a phone. Unpublishing is an ordinary product update.
+        return $this->ok(null, implode("\n", array_filter([
+            $live
+                ? "המוצר נוצר ופורסם באתר (מזהה {$id})."
+                : "המוצר נוצר כטיוטה (מזהה {$id}). כשתרצו לפרסם אותו — כתבו לי.",
+            $missing !== []
+                ? 'לא הושלמו: '.implode(', ', $missing).'. המוצר קיים, ואפשר לבקש את זה שוב.'
+                : null,
+            'לתמונה למוצר — שלחו אותה כאן עם שם המוצר.',
+        ])));
+    }
+
+    /**
+     * Sale price, stock, publishing and categories on a product just created.
+     *
+     * The product already exists by now, so a failure here is reported as what
+     * did not happen rather than as a failed request: calling the whole thing a
+     * failure would invite a second "כן" and a second, duplicate product.
+     *
+     * @param  array<string, mixed>  $extra
+     * @param  list<int>  $categoryIds
+     * @return list<string> what could not be completed, in the owner's words
+     */
+    private function completeNewProduct(Site $site, int $id, array $extra, array $categoryIds): array
+    {
+        $missing = [];
+
+        if ($categoryIds !== []) {
+            try {
+                $this->call($site, 'wp_post_terms_set', [
+                    'id' => $id, 'taxonomy' => 'product_cat', 'term_ids' => array_map('intval', $categoryIds), 'mode' => 'replace',
+                ]);
+            } catch (\Throwable) {
+                $missing[] = 'הקטגוריות';
+            }
+        }
+
+        // Categories first: a product published before it is filed shows up
+        // under "Uncategorized" for as long as the next call takes.
+        if ($extra !== []) {
+            try {
+                $this->call($site, 'wc_product_update', ['product_id' => $id, ...$extra]);
+            } catch (\Throwable) {
+                $missing = [...$missing, ...array_values(array_filter([
+                    isset($extra['sale_price']) ? 'מחיר המבצע' : null,
+                    isset($extra['stock_quantity']) ? 'המלאי' : null,
+                    isset($extra['status']) ? 'הפרסום' : null,
+                ]))];
+            }
+        }
+
+        return $missing;
     }
 
     // --- Comments, categories, fields ---------------------------------------

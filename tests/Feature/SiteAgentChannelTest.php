@@ -11,6 +11,7 @@ use App\Models\Setting;
 use App\Models\Site;
 use App\Models\SiteAgentRequest;
 use App\Models\SiteAgentSubscriber;
+use App\Models\SiteAgentUsage;
 use App\Models\Subscription;
 use App\Models\User;
 use App\Models\WebhookEvent;
@@ -143,15 +144,33 @@ class SiteAgentChannelTest extends TestCase
         Queue::assertNothingPushed();
     }
 
-    public function test_an_unknown_number_is_told_so_and_learns_nothing_else(): void
+    public function test_an_unknown_number_is_told_what_the_bot_does_and_where_to_join(): void
+    {
+        Http::fake(['*' => Http::response(['messages' => [['id' => 'wamid.reply']]])]);
+        Plan::factory()->create(['active' => true, 'is_public' => true, 'includes_site_agent' => true, 'trial_days' => 7]);
+
+        $this->deliver('972509999999', 'מה זה?');
+
+        $pitch = $this->lastReply();
+        $this->assertStringContainsString('בוט ניהול האתר', $pitch);
+        $this->assertStringContainsString('יצירת מוצרים חדשים', $pitch);
+        $this->assertStringContainsString('7 ימי ניסיון', $pitch);
+        $this->assertStringContainsString(route('store.agent'), $pitch);
+
+        // Not the whole brochure on every message they send that day.
+        $this->deliver('972509999999', 'שלום?');
+
+        $this->assertStringNotContainsString('יצירת מוצרים חדשים', $this->lastReply());
+        $this->assertStringContainsString(route('store.agent'), $this->lastReply());
+    }
+
+    public function test_a_stranger_is_not_billed_for_the_pitch(): void
     {
         Http::fake(['*' => Http::response(['messages' => [['id' => 'wamid.reply']]])]);
 
-        $this->deliver('972509999999', 'תוסיף עמוד');
+        $this->deliver('972509999999', 'היי');
 
-        // A stranger probing the number must not be able to learn which numbers
-        // are registered here — so this reads the same as the product being off.
-        $this->assertReplyContains('אינו רשום');
+        $this->assertSame(0, SiteAgentUsage::count());
     }
 
     public function test_a_bound_number_that_never_proved_itself_is_asked_for_the_code(): void
@@ -601,7 +620,7 @@ class SiteAgentChannelTest extends TestCase
         $this->deliver('972501234567', 'שלום');
 
         // Silence would read as a broken business, not as a switched-off feature.
-        $this->assertReplyContains('אינו רשום');
+        $this->assertReplyContains('אינו פעיל כרגע');
     }
 
     public function test_the_panel_screen_lists_who_can_drive_a_site(): void

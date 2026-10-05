@@ -175,9 +175,11 @@ class SiteActionProposer
                     'sale_to' => ['type' => 'string'], 'stock_quantity' => ['type' => 'integer'], 'stock_status' => ['type' => 'string'],
                     'status' => ['type' => 'string']], ['product_id']],
             ['propose_product_create', 'wc_product_create',
-                'הצעה ליצור מוצר חדש. נוצר תמיד כטיוטה; כדי לפרסם — propose_product_update עם status=publish אחרי שנוצר.',
-                ['name' => ['type' => 'string'], 'regular_price' => ['type' => 'string'], 'short_description' => ['type' => 'string'],
-                    'description' => ['type' => 'string'], 'sku' => ['type' => 'string']], ['name']],
+                'הצעה ליצור מוצר חדש: שם, מחיר, מחיר מבצע, תיאור קצר ומלא, מק"ט, כמות במלאי, קטגוריות מוצרים קיימות (שמות, מ-find_terms עם product_cat) ו-publish=true כדי לפרסם מיד. בלי publish הוא נוצר כטיוטה. תמונה — בעל האתר שולח אותה אחרי שהמוצר נוצר, עם שם המוצר.',
+                ['name' => ['type' => 'string'], 'regular_price' => ['type' => 'string'], 'sale_price' => ['type' => 'string'],
+                    'short_description' => ['type' => 'string'], 'description' => ['type' => 'string'], 'sku' => ['type' => 'string'],
+                    'stock_quantity' => ['type' => 'integer'], 'categories' => ['type' => 'array', 'items' => ['type' => 'string']],
+                    'publish' => ['type' => 'boolean']], ['name']],
             ['propose_order_status', 'wc_order_status_set',
                 'הצעה לשנות סטטוס הזמנה ל-processing / on-hold / completed / cancelled / pending. החזר כספי אינו אפשרי מכאן.',
                 ['order_id' => ['type' => 'integer', 'description' => 'מספר ההזמנה'], 'status' => ['type' => 'string'], 'note' => ['type' => 'string', 'description' => 'הערה פנימית אופציונלית']],
@@ -385,26 +387,127 @@ class SiteActionProposer
             'sku' => trim((string) ($input['sku'] ?? '')),
         ], fn (string $value): bool => $value !== '');
 
-        if (isset($fields['regular_price']) && ! $this->isPrice($fields['regular_price'])) {
-            return $this->error('מחיר חייב להיות מספר, עם עד שתי ספרות אחרי הנקודה.');
+        $extra = $this->newProductExtras($input, $fields['regular_price'] ?? null);
+
+        if (is_string($extra)) {
+            return $this->error($extra);
         }
+
+        $categories = $this->productCategories($site, (array) ($input['categories'] ?? []));
+
+        if (is_string($categories)) {
+            return $this->error($categories);
+        }
+
+        $publish = ($extra['status'] ?? null) === 'publish';
 
         return [
             'plan' => [
                 'operation' => SiteAgentRequest::OP_PRODUCT_CREATE,
                 'fields' => $fields,
+                'extra' => $extra,
+                'category_ids' => array_keys($categories),
                 'summary' => "יצירת המוצר {$name}",
             ],
             'preview' => implode("\n", array_filter([
                 "🛒 מוצר חדש: {$name}",
                 isset($fields['regular_price']) ? "מחיר: {$fields['regular_price']} ₪" : null,
+                isset($extra['sale_price']) ? "מחיר מבצע: {$extra['sale_price']} ₪" : null,
                 isset($fields['sku']) ? "מק\"ט: {$fields['sku']}" : null,
+                isset($extra['stock_quantity']) ? "במלאי: {$extra['stock_quantity']}" : null,
+                $categories !== [] ? 'קטגוריות: '.implode(', ', $categories) : null,
                 isset($fields['short_description']) ? 'תיאור קצר: "'.$this->quote($fields['short_description']).'"' : null,
                 isset($fields['description']) ? 'תיאור: "'.$this->quote($fields['description']).'"' : null,
                 '',
-                'המוצר ייווצר כטיוטה, ולא יוצג באתר עד שתבקשו לפרסם אותו.',
+                $publish
+                    ? 'המוצר יפורסם באתר מיד וייפתח לרכישה.'
+                    : 'המוצר ייווצר כטיוטה, ולא יוצג באתר עד שתבקשו לפרסם אותו.',
+                'לתמונה: אחרי שהמוצר נוצר, שלחו אותה כאן עם שם המוצר.',
             ], fn (?string $line): bool => $line !== null)),
         ];
+    }
+
+    /**
+     * What a new product carries beyond what the plugin's create takes: sale
+     * price, stock and whether it goes live. Applied by an update right after
+     * the create, so the plugin's create stays a draft-only primitive.
+     *
+     * @param  array<string, mixed>  $input
+     * @return array<string, string|int>|string the extras, or why they are refused
+     */
+    private function newProductExtras(array $input, ?string $regular): array|string
+    {
+        $extra = [];
+        $sale = trim((string) ($input['sale_price'] ?? ''));
+
+        foreach (array_filter([$regular, $sale]) as $price) {
+            if (! $this->isPrice($price)) {
+                return 'מחיר חייב להיות מספר, עם עד שתי ספרות אחרי הנקודה.';
+            }
+        }
+
+        if ($sale !== '') {
+            if ($regular === null || $this->agorot($sale) >= $this->agorot($regular)) {
+                return 'מחיר מבצע צריך מחיר רגיל, והוא חייב להיות נמוך ממנו.';
+            }
+
+            $extra['sale_price'] = $sale;
+        }
+
+        if (isset($input['stock_quantity'])) {
+            $stock = filter_var($input['stock_quantity'], FILTER_VALIDATE_INT);
+
+            if ($stock === false || $stock < 0) {
+                return 'כמות במלאי חייבת להיות מספר שלם, 0 ומעלה.';
+            }
+
+            $extra['stock_quantity'] = $stock;
+        }
+
+        if (filter_var($input['publish'] ?? false, FILTER_VALIDATE_BOOLEAN)) {
+            // A product live without a price is a product nobody can buy.
+            if ($regular === null) {
+                return 'כדי לפרסם מוצר צריך מחיר. בלי מחיר אפשר ליצור אותו כטיוטה.';
+            }
+
+            $extra['status'] = 'publish';
+        }
+
+        return $extra;
+    }
+
+    /**
+     * Existing product categories by name, as id => name.
+     *
+     * Only categories the shop already has: a typo would otherwise become a
+     * new category on the live menu, and the plugin refuses unknown names at
+     * execution time anyway — better said in the preview than after the "כן".
+     *
+     * @param  array<int, mixed>  $names
+     * @return array<int, string>|string the categories, or why they are refused
+     */
+    private function productCategories(Site $site, array $names): array|string
+    {
+        $names = array_values(array_unique(array_filter(array_map(fn ($name): string => trim((string) $name), $names))));
+
+        if (count($names) > 10) {
+            return 'עד 10 קטגוריות למוצר.';
+        }
+
+        $found = [];
+
+        foreach ($names as $name) {
+            $terms = (array) ($this->json($site, 'wp_term_list', ['taxonomy' => 'product_cat', 'search' => $name, 'limit' => 20])['terms'] ?? []);
+            $match = collect($terms)->first(fn ($term): bool => mb_strtolower(trim((string) data_get($term, 'name'))) === mb_strtolower($name));
+
+            if ($match === null) {
+                return "אין באתר קטגוריית מוצרים בשם \"{$name}\". אפשר ליצור אותה קודם (propose_term_create) או לבחור קיימת (find_terms).";
+            }
+
+            $found[(int) data_get($match, 'id')] = (string) data_get($match, 'name');
+        }
+
+        return $found;
     }
 
     // --- Orders --------------------------------------------------------------
