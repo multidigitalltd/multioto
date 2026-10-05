@@ -90,7 +90,19 @@ class InboundChannelHealth
             $replaced ? null : $this->date($record['last_accepted_at'] ?? null),
         );
         $rejected = WebhookRejections::lastAt(self::CHANNEL);
-        $delivered = WebhookDeliveries::lastAt(self::CHANNEL);
+
+        // Bounded by `since` and dropped on replacement for the same reason the
+        // accepted date is: a delivery observed while another number was
+        // configured says nothing about this one, and would otherwise report a
+        // brand-new number as a working channel aimed elsewhere.
+        $delivered = $this->latest(
+            $this->after($since, WebhookDeliveries::lastAt(self::CHANNEL)),
+            $replaced ? null : $this->date($record['last_delivered_at'] ?? null),
+        );
+
+        // Anything that proves the current secret validates: our own message, or
+        // a sibling's. Both are a signed body we verified.
+        $verified = $this->latest($accepted, $delivered);
         $everCarried = $accepted !== null || $this->verifiedByReply($since);
 
         return [
@@ -105,10 +117,13 @@ class InboundChannelHealth
                 // a field that is blank on this very screen.
                 ! $this->product->ready() => 'unready',
 
-                // A rejection newer than anything we ever accepted — measured
-                // against the durable date, so a short audit window cannot turn
-                // an old rejection into the current state of the channel.
-                $rejected !== null && ($accepted === null || $rejected->gt($accepted)) => 'rejected',
+                // A rejection newer than anything we have since verified —
+                // measured against the durable date, so a short audit window
+                // cannot turn an old rejection into the current state of the
+                // channel. A later delivery counts as much as a later accepted
+                // message: both are a body signed with the secret in use now,
+                // which is exactly what the rejection claims is wrong.
+                $rejected !== null && ($verified === null || $rejected->gt($verified)) => 'rejected',
 
                 $everCarried => 'ok',
 
@@ -148,6 +163,14 @@ class InboundChannelHealth
                     $this->loggedAcceptance($since),
                     $replaced ? null : $this->date($record['last_accepted_at'] ?? null),
                 )?->toIso8601String(),
+                // Persisted for the same reason the accepted date is: the cache
+                // marker expires, and a channel diagnosed as aimed elsewhere
+                // would then quietly revert to "no delivery ever arrived" —
+                // contradicting what we already knew and told somebody.
+                'last_delivered_at' => $this->latest(
+                    $this->after($since, WebhookDeliveries::lastAt(self::CHANNEL)),
+                    $replaced ? null : $this->date($record['last_delivered_at'] ?? null),
+                )?->toIso8601String(),
             ];
 
             if ($next !== $record) {
@@ -159,7 +182,7 @@ class InboundChannelHealth
     /**
      * The stored record, or an empty one when it is absent or unreadable.
      *
-     * @return array{number?: string, since?: ?string, last_accepted_at?: ?string}
+     * @return array{number?: string, since?: ?string, last_accepted_at?: ?string, last_delivered_at?: ?string}
      */
     private function record(): array
     {
@@ -236,6 +259,16 @@ class InboundChannelHealth
             false,
             report: false,
         );
+    }
+
+    /** The date, unless it belongs to the stretch before this number's history. */
+    private function after(?Carbon $since, ?Carbon $date): ?Carbon
+    {
+        if ($date === null || $since === null) {
+            return $date;
+        }
+
+        return $date->gte($since) ? $date : null;
     }
 
     private function latest(?Carbon ...$dates): ?Carbon

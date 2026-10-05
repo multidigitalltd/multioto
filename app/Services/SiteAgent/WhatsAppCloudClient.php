@@ -19,6 +19,27 @@ use Illuminate\Support\Str;
  */
 class WhatsAppCloudClient
 {
+    /** Meta's own words about the last send that failed. */
+    private ?string $lastError = null;
+
+    /**
+     * Why the last send failed, in the provider's own words.
+     *
+     * A caller that only knows "it did not send" can only say "check the
+     * WhatsApp connection" — and that sentence fits a template that was never
+     * approved, a template approved in a different language, an expired token
+     * and a closed service window equally badly, while naming none of them.
+     * Meta does say which; the reason it gives is the whole difference between
+     * a minute's fix and an afternoon of guessing, so it is carried out of here
+     * rather than left in a log file nobody opens.
+     *
+     * Null when the last send succeeded, or when none has run yet.
+     */
+    public function lastError(): ?string
+    {
+        return $this->lastError;
+    }
+
     public function configured(): bool
     {
         return filled(config('siteagent.whatsapp.phone_number_id'))
@@ -140,7 +161,11 @@ class WhatsAppCloudClient
      */
     private function send(string $to, array $message): ?string
     {
+        $this->lastError = null;
+
         if (! $this->configured()) {
+            $this->lastError = 'השירות אינו מוגדר במלואו (מזהה מספר, טוקן או סוד חסרים).';
+
             Log::warning('WhatsAppCloudClient: not configured, message not sent');
 
             return null;
@@ -149,6 +174,8 @@ class WhatsAppCloudClient
         $number = $this->normalize($to);
 
         if ($number === '') {
+            $this->lastError = 'מספר הטלפון אינו תקין.';
+
             return null;
         }
 
@@ -163,12 +190,14 @@ class WhatsAppCloudClient
                 ]);
 
             if ($response->failed()) {
+                // The provider's own words. A status code alone never says
+                // whether the number is wrong, the token expired, or the
+                // 24-hour window closed — and those need different answers.
+                $this->lastError = Str::limit((string) $response->json('error.message', ''), 200);
+
                 Log::warning('WhatsAppCloudClient: send rejected', [
                     'status' => $response->status(),
-                    // The provider's own words. A status code alone never says
-                    // whether the number is wrong, the token expired, or the
-                    // 24-hour window closed — and those need different answers.
-                    'error' => Str::limit((string) $response->json('error.message', ''), 200),
+                    'error' => $this->lastError,
                 ]);
 
                 return null;
@@ -176,7 +205,9 @@ class WhatsAppCloudClient
 
             return $response->json('messages.0.id');
         } catch (\Throwable $e) {
-            Log::warning('WhatsAppCloudClient: send failed', ['error' => Str::limit($e->getMessage(), 200)]);
+            $this->lastError = Str::limit($e->getMessage(), 200);
+
+            Log::warning('WhatsAppCloudClient: send failed', ['error' => $this->lastError]);
 
             return null;
         }

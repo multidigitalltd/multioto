@@ -19,6 +19,7 @@ use App\Models\Site;
 use App\Models\SiteAgentRequest;
 use App\Models\SiteAgentSubscriber;
 use App\Models\Subscription;
+use App\Models\SystemLog;
 use App\Models\User;
 use App\Providers\SettingsServiceProvider;
 use App\Services\Calendar\ShabbatClock;
@@ -358,6 +359,38 @@ class SiteAgentSubscriptionTest extends TestCase
         // and the customer waits for a service they are paying for.
         $this->assertNull($subscriber->fresh()->verification_sent_at);
         $this->assertNull($subscriber->fresh()->getAttributes()['verification_code']);
+    }
+
+    /**
+     * וההתראה אומרת מה מטא אמרה, לא "בדקו את חיבור הוואטסאפ".
+     *
+     * המשפט הגנרי הזה מתאים באותה מידה גרועה לתבנית שלא אושרה, לתבנית שאושרה
+     * בשפה אחרת, לטוקן שפג ולחלון שנסגר — ואינו מזהה אף אחד מהם. מטא דווקא
+     * אומרת במדויק מה קרה, וההבדל בין המשפט שלה לבין המשפט שלנו הוא ההבדל בין
+     * תיקון של דקה לבין חיפוש של חצי יום.
+     */
+    public function test_the_alert_carries_metas_own_reason(): void
+    {
+        Http::fake(['*' => Http::response([
+            'error' => ['message' => 'template name (verification) does not exist in he'],
+        ], 400)]);
+
+        $team = \Mockery::mock(TeamNotifier::class);
+        $team->shouldReceive('alert')->once()->withArgs(
+            fn (string $title, string $body): bool => str_contains($body, 'does not exist in he')
+                && str_contains($body, 'מטא אמרה'),
+        );
+
+        $subscriber = $this->subscriber(['verified_at' => null]);
+
+        (new SendSiteAgentVerificationJob($subscriber->id))->handle(
+            app(WhatsAppCloudClient::class),
+            $team,
+        );
+
+        // והסיבה נשמרת גם ביומן, כדי שאפשר יהיה לחזור אליה אחרי שההתראה נקראה.
+        $this->assertTrue(SystemLog::where('source', 'site-agent')
+            ->where('message', 'קוד האימות לא נשלח')->exists());
     }
 
     public function test_an_already_verified_number_is_not_sent_a_new_code(): void
