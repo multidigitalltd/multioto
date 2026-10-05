@@ -55,6 +55,12 @@ class Multioto_Agent_Comments
             $filters['search'] = $search;
         }
 
+        // One comment by its id, whatever page it would fall on — so a change
+        // proposed against an old comment can find it again to check it.
+        if (($id = (int) ($args['id'] ?? 0)) > 0) {
+            $filters['comment__in'] = [$id];
+        }
+
         $comments = (new WP_Comment_Query)->query($filters + [
             'number' => $limit,
             'paged' => $page,

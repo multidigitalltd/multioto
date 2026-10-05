@@ -192,10 +192,10 @@ class SiteAgentCoverageTest extends TestCase
 
         $this->assertStringContainsString('תפריט "ראשי"', $this->talk($subscriber, 'תוסיף לתפריט את עמוד המבצעים'));
 
+        // The site as it reads once the item is in — recorded for the undo.
         $this->site['wp_menu_item_add'] = ['added_item_id' => 88, 'menu_id' => 2];
-        $this->talk($subscriber, 'כן');
-
         $this->site['wp_menu_list'] = [['menu' => 'ראשי', 'menu_id' => 2, 'items' => [['item_id' => 88, 'title' => 'מבצעים', 'url' => '/sale']]]];
+        $this->talk($subscriber, 'כן');
         $this->calls = [];
         $this->talk($subscriber, 'בטל');
 
@@ -260,6 +260,111 @@ class SiteAgentCoverageTest extends TestCase
 
         $this->talk($subscriber, 'כן');
         $this->assertContains(['wp_cache_flush', []], $this->calls);
+    }
+
+    public function test_an_older_comment_is_looked_up_by_its_id(): void
+    {
+        $subscriber = $this->subscriber();
+        $this->site['wp_comment_list'] = ['comments' => [['id' => 7, 'author' => 'דנה', 'post_title' => 'ישן', 'status' => 'hold', 'text' => 'שאלה']]];
+
+        $this->model(function (Closure $tool): string {
+            $tool('find_comments', ['search' => 'שאלה']);
+            $tool('propose_comment_moderation', ['comment_id' => 7, 'status' => 'approve']);
+
+            return '';
+        });
+
+        $this->talk($subscriber, 'תאשר');
+
+        $this->assertContains(['wp_comment_list', ['status' => 'all', 'id' => 7, 'limit' => 50]], $this->calls);
+        $this->assertSame(1, SiteAgentRequest::count());
+    }
+
+    public function test_a_field_holding_a_list_is_not_flattened_by_an_update(): void
+    {
+        $subscriber = $this->subscriber();
+        $this->site['wp_content_list'] = [['id' => 12, 'title' => 'דירה']];
+        $this->site['wp_content_get'] = ['id' => 12, 'title' => 'דירה', 'type' => 'property', 'fields' => ['features' => ['מעלית', 'חניה']]];
+
+        $this->model(function (Closure $tool): string {
+            $tool('find_content', []);
+            $result = $tool('propose_fields_update', ['id' => 12, 'fields' => ['features' => 'מעלית']]);
+            $this->assertTrue($result['is_error']);
+            $this->assertStringContainsString('ערך מורכב', $result['content']);
+
+            return '';
+        });
+
+        $this->talk($subscriber, 'תעדכן מאפיינים');
+        $this->assertSame(0, SiteAgentRequest::count());
+    }
+
+    public function test_a_menu_item_edited_since_the_preview_is_not_removed(): void
+    {
+        $subscriber = $this->subscriber();
+        $menu = fn (string $title): array => [['menu' => 'ראשי', 'menu_id' => 2, 'items' => [
+            ['item_id' => 5, 'title' => $title, 'url' => '/a', 'parent_id' => 0, 'order' => 1],
+        ]]];
+        $this->site['wp_menu_list'] = $menu('ישן');
+
+        $this->model(function (Closure $tool): string {
+            $tool('list_menus', []);
+            $tool('propose_menu_item_remove', ['item_id' => 5]);
+
+            return '';
+        });
+        $this->talk($subscriber, 'תסיר את "ישן" מהתפריט');
+
+        $this->site['wp_menu_list'] = $menu('חדש');
+        $this->talk($subscriber, 'כן');
+
+        $this->assertSame(SiteAgentRequest::FAILED, SiteAgentRequest::sole()->state);
+        $this->assertNotContains('wp_menu_item_unlink', array_column($this->calls, 0));
+    }
+
+    public function test_an_added_menu_item_somebody_renamed_is_not_undone(): void
+    {
+        $subscriber = $this->subscriber();
+        $this->site['wp_content_list'] = [['id' => 30, 'title' => 'מבצעים']];
+        $this->site['wp_menu_list'] = [['menu' => 'ראשי', 'menu_id' => 2, 'items' => []]];
+
+        $this->model(function (Closure $tool): string {
+            $tool('find_content', []);
+            $tool('propose_menu_item_add', ['menu' => 'ראשי', 'title' => 'מבצעים', 'page_id' => 30]);
+
+            return '';
+        });
+        $this->talk($subscriber, 'תוסיף');
+
+        $this->site['wp_menu_item_add'] = ['added_item_id' => 88];
+        $this->site['wp_menu_list'] = [['menu' => 'ראשי', 'menu_id' => 2, 'items' => [['item_id' => 88, 'title' => 'מבצעים', 'url' => '/sale']]]];
+        $this->talk($subscriber, 'כן');
+
+        // Renamed in wp-admin before the undo.
+        $this->site['wp_menu_list'] = [['menu' => 'ראשי', 'menu_id' => 2, 'items' => [['item_id' => 88, 'title' => 'מבצעי חג', 'url' => '/sale']]]];
+        $this->calls = [];
+
+        $this->assertStringContainsString('לא החזרתי', $this->talk($subscriber, 'בטל'));
+        $this->assertNotContains('wp_menu_item_unlink', array_column($this->calls, 0));
+    }
+
+    public function test_a_coupon_extended_since_the_preview_is_not_ended(): void
+    {
+        $subscriber = $this->subscriber();
+        $this->site['wc_coupon_list'] = [['code' => 'sale10', 'expires' => '2026-10-31', 'usage_count' => 3]];
+
+        $this->model(function (Closure $tool): string {
+            $tool('propose_coupon_expire', ['code' => 'SALE10']);
+
+            return '';
+        });
+        $this->talk($subscriber, 'תסיים את הקופון');
+
+        $this->site['wc_coupon_list'] = [['code' => 'sale10', 'expires' => '2026-12-31', 'usage_count' => 3]];
+        $this->talk($subscriber, 'כן');
+
+        $this->assertSame(SiteAgentRequest::FAILED, SiteAgentRequest::sole()->state);
+        $this->assertNotContains('wc_coupon_expire', array_column($this->calls, 0));
     }
 
     // ── helpers ──────────────────────────────────────────────────────────

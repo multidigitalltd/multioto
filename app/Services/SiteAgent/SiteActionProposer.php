@@ -915,11 +915,13 @@ class SiteActionProposer
             return $this->error('status חייב להיות approve, hold, spam או trash. מחיקה סופית אינה אפשרית מכאן.');
         }
 
-        $comment = collect((array) ($this->json($site, 'wp_comment_list', ['status' => 'all', 'limit' => 100])['comments'] ?? []))
+        // Asked for by id; an older plugin ignores that and answers with the
+        // newest page, which is searched as before.
+        $comment = collect((array) ($this->json($site, 'wp_comment_list', ['status' => 'all', 'id' => $id, 'limit' => 50])['comments'] ?? []))
             ->first(fn ($item): bool => (int) ($item['id'] ?? 0) === $id);
 
         if ($comment === null) {
-            return $this->error('התגובה לא נמצאה בין 100 התגובות האחרונות. חפשו אותה עם find_comments.');
+            return $this->error('לא הצלחתי לקרוא את התגובה הזו מהאתר. אם היא ישנה, ייתכן שתוסף הסוכן באתר צריך עדכון.');
         }
 
         $from = (string) ($comment['status'] ?? '');
@@ -1081,6 +1083,14 @@ class SiteActionProposer
             return $this->error('השדות האלה לא מוגדרים לפריט: '.implode(', ', $unknown).'. בדקו את השמות עם field_schema.');
         }
 
+        // A field that holds a list (checkboxes, relationships, a gallery) can
+        // be neither shown in a preview nor put back by an undo from here.
+        foreach (array_keys($fields) as $key) {
+            if (isset($current[$key]) && ! is_scalar($current[$key])) {
+                return $this->error("השדה {$key} מכיל רשימה או ערך מורכב — אותו משנים בניהול האתר.");
+            }
+        }
+
         $fields = array_map(fn ($value): string => (string) $value, $fields);
         $lines = ['🧩 '.($post['title'] ?? "פריט #{$id}")];
 
@@ -1190,7 +1200,7 @@ class SiteActionProposer
             return $this->error("פריט התפריט {$itemId} לא נמצא.");
         }
 
-        $current = ['title' => (string) ($item['title'] ?? ''), 'url' => (string) ($item['url'] ?? '')];
+        $current = $this->menuState($item);
         $fields = array_filter($fields, fn (string $value, string $key): bool => $current[$key] !== $value, ARRAY_FILTER_USE_BOTH);
 
         if ($fields === []) {
@@ -1237,6 +1247,9 @@ class SiteActionProposer
             'plan' => [
                 'operation' => SiteAgentRequest::OP_MENU_REMOVE,
                 'item_id' => $itemId,
+                // What the owner was shown — removal has no undo, so it runs
+                // only on the item exactly as they saw it.
+                'current' => $this->menuState($item),
                 'summary' => "הסרת \"{$item['title']}\" מהתפריט {$menu}",
             ],
             'preview' => implode("\n", [
@@ -1308,6 +1321,8 @@ class SiteActionProposer
             'plan' => [
                 'operation' => SiteAgentRequest::OP_COUPON_EXPIRE,
                 'code' => $code,
+                // No undo, so it runs only against the expiry the owner saw.
+                'expires' => (string) ($coupon['expires'] ?? ''),
                 'summary' => "סיום הקופון {$code}",
             ],
             'preview' => implode("\n", [
@@ -1346,6 +1361,23 @@ class SiteActionProposer
         }
 
         return null;
+    }
+
+    /**
+     * A menu item as the checks compare it: everything that, changed by somebody
+     * else, makes it a different item from the one the owner was shown.
+     *
+     * @param  array<string, mixed>  $item
+     * @return array{title: string, url: string, parent_id: string, order: string}
+     */
+    private function menuState(array $item): array
+    {
+        return [
+            'title' => (string) ($item['title'] ?? ''),
+            'url' => (string) ($item['url'] ?? ''),
+            'parent_id' => (string) ($item['parent_id'] ?? '0'),
+            'order' => (string) ($item['order'] ?? '0'),
+        ];
     }
 
     /** @return array{0: string, 1: array<string, mixed>|null} the menu's name and the item */

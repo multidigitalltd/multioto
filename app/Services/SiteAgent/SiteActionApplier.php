@@ -490,11 +490,16 @@ class SiteActionApplier
         $result = $this->call($site, 'wp_fields_update', ['id' => $id, 'fields' => $fields]);
         $previous = (array) ($result['previous'] ?? []);
 
-        return $this->ok($previous !== [] ? [
+        // A structured value (a list, an object) cannot be put back from here
+        // without flattening it, so a change that replaced one keeps no undo
+        // rather than an undo that would empty the field.
+        $restorable = $previous !== [] && array_filter($previous, fn ($value): bool => $value !== null && ! is_scalar($value)) === [];
+
+        return $this->ok($restorable ? [
             'kind' => 'fields',
             'id' => $id,
             // An empty previous value is restored as empty, never skipped.
-            'fields' => array_map(fn ($value): string => is_scalar($value) ? (string) $value : '', $previous),
+            'fields' => array_map(fn ($value): string => (string) $value, $previous),
             'after' => $this->fieldValues($site, $id, array_keys($fields)),
         ] : null);
     }
@@ -520,8 +525,10 @@ class SiteActionApplier
     private function menuAdd(Site $site, array $plan): array
     {
         $added = (int) ($this->call($site, 'wp_menu_item_add', (array) $plan['fields'])['added_item_id'] ?? 0);
+        $after = $added > 0 ? $this->menuItem($site, $added) : null;
 
-        return $this->ok($added > 0 ? ['kind' => 'menu_added', 'item_id' => $added] : null);
+        // The undo removes it only while it is still the item we added.
+        return $this->ok($after !== null ? ['kind' => 'menu_added', 'item_id' => $added, 'after' => $after] : null);
     }
 
     /** @param array<string, mixed> $restore */
@@ -529,8 +536,14 @@ class SiteActionApplier
     {
         $itemId = (int) $restore['item_id'];
 
-        if ($this->menuItem($site, $itemId) === null) {
+        $live = $this->menuItem($site, $itemId);
+
+        if ($live === null) {
             return $this->refuse('הפריט כבר אינו בתפריט.');
+        }
+
+        if (! $this->sameFields($live, (array) ($restore['after'] ?? []))) {
+            return $this->refuse(SiteChangeApplier::STALE);
         }
 
         $this->call($site, 'wp_menu_item_unlink', ['item_id' => $itemId]);
@@ -576,6 +589,12 @@ class SiteActionApplier
     /** @param array<string, mixed> $plan */
     private function menuRemove(Site $site, array $plan): array
     {
+        $live = $this->menuItem($site, (int) $plan['item_id']);
+
+        if ($live === null || ! $this->sameFields($live, (array) ($plan['current'] ?? []))) {
+            return $this->refuse(SiteChangeApplier::STALE);
+        }
+
         $this->call($site, 'wp_menu_item_unlink', ['item_id' => (int) $plan['item_id']]);
 
         return $this->ok(null);
@@ -611,7 +630,15 @@ class SiteActionApplier
     /** @param array<string, mixed> $plan */
     private function couponExpire(Site $site, array $plan): array
     {
-        $this->call($site, 'wc_coupon_expire', ['code' => (string) $plan['code']]);
+        $code = (string) $plan['code'];
+        $coupon = collect($this->call($site, 'wc_coupon_list', ['limit' => 100]))
+            ->first(fn ($item): bool => is_array($item) && mb_strtolower((string) ($item['code'] ?? '')) === $code);
+
+        if ($coupon === null || (string) ($coupon['expires'] ?? '') !== (string) ($plan['expires'] ?? '')) {
+            return $this->refuse(SiteChangeApplier::STALE);
+        }
+
+        $this->call($site, 'wc_coupon_expire', ['code' => $code]);
 
         return $this->ok(null);
     }
@@ -700,7 +727,7 @@ class SiteActionApplier
 
     private function commentStatus(Site $site, int $id): ?string
     {
-        foreach ((array) ($this->call($site, 'wp_comment_list', ['status' => 'all', 'limit' => 100])['comments'] ?? []) as $comment) {
+        foreach ((array) ($this->call($site, 'wp_comment_list', ['status' => 'all', 'id' => $id, 'limit' => 50])['comments'] ?? []) as $comment) {
             if ((int) ($comment['id'] ?? 0) === $id) {
                 return (string) ($comment['status'] ?? '');
             }
@@ -743,19 +770,26 @@ class SiteActionApplier
 
         foreach ($keys as $key) {
             $value = $values[$key] ?? '';
-            $out[$key] = is_scalar($value) ? (string) $value : '';
+            // A structured value is compared as itself, never as "": a field
+            // that became a list since the preview must not read as unchanged.
+            $out[$key] = is_scalar($value) ? (string) $value : (string) json_encode($value);
         }
 
         return $out;
     }
 
-    /** @return array{title: string, url: string}|null */
+    /** @return array{title: string, url: string, parent_id: string, order: string}|null */
     private function menuItem(Site $site, int $itemId): ?array
     {
         foreach ((array) $this->call($site, 'wp_menu_list', []) as $menu) {
             foreach ((array) ($menu['items'] ?? []) as $item) {
                 if ((int) ($item['item_id'] ?? 0) === $itemId) {
-                    return ['title' => (string) ($item['title'] ?? ''), 'url' => (string) ($item['url'] ?? '')];
+                    return [
+                        'title' => (string) ($item['title'] ?? ''),
+                        'url' => (string) ($item['url'] ?? ''),
+                        'parent_id' => (string) ($item['parent_id'] ?? '0'),
+                        'order' => (string) ($item['order'] ?? '0'),
+                    ];
                 }
             }
         }
