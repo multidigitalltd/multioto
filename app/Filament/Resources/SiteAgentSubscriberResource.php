@@ -144,6 +144,8 @@ class SiteAgentSubscriberResource extends Resource
     {
         return $query
             ->with(['customer:id,name', 'site:id,domain,customer_id'])
+            // Counted with the page, like the flags below — one query, not one per row.
+            ->withCount(['usage as messages_this_month' => fn (Builder $usage) => $usage->where('sent_at', '>=', now()->startOfMonth())])
             ->withExists([
                 'customer as customer_subscribed' => fn (Builder $customer) => $customer
                     ->whereHas('subscriptions', fn (Builder $s) => SiteAgentAccess::entitling($s)),
@@ -184,6 +186,10 @@ class SiteAgentSubscriberResource extends Resource
                         'unsubscribed' => 'danger',
                         default => 'success',
                     }),
+                Tables\Columns\TextColumn::make('messages_this_month')
+                    ->label('הודעות החודש')
+                    ->numeric()
+                    ->sortable(),
                 Tables\Columns\TextColumn::make('last_seen_at')
                     ->label('פעילות אחרונה')
                     ->dateTime('d/m/Y H:i')

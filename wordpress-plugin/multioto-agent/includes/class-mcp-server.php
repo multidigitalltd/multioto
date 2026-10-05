@@ -229,12 +229,33 @@ class Multioto_Agent_Mcp_Server
         if (Multioto_Agent_Woo_Writer::active()) {
             $tools[] = ['name' => 'wc_product_search', 'description' => 'חיפוש מוצרים לפי טקסט חופשי (שם או מק"ט). מחזיר total (כמה מוצרים תואמים בסך הכל), returned (כמה הוחזרו בעמוד הזה), page, pages ו-products — לכל אחד מזהה, שם, מק"ט, מחיר רגיל, מחיר מבצע ומלאי. השתמשו בזה כדי להפוך תיאור בדיבור ("החולצה השחורה") למזהה מוצר — וכשחוזרות כמה תוצאות, שאלו על איזה מהן מדובר במקום לנחש. אם page קטן מ-pages יש עוד עמודים — בקשו אותם עם page=2,3… כדי לעבור על כל המוצרים התואמים, ואל תתייחסו לעמוד הראשון כאילו הוא כולם.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['search' => ['type' => 'string'], 'limit' => ['type' => 'integer'], 'page' => ['type' => 'integer']], 'required' => ['search']]];
             $tools[] = ['name' => 'wc_product_get', 'description' => 'פרטי מוצר מלאים לפי מזהה: מחירים, מבצע ותאריכיו, מלאי, סטטוס וקישור.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['product_id' => ['type' => 'integer']], 'required' => ['product_id']]];
-            $tools[] = ['name' => 'wc_product_update', 'description' => 'עדכון מוצר לפי product_id. שדות אופציונליים: regular_price, sale_price (ריק = סיום המבצע), sale_from ו-sale_to (YYYY-MM-DD), stock_quantity, manage_stock, stock_status (instock/outofstock/onbackorder), status (publish/draft/private). מחזיר את המצב הקודם המלא לצורך ביטול. מחיר מבצע שאינו נמוך מהמחיר הרגיל נדחה.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['product_id' => ['type' => 'integer'], 'regular_price' => ['type' => 'string'], 'sale_price' => ['type' => 'string'], 'sale_from' => ['type' => 'string'], 'sale_to' => ['type' => 'string'], 'stock_quantity' => ['type' => 'integer'], 'manage_stock' => ['type' => 'boolean'], 'stock_status' => ['type' => 'string'], 'status' => ['type' => 'string']], 'required' => ['product_id']]];
+            $tools[] = ['name' => 'wc_product_update', 'description' => 'עדכון מוצר לפי product_id. שדות אופציונליים: name, short_description, regular_price, sale_price (ריק = סיום המבצע), sale_from ו-sale_to (YYYY-MM-DD), stock_quantity, manage_stock, stock_status (instock/outofstock/onbackorder), status (publish/draft/private). מחזיר את המצב הקודם המלא לצורך ביטול. מחיר מבצע שאינו נמוך מהמחיר הרגיל נדחה.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['product_id' => ['type' => 'integer'], 'name' => ['type' => 'string'], 'short_description' => ['type' => 'string'], 'regular_price' => ['type' => 'string'], 'sale_price' => ['type' => 'string'], 'sale_from' => ['type' => 'string'], 'sale_to' => ['type' => 'string'], 'stock_quantity' => ['type' => 'integer'], 'manage_stock' => ['type' => 'boolean'], 'stock_status' => ['type' => 'string'], 'status' => ['type' => 'string']], 'required' => ['product_id']]];
             $tools[] = ['name' => 'wc_product_create', 'description' => 'יצירת מוצר חדש — תמיד כטיוטה, לעולם לא מפורסם. name חובה; אופציונלי description, short_description, regular_price, sku. הפרסום נעשה בנפרד על ידי אדם שרואה את העמוד.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['name' => ['type' => 'string'], 'description' => ['type' => 'string'], 'short_description' => ['type' => 'string'], 'regular_price' => ['type' => 'string'], 'sku' => ['type' => 'string']], 'required' => ['name']]];
             $tools[] = ['name' => 'wc_coupon_list', 'description' => 'רשימת הקופונים בחנות: קוד, סוג ההנחה, גובהה, תאריך תפוגה ומספר השימושים.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['limit' => ['type' => 'integer']]]];
             $tools[] = ['name' => 'wc_coupon_create', 'description' => 'יצירת קופון. code חובה; type = percent (ברירת מחדל) / fixed_cart / fixed_product; amount חובה; אופציונלי expires (YYYY-MM-DD), minimum_amount, usage_limit. קופון באחוזים מעל 100 או בסכום אפס נדחה.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['code' => ['type' => 'string'], 'type' => ['type' => 'string'], 'amount' => ['type' => 'number'], 'expires' => ['type' => 'string'], 'minimum_amount' => ['type' => 'string'], 'usage_limit' => ['type' => 'integer']], 'required' => ['code', 'amount']]];
             $tools[] = ['name' => 'wc_coupon_expire', 'description' => 'סיום קופון מיידי לפי code — נקבע לו תאריך תפוגה של היום. הקופון אינו נמחק, כדי שהזמנות עבר שהשתמשו בו ימשיכו להציג את ההנחה שקיבלו.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['code' => ['type' => 'string']], 'required' => ['code']]];
         }
+
+        // Running the shop from the owner's phone: orders as a list, moving an
+        // order along its ordinary path, notes, and the sales report. No refund
+        // and no delete — money going back is done by a person in wp-admin.
+        if (class_exists('WooCommerce')) {
+            $tools[] = ['name' => 'wc_order_list', 'description' => 'רשימת הזמנות, מהחדשה לישנה: מספר, סטטוס, תאריך, סכום, שם הלקוח, טלפון, אימייל, פריטים ואמצעי תשלום. אופציונלי: status (processing/on-hold/completed/pending/cancelled/any), days (רק מ-N הימים האחרונים), search (שם, טלפון, אימייל או מספר הזמנה), limit (עד 50).', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['status' => ['type' => 'string'], 'days' => ['type' => 'integer'], 'search' => ['type' => 'string'], 'limit' => ['type' => 'integer']]]];
+            $tools[] = ['name' => 'wc_order_status_set', 'description' => 'שינוי סטטוס הזמנה לפי order_id (המספר המוצג) או internal_id (המזהה הפנימי — עדיף כשידוע) ל-pending/processing/on-hold/completed/cancelled. expected_status = הסטטוס שהמשתמש ראה; אם ההזמנה זזה מאז, לא משתנה דבר ומוחזר changed=false. השלמה שולחת לקונה אימייל וביטול מחזיר את הפריטים למלאי (התנהגות WooCommerce). החזר כספי אינו נתמך.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['order_id' => ['type' => 'integer'], 'internal_id' => ['type' => 'integer'], 'status' => ['type' => 'string'], 'expected_status' => ['type' => 'string'], 'note' => ['type' => 'string']], 'required' => ['status']]];
+            $tools[] = ['name' => 'wc_order_note_add', 'description' => 'הוספת הערה להזמנה לפי order_id (המספר המוצג) או internal_id. customer_note=true שולח אותה לקונה באימייל מיד; ברירת המחדל היא הערה פנימית שנראית רק בניהול.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['order_id' => ['type' => 'integer'], 'internal_id' => ['type' => 'integer'], 'note' => ['type' => 'string'], 'customer_note' => ['type' => 'boolean']], 'required' => ['note']]];
+            $tools[] = ['name' => 'wc_sales_report', 'description' => 'דוח מכירות ל-N הימים האחרונים (ברירת מחדל 30, ימים שלמים בשעון האתר): הזמנות ששולמו, מכירות ברוטו, החזרים, נטו, ממוצע להזמנה, הזמנות שממתינות לתשלום או בהמתנה, 5 המוצרים המובילים, והשוואה לתקופה המקבילה הקודמת. לתקופה סגורה (אתמול, החודש הקודם) — from ו-to בפורמט YYYY-MM-DD במקום days.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['days' => ['type' => 'integer'], 'from' => ['type' => 'string'], 'to' => ['type' => 'string']]]];
+        }
+
+        // Renewing subscriptions — only where WooCommerce Subscriptions runs.
+        if (Multioto_Agent_Store_Admin::subscriptionsActive()) {
+            $tools[] = ['name' => 'wcs_subscription_list', 'description' => 'רשימת מנויים מתחדשים (WooCommerce Subscriptions), מהחדש לישן: מזהה, סטטוס, לקוח, טלפון, אימייל, סכום, מחזור חיוב, תאריך החיוב הבא ופריטים. אופציונלי: status (active/on-hold/cancelled/pending-cancel/expired/any), search, limit.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['status' => ['type' => 'string'], 'search' => ['type' => 'string'], 'limit' => ['type' => 'integer']]]];
+            $tools[] = ['name' => 'wcs_subscription_get', 'description' => 'פרטי מנוי לפי subscription_id: כל מה שברשימה, ובנוסף תאריך התחלה, סיום, תשלום אחרון, הזמנת המקור ואמצעי התשלום.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['subscription_id' => ['type' => 'integer']], 'required' => ['subscription_id']]];
+            $tools[] = ['name' => 'wcs_subscription_status_set', 'description' => 'שינוי סטטוס מנוי לפי subscription_id ל-active/on-hold/cancelled/pending-cancel, לפי כללי המעבר של WooCommerce Subscriptions. expected_status = הסטטוס שהמשתמש ראה; אם המנוי זז מאז, לא משתנה דבר. ביטול (cancelled) הוא סופי.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['subscription_id' => ['type' => 'integer'], 'status' => ['type' => 'string'], 'expected_status' => ['type' => 'string']], 'required' => ['subscription_id', 'status']]];
+        }
+
+        // Leads from whichever form plugins the site runs. Always advertised:
+        // the answer itself says which sources were found.
+        $tools[] = ['name' => 'wp_lead_list', 'description' => 'לידים שנאספו בטפסי האתר (Elementor Pro, Contact Form 7 דרך Flamingo, WPForms, Gravity Forms, Fluent Forms), מהחדש לישן: מקור, שם הטופס, תאריך והשדות שמולאו. אופציונלי: days (ברירת מחדל 30), search, limit (עד 50). sources מציין אילו תוספי טפסים נמצאו באתר. לתקופה סגורה — from ו-to (YYYY-MM-DD) במקום days.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['days' => ['type' => 'integer'], 'from' => ['type' => 'string'], 'to' => ['type' => 'string'], 'search' => ['type' => 'string'], 'limit' => ['type' => 'integer']]]];
 
         return $tools;
     }
@@ -302,6 +323,14 @@ class Multioto_Agent_Mcp_Server
             'wc_order_get' => 'wcOrderGet',
             'wc_order_stats_get' => 'wcOrderStats',
             'wc_shipping_zones_list' => 'wcShippingZones',
+            'wc_order_list' => 'wcOrderList',
+            'wc_order_status_set' => 'wcOrderStatusSet',
+            'wc_order_note_add' => 'wcOrderNoteAdd',
+            'wc_sales_report' => 'wcSalesReport',
+            'wcs_subscription_list' => 'wcsSubscriptionList',
+            'wcs_subscription_get' => 'wcsSubscriptionGet',
+            'wcs_subscription_status_set' => 'wcsSubscriptionStatusSet',
+            'wp_lead_list' => 'leadList',
         ];
 
         // Tools whose signature takes no arguments, or a second flag.
@@ -2093,6 +2122,87 @@ class Multioto_Agent_Mcp_Server
         ];
 
         return wp_json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    }
+
+    private function wcOrderList(array $args): string
+    {
+        Multioto_Agent_Store_Admin::requireWoo();
+
+        // An order number in the search is resolved the way wc_order_get
+        // resolves one, so "#171690" from a sequential-numbering plugin finds
+        // its order instead of matching every phone that contains those digits.
+        $search = trim((string) ($args['search'] ?? ''), " #\t");
+
+        if ($search !== '' && ctype_digit($search)) {
+            $order = wc_get_order($this->resolveOrderId((int) $search));
+
+            if ($order instanceof WC_Order) {
+                $args['search'] = (string) $order->get_order_number();
+            }
+        }
+
+        return wp_json_encode(Multioto_Agent_Store_Admin::orders($args), JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    }
+
+    private function wcOrderStatusSet(array $args): string
+    {
+        Multioto_Agent_Store_Admin::requireWoo();
+
+        return wp_json_encode(
+            Multioto_Agent_Store_Admin::setOrderStatus($this->targetOrderId($args), $args),
+            JSON_UNESCAPED_UNICODE
+        );
+    }
+
+    private function wcOrderNoteAdd(array $args): string
+    {
+        Multioto_Agent_Store_Admin::requireWoo();
+
+        return wp_json_encode(
+            Multioto_Agent_Store_Admin::addOrderNote($this->targetOrderId($args), $args),
+            JSON_UNESCAPED_UNICODE
+        );
+    }
+
+    /**
+     * The order a write is about.
+     *
+     * `internal_id` is WooCommerce's own id and is used as is. `order_id` is
+     * the number a person sees, resolved through the sequential-numbering
+     * meta first. A caller that already holds the internal id must send it as
+     * such: on a shop with custom numbering, an internal id can be another
+     * order's displayed number, and resolving it would change THAT order.
+     */
+    private function targetOrderId(array $args): int
+    {
+        $internal = (int) ($args['internal_id'] ?? 0);
+
+        return $internal > 0 ? $internal : $this->resolveOrderId((int) ($args['order_id'] ?? 0));
+    }
+
+    private function wcSalesReport(array $args): string
+    {
+        return wp_json_encode(Multioto_Agent_Store_Admin::salesReport($args), JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    }
+
+    private function wcsSubscriptionList(array $args): string
+    {
+        return wp_json_encode(Multioto_Agent_Store_Admin::subscriptions($args), JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    }
+
+    private function wcsSubscriptionGet(array $args): string
+    {
+        return wp_json_encode(Multioto_Agent_Store_Admin::subscription($args), JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    }
+
+    private function wcsSubscriptionStatusSet(array $args): string
+    {
+        return wp_json_encode(Multioto_Agent_Store_Admin::setSubscriptionStatus($args), JSON_UNESCAPED_UNICODE);
+    }
+
+    private function leadList(array $args): string
+    {
+        return wp_json_encode(Multioto_Agent_Leads::listLeads($args), JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
     }
 
     /** List the store's shipping zones with their regions, methods and conditions. */

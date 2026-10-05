@@ -130,7 +130,13 @@ class CardTokenService
                     return;
                 }
 
-                if ($subscription->status === SubscriptionStatus::Trialing) {
+                // "Trialing" has two meanings. Without an end date it is the old
+                // one — opened before a card existed — and a card is what makes
+                // it real. With an end date still ahead it is a free trial the
+                // customer was promised, and a card updated in the middle of it
+                // must not end it early (and make its messages billable).
+                if ($subscription->status === SubscriptionStatus::Trialing
+                    && ($subscription->trial_ends_at === null || $subscription->trial_ends_at->isPast())) {
                     $subscription->update(['status' => SubscriptionStatus::Active]);
                 } elseif (in_array($subscription->status, [SubscriptionStatus::PastDue, SubscriptionStatus::Suspended], true)) {
                     // The debt is due now — make it collectable immediately, but

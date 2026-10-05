@@ -29,5 +29,9 @@
         <env name="QUEUE_CONNECTION" value="sync"/>
         <env name="SESSION_DRIVER" value="array"/>
         <env name="TELESCOPE_ENABLED" value="false"/>
+        <!-- The site agent's fixed planners are what most site-agent tests
+             exercise; the assistant in front of them is switched on
+             explicitly by the tests written for it (SiteAgentAssistantTest). -->
+        <env name="SITE_AGENT_ASSISTANT" value="false"/>
     </php>
 </phpunit>

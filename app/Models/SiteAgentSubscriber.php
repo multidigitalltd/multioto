@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Facades\Hash;
 
 /**
@@ -158,5 +159,11 @@ class SiteAgentSubscriber extends Model
         }
 
         $this->increment('verification_attempts');
+    }
+
+    /** Every message the agent delivered to this number — see SiteAgentUsageMeter. */
+    public function usage(): HasMany
+    {
+        return $this->hasMany(SiteAgentUsage::class);
     }
 }

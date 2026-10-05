@@ -104,6 +104,19 @@
                 <span class="body">
                     <span class="title">{{ $plan->name }}</span>
                     <span class="price">{{ $plan->priceLabel() }}</span>
+                    @if ($plan->hasTrial())
+                        {{-- The trial and its terms in one place: free for how
+                             long, that a card is taken, and that it is not
+                             charged until the end. --}}
+                        <span class="meta"><strong>{{ $plan->trial_days }} ימים ראשונים בחינם.</strong>
+                            מזינים כרטיס ולא מחויבים — החיוב הראשון ביום ה־{{ $plan->trial_days + 1 }}, ואפשר לבטל לפני כן. תזכורת תישלח יומיים קודם.</span>
+                    @endif
+                    @if ($plan->billsMessages())
+                        <span class="meta">
+                            בנוסף {{ \App\Support\Money::ils($plan->messageGrossAgorot()) }} לכל הודעה שהבוט שולח לכם,
+                            נגבה בחידוש החודשי לפי הספירה. קודי אימות והודעות מערכת אינם נספרים.
+                        </span>
+                    @endif
                     @if (filled($plan->description))
                         <span class="meta">{{ $plan->description }}</span>
                     @endif

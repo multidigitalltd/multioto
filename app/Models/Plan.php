@@ -15,7 +15,7 @@ class Plan extends Model
 
     protected $fillable = [
         'name', 'price_agorot', 'vat_applies', 'billing_interval', 'description', 'active', 'includes_site_agent',
-        'extra_number_price_agorot', 'is_public',
+        'extra_number_price_agorot', 'message_price_agorot', 'trial_days', 'is_public',
     ];
 
     protected function casts(): array
@@ -23,6 +23,8 @@ class Plan extends Model
         return [
             'price_agorot' => 'integer',
             'extra_number_price_agorot' => 'integer',
+            'message_price_agorot' => 'integer',
+            'trial_days' => 'integer',
             'vat_applies' => 'boolean',
             'billing_interval' => BillingInterval::class,
             'active' => 'boolean',
@@ -76,6 +78,26 @@ class Plan extends Model
             : $this->withVat((int) $this->extra_number_price_agorot, $vatExempt);
     }
 
+    /** One bot message, VAT as the customer pays it — or null when messages are not billed. */
+    public function messageGrossAgorot(bool $vatExempt = false): ?int
+    {
+        return $this->billsMessages()
+            ? $this->withVat((int) $this->message_price_agorot, $vatExempt)
+            : null;
+    }
+
+    /** Does this plan charge for the messages the bot sends? */
+    public function billsMessages(): bool
+    {
+        return (int) $this->message_price_agorot > 0;
+    }
+
+    /** Does this plan start with a free trial? */
+    public function hasTrial(): bool
+    {
+        return (int) $this->trial_days > 0;
+    }
+
     /** Does this plan sell additional manager numbers at all? */
     public function sellsExtraNumbers(): bool
     {
@@ -93,7 +115,7 @@ class Plan extends Model
         return $this->billing_interval === BillingInterval::Yearly ? 'לשנה' : 'לחודש';
     }
 
-    private function withVat(int $agorot, bool $vatExempt): int
+    public function withVat(int $agorot, bool $vatExempt): int
     {
         if ($vatExempt || ! $this->vat_applies) {
             return $agorot;

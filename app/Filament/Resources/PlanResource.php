@@ -80,6 +80,22 @@ class PlanResource extends Resource
                             ->inline(false)
                             ->visible(fn (Forms\Get $get): bool => (bool) $get('includes_site_agent')),
 
+                        Forms\Components\TextInput::make('message_price_agorot')
+                            ->label('מחיר להודעה שהבוט שולח (אגורות, לפני מע"מ)')
+                            ->numeric()
+                            ->minValue(0)
+                            ->helperText('נגבה בחידוש החודשי על ההודעות שנשלחו מאז החיוב הקודם, בשורה נפרדת בחשבונית. ריק או 0 = הודעות אינן מחויבות. קודי אימות והודעות מערכת אינם נספרים.')
+                            ->visible(fn (Forms\Get $get): bool => (bool) $get('includes_site_agent')),
+
+                        Forms\Components\TextInput::make('trial_days')
+                            ->label('ימי ניסיון בחינם')
+                            ->numeric()
+                            ->minValue(0)
+                            ->maxValue(60)
+                            ->default(0)
+                            ->helperText('ברכישה עצמית: הלקוח מזין כרטיס בלי חיוב, והחיוב הראשון יוצא בסוף הניסיון אלא אם ביטל. 0 = ללא ניסיון.')
+                            ->visible(fn (Forms\Get $get): bool => (bool) $get('includes_site_agent')),
+
                         Forms\Components\TextInput::make('extra_number_price_agorot')
                             ->label('מחיר מספר מנהל נוסף (אגורות)')
                             ->numeric()

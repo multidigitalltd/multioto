@@ -77,6 +77,7 @@ class ManageSiteAgent extends Page implements HasForms
         'siteagent.template_verification',
         'siteagent.template_paused',
         'siteagent.template_resumed',
+        'siteagent.template_report',
         'siteagent.binding_ttl_minutes',
     ];
 
@@ -96,6 +97,7 @@ class ManageSiteAgent extends Page implements HasForms
                 'template_verification_copy_button' => (bool) config('siteagent.whatsapp.templates.verification_copy_button'),
                 'template_paused' => config('siteagent.whatsapp.templates.service_paused'),
                 'template_resumed' => config('siteagent.whatsapp.templates.service_resumed'),
+                'template_report' => config('siteagent.whatsapp.templates.report_ready'),
                 'binding_ttl_minutes' => config('siteagent.binding.verification_ttl_minutes'),
             ],
         ]);
@@ -209,6 +211,11 @@ class ManageSiteAgent extends Page implements HasForms
                             ->live(onBlur: true)
                             ->autocomplete(false)
                             ->helperText('קטגוריית Utility. פרמטר אחד — הדומיין (domain).'),
+                        TextInput::make('siteagent.template_report')
+                            ->label('תבנית "הדוח מוכן"')
+                            ->live(onBlur: true)
+                            ->autocomplete(false)
+                            ->helperText('קטגוריית Utility. שלושה פרמטרים: title, domain, summary. נשלחת לדוח קבוע כשבעל האתר לא כתב לבוט ב־24 השעות האחרונות; הגוף צריך להזמין אותו להשיב "דוח" לקבלת הדוח המלא. למשל: "{{title}} של {{domain}}: {{summary}}. השיבו דוח לקבלת הדוח המלא." ריק = דוח כזה לא נשלח.'),
                         TextInput::make('siteagent.binding_ttl_minutes')
                             ->label('תוקף קוד האימות (דקות)')
                             ->numeric()

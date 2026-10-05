@@ -110,6 +110,10 @@ class SiteAgentOverview extends BaseWidget
                 ->url(ActivateSiteAgent::getUrl());
         }
 
+        $stats[] = Stat::make('הודעות החודש', number_format($activity['messages_month']))
+            ->description(number_format($activity['messages_unbilled']).' ממתינות לחיוב בחידושים הבאים')
+            ->color('primary');
+
         $stats[] = Stat::make('שינויים שבוצעו השבוע', $activity['applied'])
             ->description($this->activityNote($activity))
             ->icon('heroicon-o-pencil-square')

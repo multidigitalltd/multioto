@@ -44,8 +44,14 @@ class SiteAgentOrder extends Model
         'reference', 'customer_id', 'plan_id',
         'buyer_name', 'buyer_email', 'manager_phone', 'manager_name',
         'domain', 'site_id', 'total_agorot', 'install_mode', 'status',
-        'charge_id', 'subscription_id', 'fulfilled_at',
+        'charge_id', 'subscription_id', 'fulfilled_at', 'trial_days', 'cardcom_low_profile_id',
     ];
+
+    /** A free trial: a card was captured and nothing was charged. */
+    public function isTrial(): bool
+    {
+        return (int) $this->trial_days > 0;
+    }
 
     protected function casts(): array
     {

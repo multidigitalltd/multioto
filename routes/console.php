@@ -19,6 +19,7 @@ use App\Jobs\CheckSslExpiryJob;
 use App\Jobs\CheckStoreSalesJob;
 use App\Jobs\CheckWhatsappInboundJob;
 use App\Jobs\DrillBackupJob;
+use App\Jobs\EndSiteAgentTrialsJob;
 use App\Jobs\FollowUpPendingTicketsJob;
 use App\Jobs\HeartbeatJob;
 use App\Jobs\LockOutSiteSessionsJob;
@@ -38,6 +39,7 @@ use App\Jobs\ScanSiteVulnerabilitiesJob;
 use App\Jobs\SendBroadcastJob;
 use App\Jobs\SendDemandRemindersJob;
 use App\Jobs\SendProactiveRemindersJob;
+use App\Jobs\SendSiteAgentReportsJob;
 use App\Jobs\SendTaskRemindersJob;
 use App\Jobs\SyncPluginReleasesJob;
 use App\Jobs\SyncSiteAgentServiceStateJob;
@@ -135,6 +137,16 @@ Schedule::call(function () {
         ->pluck('id')
         ->each(fn (int $id) => ChargeSubscriptionJob::dispatch($id, mode: ChargeSubscriptionJob::MODE_SCHEDULED));
 })->everyFifteenMinutes()->name('billing:dispatch-due-charges')->when($awake)->onOneServer();
+
+// Free trials of the site agent: the reminder two days before, and at the end
+// the move to Active with the first charge due — which the dispatcher above
+// then collects like any renewal. Not gated on $awake: ending a trial charges
+// nothing by itself, and the charge it leads to waits for the dispatcher.
+Schedule::job(new EndSiteAgentTrialsJob)->hourly()->name('siteagent:end-trials')->onOneServer();
+
+// Reports owners ordered from the bot ("כל בוקר בשמונה"). Every quarter of an
+// hour, so 08:00 arrives by 08:15; each run claims its row before sending.
+Schedule::job(new SendSiteAgentReportsJob)->everyFifteenMinutes()->name('siteagent:send-reports')->onOneServer();
 
 // The card as a fallback: a subscription the customer pays by transfer or
 // standing order, whose payment has now been due for its whole grace period
