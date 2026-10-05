@@ -128,6 +128,19 @@ class SiteAgentLeadAlertsTest extends TestCase
         $this->assertCount(3, $this->sent);
     }
 
+    public function test_a_burst_beyond_one_read_is_said_not_swallowed(): void
+    {
+        $this->enable();
+
+        // A full read, every lead in it new: older new ones may lie beyond it.
+        $this->leads = array_map(fn (int $id): array => $this->lead($id, "ליד {$id}"), range(100, 51));
+
+        $this->runAlerts();
+
+        $this->assertCount(3, $this->sent);
+        $this->assertStringContainsString('ועוד לפחות 47 לידים', $this->sent[2][2]);
+    }
+
     public function test_outside_the_window_the_leads_go_as_one_template(): void
     {
         config(['siteagent.whatsapp.templates.report_ready' => 'md_report']);

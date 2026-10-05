@@ -406,12 +406,19 @@ class SiteActionApplier
             return $this->failure('product create returned no id');
         }
 
-        $missing = $this->completeNewProduct($site, $id, (array) ($plan['extra'] ?? []), (array) ($plan['category_ids'] ?? []));
+        $extra = (array) ($plan['extra'] ?? []);
+        $missing = [];
 
+        // The photo before anything goes live: a product created from a
+        // picture and published without it is not what the owner approved,
+        // so a failed upload keeps it a draft.
         if (isset($plan['image_path']) && ! $this->attachPhoto($site, $id, $plan)) {
-            $missing[] = 'התמונה';
+            $missing[] = isset($extra['status']) ? 'התמונה (ולכן המוצר לא פורסם)' : 'התמונה';
+            unset($extra['status']);
         }
-        $live = ($plan['extra']['status'] ?? null) === 'publish' && ! in_array('הפרסום', $missing, true);
+
+        $missing = [...$missing, ...$this->completeNewProduct($site, $id, $extra, (array) ($plan['category_ids'] ?? []))];
+        $live = ($extra['status'] ?? null) === 'publish' && ! in_array('הפרסום', $missing, true);
 
         // No undo: there is no tool that deletes a product — which is the right
         // way round for a phone. Unpublishing is an ordinary product update.
@@ -503,7 +510,13 @@ class SiteActionApplier
                 return false;
             }
 
-            $this->call($site, 'wp_post_thumbnail_set', ['id' => $productId, 'attachment_id' => $attachmentId, 'if_current' => 0]);
+            $set = $this->call($site, 'wp_post_thumbnail_set', ['id' => $productId, 'attachment_id' => $attachmentId, 'if_current' => 0]);
+
+            // Refused because something else set an image first (a product
+            // hook, an import): ours is not the one showing, so it is not kept.
+            if (($set['changed'] ?? true) === false) {
+                throw new \RuntimeException('thumbnail already set');
+            }
 
             return true;
         } catch (\Throwable) {

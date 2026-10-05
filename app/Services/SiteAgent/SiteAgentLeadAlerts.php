@@ -24,6 +24,9 @@ class SiteAgentLeadAlerts
     /** How many lead keys are remembered per number. A day's leads, with room. */
     private const REMEMBERED = 300;
 
+    /** The most leads one read returns — the plugin's own ceiling. */
+    public const READ_LIMIT = 50;
+
     /** Fields shown per lead in the message. */
     private const FIELDS = 6;
 
@@ -77,7 +80,7 @@ class SiteAgentLeadAlerts
     {
         try {
             $decoded = json_decode($this->mcp->textContent(
-                $this->mcp->callTool($site, 'wp_lead_list', ['days' => 1, 'limit' => 50]),
+                $this->mcp->callTool($site, 'wp_lead_list', ['days' => 1, 'limit' => self::READ_LIMIT]),
             ), true);
         } catch (\Throwable) {
             return null;
@@ -107,6 +110,27 @@ class SiteAgentLeadAlerts
             $leads,
             fn (array $lead): bool => ! isset($seen[$this->key($lead)]),
         )));
+    }
+
+    /**
+     * Could leads have arrived that this read did not reach?
+     *
+     * A read returns the newest READ_LIMIT and the plugins in the field have
+     * no cursor. When the read is full and even its oldest lead is new to
+     * this number, there may be older new ones beyond it — which the owner is
+     * told, rather than their being dropped without a word.
+     *
+     * @param  list<array<string, mixed>>  $leads  newest first, as read
+     */
+    public function mayHaveMissed(SiteAgentSubscriber $subscriber, array $leads): bool
+    {
+        if (count($leads) < self::READ_LIMIT) {
+            return false;
+        }
+
+        $seen = array_flip((array) ($subscriber->lead_alert_seen ?? []));
+
+        return ! isset($seen[$this->key($leads[count($leads) - 1])]);
     }
 
     /** @param list<array<string, mixed>> $leads */

@@ -532,9 +532,10 @@ class SiteAgentShopAndMediaTest extends TestCase
 
         $this->assertStringContainsString('נוצר ופורסם', $done);
         $this->assertStringNotContainsString('לא הושלמו', $done);
-        $this->assertSame(['wc_product_create', 'wc_product_update', 'wp_media_upload', 'wp_post_thumbnail_set'], array_column($calls->getArrayCopy(), 0));
-        $this->assertSame('כד קרמיקה כחול', $calls[2][1]['alt']);
-        $this->assertSame(['id' => 70, 'attachment_id' => 501, 'if_current' => 0], $calls[3][1]);
+        // The photo is on before the product goes live.
+        $this->assertSame(['wc_product_create', 'wp_media_upload', 'wp_post_thumbnail_set', 'wc_product_update'], array_column($calls->getArrayCopy(), 0));
+        $this->assertSame('כד קרמיקה כחול', $calls[1][1]['alt']);
+        $this->assertSame(['id' => 70, 'attachment_id' => 501, 'if_current' => 0], $calls[2][1]);
         Storage::disk('local')->assertMissing($path);
     }
 
@@ -557,20 +558,42 @@ class SiteAgentShopAndMediaTest extends TestCase
         Storage::disk('local')->assertExists((string) SiteAgentRequest::sole()->plan['image_path']);
     }
 
-    public function test_a_photo_that_fails_to_upload_leaves_the_product_and_says_so(): void
+    public function test_a_photo_that_fails_to_upload_keeps_the_product_a_draft_and_says_so(): void
+    {
+        $subscriber = $this->subscriber();
+        $this->imageArrives();
+        $this->aiAnswers(['new_product' => true, 'name' => 'כד', 'regular_price' => '89', 'alt' => 'כד כחול', 'publish' => true]);
+        $this->talk($subscriber, 'מוצר חדש כד ב-89, תפרסם', mediaId: 'media-1');
+
+        $calls = $this->shopRecords(['wc_product_create' => ['id' => 70], 'wp_media_upload' => fn () => throw new \RuntimeException('too big')]);
+
+        $done = $this->talk($subscriber, 'כן');
+
+        $this->assertStringContainsString('נוצר כטיוטה', $done);
+        $this->assertStringContainsString('לא הושלמו: התמונה (ולכן המוצר לא פורסם)', $done);
+        $this->assertSame(SiteAgentRequest::APPLIED, SiteAgentRequest::sole()->state);
+        // Not published without the photo it was created from.
+        $this->assertNotContains('wc_product_update', array_column($calls->getArrayCopy(), 0));
+    }
+
+    public function test_a_thumbnail_slot_taken_first_is_not_reported_as_our_photo(): void
     {
         $subscriber = $this->subscriber();
         $this->imageArrives();
         $this->aiAnswers(['new_product' => true, 'name' => 'כד', 'regular_price' => '89', 'alt' => 'כד כחול']);
         $this->talk($subscriber, 'מוצר חדש כד ב-89', mediaId: 'media-1');
 
-        $this->shopRecords(['wc_product_create' => ['id' => 70], 'wp_media_upload' => fn () => throw new \RuntimeException('too big')]);
+        $calls = $this->shopRecords([
+            'wc_product_create' => ['id' => 70],
+            'wp_media_upload' => ['id' => 501],
+            'wp_post_thumbnail_set' => ['changed' => false],
+        ]);
 
         $done = $this->talk($subscriber, 'כן');
 
-        $this->assertStringContainsString('נוצר כטיוטה', $done);
         $this->assertStringContainsString('לא הושלמו: התמונה', $done);
-        $this->assertSame(SiteAgentRequest::APPLIED, SiteAgentRequest::sole()->state);
+        // Our upload is taken back out of their library, not left orphaned.
+        $this->assertContains(['wp_media_delete', ['attachment_id' => 501]], $calls->getArrayCopy());
     }
 
     // ── helpers ──────────────────────────────────────────────────────────

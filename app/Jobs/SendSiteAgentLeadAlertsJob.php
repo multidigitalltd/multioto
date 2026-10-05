@@ -74,16 +74,21 @@ class SendSiteAgentLeadAlertsJob implements ShouldQueue
                     $fresh = $alerts->fresh($subscriber, $recent['leads']);
 
                     if ($fresh !== []) {
-                        $this->announce($subscriber, $fresh, $alerts, $whatsapp, $meter, $assistant);
+                        $missed = $alerts->mayHaveMissed($subscriber, $recent['leads']);
+                        $this->announce($subscriber, $fresh, $missed, $alerts, $whatsapp, $meter, $assistant);
                     }
                 }
             });
     }
 
-    /** @param list<array<string, mixed>> $fresh oldest first */
+    /**
+     * @param  list<array<string, mixed>>  $fresh  oldest first
+     * @param  bool  $missed  more may have arrived than one read reaches
+     */
     private function announce(
         SiteAgentSubscriber $subscriber,
         array $fresh,
+        bool $missed,
         SiteAgentLeadAlerts $alerts,
         WhatsAppCloudClient $whatsapp,
         SiteAgentUsageMeter $meter,
@@ -93,7 +98,7 @@ class SendSiteAgentLeadAlertsJob implements ShouldQueue
             && $subscriber->last_seen_at->gt(now()->subHours(self::WINDOW_HOURS));
 
         if (! $windowOpen) {
-            $this->announceByTemplate($subscriber, $fresh, $alerts, $whatsapp, $meter, $assistant);
+            $this->announceByTemplate($subscriber, $fresh, $missed, $alerts, $whatsapp, $meter, $assistant);
 
             return;
         }
@@ -104,8 +109,8 @@ class SendSiteAgentLeadAlertsJob implements ShouldQueue
         foreach ($shown as $index => $lead) {
             $text = $alerts->text($lead);
 
-            if ($rest > 0 && $index === count($shown) - 1) {
-                $text .= "\n\n…ועוד {$rest} לידים חדשים. כתבו \"לידים\" לרשימה המלאה.";
+            if (($rest > 0 || $missed) && $index === count($shown) - 1) {
+                $text .= "\n\n…ועוד ".($missed ? 'לפחות ' : '')."{$rest} לידים חדשים. כתבו \"לידים\" לרשימה המלאה.";
             }
 
             $sent = $whatsapp->sendText($subscriber->phone, $text);
@@ -124,6 +129,7 @@ class SendSiteAgentLeadAlertsJob implements ShouldQueue
     private function announceByTemplate(
         SiteAgentSubscriber $subscriber,
         array $fresh,
+        bool $missed,
         SiteAgentLeadAlerts $alerts,
         WhatsAppCloudClient $whatsapp,
         SiteAgentUsageMeter $meter,
@@ -143,7 +149,11 @@ class SendSiteAgentLeadAlertsJob implements ShouldQueue
         }
 
         $count = count($fresh);
-        $title = $count === 1 ? 'ליד חדש' : "{$count} לידים חדשים";
+        $title = match (true) {
+            $missed => "{$count}+ לידים חדשים",
+            $count === 1 => 'ליד חדש',
+            default => "{$count} לידים חדשים",
+        };
         $summary = $alerts->summary($fresh[0]).($count > 1 ? ' ועוד' : '');
 
         $sent = $whatsapp->sendTemplate($subscriber->phone, $template, [
