@@ -83,7 +83,14 @@ class BotNumberRoute
             return $bindings->firstWhere('site_id', $siteId);
         }
 
-        return $bindings->first();
+        // The subscription carries no site — legacy rows and team-created ones
+        // are allowed to. When every binding belongs to the same site there is
+        // nothing to choose between and the delegate stands in; when they span
+        // sites there is no such thing as "the customer's manager", and picking
+        // the newest would make the same cross-site disclosure by another road.
+        return $bindings->pluck('site_id')->unique()->count() === 1
+            ? $bindings->first()
+            : null;
     }
 
     /**
@@ -96,9 +103,17 @@ class BotNumberRoute
      * which is the one thing this route exists to prevent. A client that cannot
      * send is a failure to report, not a different number to use.
      */
-    public function carries(Customer $customer, ?int $siteId = null): bool
+    public function carries(Customer $customer): bool
     {
-        return $this->subscriber($customer, $siteId) !== null;
+        // Its own question, and deliberately not "did we find somebody to send
+        // to". subscriber() legitimately returns null for a bot customer whose
+        // site cannot be told apart from another's, and routing that answer
+        // through here would classify them as not-a-bot-customer and hand the
+        // notice to the support number — the one outcome this route forbids.
+        return SiteAgentSubscriber::query()
+            ->where('customer_id', $customer->id)
+            ->usable()
+            ->exists();
     }
 
     /**

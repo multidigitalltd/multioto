@@ -216,6 +216,46 @@ class BotNumberRoutingTest extends TestCase
     }
 
     /**
+     * מנוי בלי אתר אינו מזכה בבחירת מנהל שרירותי.
+     *
+     * שורות ישנות ומנויים שנוצרו על ידי הצוות רשאים להיות בלי `site_id`.
+     * כשהקשירות שייכות לאתרים שונים, אין דבר כזה "המנהל של הלקוח" — ובחירת
+     * האחרון הייתה מבצעת בדיוק את אותה חשיפה בין אתרים, רק בדרך אחרת.
+     */
+    public function test_a_subscription_without_a_site_does_not_pick_an_arbitrary_manager(): void
+    {
+        $customer = Customer::factory()->create(['phone' => '0501111111']);
+        $siteA = Site::factory()->create(['customer_id' => $customer->id]);
+        $siteB = Site::factory()->create(['customer_id' => $customer->id]);
+
+        foreach ([[$siteA, '972502222222'], [$siteB, '972503333333']] as [$site, $phone]) {
+            SiteAgentSubscriber::create([
+                'phone' => $phone,
+                'customer_id' => $customer->id,
+                'site_id' => $site->id,
+                'verified_at' => now(),
+            ]);
+        }
+
+        $siteless = Subscription::factory()->create([
+            'customer_id' => $customer->id,
+            'site_id' => null,
+        ]);
+
+        $waha = \Mockery::mock(WahaClient::class);
+        $waha->shouldNotReceive('sendMessage');
+        $this->app->instance(WahaClient::class, $waha);
+
+        $result = app(CardCaptureLinkSender::class)->send($siteless);
+
+        Http::assertNothingSent();
+        $this->assertNotEmpty(array_filter(
+            $result['skipped'],
+            fn (string $reason): bool => str_contains($reason, 'אין מספר מחובר לאתר'),
+        ));
+    }
+
+    /**
      * שאלה שאי אפשר לענות עליה עוצרת את השליחה, ולא בוחרת בתשובה המסוכנת.
      *
      * אם שליפת המספרים המחוברים נכשלת, "לא ידוע" אינו "אין מספר מחובר": הנפילה
