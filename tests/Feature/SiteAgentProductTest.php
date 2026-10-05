@@ -50,6 +50,7 @@ class SiteAgentProductTest extends TestCase
             'siteagent.whatsapp.templates.verification' => 'site_agent_code',
             'siteagent.whatsapp.templates.service_paused' => 'site_agent_paused',
             'siteagent.whatsapp.templates.service_resumed' => 'site_agent_resumed',
+            'siteagent.whatsapp.templates.card_link' => 'site_agent_card_link',
         ]);
     }
 
@@ -118,6 +119,21 @@ class SiteAgentProductTest extends TestCase
         $this->assertStringContainsString('לא יקבל קוד', $missing[0]['detail']);
     }
 
+    /**
+     * פער אמיתי שאינו עוצר מכירה.
+     *
+     * בלי תבנית קישור תשלום, לקוח של הבוט מקבל את ההודעה במייל בלבד — פער
+     * שחייב להופיע במסך. אבל הוא אינו סיבה להוריד את החנות מהאוויר ולסרב
+     * ללקוחות חדשים, ולכן הוא נספר כחסר ואינו נספר כחוסם.
+     */
+    public function test_a_missing_card_link_template_is_a_gap_but_not_a_reason_to_stop_selling(): void
+    {
+        config(['siteagent.whatsapp.templates.card_link' => '']);
+
+        $this->assertSame(['template_card_link'], array_column($this->product()->missing(), 'key'));
+        $this->assertTrue($this->product()->ready(), 'חוסר בתבנית הזאת אינו אמור לסגור את החנות.');
+    }
+
     public function test_every_requirement_is_reported_when_nothing_is_configured(): void
     {
         config([
@@ -129,9 +145,10 @@ class SiteAgentProductTest extends TestCase
             'siteagent.whatsapp.templates.verification' => '',
             'siteagent.whatsapp.templates.service_paused' => '',
             'siteagent.whatsapp.templates.service_resumed' => '',
+            'siteagent.whatsapp.templates.card_link' => '',
         ]);
 
-        $this->assertCount(7, $this->product()->missing());
+        $this->assertCount(8, $this->product()->missing());
     }
 
     /*
@@ -488,8 +505,10 @@ class SiteAgentProductTest extends TestCase
         $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
 
         Livewire::test(ManageSiteAgent::class)
-            ->assertSeeText('{{1}}')      // Authentication — מיקומי
-            ->assertSeeText('{{domain}}') // Utility — בשם
+            ->assertSeeText('{{1}}')             // Authentication — מיקומי
+            ->assertSeeText('{{domain}}')        // Utility — בשם
+            ->assertSeeText('{{customer_name}}') // קישור לתשלום
+            ->assertSeeText('{{link}}')
             ->assertDontSeeText('{{code}}');
     }
 
