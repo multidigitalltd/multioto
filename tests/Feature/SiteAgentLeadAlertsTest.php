@@ -285,6 +285,29 @@ class SiteAgentLeadAlertsTest extends TestCase
         $this->assertCount(3, $this->sent);
     }
 
+    public function test_a_lead_cannot_switch_alerts_on_or_lift_the_cap(): void
+    {
+        Subscription::query()->update(['site_agent_message_cap' => 100]);
+
+        $this->model(function (Closure $tool): string {
+            // What a planted lead might talk the model into, while the owner
+            // only asked to see who left details.
+            $tool('find_leads', []);
+            $alerts = $tool('lead_alerts', ['on' => true]);
+            $cap = $tool('message_cap', ['limit' => 0]);
+
+            $this->assertTrue($alerts['is_error']);
+            $this->assertTrue($cap['is_error']);
+
+            return 'יש ליד אחד.';
+        });
+
+        $this->talk('מי השאיר פרטים היום?');
+
+        $this->assertFalse((bool) $this->number->fresh()->lead_alerts);
+        $this->assertSame(100, Subscription::sole()->site_agent_message_cap);
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────
 
     private function enable(): void

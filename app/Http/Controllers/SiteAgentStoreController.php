@@ -104,6 +104,10 @@ class SiteAgentStoreController extends Controller
                     fn (string $phone): bool => $phone !== '',
                 )),
             ]);
+        } catch (\DomainException $e) {
+            // An address that belongs to an existing customer: not a fault, a
+            // rule — said as it is, next to the field it is about.
+            return back()->withInput()->withErrors(['email' => $e->getMessage()]);
         } catch (\Throwable $e) {
             report($e);
 
