@@ -106,8 +106,12 @@ class SiteAgentMessageResource extends Resource
                     ->options(fn (): array => SiteAgentSubscriber::query()
                         ->whereHas('messages')
                         ->orderBy('phone')
-                        ->get(['id', 'phone', 'name'])
-                        ->mapWithKeys(fn (SiteAgentSubscriber $s): array => [$s->id => trim($s->phone.' '.$s->name)])
+                        ->with('site:id,domain')
+                        ->get(['id', 'phone', 'name', 'site_id'])
+                        // One number may manage several sites — one conversation each.
+                        ->mapWithKeys(fn (SiteAgentSubscriber $s): array => [
+                            $s->id => collect([$s->phone, $s->name, $s->site?->domain])->filter()->implode(' · '),
+                        ])
                         ->all())
                     ->searchable(),
             ])

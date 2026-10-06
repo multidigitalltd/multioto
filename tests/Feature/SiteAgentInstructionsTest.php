@@ -79,6 +79,25 @@ class SiteAgentInstructionsTest extends TestCase
             ->assertSeeText('בעל האתר');
     }
 
+    public function test_a_number_on_two_sites_is_two_conversations_told_apart_by_site(): void
+    {
+        $first = $this->subscriber();
+        $site = Site::factory()->create(['customer_id' => $first->customer_id, 'domain' => 'second.example']);
+        $second = SiteAgentSubscriber::create([
+            'phone' => $first->phone, 'customer_id' => $first->customer_id, 'site_id' => $site->id, 'verified_at' => now(),
+        ]);
+        foreach ([$first, $second] as $subscriber) {
+            SiteAgentMessage::create(['site_agent_subscriber_id' => $subscriber->id, 'role' => 'user', 'body' => 'היי']);
+        }
+
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+        $options = Livewire::test(ListSiteAgentMessages::class)->instance()
+            ->getTable()->getFilter('site_agent_subscriber_id')->getOptions();
+
+        $this->assertStringContainsString('shop.example', $options[$first->id]);
+        $this->assertStringContainsString('second.example', $options[$second->id]);
+    }
+
     private function subscriber(): SiteAgentSubscriber
     {
         $customer = Customer::factory()->create();
