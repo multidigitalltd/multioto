@@ -2,6 +2,7 @@
 
 namespace App\Services\Ai;
 
+use App\Models\AiCustomerUsage;
 use App\Models\AiUsage;
 use App\Models\SystemLog;
 use App\Services\Health\ConnectionResult;
@@ -487,6 +488,13 @@ class ClaudeClient
             $input,
             $output,
         );
+
+        // Booked to the customer too, when the call was made on their behalf.
+        $customerId = app(AiUsageAttribution::class)->current();
+
+        if ($customerId !== null) {
+            AiCustomerUsage::record($customerId, (string) config('billing.ai.provider'), (string) config('billing.ai.model'), $input, $output);
+        }
     }
 
     /** Pull the human-readable error message out of a provider error body. */

@@ -38,6 +38,7 @@ class PruneSiteAgentRequestsJob implements ShouldQueue
     public function handle(): void
     {
         $this->expireUnanswered();
+        $this->failAbandoned();
         $this->forgetOld();
         $this->forgetTranscript();
     }
@@ -64,6 +65,30 @@ class PruneSiteAgentRequestsJob implements ShouldQueue
                     $this->deleteHeldImage($request);
 
                     $request->update(['state' => SiteAgentRequest::EXPIRED]);
+                }
+            });
+    }
+
+    /**
+     * A change claimed for execution whose worker died (a timeout, a deploy)
+     * before it finished: nothing else would ever move it out of APPLYING. Well
+     * past the longest a job may run, it is closed as failed and its held
+     * picture removed. Whether it reached the site is unknown — the reason
+     * says so, for whoever looks at it in the journal.
+     */
+    private function failAbandoned(): void
+    {
+        SiteAgentRequest::query()
+            ->where('state', SiteAgentRequest::APPLYING)
+            ->where('updated_at', '<', now()->subMinutes(30))
+            ->chunkById(200, function ($requests): void {
+                foreach ($requests as $request) {
+                    $this->deleteHeldImage($request);
+
+                    $request->update([
+                        'state' => SiteAgentRequest::FAILED,
+                        'failure_reason' => 'הביצוע נקטע באמצע (העבודה הופסקה). לא ידוע אם השינוי הגיע לאתר — כדאי לבדוק.',
+                    ]);
                 }
             });
     }

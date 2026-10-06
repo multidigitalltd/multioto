@@ -18,6 +18,7 @@ use App\Observers\AuditObserver;
 use App\Observers\ChargeLicenseObserver;
 use App\Observers\TaskObserver;
 use App\Observers\TicketObserver;
+use App\Services\Ai\AiUsageAttribution;
 use App\Services\Hosting\FlyWpHostingClient;
 use App\Services\Hosting\HostingClient;
 use App\Services\Hosting\LogHostingClient;
@@ -43,6 +44,9 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
+        // One per request or job: who the AI calls in it are being made for.
+        $this->app->scoped(AiUsageAttribution::class);
+
         // The concrete hosting panel API is still an open decision (§13).
         // Swap the driver here once it lands; 'log' records intents only.
         $this->app->bind(HostingClient::class, function () {

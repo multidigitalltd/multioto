@@ -6,6 +6,7 @@ use App\Models\SiteAgentUsage;
 use App\Models\Subscription;
 use App\Services\SiteAgent\SiteAgentUsageMeter;
 use App\Support\Money;
+use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
 
 /**
@@ -48,6 +49,11 @@ class RenewalBreakdown
      */
     public function for(Subscription $subscription, CarbonInterface $periodStart, CarbonInterface $periodEnd, CarbonInterface $until): array
     {
+        // A whole second behind now: a row recorded later in this same second
+        // would carry this very timestamp and be stamped as billed by a count
+        // that never saw it.
+        $until = CarbonImmutable::instance($until)->startOfSecond()->subSecond();
+
         $plan = $subscription->plan;
         $planNet = $subscription->basePriceAgorot() - $subscription->extraNumbersAgorot();
         $extrasNet = $subscription->extraNumbersAgorot();
@@ -62,7 +68,10 @@ class RenewalBreakdown
         $writingsCharged = $writings - $writingsIncluded;
         $writingsNet = $writingsCharged * (int) ($plan?->writing_price_agorot ?? 0);
 
-        $usageUntil = $messages > 0 || $writings > 0 ? $until : null;
+        // Set whenever anything is waiting, priced or not: settle() also closes
+        // the rows of a kind this plan no longer prices, so they neither wait
+        // for ever nor hold a ceiling shut.
+        $usageUntil = $messages > 0 || $writings > 0 || $this->usage->anyUnsettled($subscription, $until) ? $until : null;
 
         $net = $planNet + $extrasNet + $messagesNet + $writingsNet;
         $vat = $this->vat($subscription, $net);

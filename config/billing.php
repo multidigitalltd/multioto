@@ -530,6 +530,10 @@ return [
             'claude-haiku' => [0.80, 4.00],
             '*' => [1.00, 5.00],
         ],
+
+        // Shekels per dollar, to put AI spend next to revenue on the site-agent
+        // usage screen. An estimate, like the prices above — update now and then.
+        'usd_ils_rate' => (float) env('AI_USD_ILS_RATE', 3.7),
     ],
 
     'monitoring' => [

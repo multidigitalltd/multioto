@@ -465,16 +465,31 @@ class SiteAgentCheckout
     }
 
     /**
-     * The buyer's customer record: an existing one when the address is known.
+     * The buyer's customer record.
      *
-     * Matched on the email — what they typed and where everything will be sent.
-     * A returning customer buying the agent for a second site must not become a
-     * second customer; that is how one business ends up with two balances and
-     * two dunning ladders.
+     * This form is public and nothing in it proves the buyer owns the email
+     * they typed. So an address that belongs to a customer with anything to
+     * take — a site, a subscription — is never attached to: doing so let a
+     * stranger who knew a customer's email and domain pay for one month,
+     * bind their own phone to that customer's live site, and read its agent
+     * secret off the confirmation page. That customer adds the agent from
+     * their personal area, where they are signed in, or through us.
+     *
+     * A bare record with nothing on it — usually an earlier attempt that never
+     * got paid — is still reused, so a retried checkout does not leave a
+     * customer per attempt.
+     *
+     * @throws \DomainException when the address belongs to an active customer
      */
     private function customer(string $name, string $email, string $phone): Customer
     {
         $existing = Customer::query()->whereRaw('LOWER(email) = ?', [mb_strtolower(trim($email))])->first();
+
+        if ($existing !== null && ($existing->sites()->exists() || $existing->subscriptions()->exists())) {
+            throw new \DomainException(
+                'כתובת המייל הזאת כבר רשומה אצלנו כלקוח. כדי לחבר את הבוט לחשבון הקיים, היכנסו לאזור האישי או כתבו לנו ונחבר אותו עבורכם.'
+            );
+        }
 
         if ($existing !== null) {
             if (blank($existing->phone)) {
