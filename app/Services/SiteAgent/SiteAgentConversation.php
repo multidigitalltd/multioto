@@ -7,6 +7,7 @@ use App\Models\SiteAgentMessage;
 use App\Models\SiteAgentRequest;
 use App\Models\SiteAgentSubscriber;
 use App\Models\SystemLog;
+use App\Services\Ai\AiUsageAttribution;
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Storage;
@@ -54,6 +55,16 @@ class SiteAgentConversation
      * @return string the reply to send back
      */
     public function handle(SiteAgentSubscriber $subscriber, string $text, ?string $messageId, ?string $mediaId = null): string
+    {
+        // Every AI call this message causes is booked to this customer, so the
+        // usage screen can set what they cost against what they pay.
+        return app(AiUsageAttribution::class)->for(
+            $subscriber->customer_id,
+            fn (): string => $this->handleFor($subscriber, $text, $messageId, $mediaId),
+        );
+    }
+
+    private function handleFor(SiteAgentSubscriber $subscriber, string $text, ?string $messageId, ?string $mediaId): string
     {
         $text = trim($text);
 
