@@ -43,7 +43,13 @@ class SiteAgentMessageCost extends Page
     /** Trailing window the comparison covers. Bound to the page's select. */
     public int $windowDays = 30;
 
-    /** The windows the operator may pick (whitelist — never free input). */
+    /**
+     * The windows the operator may pick (whitelist — never free input).
+     *
+     * The keys are MessagingCostReport::WINDOWS: cost is cached per window, and
+     * offering one the pull never fetched would show an empty figure under a
+     * period the screen named itself.
+     */
     public const WINDOWS = [7 => '7 ימים', 30 => '30 ימים', 90 => '90 ימים'];
 
     public function updatedWindowDays(mixed $value): void
@@ -60,7 +66,7 @@ class SiteAgentMessageCost extends Page
     /** What one message costs us on average — the figure the plan price must beat. */
     public function getCostPerMessageProperty(): ?int
     {
-        return app(MessagingCostReport::class)->costPerMessage();
+        return app(MessagingCostReport::class)->costPerMessage($this->windowDays);
     }
 
     /**

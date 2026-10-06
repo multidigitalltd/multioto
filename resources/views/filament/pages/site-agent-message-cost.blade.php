@@ -156,13 +156,19 @@
                     @endif
                 </p>
             @endif
-            {{-- The one thing this screen cannot see, said rather than left as a
-                 silent discrepancy: a cycle whose messages were ALL inside the
-                 allowance produces no messages line at all, so it is counted in
-                 "sent" above and in nothing below it. --}}
+            @if ($s['pending_messages'] > 0)
+                {{-- Owed but not yet earned. Messages are billed in arrears, so
+                     the newest ones have no invoice yet — neither claimed as
+                     revenue nor quietly lost. --}}
+                <p class="mt-2">
+                    ועוד <strong>{{ number_format($s['pending_messages']) }}</strong> הודעות נשלחו וטרם חויבו —
+                    הן ייכנסו לחידוש הבא. העלות שלהן כבר נספרה למעלה, וההכנסה מהן עוד לא.
+                </p>
+            @endif
             <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
-                חודש שכל ההודעות בו היו כלולות במנוי אינו מייצר שורת הודעות בחשבונית, ולכן הוא נספר
-                ב"שלח" ולא בשורות שמתחת — ההפרש בין המספרים הוא הוא.
+                ההכנסה מיוחסת לפי <strong>מתי ההודעה נשלחה</strong> ולא לפי מתי יצאה החשבונית: הודעות
+                מחויבות בדיעבד, וחידוש שיצא הבוקר יכול לכלול חודש שלם — חיתוך לפי תאריך החשבונית היה
+                מעמיד שבוע של עלות מול חודש של הכנסה.
             </p>
             @if ($s['estimated_rows'] > 0)
                 <p class="mt-2 text-xs text-warning-700 dark:text-warning-300">

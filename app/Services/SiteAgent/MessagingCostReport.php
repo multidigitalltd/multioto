@@ -42,8 +42,18 @@ use Illuminate\Support\Facades\Cache;
  */
 class MessagingCostReport
 {
-    /** Cache key for the figures the scheduled pull leaves behind. */
+    /** Cache key prefix for the figures the scheduled pull leaves behind. */
     public const CACHE_KEY = 'siteagent.messaging_cost';
+
+    /**
+     * The windows the screen offers, and therefore the windows that are pulled.
+     *
+     * Cost is cached PER window. Meta is asked about a period, and a single
+     * cached figure would mean a 7-day view subtracting a 30-day cost from
+     * 7 days of revenue — a margin that is wrong by a factor of four, and wrong
+     * in whichever direction nobody checks.
+     */
+    public const WINDOWS = [7, 30, 90];
 
     /**
      * How long a pulled figure stays usable.
@@ -65,89 +75,141 @@ class MessagingCostReport
      */
     public function refresh(int $days = 30): array
     {
+        $days = in_array($days, self::WINDOWS, true) ? $days : 30;
+
         $end = Carbon::now();
-        $start = $end->copy()->subDays(max(1, $days));
+        $start = $end->copy()->subDays($days);
 
         $data = $this->whatsapp->pricingAnalytics($start, $end);
 
         if ($data === null) {
-            // Kept separately from the figures, so a failed pull leaves the last
-            // good numbers on screen beside the reason they are not fresher.
-            Cache::put(self::CACHE_KEY.'.error', [
-                'reason' => $this->whatsapp->lastError() ?: 'מטא לא החזירה נתוני עלות.',
-                'at' => Carbon::now()->toIso8601String(),
-            ], now()->addDays(self::CACHE_DAYS));
-
-            return ['ok' => false, 'reason' => $this->whatsapp->lastError()];
+            return $this->fail($days, $this->whatsapp->lastError() ?: 'מטא לא החזירה נתוני עלות.');
         }
 
-        $parsed = $this->parse($data);
+        $parsed = $this->parse((array) ($data['analytics'] ?? []));
 
-        Cache::put(self::CACHE_KEY, [
+        /*
+         | COST withheld rather than refused.
+         |
+         | Meta does not return COST at all for an account that bills through a
+         | Solution Partner's credit line — and it says so by answering normally
+         | and leaving the figure out, not by failing the request. Defaulting the
+         | missing amount to zero would turn exactly the "we cannot know" case
+         | this screen exists to preserve into a confident ₪0, and would clear
+         | the recorded reason on its way.
+         */
+        if (! $parsed['has_cost']) {
+            return $this->fail($days, 'מטא החזירה נתונים אך בלי עלות. כך היא עונה לחשבון שמחויב דרך קו אשראי של שותף — ואז הסכום קיים רק בחיוב של השותף.');
+        }
+
+        Cache::put($this->key($days), [
             'from' => $start->toIso8601String(),
             'to' => $end->toIso8601String(),
+            'days' => $days,
             'pulled_at' => Carbon::now()->toIso8601String(),
-            'currency' => $parsed['currency'],
+            // From the account, not from the analytics envelope — which never
+            // names a currency, however much the amounts look like shekels.
+            'currency' => strtoupper(trim((string) ($data['currency'] ?? ''))),
             'by_category' => $parsed['by_category'],
             'total' => $parsed['total'],
             'messages' => $parsed['messages'],
         ], now()->addDays(self::CACHE_DAYS));
 
-        Cache::forget(self::CACHE_KEY.'.error');
+        Cache::forget($this->key($days).'.error');
 
         return ['ok' => true, 'reason' => null];
+    }
+
+    /** Cache key for one window. */
+    private function key(int $days): string
+    {
+        return self::CACHE_KEY.'.'.$days;
+    }
+
+    /**
+     * Record why a window has no fresh figure, and leave the old one standing.
+     *
+     * The reason is cached beside the figures rather than instead of them: a day
+     * Meta is unreachable should show the last good number with its date and the
+     * reason it is not newer, not an empty screen.
+     *
+     * @return array{ok: bool, reason: ?string}
+     */
+    private function fail(int $days, string $reason): array
+    {
+        Cache::put($this->key($days).'.error', [
+            'reason' => $reason,
+            'at' => Carbon::now()->toIso8601String(),
+        ], now()->addDays(self::CACHE_DAYS));
+
+        return ['ok' => false, 'reason' => $reason];
     }
 
     /**
      * Meta's reply, reduced to what the screen asks of it.
      *
-     * Meta nests the numbers as data_points under the field, with a currency on
-     * the envelope. Every figure is read defensively: this is an external shape
-     * that has changed before, and a key that moved must produce "unknown"
-     * rather than a confident zero.
+     * The nesting is pricing_analytics.data[].data_points[] — a list of series,
+     * each with its own points — and NOT data_points on the envelope. Reading it
+     * one level too high returns nothing at all, which is indistinguishable on
+     * screen from a month in which no messages were sent.
+     *
+     * Every figure is read defensively: this is an external shape that has
+     * changed before, and a key that moved must produce "unknown" rather than a
+     * confident zero. `has_cost` carries that distinction out — it is false when
+     * no point carried a cost at all, which is how Meta answers an account whose
+     * spend it will not disclose.
      *
      * Amounts arrive as a decimal in the account's currency and are turned into
      * integer agorot/cents once, here — the only place a float touches money.
      *
-     * @param  array<string, mixed>  $data
-     * @return array{currency: string, by_category: array<string, array{cost: int, messages: int}>, total: int, messages: int}
+     * @param  array<string, mixed>  $analytics
+     * @return array{by_category: array<string, array{cost: int, messages: int}>, total: int, messages: int, has_cost: bool}
      */
-    private function parse(array $data): array
+    private function parse(array $analytics): array
     {
-        $points = (array) ($data['data_points'] ?? []);
-        $currency = strtoupper(trim((string) ($data['currency'] ?? '')));
-
         $byCategory = [];
         $total = 0;
         $messages = 0;
+        $hasCost = false;
 
-        foreach ($points as $point) {
-            if (! is_array($point)) {
+        foreach ((array) ($analytics['data'] ?? []) as $series) {
+            if (! is_array($series)) {
                 continue;
             }
 
-            $category = strtolower(trim((string) ($point['pricing_category'] ?? $point['category'] ?? 'unknown')));
-            $category = $category === '' ? 'unknown' : $category;
+            foreach ((array) ($series['data_points'] ?? []) as $point) {
+                if (! is_array($point)) {
+                    continue;
+                }
 
-            // round(), not (int): 0.0061 × 100 lands on 0.60999… in binary, and
-            // truncating it loses an agora on every single row.
-            $cost = (int) round(((float) ($point['cost'] ?? 0)) * 100);
-            $count = (int) ($point['volume'] ?? $point['message_volume'] ?? 0);
+                $category = strtolower(trim((string) ($point['pricing_category'] ?? 'unknown')));
+                $category = $category === '' ? 'unknown' : $category;
 
-            $byCategory[$category]['cost'] = ($byCategory[$category]['cost'] ?? 0) + $cost;
-            $byCategory[$category]['messages'] = ($byCategory[$category]['messages'] ?? 0) + $count;
+                // Whether the key is THERE, asked before its value is read: a
+                // withheld cost and a genuine zero are the same 0 once cast.
+                $costGiven = array_key_exists('cost', $point) && $point['cost'] !== null;
+                $hasCost = $hasCost || $costGiven;
 
-            $total += $cost;
-            $messages += $count;
+                // round(), not (int): 0.61 × 100 lands on 60.999… in binary, and
+                // truncating it loses an agora on every single row.
+                $cost = $costGiven ? (int) round(((float) $point['cost']) * 100) : 0;
+                $count = (int) ($point['volume'] ?? 0);
+
+                $byCategory[$category]['cost'] = ($byCategory[$category]['cost'] ?? 0) + $cost;
+                $byCategory[$category]['messages'] = ($byCategory[$category]['messages'] ?? 0) + $count;
+
+                $total += $cost;
+                $messages += $count;
+            }
         }
 
         krsort($byCategory);
 
         return [
-            'currency' => $currency,
             'by_category' => $byCategory,
             'total' => $total,
             'messages' => $messages,
+            'has_cost' => $hasCost,
         ];
     }
 
@@ -166,10 +228,15 @@ class MessagingCostReport
      */
     public function summary(int $days = 30): array
     {
-        $cost = Cache::get(self::CACHE_KEY);
-        $error = Cache::get(self::CACHE_KEY.'.error');
+        $days = in_array($days, self::WINDOWS, true) ? $days : 30;
 
-        $since = Carbon::now()->subDays(max(1, $days));
+        // The figure for THIS window. One shared entry would show a 30-day cost
+        // under a 7-day revenue, and a refresh for one window would quietly
+        // change the period every other screen was reading.
+        $cost = Cache::get($this->key($days));
+        $error = Cache::get($this->key($days).'.error');
+
+        $since = Carbon::now()->subDays($days);
         $revenue = $this->revenue($since);
         $counts = $this->counts($since);
 
@@ -190,6 +257,7 @@ class MessagingCostReport
             'estimated_rows' => $revenue['estimated'],
             'sent_messages' => $counts['sent'],
             'unbilled_messages' => $counts['unbilled'],
+            'pending_messages' => $revenue['pending'],
             'margin' => $comparable ? $revenue['net'] - (int) $cost['total'] : null,
             'comparable' => $comparable,
             'currency' => $currency,
@@ -198,49 +266,83 @@ class MessagingCostReport
     }
 
     /**
-     * What we billed for messages since a date, before VAT.
+     * What we billed for the messages SENT in this window, before VAT.
      *
-     * From the charges, because that is what was invoiced. Only charges that
-     * SUCCEEDED count: a failed charge is not revenue, and counting it would
+     * Keyed on when the messages went out, not on when the invoice was raised,
+     * because messages are billed in arrears and the two periods do not line up.
+     * A renewal raised this morning can carry a whole month of messages: filter
+     * charges by their own date and a 7-day view shows seven days of Meta's cost
+     * against a month of revenue, while the messages actually sent in those
+     * seven days sit unbilled and uncounted. The margin can come out the wrong
+     * sign while each query is individually correct.
+     *
+     * So the ledger leads. Every usage row already knows when it was sent and
+     * which charge settled it; the charge supplies the rate, and only a charge
+     * that SUCCEEDED counts — a failed one is not revenue, and counting it would
      * make a dunning problem look like a margin.
      *
-     * `net_agorot` is read off the line where it is present. Lines written
-     * before it existed carry only the VAT-inclusive figure, so those are
-     * reported separately as estimated rather than silently divided back out.
+     * The rate is the charge's own average over its messages
+     * (`net_agorot / count`), which spreads a bundled allowance evenly across
+     * them. Which individual messages fell inside the allowance is not recorded
+     * anywhere, so an even spread is the honest answer rather than a guess that
+     * looks precise; across a whole charge it reconciles exactly.
      *
-     * `included` is read alongside, because a plan may bundle an allowance: a
-     * charge's messages line carries how many of them the subscription already
-     * paid for. Those messages cost us exactly what the charged ones cost, and
-     * dividing revenue by ALL the messages on the invoice would report a
-     * per-message price we never charged.
-     *
-     * @return array{net: int, messages: int, included: int, estimated: int}
+     * @return array{net: int, messages: int, included: int, estimated: int, pending: int}
      */
     private function revenue(Carbon $since): array
     {
+        // Messages sent in the window, grouped by the charge that settled them.
+        $settled = SiteAgentUsage::query()
+            ->where('sent_at', '>=', $since)
+            ->whereNotNull('charge_id')
+            ->groupBy('charge_id')
+            ->selectRaw('charge_id, COUNT(*) as in_window')
+            ->pluck('in_window', 'charge_id');
+
+        // Sent, billable, and not yet on any invoice. Revenue that is owed but
+        // not yet earned — shown separately so it is neither claimed nor lost.
+        $pending = SiteAgentUsage::query()
+            ->where('sent_at', '>=', $since)
+            ->whereNull('charge_id')
+            ->where('billable', true)
+            ->count();
+
+        if ($settled->isEmpty()) {
+            return ['net' => 0, 'messages' => 0, 'included' => 0, 'estimated' => 0, 'pending' => $pending];
+        }
+
         $net = 0;
         $messages = 0;
         $included = 0;
         $estimated = 0;
 
         Charge::query()
+            ->whereIn('id', $settled->keys()->all())
             ->where('status', ChargeStatus::Succeeded)
-            ->where('created_at', '>=', $since)
-            ->whereNotNull('lines')
             ->select(['id', 'lines'])
-            ->chunkById(200, function ($charges) use (&$net, &$messages, &$included, &$estimated): void {
+            ->chunkById(200, function ($charges) use ($settled, &$net, &$messages, &$included, &$estimated): void {
                 foreach ($charges as $charge) {
+                    $inWindow = (int) $settled->get($charge->id, 0);
+                    $messages += $inWindow;
+
                     $line = collect($charge->lines ?? [])->firstWhere('kind', 'messages');
 
+                    // No messages line at all: every message on this charge was
+                    // inside the plan's allowance. They earned nothing, and that
+                    // is the honest figure — not a gap.
                     if ($line === null) {
+                        $included += $inWindow;
+
                         continue;
                     }
 
-                    $messages += (int) ($line['count'] ?? 0);
-                    $included += (int) ($line['included'] ?? 0);
+                    $onCharge = max(1, (int) ($line['count'] ?? 0));
+                    $share = min(1.0, $inWindow / $onCharge);
+
+                    $included += (int) round(((int) ($line['included'] ?? 0)) * $share);
 
                     if (isset($line['net_agorot'])) {
-                        $net += (int) $line['net_agorot'];
+                        $net += (int) round(((int) $line['net_agorot']) * $share);
 
                         continue;
                     }
@@ -251,7 +353,7 @@ class MessagingCostReport
                 }
             });
 
-        return ['net' => $net, 'messages' => $messages, 'included' => $included, 'estimated' => $estimated];
+        return ['net' => $net, 'messages' => $messages, 'included' => $included, 'estimated' => $estimated, 'pending' => $pending];
     }
 
     /**
@@ -281,11 +383,13 @@ class MessagingCostReport
      *
      * The number the plan's "price per message" has to beat. Null when the cost
      * is unavailable or in another currency, or when no messages were counted —
-     * dividing by zero to show "₪0.00 per message" would read as free.
+     * dividing by zero to show "₪0.00 per message" would read as free. Per
+     * window, like the cost it divides.
      */
-    public function costPerMessage(): ?int
+    public function costPerMessage(int $days = 30): ?int
     {
-        $cost = Cache::get(self::CACHE_KEY);
+        $days = in_array($days, self::WINDOWS, true) ? $days : 30;
+        $cost = Cache::get($this->key($days));
 
         if (! is_array($cost) || (int) ($cost['messages'] ?? 0) <= 0) {
             return null;

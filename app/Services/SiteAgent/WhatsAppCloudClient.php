@@ -315,8 +315,21 @@ class WhatsAppCloudClient
             return null;
         }
 
+        /*
+         | Both metrics and the category dimension, because the report reads all
+         | three numbers. COST alone returns no `volume` and no
+         | `pricing_category` at all, which does not fail — it quietly produces a
+         | report of zero messages in one unclassified row.
+         |
+         | `currency` is asked for alongside, as a field of the account itself:
+         | the amounts come back as bare decimals "in the WABA's currency" and
+         | the analytics envelope never names it. Without it there is nothing to
+         | tell shekels from dollars, and the margin would be a subtraction
+         | between two different currencies.
+         */
         $field = sprintf(
-            'pricing_analytics.start(%d).end(%d).granularity(DAILY).metric_types([COST])',
+            'pricing_analytics.start(%d).end(%d).granularity(DAILY)'
+                .'.metric_types([COST,VOLUME]).dimensions([PRICING_CATEGORY])',
             $start->getTimestamp(),
             $end->getTimestamp(),
         );
@@ -325,7 +338,7 @@ class WhatsAppCloudClient
             $response = Http::withToken((string) config('siteagent.whatsapp.token'))
                 ->timeout((int) config('siteagent.whatsapp.timeout_seconds', 20))
                 ->get(sprintf('https://graph.facebook.com/%s/%s', $this->apiVersion(), $waba), [
-                    'fields' => $field,
+                    'fields' => 'currency,'.$field,
                 ]);
 
             if ($response->failed()) {
@@ -339,7 +352,16 @@ class WhatsAppCloudClient
                 return null;
             }
 
-            return (array) $response->json('pricing_analytics', []);
+            /*
+             | Handed back whole, with the account's currency beside it. Meta
+             | nests the figures as pricing_analytics.data[].data_points[] — one
+             | wrapper per series — and flattening it is a decision about how to
+             | aggregate, which belongs in MessagingCostReport and not here.
+             */
+            return [
+                'currency' => (string) $response->json('currency', ''),
+                'analytics' => (array) $response->json('pricing_analytics', []),
+            ];
         } catch (\Throwable $e) {
             $this->lastError = Str::limit($e->getMessage(), 200);
 

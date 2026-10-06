@@ -13,6 +13,7 @@ use App\Models\SystemLog;
 use App\Models\User;
 use App\Services\SiteAgent\MessagingCostReport;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
@@ -29,6 +30,9 @@ class SiteAgentMessageCostTest extends TestCase
 {
     use RefreshDatabase;
 
+    /** @var array<string, mixed> The body the faked Graph API currently returns. */
+    private array $metaBody = [];
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -43,20 +47,60 @@ class SiteAgentMessageCostTest extends TestCase
         ]);
     }
 
-    /** Meta's own shape, as the pricing_analytics field returns it. */
-    private function fakeMeta(string $currency = 'ILS', array $points = []): void
+    /**
+     * Meta's own shape — and the nesting is the point.
+     *
+     * pricing_analytics.data[].data_points[], not data_points on the envelope,
+     * and the currency is a field of the ACCOUNT rather than of the analytics.
+     * A fixture that flattens this passes against a contract that does not
+     * exist, which is the one way these tests could all be green over a screen
+     * that reports ₪0 forever.
+     */
+    private function fakeMeta(string $currency = 'ILS', ?array $points = null): void
     {
         $body = [
+            'currency' => $currency,
             'pricing_analytics' => [
-                'currency' => $currency,
-                'data_points' => $points ?: [
-                    ['pricing_category' => 'service', 'cost' => 12.20, 'volume' => 2000],
-                    ['pricing_category' => 'authentication', 'cost' => 0.61, 'volume' => 100],
+                'data' => [
+                    ['data_points' => $points ?? [
+                        ['pricing_category' => 'SERVICE', 'cost' => 12.20, 'volume' => 2000],
+                        ['pricing_category' => 'AUTHENTICATION', 'cost' => 0.61, 'volume' => 100],
+                    ]],
                 ],
             ],
         ];
 
-        Http::fake(['*' => Http::response($body)]);
+        /*
+         | Held on the test and served through a closure, so calling this again
+         | REPLACES the response. Registering a second '*' stub would only append
+         | one, and Laravel answers with the first that matches — so the earlier
+         | body would keep winning and a test that changes the response would be
+         | asserting against the old one.
+         */
+        $this->metaBody = $body;
+
+        Http::fake(['*' => fn () => Http::response($this->metaBody)]);
+    }
+
+    /**
+     * Mark a charge's messages as sent inside the window and settled onto it.
+     *
+     * Revenue is attributed by when the messages went out, so a charge with no
+     * usage rows behind it earns nothing — which is what the ledger says.
+     */
+    private function settle(Charge $charge, int $count, ?Customer $customer = null): void
+    {
+        $customer ??= Customer::factory()->create();
+
+        for ($i = 0; $i < $count; $i++) {
+            SiteAgentUsage::create([
+                'customer_id' => $customer->id,
+                'provider_message_id' => 'wamid-'.$charge->id.'-'.$i,
+                'billable' => true,
+                'charge_id' => $charge->id,
+                'sent_at' => now()->subDay(),
+            ]);
+        }
     }
 
     private function billedCharge(int $count, int $netAgorot, array $overrides = []): Charge
@@ -175,7 +219,7 @@ class SiteAgentMessageCostTest extends TestCase
         $this->fakeMeta('USD');
         app(MessagingCostReport::class)->refresh();
 
-        $this->billedCharge(count: 2000, netAgorot: 4000);
+        $this->settle($this->billedCharge(count: 2000, netAgorot: 4000), 2000);
 
         $summary = app(MessagingCostReport::class)->summary();
 
@@ -197,7 +241,7 @@ class SiteAgentMessageCostTest extends TestCase
         $this->fakeMeta();
         app(MessagingCostReport::class)->refresh();
 
-        $this->billedCharge(count: 2000, netAgorot: 2400);
+        $this->settle($this->billedCharge(count: 2000, netAgorot: 2400), 2000);
 
         $summary = app(MessagingCostReport::class)->summary();
 
@@ -216,7 +260,7 @@ class SiteAgentMessageCostTest extends TestCase
         $this->fakeMeta();
         app(MessagingCostReport::class)->refresh();
 
-        $this->billedCharge(count: 2000, netAgorot: 2400, overrides: ['status' => ChargeStatus::Failed]);
+        $this->settle($this->billedCharge(count: 2000, netAgorot: 2400, overrides: ['status' => ChargeStatus::Failed]), 2000);
 
         $summary = app(MessagingCostReport::class)->summary();
 
@@ -234,6 +278,7 @@ class SiteAgentMessageCostTest extends TestCase
         $lines = $charge->lines;
         unset($lines[1]['net_agorot']);
         $charge->update(['lines' => $lines]);
+        $this->settle($charge, 500);
 
         $summary = app(MessagingCostReport::class)->summary();
 
@@ -357,7 +402,7 @@ class SiteAgentMessageCostTest extends TestCase
     {
         $this->fakeMeta();
         app(MessagingCostReport::class)->refresh();
-        $this->billedCharge(count: 2000, netAgorot: 2400);
+        $this->settle($this->billedCharge(count: 2000, netAgorot: 2400), 2000);
 
         $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
 
@@ -398,6 +443,7 @@ class SiteAgentMessageCostTest extends TestCase
         $lines = $charge->lines;
         $lines[1]['included'] = 500;
         $charge->update(['lines' => $lines]);
+        $this->settle($charge, 2000);
 
         $summary = app(MessagingCostReport::class)->summary();
 
@@ -405,5 +451,200 @@ class SiteAgentMessageCostTest extends TestCase
         $this->assertSame(500, $summary['included_messages']);
         // ההכנסה היא מה שנגבה בפועל, ולא מחיר כפול מספר ההודעות.
         $this->assertSame(1800, $summary['revenue_net']);
+    }
+
+    /*
+    | ----------------------------------------------------------------
+    | החוזה מול מטא — חמש הדרכים שהמסך היה מדווח ₪0 בשקט
+    | ----------------------------------------------------------------
+    */
+
+    /**
+     * הנתונים נקראים מהקינון האמיתי, לא משכבה אחת מעליו.
+     *
+     * מטא מחזירה pricing_analytics.data[].data_points[]. קריאה של data_points
+     * ישירות מהעוטף מחזירה מערך ריק — ומערך ריק נראה על המסך בדיוק כמו חודש
+     * שלא נשלחה בו אף הודעה.
+     */
+    public function test_a_flattened_response_is_not_what_we_read(): void
+    {
+        // הצורה השגויה: data_points על העוטף, בלי data[].
+        Http::fake(['*' => Http::response([
+            'currency' => 'ILS',
+            'pricing_analytics' => [
+                'data_points' => [['pricing_category' => 'SERVICE', 'cost' => 99.00, 'volume' => 500]],
+            ],
+        ])]);
+
+        // אין נקודות בקינון הנכון, ולכן אין עלות — ולא ₪0 מדווח בביטחון.
+        $this->assertFalse(app(MessagingCostReport::class)->refresh()['ok']);
+        $this->assertNull(app(MessagingCostReport::class)->summary()['cost']);
+    }
+
+    /** וכמה סדרות — כולן נאספות, ולא רק הראשונה. */
+    public function test_every_series_in_the_response_is_aggregated(): void
+    {
+        Http::fake(['*' => Http::response([
+            'currency' => 'ILS',
+            'pricing_analytics' => ['data' => [
+                ['data_points' => [['pricing_category' => 'SERVICE', 'cost' => 10.00, 'volume' => 1000]]],
+                ['data_points' => [['pricing_category' => 'UTILITY', 'cost' => 5.00, 'volume' => 500]]],
+            ]],
+        ])]);
+
+        app(MessagingCostReport::class)->refresh();
+        $summary = app(MessagingCostReport::class)->summary();
+
+        $this->assertSame(1500, $summary['cost']['total']);
+        $this->assertSame(1500, $summary['cost']['messages']);
+    }
+
+    /**
+     * הבקשה מבקשת את כל מה שהדוח קורא.
+     *
+     * COST לבדו אינו מחזיר volume ואינו מחזיר pricing_category, והוא גם אינו
+     * נכשל — הוא פשוט מחזיר דוח של אפס הודעות בשורה אחת לא מסווגת. והמטבע הוא
+     * שדה של החשבון ולא של האנליטיקס.
+     */
+    public function test_the_request_asks_for_both_metrics_the_category_and_the_currency(): void
+    {
+        $this->fakeMeta();
+
+        app(MessagingCostReport::class)->refresh();
+
+        Http::assertSent(function (Request $request): bool {
+            $fields = urldecode((string) ($request->data()['fields'] ?? ''));
+
+            return str_contains($fields, 'COST')
+                && str_contains($fields, 'VOLUME')
+                && str_contains($fields, 'PRICING_CATEGORY')
+                && str_starts_with($fields, 'currency,');
+        });
+    }
+
+    /**
+     * עלות שמטא השאירה בחוץ אינה ₪0 — גם כשהתשובה עצמה הצליחה.
+     *
+     * לחשבון שמחויב דרך קו אשראי של שותף מטא עונה כרגיל ופשוט לא מחזירה COST.
+     * ברירת מחדל של 0 הייתה הופכת בדיוק את המצב שהמסך הזה נבנה לשמר — "אי אפשר
+     * לדעת" — לרענון מוצלח של אפס, ומוחקת את הסיבה בדרך.
+     */
+    public function test_a_withheld_cost_fails_instead_of_becoming_zero(): void
+    {
+        // תשובה תקפה, עם volume, בלי cost.
+        $this->fakeMeta('ILS', [['pricing_category' => 'SERVICE', 'volume' => 5000]]);
+
+        $result = app(MessagingCostReport::class)->refresh();
+
+        $this->assertFalse($result['ok']);
+        $this->assertStringContainsString('קו אשראי של שותף', (string) $result['reason']);
+
+        $summary = app(MessagingCostReport::class)->summary();
+        $this->assertNull($summary['cost']);
+        $this->assertNull($summary['margin']);
+    }
+
+    /**
+     * כל חלון נשמר בנפרד.
+     *
+     * אחרת תצוגת 7 ימים מחסרת עלות של 30 יום מהכנסה של 7 — טעות פי ארבעה,
+     * בכיוון שאף אחד לא בודק — ורענון של חלון אחד משנה בשקט את התקופה שכל מסך
+     * אחר קורא.
+     */
+    public function test_each_window_keeps_its_own_cost(): void
+    {
+        $this->fakeMeta('ILS', [['pricing_category' => 'SERVICE', 'cost' => 30.00, 'volume' => 3000]]);
+        app(MessagingCostReport::class)->refresh(30);
+
+        $this->fakeMeta('ILS', [['pricing_category' => 'SERVICE', 'cost' => 7.00, 'volume' => 700]]);
+        app(MessagingCostReport::class)->refresh(7);
+
+        $this->assertSame(3000, app(MessagingCostReport::class)->summary(30)['cost']['total']);
+        $this->assertSame(700, app(MessagingCostReport::class)->summary(7)['cost']['total']);
+    }
+
+    /** וחלון שלא נשלף אינו מציג את הנתון של חלון אחר. */
+    public function test_a_window_never_pulled_shows_no_cost_rather_than_anothers(): void
+    {
+        $this->fakeMeta();
+        app(MessagingCostReport::class)->refresh(30);
+
+        $this->assertNotNull(app(MessagingCostReport::class)->summary(30)['cost']);
+        $this->assertNull(app(MessagingCostReport::class)->summary(7)['cost']);
+    }
+
+    /** והשליפה המתוזמנת מכסה את כל החלונות שהמסך מציע. */
+    public function test_the_scheduled_pull_covers_every_window_the_screen_offers(): void
+    {
+        $this->fakeMeta();
+
+        (new SyncSiteAgentMessagingCostJob)->handle(app(MessagingCostReport::class));
+
+        foreach (MessagingCostReport::WINDOWS as $days) {
+            $this->assertNotNull(app(MessagingCostReport::class)->summary($days)['cost'],
+                "לחלון {$days} אין נתון, והמסך מציע אותו.");
+        }
+    }
+
+    /**
+     * ההכנסה מיוחסת לפי מתי ההודעה נשלחה, לא לפי מתי יצאה החשבונית.
+     *
+     * הודעות מחויבות בדיעבד: חידוש שיצא הבוקר יכול לכלול חודש שלם. חיתוך לפי
+     * תאריך החשבונית היה מעמיד שבוע של עלות ממטא מול חודש של הכנסה — והמרווח
+     * היה יכול לצאת בסימן ההפוך, כששתי השאילתות נכונות כל אחת לעצמה.
+     */
+    public function test_revenue_follows_when_the_messages_were_sent(): void
+    {
+        $this->fakeMeta();
+        app(MessagingCostReport::class)->refresh(7);
+        app(MessagingCostReport::class)->refresh(30);
+
+        // חשבונית שיצאה היום על 1,000 הודעות — 900 מהן נשלחו לפני שלושה שבועות,
+        // ו-100 בשבוע האחרון.
+        $charge = $this->billedCharge(count: 1000, netAgorot: 1000);
+        $customer = Customer::factory()->create();
+
+        foreach (range(1, 1000) as $i) {
+            SiteAgentUsage::create([
+                'customer_id' => $customer->id,
+                'provider_message_id' => 'wamid-old-'.$i,
+                'billable' => true,
+                'charge_id' => $charge->id,
+                'sent_at' => $i <= 900 ? now()->subDays(21) : now()->subDays(2),
+            ]);
+        }
+
+        // בתצוגת 7 ימים נספרות 100 ההודעות של השבוע, ואיתן עשירית מההכנסה.
+        $week = app(MessagingCostReport::class)->summary(7);
+        $this->assertSame(100, $week['billed_messages']);
+        $this->assertSame(100, $week['revenue_net']);
+
+        // ובתצוגת 30 יום — כולן.
+        $month = app(MessagingCostReport::class)->summary(30);
+        $this->assertSame(1000, $month['billed_messages']);
+        $this->assertSame(1000, $month['revenue_net']);
+    }
+
+    /** והודעות שנשלחו וטרם חויבו מדווחות בנפרד — לא כהכנסה ולא כאובדן. */
+    public function test_messages_sent_but_not_yet_billed_are_reported_as_pending(): void
+    {
+        $this->fakeMeta();
+        app(MessagingCostReport::class)->refresh();
+
+        $customer = Customer::factory()->create();
+
+        foreach (range(1, 40) as $i) {
+            SiteAgentUsage::create([
+                'customer_id' => $customer->id,
+                'provider_message_id' => 'wamid-pending-'.$i,
+                'billable' => true,
+                'sent_at' => now()->subHours(3),
+            ]);
+        }
+
+        $summary = app(MessagingCostReport::class)->summary();
+
+        $this->assertSame(40, $summary['pending_messages']);
+        $this->assertSame(0, $summary['revenue_net']);
     }
 }

@@ -25,7 +25,8 @@ class SyncSiteAgentMessagingCostJob implements ShouldQueue
 
     public int $tries = 1;
 
-    public function __construct(public int $days = 30) {}
+    /** Null means every window the screen offers. */
+    public function __construct(public ?int $days = null) {}
 
     public function handle(MessagingCostReport $report): void
     {
@@ -33,18 +34,32 @@ class SyncSiteAgentMessagingCostJob implements ShouldQueue
             return;
         }
 
-        $result = $report->refresh($this->days);
+        /*
+         | Every window the screen offers, because the cost is cached per window:
+         | Meta is asked about a period, and the 7-day view must not show a
+         | 30-day figure. Three small calls once a day.
+         */
+        $windows = $this->days === null ? MessagingCostReport::WINDOWS : [$this->days];
+        $failed = [];
 
-        if ($result['ok']) {
+        foreach ($windows as $days) {
+            $result = $report->refresh($days);
+
+            if (! $result['ok']) {
+                $failed[$days] = $result['reason'] ?: 'לא צוינה סיבה.';
+            }
+        }
+
+        if ($failed === []) {
             return;
         }
 
-        // Recorded once a day at most, which is how often this runs. The reason
-        // matters: "COST is not returned for accounts on a partner's credit
-        // line" and "the token expired" both look like no data on the screen,
-        // and only one of them is something anybody can fix.
+        // One line however many windows failed, because they fail together and
+        // for the same reason. And the reason matters: "COST is withheld for an
+        // account on a partner's credit line" and "the token expired" both look
+        // like no data on the screen, and only one of them is fixable.
         SystemLog::record('warning', 'siteagent',
-            'לא התקבלו נתוני עלות הודעות ממטא: '.($result['reason'] ?: 'לא צוינה סיבה.'),
-            ['days' => $this->days]);
+            'לא התקבלו נתוני עלות הודעות ממטא: '.reset($failed),
+            ['windows' => array_keys($failed)]);
     }
 }
