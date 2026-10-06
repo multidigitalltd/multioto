@@ -70,7 +70,11 @@ class SendSiteAgentLeadAlertsJob implements ShouldQueue
             ->groupBy('site_id')
             ->each(function (Collection $subscribers) use ($alerts, $whatsapp, $meter, $assistant, $billing): void {
                 $site = $subscribers->first()->site;
-                $recent = $site !== null ? $alerts->recent($site) : null;
+                // One read per site, from the furthest-behind number on it;
+                // each number then skips what it has already been told.
+                $cursors = $subscribers->pluck('lead_alert_cursor')->filter();
+                $after = $cursors->count() === $subscribers->count() ? (int) $cursors->min() : null;
+                $recent = $site !== null ? $alerts->recent($site, $after) : null;
 
                 if ($recent === null) {
                     return; // The site did not answer; the next run asks again.
@@ -80,7 +84,7 @@ class SendSiteAgentLeadAlertsJob implements ShouldQueue
                     $fresh = $alerts->fresh($subscriber, $recent['leads']);
 
                     if ($fresh !== []) {
-                        $missed = $alerts->mayHaveMissed($subscriber, $recent['leads']);
+                        $missed = $alerts->mayHaveMissed($subscriber, $recent['leads'], $recent['complete']);
                         $subscription = $billing->subscriptionForSite($subscriber->customer, $subscriber->site_id);
                         $this->announce($subscriber, $subscription, $fresh, $missed, $alerts, $whatsapp, $meter, $assistant);
                     }

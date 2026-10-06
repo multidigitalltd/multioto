@@ -40,6 +40,9 @@ class SiteAgentLeadAlertsTest extends TestCase
     /** wp_lead_list calls made. */
     private int $reads = 0;
 
+    /** Does the fake plugin take a cursor (1.8.4+)? */
+    private bool $cursorPlugin = false;
+
     private SiteAgentSubscriber $number;
 
     protected function setUp(): void
@@ -257,6 +260,31 @@ class SiteAgentLeadAlertsTest extends TestCase
         $this->assertStringContainsString('מתוך 5 ההודעות', $this->sent[1][2]);
     }
 
+    public function test_a_plugin_with_a_cursor_reads_a_whole_burst_to_its_end(): void
+    {
+        $this->cursorPlugin = true;
+        $this->leads = [];
+        $this->enable();
+        $start = (int) $this->number->fresh()->lead_alert_cursor;
+
+        // 120 new leads, one a second, between two checks: more than one read holds.
+        foreach (range(1, 120) as $i) {
+            $this->leads[] = [...$this->lead(1000 + $i, "ליד {$i}"), 'ts' => $start + $i];
+        }
+
+        $this->runAlerts();
+
+        // The oldest of the burst comes first, and the count is exact — no "at least".
+        $this->assertStringContainsString('ליד 1', $this->sent[0][2]);
+        $this->assertStringContainsString('ועוד 117 לידים', $this->sent[2][2]);
+        $this->assertStringNotContainsString('לפחות', $this->sent[2][2]);
+        // Every one of them accounted for, and the cursor past the last.
+        $this->assertSame($start + 120, $this->number->fresh()->lead_alert_cursor);
+
+        $this->runAlerts();
+        $this->assertCount(3, $this->sent);
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────
 
     private function enable(): void
@@ -297,14 +325,26 @@ class SiteAgentLeadAlertsTest extends TestCase
     private function fakeSite(): void
     {
         $mcp = Mockery::mock(McpClient::class);
-        $mcp->shouldReceive('callTool')->andReturnUsing(function (Site $site, string $tool) {
+        $mcp->shouldReceive('callTool')->andReturnUsing(function (Site $site, string $tool, array $arguments = []) {
             if ($tool !== 'wp_lead_list') {
                 return [];
             }
 
             $this->reads++;
 
-            return ['count' => count($this->leads), 'sources' => ['elementor'], 'leads' => $this->leads];
+            if ($this->cursorPlugin && isset($arguments['after'])) {
+                // Oldest first from the cursor, a page at a time — as 1.8.4 does.
+                $from = array_values(array_filter($this->leads, fn (array $lead): bool => $lead['ts'] >= $arguments['after']));
+                usort($from, fn (array $a, array $b): int => $a['ts'] <=> $b['ts']);
+                $page = array_slice($from, 0, $arguments['limit']);
+
+                return ['count' => count($page), 'sources' => ['elementor'], 'leads' => $page, 'has_more' => count($from) > count($page)];
+            }
+
+            $newest = $this->leads;
+            usort($newest, fn (array $a, array $b): int => ($b['ts'] ?? 0) <=> ($a['ts'] ?? 0));
+
+            return ['count' => count($this->leads), 'sources' => ['elementor'], 'leads' => array_slice($newest, 0, 50)];
         });
         $mcp->shouldReceive('textContent')->andReturnUsing(fn ($result): string => json_encode($result, JSON_UNESCAPED_UNICODE));
         $this->app->instance(McpClient::class, $mcp);

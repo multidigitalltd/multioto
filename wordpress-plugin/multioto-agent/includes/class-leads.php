@@ -35,12 +35,27 @@ class Multioto_Agent_Leads
     const MAX_VALUE = 500;
 
     /**
+     * Read order for the readers: newest first normally, oldest first when a
+     * cursor is given. Only ever one of these two literals — it goes into SQL.
+     *
+     * @var string
+     */
+    private static $direction = 'DESC';
+
+    /**
      * @param  array<string, mixed>  $args
      * @return array{count: int, sources: list<string>, leads: list<array<string, mixed>>}
      */
     public static function listLeads(array $args): array
     {
         $limit = min(self::MAX_LIMIT, max(1, (int) ($args['limit'] ?? 10)));
+
+        // A cursor: everything from this moment on, OLDEST first, a page at a
+        // time with `has_more`. A burst of a hundred submissions between two
+        // checks is then read to the end — the newest-first read stops at
+        // `limit` and the older ones in the burst could never be reached.
+        $after = isset($args['after']) ? max(0, (int) $args['after']) : 0;
+        self::$direction = $after > 0 ? 'ASC' : 'DESC';
         $days = max(1, min(366, (int) ($args['days'] ?? 30)));
         $search = trim(sanitize_text_field((string) ($args['search'] ?? '')));
         $since = time() - $days * DAY_IN_SECONDS;
@@ -52,6 +67,10 @@ class Multioto_Agent_Leads
         if ($range !== null) {
             $since = $range[0]->getTimestamp();
             $until = $range[1]->modify('+1 day')->getTimestamp() - 1;
+        }
+
+        if ($after > 0) {
+            $since = $after;
         }
 
         $readers = [
@@ -94,17 +113,30 @@ class Multioto_Agent_Leads
             }));
         }
 
-        usort($leads, static function (array $a, array $b): int {
-            return $b['timestamp'] <=> $a['timestamp'];
+        usort($leads, static function (array $a, array $b) use ($after): int {
+            return $after > 0 ? $a['timestamp'] <=> $b['timestamp'] : $b['timestamp'] <=> $a['timestamp'];
         });
 
-        $leads = array_map(static function (array $lead): array {
+        $total = count($leads);
+
+        $leads = array_map(static function (array $lead) use ($after): array {
+            // With a cursor the caller needs each lead's moment to move it on.
+            if ($after > 0) {
+                $lead['ts'] = $lead['timestamp'];
+            }
+
             unset($lead['timestamp']);
 
             return $lead;
         }, array_slice($leads, 0, $limit));
 
-        return ['count' => count($leads), 'sources' => $sources, 'leads' => $leads];
+        $out = ['count' => count($leads), 'sources' => $sources, 'leads' => $leads];
+
+        if ($after > 0) {
+            $out['has_more'] = $total > $limit;
+        }
+
+        return $out;
     }
 
     /** @return list<array<string, mixed>>|null */
@@ -122,7 +154,7 @@ class Multioto_Agent_Leads
         $rows = $wpdb->get_results($wpdb->prepare(
             "SELECT id, form_name, created_at_gmt FROM {$submissions}
              WHERE created_at_gmt >= %s AND status NOT LIKE %s
-             ORDER BY id DESC LIMIT %d",
+             ORDER BY id ".self::$direction." LIMIT %d",
             gmdate('Y-m-d H:i:s', $since),
             '%trash%',
             self::PER_SOURCE
@@ -169,7 +201,7 @@ class Multioto_Agent_Leads
             'post_status' => 'publish',
             'numberposts' => self::PER_SOURCE,
             'orderby' => 'date',
-            'order' => 'DESC',
+            'order' => self::$direction,
             'date_query' => [['after' => gmdate('Y-m-d H:i:s', $since), 'column' => 'post_date_gmt']],
         ]);
 
@@ -217,7 +249,7 @@ class Multioto_Agent_Leads
         $rows = $wpdb->get_results($wpdb->prepare(
             "SELECT entry_id, form_id, fields, date FROM {$table}
              WHERE date >= %s AND status NOT IN ('trash', 'spam')
-             ORDER BY entry_id DESC LIMIT %d",
+             ORDER BY entry_id ".self::$direction." LIMIT %d",
             gmdate('Y-m-d H:i:s', $since),
             self::PER_SOURCE
         ), ARRAY_A);
@@ -254,7 +286,7 @@ class Multioto_Agent_Leads
         $entries = GFAPI::get_entries(
             0,
             ['status' => 'active', 'start_date' => gmdate('Y-m-d H:i:s', $since)],
-            ['key' => 'date_created', 'direction' => 'DESC'],
+            ['key' => 'date_created', 'direction' => self::$direction],
             ['offset' => 0, 'page_size' => self::PER_SOURCE]
         );
 
@@ -315,7 +347,7 @@ class Multioto_Agent_Leads
             "SELECT s.id, s.response, s.created_at, f.title FROM {$submissions} s
              LEFT JOIN {$forms} f ON f.id = s.form_id
              WHERE s.created_at >= %s AND s.status NOT IN ('trashed', 'spam')
-             ORDER BY s.id DESC LIMIT %d",
+             ORDER BY s.id ".self::$direction." LIMIT %d",
             get_date_from_gmt(gmdate('Y-m-d H:i:s', $since)),
             self::PER_SOURCE
         ), ARRAY_A);

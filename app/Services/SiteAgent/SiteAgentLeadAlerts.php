@@ -61,6 +61,8 @@ class SiteAgentLeadAlerts
         $subscriber->forceFill([
             'lead_alerts' => true,
             'lead_alert_seen' => array_map($this->key(...), $recent['leads']),
+            // From now on: what is already there is not news.
+            'lead_alert_cursor' => now()->getTimestamp(),
         ])->save();
 
         return null;
@@ -68,32 +70,82 @@ class SiteAgentLeadAlerts
 
     public function disable(SiteAgentSubscriber $subscriber): void
     {
-        $subscriber->forceFill(['lead_alerts' => false, 'lead_alert_seen' => null])->save();
+        $subscriber->forceFill(['lead_alerts' => false, 'lead_alert_seen' => null, 'lead_alert_cursor' => null])->save();
+    }
+
+    /** Pages followed in one check. A burst beyond this waits for the next run. */
+    private const MAX_PAGES = 10;
+
+    /**
+     * The site's recent leads, newest first — or null when the read failed.
+     *
+     * With a cursor and a plugin that takes one (1.8.4+), everything since the
+     * cursor is read oldest first, page after page, so a burst bigger than
+     * one read is followed to the end: `complete` says it was. An older
+     * plugin ignores the cursor and answers with the last day's newest
+     * fifty, exactly as before — `complete` is then false and the caller
+     * says "at least" where it has to.
+     *
+     * @return array{sources: list<string>, leads: list<array<string, mixed>>, complete: bool}|null
+     */
+    public function recent(Site $site, ?int $after = null): ?array
+    {
+        $leads = [];
+        $sources = [];
+        $complete = false;
+
+        for ($page = 0; $page < self::MAX_PAGES; $page++) {
+            $decoded = $this->read($site, array_filter(['days' => 1, 'limit' => self::READ_LIMIT, 'after' => $after]));
+
+            if ($decoded === null) {
+                return $page === 0 ? null : ['sources' => $sources, 'leads' => array_reverse($leads), 'complete' => false];
+            }
+
+            $sources = array_values((array) ($decoded['sources'] ?? []));
+            $batch = array_values(array_filter((array) ($decoded['leads'] ?? []), 'is_array'));
+
+            if (! array_key_exists('has_more', $decoded)) {
+                // No cursor support: the plain newest-first read.
+                return ['sources' => $sources, 'leads' => $batch, 'complete' => false];
+            }
+
+            $leads = [...$leads, ...$batch];
+            $last = (int) ($batch[count($batch) - 1]['ts'] ?? 0);
+
+            // Done — or a page that does not move the cursor (more leads in
+            // one second than a page holds), which asking again cannot fix.
+            if (! $decoded['has_more'] || $batch === [] || $last <= (int) $after) {
+                $complete = ! $decoded['has_more'];
+                break;
+            }
+
+            $after = $last;
+        }
+
+        // Oldest-first pages, overlapping by a second at each seam: keyed
+        // once, and handed back newest first like the plain read.
+        $unique = [];
+
+        foreach ($leads as $lead) {
+            $unique[$this->key($lead)] = $lead;
+        }
+
+        return ['sources' => $sources, 'leads' => array_reverse(array_values($unique)), 'complete' => $complete];
     }
 
     /**
-     * The last day's leads on the site, newest first — or null when the read failed.
-     *
-     * @return array{sources: list<string>, leads: list<array<string, mixed>>}|null
+     * @param  array<string, mixed>  $arguments
+     * @return array<string, mixed>|null
      */
-    public function recent(Site $site): ?array
+    private function read(Site $site, array $arguments): ?array
     {
         try {
-            $decoded = json_decode($this->mcp->textContent(
-                $this->mcp->callTool($site, 'wp_lead_list', ['days' => 1, 'limit' => self::READ_LIMIT]),
-            ), true);
+            $decoded = json_decode($this->mcp->textContent($this->mcp->callTool($site, 'wp_lead_list', $arguments)), true);
         } catch (\Throwable) {
             return null;
         }
 
-        if (! is_array($decoded)) {
-            return null;
-        }
-
-        return [
-            'sources' => array_values((array) ($decoded['sources'] ?? [])),
-            'leads' => array_values(array_filter((array) ($decoded['leads'] ?? []), 'is_array')),
-        ];
+        return is_array($decoded) ? $decoded : null;
     }
 
     /**
@@ -122,9 +174,9 @@ class SiteAgentLeadAlerts
      *
      * @param  list<array<string, mixed>>  $leads  newest first, as read
      */
-    public function mayHaveMissed(SiteAgentSubscriber $subscriber, array $leads): bool
+    public function mayHaveMissed(SiteAgentSubscriber $subscriber, array $leads, bool $complete = false): bool
     {
-        if (count($leads) < self::READ_LIMIT) {
+        if ($complete || count($leads) < self::READ_LIMIT) {
             return false;
         }
 
@@ -138,8 +190,13 @@ class SiteAgentLeadAlerts
     {
         $seen = [...(array) ($subscriber->lead_alert_seen ?? []), ...array_map($this->key(...), $leads)];
 
+        // The cursor moves only as far as what was actually accounted for:
+        // a lead held back by the owner's ceiling stays ahead of it.
+        $newest = max([0, ...array_map(fn (array $lead): int => (int) ($lead['ts'] ?? 0), $leads)]);
+
         $subscriber->forceFill([
             'lead_alert_seen' => array_slice(array_values(array_unique($seen)), -self::REMEMBERED),
+            'lead_alert_cursor' => $newest > 0 ? max((int) $subscriber->lead_alert_cursor, $newest) : $subscriber->lead_alert_cursor,
         ])->save();
     }
 

@@ -538,7 +538,7 @@ class SiteAgentCoverageTest extends TestCase
         $site = Site::factory()->create([
             'customer_id' => $customer->id, 'mcp_enabled' => true,
             'mcp_endpoint' => 'https://example.test/wp-json/md-agent/v1/mcp', 'mcp_secret' => 's',
-            'mcp_capabilities' => $capabilities ?: ['server' => ['version' => '1.8.3']],
+            'mcp_capabilities' => $capabilities ?: ['server' => ['version' => '1.8.4']],
         ]);
 
         return SiteAgentSubscriber::create([
