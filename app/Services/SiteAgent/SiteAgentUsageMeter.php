@@ -4,6 +4,7 @@ namespace App\Services\SiteAgent;
 
 use App\Enums\SubscriptionStatus;
 use App\Models\Charge;
+use App\Models\SiteAgentRequest;
 use App\Models\SiteAgentSubscriber;
 use App\Models\SiteAgentUsage;
 use App\Models\Subscription;
@@ -69,9 +70,73 @@ class SiteAgentUsageMeter
         }
     }
 
+    /**
+     * One writing unit, for an approved change that put more than the
+     * threshold of words on the site.
+     *
+     * Recorded after the change went live, never at the offer: a text the
+     * owner declined or that failed to save is not written. Keyed by the
+     * request, so one approved change is one unit whatever retries.
+     */
+    public function recordWriting(SiteAgentRequest $request): void
+    {
+        $words = self::writingWords((array) $request->plan);
+        $subscriber = $request->subscriber;
+
+        if ($words <= (int) config('siteagent.writing.min_words', 300) || $subscriber === null) {
+            return;
+        }
+
+        try {
+            $subscription = $this->billing->subscriptionForSite($subscriber->customer, $subscriber->site_id);
+
+            SiteAgentUsage::create([
+                'kind' => SiteAgentUsage::WRITING,
+                'words' => $words,
+                'customer_id' => $subscriber->customer_id,
+                'subscription_id' => $subscription?->id,
+                'site_id' => $request->site_id,
+                'site_agent_subscriber_id' => $subscriber->id,
+                'provider_message_id' => "writing:{$request->id}",
+                'billable' => $subscription !== null
+                    && $subscription->status !== SubscriptionStatus::Trialing
+                    && (bool) $subscription->plan?->billsWritings(),
+                'sent_at' => now(),
+            ]);
+        } catch (QueryException $e) {
+            Log::info('SiteAgentUsageMeter: writing unit not recorded', ['error' => $e->getMessage()]);
+        }
+    }
+
+    /**
+     * The words of new text a change puts on the site: a page section, a
+     * post's content and excerpt, a product's descriptions. Titles, prices and
+     * statuses are not writing.
+     *
+     * @param  array<string, mixed>  $plan
+     */
+    public static function writingWords(array $plan): int
+    {
+        $fields = (array) ($plan['fields'] ?? []);
+        $texts = [
+            $plan['text'] ?? null,
+            $fields['content'] ?? null,
+            $fields['excerpt'] ?? null,
+            $fields['description'] ?? null,
+            $fields['short_description'] ?? null,
+        ];
+
+        return array_sum(array_map(function ($text): int {
+            $plain = trim(html_entity_decode(strip_tags((string) $text), ENT_QUOTES | ENT_HTML5));
+
+            return $plain === '' ? 0 : count(preg_split('/\s+/u', $plain) ?: []);
+        }, $texts));
+    }
+
     private function write(SiteAgentSubscriber $subscriber, ?Subscription $subscription, ?string $providerMessageId, bool $withinCap): void
     {
         SiteAgentUsage::create([
+            'kind' => SiteAgentUsage::MESSAGE,
             'customer_id' => $subscriber->customer_id,
             'subscription_id' => $subscription?->id,
             'site_id' => $subscriber->site_id,
@@ -89,11 +154,15 @@ class SiteAgentUsageMeter
         ]);
     }
 
-    /** Billable messages of this subscription not yet on any invoice, sent up to $until. */
-    public function unbilled(Subscription $subscription, CarbonInterface $until): int
+    /**
+     * Billable units of this subscription not yet on any invoice, up to $until —
+     * messages by default, or writing units.
+     */
+    public function unbilled(Subscription $subscription, CarbonInterface $until, string $kind = SiteAgentUsage::MESSAGE): int
     {
         return SiteAgentUsage::query()
             ->where('subscription_id', $subscription->id)
+            ->where('kind', $kind)
             ->where('billable', true)
             ->whereNull('charge_id')
             ->where('sent_at', '<=', $until)
@@ -204,7 +273,7 @@ class SiteAgentUsageMeter
      * total, not per message), so the number a customer is told is the number
      * they are charged.
      *
-     * @return array{included: int, cap: int|null, sent: int, billable: int, unit_gross_agorot: int|null, estimate_gross_agorot: int, next_charge_at: CarbonInterface|null, since: CarbonInterface|null}
+     * @return array{writings: int, included_writings: int, writing_unit_gross_agorot: int|null, writings_estimate_gross_agorot: int, included: int, cap: int|null, sent: int, billable: int, unit_gross_agorot: int|null, estimate_gross_agorot: int, next_charge_at: CarbonInterface|null, since: CarbonInterface|null}
      */
     public function current(Subscription $subscription): array
     {
@@ -215,12 +284,21 @@ class SiteAgentUsageMeter
 
         $included = (int) ($plan?->included_messages ?? 0);
         $charged = max(0, $billable - $included);
+        $writings = $this->unbilled($subscription, now(), SiteAgentUsage::WRITING);
+        $writingsCharged = max(0, $writings - (int) ($plan?->included_writings ?? 0));
 
         return [
+            'writings' => $writings,
+            'included_writings' => (int) ($plan?->included_writings ?? 0),
+            'writing_unit_gross_agorot' => $plan?->writingGrossAgorot($exempt),
+            'writings_estimate_gross_agorot' => $plan?->billsWritings()
+                ? $plan->withVat($writingsCharged * (int) $plan->writing_price_agorot, $exempt)
+                : 0,
             'included' => $included,
             'cap' => $subscription->site_agent_message_cap,
             'sent' => SiteAgentUsage::query()
                 ->where('subscription_id', $subscription->id)
+                ->where('kind', SiteAgentUsage::MESSAGE)
                 ->when($since !== null, fn ($q) => $q->where('sent_at', '>=', $since))
                 ->count(),
             'billable' => $billable,

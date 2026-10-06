@@ -505,7 +505,7 @@ class SiteAgentConversation
                 'expires_at' => now()->addMinutes(max(1, (int) config('siteagent.confirmation_minutes', 30))),
             ]);
 
-            return $offer['preview']."\n\n".self::CONFIRM_PROMPT;
+            return $request->refresh()->preview."\n\n".self::CONFIRM_PROMPT;
         }
 
         // Still short of something. The picture stays where it is and the
@@ -677,6 +677,10 @@ class SiteAgentConversation
             'restore' => $result['restore'],
             'applied_at' => now(),
         ]);
+
+        // A long text that just went live is a writing unit — counted now,
+        // after it saved, never at the offer.
+        app(SiteAgentUsageMeter::class)->recordWriting($request);
 
         SystemLog::record('info', 'site-agent',
             "שינוי באתר בוצע לבקשת הלקוח: {$request->plan['summary']}",

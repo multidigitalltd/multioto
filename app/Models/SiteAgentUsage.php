@@ -11,17 +11,24 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 class SiteAgentUsage extends Model
 {
+    /** A reply the bot delivered. */
+    public const MESSAGE = 'message';
+
+    /** An approved change that put more than the threshold of words on the site. */
+    public const WRITING = 'writing';
+
     protected $table = 'site_agent_usage';
 
     protected $fillable = [
         'customer_id', 'subscription_id', 'site_id', 'site_agent_subscriber_id',
-        'provider_message_id', 'billable', 'charge_id', 'sent_at',
+        'provider_message_id', 'billable', 'charge_id', 'sent_at', 'kind', 'words',
     ];
 
     protected function casts(): array
     {
         return [
             'billable' => 'boolean',
+            'words' => 'integer',
             'sent_at' => 'datetime',
         ];
     }

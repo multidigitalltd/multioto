@@ -8,6 +8,7 @@ use App\Models\Site;
 use App\Models\SiteAgentMessage;
 use App\Models\SiteAgentRequest;
 use App\Models\SiteAgentSubscriber;
+use App\Models\SiteAgentUsage;
 use App\Services\Agent\McpClient;
 use App\Services\Ai\ClaudeClient;
 use App\Services\SiteAgent\SiteAgentConversation;
@@ -544,6 +545,27 @@ class SiteAgentAssistantTest extends TestCase
         $this->assertStringContainsString('נוצר כטיוטה', $done);
         $this->assertStringContainsString('לא הושלמו: הפרסום', $done);
         $this->assertSame(SiteAgentRequest::APPLIED, SiteAgentRequest::sole()->state);
+    }
+
+    public function test_a_long_text_counts_as_writing_only_once_it_went_live(): void
+    {
+        $subscriber = $this->subscriber();
+        $this->site['wp_content_create'] = ['created_id' => 81, 'status' => 'draft'];
+        $long = implode(' ', array_fill(0, 320, 'מילה'));
+
+        $this->model(function (Closure $tool) use ($long): string {
+            $tool('propose_post_create', ['title' => 'מדריך', 'content' => $long]);
+
+            return '';
+        });
+
+        $this->talk($subscriber, 'תכתוב מדריך');
+        // Offered, not yet written.
+        $this->assertSame(0, SiteAgentUsage::where('kind', SiteAgentUsage::WRITING)->count());
+
+        $this->talk($subscriber, 'כן');
+
+        $this->assertSame(320, SiteAgentUsage::where('kind', SiteAgentUsage::WRITING)->sole()->words);
     }
 
     // ── helpers ──────────────────────────────────────────────────────────

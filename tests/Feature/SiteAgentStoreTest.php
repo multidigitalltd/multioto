@@ -225,6 +225,16 @@ class SiteAgentStoreTest extends TestCase
             ->assertSee('אפשר לקבוע תקרה');
     }
 
+    public function test_the_price_of_writing_is_said_where_the_plan_charges_for_it(): void
+    {
+        $this->plan->update(['writing_price_agorot' => 1500, 'included_writings' => 4]);
+
+        $this->get(route('store.agent'))
+            ->assertOk()
+            ->assertSee('כתיבת תוכן')
+            ->assertSee('4 בחודש כלולים במחיר');
+    }
+
     /**
      * ומסלול בלי חיוב על הודעות אינו מבטיח חיוב שלא קיים.
      *

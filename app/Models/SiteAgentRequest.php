@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Services\SiteAgent\SiteAgentWritingNotice;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -13,6 +14,26 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 class SiteAgentRequest extends Model
 {
     use HasFactory;
+
+    /**
+     * Every offer that would cost a writing unit says so in its own preview,
+     * whichever planner built it — the one place all of them pass through.
+     */
+    protected static function booted(): void
+    {
+        static::saving(function (SiteAgentRequest $request): void {
+            if ($request->state !== self::AWAITING || blank($request->preview) || ! $request->isDirty('preview')
+                || str_contains((string) $request->preview, '✍️')) {
+                return;
+            }
+
+            $notice = app(SiteAgentWritingNotice::class)->for($request);
+
+            if ($notice !== null) {
+                $request->preview = $request->preview."\n".$notice;
+            }
+        });
+    }
 
     /** Shown to the customer, waiting for their yes. */
     public const AWAITING = 'awaiting';

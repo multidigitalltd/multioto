@@ -12,6 +12,7 @@ use App\Models\Customer;
 use App\Models\PaymentToken;
 use App\Models\Plan;
 use App\Models\Site;
+use App\Models\SiteAgentRequest;
 use App\Models\SiteAgentSubscriber;
 use App\Models\SiteAgentUsage;
 use App\Models\Subscription;
@@ -341,7 +342,85 @@ class SiteAgentUsageBillingTest extends TestCase
         $this->assertNotNull($this->subscription->refresh()->site_agent_cap_warned_at);
     }
 
+    public function test_a_writing_unit_is_text_on_the_site_beyond_the_threshold(): void
+    {
+        $words = fn (int $n): string => implode(' ', array_fill(0, $n, 'מילה'));
+
+        $this->assertSame(350, SiteAgentUsageMeter::writingWords(['fields' => ['title' => $words(50), 'content' => '<p>'.$words(350).'</p>']]));
+        $this->assertSame(320, SiteAgentUsageMeter::writingWords(['text' => $words(320)]));
+        $this->assertSame(0, SiteAgentUsageMeter::writingWords(['fields' => ['regular_price' => '90']]));
+    }
+
+    public function test_an_approved_long_text_is_one_unit_and_a_short_one_none(): void
+    {
+        $this->plan->update(['writing_price_agorot' => 1500]);
+
+        $long = $this->applied(['fields' => ['content' => implode(' ', array_fill(0, 301, 'מילה'))]]);
+        $short = $this->applied(['fields' => ['content' => implode(' ', array_fill(0, 300, 'מילה'))]]);
+        $meter = app(SiteAgentUsageMeter::class);
+
+        $meter->recordWriting($long);
+        $meter->recordWriting($long); // a retry
+        $meter->recordWriting($short);
+
+        $this->assertSame(1, SiteAgentUsage::where('kind', SiteAgentUsage::WRITING)->count());
+        $this->assertSame(301, SiteAgentUsage::where('kind', SiteAgentUsage::WRITING)->value('words'));
+        // Not a message: the message count and the cap are untouched.
+        $this->assertSame(0, $meter->unbilled($this->subscription, now()));
+    }
+
+    public function test_writing_units_beyond_the_included_ones_get_their_own_line(): void
+    {
+        $this->plan->update(['writing_price_agorot' => 1500, 'included_writings' => 1]);
+        $meter = app(SiteAgentUsageMeter::class);
+
+        foreach (range(1, 3) as $i) {
+            $meter->recordWriting($this->applied(['text' => implode(' ', array_fill(0, 400, 'מילה'))]));
+        }
+
+        $this->chargeSucceeds();
+        $charge = $this->subscription->charges()->sole();
+        $line = collect($charge->lines)->firstWhere('kind', 'writings');
+
+        // 149.00 + 2 × 15.00 = 179.00 net.
+        $this->assertSame(17900, $charge->amount_agorot);
+        $this->assertStringContainsString('1 כלולים', $line['name']);
+        $this->assertSame($charge->total_agorot, collect($charge->invoiceLines())->sum(fn (array $l): int => $l['qty'] * $l['unit_price_agorot']));
+        $this->assertSame(3, SiteAgentUsage::where('kind', SiteAgentUsage::WRITING)->where('charge_id', $charge->id)->count());
+    }
+
+    public function test_the_offer_says_it_will_cost_a_writing_unit_before_the_yes(): void
+    {
+        $this->plan->update(['writing_price_agorot' => 1500]);
+
+        $request = SiteAgentRequest::create([
+            'site_agent_subscriber_id' => $this->number->id, 'site_id' => $this->site->id, 'customer_id' => $this->customer->id,
+            'message' => 'פוסט', 'operation' => SiteAgentRequest::OP_POST_CREATE, 'state' => SiteAgentRequest::AWAITING,
+            'plan' => ['operation' => SiteAgentRequest::OP_POST_CREATE, 'fields' => ['content' => implode(' ', array_fill(0, 450, 'מילה'))], 'summary' => 'פוסט'],
+            'preview' => '📝 פוסט חדש', 'expires_at' => now()->addHour(),
+        ]);
+
+        $this->assertStringContainsString('טקסט של 450 מילים', $request->preview);
+        $this->assertStringContainsString('17.70', $request->preview); // 15.00 + 18% VAT
+
+        // A plan that does not price writing discloses nothing.
+        $this->plan->update(['writing_price_agorot' => null]);
+        $request->update(['preview' => '📝 פוסט מעודכן']);
+        $this->assertStringNotContainsString('✍️', $request->refresh()->preview);
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────
+
+    /** @param array<string, mixed> $plan */
+    private function applied(array $plan): SiteAgentRequest
+    {
+        return SiteAgentRequest::create([
+            'site_agent_subscriber_id' => $this->number->id, 'site_id' => $this->site->id, 'customer_id' => $this->customer->id,
+            'message' => 'כתיבה', 'operation' => SiteAgentRequest::OP_POST_CREATE, 'state' => SiteAgentRequest::APPLIED,
+            'plan' => ['operation' => SiteAgentRequest::OP_POST_CREATE, 'summary' => 'כתיבה', ...$plan],
+            'applied_at' => now(), 'expires_at' => now()->addHour(),
+        ]);
+    }
 
     private function sendMessages(int $count): void
     {

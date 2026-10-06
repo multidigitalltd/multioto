@@ -36,6 +36,10 @@
                     <div><dt>יחויבו בחיוב הבא</dt><dd>{{ number_format(max(0, $usage['billable'] - $usage['included'])) }} × {{ \App\Support\Money::ils($usage['unit_gross_agorot']) }}</dd></div>
                     <div><dt>סכום ההודעות עד עכשיו</dt><dd>{{ \App\Support\Money::ils($usage['estimate_gross_agorot']) }}</dd></div>
                 @endif
+                @if ($usage['writing_unit_gross_agorot'] !== null)
+                    <div><dt>יחידות כתיבה (טקסטים של מעל 300 מילים)</dt><dd>{{ number_format($usage['writings']) }}@if ($usage['included_writings'] > 0) מתוך {{ number_format($usage['included_writings']) }} כלולות@endif</dd></div>
+                    <div><dt>סכום הכתיבה עד עכשיו</dt><dd>{{ \App\Support\Money::ils($usage['writings_estimate_gross_agorot']) }}</dd></div>
+                @endif
                 @if ($usage['next_charge_at'])
                     <div><dt>החיוב הבא</dt><dd>{{ $usage['next_charge_at']->format('d/m/Y') }}</dd></div>
                 @endif
