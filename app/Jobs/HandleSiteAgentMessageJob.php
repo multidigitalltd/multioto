@@ -12,6 +12,7 @@ use App\Services\SiteAgent\SiteAgentConversation;
 use App\Services\SiteAgent\SiteAgentMessageCap;
 use App\Services\SiteAgent\SiteAgentPitch;
 use App\Services\SiteAgent\SiteAgentUsageMeter;
+use App\Services\SiteAgent\SiteAgentWelcome;
 use App\Services\SiteAgent\SiteChoice;
 use App\Services\SiteAgent\WhatsAppCloudClient;
 use Illuminate\Contracts\Cache\LockTimeoutException;
@@ -197,6 +198,7 @@ class HandleSiteAgentMessageJob implements ShouldQueue
         if ($delivered !== null && $billable && $subscriber !== null) {
             $meter->record($subscriber, $delivered);
             app(SiteAgentMessageCap::class)->warnIfDue($whatsapp, $from, $subscription);
+            app(SiteAgentWelcome::class)->sendTipIfDue($whatsapp, $subscriber);
         }
 
         $event->markProcessed();
@@ -362,14 +364,7 @@ class HandleSiteAgentMessageJob implements ShouldQueue
             "מספר אומת לניהול האתר {$subscriber->site?->domain}",
             ['subscriber_id' => $subscriber->id, 'site_id' => $subscriber->site_id]);
 
-        $whatsapp->sendText($subscriber->phone, implode("\n", [
-            '✅ המספר אומת.',
-            '',
-            "מעכשיו אפשר לנהל מכאן את האתר {$subscriber->site?->domain}.",
-            '',
-            'כתבו לי מה לשנות — למשל "בעמוד צור קשר, תחליף את הטלפון 03-1234567 ב-03-7654321".',
-            'אציג לכם בדיוק מה ישתנה, וזה יקרה רק אחרי שתאשרו.',
-        ]));
+        $whatsapp->sendText($subscriber->phone, app(SiteAgentWelcome::class)->message($subscriber));
     }
 
     /**

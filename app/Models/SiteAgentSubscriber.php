@@ -25,7 +25,7 @@ class SiteAgentSubscriber extends Model
         'phone', 'customer_id', 'site_id', 'name',
         'verification_code', 'verification_sent_at', 'verification_attempts', 'verified_at',
         'revoked_at', 'revoked_reason', 'last_seen_at',
-        'lead_alerts', 'lead_alert_seen', 'lead_alert_cursor',
+        'lead_alerts', 'lead_alert_seen', 'lead_alert_cursor', 'tips_sent', 'last_tip_at',
     ];
 
     /** The service is running for this number, and it has been told so. */
@@ -48,6 +48,8 @@ class SiteAgentSubscriber extends Model
             'lead_alerts' => 'boolean',
             'lead_alert_seen' => 'array',
             'lead_alert_cursor' => 'integer',
+            'tips_sent' => 'integer',
+            'last_tip_at' => 'datetime',
         ];
     }
 
