@@ -99,7 +99,7 @@ class PlanResource extends Resource
                             ->label('מחיר ליחידת כתיבה (אגורות, לפני מע"מ)')
                             ->numeric()
                             ->minValue(0)
-                            ->helperText('יחידת כתיבה = שינוי מאושר שמעלה לאתר טקסט של יותר מ-300 מילים (פוסט, קטע בעמוד, תיאור מוצר). נגבה בחידוש, בשורה נפרדת. ריק או 0 = ללא חיוב. הלקוח רואה את החיוב בתצוגה המקדימה לפני שהוא מאשר.')
+                            ->helperText('יחידת כתיבה = טקסט של יותר מ-'.(int) config('siteagent.writing.min_words', 300).' מילים שה-AI שלנו כתב (פוסט, קטע בעמוד, תיאור מוצר). נספרת כשהטקסט נכתב — גם אם הלקוח לא אישר, וכל גרסה בנפרד. טקסט שהלקוח כתב בעצמו לא נספר. נגבה בחידוש, בשורה נפרדת. ריק או 0 = ללא חיוב.')
                             ->visible(fn (Forms\Get $get): bool => (bool) $get('includes_site_agent')),
 
                         Forms\Components\TextInput::make('included_writings')

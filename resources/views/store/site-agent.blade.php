@@ -484,13 +484,13 @@
                     <div>
                         <dt><span class="tick" aria-hidden="true">✓</span> כתיבת תוכן:</dt>
                         <dd>
-                            טקסט של יותר מ־{{ (int) config('siteagent.writing.min_words', 300) }} מילים שהבוט מעלה לאתר — פוסט, קטע בעמוד או תיאור מוצר —
+                            טקסט של יותר מ־{{ (int) config('siteagent.writing.min_words', 300) }} מילים שהבוט כותב בשבילכם — פוסט, קטע בעמוד או תיאור מוצר —
                             @if ((int) $plan->included_writings > 0)
                                 {{ number_format($plan->included_writings) }} בחודש כלולים במחיר, ומעבר להם {{ $plan->writingNetLabel() }} לטקסט.
                             @else
                                 {{ $plan->writingNetLabel() }} לטקסט.
                             @endif
-                            הבוט אומר לכם את זה בתצוגה המקדימה, לפני שאתם מאשרים.
+                            כל טיוטה נספרת, גם אם בחרתם שלא לפרסם אותה; טקסט שכתבתם בעצמכם וביקשתם רק להעלות — לא נספר. הבוט מציין את זה ליד כל טיוטה.
                         </dd>
                     </div>
                 @endif

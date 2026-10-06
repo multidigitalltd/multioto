@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Services\SiteAgent\SiteAgentUsageMeter;
 use App\Services\SiteAgent\SiteAgentWritingNotice;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -31,6 +32,14 @@ class SiteAgentRequest extends Model
 
             if ($notice !== null) {
                 $request->preview = $request->preview."\n".$notice;
+            }
+        });
+
+        // The text was written the moment the offer exists — counted now, not
+        // at the "כן". A question parked without a preview is not an offer.
+        static::saved(function (SiteAgentRequest $request): void {
+            if (filled($request->preview) && ($request->wasRecentlyCreated || $request->wasChanged('preview'))) {
+                app(SiteAgentUsageMeter::class)->recordWriting($request);
             }
         });
     }

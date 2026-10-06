@@ -547,11 +547,10 @@ class SiteAgentAssistantTest extends TestCase
         $this->assertSame(SiteAgentRequest::APPLIED, SiteAgentRequest::sole()->state);
     }
 
-    public function test_a_long_text_counts_as_writing_only_once_it_went_live(): void
+    public function test_a_long_text_our_ai_wrote_counts_when_written_even_if_declined(): void
     {
         $subscriber = $this->subscriber();
-        $this->site['wp_content_create'] = ['created_id' => 81, 'status' => 'draft'];
-        $long = implode(' ', array_fill(0, 320, 'מילה'));
+        $long = implode(' ', array_map(fn (int $i): string => "מילה{$i}", range(1, 320)));
 
         $this->model(function (Closure $tool) use ($long): string {
             $tool('propose_post_create', ['title' => 'מדריך', 'content' => $long]);
@@ -559,13 +558,33 @@ class SiteAgentAssistantTest extends TestCase
             return '';
         });
 
-        $this->talk($subscriber, 'תכתוב מדריך');
-        // Offered, not yet written.
-        $this->assertSame(0, SiteAgentUsage::where('kind', SiteAgentUsage::WRITING)->count());
-
-        $this->talk($subscriber, 'כן');
-
+        $this->talk($subscriber, 'תכתוב מדריך על גיזום');
+        // The tokens are spent when the text is written, not at the "כן".
         $this->assertSame(320, SiteAgentUsage::where('kind', SiteAgentUsage::WRITING)->sole()->words);
+
+        $this->talk($subscriber, 'לא');
+        $this->assertSame(1, SiteAgentUsage::where('kind', SiteAgentUsage::WRITING)->count());
+
+        // Another version is another draft, and another unit.
+        $this->talk($subscriber, 'תכתוב גרסה אחרת');
+        $this->assertSame(2, SiteAgentUsage::where('kind', SiteAgentUsage::WRITING)->count());
+    }
+
+    public function test_a_long_text_the_owner_wrote_themselves_is_not_a_writing_unit(): void
+    {
+        $subscriber = $this->subscriber();
+        $theirs = implode(' ', array_map(fn (int $i): string => "מילה{$i}", range(1, 320)));
+
+        $this->model(function (Closure $tool) use ($theirs): string {
+            $tool('propose_post_create', ['title' => 'המדריך שלי', 'content' => $theirs]);
+
+            return '';
+        });
+
+        // Pasted by the owner: nothing was generated for it.
+        $this->talk($subscriber, "תעלה את הפוסט הזה: {$theirs}");
+
+        $this->assertSame(0, SiteAgentUsage::where('kind', SiteAgentUsage::WRITING)->count());
     }
 
     // ── helpers ──────────────────────────────────────────────────────────

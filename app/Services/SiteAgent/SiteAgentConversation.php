@@ -678,10 +678,6 @@ class SiteAgentConversation
             'applied_at' => now(),
         ]);
 
-        // A long text that just went live is a writing unit — counted now,
-        // after it saved, never at the offer.
-        app(SiteAgentUsageMeter::class)->recordWriting($request);
-
         SystemLog::record('info', 'site-agent',
             "שינוי באתר בוצע לבקשת הלקוח: {$request->plan['summary']}",
             ['request_id' => $request->id, 'site_id' => $request->site_id]);

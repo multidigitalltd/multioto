@@ -19,10 +19,10 @@ class SiteAgentWritingNotice
 
     public function for(SiteAgentRequest $request): ?string
     {
-        $words = SiteAgentUsageMeter::writingWords((array) $request->plan);
+        $words = SiteAgentUsageMeter::writtenByUs($request);
         $subscriber = $request->subscriber;
 
-        if ($words <= (int) config('siteagent.writing.min_words', 300) || $subscriber === null) {
+        if ($words === 0 || $subscriber === null) {
             return null;
         }
 
@@ -37,9 +37,12 @@ class SiteAgentWritingNotice
         $used = $this->usage->current($subscription)['writings'];
         $price = Money::ils((int) $plan->writingGrossAgorot((bool) $subscriber->customer?->vat_exempt));
 
-        return "✍️ טקסט של {$words} מילים — נספר כיחידת כתיבה אחת אחרי הביצוע: "
-            .($used < $included
-                ? 'מתוך '.number_format($included).' הכלולות במנוי (נוצלו '.number_format($used).').'
-                : "{$price}.");
+        // Counted for the writing itself, whatever the answer to this offer —
+        // and never a promise that it is included: another number of the same
+        // subscription may use the last included unit first.
+        return "✍️ נכתב בשבילכם טקסט של {$words} מילים — נספר כיחידת כתיבה אחת (גם אם לא תאשרו): {$price}"
+            .($included > 0
+                ? ', אלא אם עדיין נשארו יחידות מתוך '.number_format($included).' הכלולות במנוי (נוצלו עד עכשיו '.number_format($used).').'
+                : '.');
     }
 }

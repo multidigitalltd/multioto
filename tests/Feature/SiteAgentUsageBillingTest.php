@@ -349,9 +349,11 @@ class SiteAgentUsageBillingTest extends TestCase
         $this->assertSame(350, SiteAgentUsageMeter::writingWords(['fields' => ['title' => $words(50), 'content' => '<p>'.$words(350).'</p>']]));
         $this->assertSame(320, SiteAgentUsageMeter::writingWords(['text' => $words(320)]));
         $this->assertSame(0, SiteAgentUsageMeter::writingWords(['fields' => ['regular_price' => '90']]));
+        // Compact WordPress HTML: adjacent tags are word boundaries.
+        $this->assertSame(4, SiteAgentUsageMeter::writingWords(['fields' => ['content' => '<p>אחת</p><p>שתיים</p><ul><li>שלוש</li><li>ארבע</li></ul>']]));
     }
 
-    public function test_an_approved_long_text_is_one_unit_and_a_short_one_none(): void
+    public function test_a_long_text_is_one_unit_per_offer_and_a_short_one_none(): void
     {
         $this->plan->update(['writing_price_agorot' => 1500]);
 
@@ -407,6 +409,23 @@ class SiteAgentUsageBillingTest extends TestCase
         $this->plan->update(['writing_price_agorot' => null]);
         $request->update(['preview' => '📝 פוסט מעודכן']);
         $this->assertStringNotContainsString('✍️', $request->refresh()->preview);
+    }
+
+    public function test_a_remaining_included_unit_is_mentioned_but_never_promised(): void
+    {
+        $this->plan->update(['writing_price_agorot' => 1500, 'included_writings' => 2]);
+
+        $request = SiteAgentRequest::create([
+            'site_agent_subscriber_id' => $this->number->id, 'site_id' => $this->site->id, 'customer_id' => $this->customer->id,
+            'message' => 'פוסט', 'operation' => SiteAgentRequest::OP_POST_CREATE, 'state' => SiteAgentRequest::AWAITING,
+            'plan' => ['operation' => SiteAgentRequest::OP_POST_CREATE, 'fields' => ['content' => implode(' ', array_fill(0, 450, 'מילה'))], 'summary' => 'פוסט'],
+            'preview' => '📝 פוסט חדש', 'expires_at' => now()->addHour(),
+        ]);
+
+        // The price is always stated; the allowance is a possibility, because
+        // another number may use the last included unit before this "כן".
+        $this->assertStringContainsString('17.70', $request->preview);
+        $this->assertStringContainsString('אלא אם עדיין נשארו', $request->preview);
     }
 
     // ── helpers ──────────────────────────────────────────────────────────

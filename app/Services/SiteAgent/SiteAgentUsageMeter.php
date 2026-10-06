@@ -31,6 +31,9 @@ use Illuminate\Support\Facades\Log;
  */
 class SiteAgentUsageMeter
 {
+    /** Most of the text's words were already in the owner's own message: they wrote it. */
+    public const OWNER_TEXT_SHARE = 0.7;
+
     /** The share of the cap at which the customer is told, once per cycle. */
     public const CAP_WARNING_SHARE = 0.8;
 
@@ -71,19 +74,23 @@ class SiteAgentUsageMeter
     }
 
     /**
-     * One writing unit, for an approved change that put more than the
-     * threshold of words on the site.
+     * One writing unit, for a long text our AI wrote into an offer.
      *
-     * Recorded after the change went live, never at the offer: a text the
-     * owner declined or that failed to save is not written. Keyed by the
-     * request, so one approved change is one unit whatever retries.
+     * Counted when the text is written, not when it goes live: the tokens are
+     * spent the moment it is generated, whether the owner then says "כן",
+     * "לא", asks for another version, or the save fails. Each offer is its own
+     * draft, so a rewrite is a new unit. Keyed by the offer, so retries of the
+     * same one never count twice.
+     *
+     * A text the owner wrote themselves and asked to put up is not ours to
+     * bill: it cost no generation. See writtenByUs().
      */
     public function recordWriting(SiteAgentRequest $request): void
     {
-        $words = self::writingWords((array) $request->plan);
+        $words = self::writtenByUs($request);
         $subscriber = $request->subscriber;
 
-        if ($words <= (int) config('siteagent.writing.min_words', 300) || $subscriber === null) {
+        if ($words === 0 || $subscriber === null) {
             return;
         }
 
@@ -109,6 +116,29 @@ class SiteAgentUsageMeter
     }
 
     /**
+     * The words of a long text our AI wrote into this offer — or 0 when it is
+     * short, or when the owner wrote it and only asked us to put it up.
+     *
+     * "Wrote it themselves" is read from the words, not the wording of the
+     * request: when most of the text's words already appear in what the owner
+     * sent, the text came from them and no generation was spent on it.
+     */
+    public static function writtenByUs(SiteAgentRequest $request): int
+    {
+        $text = self::writingText((array) $request->plan);
+        $words = self::words($text);
+
+        if (count($words) <= (int) config('siteagent.writing.min_words', 300)) {
+            return 0;
+        }
+
+        $theirs = array_flip(self::words((string) $request->message));
+        $shared = count(array_filter($words, fn (string $word): bool => isset($theirs[$word])));
+
+        return $shared / count($words) >= self::OWNER_TEXT_SHARE ? 0 : count($words);
+    }
+
+    /**
      * The words of new text a change puts on the site: a page section, a
      * post's content and excerpt, a product's descriptions. Titles, prices and
      * statuses are not writing.
@@ -117,20 +147,34 @@ class SiteAgentUsageMeter
      */
     public static function writingWords(array $plan): int
     {
+        return count(self::words(self::writingText($plan)));
+    }
+
+    /** @param array<string, mixed> $plan */
+    private static function writingText(array $plan): string
+    {
         $fields = (array) ($plan['fields'] ?? []);
-        $texts = [
+
+        return implode(' ', array_map('strval', array_filter([
             $plan['text'] ?? null,
             $fields['content'] ?? null,
             $fields['excerpt'] ?? null,
             $fields['description'] ?? null,
             $fields['short_description'] ?? null,
-        ];
+        ], fn ($text): bool => is_string($text) && $text !== '')));
+    }
 
-        return array_sum(array_map(function ($text): int {
-            $plain = trim(html_entity_decode(strip_tags((string) $text), ENT_QUOTES | ENT_HTML5));
+    /** @return list<string> */
+    private static function words(string $text): array
+    {
+        // Tags become spaces before they go: "<p>one</p><p>two</p>" is two
+        // words, and strip_tags alone would glue them into one.
+        $plain = trim(html_entity_decode(strip_tags((string) preg_replace('/<[^>]*>/', ' ', $text)), ENT_QUOTES | ENT_HTML5));
 
-            return $plain === '' ? 0 : count(preg_split('/\s+/u', $plain) ?: []);
-        }, $texts));
+        return $plain === '' ? [] : array_values(array_map(
+            fn (string $word): string => mb_strtolower(trim($word, ".,;:!?\"'()[]{}–—-")),
+            preg_split('/\s+/u', $plain) ?: [],
+        ));
     }
 
     private function write(SiteAgentSubscriber $subscriber, ?Subscription $subscription, ?string $providerMessageId, bool $withinCap): void
