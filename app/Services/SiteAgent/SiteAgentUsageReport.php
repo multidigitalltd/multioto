@@ -55,13 +55,16 @@ class SiteAgentUsageReport
             ->get()
             ->groupBy('customer_id');
 
+        // Renewal charges carry no customer_id of their own — the customer is
+        // the subscription's. Net of VAT, to stand next to a cost that has none.
         $revenue = Charge::query()
-            ->whereIn('subscription_id', $subscriptions->pluck('id'))
-            ->where('status', ChargeStatus::Succeeded)
-            ->where('charged_at', '>=', $since)
-            ->selectRaw('customer_id, SUM(total_agorot) as total')
-            ->groupBy('customer_id')
-            ->pluck('total', 'customer_id');
+            ->join('subscriptions', 'subscriptions.id', '=', 'charges.subscription_id')
+            ->whereIn('charges.subscription_id', $subscriptions->pluck('id'))
+            ->where('charges.status', ChargeStatus::Succeeded)
+            ->where('charges.charged_at', '>=', $since)
+            ->selectRaw('subscriptions.customer_id as cid, SUM(charges.amount_agorot) as total')
+            ->groupBy('subscriptions.customer_id')
+            ->pluck('total', 'cid');
 
         $aiCost = AiCustomerUsage::query()
             ->whereIn('customer_id', $customerIds)

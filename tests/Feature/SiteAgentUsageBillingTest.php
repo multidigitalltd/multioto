@@ -193,6 +193,7 @@ class SiteAgentUsageBillingTest extends TestCase
     {
         $this->sendMessages(3);
 
+        $this->travel(2)->seconds();
         $charge = app(SubscriptionCollectionService::class)->recordPayment($this->subscription);
 
         $this->assertSame(3, collect($charge->lines)->firstWhere('kind', 'messages')['count']);
@@ -428,6 +429,34 @@ class SiteAgentUsageBillingTest extends TestCase
         $this->assertStringContainsString('אלא אם עדיין נשארו', $request->preview);
     }
 
+    public function test_a_message_in_the_same_second_as_the_count_waits_for_the_next_charge(): void
+    {
+        $this->sendMessages(3);
+
+        // Charged in the same second the messages went out: they were not on
+        // this charge, so they are not stamped as billed by it.
+        $this->charge(success: true, wait: false);
+
+        $this->assertSame(0, SiteAgentUsage::whereNotNull('charge_id')->count());
+        $this->assertSame(3, app(SiteAgentUsageMeter::class)->unbilled($this->subscription, now()->addMinute()));
+    }
+
+    public function test_messages_of_a_plan_that_stopped_pricing_them_are_closed_not_left_waiting(): void
+    {
+        $this->subscription->update(['site_agent_message_cap' => 3]);
+        $this->sendMessages(3);
+        $this->assertTrue(app(SiteAgentUsageMeter::class)->capReached($this->subscription->refresh()));
+
+        $this->plan->update(['message_price_agorot' => null]);
+        $this->chargeSucceeds();
+
+        // Not billed, not stamped as paid, and no longer holding the ceiling shut.
+        $this->assertSame(14900, $this->subscription->charges()->sole()->amount_agorot);
+        $this->assertSame(0, SiteAgentUsage::whereNotNull('charge_id')->count());
+        $this->assertSame(0, SiteAgentUsage::where('billable', true)->count());
+        $this->assertFalse(app(SiteAgentUsageMeter::class)->capReached($this->subscription->refresh()));
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────
 
     /** @param array<string, mixed> $plan */
@@ -455,7 +484,7 @@ class SiteAgentUsageBillingTest extends TestCase
         $this->charge(success: true);
     }
 
-    private function charge(bool $success): void
+    private function charge(bool $success, bool $wait = true): void
     {
         $this->subscription->update(['token_id' => $this->subscription->token_id ?? $this->token()]);
 
@@ -467,6 +496,12 @@ class SiteAgentUsageBillingTest extends TestCase
                 message: $success ? null : 'Refused',
             ));
         });
+
+        // The renewal counts up to a whole second behind now; what was sent a
+        // moment ago belongs to it.
+        if ($wait) {
+            $this->travel(2)->seconds();
+        }
 
         ChargeSubscriptionJob::dispatchSync($this->subscription->id);
     }

@@ -98,7 +98,7 @@ class SiteAgentLeadAlerts
             $decoded = $this->read($site, array_filter(['days' => 1, 'limit' => self::READ_LIMIT, 'after' => $after]));
 
             if ($decoded === null) {
-                return $page === 0 ? null : ['sources' => $sources, 'leads' => array_reverse($leads), 'complete' => false];
+                return $page === 0 ? null : ['sources' => $sources, 'leads' => $this->newestFirst($leads), 'complete' => false];
             }
 
             $sources = array_values((array) ($decoded['sources'] ?? []));
@@ -122,15 +122,25 @@ class SiteAgentLeadAlerts
             $after = $last;
         }
 
-        // Oldest-first pages, overlapping by a second at each seam: keyed
-        // once, and handed back newest first like the plain read.
+        return ['sources' => $sources, 'leads' => $this->newestFirst($leads), 'complete' => $complete];
+    }
+
+    /**
+     * Oldest-first pages overlap by a second at each seam: each lead once,
+     * handed back newest first like the plain read.
+     *
+     * @param  list<array<string, mixed>>  $leads
+     * @return list<array<string, mixed>>
+     */
+    private function newestFirst(array $leads): array
+    {
         $unique = [];
 
         foreach ($leads as $lead) {
             $unique[$this->key($lead)] = $lead;
         }
 
-        return ['sources' => $sources, 'leads' => array_reverse(array_values($unique)), 'complete' => $complete];
+        return array_reverse(array_values($unique));
     }
 
     /**
@@ -157,10 +167,16 @@ class SiteAgentLeadAlerts
     public function fresh(SiteAgentSubscriber $subscriber, array $leads): array
     {
         $seen = array_flip((array) ($subscriber->lead_alert_seen ?? []));
+        $cursor = (int) $subscriber->lead_alert_cursor;
 
+        // Not seen, and not before this number's own cursor: the site is read
+        // from the furthest-behind number, and the remembered keys are capped,
+        // so the cursor is what keeps a stuck neighbour from replaying old
+        // leads to everyone else.
         return array_reverse(array_values(array_filter(
             $leads,
-            fn (array $lead): bool => ! isset($seen[$this->key($lead)]),
+            fn (array $lead): bool => ! isset($seen[$this->key($lead)])
+                && ! (isset($lead['ts']) && $cursor > 0 && (int) $lead['ts'] < $cursor),
         )));
     }
 

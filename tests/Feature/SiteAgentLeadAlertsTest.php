@@ -308,6 +308,22 @@ class SiteAgentLeadAlertsTest extends TestCase
         $this->assertSame(100, Subscription::sole()->site_agent_message_cap);
     }
 
+    public function test_two_runs_at_once_announce_a_lead_once(): void
+    {
+        $this->enable();
+        array_unshift($this->leads, $this->lead(2, 'רון'));
+
+        // Another worker is mid-run.
+        $held = Cache::lock('site-agent:lead-alerts', 60);
+        $held->get();
+        $this->runAlerts();
+        $this->assertSame([], $this->sent);
+
+        $held->release();
+        $this->runAlerts();
+        $this->assertCount(1, $this->sent);
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────
 
     private function enable(): void

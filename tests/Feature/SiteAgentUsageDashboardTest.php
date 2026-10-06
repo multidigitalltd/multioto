@@ -115,8 +115,9 @@ class SiteAgentUsageDashboardTest extends TestCase
         ]);
 
         if ($paidAgorot > 0) {
+            // As a card renewal creates it: no customer_id of its own.
             $subscription->charges()->create([
-                'customer_id' => $customer->id, 'amount_agorot' => $paidAgorot, 'vat_agorot' => 0, 'total_agorot' => $paidAgorot,
+                'amount_agorot' => $paidAgorot, 'vat_agorot' => 0, 'total_agorot' => $paidAgorot,
                 'currency' => 'ILS', 'status' => ChargeStatus::Succeeded, 'attempt_number' => 1,
                 'period_start' => now()->startOfMonth(), 'period_end' => now()->endOfMonth(), 'charged_at' => now()->subDay(),
             ]);

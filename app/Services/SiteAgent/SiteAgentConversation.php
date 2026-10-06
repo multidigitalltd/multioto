@@ -83,7 +83,10 @@ class SiteAgentConversation
         // site and calls the model several times; a lock that lapsed in the
         // middle of it would let the next message read a conversation this one
         // is still writing.
-        $lock = Cache::lock("site-agent:conversation:{$subscriber->id}", 600);
+        // Held as long as the job may run (1,200s): a confirmed batch of plugin
+        // updates can take most of that, and a lock that expires mid-turn lets
+        // a "בטל" in through the middle of it.
+        $lock = Cache::lock("site-agent:conversation:{$subscriber->id}", 1250);
 
         try {
             // WAITS for its turn rather than giving up on it. The job runs once
@@ -720,6 +723,9 @@ class SiteAgentConversation
         $last = SiteAgentRequest::query()
             ->where('site_agent_subscriber_id', $subscriber->id)
             ->revertable()
+            // A cache flush or an emailed note has nothing to put back; "בטל"
+            // means the last change that does.
+            ->whereNotNull('restore')
             ->latest('applied_at')
             ->first();
 

@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Models\SiteAgentRequest;
 use App\Models\SiteAgentSubscriber;
 use App\Models\Subscription;
 use App\Models\SystemLog;
@@ -91,9 +92,13 @@ class HandleSiteAgentMessageJob implements ShouldQueue
             ? data_get($payload, 'image.caption', '')
             : data_get($payload, 'text.body', '')));
 
-        // A tapped "כן" / "לא" button is the same answer as typing it.
+        // A tapped "כן" / "לא" button is the same answer as typing it — to the
+        // offer it was shown under, which buttonFor names.
+        $buttonFor = null;
+
         if (in_array($type, ['interactive', 'button'], true)) {
             $text = WhatsAppCloudClient::buttonText($payload);
+            $buttonFor = WhatsAppCloudClient::buttonRequestId($payload);
             $type = $text !== '' ? 'text' : $type;
         }
 
@@ -166,6 +171,10 @@ class HandleSiteAgentMessageJob implements ShouldQueue
 
             if ($meter->capReached($subscription)) {
                 $reply = $this->atCeiling($subscription, $text);
+            } elseif ($buttonFor !== null && $this->pendingOfferId($subscriber) !== $buttonFor) {
+                // A button scrolled back to under an offer that was replaced:
+                // read as a "כן" it would confirm whatever is pending NOW.
+                $reply = 'הכפתור הזה שייך להצעה קודמת שכבר לא בתוקף, ולכן לא ביצעתי דבר. אם עדיין רוצים אותה — בקשו שוב.';
             } else {
                 $billable = true;
                 $reply = $type !== 'text' && $type !== 'image'
@@ -181,7 +190,7 @@ class HandleSiteAgentMessageJob implements ShouldQueue
             $reply = $this->answerFor($decision['status'], $subscriber, $from);
         }
 
-        $delivered = $reply !== '' ? $this->deliver($whatsapp, $from, $reply) : null;
+        $delivered = $reply !== '' ? $this->deliver($whatsapp, $from, $reply, $billable ? $subscriber : null) : null;
 
         if ($reply !== '' && $delivered === null) {
             // The customer is holding a phone that shows their message
@@ -389,12 +398,16 @@ class HandleSiteAgentMessageJob implements ShouldQueue
      * Falls back to the plain text if the buttons are refused, so an offer is
      * never lost to a formatting problem — typing still works.
      */
-    private function deliver(WhatsAppCloudClient $whatsapp, string $to, string $reply): ?string
+    private function deliver(WhatsAppCloudClient $whatsapp, string $to, string $reply, ?SiteAgentSubscriber $subscriber): ?string
     {
         $suffix = "\n\n".SiteAgentConversation::CONFIRM_PROMPT;
 
         if (str_ends_with($reply, $suffix)) {
-            $sent = $whatsapp->sendConfirmation($to, mb_substr($reply, 0, mb_strlen($reply) - mb_strlen($suffix)));
+            $sent = $whatsapp->sendConfirmation(
+                $to,
+                mb_substr($reply, 0, mb_strlen($reply) - mb_strlen($suffix)),
+                $subscriber !== null ? $this->pendingOfferId($subscriber) : null,
+            );
 
             if ($sent !== null) {
                 return $sent;
@@ -402,6 +415,18 @@ class HandleSiteAgentMessageJob implements ShouldQueue
         }
 
         return $whatsapp->sendText($to, $reply);
+    }
+
+    /** The offer waiting for this number's answer, if any. */
+    private function pendingOfferId(SiteAgentSubscriber $subscriber): ?int
+    {
+        $id = SiteAgentRequest::query()
+            ->where('site_agent_subscriber_id', $subscriber->id)
+            ->awaitingConfirmation()
+            ->latest('id')
+            ->value('id');
+
+        return $id !== null ? (int) $id : null;
     }
 
     /**

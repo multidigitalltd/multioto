@@ -873,6 +873,59 @@ class SiteAgentChannelTest extends TestCase
         $this->assertFalse(app(SiteAgentWelcome::class)->tipDue($subscriber->refresh(), 4));
     }
 
+    public function test_a_button_from_a_replaced_offer_does_not_confirm_the_new_one(): void
+    {
+        Http::fake(['*' => Http::response(['messages' => [['id' => 'wamid.reply']]])]);
+        $subscriber = $this->subscriber();
+        $this->subscribe($subscriber->customer);
+
+        $current = SiteAgentRequest::create([
+            'site_agent_subscriber_id' => $subscriber->id, 'site_id' => $subscriber->site_id, 'customer_id' => $subscriber->customer_id,
+            'message' => 'הצעה ב', 'operation' => SiteAgentRequest::OP_CACHE_FLUSH, 'state' => SiteAgentRequest::AWAITING,
+            'plan' => ['operation' => SiteAgentRequest::OP_CACHE_FLUSH, 'summary' => 'ניקוי'], 'preview' => 'ניקוי מטמון',
+            'expires_at' => now()->addHour(),
+        ]);
+
+        $conversation = Mockery::mock(SiteAgentConversation::class);
+        $conversation->shouldNotReceive('handle');
+        $this->app->instance(SiteAgentConversation::class, $conversation);
+
+        // "כן" tapped under an older offer (id below the current one).
+        $this->deliverTyped('972501234567', ['type' => 'interactive', 'interactive' => [
+            'type' => 'button_reply',
+            'button_reply' => ['id' => WhatsAppCloudClient::BUTTON_YES.':'.($current->id - 1), 'title' => '✅ כן, לבצע'],
+        ]]);
+
+        $this->assertReplyContains('שייך להצעה קודמת');
+        $this->assertSame(SiteAgentRequest::AWAITING, $current->fresh()->state);
+    }
+
+    public function test_a_lapsed_site_does_not_ride_on_another_paid_site(): void
+    {
+        Http::fake(['*' => Http::response(['messages' => [['id' => 'wamid.reply']]])]);
+        $subscriber = $this->subscriber();
+        $plan = Plan::factory()->create(['includes_site_agent' => true]);
+        $otherSite = Site::factory()->create(['customer_id' => $subscriber->customer_id]);
+
+        // Site A paid, this site's own subscription canceled.
+        Subscription::factory()->create(['customer_id' => $subscriber->customer_id, 'plan_id' => $plan->id, 'site_id' => $otherSite->id, 'status' => SubscriptionStatus::Active]);
+        Subscription::factory()->create(['customer_id' => $subscriber->customer_id, 'plan_id' => $plan->id, 'site_id' => $subscriber->site_id, 'status' => SubscriptionStatus::Suspended]);
+
+        $this->assertSame(SiteAgentAccess::NO_SUBSCRIPTION, app(SiteAgentAccess::class)->forSubscriber($subscriber->fresh())['status']);
+    }
+
+    public function test_a_long_offer_whose_buttons_fail_is_not_sent_twice(): void
+    {
+        $sequence = Http::fakeSequence()
+            ->push(['messages' => [['id' => 'wamid.text']]])
+            ->push(['error' => ['message' => 'interactive not allowed']], 400);
+
+        $id = app(WhatsAppCloudClient::class)->sendConfirmation('972501234567', str_repeat('א', 1100));
+
+        $this->assertSame('wamid.text', $id);
+        $this->assertTrue($sequence->isEmpty());
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────
 
     /** @param array<string, mixed> $attributes */

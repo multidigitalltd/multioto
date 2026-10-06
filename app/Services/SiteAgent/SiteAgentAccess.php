@@ -130,7 +130,14 @@ class SiteAgentAccess
             return [...$found, 'status' => self::UNVERIFIED];
         }
 
-        if ($subscriber->customer === null || ! $this->subscribed($subscriber->customer)) {
+        // The subscription that carries THIS site — the same one its messages
+        // are billed to — and not merely any live one the customer holds: a
+        // lapsed site B must not ride on a paid site A, served and never billed.
+        $subscription = $subscriber->customer !== null
+            ? app(SiteAgentBilling::class)->subscriptionForSite($subscriber->customer, $subscriber->site_id)
+            : null;
+
+        if ($subscription === null || ! in_array($subscription->status, self::ENTITLING, true)) {
             return [...$found, 'status' => self::NO_SUBSCRIPTION];
         }
 

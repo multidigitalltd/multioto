@@ -385,7 +385,6 @@ class Multioto_Agent_Mcp_Server
 
         wp_update_plugins();
         $updates = get_site_transient('update_plugins');
-        $active = (array) get_option('active_plugins', []);
         $out = [];
 
         foreach (get_plugins() as $file => $meta) {
@@ -393,7 +392,9 @@ class Multioto_Agent_Mcp_Server
                 'plugin' => $file,
                 'name' => $meta['Name'] ?? $file,
                 'version' => $meta['Version'] ?? '',
-                'active' => in_array($file, $active, true),
+                // is_plugin_active() also counts network activation; the site's
+                // own option alone reports a network-active plugin as off.
+                'active' => is_plugin_active($file),
                 'update_available' => isset($updates->response[$file]),
             ];
         }

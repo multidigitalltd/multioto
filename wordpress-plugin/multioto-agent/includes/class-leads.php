@@ -202,7 +202,9 @@ class Multioto_Agent_Leads
             'numberposts' => self::PER_SOURCE,
             'orderby' => 'date',
             'order' => self::$direction,
-            'date_query' => [['after' => gmdate('Y-m-d H:i:s', $since), 'column' => 'post_date_gmt']],
+            // Inclusive, like every other reader: a cursor at second T must
+            // still find the second lead that arrived in that same second.
+            'date_query' => [['after' => gmdate('Y-m-d H:i:s', $since), 'column' => 'post_date_gmt', 'inclusive' => true]],
         ]);
 
         $leads = [];
