@@ -338,6 +338,9 @@
                     <li>תעדכן את המחיר של הכורסה ל־1,290 ש״ח</li>
                     <li>תוסיף 20 יחידות למלאי של החולצה הלבנה</li>
                     <li>תעלה מוצר חדש: חולצת פשתן, 120 ש״ח, 5 במלאי, בקטגוריית חולצות</li>
+                    {{-- A photo with a caption is the shortest path there is from
+                         "I have a new product" to it being on the site. --}}
+                    <li>[תמונה] מוצר חדש, כד קרמיקה, 89 ש״ח</li>
                 </ul>
             </div>
 
@@ -358,6 +361,7 @@
                 <ul class="quotes">
                     <li>תשווה את המכירות של החודש לקודם ותגיד לי אילו מוצרים ירדו</li>
                     <li>תעבור על ההזמנות בהמתנה מהשבוע, תגיד לי מי שילם בהעברה, ותסמן אותן כהושלמו</li>
+                    <li>תודיע לי על כל ליד חדש</li>
                     <li>כל בוקר בשמונה תשלח לי את המכירות של אתמול והלידים החדשים</li>
                     <li>תייצר קופון 15% לשבוע הקרוב בשם SUKKOT ותכתוב עליו פוסט כטיוטה</li>
                     <li>בעמוד הנחיתה באלמנטור — במקום "חייגו עכשיו" שיהיה "השאירו פרטים"</li>
@@ -380,7 +384,8 @@
         <div class="promise">
             <h2 id="promise-title" style="font-size:1.15rem">שום דבר לא קורה בלי "כן" שלכם</h2>
             <p style="margin:.5rem 0 0">
-                כל שינוי מוצג לכם בצ׳אט <strong>לפני</strong> שהוא מבוצע, ולרוב השינויים יש "בטל".
+                כל שינוי מוצג לכם בצ׳אט <strong>לפני</strong> שהוא מבוצע, עם כפתורי "כן" ו"לא"
+                (ואפשר גם פשוט להקליד), ולרוב השינויים יש "בטל".
                 {{-- Named, not glossed over. A product that lists what cannot be
                      undone is a product somebody can trust with the rest; one
                      that promises "everything is reversible" is caught out once

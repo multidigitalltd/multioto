@@ -39,6 +39,7 @@ use App\Jobs\ScanSiteVulnerabilitiesJob;
 use App\Jobs\SendBroadcastJob;
 use App\Jobs\SendDemandRemindersJob;
 use App\Jobs\SendProactiveRemindersJob;
+use App\Jobs\SendSiteAgentLeadAlertsJob;
 use App\Jobs\SendSiteAgentReportsJob;
 use App\Jobs\SendTaskRemindersJob;
 use App\Jobs\SyncPluginReleasesJob;
@@ -147,6 +148,11 @@ Schedule::job(new EndSiteAgentTrialsJob)->hourly()->name('siteagent:end-trials')
 // Reports owners ordered from the bot ("כל בוקר בשמונה"). Every quarter of an
 // hour, so 08:00 arrives by 08:15; each run claims its row before sending.
 Schedule::job(new SendSiteAgentReportsJob)->everyFifteenMinutes()->name('siteagent:send-reports')->onOneServer();
+
+// "תודיע לי על כל ליד חדש". Never two at once: a lead is marked seen only
+// after its message goes, so an overlapping run would announce it twice.
+Schedule::job(new SendSiteAgentLeadAlertsJob)->everyFiveMinutes()->name('siteagent:lead-alerts')
+    ->withoutOverlapping(10)->onOneServer();
 
 // The card as a fallback: a subscription the customer pays by transfer or
 // standing order, whose payment has now been due for its whole grace period

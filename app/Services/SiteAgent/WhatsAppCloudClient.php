@@ -70,6 +70,70 @@ class WhatsAppCloudClient
         ]);
     }
 
+    /** Reply-button ids the inbound side maps back to the words they stand for. */
+    public const BUTTON_YES = 'site_agent_yes';
+
+    public const BUTTON_NO = 'site_agent_no';
+
+    /** Meta's ceiling on an interactive message's body. */
+    private const INTERACTIVE_BODY_MAX = 1024;
+
+    /**
+     * An offer with "כן" / "לא" buttons under it.
+     *
+     * A tap arrives as an interactive reply carrying the button's id, which
+     * the inbound side turns back into "כן" or "לא" — so the confirmation
+     * path is the same one a typed answer takes. A preview longer than Meta
+     * allows in an interactive body goes as text first, with the buttons in
+     * a short message after it.
+     */
+    public function sendConfirmation(string $to, string $body): ?string
+    {
+        $question = 'לבצע את השינוי?';
+
+        if (mb_strlen($body) > self::INTERACTIVE_BODY_MAX) {
+            if ($this->sendText($to, $body) === null) {
+                return null;
+            }
+        } else {
+            $question = $body;
+        }
+
+        return $this->send($to, [
+            'type' => 'interactive',
+            'interactive' => [
+                'type' => 'button',
+                'body' => ['text' => $question],
+                'footer' => ['text' => 'אפשר גם לכתוב "כן" או "לא"'],
+                'action' => ['buttons' => [
+                    ['type' => 'reply', 'reply' => ['id' => self::BUTTON_YES, 'title' => '✅ כן, לבצע']],
+                    ['type' => 'reply', 'reply' => ['id' => self::BUTTON_NO, 'title' => '❌ לא']],
+                ]],
+            ],
+        ]);
+    }
+
+    /**
+     * The words a tapped button stands for, or '' when the message is not a
+     * button reply. Unknown ids read as their visible title, never as a yes.
+     *
+     * @param  array<string, mixed>  $payload  one inbound message
+     */
+    public static function buttonText(array $payload): string
+    {
+        $reply = match ((string) ($payload['type'] ?? '')) {
+            'interactive' => (array) data_get($payload, 'interactive.button_reply', []),
+            'button' => ['id' => '', 'title' => (string) data_get($payload, 'button.text', '')],
+            default => [],
+        };
+
+        return match ((string) ($reply['id'] ?? '')) {
+            self::BUTTON_YES => 'כן',
+            self::BUTTON_NO => 'לא',
+            default => trim((string) ($reply['title'] ?? '')),
+        };
+    }
+
     /**
      * Send one of the account's approved templates.
      *

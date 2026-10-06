@@ -903,18 +903,34 @@ class Multioto_Agent_Mcp_Server
 
         wp_update_plugins();
 
+        // The upgrader deactivates an active plugin before swapping its files
+        // and leaves switching it back on to wp-admin's next screen, which an
+        // update from here never reaches. Without this, "update Elementor Pro"
+        // quietly meant "update it and turn it off".
+        $wasActive = is_plugin_active($plugin);
+        $wasNetwork = is_multisite() && is_plugin_active_for_network($plugin);
+
         $upgrader = new Plugin_Upgrader(new Automatic_Upgrader_Skin);
         $result = $upgrader->upgrade($plugin);
 
+        $reactivated = '';
+
+        if ($wasActive && ! is_plugin_active($plugin)) {
+            $activation = activate_plugin($plugin, '', $wasNetwork);
+            $reactivated = is_wp_error($activation)
+                ? ' לא ניתן היה להפעיל אותו מחדש: '.$activation->get_error_message()
+                : ' הוא הופעל מחדש.';
+        }
+
         if (is_wp_error($result)) {
-            throw new Multioto_Agent_Rpc_Error(-32000, $result->get_error_message());
+            throw new Multioto_Agent_Rpc_Error(-32000, $result->get_error_message().$reactivated);
         }
 
         if ($result === false || $result === null) {
-            return "לא נמצא עדכון עבור {$plugin} (ייתכן שהוא כבר מעודכן).";
+            return "לא נמצא עדכון עבור {$plugin} (ייתכן שהוא כבר מעודכן).".$reactivated;
         }
 
-        return "התוסף {$plugin} עודכן.";
+        return "התוסף {$plugin} עודכן.".$reactivated;
     }
 
     /**

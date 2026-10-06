@@ -4,10 +4,11 @@ namespace App\Services\SiteAgent;
 
 use App\Models\Site;
 use App\Models\SiteAgentRequest;
+use App\Models\SystemLog;
 use App\Services\Agent\McpClient;
 use App\Services\Agent\SiteChangeJournal;
-use App\Services\Notifications\TeamNotifier;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
 /**
@@ -37,7 +38,6 @@ class SiteActionApplier
     public function __construct(
         private McpClient $mcp,
         private SiteChangeJournal $journal,
-        private TeamNotifier $team,
     ) {}
 
     /**
@@ -405,8 +405,19 @@ class SiteActionApplier
             return $this->failure('product create returned no id');
         }
 
-        $missing = $this->completeNewProduct($site, $id, (array) ($plan['extra'] ?? []), (array) ($plan['category_ids'] ?? []));
-        $live = ($plan['extra']['status'] ?? null) === 'publish' && ! in_array('הפרסום', $missing, true);
+        $extra = (array) ($plan['extra'] ?? []);
+        $missing = [];
+
+        // The photo before anything goes live: a product created from a
+        // picture and published without it is not what the owner approved,
+        // so a failed upload keeps it a draft.
+        if (isset($plan['image_path']) && ! $this->attachPhoto($site, $id, $plan)) {
+            $missing[] = isset($extra['status']) ? 'התמונה (ולכן המוצר לא פורסם)' : 'התמונה';
+            unset($extra['status']);
+        }
+
+        $missing = [...$missing, ...$this->completeNewProduct($site, $id, $extra, (array) ($plan['category_ids'] ?? []))];
+        $live = ($extra['status'] ?? null) === 'publish' && ! in_array('הפרסום', $missing, true);
 
         // No undo: there is no tool that deletes a product — which is the right
         // way round for a phone. Unpublishing is an ordinary product update.
@@ -417,7 +428,7 @@ class SiteActionApplier
             $missing !== []
                 ? 'לא הושלמו: '.implode(', ', $missing).'. המוצר קיים, ואפשר לבקש את זה שוב.'
                 : null,
-            'לתמונה למוצר — שלחו אותה כאן עם שם המוצר.',
+            isset($plan['image_path']) ? null : 'לתמונה למוצר — שלחו אותה כאן עם שם המוצר.',
         ])));
     }
 
@@ -461,6 +472,65 @@ class SiteActionApplier
         }
 
         return $missing;
+    }
+
+    /**
+     * The photograph the product was created from, as its main image.
+     *
+     * The filename is ours, never the sender's, and the description the owner
+     * approved is the alt text — the plugin refuses an image without one. A
+     * picture uploaded but not attached is taken back out of the library, so
+     * a retry does not leave orphans behind. The file on our disk goes either
+     * way: it was held only for this.
+     *
+     * @param  array<string, mixed>  $plan
+     */
+    private function attachPhoto(Site $site, int $productId, array $plan): bool
+    {
+        $path = (string) $plan['image_path'];
+        $disk = Storage::disk('local');
+        $bytes = $disk->exists($path) ? (string) $disk->get($path) : '';
+        $attachmentId = 0;
+
+        try {
+            if ($bytes === '' || trim((string) ($plan['image_alt'] ?? '')) === '') {
+                return false;
+            }
+
+            // The upload gets the longer allowance: a phone photo is megabytes.
+            $uploaded = json_decode($this->mcp->textContent($this->mcp->callTool($site, 'wp_media_upload', [
+                'filename' => 'whatsapp-'.now()->format('Ymd-His').'-'.Str::random(6).'.'.($plan['extension'] ?? 'jpg'),
+                'data' => base64_encode($bytes),
+                'alt' => (string) $plan['image_alt'],
+            ], 120)), true);
+            $attachmentId = (int) data_get($uploaded, 'id', data_get($uploaded, 'attachment_id', 0));
+
+            if ($attachmentId <= 0) {
+                return false;
+            }
+
+            $set = $this->call($site, 'wp_post_thumbnail_set', ['id' => $productId, 'attachment_id' => $attachmentId, 'if_current' => 0]);
+
+            // Refused because something else set an image first (a product
+            // hook, an import): ours is not the one showing, so it is not kept.
+            if (($set['changed'] ?? true) === false) {
+                throw new \RuntimeException('thumbnail already set');
+            }
+
+            return true;
+        } catch (\Throwable) {
+            if ($attachmentId > 0) {
+                try {
+                    $this->call($site, 'wp_media_delete', ['attachment_id' => $attachmentId]);
+                } catch (\Throwable) {
+                    // Housekeeping; the owner is already told the image is missing.
+                }
+            }
+
+            return false;
+        } finally {
+            $disk->delete($path);
+        }
     }
 
     // --- Comments, categories, fields ---------------------------------------
@@ -726,28 +796,80 @@ class SiteActionApplier
      * Update plugins one at a time, the way the team's maintenance does: the
      * homepage must still answer after EVERY update, and the first one that
      * breaks it stops the run — one bad plugin must not be buried under four
-     * more updates — and the team hears about it at once.
+     * more updates.
+     *
+     * WordPress's upgrader deactivates an active plugin before replacing its
+     * files and leaves turning it back on to wp-admin's next screen, which
+     * never comes here. So a plugin that was active is switched back on after
+     * its update — on every plugin version, since older ones do not do it
+     * themselves — and one that will not come back is said, not left quietly
+     * off.
      *
      * @param  array<string, mixed>  $plan
      */
     private function pluginUpdate(Site $site, array $plan): array
     {
         $done = [];
+        $inactive = [];
+        $wasActive = $this->activePlugins($site);
 
         foreach ((array) $plan['plugins'] as $plugin) {
             $name = (string) $plugin['name'];
+            $file = (string) $plugin['file'];
 
-            $this->mcp->callTool($site, 'wp_plugin_update', ['plugin' => (string) $plugin['file']], self::UPDATE_TIMEOUT_SECONDS);
-            $this->journal->record($site, "בוט ניהול האתר — עודכן {$name}", 'wp_plugin_update', ['plugin' => (string) $plugin['file']],
+            $this->mcp->callTool($site, 'wp_plugin_update', ['plugin' => $file], self::UPDATE_TIMEOUT_SECONDS);
+            $this->journal->record($site, "בוט ניהול האתר — עודכן {$name}", 'wp_plugin_update', ['plugin' => $file],
                 beforeState: 'גרסה קודמת: '.(string) ($plugin['version'] ?? '?'), initiatedBy: 'site_agent');
             $done[] = $name;
+
+            if (isset($wasActive[$file]) && ! $this->reactivated($site, $file)) {
+                $inactive[] = $name;
+            }
 
             if (! $this->healthy($site)) {
                 return $this->broken($site, "אחרי עדכון התוסף {$name}", $done);
             }
         }
 
-        return $this->ok(null, 'עודכנו: '.implode(', ', $done).'. האתר נבדק אחרי כל עדכון ועולה כרגיל.');
+        return $this->ok(null, implode("\n", array_filter([
+            'עודכנו: '.implode(', ', $done).'. האתר נבדק אחרי כל עדכון ועולה כרגיל.',
+            $inactive !== []
+                ? 'שימו לב: '.implode(', ', $inactive).' לא חזר לפעול אחרי העדכון. כתבו לי "תפעיל את '.$inactive[0].'" ואנסה שוב.'
+                : null,
+        ])));
+    }
+
+    /**
+     * The plugin is active after its update — switched back on if the
+     * upgrader left it off.
+     */
+    private function reactivated(Site $site, string $file): bool
+    {
+        try {
+            if ($this->pluginActive($site, $file) === true) {
+                return true;
+            }
+
+            $this->switchPlugin($site, $file, true);
+
+            return $this->pluginActive($site, $file) === true;
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    /** @return array<string, true> plugin file => active, as the site lists them now */
+    private function activePlugins(Site $site): array
+    {
+        $active = [];
+
+        foreach ((array) $this->call($site, 'wp_plugin_list', []) as $plugin) {
+            if (is_array($plugin) && ($plugin['active'] ?? false)) {
+                $active[(string) ($plugin['plugin'] ?? '')] = true;
+            }
+        }
+
+        return $active;
     }
 
     /** @param array<string, mixed> $plan */
@@ -788,13 +910,11 @@ class SiteActionApplier
 
         if (! $this->healthy($site)) {
             $this->switchPlugin($site, $file, ! $to);
-            $this->team->alert(
-                "⚠️ {$site->domain}: שינוי תוסף מהבוט הוחזר",
-                'בעל האתר '.($to ? 'הפעיל' : 'כיבה')." את {$plan['name']} מהוואטסאפ, ודף הבית הפסיק לענות. השינוי הוחזר מיד — כדאי לוודא שהאתר תקין.",
-                rtrim((string) config('app.url'), '/')."/admin/sites/{$site->id}",
-            );
+            SystemLog::record('warning', 'site-agent',
+                "{$site->domain}: שינוי תוסף מהבוט הוחזר — בעל האתר ".($to ? 'הפעיל' : 'כיבה')." את {$plan['name']} ודף הבית הפסיק לענות.",
+                ['site_id' => $site->id]);
 
-            return $this->refuse('האתר הפסיק לענות אחרי השינוי, ולכן החזרתי אותו מיד. הצוות שלנו קיבל התראה ויבדוק.');
+            return $this->refuse('האתר הפסיק לענות אחרי השינוי, ולכן החזרתי אותו מיד. כדאי לבדוק שהאתר נראה תקין.');
         }
 
         return $this->ok(['kind' => 'plugin_toggle', 'plugin' => $file, 'active' => ! $to, 'after' => $to]);
@@ -852,20 +972,20 @@ class SiteActionApplier
     }
 
     /**
-     * An update left the site not answering: stop, tell the team now, and tell
-     * the owner the truth.
+     * An update left the site not answering: stop, and tell the owner exactly
+     * what happened and what was updated. It is their site and their request;
+     * the panel's log keeps the record.
      *
      * @param  list<string>  $done
      */
     private function broken(Site $site, string $after, array $done): array
     {
-        $this->team->alert(
-            "🚨 {$site->domain} הפסיק לענות — עדכון מהבוט",
-            "{$after} שבוצע מהוואטסאפ, דף הבית של {$site->domain} הפסיק לענות תקין. העדכונים נעצרו (עודכנו: ".implode(', ', $done).'). ייתכן שנדרש שחזור.',
-            rtrim((string) config('app.url'), '/')."/admin/sites/{$site->id}",
-        );
+        SystemLog::record('warning', 'site-agent',
+            "{$site->domain}: דף הבית הפסיק לענות {$after} שבוצע מהוואטסאפ. עודכנו: ".implode(', ', $done).'.',
+            ['site_id' => $site->id]);
 
-        return $this->refuse("האתר הפסיק לענות {$after}. עצרתי את העדכונים, והצוות שלנו קיבל התראה ומטפל בזה עכשיו.");
+        return $this->refuse("האתר הפסיק לענות {$after}, ולכן עצרתי את שאר העדכונים. עודכנו: ".implode(', ', $done)
+            .'. בדקו את האתר; אם הוא לא חוזר, כתבו לי "יומן שגיאות" ואבדוק מה קרה.');
     }
 
     // --- Helpers -------------------------------------------------------------

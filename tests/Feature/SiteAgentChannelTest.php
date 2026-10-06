@@ -680,6 +680,65 @@ class SiteAgentChannelTest extends TestCase
         $this->assertReplyDoesNotContain('הודעות טקסט ותמונות');
     }
 
+    public function test_an_offer_arrives_with_yes_and_no_buttons_and_a_tap_answers_it(): void
+    {
+        Http::fake(['*' => Http::response(['messages' => [['id' => 'wamid.reply']]])]);
+        $subscriber = $this->subscriber();
+        $this->subscribe($subscriber->customer);
+
+        $heard = [];
+        $conversation = Mockery::mock(SiteAgentConversation::class);
+        $conversation->shouldReceive('handle')->andReturnUsing(function ($who, string $text) use (&$heard): string {
+            $heard[] = $text;
+
+            return $text === 'כן' ? '✅ בוצע.' : "🔌 לעדכן 1 תוספים\n\n".SiteAgentConversation::CONFIRM_PROMPT;
+        });
+        $this->app->instance(SiteAgentConversation::class, $conversation);
+
+        $this->deliver('972501234567', 'תעדכן את התוספים');
+
+        $interactive = null;
+        Http::recorded(function ($request) use (&$interactive) {
+            if (data_get($request->data(), 'type') === 'interactive') {
+                $interactive = $request->data();
+            }
+
+            return true;
+        });
+
+        $this->assertNotNull($interactive, 'the offer went out without buttons');
+        $this->assertSame('🔌 לעדכן 1 תוספים', data_get($interactive, 'interactive.body.text'));
+        $this->assertSame(
+            [WhatsAppCloudClient::BUTTON_YES, WhatsAppCloudClient::BUTTON_NO],
+            array_column(array_column((array) data_get($interactive, 'interactive.action.buttons'), 'reply'), 'id'),
+        );
+
+        // The tap comes back as an interactive reply and is read as a typed "כן".
+        $this->deliverTyped('972501234567', ['type' => 'interactive', 'interactive' => [
+            'type' => 'button_reply',
+            'button_reply' => ['id' => WhatsAppCloudClient::BUTTON_YES, 'title' => '✅ כן, לבצע'],
+        ]]);
+
+        $this->assertSame(['תעדכן את התוספים', 'כן'], $heard);
+        $this->assertReplyDoesNotContain('הודעות טקסט ותמונות');
+    }
+
+    public function test_an_offer_too_long_for_buttons_goes_as_text_with_the_buttons_after_it(): void
+    {
+        Http::fake(['*' => Http::response(['messages' => [['id' => 'wamid.reply']]])]);
+
+        app(WhatsAppCloudClient::class)->sendConfirmation('972501234567', str_repeat('א', 1100));
+
+        $types = [];
+        Http::recorded(function ($request) use (&$types) {
+            $types[] = data_get($request->data(), 'type');
+
+            return true;
+        });
+
+        $this->assertSame(['text', 'interactive'], $types);
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────
 
     /** @param array<string, mixed> $attributes */
@@ -769,13 +828,19 @@ class SiteAgentChannelTest extends TestCase
         );
     }
 
+    /** What a sent message says — a plain text, or the body over its buttons. */
+    private function bodyOf(array $data): string
+    {
+        return (string) (data_get($data, 'text.body') ?? data_get($data, 'interactive.body.text', ''));
+    }
+
     /** The last thing the agent said. */
     private function lastReply(): string
     {
         $last = '';
 
         Http::recorded(function ($request) use (&$last) {
-            $body = (string) data_get($request->data(), 'text.body', '');
+            $body = $this->bodyOf($request->data());
 
             if ($body !== '') {
                 $last = $body;
@@ -793,7 +858,7 @@ class SiteAgentChannelTest extends TestCase
         $found = false;
 
         Http::recorded(function ($request) use ($needle, &$found) {
-            if (str_contains((string) data_get($request->data(), 'text.body', ''), $needle)) {
+            if (str_contains($this->bodyOf($request->data()), $needle)) {
                 $found = true;
             }
 
@@ -837,7 +902,7 @@ class SiteAgentChannelTest extends TestCase
         $found = false;
 
         Http::recorded(function ($request) use ($needle, &$found) {
-            if (str_contains((string) data_get($request->data(), 'text.body', ''), $needle)) {
+            if (str_contains($this->bodyOf($request->data()), $needle)) {
                 $found = true;
             }
 
