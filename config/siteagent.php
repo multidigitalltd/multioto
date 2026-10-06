@@ -222,8 +222,10 @@ return [
     | התור ואת נעילת השיחה דקות ארוכות.
     */
     /*
-     | A writing unit: an approved change that puts MORE than this many words
-     | of text on the site — a post, a page section, a product description.
+     | A writing unit: an offer whose text runs to MORE than this many words —
+     | a post, a page section, a product description. Counted when the offer is
+     | made and not when it is approved, because the generation is spent by
+     | then; the preview says so before the "כן" (SiteAgentWritingNotice).
      | Billed per plan (writing_price_agorot, included_writings).
      */
     'writing' => [

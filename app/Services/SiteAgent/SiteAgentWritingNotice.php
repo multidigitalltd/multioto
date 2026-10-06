@@ -8,10 +8,12 @@ use App\Support\Money;
 /**
  * The line an offer carries when approving it would cost a writing unit.
  *
- * A long text is charged once it goes live, so the owner is told before the
- * "כן" — in the preview itself, next to the text they are approving — and
- * never first on the invoice. Said only where the plan actually prices
- * writing; a plan that does not has nothing to disclose.
+ * A long text is counted the moment the offer exists — the generation is
+ * already spent by then — and NOT at the "כן" (see SiteAgentRequest::booted).
+ * So this is disclosure and not a price to approve: the owner is told in the
+ * preview, next to the text, that the unit is counted either way, and never
+ * first on the invoice. Said only where the plan actually prices writing; a
+ * plan that does not has nothing to disclose.
  */
 class SiteAgentWritingNotice
 {

@@ -311,6 +311,31 @@ class LegalPagesTest extends TestCase
     }
 
     /**
+     * ואותם ספקים נקובים בשני המסמכים.
+     *
+     * מדיניות הפרטיות אמרה "ספק דיוור תפעולי" ו"ספק אחסון השרתים" בזמן שהתנאים
+     * נקבו בשמות. שני מסמכים שנקראים יחד ומונים ספקים שונים הם בדיוק מה שלקוח
+     * מצביע עליו — ובמדיניות פרטיות זו גם הרשימה שהיא לב המסמך.
+     *
+     * רשמי השמות אינם בבדיקה הזאת במתכוון: אין בקוד רישום דומיינים, ולכן אין
+     * מידע אישי שעובר אליהם, והם נשארים בתנאים כקבלני משנה בלבד.
+     */
+    public function test_the_two_documents_name_the_same_providers(): void
+    {
+        $terms = $this->get(route('legal.terms'));
+        $privacy = $this->get(route('legal.privacy'));
+
+        foreach (['Google', 'Amazon', 'DigitalOcean', 'Vultr', 'hetzner',
+            'postmark', 'שמיר מערכות', 'sendgrid', 'mailgun', 'cloudflare'] as $provider) {
+            $terms->assertSeeText($provider);
+            $privacy->assertSeeText($provider);
+        }
+
+        $privacy->assertDontSeeText('ספק דיוור תפעולי')
+            ->assertDontSeeText('ספק אחסון השרתים');
+    }
+
+    /**
      * תקרת האחריות היא 12 החודשים — ואין לידה "הסעד היחיד הוא ביטול".
      *
      * שתי הגבלות שונות שלא ניתן לכתוב יחד: הסכם השירות הכללי אמר "הסעד היחיד
@@ -381,6 +406,42 @@ class LegalPagesTest extends TestCase
      * לקוח שמקבל את המכתב ופותח את התנאים משווה בדיוק את זה, ולכן המסמך אומר את
      * מה שהמכתב אומר — ובמקרה של רישיון תוסף, באותן מילים.
      */
+    /**
+     * מסלול ההתראות וההשהיה מוצג כמה שהוא: גבייה בכרטיס בלבד.
+     *
+     * scopeDueForCharge() מסננת ב-whereCollectedByCard(), ו-DunningMachine מופעלת
+     * רק מניסיון חיוב שנכשל. מנוי בהעברה בנקאית, הוראת קבע או שיקים, בלי גיבוי
+     * כרטיס, אינו נכנס למסלול הזה כלל — הוא מטופל בדרישות תשלום ובתזכורות,
+     * וההשהיה שם היא החלטה ולא תוצאה אוטומטית. אמירה גורפת הייתה מבטיחה למי
+     * שמשלם בהעברה התראות שלא יגיעו אליו.
+     */
+    public function test_the_dunning_ladder_is_scoped_to_card_collection(): void
+    {
+        $this->get(route('legal.terms'))
+            ->assertSeeText('בגבייה בכרטיס')
+            ->assertSeeText('המסלול האוטומטי אינו חל')
+            ->assertSeeText('העברה בנקאית, הוראת קבע או שיקים')
+            ->assertDontSeeText('תשלום שלא נפרע מוביל להשהיית השירות');
+    }
+
+    /**
+     * ומספר הימים נאמר כנומינלי — לא כמסגרת מדויקת ולא כרצפה.
+     *
+     * הוא זז לשני הכיוונים: משגר החיובים גדור ב-$awake ו-ChargeSubscriptionJob עוצר
+     * ב-rescheduledForShabbat(), כך שניסיון שנופל בשבת או בחג נדחה והמסלול מתארך —
+     * אבל DunningMachine קובעת now()->addDays($n)->startOfDay(), שמוותרת על החלק
+     * שחלף מאותו יום, כך שכשל אחרי חצות מגיע להשהיה בפחות מהסכום. גם "לפחות" היה
+     * התחייבות שאינה נכונה.
+     */
+    public function test_the_days_before_suspension_are_stated_as_nominal(): void
+    {
+        $this->get(route('legal.terms'))
+            ->assertSeeText('ימים בדרך כלל')
+            ->assertSeeText('המרווחים נומינליים')
+            ->assertSeeText('כשהם נופלים בשבת או בחג')
+            ->assertDontSeeText('ימים לפחות');
+    }
+
     public function test_the_three_suspension_cases_match_the_three_dunning_letters(): void
     {
         $terms = $this->get(route('legal.terms'));
