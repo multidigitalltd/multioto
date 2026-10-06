@@ -402,6 +402,32 @@ class SiteAgentAssistantTest extends TestCase
         $this->assertStringNotContainsString('הנחיות נוספות', $this->seenByModel[0]);
     }
 
+    public function test_a_shop_is_told_plainly_that_new_products_are_possible(): void
+    {
+        $subscriber = $this->subscriber();
+
+        $this->model(fn (): string => 'שלום');
+        $this->talk($subscriber, 'תעלה לי מוצר חדש שנקרא בדיקה מחיר 200 שח');
+
+        [$system, , $tools] = $this->seenByModel;
+        $this->assertContains('propose_product_create', array_column($tools, 'name'));
+        $this->assertStringContainsString('propose_product_create ישירות', $system);
+        $this->assertStringContainsString('אל תפנה לצוות', $system);
+        // Deleting products stays out of reach; creating them is not lumped in with it.
+        $this->assertStringContainsString('יצירה ועדכון שלהם — כן', $system);
+    }
+
+    public function test_without_the_plugin_tool_new_products_are_not_promised(): void
+    {
+        $subscriber = $this->subscriber(['tools' => [['name' => 'wc_product_search'], ['name' => 'wc_product_update']]]);
+
+        $this->model(fn (): string => 'שלום');
+        $this->talk($subscriber, 'היי');
+
+        $this->assertStringNotContainsString('יצירת מוצרים חדשים', $this->seenByModel[0]);
+        $this->assertStringNotContainsString('propose_product_create ישירות', $this->seenByModel[0]);
+    }
+
     public function test_a_store_is_offered_only_the_tools_its_plugin_has(): void
     {
         $subscriber = $this->subscriber(['tools' => [
