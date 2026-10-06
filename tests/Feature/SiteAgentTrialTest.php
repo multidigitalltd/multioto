@@ -70,8 +70,36 @@ class SiteAgentTrialTest extends TestCase
     {
         $this->get(route('store.agent'))
             ->assertOk()
-            ->assertSee('7 ימים ראשונים בחינם')
-            ->assertSee('מזינים כרטיס ולא מחויבים');
+            ->assertSee('7 ימים ניסיון חינם')
+            ->assertSee('מזינים כרטיס ולא מחויבים')
+            // ומתי החיוב הראשון יוצא, במספר ולא ב"בתום התקופה": זה היום שעליו
+            // הקונה חוזר ושואל, ועמוד שאינו אומר אותו הוא עמוד שיצר את השאלה.
+            ->assertSee('ביום ה־8');
+    }
+
+    /**
+     * מספר נוסף בקנייה בתקופת ניסיון — חינם עכשיו, מחויב מהחיוב הראשון.
+     *
+     * שתי הטעויות ההופכיות: לחייב היום על מושב בתוך תקופה שהובטחה חינם, או
+     * לקשור מושב שלא ייכנס לחיוב אף פעם. הראשונה שוברת את ההבטחה, השנייה היא
+     * מספר שעובד כל חודש ואינו מחויב באף אחד.
+     */
+    public function test_an_extra_number_bought_in_a_trial_is_free_now_and_billed_from_the_first_charge(): void
+    {
+        $this->plan->update(['extra_number_price_agorot' => 4900]);
+        $this->fakeCardPage();
+
+        $this->buy(['extra_phones' => ['052-7654321']]);
+        $this->cardArrives();
+
+        // שום דבר לא נגבה, ואין בכלל שורת חיוב.
+        $this->assertSame(0, Charge::count());
+
+        $subscription = SiteAgentOrder::sole()->subscription;
+        $this->assertSame(SubscriptionStatus::Trialing, $subscription->status);
+        // אבל המושב נרשם, ולכן הוא ייכנס לחיוב הראשון בתום הניסיון.
+        $this->assertSame(1, (int) $subscription->agent_extra_numbers);
+        $this->assertSame(2, $subscription->customer->siteAgentSubscribers()->count());
     }
 
     public function test_a_trial_purchase_opens_a_card_page_that_charges_nothing(): void
