@@ -18,9 +18,12 @@ use App\Models\Subscription;
 use App\Services\Billing\SubscriptionCollectionService;
 use App\Services\Cardcom\CardcomClient;
 use App\Services\Cardcom\ChargeResult;
+use App\Services\SiteAgent\SiteAgentMessageCap;
 use App\Services\SiteAgent\SiteAgentUsageMeter;
+use App\Services\SiteAgent\WhatsAppCloudClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
+use Mockery;
 use Tests\TestCase;
 
 /**
@@ -216,6 +219,126 @@ class SiteAgentUsageBillingTest extends TestCase
         // as 7 × 0.18 (which would say 1.26).
         $this->assertSame(124, $usage['estimate_gross_agorot']);
         $this->assertSame(7, $usage['billable']);
+    }
+
+    public function test_only_messages_beyond_the_included_ones_are_charged(): void
+    {
+        $this->plan->update(['included_messages' => 300]);
+        $this->sendMessages(400);
+
+        $this->chargeSucceeds();
+        $charge = $this->subscription->charges()->sole();
+        $line = collect($charge->lines)->firstWhere('kind', 'messages');
+
+        // 149.00 + 100 × 0.15 = 164.00 net.
+        $this->assertSame(16400, $charge->amount_agorot);
+        $this->assertStringContainsString('300 כלולות', $line['name']);
+        $this->assertSame($charge->total_agorot, collect($charge->invoiceLines())->sum(fn (array $l): int => $l['qty'] * $l['unit_price_agorot']));
+        // All 400 are counted as billed, not only the 100 charged.
+        $this->assertSame(400, SiteAgentUsage::where('charge_id', $charge->id)->count());
+    }
+
+    public function test_messages_all_within_the_included_ones_are_counted_and_not_counted_again(): void
+    {
+        $this->plan->update(['included_messages' => 300]);
+        $this->sendMessages(120);
+
+        $this->chargeSucceeds();
+        $first = $this->subscription->charges()->sole();
+
+        // The invoice is the plain plan, exactly as before…
+        $this->assertNull($first->lines);
+        $this->assertSame(14900, $first->amount_agorot);
+        // …and the 120 are stamped all the same, so next month starts at zero.
+        $this->assertSame(120, SiteAgentUsage::where('charge_id', $first->id)->count());
+
+        $this->travel(1)->month();
+        $this->sendMessages(350);
+        $this->subscription->refresh()->update(['next_charge_at' => now()->subHour()]);
+        $this->chargeSucceeds();
+
+        $second = $this->subscription->charges()->latest('id')->first();
+        // 350 this cycle, 300 included: 50 charged — not 170.
+        $this->assertSame(14900 + 50 * 15, $second->amount_agorot);
+    }
+
+    public function test_the_estimate_leaves_the_included_messages_out(): void
+    {
+        $this->plan->update(['included_messages' => 5]);
+        $this->sendMessages(7);
+
+        $usage = app(SiteAgentUsageMeter::class)->current($this->subscription->refresh());
+
+        // 2 × 0.15 = 0.30 net → 0.35 with VAT.
+        $this->assertSame(35, $usage['estimate_gross_agorot']);
+        $this->assertSame(5, $usage['included']);
+    }
+
+    public function test_the_cap_is_reached_at_the_count_the_invoice_will_carry(): void
+    {
+        $meter = app(SiteAgentUsageMeter::class);
+        $this->subscription->update(['site_agent_message_cap' => 10]);
+
+        $this->sendMessages(7);
+        $this->assertFalse($meter->capReached($this->subscription));
+        $this->assertFalse($meter->shouldWarn($this->subscription));
+
+        $this->sendMessages(1);
+        // 8 of 10: the 80% notice, once.
+        $this->assertTrue($meter->shouldWarn($this->subscription));
+        $this->subscription->update(['site_agent_cap_warned_at' => now()]);
+        $this->assertFalse($meter->shouldWarn($this->subscription->refresh()));
+
+        $this->sendMessages(2);
+        $this->assertTrue($meter->capReached($this->subscription));
+    }
+
+    public function test_the_portal_sets_and_removes_the_cap(): void
+    {
+        $portal = $this->withSession(['portal.customer_id' => $this->customer->id]);
+
+        $portal->post(route('portal.site-agent.cap'), ['cap' => 500])->assertRedirect();
+        $this->assertSame(500, $this->subscription->refresh()->site_agent_message_cap);
+
+        $portal->post(route('portal.site-agent.cap'), ['cap' => 0])->assertSessionHasErrorsIn('cap', 'cap');
+        $this->assertSame(500, $this->subscription->refresh()->site_agent_message_cap);
+
+        $portal->post(route('portal.site-agent.cap'), ['cap' => ''])->assertRedirect();
+        $this->assertNull($this->subscription->refresh()->site_agent_message_cap);
+    }
+
+    public function test_a_message_over_the_ceiling_is_delivered_but_never_billed(): void
+    {
+        // Two workers that both passed the "under the cap?" check before
+        // either recorded: the ceiling is held where the row is written.
+        $this->subscription->update(['site_agent_message_cap' => 2]);
+
+        $this->sendMessages(3);
+
+        $this->assertSame(3, SiteAgentUsage::count());
+        $this->assertSame(2, SiteAgentUsage::where('billable', true)->count());
+    }
+
+    public function test_the_eighty_percent_notice_is_kept_until_it_is_actually_delivered(): void
+    {
+        $this->subscription->update(['site_agent_message_cap' => 5]);
+        $this->sendMessages(4);
+        $cap = app(SiteAgentMessageCap::class);
+
+        $failing = Mockery::mock(WhatsAppCloudClient::class);
+        $failing->shouldReceive('sendText')->once()->andReturn(null);
+        $cap->warnIfDue($failing, '972501111111', $this->subscription->refresh());
+
+        // Not delivered: still due.
+        $this->assertNull($this->subscription->refresh()->site_agent_cap_warned_at);
+
+        $working = Mockery::mock(WhatsAppCloudClient::class);
+        $working->shouldReceive('sendText')->once()->andReturn('wamid.warn');
+        $cap->warnIfDue($working, '972501111111', $this->subscription->refresh());
+        // Delivered once; a second worker does not send it again.
+        $cap->warnIfDue($working, '972501111111', $this->subscription->refresh());
+
+        $this->assertNotNull($this->subscription->refresh()->site_agent_cap_warned_at);
     }
 
     // ── helpers ──────────────────────────────────────────────────────────

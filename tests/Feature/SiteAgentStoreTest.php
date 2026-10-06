@@ -214,6 +214,17 @@ class SiteAgentStoreTest extends TestCase
             ->assertSee('הודעות');
     }
 
+    /** הודעות שכלולות במסלול נאמרות לצד המחיר, וכך גם התקרה שהלקוח יכול לקבוע. */
+    public function test_messages_included_in_the_plan_are_said_beside_the_price(): void
+    {
+        $this->plan->update(['message_price_agorot' => 12, 'included_messages' => 300]);
+
+        $this->get(route('store.agent'))
+            ->assertOk()
+            ->assertSee('300 הודעות בכל חודש כלולות במחיר')
+            ->assertSee('אפשר לקבוע תקרה');
+    }
+
     /**
      * ומסלול בלי חיוב על הודעות אינו מבטיח חיוב שלא קיים.
      *

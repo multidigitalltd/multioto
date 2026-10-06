@@ -4,10 +4,13 @@ namespace App\Jobs;
 
 use App\Models\SiteAgentMessage;
 use App\Models\SiteAgentSubscriber;
+use App\Models\Subscription;
 use App\Models\SystemLog;
 use App\Services\SiteAgent\SiteAgentAccess;
 use App\Services\SiteAgent\SiteAgentAssistant;
+use App\Services\SiteAgent\SiteAgentBilling;
 use App\Services\SiteAgent\SiteAgentLeadAlerts;
+use App\Services\SiteAgent\SiteAgentMessageCap;
 use App\Services\SiteAgent\SiteAgentUsageMeter;
 use App\Services\SiteAgent\WhatsAppCloudClient;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -50,6 +53,7 @@ class SendSiteAgentLeadAlertsJob implements ShouldQueue
         WhatsAppCloudClient $whatsapp,
         SiteAgentUsageMeter $meter,
         SiteAgentAssistant $assistant,
+        SiteAgentBilling $billing,
     ): void {
         if (! (bool) config('siteagent.enabled', false)) {
             return;
@@ -60,9 +64,11 @@ class SendSiteAgentLeadAlertsJob implements ShouldQueue
             ->where('lead_alerts', true)
             ->whereNotNull('site_id')
             ->get()
-            ->filter(fn (SiteAgentSubscriber $subscriber): bool => $access->forSubscriber($subscriber)['status'] === SiteAgentAccess::ALLOWED)
+            ->filter(fn (SiteAgentSubscriber $subscriber): bool => $access->forSubscriber($subscriber)['status'] === SiteAgentAccess::ALLOWED
+                // At the owner's own ceiling, alerts wait like every other message.
+                && ! $meter->capReached($billing->subscriptionForSite($subscriber->customer, $subscriber->site_id)))
             ->groupBy('site_id')
-            ->each(function (Collection $subscribers) use ($alerts, $whatsapp, $meter, $assistant): void {
+            ->each(function (Collection $subscribers) use ($alerts, $whatsapp, $meter, $assistant, $billing): void {
                 $site = $subscribers->first()->site;
                 $recent = $site !== null ? $alerts->recent($site) : null;
 
@@ -75,7 +81,8 @@ class SendSiteAgentLeadAlertsJob implements ShouldQueue
 
                     if ($fresh !== []) {
                         $missed = $alerts->mayHaveMissed($subscriber, $recent['leads']);
-                        $this->announce($subscriber, $fresh, $missed, $alerts, $whatsapp, $meter, $assistant);
+                        $subscription = $billing->subscriptionForSite($subscriber->customer, $subscriber->site_id);
+                        $this->announce($subscriber, $subscription, $fresh, $missed, $alerts, $whatsapp, $meter, $assistant);
                     }
                 }
             });
@@ -87,6 +94,7 @@ class SendSiteAgentLeadAlertsJob implements ShouldQueue
      */
     private function announce(
         SiteAgentSubscriber $subscriber,
+        ?Subscription $subscription,
         array $fresh,
         bool $missed,
         SiteAgentLeadAlerts $alerts,
@@ -98,7 +106,7 @@ class SendSiteAgentLeadAlertsJob implements ShouldQueue
             && $subscriber->last_seen_at->gt(now()->subHours(self::WINDOW_HOURS));
 
         if (! $windowOpen) {
-            $this->announceByTemplate($subscriber, $fresh, $missed, $alerts, $whatsapp, $meter, $assistant);
+            $this->announceByTemplate($subscriber, $subscription, $fresh, $missed, $alerts, $whatsapp, $meter, $assistant);
 
             return;
         }
@@ -107,6 +115,13 @@ class SendSiteAgentLeadAlertsJob implements ShouldQueue
         $rest = count($fresh) - count($shown);
 
         foreach ($shown as $index => $lead) {
+            // Checked before every alert, not once for the burst: three leads
+            // with one message left under the owner's ceiling send one. The
+            // rest are not marked, and go out once the ceiling allows.
+            if ($meter->capReached($subscription)) {
+                return;
+            }
+
             $text = $alerts->text($lead);
 
             if (($rest > 0 || $missed) && $index === count($shown) - 1) {
@@ -120,6 +135,7 @@ class SendSiteAgentLeadAlertsJob implements ShouldQueue
             }
 
             $meter->record($subscriber, $sent);
+            app(SiteAgentMessageCap::class)->warnIfDue($whatsapp, $subscriber->phone, $subscription);
             $assistant->remember($subscriber, SiteAgentMessage::ASSISTANT, $text);
             $alerts->markSeen($subscriber, $index === count($shown) - 1 ? array_slice($fresh, $index) : [$lead]);
         }
@@ -128,6 +144,7 @@ class SendSiteAgentLeadAlertsJob implements ShouldQueue
     /** @param list<array<string, mixed>> $fresh */
     private function announceByTemplate(
         SiteAgentSubscriber $subscriber,
+        ?Subscription $subscription,
         array $fresh,
         bool $missed,
         SiteAgentLeadAlerts $alerts,
@@ -167,6 +184,7 @@ class SendSiteAgentLeadAlertsJob implements ShouldQueue
         }
 
         $meter->record($subscriber, $sent);
+        app(SiteAgentMessageCap::class)->warnIfDue($whatsapp, $subscriber->phone, $subscription);
         $alerts->markSeen($subscriber, $fresh);
         $assistant->remember($subscriber, SiteAgentMessage::ASSISTANT,
             "[נשלחה התראה: {$title} — {$summary}. אם בעל האתר משיב \"דוח\" או \"לידים\" — הצג את הלידים החדשים עם find_leads.]");

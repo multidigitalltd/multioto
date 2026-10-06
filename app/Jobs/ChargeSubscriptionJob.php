@@ -203,6 +203,7 @@ class ChargeSubscriptionJob implements ShouldQueue
             'vat_agorot' => $breakdown['vat_agorot'],
             'total_agorot' => $breakdown['total_agorot'],
             'lines' => $breakdown['lines'],
+            'usage_until' => $breakdown['usage_until'],
             'currency' => config('billing.currency'),
             // Everything this job collects runs on a card, including a fallback
             // charge for a subscription nominally paid by transfer — and the

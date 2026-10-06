@@ -314,6 +314,8 @@ Route::prefix('portal')->group(function () {
             ->name('portal.site-agent.connect');
         Route::post('/site-agent/sites/{site}/check', [PortalSiteAgentController::class, 'check'])
             ->middleware('throttle:6,10')->name('portal.site-agent.check');
+        Route::post('/site-agent/cap', [PortalSiteAgentController::class, 'setCap'])
+            ->middleware('throttle:10,1')->name('portal.site-agent.cap');
         Route::post('/site-agent/numbers', [PortalSiteAgentController::class, 'addNumber'])
             ->middleware('throttle:10,60')->name('portal.site-agent.add');
         Route::post('/site-agent/numbers/{subscriber}/resend', [PortalSiteAgentController::class, 'resend'])

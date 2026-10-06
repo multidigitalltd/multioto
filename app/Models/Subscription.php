@@ -34,6 +34,7 @@ class Subscription extends Model
         'site_id', 'token_id', 'payment_method', 'card_fallback_days', 'status', 'trial_ends_at', 'trial_reminded_at',
         'current_period_start', 'current_period_end', 'next_charge_at', 'card_expiry_alerted_at',
         'price_agorot_override', 'agent_extra_numbers', 'dunning_stage', 'canceled_at',
+        'site_agent_message_cap', 'site_agent_cap_warned_at',
     ];
 
     protected function casts(): array
@@ -54,6 +55,8 @@ class Subscription extends Model
             'card_fallback_days' => 'integer',
             'dunning_stage' => 'integer',
             'canceled_at' => 'datetime',
+            'site_agent_message_cap' => 'integer',
+            'site_agent_cap_warned_at' => 'datetime',
         ];
     }
 

@@ -30,7 +30,10 @@
             <dl class="usage">
                 <div><dt>הודעות שהבוט שלח</dt><dd>{{ number_format($usage['sent']) }}</dd></div>
                 @if ($usage['unit_gross_agorot'] !== null)
-                    <div><dt>יחויבו בחיוב הבא</dt><dd>{{ number_format($usage['billable']) }} × {{ \App\Support\Money::ils($usage['unit_gross_agorot']) }}</dd></div>
+                    @if ($usage['included'] > 0)
+                        <div><dt>כלולות במנוי</dt><dd>{{ number_format(min($usage['billable'], $usage['included'])) }} מתוך {{ number_format($usage['included']) }}</dd></div>
+                    @endif
+                    <div><dt>יחויבו בחיוב הבא</dt><dd>{{ number_format(max(0, $usage['billable'] - $usage['included'])) }} × {{ \App\Support\Money::ils($usage['unit_gross_agorot']) }}</dd></div>
                     <div><dt>סכום ההודעות עד עכשיו</dt><dd>{{ \App\Support\Money::ils($usage['estimate_gross_agorot']) }}</dd></div>
                 @endif
                 @if ($usage['next_charge_at'])
@@ -41,6 +44,30 @@
                 בחיוב החודשי יופיעו שורות נפרדות: המנוי, מספרים נוספים (אם יש), וההודעות שנשלחו מאז החיוב הקודם.
                 קודי אימות והודעות מערכת אינם נספרים. אפשר גם לשאול את הבוט: "כמה הודעות שלחתי החודש?"
             </p>
+
+            @if ($usage['unit_gross_agorot'] !== null)
+                {{-- Their own ceiling: at it the bot stops sending until the
+                     next renewal, so the bill never passes what they chose. --}}
+                <h3 style="margin-bottom:.4rem;">תקרת הודעות</h3>
+                <form method="POST" action="{{ route('portal.site-agent.cap') }}" class="agent-form" novalidate>
+                    @csrf
+                    <div class="field">
+                        <label for="cap">מספר ההודעות המרבי במחזור</label>
+                        <input id="cap" name="cap" type="number" min="1" max="{{ \App\Services\SiteAgent\SiteAgentMessageCap::MAX }}" inputmode="numeric"
+                               value="{{ old('cap', $usage['cap']) }}"
+                               aria-describedby="cap-hint{{ $errors->cap->any() ? ' cap-error' : '' }}"
+                               @if ($errors->cap->any()) aria-invalid="true" @endif>
+                        <p class="muted" id="cap-hint" style="font-size:.9rem;margin:.3rem 0 0;">
+                            בתקרה הבוט מפסיק לשלוח עד החידוש הבא, וב־80% תקבלו הודעה. השאירו ריק כדי לבטל את התקרה.
+                            אפשר גם לכתוב לבוט "תקרה 500".
+                        </p>
+                        @if ($errors->cap->any())
+                            <p id="cap-error" role="alert" style="color:#dc2626;margin:.3rem 0 0;">{{ $errors->cap->first() }}</p>
+                        @endif
+                    </div>
+                    <button type="submit" class="btn">שמירת התקרה</button>
+                </form>
+            @endif
         </div>
     @endif
 

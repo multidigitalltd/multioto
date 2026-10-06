@@ -20,7 +20,7 @@ class Charge extends Model
         'status', 'attempt_number', 'cardcom_transaction_id', 'cardcom_response_code',
         'failure_reason', 'description', 'invoice_notes', 'lines', 'cardcom_low_profile_id', 'cardcom_pay_url', 'cardcom_bit_url',
         'demand_sent_at', 'demand_channel', 'due_at', 'demand_reminder_count', 'demand_reminders_log', 'demand_reminders_paused',
-        'proforma_document_id', 'proforma_pdf_url', 'period_start', 'period_end', 'charged_at',
+        'proforma_document_id', 'proforma_pdf_url', 'period_start', 'period_end', 'charged_at', 'usage_until',
     ];
 
     protected function casts(): array
@@ -40,6 +40,7 @@ class Charge extends Model
             'period_start' => 'date',
             'period_end' => 'date',
             'charged_at' => 'datetime',
+            'usage_until' => 'datetime',
         ];
     }
 
