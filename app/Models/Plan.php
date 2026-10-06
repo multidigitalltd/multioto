@@ -15,7 +15,7 @@ class Plan extends Model
 
     protected $fillable = [
         'name', 'price_agorot', 'vat_applies', 'billing_interval', 'description', 'active', 'includes_site_agent',
-        'extra_number_price_agorot', 'message_price_agorot', 'trial_days', 'is_public',
+        'extra_number_price_agorot', 'message_price_agorot', 'included_messages', 'trial_days', 'is_public',
     ];
 
     protected function casts(): array
@@ -25,6 +25,7 @@ class Plan extends Model
             'extra_number_price_agorot' => 'integer',
             'message_price_agorot' => 'integer',
             'trial_days' => 'integer',
+            'included_messages' => 'integer',
             'vat_applies' => 'boolean',
             'billing_interval' => BillingInterval::class,
             'active' => 'boolean',

@@ -739,6 +739,80 @@ class SiteAgentChannelTest extends TestCase
         $this->assertSame(['text', 'interactive'], $types);
     }
 
+    public function test_at_the_owners_ceiling_the_bot_stops_until_they_raise_it(): void
+    {
+        // A distinct Meta id per send, as the real API returns: the meter
+        // counts each id once.
+        Http::fake(fn () => Http::response(['messages' => [['id' => 'wamid.'.uniqid('', true)]]]));
+        $subscriber = $this->subscriber();
+        $subscription = Subscription::factory()->create([
+            'customer_id' => $subscriber->customer_id,
+            'site_id' => $subscriber->site_id,
+            'plan_id' => Plan::factory()->create(['includes_site_agent' => true, 'message_price_agorot' => 15])->id,
+            'status' => SubscriptionStatus::Active,
+            'site_agent_message_cap' => 2,
+        ]);
+
+        $heard = [];
+        $conversation = Mockery::mock(SiteAgentConversation::class);
+        $conversation->shouldReceive('handle')->andReturnUsing(function ($who, string $text) use (&$heard): string {
+            $heard[] = $text;
+
+            return 'תשובה';
+        });
+        $this->app->instance(SiteAgentConversation::class, $conversation);
+
+        $this->deliver('972501234567', 'אחת');
+        $this->deliver('972501234567', 'שתיים');
+        $this->assertSame(2, SiteAgentUsage::count());
+
+        // At the ceiling: not handed to the bot, told why, not billed.
+        $this->deliver('972501234567', 'שלוש');
+        $this->assertReplyContains('הגעתם לתקרה');
+        $this->assertSame(['אחת', 'שתיים'], $heard);
+        $this->assertSame(2, SiteAgentUsage::count());
+
+        // Raising it is the one thing that works at the ceiling.
+        $this->deliver('972501234567', 'תקרה 800');
+        $this->assertSame(800, $subscription->refresh()->site_agent_message_cap);
+        $this->assertReplyContains('התקרה נקבעה ל-800');
+
+        $this->deliver('972501234567', 'ארבע');
+        $this->assertSame(['אחת', 'שתיים', 'ארבע'], $heard);
+    }
+
+    public function test_the_eighty_percent_notice_is_sent_once_and_not_billed(): void
+    {
+        // A distinct Meta id per send, as the real API returns: the meter
+        // counts each id once.
+        Http::fake(fn () => Http::response(['messages' => [['id' => 'wamid.'.uniqid('', true)]]]));
+        $subscriber = $this->subscriber();
+        Subscription::factory()->create([
+            'customer_id' => $subscriber->customer_id,
+            'site_id' => $subscriber->site_id,
+            'plan_id' => Plan::factory()->create(['includes_site_agent' => true, 'message_price_agorot' => 15])->id,
+            'status' => SubscriptionStatus::Active,
+            'site_agent_message_cap' => 5,
+        ]);
+        $conversation = Mockery::mock(SiteAgentConversation::class);
+        $conversation->shouldReceive('handle')->andReturn('תשובה');
+        $this->app->instance(SiteAgentConversation::class, $conversation);
+
+        foreach (['1', '2', '3', '4', '5'] as $text) {
+            $this->deliver('972501234567', $text);
+        }
+
+        $notices = 0;
+        Http::recorded(function ($request) use (&$notices) {
+            $notices += str_contains($this->bodyOf($request->data()), 'מתוך 5 ההודעות') ? 1 : 0;
+
+            return true;
+        });
+
+        $this->assertSame(1, $notices);
+        $this->assertSame(5, SiteAgentUsage::count());
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────
 
     /** @param array<string, mixed> $attributes */

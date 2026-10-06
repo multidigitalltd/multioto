@@ -92,6 +92,7 @@ class SubscriptionCollectionService
                     'vat_agorot' => $breakdown['vat_agorot'],
                     'total_agorot' => $breakdown['total_agorot'],
                     'lines' => $breakdown['lines'],
+                    'usage_until' => $breakdown['usage_until'],
                     'currency' => config('billing.currency'),
                     // Recorded here, not inferred at invoicing time: this money
                     // arrived by transfer / standing order / cheque, whatever

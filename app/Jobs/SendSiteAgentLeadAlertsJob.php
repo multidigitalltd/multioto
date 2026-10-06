@@ -7,6 +7,7 @@ use App\Models\SiteAgentSubscriber;
 use App\Models\SystemLog;
 use App\Services\SiteAgent\SiteAgentAccess;
 use App\Services\SiteAgent\SiteAgentAssistant;
+use App\Services\SiteAgent\SiteAgentBilling;
 use App\Services\SiteAgent\SiteAgentLeadAlerts;
 use App\Services\SiteAgent\SiteAgentUsageMeter;
 use App\Services\SiteAgent\WhatsAppCloudClient;
@@ -50,6 +51,7 @@ class SendSiteAgentLeadAlertsJob implements ShouldQueue
         WhatsAppCloudClient $whatsapp,
         SiteAgentUsageMeter $meter,
         SiteAgentAssistant $assistant,
+        SiteAgentBilling $billing,
     ): void {
         if (! (bool) config('siteagent.enabled', false)) {
             return;
@@ -60,7 +62,9 @@ class SendSiteAgentLeadAlertsJob implements ShouldQueue
             ->where('lead_alerts', true)
             ->whereNotNull('site_id')
             ->get()
-            ->filter(fn (SiteAgentSubscriber $subscriber): bool => $access->forSubscriber($subscriber)['status'] === SiteAgentAccess::ALLOWED)
+            ->filter(fn (SiteAgentSubscriber $subscriber): bool => $access->forSubscriber($subscriber)['status'] === SiteAgentAccess::ALLOWED
+                // At the owner's own ceiling, alerts wait like every other message.
+                && ! $meter->capReached($billing->subscriptionForSite($subscriber->customer, $subscriber->site_id)))
             ->groupBy('site_id')
             ->each(function (Collection $subscribers) use ($alerts, $whatsapp, $meter, $assistant): void {
                 $site = $subscribers->first()->site;

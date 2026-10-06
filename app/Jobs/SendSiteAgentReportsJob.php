@@ -7,6 +7,7 @@ use App\Models\SiteAgentReportSchedule;
 use App\Models\SystemLog;
 use App\Services\SiteAgent\SiteAgentAccess;
 use App\Services\SiteAgent\SiteAgentAssistant;
+use App\Services\SiteAgent\SiteAgentBilling;
 use App\Services\SiteAgent\SiteAgentReportBuilder;
 use App\Services\SiteAgent\SiteAgentUsageMeter;
 use App\Services\SiteAgent\WhatsAppCloudClient;
@@ -68,6 +69,12 @@ class SendSiteAgentReportsJob implements ShouldQueue
                     // or piling up a backlog to flood them with later.
                     if ($subscriber === null || $schedule->site === null
                         || $access->forSubscriber($subscriber)['status'] !== SiteAgentAccess::ALLOWED) {
+                        continue;
+                    }
+
+                    // The owner's own ceiling on messages is reached: a report
+                    // is a message, and they asked for nothing above it.
+                    if ($meter->capReached(app(SiteAgentBilling::class)->subscriptionForSite($subscriber->customer, $subscriber->site_id))) {
                         continue;
                     }
 

@@ -14,6 +14,7 @@ use App\Services\Agent\McpClient;
 use App\Services\Ai\ClaudeClient;
 use App\Services\SiteAgent\SiteAgentConversation;
 use App\Services\SiteAgent\SiteAgentLeadAlerts;
+use App\Services\SiteAgent\SiteAgentUsageMeter;
 use App\Services\SiteAgent\WhatsAppCloudClient;
 use Closure;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -200,6 +201,23 @@ class SiteAgentLeadAlertsTest extends TestCase
 
         $this->assertFalse($this->number->fresh()->lead_alerts);
         $this->assertSame([], $this->sent);
+    }
+
+    public function test_at_the_owners_message_ceiling_alerts_wait(): void
+    {
+        $this->enable();
+        Subscription::query()->update(['site_agent_message_cap' => 1]);
+        app(SiteAgentUsageMeter::class)->record($this->number, 'wamid.earlier');
+        array_unshift($this->leads, $this->lead(2, 'רון'));
+
+        $this->runAlerts();
+
+        $this->assertSame([], $this->sent);
+
+        // Raised: the lead that waited goes out.
+        Subscription::query()->update(['site_agent_message_cap' => 10]);
+        $this->runAlerts();
+        $this->assertCount(1, $this->sent);
     }
 
     // ── helpers ──────────────────────────────────────────────────────────

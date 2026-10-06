@@ -218,6 +218,92 @@ class SiteAgentUsageBillingTest extends TestCase
         $this->assertSame(7, $usage['billable']);
     }
 
+    public function test_only_messages_beyond_the_included_ones_are_charged(): void
+    {
+        $this->plan->update(['included_messages' => 300]);
+        $this->sendMessages(400);
+
+        $this->chargeSucceeds();
+        $charge = $this->subscription->charges()->sole();
+        $line = collect($charge->lines)->firstWhere('kind', 'messages');
+
+        // 149.00 + 100 × 0.15 = 164.00 net.
+        $this->assertSame(16400, $charge->amount_agorot);
+        $this->assertStringContainsString('300 כלולות', $line['name']);
+        $this->assertSame($charge->total_agorot, collect($charge->invoiceLines())->sum(fn (array $l): int => $l['qty'] * $l['unit_price_agorot']));
+        // All 400 are counted as billed, not only the 100 charged.
+        $this->assertSame(400, SiteAgentUsage::where('charge_id', $charge->id)->count());
+    }
+
+    public function test_messages_all_within_the_included_ones_are_counted_and_not_counted_again(): void
+    {
+        $this->plan->update(['included_messages' => 300]);
+        $this->sendMessages(120);
+
+        $this->chargeSucceeds();
+        $first = $this->subscription->charges()->sole();
+
+        // The invoice is the plain plan, exactly as before…
+        $this->assertNull($first->lines);
+        $this->assertSame(14900, $first->amount_agorot);
+        // …and the 120 are stamped all the same, so next month starts at zero.
+        $this->assertSame(120, SiteAgentUsage::where('charge_id', $first->id)->count());
+
+        $this->travel(1)->month();
+        $this->sendMessages(350);
+        $this->subscription->refresh()->update(['next_charge_at' => now()->subHour()]);
+        $this->chargeSucceeds();
+
+        $second = $this->subscription->charges()->latest('id')->first();
+        // 350 this cycle, 300 included: 50 charged — not 170.
+        $this->assertSame(14900 + 50 * 15, $second->amount_agorot);
+    }
+
+    public function test_the_estimate_leaves_the_included_messages_out(): void
+    {
+        $this->plan->update(['included_messages' => 5]);
+        $this->sendMessages(7);
+
+        $usage = app(SiteAgentUsageMeter::class)->current($this->subscription->refresh());
+
+        // 2 × 0.15 = 0.30 net → 0.35 with VAT.
+        $this->assertSame(35, $usage['estimate_gross_agorot']);
+        $this->assertSame(5, $usage['included']);
+    }
+
+    public function test_the_cap_is_reached_at_the_count_the_invoice_will_carry(): void
+    {
+        $meter = app(SiteAgentUsageMeter::class);
+        $this->subscription->update(['site_agent_message_cap' => 10]);
+
+        $this->sendMessages(7);
+        $this->assertFalse($meter->capReached($this->subscription));
+        $this->assertFalse($meter->shouldWarn($this->subscription));
+
+        $this->sendMessages(1);
+        // 8 of 10: the 80% notice, once.
+        $this->assertTrue($meter->shouldWarn($this->subscription));
+        $this->subscription->update(['site_agent_cap_warned_at' => now()]);
+        $this->assertFalse($meter->shouldWarn($this->subscription->refresh()));
+
+        $this->sendMessages(2);
+        $this->assertTrue($meter->capReached($this->subscription));
+    }
+
+    public function test_the_portal_sets_and_removes_the_cap(): void
+    {
+        $portal = $this->withSession(['portal.customer_id' => $this->customer->id]);
+
+        $portal->post(route('portal.site-agent.cap'), ['cap' => 500])->assertRedirect();
+        $this->assertSame(500, $this->subscription->refresh()->site_agent_message_cap);
+
+        $portal->post(route('portal.site-agent.cap'), ['cap' => 0])->assertSessionHasErrorsIn('cap', 'cap');
+        $this->assertSame(500, $this->subscription->refresh()->site_agent_message_cap);
+
+        $portal->post(route('portal.site-agent.cap'), ['cap' => ''])->assertRedirect();
+        $this->assertNull($this->subscription->refresh()->site_agent_message_cap);
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────
 
     private function sendMessages(int $count): void

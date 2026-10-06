@@ -87,6 +87,14 @@ class PlanResource extends Resource
                             ->helperText('נגבה בחידוש החודשי על ההודעות שנשלחו מאז החיוב הקודם, בשורה נפרדת בחשבונית. ריק או 0 = הודעות אינן מחויבות. קודי אימות והודעות מערכת אינם נספרים.')
                             ->visible(fn (Forms\Get $get): bool => (bool) $get('includes_site_agent')),
 
+                        Forms\Components\TextInput::make('included_messages')
+                            ->label('הודעות כלולות במנוי (לכל מחזור חיוב)')
+                            ->numeric()
+                            ->minValue(0)
+                            ->default(0)
+                            ->helperText('כמה הודעות בכל מחזור אינן מחויבות. רק ההודעות שמעבר להן מחויבות במחיר להודעה. 0 = כל הודעה מחויבת.')
+                            ->visible(fn (Forms\Get $get): bool => (bool) $get('includes_site_agent')),
+
                         Forms\Components\TextInput::make('trial_days')
                             ->label('ימי ניסיון בחינם')
                             ->numeric()
