@@ -235,6 +235,8 @@ return [
         'history_messages' => (int) env('SITE_AGENT_ASSISTANT_HISTORY', 12),
         'history_hours' => (int) env('SITE_AGENT_ASSISTANT_HISTORY_HOURS', 12),
         'transcript_days' => (int) env('SITE_AGENT_ASSISTANT_TRANSCRIPT_DAYS', 7),
+        // הנחיות קבועות מהצוות לכל שיחה — נערכות במסך ההגדרות של המוצר.
+        'instructions' => (string) env('SITE_AGENT_ASSISTANT_INSTRUCTIONS', ''),
         'max_turns' => (int) env('SITE_AGENT_ASSISTANT_MAX_TURNS', 6),
         'budget_seconds' => (int) env('SITE_AGENT_ASSISTANT_BUDGET_SECONDS', 240),
         'tool_result_chars' => (int) env('SITE_AGENT_ASSISTANT_TOOL_RESULT_CHARS', 6000),

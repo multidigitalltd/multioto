@@ -5,11 +5,14 @@ namespace App\Filament\Pages;
 use App\Filament\Clusters\Settings;
 use App\Filament\Concerns\AdminOnly;
 use App\Filament\Concerns\PersistsSettings;
+use App\Filament\Resources\SiteAgentMessageResource;
 use App\Models\Setting;
 use App\Services\SiteAgent\InboundChannelHealth;
+use App\Services\SiteAgent\SiteAgentAssistant;
 use App\Services\SiteAgent\SiteAgentProduct;
 use Filament\Forms\Components\Placeholder;
 use Filament\Forms\Components\Section;
+use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Toggle;
 use Filament\Forms\Concerns\InteractsWithForms;
@@ -81,6 +84,8 @@ class ManageSiteAgent extends Page implements HasForms
         'siteagent.template_card_link',
         'siteagent.template_report',
         'siteagent.binding_ttl_minutes',
+        'siteagent.instructions',
+        'siteagent.transcript_days',
     ];
 
     /** @var array<string, mixed> */
@@ -103,6 +108,8 @@ class ManageSiteAgent extends Page implements HasForms
                 'template_card_link' => config('siteagent.whatsapp.templates.card_link'),
                 'template_report' => config('siteagent.whatsapp.templates.report_ready'),
                 'binding_ttl_minutes' => config('siteagent.binding.verification_ttl_minutes'),
+                'instructions' => config('siteagent.assistant.instructions'),
+                'transcript_days' => config('siteagent.assistant.transcript_days'),
             ],
         ]);
     }
@@ -255,6 +262,29 @@ class ManageSiteAgent extends Page implements HasForms
                             // ("התוקף יפוג בעוד X דקות"), ומי שכתב אותו יושב
                             // במסך הזה. פער בין השניים משקר ללקוח לשני הכיוונים.
                             ->helperText('חייב להתאים לתוקף שכתוב בתבנית האימות עצמה אצל מטא (עד 90 דקות — זה הגבול שלה). אם התבנית אומרת ללקוח 10 דקות והערך כאן הוא 30, מי שממתין רבע שעה חושב שהקוד פג ומבקש חדש — והחדש מבטל את הישן שעוד עבד.'),
+                    ])->columns(2),
+
+                Section::make('הנחיות ל-AI')
+                    ->description('מה שנכתב כאן מצורף לכל שיחה של הבוט, בכל האתרים. לכוונון סגנון והרגלים — לא לעקיפת כללי הבטיחות: שינוי באתר עדיין קורה רק אחרי "כן", ובסתירה הכללים הקבועים גוברים.')
+                    ->schema([
+                        Textarea::make('siteagent.instructions')
+                            ->label('הנחיות קבועות')
+                            ->rows(8)
+                            ->maxLength(SiteAgentAssistant::INSTRUCTIONS_MAX_CHARS)
+                            ->placeholder("למשל:\n• פתח כל תשובה על מכירות בסכום הכולל, ורק אחר כך פירוט.\n• כשמבקשים \"מבצע\" בלי אחוז — שאל כמה אחוז, אל תציע 10%.\n• פנה בלשון רבים.")
+                            ->helperText(fn (): HtmlString => new HtmlString(
+                                'כדי לראות מה עבד ומה לא — <a class="underline" href="'.e(SiteAgentMessageResource::getUrl()).'">שיחות הבוט</a>: מה בעלי האתרים כתבו ומה הבוט ענה.'
+                            ))
+                            ->columnSpanFull(),
+                        TextInput::make('siteagent.transcript_days')
+                            ->label('כמה ימים לשמור את השיחות')
+                            ->numeric()
+                            ->rule('integer')
+                            ->minValue(1)
+                            ->maxValue(90)
+                            ->placeholder('7')
+                            ->live(onBlur: true)
+                            ->helperText('השיחות מכילות פרטים של לקוחות הקצה (שמות, טלפונים, הזמנות), ולכן נמחקות אחרי התקופה הזו. 30 יום מספיקים בדרך כלל כדי ללמוד מהן; עד 90.'),
                     ])->columns(2),
             ])
             ->statePath('data');

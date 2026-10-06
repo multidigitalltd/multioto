@@ -96,6 +96,10 @@ class SettingsServiceProvider extends ServiceProvider
         // either direction — asking for a new code while the old one still
         // works, which then invalidates the one they were about to use.
         'siteagent.binding_ttl_minutes' => 'siteagent.binding.verification_ttl_minutes',
+        // Standing instructions the team gives the assistant, and how long the
+        // conversations are kept to read back and improve them.
+        'siteagent.instructions' => 'siteagent.assistant.instructions',
+        'siteagent.transcript_days' => 'siteagent.assistant.transcript_days',
         'waha.api_key' => 'billing.waha.api_key',
         'waha.base_url' => 'billing.waha.base_url',
         'waha.session' => 'billing.waha.session',
@@ -224,6 +228,10 @@ class SettingsServiceProvider extends ServiceProvider
         'siteagent.template_card_link' => 'siteagent.whatsapp.templates.card_link',
         'siteagent.template_report' => 'siteagent.whatsapp.templates.report_ready',
         'siteagent.binding_ttl_minutes' => 'siteagent.binding.verification_ttl_minutes',
+        // Standing instructions the team gives the assistant, and how long the
+        // conversations are kept to read back and improve them.
+        'siteagent.instructions' => 'siteagent.assistant.instructions',
+        'siteagent.transcript_days' => 'siteagent.assistant.transcript_days',
     ];
 
     /**
