@@ -2,6 +2,7 @@
 
 namespace App\Services\Billing;
 
+use App\Models\SiteAgentUsage;
 use App\Models\Subscription;
 use App\Services\SiteAgent\SiteAgentUsageMeter;
 use App\Support\Money;
@@ -16,6 +17,8 @@ use Carbon\CarbonInterface;
  *   2. the additional manager numbers, for that period  (in advance)
  *   3. the messages the bot sent since the last invoice (in arrears), less
  *      the plan's included messages — only the ones beyond are charged
+ *   4. the writing units since the last invoice: approved changes that put
+ *      more than 300 words on the site, less the plan's included ones
  *
  * VAT is computed once, on the net total, exactly as Subscription::vatAgorot()
  * always has — so a subscription with no extras and no messages costs to the
@@ -53,14 +56,20 @@ class RenewalBreakdown
         $included = min($messages, (int) ($plan?->included_messages ?? 0));
         $charged = $messages - $included;
         $messagesNet = $charged * (int) ($plan?->message_price_agorot ?? 0);
-        $usageUntil = $messages > 0 ? $until : null;
 
-        $net = $planNet + $extrasNet + $messagesNet;
+        $writings = $plan?->billsWritings() ? $this->usage->unbilled($subscription, $until, SiteAgentUsage::WRITING) : 0;
+        $writingsIncluded = min($writings, (int) ($plan?->included_writings ?? 0));
+        $writingsCharged = $writings - $writingsIncluded;
+        $writingsNet = $writingsCharged * (int) ($plan?->writing_price_agorot ?? 0);
+
+        $usageUntil = $messages > 0 || $writings > 0 ? $until : null;
+
+        $net = $planNet + $extrasNet + $messagesNet + $writingsNet;
         $vat = $this->vat($subscription, $net);
         $total = $net + $vat;
 
         // Nothing beyond the plan itself: the invoice stays exactly as it was.
-        if ($extrasNet === 0 && $messagesNet === 0) {
+        if ($extrasNet === 0 && $messagesNet === 0 && $writingsNet === 0) {
             return ['amount_agorot' => $net, 'vat_agorot' => $vat, 'total_agorot' => $total, 'lines' => null, 'usage_until' => $usageUntil];
         }
 
@@ -96,6 +105,21 @@ class RenewalBreakdown
                 // The cut-off this charge counted to. SiteAgentUsageMeter::settle
                 // stamps exactly these messages when the charge succeeds.
                 'until' => $until->toIso8601String(),
+            ];
+        }
+
+        if ($writingsNet > 0) {
+            $extras[] = [
+                'kind' => 'writings',
+                'name' => 'כתיבת תוכן (טקסטים של מעל '.(int) config('siteagent.writing.min_words', 300).' מילים): '
+                    .($writingsIncluded > 0
+                        ? number_format($writings).' (מתוכם '.number_format($writingsIncluded).' כלולים במנוי) — '.number_format($writingsCharged)
+                        : number_format($writings))
+                    .' × '.Money::ils((int) $plan->writing_price_agorot).' (עד '.$until->format('d/m/Y').')',
+                'qty' => 1,
+                'unit_price_agorot' => $this->gross($subscription, $writingsNet),
+                'count' => $writings,
+                'included' => $writingsIncluded,
             ];
         }
 

@@ -493,6 +493,21 @@
                     </div>
                 @endif
 
+                @if ($plan->billsWritings())
+                    <div>
+                        <dt><span class="tick" aria-hidden="true">✓</span> כתיבת תוכן:</dt>
+                        <dd>
+                            טקסט של יותר מ־{{ (int) config('siteagent.writing.min_words', 300) }} מילים שהבוט כותב בשבילכם — פוסט, קטע בעמוד או תיאור מוצר —
+                            @if ((int) $plan->included_writings > 0)
+                                {{ number_format($plan->included_writings) }} בחודש כלולים במחיר, ומעבר להם {{ $plan->writingNetLabel() }} לטקסט.
+                            @else
+                                {{ $plan->writingNetLabel() }} לטקסט.
+                            @endif
+                            כל טיוטה נספרת, גם אם בחרתם שלא לפרסם אותה; טקסט שכתבתם בעצמכם וביקשתם רק להעלות — לא נספר. הבוט מציין את זה ליד כל טיוטה.
+                        </dd>
+                    </div>
+                @endif
+
                 <div>
                     <dt><span class="tick" aria-hidden="true">✓</span> מתחדש אוטומטית.</dt>
                     <dd>אפשר לבטל בכל עת, ולא תחויבו לתקופה הבאה.</dd>

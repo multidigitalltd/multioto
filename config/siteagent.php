@@ -221,6 +221,15 @@ return [
     | max_turns / budget_seconds: תקרה על סבב אחד, כדי שהודעה אחת לא תחזיק את
     | התור ואת נעילת השיחה דקות ארוכות.
     */
+    /*
+     | A writing unit: an approved change that puts MORE than this many words
+     | of text on the site — a post, a page section, a product description.
+     | Billed per plan (writing_price_agorot, included_writings).
+     */
+    'writing' => [
+        'min_words' => (int) env('SITE_AGENT_WRITING_MIN_WORDS', 300),
+    ],
+
     'assistant' => [
         'enabled' => (bool) env('SITE_AGENT_ASSISTANT', true),
         'history_messages' => (int) env('SITE_AGENT_ASSISTANT_HISTORY', 12),
