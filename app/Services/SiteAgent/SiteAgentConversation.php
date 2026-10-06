@@ -266,6 +266,10 @@ class SiteAgentConversation
             ]);
         }
 
+        if (! app(SiteAgentPermissions::class)->allowsOperation($plan['operation'])) {
+            return SiteAgentPermissions::refusal();
+        }
+
         $minutes = max(1, (int) config('siteagent.confirmation_minutes', 30));
 
         $request = SiteAgentRequest::create([
@@ -315,6 +319,10 @@ class SiteAgentConversation
         }
 
         [$plan, $offer] = $this->newProductOffer($site, $plan);
+
+        if (! app(SiteAgentPermissions::class)->allowsOperation($offer !== null ? SiteAgentRequest::OP_PRODUCT_CREATE : SiteAgentRequest::OP_IMAGE)) {
+            return SiteAgentPermissions::refusal();
+        }
 
         $minutes = max(1, (int) config('siteagent.confirmation_minutes', 30));
 
@@ -656,6 +664,14 @@ class SiteAgentConversation
     /** The claimed request, executed. */
     private function carryOut(SiteAgentRequest $request): string
     {
+        // Switched off after the offer was made: the "כן" is to something no
+        // longer allowed.
+        if (! app(SiteAgentPermissions::class)->allowsOperation($request->operation)) {
+            $this->settle($request, SiteAgentRequest::FAILED, 'disabled by the team');
+
+            return SiteAgentPermissions::refusal();
+        }
+
         try {
             $result = $this->applier->apply($request);
         } catch (\Throwable $e) {

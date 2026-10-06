@@ -65,7 +65,7 @@ class SiteAgentCoverageTest extends TestCase
      * here because the plugin cannot list what is IN the trash, so the bot has
      * no way to find an older trashed item — "בטל" right after is the path.
      */
-    private const THROUGH_UNDO = ['wp_content_restore'];
+    private const THROUGH_UNDO = ['wp_content_restore', 'wc_product_restore'];
 
     private array $calls = [];
 
@@ -538,7 +538,7 @@ class SiteAgentCoverageTest extends TestCase
         $site = Site::factory()->create([
             'customer_id' => $customer->id, 'mcp_enabled' => true,
             'mcp_endpoint' => 'https://example.test/wp-json/md-agent/v1/mcp', 'mcp_secret' => 's',
-            'mcp_capabilities' => $capabilities ?: ['server' => ['version' => '1.8.4']],
+            'mcp_capabilities' => $capabilities ?: ['server' => ['version' => '1.8.5']],
         ]);
 
         return SiteAgentSubscriber::create([

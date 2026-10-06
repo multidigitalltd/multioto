@@ -100,6 +100,7 @@ class SettingsServiceProvider extends ServiceProvider
         // conversations are kept to read back and improve them.
         'siteagent.instructions' => 'siteagent.assistant.instructions',
         'siteagent.transcript_days' => 'siteagent.assistant.transcript_days',
+        'siteagent.disabled_permissions' => 'siteagent.assistant.disabled_permissions',
         'waha.api_key' => 'billing.waha.api_key',
         'waha.base_url' => 'billing.waha.base_url',
         'waha.session' => 'billing.waha.session',
@@ -232,6 +233,7 @@ class SettingsServiceProvider extends ServiceProvider
         // conversations are kept to read back and improve them.
         'siteagent.instructions' => 'siteagent.assistant.instructions',
         'siteagent.transcript_days' => 'siteagent.assistant.transcript_days',
+        'siteagent.disabled_permissions' => 'siteagent.assistant.disabled_permissions',
     ];
 
     /**

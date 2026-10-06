@@ -94,6 +94,7 @@ class SiteAgentRequestResource extends Resource
         SiteAgentRequest::OP_THEME_UPDATE => 'עדכון תבנית',
         SiteAgentRequest::OP_PLUGIN_TOGGLE => 'הפעלה/כיבוי תוסף',
         SiteAgentRequest::OP_MEDIA_DELETE => 'מחיקת קובץ מדיה',
+        SiteAgentRequest::OP_PRODUCT_TRASH => 'מחיקת מוצר',
     ];
 
     private const STATES = [

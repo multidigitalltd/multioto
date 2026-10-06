@@ -2,7 +2,7 @@
 Contributors: multidigital
 Requires at least: 6.0
 Requires PHP: 7.4
-Stable tag: 1.8.4
+Stable tag: 1.8.5
 License: GPLv2 or later
 
 מחבר את אתר הוורדפרס לפאנל התפעול של Multi Digital: נקודת קצה MCP מאובטחת
@@ -55,6 +55,9 @@ Cloudflare באתר כולו — די בחריגה לנתיב הזה.)
   RewriteRule .* - [E=HTTP_AUTHORIZATION:%1]
 
 == Changelog ==
+
+= 1.8.5 =
+* `wc_product_trash` / `wc_product_restore` — העברת מוצר לפח (לא מחיקה סופית) והחזרתו לסטטוס שהיה לו. כך "תמחק את המוצר X" מהוואטסאפ אפשרי, עם ביטול.
 
 = 1.8.4 =
 * `wp_plugin_list` מסמן תוסף שהופעל ברשת (multisite) כפעיל — קודם הוא נראה כבוי, והצעות הפעלה/כיבוי יצאו ממצב שגוי.

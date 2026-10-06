@@ -72,6 +72,7 @@ class SiteActionApplier
                 SiteAgentRequest::OP_THEME_UPDATE => $this->themeUpdate($site, $plan),
                 SiteAgentRequest::OP_PLUGIN_TOGGLE => $this->pluginToggle($site, $plan),
                 SiteAgentRequest::OP_MEDIA_DELETE => $this->mediaDelete($site, $plan),
+                SiteAgentRequest::OP_PRODUCT_TRASH => $this->productTrash($site, $plan),
                 default => $this->refuse('פעולה לא מוכרת.'),
             };
         } catch (\Throwable $e) {
@@ -83,7 +84,7 @@ class SiteActionApplier
     public function reverts(string $kind): bool
     {
         return in_array($kind, ['order_status', 'subscription_status', 'created_post', 'post', 'user_role', 'coupon',
-            'comment', 'post_terms', 'fields', 'menu_added', 'menu_item', 'trashed', 'plugin_toggle'], true);
+            'comment', 'post_terms', 'fields', 'menu_added', 'menu_item', 'trashed', 'plugin_toggle', 'trashed_product'], true);
     }
 
     /**
@@ -107,6 +108,7 @@ class SiteActionApplier
                 'menu_item' => $this->revertMenuUpdate($site, $restore),
                 'trashed' => $this->revertTrash($site, $restore),
                 'plugin_toggle' => $this->revertPluginToggle($site, $restore),
+                'trashed_product' => $this->revertProductTrash($site, $restore),
                 default => $this->refuse('אין לי גיבוי לשחזור הבקשה הזו.'),
             };
         } catch (\Throwable $e) {
@@ -763,6 +765,35 @@ class SiteActionApplier
     {
         $this->call($site, 'wp_content_restore', ['id' => (int) $restore['id']]);
         SiteChangePlanner::forget($site);
+
+        return $this->ok(null);
+    }
+
+    /** @param array<string, mixed> $plan */
+    private function productTrash(Site $site, array $plan): array
+    {
+        $id = (int) $plan['product_id'];
+
+        try {
+            $live = $this->call($site, 'wc_product_get', ['product_id' => $id]);
+        } catch (\Throwable) {
+            $live = [];
+        }
+
+        // Gone, or moved since the preview: not what the owner approved.
+        if (! isset($live['name']) || (string) ($live['status'] ?? '') !== (string) $plan['status']) {
+            return $this->refuse(SiteChangeApplier::STALE);
+        }
+
+        $this->call($site, 'wc_product_trash', ['product_id' => $id]);
+
+        return $this->ok(($plan['restorable'] ?? false) === true ? ['kind' => 'trashed_product', 'product_id' => $id] : null);
+    }
+
+    /** @param array<string, mixed> $restore */
+    private function revertProductTrash(Site $site, array $restore): array
+    {
+        $this->call($site, 'wc_product_restore', ['product_id' => (int) $restore['product_id']]);
 
         return $this->ok(null);
     }
