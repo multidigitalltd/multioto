@@ -43,6 +43,7 @@ use App\Jobs\SendSiteAgentLeadAlertsJob;
 use App\Jobs\SendSiteAgentReportsJob;
 use App\Jobs\SendTaskRemindersJob;
 use App\Jobs\SyncPluginReleasesJob;
+use App\Jobs\SyncSiteAgentMessagingCostJob;
 use App\Jobs\SyncSiteAgentServiceStateJob;
 use App\Jobs\WeeklyMaintenanceJob;
 use App\Models\AuditLog;
@@ -148,6 +149,11 @@ Schedule::job(new EndSiteAgentTrialsJob)->hourly()->name('siteagent:end-trials')
 // Reports owners ordered from the bot ("כל בוקר בשמונה"). Every quarter of an
 // hour, so 08:00 arrives by 08:15; each run claims its row before sending.
 Schedule::job(new SendSiteAgentReportsJob)->everyFifteenMinutes()->name('siteagent:send-reports')->onOneServer();
+
+// מה שמטא גובה על ההודעות. פעם ביום ובשעה שקטה: זה דוח ולא התראה, והנתון של
+// מטא עצמה מתעדכן באיחור — שאילתה כל שעה לא תחזיר מספר חדש יותר.
+Schedule::job(new SyncSiteAgentMessagingCostJob)->dailyAt('04:40')
+    ->name('siteagent:messaging-cost')->onOneServer();
 
 // "תודיע לי על כל ליד חדש". Never two at once: a lead is marked seen only
 // after its message goes, so an overlapping run would announce it twice.

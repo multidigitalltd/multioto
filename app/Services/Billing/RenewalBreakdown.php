@@ -76,6 +76,12 @@ class RenewalBreakdown
                 'qty' => 1,
                 'unit_price_agorot' => $this->gross($subscription, $messagesNet),
                 'count' => $messages,
+                // The same figure before VAT. Recorded rather than derived,
+                // because deriving it means dividing the gross back out — and a
+                // net reconstructed by division is not the net that was charged.
+                // The message-cost report compares against OUR revenue, and VAT
+                // is not ours.
+                'net_agorot' => $messagesNet,
                 // The cut-off this charge counted to. SiteAgentUsageMeter::settle
                 // stamps exactly these messages when the charge succeeds.
                 'until' => $until->toIso8601String(),

@@ -278,6 +278,78 @@ class WhatsAppCloudClient
     }
 
     /**
+     * What Meta says it charged this WABA, between two instants.
+     *
+     * Thin by the architecture rule: it asks, and it hands back what came
+     * back. Which period to ask about, how to read the categories and what the
+     * figures mean against our own billing all live in MessagingCostReport.
+     *
+     * `pricing_analytics` rather than `conversation_analytics`, because the
+     * question is "what did this cost, by category" and only this one breaks the
+     * spend down by pricing category.
+     *
+     * Returns null when the call could not be made or Meta refused it. That is
+     * deliberately distinct from an empty result, which means "no spend in this
+     * period" — a screen that cannot tell those apart reports ₪0 for an
+     * expired token, and ₪0 is the one figure nobody questions.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function pricingAnalytics(\DateTimeInterface $start, \DateTimeInterface $end): ?array
+    {
+        $this->lastError = null;
+
+        $waba = trim((string) config('siteagent.whatsapp.waba_id'), '/');
+
+        if ($waba === '' || blank(config('siteagent.whatsapp.token'))) {
+            $this->lastError = 'חסר מזהה חשבון WhatsApp Business (WABA) או טוקן.';
+
+            return null;
+        }
+
+        // Built with the ids stripped of anything that is not a digit. The WABA
+        // id is operator-entered, and it is interpolated into a URL path here.
+        if (! preg_match('/^\d+$/', $waba)) {
+            $this->lastError = 'מזהה חשבון ה-WhatsApp Business אינו מספרי.';
+
+            return null;
+        }
+
+        $field = sprintf(
+            'pricing_analytics.start(%d).end(%d).granularity(DAILY).metric_types([COST])',
+            $start->getTimestamp(),
+            $end->getTimestamp(),
+        );
+
+        try {
+            $response = Http::withToken((string) config('siteagent.whatsapp.token'))
+                ->timeout((int) config('siteagent.whatsapp.timeout_seconds', 20))
+                ->get(sprintf('https://graph.facebook.com/%s/%s', $this->apiVersion(), $waba), [
+                    'fields' => $field,
+                ]);
+
+            if ($response->failed()) {
+                $this->lastError = Str::limit((string) $response->json('error.message', ''), 200);
+
+                Log::warning('WhatsAppCloudClient: pricing analytics rejected', [
+                    'status' => $response->status(),
+                    'error' => $this->lastError,
+                ]);
+
+                return null;
+            }
+
+            return (array) $response->json('pricing_analytics', []);
+        } catch (\Throwable $e) {
+            $this->lastError = Str::limit($e->getMessage(), 200);
+
+            Log::warning('WhatsAppCloudClient: pricing analytics failed', ['error' => $this->lastError]);
+
+            return null;
+        }
+    }
+
+    /**
      * Fetch an image the customer sent, as bytes we may actually publish.
      *
      * Two calls, because that is how Meta serves media: an id resolves to a
