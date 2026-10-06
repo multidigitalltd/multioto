@@ -381,6 +381,37 @@ class LegalPagesTest extends TestCase
      * לקוח שמקבל את המכתב ופותח את התנאים משווה בדיוק את זה, ולכן המסמך אומר את
      * מה שהמכתב אומר — ובמקרה של רישיון תוסף, באותן מילים.
      */
+    /**
+     * מסלול ההתראות וההשהיה מוצג כמה שהוא: גבייה בכרטיס בלבד.
+     *
+     * scopeDueForCharge() מסננת ב-whereCollectedByCard(), ו-DunningMachine מופעלת
+     * רק מניסיון חיוב שנכשל. מנוי בהעברה בנקאית, הוראת קבע או שיקים, בלי גיבוי
+     * כרטיס, אינו נכנס למסלול הזה כלל — הוא מטופל בדרישות תשלום ובתזכורות,
+     * וההשהיה שם היא החלטה ולא תוצאה אוטומטית. אמירה גורפת הייתה מבטיחה למי
+     * שמשלם בהעברה התראות שלא יגיעו אליו.
+     */
+    public function test_the_dunning_ladder_is_scoped_to_card_collection(): void
+    {
+        $this->get(route('legal.terms'))
+            ->assertSeeText('בגבייה בכרטיס')
+            ->assertSeeText('המסלול האוטומטי אינו חל')
+            ->assertSeeText('העברה בנקאית, הוראת קבע או שיקים')
+            ->assertDontSeeText('תשלום שלא נפרע מוביל להשהיית השירות');
+    }
+
+    /**
+     * ומספר הימים נאמר כרצפה, לא כמסגרת מדויקת.
+     *
+     * משגר החיובים גדור ב-$awake ו-ChargeSubscriptionJob עוצר ב-rescheduledForShabbat(),
+     * כך שניסיון שנופל בשבת או בחג נדחה והמסלול מתארך מעבר לסכום ימי ההמתנה.
+     */
+    public function test_the_days_before_suspension_are_stated_as_a_floor(): void
+    {
+        $this->get(route('legal.terms'))
+            ->assertSeeText('ימים לפחות')
+            ->assertSeeText('כשהם נופלים בשבת או בחג');
+    }
+
     public function test_the_three_suspension_cases_match_the_three_dunning_letters(): void
     {
         $terms = $this->get(route('legal.terms'));
