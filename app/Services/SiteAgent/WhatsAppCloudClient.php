@@ -2,6 +2,7 @@
 
 namespace App\Services\SiteAgent;
 
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -299,6 +300,162 @@ class WhatsAppCloudClient
             $this->lastError = Str::limit($e->getMessage(), 200);
 
             Log::warning('WhatsAppCloudClient: send failed', ['error' => $this->lastError]);
+
+            return null;
+        }
+    }
+
+    /**
+     * What Meta says it charged this WABA, between two instants.
+     *
+     * Thin by the architecture rule: it asks, and it hands back what came
+     * back. Which period to ask about, how to read the categories and what the
+     * figures mean against our own billing all live in MessagingCostReport.
+     *
+     * `pricing_analytics` rather than `conversation_analytics`, because the
+     * question is "what did this cost, by category" and only this one breaks the
+     * spend down by pricing category.
+     *
+     * Returns null when the call could not be made or Meta refused it. That is
+     * deliberately distinct from an empty result, which means "no spend in this
+     * period" — a screen that cannot tell those apart reports ₪0 for an
+     * expired token, and ₪0 is the one figure nobody questions.
+     *
+     * @return array<string, mixed>|null
+     */
+    /**
+     * The display number behind the configured phone-number id.
+     *
+     * Needed because Meta's analytics filter takes the NUMBER, while everything
+     * else here is keyed on its id. Cached for a day: it changes about never, and
+     * it would otherwise be a second round trip on every pull.
+     *
+     * Null when it cannot be resolved — which the caller must treat as "do not
+     * ask", never as "ask about everything".
+     */
+    public function displayPhoneNumber(): ?string
+    {
+        $id = trim((string) config('siteagent.whatsapp.phone_number_id'), '/');
+
+        if ($id === '' || ! preg_match('/^\d+$/', $id) || blank(config('siteagent.whatsapp.token'))) {
+            return null;
+        }
+
+        return Cache::remember('siteagent.display_phone_number.'.$id, now()->addDay(), function () use ($id): ?string {
+            try {
+                $response = Http::withToken((string) config('siteagent.whatsapp.token'))
+                    ->timeout((int) config('siteagent.whatsapp.timeout_seconds', 20))
+                    ->get(sprintf('https://graph.facebook.com/%s/%s', $this->apiVersion(), $id), [
+                        'fields' => 'display_phone_number',
+                    ]);
+
+                if ($response->failed()) {
+                    return null;
+                }
+
+                // Meta returns it formatted ("+972 50-123-4567"); the filter wants
+                // digits.
+                $digits = preg_replace('/\D+/', '', (string) $response->json('display_phone_number', ''));
+
+                return $digits === '' ? null : $digits;
+            } catch (\Throwable) {
+                return null;
+            }
+        });
+    }
+
+    public function pricingAnalytics(\DateTimeInterface $start, \DateTimeInterface $end): ?array
+    {
+        $this->lastError = null;
+
+        $waba = trim((string) config('siteagent.whatsapp.waba_id'), '/');
+
+        if ($waba === '' || blank(config('siteagent.whatsapp.token'))) {
+            $this->lastError = 'חסר מזהה חשבון WhatsApp Business (WABA) או טוקן.';
+
+            return null;
+        }
+
+        // Built with the ids stripped of anything that is not a digit. The WABA
+        // id is operator-entered, and it is interpolated into a URL path here.
+        if (! preg_match('/^\d+$/', $waba)) {
+            $this->lastError = 'מזהה חשבון ה-WhatsApp Business אינו מספרי.';
+
+            return null;
+        }
+
+        /*
+         | Both metrics and the category dimension, because the report reads all
+         | three numbers. COST alone returns no `volume` and no
+         | `pricing_category` at all, which does not fail — it quietly produces a
+         | report of zero messages in one unclassified row.
+         |
+         | `currency` is asked for alongside, as a field of the account itself:
+         | the amounts come back as bare decimals "in the WABA's currency" and
+         | the analytics envelope never names it. Without it there is nothing to
+         | tell shekels from dollars, and the margin would be a subtraction
+         | between two different currencies.
+         */
+        /*
+         | Narrowed to OUR number, which is not optional.
+         |
+         | A WABA can hold several business numbers, and omitting the filter
+         | returns the spend of all of them. Our revenue ledger holds only this
+         | bot's traffic, so an unfiltered cost would be compared against a
+         | fraction of the messages that produced it — and the margin would be
+         | wrong by however much the other numbers happen to send.
+         |
+         | Unresolvable number means no call at all. "Ask about everything" is the
+         | one answer that looks like data and is not.
+         */
+        $number = $this->displayPhoneNumber();
+
+        if ($number === null) {
+            $this->lastError = 'לא הצלחנו לזהות את מספר הטלפון של הבוט מול מטא, ובלעדיו העלות הייתה של כל המספרים בחשבון.';
+
+            return null;
+        }
+
+        $field = sprintf(
+            'pricing_analytics.start(%d).end(%d).granularity(DAILY)'
+                .'.phone_numbers([%s]).metric_types([COST,VOLUME]).dimensions([PRICING_CATEGORY])',
+            $start->getTimestamp(),
+            $end->getTimestamp(),
+            $number,
+        );
+
+        try {
+            $response = Http::withToken((string) config('siteagent.whatsapp.token'))
+                ->timeout((int) config('siteagent.whatsapp.timeout_seconds', 20))
+                ->get(sprintf('https://graph.facebook.com/%s/%s', $this->apiVersion(), $waba), [
+                    'fields' => 'currency,'.$field,
+                ]);
+
+            if ($response->failed()) {
+                $this->lastError = Str::limit((string) $response->json('error.message', ''), 200);
+
+                Log::warning('WhatsAppCloudClient: pricing analytics rejected', [
+                    'status' => $response->status(),
+                    'error' => $this->lastError,
+                ]);
+
+                return null;
+            }
+
+            /*
+             | Handed back whole, with the account's currency beside it. Meta
+             | nests the figures as pricing_analytics.data[].data_points[] — one
+             | wrapper per series — and flattening it is a decision about how to
+             | aggregate, which belongs in MessagingCostReport and not here.
+             */
+            return [
+                'currency' => (string) $response->json('currency', ''),
+                'analytics' => (array) $response->json('pricing_analytics', []),
+            ];
+        } catch (\Throwable $e) {
+            $this->lastError = Str::limit($e->getMessage(), 200);
+
+            Log::warning('WhatsAppCloudClient: pricing analytics failed', ['error' => $this->lastError]);
 
             return null;
         }

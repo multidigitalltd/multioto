@@ -44,6 +44,17 @@ return [
         'api_version' => GraphApiVersion::resolve(env('SITE_AGENT_WA_API_VERSION')),
         'phone_number_id' => env('SITE_AGENT_WA_PHONE_NUMBER_ID', ''),
 
+        /*
+        | The WhatsApp Business Account the number belongs to — NOT the number's
+        | own id above, and not the app or the business id. Sending does not need
+        | it; the cost report does, because Meta reports spend per WABA.
+        |
+        | In Meta Business Settings it is the id under WhatsApp accounts. Left
+        | blank, the cost screen says it is missing rather than showing ₪0, which
+        | is the one number that would be read as "messages cost us nothing".
+        */
+        'waba_id' => env('SITE_AGENT_WA_WABA_ID', ''),
+
         // Permanent access token of the system user that owns the number.
         'token' => env('SITE_AGENT_WA_TOKEN', ''),
 
