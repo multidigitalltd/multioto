@@ -95,6 +95,20 @@ class PlanResource extends Resource
                             ->helperText('כמה הודעות בכל מחזור אינן מחויבות. רק ההודעות שמעבר להן מחויבות במחיר להודעה. 0 = כל הודעה מחויבת.')
                             ->visible(fn (Forms\Get $get): bool => (bool) $get('includes_site_agent')),
 
+                        Forms\Components\TextInput::make('writing_price_agorot')
+                            ->label('מחיר ליחידת כתיבה (אגורות, לפני מע"מ)')
+                            ->numeric()
+                            ->minValue(0)
+                            ->helperText('יחידת כתיבה = טקסט של יותר מ-'.(int) config('siteagent.writing.min_words', 300).' מילים שה-AI שלנו כתב (פוסט, קטע בעמוד, תיאור מוצר). נספרת כשהטקסט נכתב — גם אם הלקוח לא אישר, וכל גרסה בנפרד. טקסט שהלקוח כתב בעצמו לא נספר. נגבה בחידוש, בשורה נפרדת. ריק או 0 = ללא חיוב.')
+                            ->visible(fn (Forms\Get $get): bool => (bool) $get('includes_site_agent')),
+
+                        Forms\Components\TextInput::make('included_writings')
+                            ->label('יחידות כתיבה כלולות במנוי (לכל מחזור)')
+                            ->numeric()
+                            ->minValue(0)
+                            ->default(0)
+                            ->visible(fn (Forms\Get $get): bool => (bool) $get('includes_site_agent')),
+
                         Forms\Components\TextInput::make('trial_days')
                             ->label('ימי ניסיון בחינם')
                             ->numeric()

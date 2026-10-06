@@ -15,7 +15,7 @@ class Plan extends Model
 
     protected $fillable = [
         'name', 'price_agorot', 'vat_applies', 'billing_interval', 'description', 'active', 'includes_site_agent',
-        'extra_number_price_agorot', 'message_price_agorot', 'included_messages', 'trial_days', 'is_public',
+        'extra_number_price_agorot', 'message_price_agorot', 'included_messages', 'writing_price_agorot', 'included_writings', 'trial_days', 'is_public',
     ];
 
     protected function casts(): array
@@ -26,6 +26,8 @@ class Plan extends Model
             'message_price_agorot' => 'integer',
             'trial_days' => 'integer',
             'included_messages' => 'integer',
+            'writing_price_agorot' => 'integer',
+            'included_writings' => 'integer',
             'vat_applies' => 'boolean',
             'billing_interval' => BillingInterval::class,
             'active' => 'boolean',
@@ -93,6 +95,19 @@ class Plan extends Model
         return (int) $this->message_price_agorot > 0;
     }
 
+    /** Does this plan charge for long texts the bot writes onto the site? */
+    public function billsWritings(): bool
+    {
+        return (int) $this->writing_price_agorot > 0;
+    }
+
+    public function writingGrossAgorot(bool $vatExempt = false): ?int
+    {
+        return $this->billsWritings()
+            ? $this->withVat((int) $this->writing_price_agorot, $vatExempt)
+            : null;
+    }
+
     /** Does this plan start with a free trial? */
     public function hasTrial(): bool
     {
@@ -156,6 +171,13 @@ class Plan extends Model
     {
         return $this->billsMessages()
             ? Money::ils((int) $this->message_price_agorot).$this->vatSuffix()
+            : null;
+    }
+
+    public function writingNetLabel(): ?string
+    {
+        return $this->billsWritings()
+            ? Money::ils((int) $this->writing_price_agorot).$this->vatSuffix()
             : null;
     }
 
