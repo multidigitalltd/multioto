@@ -45,11 +45,21 @@
         </div>
     </div>
 
-    {{-- The cost could not be read. Said plainly, and never as ₪0: that is the
-         one figure that would be taken at face value. --}}
-    @if ($cost === null)
+    {{-- Shown whenever the last pull failed — not only when there is no figure
+         at all. A pull that keeps failing after one success leaves an ageing
+         number on screen, and for the eight days the cache holds it the operator
+         would have no way of knowing Meta has refused every request since. A
+         stale figure presented as current is worse than none. --}}
+    @if ($cost === null || $s['cost_error'])
         <div class="rounded-xl border border-warning-300 bg-warning-50 p-4 text-sm dark:border-warning-700 dark:bg-warning-950">
-            <p class="font-semibold text-warning-800 dark:text-warning-200">אין נתוני עלות ממטא.</p>
+            <p class="font-semibold text-warning-800 dark:text-warning-200">
+                @if ($cost === null)
+                    אין נתוני עלות ממטא.
+                @else
+                    הנתונים שלמטה אינם מעודכנים — הפנייה האחרונה למטא נכשלה
+                    ({{ \Illuminate\Support\Carbon::parse($s['cost_error']['at'])->diffForHumans() }}).
+                @endif
+            </p>
             <p class="mt-1 text-warning-700 dark:text-warning-300">
                 @if ($s['cost_error'])
                     {{ $s['cost_error']['reason'] }}
@@ -57,11 +67,18 @@
                     הנתונים עוד לא נשלפו. השליפה רצה פעם ביום, או בכפתור "רענון מול מטא" שלמעלה.
                 @endif
             </p>
-            <p class="mt-2 text-xs text-warning-700 dark:text-warning-300">
-                שתי סיבות נפוצות, ורק אחת מהן ניתנת לתיקון: חסר <strong>מזהה WABA</strong> במסך הבוט,
-                או שהחשבון עובד דרך קו אשראי של שותף (Solution Partner) — ואז מטא אינה מחזירה עלות בכלל,
-                והמספר נמצא רק בחיוב של השותף.
-            </p>
+            {{-- Only where there is no figure at all. On a stale one we plainly
+                 did reach Meta once, so "the WABA id is missing" is not the
+                 explanation and offering it sends somebody to check a setting
+                 that is already right. --}}
+            @if ($cost === null)
+                <p class="mt-2 text-xs text-warning-700 dark:text-warning-300">
+                    הסיבות הנפוצות, ורק חלקן ניתנות לתיקון: חסר <strong>מזהה WABA</strong> במסך הבוט;
+                    לא הצלחנו לזהות את מספר הטלפון של הבוט מול מטא (ובלעדיו העלות הייתה של כל המספרים
+                    בחשבון, ולכן אינה מוצגת); או שהחשבון עובד דרך קו אשראי של שותף (Solution Partner) —
+                    ואז מטא אינה מחזירה עלות בכלל, והמספר נמצא רק בחיוב של השותף.
+                </p>
+            @endif
         </div>
     @endif
 

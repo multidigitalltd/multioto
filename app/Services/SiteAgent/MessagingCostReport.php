@@ -236,9 +236,26 @@ class MessagingCostReport
         $cost = Cache::get($this->key($days));
         $error = Cache::get($this->key($days).'.error');
 
-        $since = Carbon::now()->subDays($days);
-        $revenue = $this->revenue($since);
-        $counts = $this->counts($since);
+        /*
+         | Both sides over the SAME interval, which is the cost's own.
+         |
+         | Meta's figure ends when the pull ran (04:40), not now. Recomputing the
+         | local side "to now" would compare an evening's revenue against a cost
+         | that stopped before breakfast — hours of revenue whose cost is missing,
+         | and a slice at the start dropped instead. So where a cached figure
+         | exists its stored bounds lead, and only without one does the window
+         | fall back to the trailing period from this moment.
+         */
+        $from = is_array($cost) && isset($cost['from'])
+            ? Carbon::parse($cost['from'])
+            : Carbon::now()->subDays($days);
+
+        $to = is_array($cost) && isset($cost['to'])
+            ? Carbon::parse($cost['to'])
+            : Carbon::now();
+
+        $revenue = $this->revenue($from, $to);
+        $counts = $this->counts($from, $to);
 
         $currency = is_array($cost) ? (string) ($cost['currency'] ?? '') : '';
 
@@ -262,6 +279,10 @@ class MessagingCostReport
             'comparable' => $comparable,
             'currency' => $currency,
             'days' => $days,
+            // The interval both sides were measured over, so the screen can name
+            // it rather than implying "the last N days from right now".
+            'from' => $from->toIso8601String(),
+            'to' => $to->toIso8601String(),
         ];
     }
 
@@ -287,13 +308,17 @@ class MessagingCostReport
      * anywhere, so an even spread is the honest answer rather than a guess that
      * looks precise; across a whole charge it reconciles exactly.
      *
+     * Bounded at both ends, not just the start: the cost it is compared against
+     * stopped when the pull ran, and revenue past that point has no cost beside
+     * it.
+     *
      * @return array{net: int, messages: int, included: int, estimated: int, pending: int}
      */
-    private function revenue(Carbon $since): array
+    private function revenue(Carbon $from, Carbon $to): array
     {
         // Messages sent in the window, grouped by the charge that settled them.
         $settled = SiteAgentUsage::query()
-            ->where('sent_at', '>=', $since)
+            ->whereBetween('sent_at', [$from, $to])
             ->whereNotNull('charge_id')
             ->groupBy('charge_id')
             ->selectRaw('charge_id, COUNT(*) as in_window')
@@ -302,7 +327,7 @@ class MessagingCostReport
         // Sent, billable, and not yet on any invoice. Revenue that is owed but
         // not yet earned — shown separately so it is neither claimed nor lost.
         $pending = SiteAgentUsage::query()
-            ->where('sent_at', '>=', $since)
+            ->whereBetween('sent_at', [$from, $to])
             ->whereNull('charge_id')
             ->where('billable', true)
             ->count();
@@ -365,12 +390,12 @@ class MessagingCostReport
      *
      * @return array{sent: int, unbilled: int}
      */
-    private function counts(Carbon $since): array
+    private function counts(Carbon $from, Carbon $to): array
     {
         // Two plain counts rather than one aggregate with a CASE: a boolean in
         // raw SQL is 0/1 on SQLite and true/false on Postgres, and the tests run
         // on one while production runs on the other.
-        $base = fn () => SiteAgentUsage::query()->where('sent_at', '>=', $since);
+        $base = fn () => SiteAgentUsage::query()->whereBetween('sent_at', [$from, $to]);
 
         return [
             'sent' => $base()->count(),

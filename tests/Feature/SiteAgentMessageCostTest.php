@@ -30,8 +30,17 @@ class SiteAgentMessageCostTest extends TestCase
 {
     use RefreshDatabase;
 
+    /** The configured phone-number id, which the analytics filter resolves through. */
+    private const PHONE_ID = '1234';
+
     /** @var array<string, mixed> The body the faked Graph API currently returns. */
     private array $metaBody = [];
+
+    /** The status it returns with. */
+    private int $metaStatus = 200;
+
+    /** Whether the phone-number lookup succeeds. */
+    private bool $numberResolves = true;
 
     protected function setUp(): void
     {
@@ -41,9 +50,42 @@ class SiteAgentMessageCostTest extends TestCase
 
         config([
             'siteagent.enabled' => true,
-            'siteagent.whatsapp.phone_number_id' => '1234',
+            'siteagent.whatsapp.phone_number_id' => self::PHONE_ID,
             'siteagent.whatsapp.token' => 'wa-token',
             'siteagent.whatsapp.waba_id' => '1079443834447382',
+        ]);
+    }
+
+    /**
+     * Point the faked Graph API at a body of our choosing for the analytics call.
+     *
+     * The response is held on the test and served through a closure, so calling
+     * this again REPLACES it. Registering a second stub would only append one and
+     * Laravel answers with the first that matches, so the earlier body would keep
+     * winning — and a test that changes the response mid-way would quietly be
+     * asserting against the old one.
+     *
+     * The number lookup is stubbed alongside, because the analytics call now
+     * depends on it. Without it that call never happens, and a test asserting
+     * "the refresh failed" would pass for a reason it never meant to test.
+     *
+     * @param  array<string, mixed>  $body
+     */
+    private function fakeGraph(array $body, int $status = 200): void
+    {
+        $this->metaBody = $body;
+        $this->metaStatus = $status;
+        $this->stubGraph();
+    }
+
+    /** Register the stubs once; they read the state the helpers above set. */
+    private function stubGraph(): void
+    {
+        Http::fake([
+            '*/'.self::PHONE_ID.'?*' => fn () => $this->numberResolves
+                ? Http::response(['display_phone_number' => '+972 50-123-4567'])
+                : Http::response(['error' => ['message' => 'nope']], 400),
+            '*' => fn () => Http::response($this->metaBody, $this->metaStatus),
         ]);
     }
 
@@ -58,7 +100,7 @@ class SiteAgentMessageCostTest extends TestCase
      */
     private function fakeMeta(string $currency = 'ILS', ?array $points = null): void
     {
-        $body = [
+        $this->fakeGraph([
             'currency' => $currency,
             'pricing_analytics' => [
                 'data' => [
@@ -68,18 +110,7 @@ class SiteAgentMessageCostTest extends TestCase
                     ]],
                 ],
             ],
-        ];
-
-        /*
-         | Held on the test and served through a closure, so calling this again
-         | REPLACES the response. Registering a second '*' stub would only append
-         | one, and Laravel answers with the first that matches — so the earlier
-         | body would keep winning and a test that changes the response would be
-         | asserting against the old one.
-         */
-        $this->metaBody = $body;
-
-        Http::fake(['*' => fn () => Http::response($this->metaBody)]);
+        ]);
     }
 
     /**
@@ -168,7 +199,7 @@ class SiteAgentMessageCostTest extends TestCase
      */
     public function test_an_unavailable_cost_is_null_and_carries_the_reason(): void
     {
-        Http::fake(['*' => Http::response(['error' => ['message' => 'Unsupported get request.']], 400)]);
+        $this->fakeGraph(['error' => ['message' => 'Unsupported get request.']], 400);
 
         $result = app(MessagingCostReport::class)->refresh();
 
@@ -354,7 +385,7 @@ class SiteAgentMessageCostTest extends TestCase
     /** וכשמטא לא עונה — נרשמת שורה ביומן עם הסיבה, במקום מסך ריק בלי הסבר. */
     public function test_a_failed_pull_is_recorded_in_the_journal_with_its_reason(): void
     {
-        Http::fake(['*' => Http::response(['error' => ['message' => 'Invalid OAuth access token.']], 401)]);
+        $this->fakeGraph(['error' => ['message' => 'Invalid OAuth access token.']], 401);
 
         (new SyncSiteAgentMessagingCostJob)->handle(app(MessagingCostReport::class));
 
@@ -469,28 +500,33 @@ class SiteAgentMessageCostTest extends TestCase
     public function test_a_flattened_response_is_not_what_we_read(): void
     {
         // הצורה השגויה: data_points על העוטף, בלי data[].
-        Http::fake(['*' => Http::response([
+        $this->fakeGraph([
             'currency' => 'ILS',
             'pricing_analytics' => [
                 'data_points' => [['pricing_category' => 'SERVICE', 'cost' => 99.00, 'volume' => 500]],
             ],
-        ])]);
+        ]);
 
         // אין נקודות בקינון הנכון, ולכן אין עלות — ולא ₪0 מדווח בביטחון.
-        $this->assertFalse(app(MessagingCostReport::class)->refresh()['ok']);
+        $result = app(MessagingCostReport::class)->refresh();
+
+        $this->assertFalse($result['ok']);
+        // והכישלון הוא אחרי שהתשובה נקראה ולא לפניה: בלי האימות הזה הבדיקה
+        // עוברת גם אם הקריאה לא יצאה בכלל, מסיבה שאינה קשורה.
+        $this->assertStringContainsString('קו אשראי של שותף', (string) $result['reason']);
         $this->assertNull(app(MessagingCostReport::class)->summary()['cost']);
     }
 
     /** וכמה סדרות — כולן נאספות, ולא רק הראשונה. */
     public function test_every_series_in_the_response_is_aggregated(): void
     {
-        Http::fake(['*' => Http::response([
+        $this->fakeGraph([
             'currency' => 'ILS',
             'pricing_analytics' => ['data' => [
                 ['data_points' => [['pricing_category' => 'SERVICE', 'cost' => 10.00, 'volume' => 1000]]],
                 ['data_points' => [['pricing_category' => 'UTILITY', 'cost' => 5.00, 'volume' => 500]]],
             ]],
-        ])]);
+        ]);
 
         app(MessagingCostReport::class)->refresh();
         $summary = app(MessagingCostReport::class)->summary();
@@ -646,5 +682,116 @@ class SiteAgentMessageCostTest extends TestCase
 
         $this->assertSame(40, $summary['pending_messages']);
         $this->assertSame(0, $summary['revenue_net']);
+    }
+
+    /*
+    | ----------------------------------------------------------------
+    | סבב שני: מספר אחד מתוך החשבון, נתון מעופש, ואותו חלון בשני הצדדים
+    | ----------------------------------------------------------------
+    */
+
+    /**
+     * העלות מסוננת למספר של הבוט, ולא של כל החשבון.
+     *
+     * חשבון WhatsApp Business יכול להחזיק כמה מספרים עסקיים, ובלי הסינון מטא
+     * מחזירה את ההוצאה של כולם — בעוד שהיומן שלנו מכיל רק את התנועה של הבוט.
+     * המרווח היה יוצא שגוי בדיוק כגודל מה שהמספרים האחרים שלחו.
+     */
+    public function test_the_cost_is_filtered_to_the_bots_own_number(): void
+    {
+        $this->fakeMeta();
+
+        app(MessagingCostReport::class)->refresh();
+
+        // נבדק על בקשת האנליטיקס עצמה. בלי התנאי הראשון, חיפוש המספר היה מספק
+        // את assertSent לבדו והבדיקה לא הייתה בודקת דבר.
+        Http::assertSent(function (Request $request): bool {
+            $fields = urldecode((string) ($request->data()['fields'] ?? ''));
+
+            return str_contains($fields, 'pricing_analytics')
+                // מוזן כמזהה, ונשלח כמספר — זה מה שמטא מסננת לפיו.
+                && str_contains($fields, 'phone_numbers([972501234567])');
+        });
+    }
+
+    /**
+     * ומספר שלא הצלחנו לזהות — לא פונים בכלל.
+     *
+     * "לשאול על הכול" היא התשובה היחידה שנראית כמו נתון ואינה נתון.
+     */
+    public function test_an_unresolvable_number_stops_the_call_rather_than_widening_it(): void
+    {
+        // האנליטיקס היה מחזיר נתונים אם היו פונים אליו — אבל חיפוש המספר נכשל.
+        $this->fakeMeta('ILS', [['pricing_category' => 'SERVICE', 'cost' => 99.00, 'volume' => 9999]]);
+        $this->numberResolves = false;
+
+        $result = app(MessagingCostReport::class)->refresh();
+
+        $this->assertFalse($result['ok']);
+        $this->assertStringContainsString('מספר הטלפון', (string) $result['reason']);
+        $this->assertNull(app(MessagingCostReport::class)->summary()['cost']);
+
+        // ולא נשלחה בקשת אנליטיקס אחרי הכישלון.
+        Http::assertNotSent(fn (Request $request): bool => str_contains(
+            urldecode((string) ($request->data()['fields'] ?? '')), 'pricing_analytics'));
+    }
+
+    /**
+     * רענון שנכשל מוצג גם כשנשאר נתון מלפני כן.
+     *
+     * אחרת מספר מתיישן נשאר על המסך עד שמונה ימים בלי שום סימן שכל פנייה מאז
+     * נדחתה — ונתון מעופש שמוצג כעדכני גרוע מאין נתון בכלל.
+     */
+    public function test_a_stale_figure_is_shown_with_the_reason_it_is_not_fresher(): void
+    {
+        $this->fakeMeta();
+        app(MessagingCostReport::class)->refresh();
+
+        // ומעתה מטא דוחה.
+        $this->fakeGraph(['error' => ['message' => 'Invalid OAuth access token.']], 401);
+        app(MessagingCostReport::class)->refresh();
+
+        $summary = app(MessagingCostReport::class)->summary();
+
+        // הנתון הקודם נשאר — ולידו הסיבה.
+        $this->assertNotNull($summary['cost']);
+        $this->assertNotNull($summary['cost_error']);
+
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+
+        $this->get(SiteAgentMessageCost::getUrl())
+            ->assertOk()
+            ->assertSee('אינם מעודכנים')
+            ->assertSee('Invalid OAuth access token.')
+            // ולא ההסבר על מזהה WABA חסר: ברור שהגענו למטא פעם אחת.
+            ->assertDontSee('חסר <strong>מזהה WABA</strong>', false);
+    }
+
+    /**
+     * שני הצדדים נמדדים על אותו חלון — זה של העלות.
+     *
+     * הנתון של מטא נגמר כשהשליפה רצה, לא עכשיו. חישוב מחדש "עד עכשיו" היה
+     * מעמיד הכנסה של אחר הצהריים מול עלות שנעצרה לפני הבוקר.
+     */
+    public function test_both_sides_are_measured_over_the_cost_interval(): void
+    {
+        $this->fakeMeta();
+        app(MessagingCostReport::class)->refresh(7);
+
+        $customer = Customer::factory()->create();
+
+        // הודעה שנשלחה אחרי שהשליפה נגמרה: העלות שלה אינה בנתון של מטא, ולכן
+        // היא גם לא נספרת בצד שלנו.
+        SiteAgentUsage::create([
+            'customer_id' => $customer->id,
+            'provider_message_id' => 'wamid-after-the-pull',
+            'billable' => true,
+            'sent_at' => now()->addHours(2),
+        ]);
+
+        $summary = app(MessagingCostReport::class)->summary(7);
+
+        $this->assertSame(0, $summary['sent_messages']);
+        $this->assertSame(0, $summary['pending_messages']);
     }
 }

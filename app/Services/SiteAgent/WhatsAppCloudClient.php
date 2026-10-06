@@ -2,6 +2,7 @@
 
 namespace App\Services\SiteAgent;
 
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -295,6 +296,47 @@ class WhatsAppCloudClient
      *
      * @return array<string, mixed>|null
      */
+    /**
+     * The display number behind the configured phone-number id.
+     *
+     * Needed because Meta's analytics filter takes the NUMBER, while everything
+     * else here is keyed on its id. Cached for a day: it changes about never, and
+     * it would otherwise be a second round trip on every pull.
+     *
+     * Null when it cannot be resolved — which the caller must treat as "do not
+     * ask", never as "ask about everything".
+     */
+    public function displayPhoneNumber(): ?string
+    {
+        $id = trim((string) config('siteagent.whatsapp.phone_number_id'), '/');
+
+        if ($id === '' || ! preg_match('/^\d+$/', $id) || blank(config('siteagent.whatsapp.token'))) {
+            return null;
+        }
+
+        return Cache::remember('siteagent.display_phone_number.'.$id, now()->addDay(), function () use ($id): ?string {
+            try {
+                $response = Http::withToken((string) config('siteagent.whatsapp.token'))
+                    ->timeout((int) config('siteagent.whatsapp.timeout_seconds', 20))
+                    ->get(sprintf('https://graph.facebook.com/%s/%s', $this->apiVersion(), $id), [
+                        'fields' => 'display_phone_number',
+                    ]);
+
+                if ($response->failed()) {
+                    return null;
+                }
+
+                // Meta returns it formatted ("+972 50-123-4567"); the filter wants
+                // digits.
+                $digits = preg_replace('/\D+/', '', (string) $response->json('display_phone_number', ''));
+
+                return $digits === '' ? null : $digits;
+            } catch (\Throwable) {
+                return null;
+            }
+        });
+    }
+
     public function pricingAnalytics(\DateTimeInterface $start, \DateTimeInterface $end): ?array
     {
         $this->lastError = null;
@@ -327,11 +369,32 @@ class WhatsAppCloudClient
          | tell shekels from dollars, and the margin would be a subtraction
          | between two different currencies.
          */
+        /*
+         | Narrowed to OUR number, which is not optional.
+         |
+         | A WABA can hold several business numbers, and omitting the filter
+         | returns the spend of all of them. Our revenue ledger holds only this
+         | bot's traffic, so an unfiltered cost would be compared against a
+         | fraction of the messages that produced it — and the margin would be
+         | wrong by however much the other numbers happen to send.
+         |
+         | Unresolvable number means no call at all. "Ask about everything" is the
+         | one answer that looks like data and is not.
+         */
+        $number = $this->displayPhoneNumber();
+
+        if ($number === null) {
+            $this->lastError = 'לא הצלחנו לזהות את מספר הטלפון של הבוט מול מטא, ובלעדיו העלות הייתה של כל המספרים בחשבון.';
+
+            return null;
+        }
+
         $field = sprintf(
             'pricing_analytics.start(%d).end(%d).granularity(DAILY)'
-                .'.metric_types([COST,VOLUME]).dimensions([PRICING_CATEGORY])',
+                .'.phone_numbers([%s]).metric_types([COST,VOLUME]).dimensions([PRICING_CATEGORY])',
             $start->getTimestamp(),
             $end->getTimestamp(),
+            $number,
         );
 
         try {
