@@ -89,6 +89,21 @@ class SiteAgentMessageCap
             ."\nלהעלאת התקרה כתבו למשל \"תקרה ".number_format($cap * 2, 0, '', '').'", ולהסרה — "בטל תקרה". ההודעה הזאת לא מחויבת.';
     }
 
+    /**
+     * Send the once-a-cycle 80% notice if it is due — after any billed
+     * message, a reply, a report or a lead alert alike. Not billed itself.
+     */
+    public function warnIfDue(WhatsAppCloudClient $whatsapp, string $to, ?Subscription $subscription): void
+    {
+        if ($subscription === null || ! $this->usage->claimWarning($subscription)) {
+            return;
+        }
+
+        if ($whatsapp->sendText($to, $this->warning($subscription)) === null) {
+            $this->usage->releaseWarning($subscription);
+        }
+    }
+
     /** The once-a-cycle notice at 80%. */
     public function warning(Subscription $subscription): string
     {

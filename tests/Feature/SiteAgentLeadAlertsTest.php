@@ -220,6 +220,43 @@ class SiteAgentLeadAlertsTest extends TestCase
         $this->assertCount(1, $this->sent);
     }
 
+    public function test_a_burst_stops_at_the_ceiling_alert_by_alert(): void
+    {
+        $this->enable();
+        Subscription::query()->update(['site_agent_message_cap' => 10]);
+        $meter = app(SiteAgentUsageMeter::class);
+
+        foreach (range(1, 9) as $i) {
+            $meter->record($this->number, "wamid.earlier-{$i}");
+        }
+
+        array_unshift($this->leads, $this->lead(2, 'רון'), $this->lead(3, 'דנה'), $this->lead(4, 'גיל'));
+
+        $this->runAlerts();
+
+        // One message left under the ceiling: one alert, and no more billed.
+        $alerts = array_filter($this->sent, fn (array $sent): bool => str_contains((string) $sent[2], 'ליד חדש'));
+        $this->assertCount(1, $alerts);
+        $this->assertSame(10, SiteAgentUsage::where('billable', true)->count());
+    }
+
+    public function test_crossing_eighty_percent_through_an_alert_says_so(): void
+    {
+        $this->enable();
+        Subscription::query()->update(['site_agent_message_cap' => 5]);
+        $meter = app(SiteAgentUsageMeter::class);
+
+        foreach (range(1, 3) as $i) {
+            $meter->record($this->number, "wamid.earlier-{$i}");
+        }
+
+        array_unshift($this->leads, $this->lead(2, 'רון'));
+        $this->runAlerts();
+
+        $this->assertCount(2, $this->sent);
+        $this->assertStringContainsString('מתוך 5 ההודעות', $this->sent[1][2]);
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────
 
     private function enable(): void

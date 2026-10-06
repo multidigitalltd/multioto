@@ -18,9 +18,12 @@ use App\Models\Subscription;
 use App\Services\Billing\SubscriptionCollectionService;
 use App\Services\Cardcom\CardcomClient;
 use App\Services\Cardcom\ChargeResult;
+use App\Services\SiteAgent\SiteAgentMessageCap;
 use App\Services\SiteAgent\SiteAgentUsageMeter;
+use App\Services\SiteAgent\WhatsAppCloudClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
+use Mockery;
 use Tests\TestCase;
 
 /**
@@ -302,6 +305,40 @@ class SiteAgentUsageBillingTest extends TestCase
 
         $portal->post(route('portal.site-agent.cap'), ['cap' => ''])->assertRedirect();
         $this->assertNull($this->subscription->refresh()->site_agent_message_cap);
+    }
+
+    public function test_a_message_over_the_ceiling_is_delivered_but_never_billed(): void
+    {
+        // Two workers that both passed the "under the cap?" check before
+        // either recorded: the ceiling is held where the row is written.
+        $this->subscription->update(['site_agent_message_cap' => 2]);
+
+        $this->sendMessages(3);
+
+        $this->assertSame(3, SiteAgentUsage::count());
+        $this->assertSame(2, SiteAgentUsage::where('billable', true)->count());
+    }
+
+    public function test_the_eighty_percent_notice_is_kept_until_it_is_actually_delivered(): void
+    {
+        $this->subscription->update(['site_agent_message_cap' => 5]);
+        $this->sendMessages(4);
+        $cap = app(SiteAgentMessageCap::class);
+
+        $failing = Mockery::mock(WhatsAppCloudClient::class);
+        $failing->shouldReceive('sendText')->once()->andReturn(null);
+        $cap->warnIfDue($failing, '972501111111', $this->subscription->refresh());
+
+        // Not delivered: still due.
+        $this->assertNull($this->subscription->refresh()->site_agent_cap_warned_at);
+
+        $working = Mockery::mock(WhatsAppCloudClient::class);
+        $working->shouldReceive('sendText')->once()->andReturn('wamid.warn');
+        $cap->warnIfDue($working, '972501111111', $this->subscription->refresh());
+        // Delivered once; a second worker does not send it again.
+        $cap->warnIfDue($working, '972501111111', $this->subscription->refresh());
+
+        $this->assertNotNull($this->subscription->refresh()->site_agent_cap_warned_at);
     }
 
     // ── helpers ──────────────────────────────────────────────────────────

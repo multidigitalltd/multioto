@@ -196,7 +196,7 @@ class HandleSiteAgentMessageJob implements ShouldQueue
         // system talking about itself, and nobody is billed for that.
         if ($delivered !== null && $billable && $subscriber !== null) {
             $meter->record($subscriber, $delivered);
-            $this->warnNearCeiling($whatsapp, $meter, $from, $subscription);
+            app(SiteAgentMessageCap::class)->warnIfDue($whatsapp, $from, $subscription);
         }
 
         $event->markProcessed();
@@ -386,17 +386,6 @@ class HandleSiteAgentMessageJob implements ShouldQueue
         }
 
         return $cap->set($subscription, $command['cap']) ?? $cap->confirmation($subscription->refresh());
-    }
-
-    /** The once-a-cycle notice at 80% of the owner's ceiling — not billed. */
-    private function warnNearCeiling(WhatsAppCloudClient $whatsapp, SiteAgentUsageMeter $meter, string $to, ?Subscription $subscription): void
-    {
-        if ($subscription === null || ! $meter->shouldWarn($subscription)) {
-            return;
-        }
-
-        $subscription->forceFill(['site_agent_cap_warned_at' => now()])->save();
-        $whatsapp->sendText($to, app(SiteAgentMessageCap::class)->warning($subscription));
     }
 
     /**

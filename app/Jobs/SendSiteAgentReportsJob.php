@@ -8,6 +8,7 @@ use App\Models\SystemLog;
 use App\Services\SiteAgent\SiteAgentAccess;
 use App\Services\SiteAgent\SiteAgentAssistant;
 use App\Services\SiteAgent\SiteAgentBilling;
+use App\Services\SiteAgent\SiteAgentMessageCap;
 use App\Services\SiteAgent\SiteAgentReportBuilder;
 use App\Services\SiteAgent\SiteAgentUsageMeter;
 use App\Services\SiteAgent\WhatsAppCloudClient;
@@ -74,7 +75,9 @@ class SendSiteAgentReportsJob implements ShouldQueue
 
                     // The owner's own ceiling on messages is reached: a report
                     // is a message, and they asked for nothing above it.
-                    if ($meter->capReached(app(SiteAgentBilling::class)->subscriptionForSite($subscriber->customer, $subscriber->site_id))) {
+                    $subscription = app(SiteAgentBilling::class)->subscriptionForSite($subscriber->customer, $subscriber->site_id);
+
+                    if ($meter->capReached($subscription)) {
                         continue;
                     }
 
@@ -92,6 +95,7 @@ class SendSiteAgentReportsJob implements ShouldQueue
 
                     $schedule->forceFill(['last_sent_at' => now()])->save();
                     $meter->record($subscriber, $sent);
+                    app(SiteAgentMessageCap::class)->warnIfDue($whatsapp, $subscriber->phone, $subscription);
 
                     // In the conversation's memory, so a "דוח" in reply is
                     // understood as "the full version of that one".

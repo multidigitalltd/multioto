@@ -8,7 +8,9 @@ use App\Models\SiteAgentSubscriber;
 use App\Models\SiteAgentUsage;
 use App\Models\Subscription;
 use Carbon\CarbonInterface;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Database\QueryException;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -45,25 +47,46 @@ class SiteAgentUsageMeter
         try {
             $subscription = $this->billing->subscriptionForSite($subscriber->customer, $subscriber->site_id);
 
-            SiteAgentUsage::create([
-                'customer_id' => $subscriber->customer_id,
-                'subscription_id' => $subscription?->id,
-                'site_id' => $subscriber->site_id,
-                'site_agent_subscriber_id' => $subscriber->id,
-                'provider_message_id' => $providerMessageId,
-                // Settled now, not at billing time: a week of trial messages
-                // must not turn into a line on the first real invoice, and a
-                // plan that starts pricing messages must not reach back to
-                // the ones sent before it did.
-                'billable' => $subscription !== null
-                    && $subscription->status !== SubscriptionStatus::Trialing
-                    && (bool) $subscription->plan?->billsMessages(),
-                'sent_at' => now(),
-            ]);
+            if ($subscription?->site_agent_message_cap !== null) {
+                // The owner's ceiling is held here, where the row is written,
+                // under one lock per subscription: two workers that both passed
+                // an earlier "under the cap?" check — two numbers, or a reply
+                // racing a lead alert — cannot both bill the last message. One
+                // over the ceiling is still delivered and recorded, never billed.
+                Cache::lock("site-agent:usage:{$subscription->id}", 10)->block(5, function () use ($subscriber, $subscription, $providerMessageId): void {
+                    $this->write($subscriber, $subscription, $providerMessageId, ! $this->capReached($subscription));
+                });
+
+                return;
+            }
+
+            $this->write($subscriber, $subscription, $providerMessageId, true);
         } catch (QueryException $e) {
             // The same Meta id twice is the same message twice — counted once.
             Log::info('SiteAgentUsageMeter: message not recorded', ['error' => $e->getMessage()]);
+        } catch (LockTimeoutException) {
+            Log::warning('SiteAgentUsageMeter: usage lock timed out, message not recorded', ['subscriber_id' => $subscriber->id]);
         }
+    }
+
+    private function write(SiteAgentSubscriber $subscriber, ?Subscription $subscription, ?string $providerMessageId, bool $withinCap): void
+    {
+        SiteAgentUsage::create([
+            'customer_id' => $subscriber->customer_id,
+            'subscription_id' => $subscription?->id,
+            'site_id' => $subscriber->site_id,
+            'site_agent_subscriber_id' => $subscriber->id,
+            'provider_message_id' => $providerMessageId,
+            // Settled now, not at billing time: a week of trial messages
+            // must not turn into a line on the first real invoice, and a
+            // plan that starts pricing messages must not reach back to
+            // the ones sent before it did.
+            'billable' => $withinCap
+                && $subscription !== null
+                && $subscription->status !== SubscriptionStatus::Trialing
+                && (bool) $subscription->plan?->billsMessages(),
+            'sent_at' => now(),
+        ]);
     }
 
     /** Billable messages of this subscription not yet on any invoice, sent up to $until. */
@@ -115,6 +138,41 @@ class SiteAgentUsageMeter
         $cap = $subscription?->site_agent_message_cap;
 
         return $cap !== null && $this->unbilled($subscription, now()) >= $cap;
+    }
+
+    /**
+     * Claim the 80% notice for this cycle, if it is due — atomically, so two
+     * workers crossing the mark together send it once. The caller sends it and
+     * calls releaseWarning() if the send failed, so a delivery that did not
+     * happen is tried again rather than lost for the rest of the cycle.
+     */
+    public function claimWarning(Subscription $subscription): bool
+    {
+        if (! $this->shouldWarn($subscription)) {
+            return false;
+        }
+
+        $previous = $subscription->getRawOriginal('site_agent_cap_warned_at');
+        $now = now();
+
+        $claimed = Subscription::query()
+            ->whereKey($subscription->id)
+            ->where(fn ($query) => $previous === null
+                ? $query->whereNull('site_agent_cap_warned_at')
+                : $query->where('site_agent_cap_warned_at', $previous))
+            ->update(['site_agent_cap_warned_at' => $now]) === 1;
+
+        if ($claimed) {
+            $subscription->forceFill(['site_agent_cap_warned_at' => $now])->syncOriginalAttribute('site_agent_cap_warned_at');
+        }
+
+        return $claimed;
+    }
+
+    /** Give the notice back after a send that did not go through. */
+    public function releaseWarning(Subscription $subscription): void
+    {
+        $subscription->forceFill(['site_agent_cap_warned_at' => null])->save();
     }
 
     /**
