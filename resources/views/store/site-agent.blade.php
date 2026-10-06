@@ -1331,7 +1331,11 @@
                                @checked(old('terms'))
                                @error('terms') aria-invalid="true" aria-describedby="terms-error" @enderror>
                         <label for="terms">
-                            קראתי ואני מאשר/ת את <a href="{{ route('legal.terms') }}" target="_blank" rel="noopener">תנאי השימוש</a>
+                            {{-- נאמר בקופה ולא רק בתנאים: התנאים מגבילים את השירות
+                                 לעסקים, וקופה שמוכרת בלי לומר זאת מוכרת למי
+                                 שהתנאים שהוא מאשר אינם חלים עליו. --}}
+                            אני מאשר/ת שאני רוכש/ת עבור עסק, ושקראתי את
+                            <a href="{{ route('legal.terms') }}" target="_blank" rel="noopener">תנאי השימוש</a>
                             ו<a href="{{ route('legal.privacy') }}" target="_blank" rel="noopener">מדיניות הפרטיות</a>,
                             ואת החידוש האוטומטי של המנוי.
                         </label>
