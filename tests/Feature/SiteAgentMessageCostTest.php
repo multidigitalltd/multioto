@@ -3,12 +3,14 @@
 namespace Tests\Feature;
 
 use App\Enums\ChargeStatus;
+use App\Enums\SubscriptionStatus;
 use App\Enums\UserRole;
 use App\Filament\Pages\SiteAgentMessageCost;
 use App\Jobs\SyncSiteAgentMessagingCostJob;
 use App\Models\Charge;
 use App\Models\Customer;
 use App\Models\SiteAgentUsage;
+use App\Models\Subscription;
 use App\Models\SystemLog;
 use App\Models\User;
 use App\Services\SiteAgent\MessagingCostReport;
@@ -111,6 +113,15 @@ class SiteAgentMessageCostTest extends TestCase
                     ]],
                 ],
             ],
+        ]);
+    }
+
+    /** A subscription a renewal can still collect on. */
+    private function collectable(): Subscription
+    {
+        return Subscription::factory()->create([
+            'status' => SubscriptionStatus::Active,
+            'next_charge_at' => now()->addWeek(),
         ]);
     }
 
@@ -669,11 +680,13 @@ class SiteAgentMessageCostTest extends TestCase
         $this->fakeMeta();
         app(MessagingCostReport::class)->refresh();
 
-        $customer = Customer::factory()->create();
+        // על מנוי שעוד אפשר לגבות בו — אחרת אלה הודעות שלא ייחויבו לעולם.
+        $subscription = $this->collectable();
 
         foreach (range(1, 40) as $i) {
             SiteAgentUsage::create([
-                'customer_id' => $customer->id,
+                'customer_id' => $subscription->customer_id,
+                'subscription_id' => $subscription->id,
                 'provider_message_id' => 'wamid-pending-'.$i,
                 'billable' => true,
                 'sent_at' => now()->subHours(3),
@@ -986,12 +999,13 @@ class SiteAgentMessageCostTest extends TestCase
         $this->fakeMeta('ILS', [['pricing_category' => 'SERVICE', 'cost' => 10.00, 'volume' => 1000]]);
         app(MessagingCostReport::class)->refresh();
 
-        $customer = Customer::factory()->create();
+        $subscription = $this->collectable();
 
         // כולן נשלחו, אף אחת לא חויבה עדיין.
         foreach (range(1, 1000) as $i) {
             SiteAgentUsage::create([
-                'customer_id' => $customer->id,
+                'customer_id' => $subscription->customer_id,
+                'subscription_id' => $subscription->id,
                 'provider_message_id' => 'wamid-unbilled-'.$i,
                 'billable' => true,
                 'sent_at' => now()->subHour(),
@@ -1032,5 +1046,124 @@ class SiteAgentMessageCostTest extends TestCase
         $summary = app(MessagingCostReport::class)->summary();
         $this->assertSame(1281, $summary['cost']['total']);
         $this->assertNotNull($summary['cost_error']);
+    }
+
+    /*
+    | ----------------------------------------------------------------
+    | סבב שישי: הזנב של מטא, מנוי שבוטל, והקצאה בדיוק מלא
+    | ----------------------------------------------------------------
+    */
+
+    /**
+     * החלון נסגר במקום שבו הנתון של מטא נגמר, לא במקום שבו ביקשנו.
+     *
+     * האנליטיקס של מטא מתעדכן באיחור: בקשה "עד עכשיו" חוזרת מוצלחת אבל קטועה,
+     * והשעות האחרונות עדיין בלי דלי. השוואה של הכנסה עד עכשיו מול נתון כזה היא
+     * הכנסה בלי העלות שלה — מרווח מנופח, והכי בולט בתצוגת 7 הימים.
+     */
+    public function test_the_window_closes_where_metas_data_ends(): void
+    {
+        $bucketEnd = now()->subHours(6)->startOfSecond();
+
+        $this->fakeMeta('ILS', [[
+            'pricing_category' => 'SERVICE',
+            'cost' => 5.00,
+            'volume' => 500,
+            'end' => $bucketEnd->getTimestamp(),
+        ]]);
+
+        app(MessagingCostReport::class)->refresh(7);
+
+        $summary = app(MessagingCostReport::class)->summary(7);
+
+        $this->assertSame(
+            $bucketEnd->getTimestamp(),
+            Carbon::parse($summary['to'])->getTimestamp(),
+            'החלון נסגר בזמן שביקשנו ולא בזמן שמטא דיווחה עליו.',
+        );
+
+        // והכנסה שנוצרה אחרי הדלי האחרון אינה נספרת, כי אין לה עלות לידה.
+        SiteAgentUsage::create([
+            'customer_id' => Customer::factory()->create()->id,
+            'provider_message_id' => 'wamid-in-the-tail',
+            'billable' => true,
+            'sent_at' => now()->subHour(),
+        ]);
+
+        $this->assertSame(0, app(MessagingCostReport::class)->summary(7)['sent_messages']);
+    }
+
+    /**
+     * הודעות של מנוי שבוטל אינן "ייחויבו בחידוש הבא".
+     *
+     * cancel() מנקה את next_charge_at ואינו מסדיר את השימוש שמאחוריו, ולכן
+     * השורות נשארות billable בלי חיוב לנצח. ספירתן כנושאות מחיר מקטינה את נקודת
+     * האיזון וגם מגבה אמירה על המסך שאינה נכונה — חידוש שלא יקרה.
+     */
+    public function test_pending_usage_of_a_canceled_subscription_is_not_counted_as_owed(): void
+    {
+        $this->fakeMeta();
+        app(MessagingCostReport::class)->refresh();
+
+        $live = Subscription::factory()->create([
+            'status' => SubscriptionStatus::Active,
+            'next_charge_at' => now()->addWeek(),
+        ]);
+
+        $dead = Subscription::factory()->create(['status' => SubscriptionStatus::Active]);
+        $dead->cancel();
+
+        foreach ([[$live, 'live'], [$dead, 'dead']] as [$subscription, $tag]) {
+            SiteAgentUsage::create([
+                'customer_id' => $subscription->customer_id,
+                'subscription_id' => $subscription->id,
+                'provider_message_id' => 'wamid-'.$tag,
+                'billable' => true,
+                'sent_at' => now()->subHour(),
+            ]);
+        }
+
+        $summary = app(MessagingCostReport::class)->summary();
+
+        // שתיהן נשלחו...
+        $this->assertSame(2, $summary['sent_messages']);
+        // ...אבל רק אחת עוד יכולה להיגבות.
+        $this->assertSame(1, $summary['pending_messages']);
+    }
+
+    /**
+     * עלות ההודעות שלא חויבו מוקצית בדיוק מלא, ולא כמחיר מעוגל כפול כמות.
+     *
+     * 1,281 אגורות על 2,000 הודעות הן 0.64 אגורה להודעה. עיגול ל-1 וכפל ב-2,000
+     * מדווח ₪20 במקום ₪12.81, וממוצע מתחת לחצי אגורה מדווח את העלות כאפס.
+     */
+    public function test_the_cost_of_unbilled_messages_is_allocated_at_full_precision(): void
+    {
+        // ₪12.81 על 2,000 הודעות.
+        $this->fakeMeta();
+        app(MessagingCostReport::class)->refresh();
+
+        $customer = Customer::factory()->create();
+
+        foreach (range(1, 2000) as $i) {
+            SiteAgentUsage::create([
+                'customer_id' => $customer->id,
+                'provider_message_id' => 'wamid-free-'.$i,
+                'billable' => false,
+                'sent_at' => now()->subHour(),
+            ]);
+        }
+
+        $summary = app(MessagingCostReport::class)->summary();
+
+        $this->assertSame(2000, $summary['unbilled_messages']);
+        /*
+         | מטא דיווחה 2,100 הודעות ב-1,281 אגורות (2,000 שיחה ו-100 אימות), ולכן
+         | חלקן של 2,000 ההודעות הוא 2000 × 1281 / 2100 = 1,220.
+         |
+         | וזו הנקודה: מחיר מעוגל כפול כמות היה נותן 1 × 2,000 = 2,000 אגורות —
+         | יותר מכל העלות של התקופה כולה.
+         */
+        $this->assertSame(1220, $summary['unbilled_cost_agorot']);
     }
 }

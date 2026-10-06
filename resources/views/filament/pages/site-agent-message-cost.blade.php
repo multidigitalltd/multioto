@@ -175,9 +175,13 @@
                 הבוט שלח <strong>{{ number_format($s['sent_messages']) }}</strong> תשובות בתקופה,
                 מהן <strong>{{ number_format($s['unbilled_messages']) }}</strong> שלא יחויבו לאף לקוח
                 (תקופת ניסיון, או מסלול שאינו מתמחר הודעות).
-                @if ($s['unbilled_messages'] > 0 && $perMessage !== null)
+                @if ($s['unbilled_cost_agorot'] !== null)
+                    {{-- The allocated share, not a rounded rate times a count:
+                         multiplying a per-message figure that was rounded to a
+                         whole agora overstates the total by up to 50% on small
+                         averages, and reports zero on averages under half. --}}
                     העלות שלהן:
-                    <strong>{{ $ils($s['unbilled_messages'] * $perMessage) }}</strong> —
+                    <strong>{{ $ils($s['unbilled_cost_agorot']) }}</strong> —
                     זה מחיר רכישת הלקוחות האלה, ולא תקלה.
                 @endif
             </p>
@@ -185,8 +189,8 @@
                 <p class="mt-2">
                     בנוסף <strong>{{ number_format($s['included_messages']) }}</strong> הודעות היו כלולות במנוי —
                     הן עלו לנו כמו כל השאר ולא נגבה עליהן בנפרד.
-                    @if ($perMessage !== null)
-                        העלות שלהן: <strong>{{ $ils($s['included_messages'] * $perMessage) }}</strong>.
+                    @if ($s['included_cost_agorot'] !== null)
+                        העלות שלהן: <strong>{{ $ils($s['included_cost_agorot']) }}</strong>.
                     @endif
                 </p>
             @endif

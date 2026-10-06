@@ -3,6 +3,7 @@
 namespace App\Services\SiteAgent;
 
 use App\Enums\ChargeStatus;
+use App\Enums\SubscriptionStatus;
 use App\Models\Charge;
 use App\Models\SiteAgentUsage;
 use Illuminate\Support\Carbon;
@@ -137,7 +138,14 @@ class MessagingCostReport
 
         Cache::put($this->key($days), [
             'from' => $start->toIso8601String(),
-            'to' => $end->toIso8601String(),
+            // Where Meta's data actually ends, falling back to what we asked for
+            // when it reported no buckets at all — there is nothing shorter to
+            // honour then, and a quiet period with local traffic is a real gap
+            // worth seeing rather than hiding behind a moved boundary.
+            'to' => ($parsed['reported_to'] !== null
+                ? Carbon::createFromTimestamp($parsed['reported_to'])
+                : $end)->toIso8601String(),
+            'requested_to' => $end->toIso8601String(),
             'days' => $days,
             'pulled_at' => Carbon::now()->toIso8601String(),
             // From the account, not from the analytics envelope — which never
@@ -200,7 +208,7 @@ class MessagingCostReport
      *                                           Both arrive as a response with no cost in it, and they mean opposite things:
      *                                           one is a quiet month worth caching as zero, the other is an account whose
      *                                           spend Meta will not disclose.
-     * @return array{by_category: array<string, array{cost: int, messages: int}>, total: int, messages: int, has_cost: bool, has_points: bool, malformed: bool}
+     * @return array{by_category: array<string, array{cost: int, messages: int}>, total: int, messages: int, has_cost: bool, has_points: bool, malformed: bool, reported_to: ?int}
      */
     private function parse(array $analytics): array
     {
@@ -210,6 +218,7 @@ class MessagingCostReport
         $hasCost = false;
         $hasPoints = false;
         $malformed = false;
+        $reportedTo = null;
 
         foreach ((array) ($analytics['data'] ?? []) as $series) {
             if (! is_array($series)) {
@@ -260,6 +269,22 @@ class MessagingCostReport
                  | Integers throughout, per the money rule: the decimal from Meta
                  | is scaled once on the way in, and nothing downstream is a float.
                  */
+                /*
+                 | The far edge of the newest bucket Meta actually reported.
+                 |
+                 | Its analytics populate with a delay, and a request for "up to
+                 | now" comes back successful but short: the last hours have no
+                 | bucket yet. Comparing local revenue up to now against that is
+                 | revenue with its cost missing — an overstated margin, worst in
+                 | the 7-day view. So the window closes where Meta's data ends,
+                 | not where we asked it to.
+                 */
+                $pointEnd = (int) ($point['end'] ?? 0);
+
+                if ($pointEnd > 0 && ($reportedTo === null || $pointEnd > $reportedTo)) {
+                    $reportedTo = $pointEnd;
+                }
+
                 $scaled = $costGiven ? (int) round(((float) $point['cost']) * 10000) : 0;
                 $count = (int) ($point['volume'] ?? 0);
 
@@ -292,6 +317,7 @@ class MessagingCostReport
             'has_cost' => $hasCost,
             'has_points' => $hasPoints,
             'malformed' => $malformed,
+            'reported_to' => $reportedTo,
         ];
     }
 
@@ -304,7 +330,8 @@ class MessagingCostReport
      * @return array{
      *     cost: ?array<string, mixed>, cost_error: ?array<string, mixed>,
      *     revenue_net: int, billed_messages: int, included_messages: int,
-     *     charged_messages: int, break_even_agorot: ?int, estimated_rows: int,
+     *     charged_messages: int, break_even_agorot: ?int,
+     *     unbilled_cost_agorot: ?int, included_cost_agorot: ?int, estimated_rows: int,
      *     sent_messages: int, unbilled_messages: int,
      *     margin: ?int, comparable: bool, currency: string, days: int
      * }
@@ -396,6 +423,18 @@ class MessagingCostReport
                 ? (int) ceil(((int) $cost['total']) / $charged)
                 : null,
             'charged_messages' => $charged,
+            /*
+             | What the messages nobody pays for actually cost, allocated at full
+             | precision and rounded once.
+             |
+             | Multiplying a rounded per-message rate instead gets this badly
+             | wrong on small numbers: 1,281 agorot over 2,000 messages is 0.64 of
+             | an agora each, which rounds to 1 and then reports ₪20 for the same
+             | 2,000 messages instead of ₪12.81. An average below half an agora
+             | rounds to nothing and reports the cost as free.
+             */
+            'unbilled_cost_agorot' => $this->allocate($cost, $counts['unbilled'], $comparable),
+            'included_cost_agorot' => $this->allocate($cost, $revenue['included'], $comparable),
             'comparable' => $comparable,
             'currency' => $currency,
             'days' => $days,
@@ -447,11 +486,24 @@ class MessagingCostReport
 
         // Sent, billable, and not yet on any invoice. Revenue that is owed but
         // not yet earned — shown separately so it is neither claimed nor lost.
+        /*
+         | Pending, and still collectable.
+         |
+         | Subscription::cancel() clears next_charge_at without settling the usage
+         | behind it, so those rows stay billable with no charge for good. Counting
+         | them as revenue-bearing understates the break-even rate AND backs the
+         | screen's claim that they will be billed at the next renewal — for a
+         | subscription that will never renew. A row whose subscription is gone or
+         | cancelled is counted as sent, never as owed.
+         */
         $pending = SiteAgentUsage::query()
             ->where('sent_at', '>=', $from)
             ->where('sent_at', '<', $to)
             ->whereNull('charge_id')
             ->where('billable', true)
+            ->whereHas('subscription', fn ($query) => $query
+                ->whereNot('status', SubscriptionStatus::Canceled)
+                ->whereNotNull('next_charge_at'))
             ->count();
 
         if ($settled->isEmpty()) {
@@ -528,6 +580,26 @@ class MessagingCostReport
             'sent' => $base()->count(),
             'unbilled' => $base()->where('billable', false)->count(),
         ];
+    }
+
+    /**
+     * The share of the period's cost belonging to a number of messages.
+     *
+     * count × total ÷ messages, rounded once at the end. Null where there is no
+     * comparable cost to divide, or no messages to divide by — a zero here would
+     * read as "these were free".
+     *
+     * @param  array<string, mixed>|null  $cost
+     */
+    private function allocate(?array $cost, int $count, bool $comparable): ?int
+    {
+        $messages = is_array($cost) ? (int) ($cost['messages'] ?? 0) : 0;
+
+        if (! $comparable || $messages <= 0 || $count <= 0) {
+            return null;
+        }
+
+        return (int) round($count * ((int) $cost['total']) / $messages);
     }
 
     /**
