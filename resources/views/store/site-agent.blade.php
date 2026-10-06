@@ -229,6 +229,11 @@
         .hero-price { display: flex; flex-wrap: wrap; align-items: baseline; gap: .25rem .75rem; margin: 0 0 1.5rem; }
         .hero-price .amount { font-size: clamp(1.5rem, 4.5vw, 2rem); font-weight: 800; letter-spacing: -.01em; }
         .hero-price .vat { color: var(--muted); font-size: 1rem; white-space: nowrap; }
+        .hero-price .usage { flex-basis: 100%; color: var(--muted); font-size: .95rem; }
+        .hero-price .usage a { color: inherit; text-decoration: underline; text-underline-offset: 3px; }
+        .usage-prices { list-style: none; margin: .6rem 0 0; padding: .6rem .8rem; border: 1px solid var(--line-strong); border-radius: 12px; font-size: .92rem; color: var(--muted); }
+        .usage-prices li + li { margin-top: .3rem; }
+        .usage-prices strong { color: var(--fg); }
 
         .hero-actions { display: flex; flex-wrap: wrap; gap: .75rem; margin-bottom: 2rem; }
 
@@ -693,6 +698,15 @@
                     @if ($headline->vat_applies)
                         <span class="vat">+ מע״מ</span>
                     @endif
+                    {{-- The usage charge beside the price, never only further down:
+                         a monthly figure quoted alone reads as the whole cost. --}}
+                    @if ($headline->billsMessages())
+                        <span class="usage">
+                            ובנוסף {{ $headline->messageNetLabel() }} לכל הודעה שהבוט שולח לכם@if ((int) $headline->included_messages > 0)
+                                — {{ number_format($headline->included_messages) }} הודעות בחודש כלולות במחיר@endif.
+                            <a href="#price-title">פירוט המחיר</a>
+                        </span>
+                    @endif
                 </p>
 
                 <div class="hero-actions">
@@ -1029,6 +1043,16 @@
                             <span class="vat">+ מע״מ</span>
                         @endif
                     </p>
+                    @if ($plan->billsMessages() || $plan->billsWritings())
+                        <ul class="usage-prices">
+                            @if ($plan->billsMessages())
+                                <li><strong>{{ $plan->messageNetLabel() }}</strong> להודעה שהבוט שולח@if ((int) $plan->included_messages > 0) (אחרי {{ number_format($plan->included_messages) }} כלולות בחודש)@endif</li>
+                            @endif
+                            @if ($plan->billsWritings())
+                                <li><strong>{{ $plan->writingNetLabel() }}</strong> לטקסט ארוך שהבוט כותב@if ((int) $plan->included_writings > 0) (אחרי {{ number_format($plan->included_writings) }} כלולים בחודש)@endif</li>
+                            @endif
+                        </ul>
+                    @endif
 
                     @if (filled($plan->description))
                         <p class="note" style="margin:.4rem 0 0">{{ $plan->description }}</p>
