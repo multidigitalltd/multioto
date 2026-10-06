@@ -434,6 +434,17 @@ class LegalPagesTest extends TestCase
         foreach (BusinessType::cases() as $type) {
             $terms->assertSeeText($type->getLabel());
         }
+
+        // ודוגמאות, לא רשימה סגורה: SiteAgentStoreController::buy() אינו מאמת סוג
+        // עסק כלל, כך שרשימה סגורה הייתה שוללת כשירות ממי שהקופה מוכרת לו.
+        $terms->assertSeeText('מיועד לעסקים ולארגונים בלבד ואינו מיועד לשימוש פרטי');
+
+        // על טקסט מנורמל, כי בתבנית "למשל" והרשימה יושבים בשורות נפרדות.
+        $this->assertStringContainsString(
+            'למשל '.BusinessType::cases()[0]->getLabel(),
+            (string) preg_replace('/\s+/u', ' ', strip_tags((string) $terms->getContent())),
+            'רשימת סוגי העסקים מוצגת כרשימה סגורה ולא כדוגמאות.',
+        );
     }
 
     /**
