@@ -144,6 +144,20 @@ class LegalPagesTest extends TestCase
     }
 
     /**
+     * ואותו דבר בטלפון: סעיף פרטי ההתקשרות בתנאי השימוש נסתר כשהערך ריק,
+     * והשורה ב-.env.example ריקה — כך שברירת מחדל של env() לא הייתה נקראת,
+     * והסעיף היה נעלם דווקא בהתקנה שלא שינתה כלום.
+     */
+    public function test_a_blank_phone_line_falls_back_instead_of_hiding_the_contact_section(): void
+    {
+        $this->assertNotSame('', trim((string) config('legal.company.phone')));
+
+        $this->get(route('legal.terms'))
+            ->assertSeeText('טלפון:')
+            ->assertDontSee('tel:"', false);
+    }
+
+    /**
      * מה שנאמר על הצעה שפגה הוא מה שהקוד עושה.
      *
      * עבודת הניקוי מוחקת את קובץ התמונה ומסמנת את ההצעה כפגה — היא אינה מוחקת
@@ -235,5 +249,108 @@ class LegalPagesTest extends TestCase
         config(['legal.contact_email' => 'privacy@example.co.il']);
 
         $this->get(route('legal.privacy'))->assertSeeText('privacy@example.co.il');
+    }
+
+    /*
+    | ----------------------------------------------------------------
+    | הסכם השירות הכללי, משוזר לתוך התנאים
+    | ----------------------------------------------------------------
+    */
+
+    /**
+     * שעות התמיכה נאמרות — ולא כאילו הן גם שעות הבוט.
+     *
+     * הבוט אוטומטי ועונה בכל שעה; התמיכה האנושית היא א׳–ה׳ 8:00–17:00 ולא בשבת.
+     * נוסח אחד לשניהם היה או מבטיח תמיכה 24/7 או טוען שהבוט שותק בשבת, ושתי
+     * האמירות אינן נכונות — ולכן ההפרדה היא הדבר שנבדק כאן, לא רק השעות.
+     */
+    public function test_the_support_hours_are_stated_apart_from_the_bots_own_hours(): void
+    {
+        $this->get(route('legal.terms'))
+            ->assertSeeText('8:00–17:00')
+            ->assertSeeText('הבוט פועל אוטומטית בכל שעה')
+            ->assertSeeText('אינו פעיל בשבת');
+    }
+
+    /** ושאין התחייבות לזמן פתרון — ההבטחה היחידה שאסור לנסח ברישול. */
+    public function test_no_resolution_time_is_promised(): void
+    {
+        $this->get(route('legal.terms'))->assertSeeText('איננו מתחייבים למסגרת זמן');
+    }
+
+    /**
+     * השירות לעסקים בלבד — וגם הקופה אומרת זאת.
+     *
+     * תנאים שמגבילים את השירות לעסקים מול קופה שמוכרת לכל מי שנכנס הם מסמך
+     * שאינו חל על חלק מהלקוחות שאישרו אותו. שני המקומות נבדקים יחד בכוונה.
+     */
+    public function test_the_service_is_for_businesses_in_both_the_terms_and_the_checkout(): void
+    {
+        $this->get(route('legal.terms'))->assertSeeText('מיועד לעסקים בלבד');
+
+        // על התבנית ולא על עמוד מורנדר, מאותה סיבה שהבדיקה הקיימת למטה עושה כך:
+        // עמוד הרכישה חסום מאחורי מסלול פעיל ומוצר מוכן, וגרסה שפותחת אותו הייתה
+        // מדלגת בשקט כשהתנאי אינו מתקיים.
+        $this->assertStringContainsString(
+            'רוכש/ת עבור עסק',
+            file_get_contents(resource_path('views/store/site-agent.blade.php')),
+            'הקופה אינה אומרת שהשירות לעסקים, בעוד שהתנאים שהיא מבקשת לאשר מגבילים אותו לכך.',
+        );
+    }
+
+    /** הספקים בשמם — מי מאחסן את האתר ומי שולח את הדוא״ל. */
+    public function test_the_terms_name_the_infrastructure_providers(): void
+    {
+        $this->get(route('legal.terms'))
+            ->assertSeeText('hetzner')
+            ->assertSeeText('postmark')
+            ->assertSeeText('cloudflare');
+    }
+
+    /**
+     * תקרת האחריות היא 12 החודשים — ואין לידה "הסעד היחיד הוא ביטול".
+     *
+     * שתי הגבלות שונות שלא ניתן לכתוב יחד: הסכם השירות הכללי אמר "הסעד היחיד
+     * שלך הוא ביטול המנוי", והתנאים אומרים תקרה לפי מה ששולם. נבחרה התקרה, ולכן
+     * הנוסח הסותר לא אמור להופיע.
+     */
+    public function test_the_liability_cap_is_the_twelve_month_figure_and_not_a_sole_remedy_clause(): void
+    {
+        $this->get(route('legal.terms'))
+            ->assertSeeText('שנים-עשר החודשים')
+            ->assertDontSeeText('הסעד היחיד');
+    }
+
+    /** יישוב סכסוכים: גישור או בורר לפני בית המשפט, ואז תל אביב-יפו. */
+    public function test_dispute_resolution_comes_before_the_court(): void
+    {
+        $this->get(route('legal.terms'))->assertSeeTextInOrder([
+            'בורר מוסמך',
+            'תל אביב-יפו',
+        ]);
+    }
+
+    /** ופרטי ההתקשרות — חברה, ח.פ. וטלפון. */
+    public function test_the_terms_carry_the_contact_details(): void
+    {
+        config(['legal.company.phone' => '03-000-0000']);
+
+        $this->get(route('legal.terms'))
+            ->assertSeeText(config('legal.company.name'))
+            ->assertSeeText('03-000-0000');
+    }
+
+    /**
+     * המחירים מוצגים לפני מע״מ — ואותו דבר נאמר בתנאים ובקופה.
+     *
+     * הנוסח הקודם בתנאים אמר "המחירים כוללים מע״מ", בעוד שעמוד המכירה מצטט נטו
+     * ומוסיף "+ מע״מ". שני מסמכים שסותרים זה את זה על מחיר הם בדיוק מה שלקוח
+     * מצביע עליו בוויכוח.
+     */
+    public function test_the_terms_say_prices_are_before_vat_like_the_store_does(): void
+    {
+        $this->get(route('legal.terms'))
+            ->assertSeeText('המחירים מוצגים לפני מע״מ')
+            ->assertDontSeeText('המחירים כוללים מע״מ');
     }
 }
