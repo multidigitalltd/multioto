@@ -966,4 +966,71 @@ class SiteAgentMessageCostTest extends TestCase
 
         $this->assertSame(0, app(MessagingCostReport::class)->summary()['cost']['total']);
     }
+
+    /*
+    | ----------------------------------------------------------------
+    | סבב חמישי: הודעות שטרם חויבו, וסדרה שלא מזוהה
+    | ----------------------------------------------------------------
+    */
+
+    /**
+     * הודעות שנשלחו וטרם חויבו נכנסות למחלק של נקודת האיזון.
+     *
+     * העלות שלהן כבר בתוך המונה — מטא גבתה עליהן — ולכן השארתן בחוץ מחלקת את כל
+     * ההוצאה בשבריר ההודעות שייצרו אותה. חלון שכולו הודעות שטרם חויבו היה מדווח
+     * שאין נקודת איזון בכלל, בעוד שהמסך אומר שהן יחויבו בחידוש הבא.
+     */
+    public function test_pending_messages_count_toward_the_break_even_denominator(): void
+    {
+        // ₪10 על 1,000 הודעות.
+        $this->fakeMeta('ILS', [['pricing_category' => 'SERVICE', 'cost' => 10.00, 'volume' => 1000]]);
+        app(MessagingCostReport::class)->refresh();
+
+        $customer = Customer::factory()->create();
+
+        // כולן נשלחו, אף אחת לא חויבה עדיין.
+        foreach (range(1, 1000) as $i) {
+            SiteAgentUsage::create([
+                'customer_id' => $customer->id,
+                'provider_message_id' => 'wamid-unbilled-'.$i,
+                'billable' => true,
+                'sent_at' => now()->subHour(),
+            ]);
+        }
+
+        $summary = app(MessagingCostReport::class)->summary();
+
+        $this->assertSame(1000, $summary['pending_messages']);
+        $this->assertSame(1000, $summary['charged_messages']);
+        // 1000 אגורות / 1000 הודעות = אגורה אחת, ולא null.
+        $this->assertSame(1, $summary['break_even_agorot']);
+    }
+
+    /**
+     * סדרה בלי data_points אינה "חודש שקט".
+     *
+     * אחרת היא דורסת נתון אמיתי באפס ומנקה את הסיבה בדרך — אותו ₪0 שקט, בדרך
+     * צרה יותר.
+     */
+    public function test_a_series_without_data_points_is_refused_rather_than_read_as_zero(): void
+    {
+        $this->fakeMeta();
+        app(MessagingCostReport::class)->refresh();
+        $this->assertSame(1281, app(MessagingCostReport::class)->summary()['cost']['total']);
+
+        // data קיים ולא ריק, אבל הסדרה שבתוכו אינה בצורה המצופה.
+        $this->fakeGraph(['currency' => 'ILS', 'pricing_analytics' => ['data' => [
+            ['points' => [['pricing_category' => 'SERVICE', 'cost' => 1.00, 'volume' => 10]]],
+        ]]]);
+
+        $result = app(MessagingCostReport::class)->refresh();
+
+        $this->assertFalse($result['ok']);
+        $this->assertStringContainsString('data_points', (string) $result['reason']);
+
+        // והנתון הקודם נשאר, עם הסיבה לידו — ולא נדרס באפס.
+        $summary = app(MessagingCostReport::class)->summary();
+        $this->assertSame(1281, $summary['cost']['total']);
+        $this->assertNotNull($summary['cost_error']);
+    }
 }

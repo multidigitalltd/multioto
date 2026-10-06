@@ -125,6 +125,12 @@ class MessagingCostReport
          |
          | Points that carry volume but no cost are the other thing entirely.
          */
+        // A series we could not read at all. Same reasoning as the missing
+        // envelope above: an unrecognised shape is reported, never cached as zero.
+        if ($parsed['malformed']) {
+            return $this->fail($days, 'התשובה ממטא אינה בצורה המצופה (סדרה בלי data_points). ייתכן ששונה חוזה ה-API — אין לקרוא את זה כאפס.');
+        }
+
         if ($parsed['has_points'] && ! $parsed['has_cost']) {
             return $this->fail($days, 'מטא החזירה נתונים אך בלי עלות. כך היא עונה לחשבון שמחויב דרך קו אשראי של שותף — ואז הסכום קיים רק בחיוב של השותף.');
         }
@@ -194,7 +200,7 @@ class MessagingCostReport
      *                                           Both arrive as a response with no cost in it, and they mean opposite things:
      *                                           one is a quiet month worth caching as zero, the other is an account whose
      *                                           spend Meta will not disclose.
-     * @return array{by_category: array<string, array{cost: int, messages: int}>, total: int, messages: int, has_cost: bool, has_points: bool}
+     * @return array{by_category: array<string, array{cost: int, messages: int}>, total: int, messages: int, has_cost: bool, has_points: bool, malformed: bool}
      */
     private function parse(array $analytics): array
     {
@@ -203,13 +209,29 @@ class MessagingCostReport
         $messages = 0;
         $hasCost = false;
         $hasPoints = false;
+        $malformed = false;
 
         foreach ((array) ($analytics['data'] ?? []) as $series) {
             if (! is_array($series)) {
+                $malformed = true;
+
                 continue;
             }
 
-            foreach ((array) ($series['data_points'] ?? []) as $point) {
+            /*
+             | A series is contractually required to carry `data_points`. Letting
+             | its absence fall through to an empty list would read as "nothing
+             | was sent" — and would then overwrite a real figure with zero and
+             | clear the error on its way, which is the same silent ₪0 by a
+             | narrower road.
+             */
+            if (! is_array($series['data_points'] ?? null)) {
+                $malformed = true;
+
+                continue;
+            }
+
+            foreach ($series['data_points'] as $point) {
                 if (! is_array($point)) {
                     continue;
                 }
@@ -269,6 +291,7 @@ class MessagingCostReport
             'messages' => $messages,
             'has_cost' => $hasCost,
             'has_points' => $hasPoints,
+            'malformed' => $malformed,
         ];
     }
 
@@ -325,9 +348,22 @@ class MessagingCostReport
         // nobody could see on the screen.
         $comparable = is_array($cost) && in_array($currency, ['ILS', 'NIS'], true);
 
-        // Messages that actually carry a per-message price: on an invoice, and
-        // not inside the plan's bundled allowance.
-        $charged = max(0, $revenue['messages'] - $revenue['included']);
+        /*
+         | Messages in this window that carry a per-message price.
+         |
+         | Settled ones outside the plan's allowance, PLUS the ones sent and not
+         | yet invoiced. The pending ones belong here because Meta's cost — the
+         | numerator — already includes them: leaving them out divides the whole
+         | window's spend by a fraction of the messages that produced it, and a
+         | window of nothing but pending replies would report no break-even at all
+         | while the screen says they will be billed at the next renewal.
+         |
+         | How many of the pending ones will land inside a plan's remaining
+         | allowance is not knowable until that renewal computes it, so this can
+         | be a little optimistic. The screen says so rather than implying a
+         | precision the figure does not have.
+         */
+        $charged = max(0, $revenue['messages'] - $revenue['included']) + $revenue['pending'];
 
         return [
             'cost' => is_array($cost) ? $cost : null,

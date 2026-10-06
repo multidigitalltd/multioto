@@ -151,7 +151,15 @@
             </div>
             <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
                 זה המספר ש"מחיר להודעה" במסך המסלולים צריך לכסות — כל ההוצאה על ההודעות
-                חלקי {{ number_format($s['charged_messages']) }} ההודעות שבאמת חויבו.
+                חלקי {{ number_format($s['charged_messages']) }} ההודעות שנושאות מחיר בתקופה
+                (מחויבות, ואלה שטרם חויבו וייכנסו לחידוש הבא).
+                @if ($s['pending_messages'] > 0)
+                    {{-- Said rather than implied: how many of the pending ones will
+                         land inside a plan's remaining allowance is unknowable
+                         until that renewal computes it. --}}
+                    <br>כמה מההודעות שטרם חויבו ייפלו בתוך מכסה כלולה אינו ידוע עד החידוש,
+                    ולכן המספר עשוי להיות אופטימי במקצת.
+                @endif
                 @if ($perMessage !== null)
                     <br>העלות הממוצעת של הודעה כלשהי (כולל קודי אימות והודעות מערכת): {{ $ils($perMessage) }}.
                 @endif
