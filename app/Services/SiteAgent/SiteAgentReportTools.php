@@ -26,11 +26,13 @@ class SiteAgentReportTools
 
     public const CANCEL = 'cancel_report';
 
-    public function __construct(private SiteAgentReportBuilder $builder) {}
+    public const LEAD_ALERTS = 'lead_alerts';
+
+    public function __construct(private SiteAgentReportBuilder $builder, private SiteAgentLeadAlerts $leadAlerts) {}
 
     public function handles(string $name): bool
     {
-        return in_array($name, [self::REPORT_NOW, self::SCHEDULE, self::LIST, self::CANCEL], true);
+        return in_array($name, [self::REPORT_NOW, self::SCHEDULE, self::LIST, self::CANCEL, self::LEAD_ALERTS], true);
     }
 
     /** @return list<array{name: string, description: string, input_schema: array<string, mixed>}> */
@@ -68,6 +70,12 @@ class SiteAgentReportTools
                 'description' => 'ביטול דוח קבוע לפי id (מתוך list_reports).',
                 'input_schema' => ['type' => 'object', 'properties' => ['id' => ['type' => 'integer']], 'required' => ['id']],
             ],
+            [
+                'name' => self::LEAD_ALERTS,
+                'description' => 'התראה בוואטסאפ על כל ליד חדש מטפסי האתר, תוך כמה דקות מההגשה. on=true להפעלה, on=false להפסקה. '
+                    .'בלי on — מחזיר אם ההתראות פעילות.',
+                'input_schema' => ['type' => 'object', 'properties' => ['on' => ['type' => 'boolean']]],
+            ],
         ];
     }
 
@@ -81,6 +89,7 @@ class SiteAgentReportTools
             self::REPORT_NOW => $this->now($site, $input),
             self::SCHEDULE => $this->schedule($subscriber, $site, $input),
             self::LIST => $this->list($subscriber),
+            self::LEAD_ALERTS => $this->leadAlerts($subscriber, $site, $input),
             default => $this->cancel($subscriber, $input),
         };
     }
@@ -177,6 +186,37 @@ class SiteAgentReportTools
         return $deleted > 0
             ? ['content' => 'הדוח בוטל.']
             : ['content' => 'אין דוח כזה. בדקו עם list_reports.', 'is_error' => true];
+    }
+
+    /**
+     * Lead alerts on, off, or asked about.
+     *
+     * Like a standing report, this is the owner's own subscription rather than
+     * a change to their site, so it takes no "כן" — but every alert is a billed
+     * message, and the answer says so.
+     *
+     * @param  array<string, mixed>  $input
+     */
+    private function leadAlerts(SiteAgentSubscriber $subscriber, Site $site, array $input): array
+    {
+        if (! array_key_exists('on', $input)) {
+            return ['content' => json_encode(['lead_alerts' => (bool) $subscriber->lead_alerts], JSON_UNESCAPED_UNICODE)];
+        }
+
+        if (! filter_var($input['on'], FILTER_VALIDATE_BOOLEAN)) {
+            $this->leadAlerts->disable($subscriber);
+
+            return ['content' => 'ההתראות על לידים הופסקו.'];
+        }
+
+        $problem = $this->leadAlerts->enable($subscriber, $site);
+
+        return $problem !== null
+            ? ['content' => $problem, 'is_error' => true]
+            : ['content' => json_encode([
+                'lead_alerts' => true,
+                'note' => 'מעכשיו כל ליד חדש יישלח לבעל האתר תוך כמה דקות. כל התראה היא הודעה שנספרת בחיוב ההודעות החודשי. אמור זאת בקצרה, ושאפשר להפסיק בכל עת.',
+            ], JSON_UNESCAPED_UNICODE)];
     }
 
     /** @param array<string, mixed> $input */

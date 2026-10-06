@@ -11,6 +11,8 @@ use App\Services\Agent\McpClient;
 use App\Services\Ai\ClaudeClient;
 use App\Services\SiteAgent\ImageChangePlanner;
 use App\Services\SiteAgent\ProductChangePlanner;
+use App\Services\SiteAgent\SiteActionApplier;
+use App\Services\SiteAgent\SiteActionProposer;
 use App\Services\SiteAgent\SiteAgentConversation;
 use App\Services\SiteAgent\SiteChangeApplier;
 use App\Services\SiteAgent\SiteChangePlanner;
@@ -508,6 +510,92 @@ class SiteAgentShopAndMediaTest extends TestCase
         Storage::disk('local')->assertMissing($path);
     }
 
+    public function test_a_photo_of_a_new_product_becomes_the_product_with_that_photo(): void
+    {
+        $subscriber = $this->subscriber();
+        $this->imageArrives();
+        $this->aiAnswers(['new_product' => true, 'name' => 'כד קרמיקה', 'regular_price' => '89', 'alt' => 'כד קרמיקה כחול', 'publish' => true]);
+
+        $preview = $this->talk($subscriber, 'צילמתי מוצר חדש, כד קרמיקה, תעלה אותו ב-89', mediaId: 'media-1');
+
+        $this->assertStringContainsString('🛒 מוצר חדש: כד קרמיקה', $preview);
+        $this->assertStringContainsString('מחיר: 89', $preview);
+        $this->assertStringContainsString('התמונה ששלחתם תהיה התמונה הראשית', $preview);
+        $request = SiteAgentRequest::sole();
+        $this->assertSame(SiteAgentRequest::OP_PRODUCT_CREATE, $request->operation);
+        $path = (string) $request->plan['image_path'];
+        Storage::disk('local')->assertExists($path);
+
+        $calls = $this->shopRecords(['wc_product_create' => ['id' => 70], 'wp_media_upload' => ['id' => 501]]);
+
+        $done = $this->talk($subscriber, 'כן');
+
+        $this->assertStringContainsString('נוצר ופורסם', $done);
+        $this->assertStringNotContainsString('לא הושלמו', $done);
+        // The photo is on before the product goes live.
+        $this->assertSame(['wc_product_create', 'wp_media_upload', 'wp_post_thumbnail_set', 'wc_product_update'], array_column($calls->getArrayCopy(), 0));
+        $this->assertSame('כד קרמיקה כחול', $calls[1][1]['alt']);
+        $this->assertSame(['id' => 70, 'attachment_id' => 501, 'if_current' => 0], $calls[2][1]);
+        Storage::disk('local')->assertMissing($path);
+    }
+
+    public function test_a_new_product_photo_without_a_name_is_asked_about_and_kept(): void
+    {
+        $subscriber = $this->subscriber();
+        $this->imageArrives();
+        $this->aiAnswers(['new_product' => true, 'alt' => 'כד קרמיקה כחול']);
+
+        $reply = $this->talk($subscriber, 'מוצר חדש', mediaId: 'media-1');
+
+        $this->assertStringContainsString('איך לקרוא למוצר', $reply);
+
+        // The answer completes it; the photo is not sent again.
+        $this->aiAnswers(['new_product' => true, 'name' => 'כד', 'regular_price' => '89', 'alt' => 'כד קרמיקה כחול']);
+        $preview = $this->talk($subscriber, 'כד, 89 שקל');
+
+        $this->assertStringContainsString('🛒 מוצר חדש: כד', $preview);
+        $this->assertSame(SiteAgentRequest::OP_PRODUCT_CREATE, SiteAgentRequest::sole()->operation);
+        Storage::disk('local')->assertExists((string) SiteAgentRequest::sole()->plan['image_path']);
+    }
+
+    public function test_a_photo_that_fails_to_upload_keeps_the_product_a_draft_and_says_so(): void
+    {
+        $subscriber = $this->subscriber();
+        $this->imageArrives();
+        $this->aiAnswers(['new_product' => true, 'name' => 'כד', 'regular_price' => '89', 'alt' => 'כד כחול', 'publish' => true]);
+        $this->talk($subscriber, 'מוצר חדש כד ב-89, תפרסם', mediaId: 'media-1');
+
+        $calls = $this->shopRecords(['wc_product_create' => ['id' => 70], 'wp_media_upload' => fn () => throw new \RuntimeException('too big')]);
+
+        $done = $this->talk($subscriber, 'כן');
+
+        $this->assertStringContainsString('נוצר כטיוטה', $done);
+        $this->assertStringContainsString('לא הושלמו: התמונה (ולכן המוצר לא פורסם)', $done);
+        $this->assertSame(SiteAgentRequest::APPLIED, SiteAgentRequest::sole()->state);
+        // Not published without the photo it was created from.
+        $this->assertNotContains('wc_product_update', array_column($calls->getArrayCopy(), 0));
+    }
+
+    public function test_a_thumbnail_slot_taken_first_is_not_reported_as_our_photo(): void
+    {
+        $subscriber = $this->subscriber();
+        $this->imageArrives();
+        $this->aiAnswers(['new_product' => true, 'name' => 'כד', 'regular_price' => '89', 'alt' => 'כד כחול']);
+        $this->talk($subscriber, 'מוצר חדש כד ב-89', mediaId: 'media-1');
+
+        $calls = $this->shopRecords([
+            'wc_product_create' => ['id' => 70],
+            'wp_media_upload' => ['id' => 501],
+            'wp_post_thumbnail_set' => ['changed' => false],
+        ]);
+
+        $done = $this->talk($subscriber, 'כן');
+
+        $this->assertStringContainsString('לא הושלמו: התמונה', $done);
+        // Our upload is taken back out of their library, not left orphaned.
+        $this->assertContains(['wp_media_delete', ['attachment_id' => 501]], $calls->getArrayCopy());
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────
 
     private function subscriber(): SiteAgentSubscriber
@@ -581,6 +669,29 @@ class SiteAgentShopAndMediaTest extends TestCase
         $this->forgetServices();
     }
 
+    /**
+     * The site, recording every call it receives.
+     *
+     * @param  array<string, mixed>  $answers  per tool: a value, or a closure that may throw
+     * @return \ArrayObject<int, array{0: string, 1: array<string, mixed>}>
+     */
+    private function shopRecords(array $answers): \ArrayObject
+    {
+        $calls = new \ArrayObject;
+        $mcp = Mockery::mock(McpClient::class);
+        $mcp->shouldReceive('callTool')->andReturnUsing(function (Site $site, string $tool, array $arguments = []) use ($answers, $calls) {
+            $calls[] = [$tool, $arguments];
+            $answer = $answers[$tool] ?? [];
+
+            return $answer instanceof \Closure ? $answer($arguments) : $answer;
+        });
+        $mcp->shouldReceive('textContent')->andReturnUsing(fn ($r): string => json_encode($r));
+        $this->app->instance(McpClient::class, $mcp);
+        $this->forgetServices();
+
+        return $calls;
+    }
+
     /** Responses the real MCP client gets back, in order. */
     private function siteReturns(array $responses): void
     {
@@ -618,6 +729,8 @@ class SiteAgentShopAndMediaTest extends TestCase
             ProductChangePlanner::class,
             ImageChangePlanner::class,
             SiteChangeApplier::class,
+            SiteActionApplier::class,
+            SiteActionProposer::class,
             WhatsAppCloudClient::class,
             SiteAgentConversation::class,
         ] as $service) {

@@ -2,7 +2,7 @@
 Contributors: multidigital
 Requires at least: 6.0
 Requires PHP: 7.4
-Stable tag: 1.8.2
+Stable tag: 1.8.3
 License: GPLv2 or later
 
 מחבר את אתר הוורדפרס לפאנל התפעול של Multi Digital: נקודת קצה MCP מאובטחת
@@ -55,6 +55,9 @@ Cloudflare באתר כולו — די בחריגה לנתיב הזה.)
   RewriteRule .* - [E=HTTP_AUTHORIZATION:%1]
 
 == Changelog ==
+
+= 1.8.3 =
+* **תוסף שהיה פעיל נשאר פעיל אחרי עדכון.** `wp_plugin_update` עובר דרך Plugin_Upgrader, שמכבה תוסף פעיל לפני החלפת הקבצים ומשאיר את ההפעלה מחדש למסך הבא של wp-admin — שעדכון מכאן לעולם לא מגיע אליו. כך "עדכן את Elementor Pro" עדכן אותו והשאיר אותו כבוי. עכשיו התוסף מופעל מחדש מיד אחרי העדכון (גם ברשת), והתשובה אומרת אם זה הצליח.
 
 = 1.8.2 =
 * `wp_post_terms_get` — הקטגוריות שמשויכות כרגע לפריט (גם למוצר), כדי שביטול שיוך יבדוק קודם שאיש לא שינה אותן מאז.

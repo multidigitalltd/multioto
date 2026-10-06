@@ -295,6 +295,24 @@ class SiteActionProposer
     // --- Products ------------------------------------------------------------
 
     /**
+     * A new product, as a photograph's caption described it.
+     *
+     * The same validation and the same preview as a typed request: a product
+     * does not get looser rules for arriving with a picture.
+     *
+     * @param  array<string, mixed>  $input
+     * @return array{plan: array<string, mixed>, preview: string}|array{error: string}
+     */
+    public function newProduct(Site $site, array $input): array
+    {
+        try {
+            return $this->proposeProductCreate($site, $input, []);
+        } catch (\Throwable $e) {
+            return $this->error('לא הצלחתי לקרוא את הנתונים מהאתר: '.Str::limit($e->getMessage(), 300));
+        }
+    }
+
+    /**
      * @param  array<string, mixed>  $input
      * @param  list<int>  $seen
      */
@@ -422,7 +440,9 @@ class SiteActionProposer
                 $publish
                     ? 'המוצר יפורסם באתר מיד וייפתח לרכישה.'
                     : 'המוצר ייווצר כטיוטה, ולא יוצג באתר עד שתבקשו לפרסם אותו.',
-                'לתמונה: אחרי שהמוצר נוצר, שלחו אותה כאן עם שם המוצר.',
+                isset($input['image_alt'])
+                    ? '📷 התמונה ששלחתם תהיה התמונה הראשית ("'.$this->quote((string) $input['image_alt']).'")'
+                    : 'לתמונה: אחרי שהמוצר נוצר, שלחו אותה כאן עם שם המוצר.',
             ], fn (?string $line): bool => $line !== null)),
         ];
     }
@@ -1566,7 +1586,7 @@ class SiteActionProposer
                 '🔌 לעדכן '.count($chosen).' תוספים:',
                 ...array_map(fn (array $plugin): string => '• '.($plugin['name'] ?? $plugin['plugin']).' (עכשיו '.($plugin['version'] ?? '?').')', $chosen),
                 '',
-                'אחד אחרי השני, ואחרי כל אחד נבדק שהאתר עולה. אם לא — עוצרים מיד והצוות שלנו מקבל התראה.',
+                'אחד אחרי השני. תוסף שהיה פעיל מופעל מחדש אחרי העדכון, ואחרי כל אחד נבדק שהאתר עולה — אם לא, עוצרים מיד ותקבלו כאן הודעה.',
                 'אין ביטול אוטומטי לעדכון, ולא נלקח גיבוי של האתר מכאן.',
             ]),
         ];
@@ -1601,7 +1621,7 @@ class SiteActionProposer
             'preview' => implode("\n", array_filter([
                 '🎨 לעדכן את התבנית '.($theme['name'] ?? $theme['stylesheet']).' (עכשיו '.($theme['version'] ?? '?').')',
                 ($theme['active'] ?? false) ? 'זו התבנית הפעילה — העיצוב של כל האתר נשען עליה.' : null,
-                'אחרי העדכון נבדק שהאתר עולה; אם לא — הצוות מקבל התראה מיד. אין ביטול אוטומטי, ושינויים שנעשו ישירות בקבצי התבנית יידרסו.',
+                'אחרי העדכון נבדק שהאתר עולה; אם לא — תקבלו כאן הודעה מיד. אין ביטול אוטומטי, ושינויים שנעשו ישירות בקבצי התבנית יידרסו.',
             ])),
         ];
     }

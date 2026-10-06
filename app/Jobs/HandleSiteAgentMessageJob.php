@@ -88,6 +88,12 @@ class HandleSiteAgentMessageJob implements ShouldQueue
             ? data_get($payload, 'image.caption', '')
             : data_get($payload, 'text.body', '')));
 
+        // A tapped "כן" / "לא" button is the same answer as typing it.
+        if (in_array($type, ['interactive', 'button'], true)) {
+            $text = WhatsAppCloudClient::buttonText($payload);
+            $type = $text !== '' ? 'text' : $type;
+        }
+
         if ($from === '') {
             $event->markProcessed();
 
@@ -160,7 +166,7 @@ class HandleSiteAgentMessageJob implements ShouldQueue
             $reply = $this->answerFor($decision['status'], $subscriber, $from);
         }
 
-        $delivered = $reply !== '' ? $whatsapp->sendText($from, $reply) : null;
+        $delivered = $reply !== '' ? $this->deliver($whatsapp, $from, $reply) : null;
 
         if ($reply !== '' && $delivered === null) {
             // The customer is holding a phone that shows their message
@@ -349,6 +355,27 @@ class HandleSiteAgentMessageJob implements ShouldQueue
             'כתבו לי מה לשנות — למשל "בעמוד צור קשר, תחליף את הטלפון 03-1234567 ב-03-7654321".',
             'אציג לכם בדיוק מה ישתנה, וזה יקרה רק אחרי שתאשרו.',
         ]));
+    }
+
+    /**
+     * The reply, with "כן" / "לא" buttons when it is an offer.
+     *
+     * Falls back to the plain text if the buttons are refused, so an offer is
+     * never lost to a formatting problem — typing still works.
+     */
+    private function deliver(WhatsAppCloudClient $whatsapp, string $to, string $reply): ?string
+    {
+        $suffix = "\n\n".SiteAgentConversation::CONFIRM_PROMPT;
+
+        if (str_ends_with($reply, $suffix)) {
+            $sent = $whatsapp->sendConfirmation($to, mb_substr($reply, 0, mb_strlen($reply) - mb_strlen($suffix)));
+
+            if ($sent !== null) {
+                return $sent;
+            }
+        }
+
+        return $whatsapp->sendText($to, $reply);
     }
 
     /**
