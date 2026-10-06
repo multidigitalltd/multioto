@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Enums\BusinessType;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -424,10 +425,30 @@ class LegalPagesTest extends TestCase
      */
     public function test_eligibility_covers_the_business_types_the_system_registers(): void
     {
-        $this->get(route('legal.terms'))
-            ->assertSeeText('עוסק פטור')
-            ->assertSeeText('מלכ״ר')
+        $terms = $this->get(route('legal.terms'))
             ->assertDontSeeText('לישויות משפטיות שבבעלות בני 18 ומעלה');
+
+        // מול ה-enum ולא מול רשימה שהועתקה לכאן: סוג שיתווסף או ישונה ייכשל כאן
+        // במקום להישאר מסמך שמתאר טופס הרשמה אחר. SignupRequest דוחה כל ערך שאינו
+        // ב-enum, ולכן גם ההפך חמור — כשירות שהובטחה למי שאינו יכול להירשם בכלל.
+        foreach (BusinessType::cases() as $type) {
+            $terms->assertSeeText($type->getLabel());
+        }
+    }
+
+    /**
+     * ואין בתנאים הבטחת פטור ממע״מ שהקופה הפומבית אינה מקיימת.
+     *
+     * PluginCheckout::customer() ו-SiteAgentCheckout::customer() יוצרות Customer
+     * בלי vat_exempt, ואף אחד מהטפסים אינו שואל — כלומר קונה חדש שפטור כן מחויב
+     * במע״מ. ההבטחה מנוסחת לפי מה שקורה באמת, ונאמר ללקוח מה לעשות.
+     */
+    public function test_the_vat_exemption_is_not_promised_to_a_checkout_that_never_asks(): void
+    {
+        $this->get(route('legal.terms'))
+            ->assertSeeText('מוחל על לקוח שרשום אצלנו כפטור')
+            ->assertSeeText('הקופה הפומבית אינה שואלת')
+            ->assertDontSeeText('לקוח הפטור ממע״מ כדין — לא נגבה ממנו מע״מ');
     }
 
     /**
