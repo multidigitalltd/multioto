@@ -141,6 +141,9 @@ class SiteAgentRequest extends Model
     /** Move a post or page to the trash. */
     public const OP_TRASH = 'trash_content';
 
+    /** Move a product to the trash (never a permanent delete). */
+    public const OP_PRODUCT_TRASH = 'trash_product';
+
     /** End a coupon today. */
     public const OP_COUPON_EXPIRE = 'expire_coupon';
 
@@ -168,6 +171,7 @@ class SiteAgentRequest extends Model
         self::OP_MENU_ADD, self::OP_MENU_UPDATE, self::OP_MENU_REMOVE,
         self::OP_TRASH, self::OP_COUPON_EXPIRE, self::OP_CACHE_FLUSH,
         self::OP_PLUGIN_UPDATE, self::OP_THEME_UPDATE, self::OP_PLUGIN_TOGGLE, self::OP_MEDIA_DELETE,
+        self::OP_PRODUCT_TRASH,
     ];
 
     /** Everything the agent is allowed to do, in one list. */

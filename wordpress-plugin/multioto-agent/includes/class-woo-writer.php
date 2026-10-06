@@ -401,6 +401,58 @@ class Multioto_Agent_Woo_Writer
         ];
     }
 
+    /**
+     * Move a product to the trash — never a permanent delete.
+     *
+     * The product leaves the shop at once, and a manager (or the undo from
+     * the panel, through trashRestore) can bring it back as it was: WordPress
+     * keeps the status it had before it went in.
+     *
+     * @return array{trashed_id: int, previous_status: string}
+     */
+    public static function trash(int $productId): array
+    {
+        $product = self::product($productId);
+        $status = (string) $product->get_status();
+
+        if ($status === 'trash') {
+            throw new Multioto_Agent_Rpc_Error(-32602, "המוצר {$productId} כבר בפח.");
+        }
+
+        if (! wp_trash_post($product->get_id())) {
+            throw new Multioto_Agent_Rpc_Error(-32000, "לא ניתן להעביר לפח את המוצר {$productId}.");
+        }
+
+        return ['trashed_id' => (int) $product->get_id(), 'previous_status' => $status];
+    }
+
+    /**
+     * Take a product back out of the trash, to the status it had before.
+     *
+     * @return array{restored_id: int, status: string}
+     */
+    public static function trashRestore(int $productId): array
+    {
+        $post = $productId > 0 ? get_post($productId) : null;
+
+        if (! $post || $post->post_type !== 'product' || $post->post_status !== 'trash') {
+            throw new Multioto_Agent_Rpc_Error(-32602, "המוצר {$productId} אינו בפח.");
+        }
+
+        $previous = (string) get_post_meta($post->ID, '_wp_trash_meta_status', true);
+
+        if (! wp_untrash_post($post->ID)) {
+            throw new Multioto_Agent_Rpc_Error(-32000, "לא ניתן להחזיר את המוצר {$productId} מהפח.");
+        }
+
+        // Since WP 5.6 untrash lands on draft; put back what it really was.
+        if ($previous !== '' && get_post_status($post->ID) !== $previous) {
+            wp_update_post(['ID' => $post->ID, 'post_status' => $previous]);
+        }
+
+        return ['restored_id' => (int) $post->ID, 'status' => (string) get_post_status($post->ID)];
+    }
+
     private static function product(int $productId): WC_Product
     {
         $product = $productId > 0 ? wc_get_product($productId) : null;

@@ -414,7 +414,7 @@ class SiteAgentAssistantTest extends TestCase
         $this->assertStringContainsString('propose_product_create ישירות', $system);
         $this->assertStringContainsString('אל תפנה לצוות', $system);
         // Deleting products stays out of reach; creating them is not lumped in with it.
-        $this->assertStringContainsString('יצירה ועדכון שלהם — כן', $system);
+        $this->assertStringContainsString('מוצרים: יצירה, עדכון והעברה לפח — כן', $system);
     }
 
     public function test_without_the_plugin_tool_new_products_are_not_promised(): void

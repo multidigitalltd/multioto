@@ -95,7 +95,7 @@ class SiteActionProposer
 
     /** Every proposal tool, by name. */
     private const PROPOSALS = [
-        'propose_product_update', 'propose_product_create', 'propose_order_status', 'propose_order_note',
+        'propose_product_update', 'propose_product_create', 'propose_product_trash', 'propose_order_status', 'propose_order_note',
         'propose_subscription_status', 'propose_post_create', 'propose_post_update', 'propose_text_edit',
         'propose_user_create', 'propose_user_role', 'propose_coupon',
         'propose_comment_moderation', 'propose_term_create', 'propose_item_terms', 'propose_fields_update',
@@ -180,6 +180,9 @@ class SiteActionProposer
                     'short_description' => ['type' => 'string'], 'description' => ['type' => 'string'], 'sku' => ['type' => 'string'],
                     'stock_quantity' => ['type' => 'integer'], 'categories' => ['type' => 'array', 'items' => ['type' => 'string']],
                     'publish' => ['type' => 'boolean']], ['name']],
+            ['propose_product_trash', 'wc_product_trash',
+                'הצעה למחוק מוצר לפי product_id — הוא עובר לפח (לא מחיקה סופית) ויורד מהחנות מיד. הפיך — "בטל" מחזיר אותו.',
+                ['product_id' => ['type' => 'integer']], ['product_id']],
             ['propose_order_status', 'wc_order_status_set',
                 'הצעה לשנות סטטוס הזמנה ל-processing / on-hold / completed / cancelled / pending. החזר כספי אינו אפשרי מכאן.',
                 ['order_id' => ['type' => 'integer', 'description' => 'מספר ההזמנה'], 'status' => ['type' => 'string'], 'note' => ['type' => 'string', 'description' => 'הערה פנימית אופציונלית']],
@@ -283,6 +286,10 @@ class SiteActionProposer
             return $this->error("אין כלי בשם {$name}.");
         }
 
+        if (! app(SiteAgentPermissions::class)->allowsTool($name)) {
+            return $this->error('הפעולה הזו כבויה בחשבון הזה על ידי הצוות. אמור זאת לבעל האתר בנימוס, בלי להציע דרך עוקפת.');
+        }
+
         try {
             return $this->{Str::camel($name)}($site, $input, $seen);
         } catch (\Throwable $e) {
@@ -305,6 +312,10 @@ class SiteActionProposer
      */
     public function newProduct(Site $site, array $input): array
     {
+        if (! app(SiteAgentPermissions::class)->allowsOperation(SiteAgentRequest::OP_PRODUCT_CREATE)) {
+            return $this->error(SiteAgentPermissions::refusal());
+        }
+
         try {
             return $this->proposeProductCreate($site, $input, []);
         } catch (\Throwable $e) {
@@ -382,6 +393,46 @@ class SiteActionProposer
                 'summary' => "עדכון המוצר {$name}",
             ],
             'preview' => implode("\n", $lines),
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $input
+     * @param  list<int>  $seen
+     */
+    private function proposeProductTrash(Site $site, array $input, array $seen): array
+    {
+        $productId = (int) ($input['product_id'] ?? 0);
+
+        if (! $this->wasSeen($productId, $seen)) {
+            return $this->unseen('המוצר', 'find_products');
+        }
+
+        $product = $this->json($site, 'wc_product_get', ['product_id' => $productId]);
+
+        if (! isset($product['name'])) {
+            return $this->error("המוצר {$productId} לא נמצא.");
+        }
+
+        $name = (string) $product['name'];
+        $status = (string) ($product['status'] ?? '');
+        // Only a plugin that can take it back out of the trash is promised an undo.
+        $restorable = $this->toolbox->siteHas($site, 'wc_product_restore');
+
+        return [
+            'plan' => [
+                'operation' => SiteAgentRequest::OP_PRODUCT_TRASH,
+                'product_id' => $productId,
+                'product_name' => $name,
+                'status' => $status,
+                'restorable' => $restorable,
+                'summary' => "מחיקת המוצר {$name}",
+            ],
+            'preview' => implode("\n", [
+                "🗑️ למחוק את המוצר: {$name}".(isset($product['regular_price']) && $product['regular_price'] !== '' ? " ({$product['regular_price']} ₪)" : ''),
+                $status === 'publish' ? 'הוא יירד מהחנות מיד.' : 'הוא אינו מוצג בחנות ממילא.',
+                'המוצר עובר לפח ולא נמחק סופית — '.($restorable ? '"בטל" יחזיר אותו כמו שהיה.' : 'אפשר להחזיר אותו מהפח בניהול האתר.'),
+            ]),
         ];
     }
 

@@ -9,7 +9,9 @@ use App\Filament\Resources\SiteAgentMessageResource;
 use App\Models\Setting;
 use App\Services\SiteAgent\InboundChannelHealth;
 use App\Services\SiteAgent\SiteAgentAssistant;
+use App\Services\SiteAgent\SiteAgentPermissions;
 use App\Services\SiteAgent\SiteAgentProduct;
+use Filament\Forms\Components\CheckboxList;
 use Filament\Forms\Components\Placeholder;
 use Filament\Forms\Components\Section;
 use Filament\Forms\Components\Textarea;
@@ -108,6 +110,7 @@ class ManageSiteAgent extends Page implements HasForms
                 'binding_ttl_minutes' => config('siteagent.binding.verification_ttl_minutes'),
                 'instructions' => config('siteagent.assistant.instructions'),
                 'transcript_days' => config('siteagent.assistant.transcript_days'),
+                'allowed' => array_values(array_diff(array_keys(SiteAgentPermissions::GROUPS), app(SiteAgentPermissions::class)->disabled())),
             ],
         ]);
     }
@@ -255,6 +258,16 @@ class ManageSiteAgent extends Page implements HasForms
                             ->helperText('חייב להתאים לתוקף שכתוב בתבנית האימות עצמה אצל מטא (עד 90 דקות — זה הגבול שלה). אם התבנית אומרת ללקוח 10 דקות והערך כאן הוא 30, מי שממתין רבע שעה חושב שהקוד פג ומבקש חדש — והחדש מבטל את הישן שעוד עבד.'),
                     ])->columns(2),
 
+                Section::make('מה הבוט רשאי לעשות')
+                    ->description('מה שמסומן — הבוט יכול להציע, ומבצע רק אחרי "כן" של בעל האתר. מה שלא מסומן — הבוט לא יציע, יאמר שזה כבוי בחשבון, והצעה שכבר ממתינה תיחסם ב"כן". קריאה ושאלות (הזמנות, לידים, דוחות) תמיד מותרות.')
+                    ->schema([
+                        CheckboxList::make('siteagent.allowed')
+                            ->label('הרשאות')
+                            ->options(SiteAgentPermissions::options())
+                            ->columns(2)
+                            ->bulkToggleable(),
+                    ]),
+
                 Section::make('הנחיות ל-AI')
                     ->description('מה שנכתב כאן מצורף לכל שיחה של הבוט, בכל האתרים. לכוונון סגנון והרגלים — לא לעקיפת כללי הבטיחות: שינוי באתר עדיין קורה רק אחרי "כן", ובסתירה הכללים הקבועים גוברים.')
                     ->schema([
@@ -303,6 +316,16 @@ class ManageSiteAgent extends Page implements HasForms
             } else {
                 Setting::forget($key);
             }
+        }
+
+        // Stored as what is OFF, so a permission added later starts allowed.
+        $allowed = (array) data_get($state, 'siteagent.allowed', []);
+        $off = array_values(array_diff(array_keys(SiteAgentPermissions::GROUPS), $allowed));
+
+        if ($off === []) {
+            Setting::forget('siteagent.disabled_permissions');
+        } else {
+            Setting::put('siteagent.disabled_permissions', implode(',', $off));
         }
 
         // Only overwrite a secret when a new one was actually typed. A blank

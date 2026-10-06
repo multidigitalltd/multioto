@@ -234,6 +234,8 @@ class Multioto_Agent_Mcp_Server
             $tools[] = ['name' => 'wc_product_get', 'description' => 'פרטי מוצר מלאים לפי מזהה: מחירים, מבצע ותאריכיו, מלאי, סטטוס וקישור.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['product_id' => ['type' => 'integer']], 'required' => ['product_id']]];
             $tools[] = ['name' => 'wc_product_update', 'description' => 'עדכון מוצר לפי product_id. שדות אופציונליים: name, short_description, regular_price, sale_price (ריק = סיום המבצע), sale_from ו-sale_to (YYYY-MM-DD), stock_quantity, manage_stock, stock_status (instock/outofstock/onbackorder), status (publish/draft/private). מחזיר את המצב הקודם המלא לצורך ביטול. מחיר מבצע שאינו נמוך מהמחיר הרגיל נדחה.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['product_id' => ['type' => 'integer'], 'name' => ['type' => 'string'], 'short_description' => ['type' => 'string'], 'regular_price' => ['type' => 'string'], 'sale_price' => ['type' => 'string'], 'sale_from' => ['type' => 'string'], 'sale_to' => ['type' => 'string'], 'stock_quantity' => ['type' => 'integer'], 'manage_stock' => ['type' => 'boolean'], 'stock_status' => ['type' => 'string'], 'status' => ['type' => 'string']], 'required' => ['product_id']]];
             $tools[] = ['name' => 'wc_product_create', 'description' => 'יצירת מוצר חדש — תמיד כטיוטה, לעולם לא מפורסם. name חובה; אופציונלי description, short_description, regular_price, sku. הפרסום נעשה בנפרד על ידי אדם שרואה את העמוד.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['name' => ['type' => 'string'], 'description' => ['type' => 'string'], 'short_description' => ['type' => 'string'], 'regular_price' => ['type' => 'string'], 'sku' => ['type' => 'string']], 'required' => ['name']]];
+            $tools[] = ['name' => 'wc_product_trash', 'description' => 'העברת מוצר לפח לפי product_id — לא מחיקה סופית. המוצר יורד מהחנות מיד ואפשר להחזיר אותו עם wc_product_restore.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['product_id' => ['type' => 'integer']], 'required' => ['product_id']]];
+            $tools[] = ['name' => 'wc_product_restore', 'description' => 'החזרת מוצר מהפח לפי product_id, לסטטוס שהיה לו לפני כן — הביטול של wc_product_trash.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['product_id' => ['type' => 'integer']], 'required' => ['product_id']]];
             $tools[] = ['name' => 'wc_coupon_list', 'description' => 'רשימת הקופונים בחנות: קוד, סוג ההנחה, גובהה, תאריך תפוגה ומספר השימושים.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['limit' => ['type' => 'integer']]]];
             $tools[] = ['name' => 'wc_coupon_create', 'description' => 'יצירת קופון. code חובה; type = percent (ברירת מחדל) / fixed_cart / fixed_product; amount חובה; אופציונלי expires (YYYY-MM-DD), minimum_amount, usage_limit. קופון באחוזים מעל 100 או בסכום אפס נדחה.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['code' => ['type' => 'string'], 'type' => ['type' => 'string'], 'amount' => ['type' => 'number'], 'expires' => ['type' => 'string'], 'minimum_amount' => ['type' => 'string'], 'usage_limit' => ['type' => 'integer']], 'required' => ['code', 'amount']]];
             $tools[] = ['name' => 'wc_coupon_expire', 'description' => 'סיום קופון מיידי לפי code — נקבע לו תאריך תפוגה של היום. הקופון אינו נמחק, כדי שהזמנות עבר שהשתמשו בו ימשיכו להציג את ההנחה שקיבלו.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['code' => ['type' => 'string']], 'required' => ['code']]];
@@ -320,6 +322,8 @@ class Multioto_Agent_Mcp_Server
             'wc_product_get' => 'wcProductGet',
             'wc_product_update' => 'wcProductUpdate',
             'wc_product_create' => 'wcProductCreate',
+            'wc_product_trash' => 'wcProductTrash',
+            'wc_product_restore' => 'wcProductRestore',
             'wc_coupon_list' => 'wcCouponList',
             'wc_coupon_create' => 'wcCouponCreate',
             'wc_coupon_expire' => 'wcCouponExpire',
@@ -1515,6 +1519,16 @@ class Multioto_Agent_Mcp_Server
     private function wcProductCreate(array $args): string
     {
         return wp_json_encode(Multioto_Agent_Woo_Writer::create($args), JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    }
+
+    private function wcProductTrash(array $args): string
+    {
+        return wp_json_encode(Multioto_Agent_Woo_Writer::trash((int) ($args['product_id'] ?? 0)), JSON_UNESCAPED_UNICODE);
+    }
+
+    private function wcProductRestore(array $args): string
+    {
+        return wp_json_encode(Multioto_Agent_Woo_Writer::trashRestore((int) ($args['product_id'] ?? 0)), JSON_UNESCAPED_UNICODE);
     }
 
     private function wcCouponList(array $args): string
