@@ -86,6 +86,14 @@ class SiteAgentUsageDashboardTest extends TestCase
         $this->assertSame(8, $row['cap_used']);
     }
 
+    public function test_a_customer_the_bot_no_longer_serves_is_not_counted(): void
+    {
+        $one = $this->customer('לקוח מושעה', paidAgorot: 0);
+        $one['subscription']->update(['status' => SubscriptionStatus::Suspended]);
+
+        $this->assertCount(0, app(SiteAgentUsageReport::class)->rows(30));
+    }
+
     public function test_the_page_is_for_admins_and_renders(): void
     {
         $this->actingAs(User::factory()->create(['role' => UserRole::Agent]));

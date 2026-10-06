@@ -48,6 +48,9 @@ class SiteAgentLeadAlerts
             return 'התוסף באתר אינו יודע לקרוא לידים — צריך לעדכן אותו.';
         }
 
+        // Taken BEFORE the read: a lead that arrives while it runs is not in
+        // the snapshot, so the cursor must not start after it.
+        $from = now()->getTimestamp();
         $recent = $this->recent($site);
 
         if ($recent === null) {
@@ -61,8 +64,8 @@ class SiteAgentLeadAlerts
         $subscriber->forceFill([
             'lead_alerts' => true,
             'lead_alert_seen' => array_map($this->key(...), $recent['leads']),
-            // From now on: what is already there is not news.
-            'lead_alert_cursor' => now()->getTimestamp(),
+            // From the start of that read on: what it saw is not news.
+            'lead_alert_cursor' => $from,
         ])->save();
 
         return null;
@@ -94,8 +97,10 @@ class SiteAgentLeadAlerts
         $sources = [];
         $complete = false;
 
+        $afterKey = null;
+
         for ($page = 0; $page < self::MAX_PAGES; $page++) {
-            $decoded = $this->read($site, array_filter(['days' => 1, 'limit' => self::READ_LIMIT, 'after' => $after]));
+            $decoded = $this->read($site, array_filter(['days' => 1, 'limit' => self::READ_LIMIT, 'after' => $after, 'after_key' => $afterKey]));
 
             if ($decoded === null) {
                 return $page === 0 ? null : ['sources' => $sources, 'leads' => $this->newestFirst($leads), 'complete' => false];
@@ -110,16 +115,21 @@ class SiteAgentLeadAlerts
             }
 
             $leads = [...$leads, ...$batch];
-            $last = (int) ($batch[count($batch) - 1]['ts'] ?? 0);
+            $lastLead = $batch[count($batch) - 1] ?? null;
+            $last = (int) ($lastLead['ts'] ?? 0);
+            $lastKey = $lastLead !== null ? $this->key($lastLead) : null;
 
-            // Done — or a page that does not move the cursor (more leads in
-            // one second than a page holds), which asking again cannot fix.
-            if (! $decoded['has_more'] || $batch === [] || $last <= (int) $after) {
+            // Done — or a page that did not move past where it started, which
+            // asking again cannot fix.
+            if (! $decoded['has_more'] || $batch === [] || ($last === (int) $after && $lastKey === $afterKey)) {
                 $complete = ! $decoded['has_more'];
                 break;
             }
 
+            // The next page starts after this exact lead — its second AND its
+            // key, so fifty leads in one second do not return the same page.
             $after = $last;
+            $afterKey = $lastKey;
         }
 
         return ['sources' => $sources, 'leads' => $this->newestFirst($leads), 'complete' => $complete];

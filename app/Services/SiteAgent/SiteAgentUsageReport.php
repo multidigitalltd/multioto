@@ -3,7 +3,6 @@
 namespace App\Services\SiteAgent;
 
 use App\Enums\ChargeStatus;
-use App\Enums\SubscriptionStatus;
 use App\Models\AiCustomerUsage;
 use App\Models\Charge;
 use App\Models\SiteAgentSubscriber;
@@ -38,7 +37,8 @@ class SiteAgentUsageReport
         $subscriptions = Subscription::query()
             ->with(['customer:id,name', 'plan:id,includes_site_agent'])
             ->whereHas('plan', fn ($query) => $query->where('includes_site_agent', true))
-            ->whereNot('status', SubscriptionStatus::Canceled)
+            // Only subscriptions the bot actually serves — the same rule access uses.
+            ->whereIn('status', SiteAgentAccess::ENTITLING)
             ->get();
 
         if ($subscriptions->isEmpty()) {

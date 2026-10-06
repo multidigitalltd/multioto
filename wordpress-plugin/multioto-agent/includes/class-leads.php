@@ -55,6 +55,9 @@ class Multioto_Agent_Leads
         // checks is then read to the end — the newest-first read stops at
         // `limit` and the older ones in the burst could never be reached.
         $after = isset($args['after']) ? max(0, (int) $args['after']) : 0;
+        // The last lead of the previous page ("source:id"): leads in that same
+        // second up to and including it were already returned.
+        $afterKey = isset($args['after_key']) ? (string) $args['after_key'] : '';
         self::$direction = $after > 0 ? 'ASC' : 'DESC';
         $days = max(1, min(366, (int) ($args['days'] ?? 30)));
         $search = trim(sanitize_text_field((string) ($args['search'] ?? '')));
@@ -114,8 +117,20 @@ class Multioto_Agent_Leads
         }
 
         usort($leads, static function (array $a, array $b) use ($after): int {
-            return $after > 0 ? $a['timestamp'] <=> $b['timestamp'] : $b['timestamp'] <=> $a['timestamp'];
+            if ($after <= 0) {
+                return $b['timestamp'] <=> $a['timestamp'];
+            }
+
+            // Oldest first, and within one second by key, so a page boundary
+            // inside a second is a stable place to continue from.
+            return [$a['timestamp'], $a['source'].':'.$a['id']] <=> [$b['timestamp'], $b['source'].':'.$b['id']];
         });
+
+        if ($after > 0 && $afterKey !== '') {
+            $leads = array_values(array_filter($leads, static function (array $lead) use ($after, $afterKey): bool {
+                return $lead['timestamp'] > $after || strcmp($lead['source'].':'.$lead['id'], $afterKey) > 0;
+            }));
+        }
 
         $total = count($leads);
 

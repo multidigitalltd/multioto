@@ -2,6 +2,7 @@
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 /**
@@ -17,6 +18,15 @@ return new class extends Migration
         Schema::table('site_agent_subscribers', function (Blueprint $table) {
             $table->unsignedBigInteger('lead_alert_cursor')->nullable();
         });
+
+        // Numbers that already have alerts on start reading by cursor too, from
+        // a day back: anything in that day they were already told about is
+        // still in their remembered keys, so nothing is announced twice and
+        // nothing that arrived around the deploy falls behind the cursor.
+        DB::table('site_agent_subscribers')
+            ->where('lead_alerts', true)
+            ->whereNull('lead_alert_cursor')
+            ->update(['lead_alert_cursor' => time() - 86400]);
     }
 
     public function down(): void

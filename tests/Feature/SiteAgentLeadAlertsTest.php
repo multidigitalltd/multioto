@@ -324,6 +324,24 @@ class SiteAgentLeadAlertsTest extends TestCase
         $this->assertCount(1, $this->sent);
     }
 
+    public function test_more_leads_in_one_second_than_a_page_holds_are_all_read(): void
+    {
+        $this->cursorPlugin = true;
+        $this->leads = [];
+        $this->enable();
+        $second = (int) $this->number->fresh()->lead_alert_cursor + 5;
+
+        // An import: 70 leads stamped with the very same second.
+        foreach (range(1, 70) as $i) {
+            $this->leads[] = [...$this->lead(5000 + $i, "יבוא {$i}"), 'ts' => $second];
+        }
+
+        $this->runAlerts();
+
+        $this->assertStringContainsString('ועוד 67 לידים', $this->sent[2][2]);
+        $this->assertStringNotContainsString('לפחות', $this->sent[2][2]);
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────
 
     private function enable(): void
@@ -373,8 +391,10 @@ class SiteAgentLeadAlertsTest extends TestCase
 
             if ($this->cursorPlugin && isset($arguments['after'])) {
                 // Oldest first from the cursor, a page at a time — as 1.8.4 does.
-                $from = array_values(array_filter($this->leads, fn (array $lead): bool => $lead['ts'] >= $arguments['after']));
-                usort($from, fn (array $a, array $b): int => $a['ts'] <=> $b['ts']);
+                $key = fn (array $lead): string => $lead['source'].':'.$lead['id'];
+                $from = array_values(array_filter($this->leads, fn (array $lead): bool => $lead['ts'] > $arguments['after']
+                    || ($lead['ts'] === $arguments['after'] && strcmp($key($lead), (string) ($arguments['after_key'] ?? '')) > 0)));
+                usort($from, fn (array $a, array $b): int => [$a['ts'], $key($a)] <=> [$b['ts'], $key($b)]);
                 $page = array_slice($from, 0, $arguments['limit']);
 
                 return ['count' => count($page), 'sources' => ['elementor'], 'leads' => $page, 'has_more' => count($from) > count($page)];

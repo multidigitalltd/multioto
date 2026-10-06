@@ -258,7 +258,7 @@ class Multioto_Agent_Mcp_Server
 
         // Leads from whichever form plugins the site runs. Always advertised:
         // the answer itself says which sources were found.
-        $tools[] = ['name' => 'wp_lead_list', 'description' => 'לידים שנאספו בטפסי האתר (Elementor Pro, Contact Form 7 דרך Flamingo, WPForms, Gravity Forms, Fluent Forms), מהחדש לישן: מקור, שם הטופס, תאריך והשדות שמולאו. אופציונלי: days (ברירת מחדל 30), search, limit (עד 50). sources מציין אילו תוספי טפסים נמצאו באתר. לתקופה סגורה — from ו-to (YYYY-MM-DD) במקום days. after (חותמת זמן Unix) — מהרגע הזה והלאה, מהישן לחדש, עם ts לכל ליד ו-has_more לעמוד הבא.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['after' => ['type' => 'integer'], 'days' => ['type' => 'integer'], 'from' => ['type' => 'string'], 'to' => ['type' => 'string'], 'search' => ['type' => 'string'], 'limit' => ['type' => 'integer']]]];
+        $tools[] = ['name' => 'wp_lead_list', 'description' => 'לידים שנאספו בטפסי האתר (Elementor Pro, Contact Form 7 דרך Flamingo, WPForms, Gravity Forms, Fluent Forms), מהחדש לישן: מקור, שם הטופס, תאריך והשדות שמולאו. אופציונלי: days (ברירת מחדל 30), search, limit (עד 50). sources מציין אילו תוספי טפסים נמצאו באתר. לתקופה סגורה — from ו-to (YYYY-MM-DD) במקום days. after (חותמת זמן Unix) — מהרגע הזה והלאה, מהישן לחדש, עם ts לכל ליד ו-has_more לעמוד הבא.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['after' => ['type' => 'integer'], 'after_key' => ['type' => 'string'], 'days' => ['type' => 'integer'], 'from' => ['type' => 'string'], 'to' => ['type' => 'string'], 'search' => ['type' => 'string'], 'limit' => ['type' => 'integer']]]];
 
         return $tools;
     }
