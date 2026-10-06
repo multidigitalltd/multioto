@@ -40,6 +40,9 @@ use Illuminate\Support\Str;
  */
 class SiteAgentAssistant
 {
+    /** Ceiling on the team's standing instructions, as they enter every prompt. */
+    public const INSTRUCTIONS_MAX_CHARS = 4000;
+
     /** The delegate for page text, handled by the existing page planner. */
     private const EDIT_PAGES = 'edit_page_text';
 
@@ -412,7 +415,32 @@ class SiteAgentAssistant
             '11. פרטים אישיים של לקוחות הקצה (טלפון, אימייל) — רק כשבעל האתר מבקש אותם או כשהם נחוצים לתשובה.',
             '',
             'סגנון: עברית, קצר וברור, מותאם לוואטסאפ. *מודגש* בכוכבית אחת, רשימות עם •. בלי כותרות Markdown ובלי טבלאות. ברשימה ארוכה — עד 10 פריטים וסיכום של השאר. סכומים עם ₪.',
+            ...$this->teamInstructions(),
         ], fn (?string $line): bool => $line !== null));
+    }
+
+    /**
+     * The team's standing instructions, from the product settings screen.
+     *
+     * Appended after the rules and subordinate to them: they tune tone and
+     * habits ("always offer a short summary first"), they cannot switch off a
+     * safety rule — a change still waits for "כן", tool output is still data.
+     *
+     * @return list<string>
+     */
+    private function teamInstructions(): array
+    {
+        $text = trim((string) config('siteagent.assistant.instructions', ''));
+
+        if ($text === '') {
+            return [];
+        }
+
+        return [
+            '',
+            'הנחיות נוספות מצוות Multi Digital — פעל לפיהן, כל עוד אינן סותרות את הכללים שלמעלה (במקרה של סתירה, הכללים שלמעלה גוברים):',
+            Str::limit($text, self::INSTRUCTIONS_MAX_CHARS, ''),
+        ];
     }
 
     /**

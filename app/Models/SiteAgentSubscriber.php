@@ -172,4 +172,10 @@ class SiteAgentSubscriber extends Model
     {
         return $this->hasMany(SiteAgentUsage::class);
     }
+
+    /** The conversation with the assistant, turn by turn — see SiteAgentMessageResource. */
+    public function messages(): HasMany
+    {
+        return $this->hasMany(SiteAgentMessage::class);
+    }
 }
