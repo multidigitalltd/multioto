@@ -79,10 +79,20 @@ class SiteAgentProductTest extends TestCase
         ]);
     }
 
+    /**
+     * A number bound to a site, with a phone nobody else in the test will hold.
+     *
+     * Counted rather than randomised. `random_int(10, 99)` collided roughly once
+     * in ninety on the tests that bind twice to the same site — (phone, site_id)
+     * is unique — so the suite failed at random on a test whose subject is not
+     * phone numbers at all, and passed when run alone.
+     */
+    private int $boundNumbers = 0;
+
     private function bind(Site $site, array $attributes = []): SiteAgentSubscriber
     {
         return SiteAgentSubscriber::create(array_merge([
-            'phone' => '9725012345'.random_int(10, 99),
+            'phone' => '97250'.str_pad((string) ++$this->boundNumbers, 7, '0', STR_PAD_LEFT),
             'customer_id' => $site->customer_id,
             'site_id' => $site->id,
             'verified_at' => now(),

@@ -431,6 +431,13 @@ class SiteAgentUsageBillingTest extends TestCase
 
     public function test_a_message_in_the_same_second_as_the_count_waits_for_the_next_charge(): void
     {
+        // הזמן קפוא, כי "באותה שנייה" הוא מה שנבדק כאן ולא מה שהשעון מרשה.
+        // sent_at נשמר בדיוק של שנייה, ו-RenewalBreakdown סופרת עד
+        // now()->startOfSecond()->subSecond() — כך שבלי הקפאה די בגבול שנייה
+        // שנחצה בין שליחת ההודעות לחיוב כדי שהן ייכנסו לחיוב הזה, והבדיקה
+        // תיכשל על תזמון במקום על התנהגות. היא אכן נכשלה כך ב-CI.
+        $this->freezeTime();
+
         $this->sendMessages(3);
 
         // Charged in the same second the messages went out: they were not on

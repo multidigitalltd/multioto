@@ -78,6 +78,7 @@ class ManageSiteAgent extends Page implements HasForms
     /** Plain text fields — shown, and cleared when emptied. */
     private const TEXT = [
         'siteagent.phone_number_id',
+        'siteagent.waba_id',
         'siteagent.template_language',
         'siteagent.template_verification',
         'siteagent.template_paused',
@@ -100,6 +101,7 @@ class ManageSiteAgent extends Page implements HasForms
             'siteagent' => [
                 'enabled' => (bool) config('siteagent.enabled'),
                 'phone_number_id' => config('siteagent.whatsapp.phone_number_id'),
+                'waba_id' => config('siteagent.whatsapp.waba_id'),
                 'template_language' => config('siteagent.whatsapp.templates.language'),
                 'template_verification' => config('siteagent.whatsapp.templates.verification'),
                 'template_verification_copy_button' => (bool) config('siteagent.whatsapp.templates.verification_copy_button'),
@@ -180,6 +182,13 @@ class ManageSiteAgent extends Page implements HasForms
                             ->label('מזהה המספר (Phone number ID)')
                             ->live(onBlur: true)
                             ->autocomplete(false),
+                        TextInput::make('siteagent.waba_id')
+                            ->label('מזהה חשבון WhatsApp Business (WABA ID)')
+                            ->live(onBlur: true)
+                            ->autocomplete(false)
+                            // ספרות בלבד: הערך מוכנס לנתיב של כתובת ב-Graph API.
+                            ->rule('regex:/^\d*$/')
+                            ->helperText('לא נדרש לשליחה — נדרש למסך "עלות הודעות הבוט", כי מטא מדווחת הוצאה לפי חשבון ולא לפי מספר. בהגדרות העסק במטא, תחת WhatsApp accounts.'),
                         $this->secretInput('siteagent.token', 'טוקן קבוע (Permanent token)')
                             ->helperText('של משתמש המערכת שמחזיק במספר.'),
                         $this->secretInput('siteagent.app_secret', 'סוד האפליקציה (App secret)')

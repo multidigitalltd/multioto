@@ -150,6 +150,39 @@ class SiteAgentStoreTest extends TestCase
         $this->get(route('store.agent'))->assertOk()->assertDontSee('class="usage', false);
     }
 
+    /**
+     * תשובת ה-FAQ על ההודעות אומרת מה שאין בכרטיס המסלול, ולא חוזרת עליו.
+     *
+     * הכותרת שואלת שתי שאלות — למה יש חיוב ואיך יודעים כמה — ולכן התשובה היא מה
+     * נספר, למה, ואיפה רואים. מכניקת החיוב ("נגבה בחידוש החודשי לפי הספירה")
+     * כבר מופיעה בכרטיס שלמעלה, ופסקה שחזרה עליה הפכה את התשובה לארוכה ופחות
+     * ברורה — וזה מה שהתלונה הייתה.
+     */
+    public function test_the_messages_faq_says_what_the_plan_card_does_not(): void
+    {
+        $this->plan->update(['message_price_agorot' => 9, 'included_messages' => 0]);
+
+        $html = (string) $this->get(route('store.agent'))->assertOk()->getContent();
+
+        // גוף התשובה בלבד, מהכותרת שלה עד סוף ה-details.
+        $this->assertSame(1, preg_match(
+            '#<summary>למה יש חיוב על הודעות.*?</details>#s', $html, $faq,
+        ), 'תשובת ה-FAQ על ההודעות לא נמצאה בעמוד.');
+
+        $answer = (string) preg_replace('/\s+/u', ' ', strip_tags($faq[0]));
+
+        // מה שרק כאן נאמר: מה נספר, ולמה בכלל יש חיוב.
+        $this->assertStringContainsString('נספרת התשובה של הבוט, לא ההודעה שלכם', $answer);
+        $this->assertStringContainsString('שאלה אחת = הודעה אחת בספירה', $answer);
+        $this->assertStringContainsString('מכסה חודשית של תשובות בחינם', $answer);
+
+        // ומה שלא נאמר כאן שוב, כי הכרטיס אומר אותו.
+        $this->assertStringNotContainsString('נגבה בחידוש החודשי', $answer,
+            'תשובת ה-FAQ חוזרת על מכניקת החיוב שכרטיס המסלול כבר אומר.');
+        $this->assertStringContainsString('נגבה בחידוש החודשי', (string) preg_replace('/\s+/u', ' ', strip_tags($html)),
+            'מכניקת החיוב נעלמה מהעמוד כולו, ולא רק מה-FAQ.');
+    }
+
     /** The page promises the retention the pruning job actually applies. */
     public function test_the_page_states_the_transcript_retention_actually_configured(): void
     {

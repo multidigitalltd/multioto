@@ -77,6 +77,7 @@ class SettingsServiceProvider extends ServiceProvider
         // message; no screen here ever hears about it).
         'siteagent.enabled' => 'siteagent.enabled',
         'siteagent.phone_number_id' => 'siteagent.whatsapp.phone_number_id',
+        'siteagent.waba_id' => 'siteagent.whatsapp.waba_id',
         'siteagent.token' => 'siteagent.whatsapp.token',
         'siteagent.app_secret' => 'siteagent.whatsapp.app_secret',
         'siteagent.verify_token' => 'siteagent.whatsapp.verify_token',
@@ -220,6 +221,7 @@ class SettingsServiceProvider extends ServiceProvider
         // is not merely untidy — a stale template name is a name Meta has since
         // stopped approving, and every notice sent under it is refused.
         'siteagent.phone_number_id' => 'siteagent.whatsapp.phone_number_id',
+        'siteagent.waba_id' => 'siteagent.whatsapp.waba_id',
         'siteagent.template_language' => 'siteagent.whatsapp.templates.language',
         'siteagent.template_verification' => 'siteagent.whatsapp.templates.verification',
         'siteagent.template_paused' => 'siteagent.whatsapp.templates.service_paused',

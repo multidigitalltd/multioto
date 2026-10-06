@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Enums\BusinessType;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -144,6 +145,20 @@ class LegalPagesTest extends TestCase
     }
 
     /**
+     * ואותו דבר בטלפון: סעיף פרטי ההתקשרות בתנאי השימוש נסתר כשהערך ריק,
+     * והשורה ב-.env.example ריקה — כך שברירת מחדל של env() לא הייתה נקראת,
+     * והסעיף היה נעלם דווקא בהתקנה שלא שינתה כלום.
+     */
+    public function test_a_blank_phone_line_falls_back_instead_of_hiding_the_contact_section(): void
+    {
+        $this->assertNotSame('', trim((string) config('legal.company.phone')));
+
+        $this->get(route('legal.terms'))
+            ->assertSeeText('טלפון:')
+            ->assertDontSee('tel:"', false);
+    }
+
+    /**
      * מה שנאמר על הצעה שפגה הוא מה שהקוד עושה.
      *
      * עבודת הניקוי מוחקת את קובץ התמונה ומסמנת את ההצעה כפגה — היא אינה מוחקת
@@ -235,5 +250,289 @@ class LegalPagesTest extends TestCase
         config(['legal.contact_email' => 'privacy@example.co.il']);
 
         $this->get(route('legal.privacy'))->assertSeeText('privacy@example.co.il');
+    }
+
+    /*
+    | ----------------------------------------------------------------
+    | הסכם השירות הכללי, משוזר לתוך התנאים
+    | ----------------------------------------------------------------
+    */
+
+    /**
+     * שעות התמיכה נאמרות — ולא כאילו הן גם שעות הבוט.
+     *
+     * הבוט אוטומטי ועונה בכל שעה; התמיכה האנושית היא א׳–ה׳ 8:00–17:00 ולא בשבת.
+     * נוסח אחד לשניהם היה או מבטיח תמיכה 24/7 או טוען שהבוט שותק בשבת, ושתי
+     * האמירות אינן נכונות — ולכן ההפרדה היא הדבר שנבדק כאן, לא רק השעות.
+     */
+    public function test_the_support_hours_are_stated_apart_from_the_bots_own_hours(): void
+    {
+        $this->get(route('legal.terms'))
+            ->assertSeeText('8:00–17:00')
+            ->assertSeeText('הבוט פועל אוטומטית בכל שעה')
+            ->assertSeeText('אינו פעיל בשבת');
+    }
+
+    /** ושאין התחייבות לזמן פתרון — ההבטחה היחידה שאסור לנסח ברישול. */
+    public function test_no_resolution_time_is_promised(): void
+    {
+        $this->get(route('legal.terms'))->assertSeeText('איננו מתחייבים למסגרת זמן');
+    }
+
+    /**
+     * השירות לעסקים בלבד — וגם הקופה אומרת זאת.
+     *
+     * תנאים שמגבילים את השירות לעסקים מול קופה שמוכרת לכל מי שנכנס הם מסמך
+     * שאינו חל על חלק מהלקוחות שאישרו אותו. שני המקומות נבדקים יחד בכוונה.
+     */
+    public function test_the_service_is_for_businesses_in_both_the_terms_and_the_checkout(): void
+    {
+        $this->get(route('legal.terms'))
+            ->assertSeeText('מיועד לעסקים ולארגונים בלבד')
+            ->assertSeeText('אינו מיועד לשימוש פרטי');
+
+        // על התבנית ולא על עמוד מורנדר, מאותה סיבה שהבדיקה הקיימת למטה עושה כך:
+        // עמוד הרכישה חסום מאחורי מסלול פעיל ומוצר מוכן, וגרסה שפותחת אותו הייתה
+        // מדלגת בשקט כשהתנאי אינו מתקיים.
+        $this->assertStringContainsString(
+            'רוכש/ת עבור עסק',
+            file_get_contents(resource_path('views/store/site-agent.blade.php')),
+            'הקופה אינה אומרת שהשירות לעסקים, בעוד שהתנאים שהיא מבקשת לאשר מגבילים אותו לכך.',
+        );
+    }
+
+    /** הספקים בשמם — מי מאחסן את האתר ומי שולח את הדוא״ל. */
+    public function test_the_terms_name_the_infrastructure_providers(): void
+    {
+        $this->get(route('legal.terms'))
+            ->assertSeeText('hetzner')
+            ->assertSeeText('postmark')
+            ->assertSeeText('cloudflare');
+    }
+
+    /**
+     * ואותם ספקים נקובים בשני המסמכים.
+     *
+     * מדיניות הפרטיות אמרה "ספק דיוור תפעולי" ו"ספק אחסון השרתים" בזמן שהתנאים
+     * נקבו בשמות. שני מסמכים שנקראים יחד ומונים ספקים שונים הם בדיוק מה שלקוח
+     * מצביע עליו — ובמדיניות פרטיות זו גם הרשימה שהיא לב המסמך.
+     *
+     * רשמי השמות אינם בבדיקה הזאת במתכוון: אין בקוד רישום דומיינים, ולכן אין
+     * מידע אישי שעובר אליהם, והם נשארים בתנאים כקבלני משנה בלבד.
+     */
+    public function test_the_two_documents_name_the_same_providers(): void
+    {
+        $terms = $this->get(route('legal.terms'));
+        $privacy = $this->get(route('legal.privacy'));
+
+        foreach (['Google', 'Amazon', 'DigitalOcean', 'Vultr', 'hetzner',
+            'postmark', 'שמיר מערכות', 'sendgrid', 'mailgun', 'cloudflare'] as $provider) {
+            $terms->assertSeeText($provider);
+            $privacy->assertSeeText($provider);
+        }
+
+        $privacy->assertDontSeeText('ספק דיוור תפעולי')
+            ->assertDontSeeText('ספק אחסון השרתים');
+    }
+
+    /**
+     * תקרת האחריות היא 12 החודשים — ואין לידה "הסעד היחיד הוא ביטול".
+     *
+     * שתי הגבלות שונות שלא ניתן לכתוב יחד: הסכם השירות הכללי אמר "הסעד היחיד
+     * שלך הוא ביטול המנוי", והתנאים אומרים תקרה לפי מה ששולם. נבחרה התקרה, ולכן
+     * הנוסח הסותר לא אמור להופיע.
+     */
+    public function test_the_liability_cap_is_the_twelve_month_figure_and_not_a_sole_remedy_clause(): void
+    {
+        $this->get(route('legal.terms'))
+            ->assertSeeText('שנים-עשר החודשים')
+            ->assertDontSeeText('הסעד היחיד');
+    }
+
+    /** יישוב סכסוכים: גישור או בורר לפני בית המשפט, ואז תל אביב-יפו. */
+    public function test_dispute_resolution_comes_before_the_court(): void
+    {
+        $this->get(route('legal.terms'))->assertSeeTextInOrder([
+            'בורר מוסמך',
+            'תל אביב-יפו',
+        ]);
+    }
+
+    /** ופרטי ההתקשרות — חברה, ח.פ. וטלפון. */
+    public function test_the_terms_carry_the_contact_details(): void
+    {
+        config(['legal.company.phone' => '03-000-0000']);
+
+        $this->get(route('legal.terms'))
+            ->assertSeeText(config('legal.company.name'))
+            ->assertSeeText('03-000-0000');
+    }
+
+    /**
+     * אמירת המע״מ מבחינה בין המוצרים, כי הקופות עצמן מציגות אחרת.
+     *
+     * עמוד בוט ניהול האתר מצטט נטו ומוסיף "+ מע״מ"; עמוד התוספים מציג מחיר שנגזר
+     * מ-grossAgorot() ואומר במפורש "המחירים כוללים מע״מ". אמירה גורפת לכאן או
+     * לכאן בתנאים הייתה נסתרת על ידי אחת מהקופות — כלומר כל קוני התוספים היו
+     * מאשרים תנאים שאומרים את ההפך ממה שהם רואים ומשלמים.
+     */
+    public function test_the_vat_statement_tells_the_two_product_families_apart(): void
+    {
+        $this->get(route('legal.terms'))
+            ->assertSeeText('הקובע הוא מה שמצוין בעמוד הרכישה')
+            ->assertSeeText('במסלולי התוספים המחיר המוצג כולל מע״מ')
+            ->assertDontSeeText('המחירים כוללים מע״מ, אלא אם');
+    }
+
+    /**
+     * ואין בתנאים הבטחה גורפת שהאתר ממשיך לעבוד כשלא שולם.
+     *
+     * הנוסח הזה היה נכון כשהמסמך כיסה את הבוט בלבד. מרגע שהוא מכסה גם אחסון הוא
+     * נסתר על ידי DunningMachine::handleFailure(), ששולחת SuspendSiteJob בשלב
+     * המשהה כשלמנוי יש site_id. התחייבות שהמערכת מפרה בעצמה גרועה מהיעדר
+     * התחייבות.
+     */
+    public function test_an_unpaid_hosting_subscription_is_not_promised_to_keep_running(): void
+    {
+        $this->get(route('legal.terms'))
+            ->assertSeeText('בתום המסלול האתר עצמו מושהה בשרת')
+            ->assertSeeText('הנתונים נשמרים')
+            ->assertDontSeeText('תשלום שלא נפרע עשוי להוביל להשהיית השירות. האתר עצמו ממשיך לעבוד');
+    }
+
+    /**
+     * ושלושת המקרים בתנאים הם שלושת מכתבי ההשהיה שהמערכת שולחת.
+     *
+     * לקוח שמקבל את המכתב ופותח את התנאים משווה בדיוק את זה, ולכן המסמך אומר את
+     * מה שהמכתב אומר — ובמקרה של רישיון תוסף, באותן מילים.
+     */
+    /**
+     * מסלול ההתראות וההשהיה מוצג כמה שהוא: גבייה בכרטיס בלבד.
+     *
+     * scopeDueForCharge() מסננת ב-whereCollectedByCard(), ו-DunningMachine מופעלת
+     * רק מניסיון חיוב שנכשל. מנוי בהעברה בנקאית, הוראת קבע או שיקים, בלי גיבוי
+     * כרטיס, אינו נכנס למסלול הזה כלל — הוא מטופל בדרישות תשלום ובתזכורות,
+     * וההשהיה שם היא החלטה ולא תוצאה אוטומטית. אמירה גורפת הייתה מבטיחה למי
+     * שמשלם בהעברה התראות שלא יגיעו אליו.
+     */
+    public function test_the_dunning_ladder_is_scoped_to_card_collection(): void
+    {
+        $this->get(route('legal.terms'))
+            ->assertSeeText('בגבייה בכרטיס')
+            ->assertSeeText('המסלול האוטומטי אינו חל')
+            ->assertSeeText('העברה בנקאית, הוראת קבע או שיקים')
+            ->assertDontSeeText('תשלום שלא נפרע מוביל להשהיית השירות');
+    }
+
+    /**
+     * ומספר הימים נאמר כנומינלי — לא כמסגרת מדויקת ולא כרצפה.
+     *
+     * הוא זז לשני הכיוונים: משגר החיובים גדור ב-$awake ו-ChargeSubscriptionJob עוצר
+     * ב-rescheduledForShabbat(), כך שניסיון שנופל בשבת או בחג נדחה והמסלול מתארך —
+     * אבל DunningMachine קובעת now()->addDays($n)->startOfDay(), שמוותרת על החלק
+     * שחלף מאותו יום, כך שכשל אחרי חצות מגיע להשהיה בפחות מהסכום. גם "לפחות" היה
+     * התחייבות שאינה נכונה.
+     */
+    public function test_the_days_before_suspension_are_stated_as_nominal(): void
+    {
+        $this->get(route('legal.terms'))
+            ->assertSeeText('ימים בדרך כלל')
+            ->assertSeeText('המרווחים נומינליים')
+            ->assertSeeText('כשהם נופלים בשבת או בחג')
+            ->assertDontSeeText('ימים לפחות');
+    }
+
+    public function test_the_three_suspension_cases_match_the_three_dunning_letters(): void
+    {
+        $terms = $this->get(route('legal.terms'));
+
+        $terms->assertSeeText('מנוי שכולל אחסון')
+            ->assertSeeText('מנוי בוט בלבד')
+            ->assertSeeText('מנוי רישיון לתוסף');
+
+        // אותו נוסח בדיוק שמכתב הרישיון מבטיח — ושעמוד התוספים מבטיח לפניו.
+        $terms->assertSeeText('התוסף ממשיך לעבוד');
+        $this->assertStringContainsString('התוסף ממשיך לעבוד', __('dunning.site_suspended_license.body', [
+            'name' => 'דנה', 'plan' => 'רישיון', 'amount' => '236.00',
+            'update_link' => 'https://example.test', 'until' => '01/01/2027',
+        ]));
+    }
+
+    /**
+     * מספר ההתראות וימי ההמתנה נקראים מהקונפיג ולא מוקלדים בטקסט.
+     *
+     * מסלול הדאנינג ניתן לשינוי ב-config/billing.php, ומספר כתוב במסמך היה הופך
+     * בשקט להתחייבות שאינה נכונה.
+     */
+    public function test_the_dunning_notices_are_read_from_the_billing_config(): void
+    {
+        config(['billing.dunning.stages' => [
+            1 => ['template' => 'a', 'retry_in_days' => 4, 'suspend' => false],
+            2 => ['template' => 'b', 'retry_in_days' => 5, 'suspend' => false],
+            3 => ['template' => 'c', 'retry_in_days' => null, 'suspend' => true],
+        ]]);
+
+        $this->get(route('legal.terms'))
+            ->assertSeeText('2 התראות')
+            ->assertSeeText('9 ימים');
+    }
+
+    /**
+     * וכשירות ההתקשרות מתארת את סוגי העסקים שהמערכת באמת רושמת.
+     *
+     * App\Enums\BusinessType מקבל עוסק פטור, עוסק מורשה, חברה ומלכ״ר. נוסח
+     * שהגביל את השירות ל"ישויות משפטיות שבבעלות בני 18 ומעלה" היה מוציא ממנו
+     * עוסק — שאינו ישות משפטית נפרדת — ומלכ״ר, שאין לו בעלים.
+     */
+    public function test_eligibility_covers_the_business_types_the_system_registers(): void
+    {
+        $terms = $this->get(route('legal.terms'))
+            ->assertDontSeeText('לישויות משפטיות שבבעלות בני 18 ומעלה');
+
+        // מול ה-enum ולא מול רשימה שהועתקה לכאן: סוג שיתווסף או ישונה ייכשל כאן
+        // במקום להישאר מסמך שמתאר טופס הרשמה אחר. SignupRequest דוחה כל ערך שאינו
+        // ב-enum, ולכן גם ההפך חמור — כשירות שהובטחה למי שאינו יכול להירשם בכלל.
+        foreach (BusinessType::cases() as $type) {
+            $terms->assertSeeText($type->getLabel());
+        }
+
+        // ודוגמאות, לא רשימה סגורה: SiteAgentStoreController::buy() אינו מאמת סוג
+        // עסק כלל, כך שרשימה סגורה הייתה שוללת כשירות ממי שהקופה מוכרת לו.
+        $terms->assertSeeText('מיועד לעסקים ולארגונים בלבד ואינו מיועד לשימוש פרטי');
+
+        // על טקסט מנורמל, כי בתבנית "למשל" והרשימה יושבים בשורות נפרדות.
+        $this->assertStringContainsString(
+            'למשל '.BusinessType::cases()[0]->getLabel(),
+            (string) preg_replace('/\s+/u', ' ', strip_tags((string) $terms->getContent())),
+            'רשימת סוגי העסקים מוצגת כרשימה סגורה ולא כדוגמאות.',
+        );
+    }
+
+    /**
+     * ואין בתנאים הבטחת פטור ממע״מ שהקופה הפומבית אינה מקיימת.
+     *
+     * PluginCheckout::customer() ו-SiteAgentCheckout::customer() יוצרות Customer
+     * בלי vat_exempt, ואף אחד מהטפסים אינו שואל — כלומר קונה חדש שפטור כן מחויב
+     * במע״מ. ההבטחה מנוסחת לפי מה שקורה באמת, ונאמר ללקוח מה לעשות.
+     */
+    public function test_the_vat_exemption_is_not_promised_to_a_checkout_that_never_asks(): void
+    {
+        $this->get(route('legal.terms'))
+            ->assertSeeText('מוחל על לקוח שרשום אצלנו כפטור')
+            ->assertSeeText('הקופה הפומבית אינה שואלת')
+            ->assertDontSeeText('לקוח הפטור ממע״מ כדין — לא נגבה ממנו מע״מ');
+    }
+
+    /**
+     * והמסמך אינו אומר על חוב גם "מיידית" וגם "לא מיידית".
+     *
+     * סעיף הפסקת השירות שומר את ההשהיה המיידית להפרה, לשימוש לרעה ולפגיעה
+     * באבטחה — ומפנה לגבי חוב אל מסלול ההתראות שבסעיף התשלום.
+     */
+    public function test_debt_is_not_listed_among_the_immediate_suspension_grounds(): void
+    {
+        $this->get(route('legal.terms'))
+            ->assertSeeText('הפרת תנאים אלה, שימוש לרעה, פגיעה באבטחה, או כשיש חשש סביר')
+            ->assertSeeText('ורק אחריהם השהיה');
     }
 }

@@ -44,6 +44,17 @@ return [
         'api_version' => GraphApiVersion::resolve(env('SITE_AGENT_WA_API_VERSION')),
         'phone_number_id' => env('SITE_AGENT_WA_PHONE_NUMBER_ID', ''),
 
+        /*
+        | The WhatsApp Business Account the number belongs to — NOT the number's
+        | own id above, and not the app or the business id. Sending does not need
+        | it; the cost report does, because Meta reports spend per WABA.
+        |
+        | In Meta Business Settings it is the id under WhatsApp accounts. Left
+        | blank, the cost screen says it is missing rather than showing ₪0, which
+        | is the one number that would be read as "messages cost us nothing".
+        */
+        'waba_id' => env('SITE_AGENT_WA_WABA_ID', ''),
+
         // Permanent access token of the system user that owns the number.
         'token' => env('SITE_AGENT_WA_TOKEN', ''),
 
@@ -211,8 +222,10 @@ return [
     | התור ואת נעילת השיחה דקות ארוכות.
     */
     /*
-     | A writing unit: an approved change that puts MORE than this many words
-     | of text on the site — a post, a page section, a product description.
+     | A writing unit: an offer whose text runs to MORE than this many words —
+     | a post, a page section, a product description. Counted when the offer is
+     | made and not when it is approved, because the generation is spent by
+     | then; the preview says so before the "כן" (SiteAgentWritingNotice).
      | Billed per plan (writing_price_agorot, included_writings).
      */
     'writing' => [
