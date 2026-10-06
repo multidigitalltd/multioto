@@ -26,6 +26,15 @@ use Symfony\Component\HttpFoundation\BinaryFileResponse;
  */
 class SiteAgentStoreController extends Controller
 {
+    /**
+     * How many additional manager numbers may be bought in one go.
+     *
+     * A ceiling rather than a product limit: more are added from the personal
+     * area at any time. It exists so that a form a stranger posts cannot price
+     * an unbounded number of seats, and so the page stays a page.
+     */
+    public const MAX_EXTRA_NUMBERS = 3;
+
     /** The sales page: what it does, what it costs, and the form. */
     public function show(SiteAgentProduct $product): View
     {
@@ -37,7 +46,10 @@ class SiteAgentStoreController extends Controller
         // taking money for a number that never beeps.
         abort_if($plans->isEmpty() || ! $product->ready(), 404);
 
-        return view('store.site-agent', ['plans' => $plans]);
+        return view('store.site-agent', [
+            'plans' => $plans,
+            'maxExtraNumbers' => self::MAX_EXTRA_NUMBERS,
+        ]);
     }
 
     /** Take the details and send them to the payment page. */
@@ -58,6 +70,12 @@ class SiteAgentStoreController extends Controller
             'manager_name' => ['nullable', 'string', 'max:120'],
             'domain' => ['required', 'string', 'max:190'],
             'install_mode' => ['required', Rule::in(SiteAgentOrder::INSTALL_MODES)],
+            // Additional manager numbers, each of which adds to the price. Capped
+            // here as well as in the form: the cap is what stops a posted array of
+            // two hundred numbers from becoming a payment page for two hundred
+            // seats. A blank box is simply not a number and is dropped below.
+            'extra_phones' => ['nullable', 'array', 'max:'.self::MAX_EXTRA_NUMBERS],
+            'extra_phones.*' => ['nullable', 'string', 'max:30'],
             'terms' => ['accepted'],
         ], [], [
             'plan' => 'המסלול',
@@ -66,6 +84,7 @@ class SiteAgentStoreController extends Controller
             'phone' => 'מספר הוואטסאפ',
             'domain' => 'כתובת האתר',
             'install_mode' => 'ההתקנה',
+            'extra_phones' => 'המספרים הנוספים',
             'terms' => 'התנאים',
         ]);
 
@@ -77,6 +96,13 @@ class SiteAgentStoreController extends Controller
                 'manager_name' => filled($data['manager_name'] ?? null) ? trim($data['manager_name']) : null,
                 'domain' => trim($data['domain']),
                 'install_mode' => $data['install_mode'],
+                // Blank boxes dropped here, so three empty fields are not three
+                // numbers. What survives is normalised and de-duplicated in the
+                // checkout, where the price is decided.
+                'extra_phones' => array_values(array_filter(
+                    array_map(fn ($phone): string => trim((string) $phone), $data['extra_phones'] ?? []),
+                    fn (string $phone): bool => $phone !== '',
+                )),
             ]);
         } catch (\Throwable $e) {
             report($e);

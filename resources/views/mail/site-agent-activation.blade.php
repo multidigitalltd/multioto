@@ -4,9 +4,20 @@
 <p>שלום,</p>
 <p>תודה על הרכישה! <strong>בוט ניהול האתר פעיל עבור {{ $order->domain }}</strong>.</p>
 
+@php $extraPhones = $order->extraPhones(); @endphp
+
 <p><strong>הדבר הראשון:</strong> שלחנו קוד בן 6 ספרות בוואטסאפ למספר
 <span dir="ltr">{{ $order->manager_phone }}</span>. יש להשיב עליו באותה שיחה.
 עד שהמספר יאומת הוא אינו יכול לעשות דבר באתר.</p>
+
+{{-- Every number that was bought. Telling a buyer who paid for two extra
+     numbers about one code leaves two numbers that will never work, with
+     nothing on any screen explaining why. --}}
+@if ($extraPhones !== [])
+<p><strong>וגם {{ count($extraPhones) === 1 ? 'למספר הנוסף' : 'למספרים הנוספים' }}</strong>
+@foreach ($extraPhones as $phone)<span dir="ltr">{{ $phone }}</span>@if (! $loop->last), @endif @endforeach
+— לכל אחד נשלח קוד משלו, ועד שהוא נענה אותו מספר אינו יכול לעשות דבר באתר.</p>
+@endif
 
 @if ($installedByUs)
 <p><strong>ההתקנה אצלנו.</strong> ביקשתם שנתקין עבורכם — בעמוד שבקישור למטה אפשר למסור לנו
@@ -14,7 +25,7 @@
 ואפשר לבטל אותו בכל רגע.</p>
 @else
 <p><strong>ההתקנה אצלכם — כחמש דקות.</strong> בעמוד שבקישור למטה יש את קובץ התוסף
-ואת שלושת הקודים שצריך להדביק בהגדרות התוסף בוורדפרס. אחרי השמירה, שלחו הודעה
+ואת הקודים שצריך להדביק בהגדרות התוסף בוורדפרס. אחרי השמירה, שלחו הודעה
 בוואטסאפ ותראו שהבוט עונה.</p>
 @endif
 

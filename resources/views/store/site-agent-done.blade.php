@@ -111,9 +111,25 @@
             </div>
         @endif
 
+        {{-- Every number that was bought, not only the first.
+             A buyer who paid for two extra numbers and is told about one code
+             has two numbers that will never work, and no way of knowing why:
+             each binding needs its own answered code before it can do anything,
+             and nothing on any other screen says so. --}}
+        @php $extraPhones = $order->extraPhones(); @endphp
+
         <div class="ok">
             <strong>עכשיו בדקו את הוואטסאפ במספר {{ $order->manager_phone }}</strong> —
             שלחנו לשם קוד בן 6 ספרות. השיבו עליו באותה שיחה, וזהו: המספר מאומת.
+
+            @if ($extraPhones !== [])
+                <br><br>
+                <strong>וגם {{ count($extraPhones) === 1 ? 'למספר הנוסף' : 'למספרים הנוספים' }}:</strong>
+                @foreach ($extraPhones as $phone)
+                    <span dir="ltr">{{ $phone }}</span>@if (! $loop->last), @endif
+                @endforeach
+                — לכל אחד נשלח קוד משלו, ועד שהוא נענה המספר הזה אינו יכול לעשות דבר באתר.
+            @endif
         </div>
 
         @if (session('handover'))
