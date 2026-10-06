@@ -286,7 +286,9 @@ class LegalPagesTest extends TestCase
      */
     public function test_the_service_is_for_businesses_in_both_the_terms_and_the_checkout(): void
     {
-        $this->get(route('legal.terms'))->assertSeeText('מיועד לעסקים בלבד');
+        $this->get(route('legal.terms'))
+            ->assertSeeText('מיועד לעסקים ולארגונים בלבד')
+            ->assertSeeText('אינו מיועד לשימוש פרטי');
 
         // על התבנית ולא על עמוד מורנדר, מאותה סיבה שהבדיקה הקיימת למטה עושה כך:
         // עמוד הרכישה חסום מאחורי מסלול פעיל ומוצר מוכן, וגרסה שפותחת אותו הייתה
@@ -341,16 +343,103 @@ class LegalPagesTest extends TestCase
     }
 
     /**
-     * המחירים מוצגים לפני מע״מ — ואותו דבר נאמר בתנאים ובקופה.
+     * אמירת המע״מ מבחינה בין המוצרים, כי הקופות עצמן מציגות אחרת.
      *
-     * הנוסח הקודם בתנאים אמר "המחירים כוללים מע״מ", בעוד שעמוד המכירה מצטט נטו
-     * ומוסיף "+ מע״מ". שני מסמכים שסותרים זה את זה על מחיר הם בדיוק מה שלקוח
-     * מצביע עליו בוויכוח.
+     * עמוד בוט ניהול האתר מצטט נטו ומוסיף "+ מע״מ"; עמוד התוספים מציג מחיר שנגזר
+     * מ-grossAgorot() ואומר במפורש "המחירים כוללים מע״מ". אמירה גורפת לכאן או
+     * לכאן בתנאים הייתה נסתרת על ידי אחת מהקופות — כלומר כל קוני התוספים היו
+     * מאשרים תנאים שאומרים את ההפך ממה שהם רואים ומשלמים.
      */
-    public function test_the_terms_say_prices_are_before_vat_like_the_store_does(): void
+    public function test_the_vat_statement_tells_the_two_product_families_apart(): void
     {
         $this->get(route('legal.terms'))
-            ->assertSeeText('המחירים מוצגים לפני מע״מ')
-            ->assertDontSeeText('המחירים כוללים מע״מ');
+            ->assertSeeText('הקובע הוא מה שמצוין בעמוד הרכישה')
+            ->assertSeeText('במסלולי התוספים המחיר המוצג כולל מע״מ')
+            ->assertDontSeeText('המחירים כוללים מע״מ, אלא אם');
+    }
+
+    /**
+     * ואין בתנאים הבטחה גורפת שהאתר ממשיך לעבוד כשלא שולם.
+     *
+     * הנוסח הזה היה נכון כשהמסמך כיסה את הבוט בלבד. מרגע שהוא מכסה גם אחסון הוא
+     * נסתר על ידי DunningMachine::handleFailure(), ששולחת SuspendSiteJob בשלב
+     * המשהה כשלמנוי יש site_id. התחייבות שהמערכת מפרה בעצמה גרועה מהיעדר
+     * התחייבות.
+     */
+    public function test_an_unpaid_hosting_subscription_is_not_promised_to_keep_running(): void
+    {
+        $this->get(route('legal.terms'))
+            ->assertSeeText('בתום המסלול האתר עצמו מושהה בשרת')
+            ->assertSeeText('הנתונים נשמרים')
+            ->assertDontSeeText('תשלום שלא נפרע עשוי להוביל להשהיית השירות. האתר עצמו ממשיך לעבוד');
+    }
+
+    /**
+     * ושלושת המקרים בתנאים הם שלושת מכתבי ההשהיה שהמערכת שולחת.
+     *
+     * לקוח שמקבל את המכתב ופותח את התנאים משווה בדיוק את זה, ולכן המסמך אומר את
+     * מה שהמכתב אומר — ובמקרה של רישיון תוסף, באותן מילים.
+     */
+    public function test_the_three_suspension_cases_match_the_three_dunning_letters(): void
+    {
+        $terms = $this->get(route('legal.terms'));
+
+        $terms->assertSeeText('מנוי שכולל אחסון')
+            ->assertSeeText('מנוי בוט בלבד')
+            ->assertSeeText('מנוי רישיון לתוסף');
+
+        // אותו נוסח בדיוק שמכתב הרישיון מבטיח — ושעמוד התוספים מבטיח לפניו.
+        $terms->assertSeeText('התוסף ממשיך לעבוד');
+        $this->assertStringContainsString('התוסף ממשיך לעבוד', __('dunning.site_suspended_license.body', [
+            'name' => 'דנה', 'plan' => 'רישיון', 'amount' => '236.00',
+            'update_link' => 'https://example.test', 'until' => '01/01/2027',
+        ]));
+    }
+
+    /**
+     * מספר ההתראות וימי ההמתנה נקראים מהקונפיג ולא מוקלדים בטקסט.
+     *
+     * מסלול הדאנינג ניתן לשינוי ב-config/billing.php, ומספר כתוב במסמך היה הופך
+     * בשקט להתחייבות שאינה נכונה.
+     */
+    public function test_the_dunning_notices_are_read_from_the_billing_config(): void
+    {
+        config(['billing.dunning.stages' => [
+            1 => ['template' => 'a', 'retry_in_days' => 4, 'suspend' => false],
+            2 => ['template' => 'b', 'retry_in_days' => 5, 'suspend' => false],
+            3 => ['template' => 'c', 'retry_in_days' => null, 'suspend' => true],
+        ]]);
+
+        $this->get(route('legal.terms'))
+            ->assertSeeText('2 התראות')
+            ->assertSeeText('9 ימים');
+    }
+
+    /**
+     * וכשירות ההתקשרות מתארת את סוגי העסקים שהמערכת באמת רושמת.
+     *
+     * App\Enums\BusinessType מקבל עוסק פטור, עוסק מורשה, חברה ומלכ״ר. נוסח
+     * שהגביל את השירות ל"ישויות משפטיות שבבעלות בני 18 ומעלה" היה מוציא ממנו
+     * עוסק — שאינו ישות משפטית נפרדת — ומלכ״ר, שאין לו בעלים.
+     */
+    public function test_eligibility_covers_the_business_types_the_system_registers(): void
+    {
+        $this->get(route('legal.terms'))
+            ->assertSeeText('עוסק פטור')
+            ->assertSeeText('מלכ״ר')
+            ->assertDontSeeText('לישויות משפטיות שבבעלות בני 18 ומעלה');
+    }
+
+    /**
+     * והמסמך אינו אומר על חוב גם "מיידית" וגם "לא מיידית".
+     *
+     * סעיף הפסקת השירות שומר את ההשהיה המיידית להפרה, לשימוש לרעה ולפגיעה
+     * באבטחה — ומפנה לגבי חוב אל מסלול ההתראות שבסעיף התשלום.
+     */
+    public function test_debt_is_not_listed_among_the_immediate_suspension_grounds(): void
+    {
+        $this->get(route('legal.terms'))
+            ->assertSeeText('הפרת תנאים אלה, שימוש לרעה, פגיעה באבטחה, או כשיש חשש סביר')
+            ->assertSeeText('ורק אחריהם השהיה');
     }
 }
