@@ -14,7 +14,8 @@ use Carbon\CarbonInterface;
  *
  *   1. the plan, for the period being opened            (in advance)
  *   2. the additional manager numbers, for that period  (in advance)
- *   3. the messages the bot sent since the last invoice (in arrears)
+ *   3. the messages the bot sent since the last invoice (in arrears), less
+ *      the plan's included messages — only the ones beyond are charged
  *
  * VAT is computed once, on the net total, exactly as Subscription::vatAgorot()
  * always has — so a subscription with no extras and no messages costs to the
@@ -36,7 +37,11 @@ class RenewalBreakdown
      * Amount, VAT, total and lines for collecting this period, counting
      * messages sent up to $until.
      *
-     * @return array{amount_agorot: int, vat_agorot: int, total_agorot: int, lines: list<array<string, mixed>>|null}
+     * `usage_until` is the cut-off the messages were counted to — null when
+     * none were. The charge keeps it, and SiteAgentUsageMeter::settle stamps
+     * exactly those messages when the charge succeeds, line or no line.
+     *
+     * @return array{amount_agorot: int, vat_agorot: int, total_agorot: int, lines: list<array<string, mixed>>|null, usage_until: CarbonInterface|null}
      */
     public function for(Subscription $subscription, CarbonInterface $periodStart, CarbonInterface $periodEnd, CarbonInterface $until): array
     {
@@ -45,7 +50,10 @@ class RenewalBreakdown
         $extrasNet = $subscription->extraNumbersAgorot();
 
         $messages = $plan?->billsMessages() ? $this->usage->unbilled($subscription, $until) : 0;
-        $messagesNet = $messages * (int) ($plan?->message_price_agorot ?? 0);
+        $included = min($messages, (int) ($plan?->included_messages ?? 0));
+        $charged = $messages - $included;
+        $messagesNet = $charged * (int) ($plan?->message_price_agorot ?? 0);
+        $usageUntil = $messages > 0 ? $until : null;
 
         $net = $planNet + $extrasNet + $messagesNet;
         $vat = $this->vat($subscription, $net);
@@ -53,7 +61,7 @@ class RenewalBreakdown
 
         // Nothing beyond the plan itself: the invoice stays exactly as it was.
         if ($extrasNet === 0 && $messagesNet === 0) {
-            return ['amount_agorot' => $net, 'vat_agorot' => $vat, 'total_agorot' => $total, 'lines' => null];
+            return ['amount_agorot' => $net, 'vat_agorot' => $vat, 'total_agorot' => $total, 'lines' => null, 'usage_until' => $usageUntil];
         }
 
         $extras = [];
@@ -71,8 +79,10 @@ class RenewalBreakdown
         if ($messagesNet > 0) {
             $extras[] = [
                 'kind' => 'messages',
-                'name' => 'הודעות בוט ניהול האתר: '.number_format($messages).' × '
-                    .Money::ils((int) $plan->message_price_agorot).' (עד '.$until->format('d/m/Y').')',
+                'name' => 'הודעות בוט ניהול האתר: '.($included > 0
+                    ? number_format($messages).' (מתוכן '.number_format($included).' כלולות במנוי) — '.number_format($charged)
+                    : number_format($messages))
+                    .' × '.Money::ils((int) $plan->message_price_agorot).' (עד '.$until->format('d/m/Y').')',
                 'qty' => 1,
                 'unit_price_agorot' => $this->gross($subscription, $messagesNet),
                 'count' => $messages,
@@ -82,6 +92,7 @@ class RenewalBreakdown
                 // The message-cost report compares against OUR revenue, and VAT
                 // is not ours.
                 'net_agorot' => $messagesNet,
+                'included' => $included,
                 // The cut-off this charge counted to. SiteAgentUsageMeter::settle
                 // stamps exactly these messages when the charge succeeds.
                 'until' => $until->toIso8601String(),
@@ -100,6 +111,7 @@ class RenewalBreakdown
             'vat_agorot' => $vat,
             'total_agorot' => $total,
             'lines' => [$first, ...$extras],
+            'usage_until' => $usageUntil,
         ];
     }
 

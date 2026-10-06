@@ -159,7 +159,7 @@ class MessagingCostReport
      *
      * @return array{
      *     cost: ?array<string, mixed>, cost_error: ?array<string, mixed>,
-     *     revenue_net: int, billed_messages: int, estimated_rows: int,
+     *     revenue_net: int, billed_messages: int, included_messages: int, estimated_rows: int,
      *     sent_messages: int, unbilled_messages: int,
      *     margin: ?int, comparable: bool, currency: string, days: int
      * }
@@ -186,6 +186,7 @@ class MessagingCostReport
             'cost_error' => is_array($error) ? $error : null,
             'revenue_net' => $revenue['net'],
             'billed_messages' => $revenue['messages'],
+            'included_messages' => $revenue['included'],
             'estimated_rows' => $revenue['estimated'],
             'sent_messages' => $counts['sent'],
             'unbilled_messages' => $counts['unbilled'],
@@ -207,12 +208,19 @@ class MessagingCostReport
      * before it existed carry only the VAT-inclusive figure, so those are
      * reported separately as estimated rather than silently divided back out.
      *
-     * @return array{net: int, messages: int, estimated: int}
+     * `included` is read alongside, because a plan may bundle an allowance: a
+     * charge's messages line carries how many of them the subscription already
+     * paid for. Those messages cost us exactly what the charged ones cost, and
+     * dividing revenue by ALL the messages on the invoice would report a
+     * per-message price we never charged.
+     *
+     * @return array{net: int, messages: int, included: int, estimated: int}
      */
     private function revenue(Carbon $since): array
     {
         $net = 0;
         $messages = 0;
+        $included = 0;
         $estimated = 0;
 
         Charge::query()
@@ -220,7 +228,7 @@ class MessagingCostReport
             ->where('created_at', '>=', $since)
             ->whereNotNull('lines')
             ->select(['id', 'lines'])
-            ->chunkById(200, function ($charges) use (&$net, &$messages, &$estimated): void {
+            ->chunkById(200, function ($charges) use (&$net, &$messages, &$included, &$estimated): void {
                 foreach ($charges as $charge) {
                     $line = collect($charge->lines ?? [])->firstWhere('kind', 'messages');
 
@@ -229,6 +237,7 @@ class MessagingCostReport
                     }
 
                     $messages += (int) ($line['count'] ?? 0);
+                    $included += (int) ($line['included'] ?? 0);
 
                     if (isset($line['net_agorot'])) {
                         $net += (int) $line['net_agorot'];
@@ -242,7 +251,7 @@ class MessagingCostReport
                 }
             });
 
-        return ['net' => $net, 'messages' => $messages, 'estimated' => $estimated];
+        return ['net' => $net, 'messages' => $messages, 'included' => $included, 'estimated' => $estimated];
     }
 
     /**

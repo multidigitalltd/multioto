@@ -469,7 +469,12 @@
                     <div>
                         <dt><span class="tick" aria-hidden="true">✓</span> הודעות:</dt>
                         <dd>
-                            לכל הודעה שהבוט שולח לכם — {{ $plan->messageNetLabel() }}, נגבה בחידוש החודשי לפי הספירה.
+                            @if ((int) $plan->included_messages > 0)
+                                {{ number_format($plan->included_messages) }} הודעות בכל חודש כלולות במחיר; מעבר להן —
+                                {{ $plan->messageNetLabel() }} להודעה, נגבה בחידוש החודשי לפי הספירה.
+                            @else
+                                לכל הודעה שהבוט שולח לכם — {{ $plan->messageNetLabel() }}, נגבה בחידוש החודשי לפי הספירה.
+                            @endif
                             {{-- מה שבאמת מפתיע לקוח בחשבונית הראשונה: לא המחיר, אלא
                                  שהשאלות שלו הן אלה שמייצרות אותו. ההודעות שאתם
                                  שולחים אינן מחויבות בעצמן — מטא אינה גובה על הודעה
@@ -483,6 +488,7 @@
                                  one on a plan that has none offers something this
                                  plan does not include. --}}
                             את הספירה אפשר לראות בכל רגע באזור האישי, או לשאול את הבוט "כמה הודעות שלחתי החודש?".
+                            ואפשר לקבוע תקרה: בתקרה הבוט עוצר עד החידוש, ושום דבר מעליה לא מחויב.
                         </dd>
                     </div>
                 @endif
@@ -545,7 +551,13 @@
                                     <span class="meta">{{ $plan->trial_days }} ימים ניסיון חינם, עם כרטיס ובלי חיוב.</span>
                                 @endif
                                 @if ($plan->billsMessages())
-                                    <span class="meta">בנוסף {{ $plan->messageNetLabel() }} לכל הודעה שהבוט שולח לכם.</span>
+                                    <span class="meta">
+                                        @if ((int) $plan->included_messages > 0)
+                                            {{ number_format($plan->included_messages) }} הודעות בחודש כלולות; מעבר להן {{ $plan->messageNetLabel() }} להודעה.
+                                        @else
+                                            בנוסף {{ $plan->messageNetLabel() }} לכל הודעה שהבוט שולח לכם.
+                                        @endif
+                                    </span>
                                 @endif
                                 @if ($plan->sellsExtraNumbers())
                                     <span class="meta">מספר נוסף: {{ $plan->extraNumberNetLabel() }}.</span>

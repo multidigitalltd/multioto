@@ -381,4 +381,29 @@ class SiteAgentMessageCostTest extends TestCase
 
         $this->get(SiteAgentMessageCost::getUrl())->assertForbidden();
     }
+
+    /**
+     * הודעות שכלולות במנוי אינן נספרות כהודעות שחויבו.
+     *
+     * הן עולות לנו בדיוק כמו המחויבות, וחלוקה של ההכנסה בכל ההודעות שבחשבונית
+     * הייתה מדווחת מחיר להודעה שלא גבינו מעולם.
+     */
+    public function test_messages_included_in_the_plan_are_not_counted_as_charged(): void
+    {
+        $this->fakeMeta();
+        app(MessagingCostReport::class)->refresh();
+
+        // 2,000 על החשבונית, 500 מהן כלולות, ולכן 1,500 חויבו.
+        $charge = $this->billedCharge(count: 2000, netAgorot: 1800);
+        $lines = $charge->lines;
+        $lines[1]['included'] = 500;
+        $charge->update(['lines' => $lines]);
+
+        $summary = app(MessagingCostReport::class)->summary();
+
+        $this->assertSame(2000, $summary['billed_messages']);
+        $this->assertSame(500, $summary['included_messages']);
+        // ההכנסה היא מה שנגבה בפועל, ולא מחיר כפול מספר ההודעות.
+        $this->assertSame(1800, $summary['revenue_net']);
+    }
 }

@@ -90,7 +90,14 @@
             <div class="text-xs text-gray-500 dark:text-gray-400">חויב מהלקוחות (ללא מע״מ)</div>
             <div class="mt-1 text-2xl font-bold">{{ $ils($s['revenue_net']) }}</div>
             <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                {{ number_format($s['billed_messages']) }} הודעות בחשבוניות
+                {{-- The charged count, not every message on the invoice: a plan
+                     may bundle an allowance, and those messages cost us the same
+                     while earning nothing. Dividing revenue by all of them would
+                     report a price we never charged. --}}
+                {{ number_format($s['billed_messages'] - $s['included_messages']) }} הודעות חויבו
+                @if ($s['included_messages'] > 0)
+                    · {{ number_format($s['included_messages']) }} כלולות במנוי
+                @endif
             </div>
         </div>
 
@@ -139,6 +146,23 @@
                     <strong>{{ $ils($s['unbilled_messages'] * $perMessage) }}</strong> —
                     זה מחיר רכישת הלקוחות האלה, ולא תקלה.
                 @endif
+            </p>
+            @if ($s['included_messages'] > 0)
+                <p class="mt-2">
+                    בנוסף <strong>{{ number_format($s['included_messages']) }}</strong> הודעות היו כלולות במנוי —
+                    הן עלו לנו כמו כל השאר ולא נגבה עליהן בנפרד.
+                    @if ($perMessage !== null)
+                        העלות שלהן: <strong>{{ $ils($s['included_messages'] * $perMessage) }}</strong>.
+                    @endif
+                </p>
+            @endif
+            {{-- The one thing this screen cannot see, said rather than left as a
+                 silent discrepancy: a cycle whose messages were ALL inside the
+                 allowance produces no messages line at all, so it is counted in
+                 "sent" above and in nothing below it. --}}
+            <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                חודש שכל ההודעות בו היו כלולות במנוי אינו מייצר שורת הודעות בחשבונית, ולכן הוא נספר
+                ב"שלח" ולא בשורות שמתחת — ההפרש בין המספרים הוא הוא.
             </p>
             @if ($s['estimated_rows'] > 0)
                 <p class="mt-2 text-xs text-warning-700 dark:text-warning-300">

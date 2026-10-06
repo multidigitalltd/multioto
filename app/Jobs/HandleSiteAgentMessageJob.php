@@ -3,11 +3,13 @@
 namespace App\Jobs;
 
 use App\Models\SiteAgentSubscriber;
+use App\Models\Subscription;
 use App\Models\SystemLog;
 use App\Models\WebhookEvent;
 use App\Services\SiteAgent\SiteAgentAccess;
 use App\Services\SiteAgent\SiteAgentBilling;
 use App\Services\SiteAgent\SiteAgentConversation;
+use App\Services\SiteAgent\SiteAgentMessageCap;
 use App\Services\SiteAgent\SiteAgentPitch;
 use App\Services\SiteAgent\SiteAgentUsageMeter;
 use App\Services\SiteAgent\SiteChoice;
@@ -151,17 +153,29 @@ class HandleSiteAgentMessageJob implements ShouldQueue
         $decision = $access->forSubscriber($subscriber ?? $routed['fallback']);
         $subscriber = $decision['subscriber'];
 
+        // Whether this reply counts towards the bill. A refusal, or the notice
+        // that the owner's own ceiling was reached, is the system talking about
+        // itself.
+        $billable = false;
+        $subscription = null;
+
         if ($decision['status'] === SiteAgentAccess::ALLOWED && $subscriber !== null) {
             $subscriber->forceFill(['last_seen_at' => now()])->save();
+            $subscription = app(SiteAgentBilling::class)->subscriptionForSite($subscriber->customer, $subscriber->site_id);
 
-            $reply = $type !== 'text' && $type !== 'image'
-                ? 'אני יודע לקרוא הודעות טקסט ותמונות. אפשר לכתוב לי מה לשנות באתר?'
-                : $conversation->handle(
-                    $subscriber,
-                    $text,
-                    (string) ($payload['id'] ?? '') ?: null,
-                    $mediaId !== '' ? $mediaId : null,
-                );
+            if ($meter->capReached($subscription)) {
+                $reply = $this->atCeiling($subscription, $text);
+            } else {
+                $billable = true;
+                $reply = $type !== 'text' && $type !== 'image'
+                    ? 'אני יודע לקרוא הודעות טקסט ותמונות. אפשר לכתוב לי מה לשנות באתר?'
+                    : $conversation->handle(
+                        $subscriber,
+                        $text,
+                        (string) ($payload['id'] ?? '') ?: null,
+                        $mediaId !== '' ? $mediaId : null,
+                    );
+            }
         } else {
             $reply = $this->answerFor($decision['status'], $subscriber, $from);
         }
@@ -180,8 +194,9 @@ class HandleSiteAgentMessageJob implements ShouldQueue
         // Billed per reply the service delivered — and only to a number that
         // is entitled to it. A refusal to an unpaid or unknown number is the
         // system talking about itself, and nobody is billed for that.
-        if ($delivered !== null && $decision['status'] === SiteAgentAccess::ALLOWED && $subscriber !== null) {
+        if ($delivered !== null && $billable && $subscriber !== null) {
             $meter->record($subscriber, $delivered);
+            app(SiteAgentMessageCap::class)->warnIfDue($whatsapp, $from, $subscription);
         }
 
         $event->markProcessed();
@@ -355,6 +370,22 @@ class HandleSiteAgentMessageJob implements ShouldQueue
             'כתבו לי מה לשנות — למשל "בעמוד צור קשר, תחליף את הטלפון 03-1234567 ב-03-7654321".',
             'אציג לכם בדיוק מה ישתנה, וזה יקרה רק אחרי שתאשרו.',
         ]));
+    }
+
+    /**
+     * The owner's own ceiling is reached: only raising or removing it is
+     * answered; anything else gets the notice. Neither is billed.
+     */
+    private function atCeiling(Subscription $subscription, string $text): string
+    {
+        $cap = app(SiteAgentMessageCap::class);
+        $command = $cap->command($text);
+
+        if ($command === null) {
+            return $cap->reachedNotice($subscription);
+        }
+
+        return $cap->set($subscription, $command['cap']) ?? $cap->confirmation($subscription->refresh());
     }
 
     /**

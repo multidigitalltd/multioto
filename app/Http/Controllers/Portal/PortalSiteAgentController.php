@@ -12,6 +12,7 @@ use App\Models\Subscription;
 use App\Models\SystemLog;
 use App\Services\SiteAgent\SiteAgentAccess;
 use App\Services\SiteAgent\SiteAgentBilling;
+use App\Services\SiteAgent\SiteAgentMessageCap;
 use App\Services\SiteAgent\SiteAgentUsageMeter;
 use App\Services\SiteAgent\WhatsAppCloudClient;
 use App\Support\Money;
@@ -153,6 +154,30 @@ class PortalSiteAgentController extends Controller
      * here would mean a second card page, a second invoice and a second thing
      * that can fail, for a few days of one line item.
      */
+    /**
+     * The customer's own ceiling on messages per billing cycle.
+     *
+     * Their setting on their subscription — the one carrying the site agent —
+     * found from the logged-in customer, never from anything in the request.
+     */
+    public function setCap(Request $request, SiteAgentBilling $billing, SiteAgentMessageCap $cap): RedirectResponse
+    {
+        $customer = $this->customer($request);
+        $subscription = $billing->subscriptionFor($customer);
+
+        if ($subscription === null || ! $subscription->plan?->billsMessages()) {
+            return back()->withErrors(['cap' => 'המסלול שלכם לא מחייב לפי הודעה, ולכן אין צורך בתקרה.'], 'cap');
+        }
+
+        $data = $request->validateWithBag('cap', [
+            'cap' => ['nullable', 'integer', 'min:1', 'max:'.SiteAgentMessageCap::MAX],
+        ], [], ['cap' => 'תקרת ההודעות']);
+
+        $cap->set($subscription, isset($data['cap']) ? (int) $data['cap'] : null);
+
+        return back()->with('status', $cap->confirmation($subscription->refresh()));
+    }
+
     public function addNumber(Request $request, SiteAgentBilling $billing, WhatsAppCloudClient $whatsapp): RedirectResponse
     {
         $customer = $this->customer($request);
