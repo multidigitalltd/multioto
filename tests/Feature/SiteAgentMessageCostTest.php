@@ -14,6 +14,7 @@ use App\Models\User;
 use App\Services\SiteAgent\MessagingCostReport;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
@@ -793,5 +794,95 @@ class SiteAgentMessageCostTest extends TestCase
 
         $this->assertSame(0, $summary['sent_messages']);
         $this->assertSame(0, $summary['pending_messages']);
+    }
+
+    /*
+    | ----------------------------------------------------------------
+    | סבב שלישי: דיוק אגורות, וגבול עליון פתוח
+    | ----------------------------------------------------------------
+    */
+
+    /**
+     * שאריות של פחות מאגורה נאספות, ולא נזרקות בכל נקודה.
+     *
+     * granularity יומי כפול קטגוריה מחזיר הרבה נקודות, כל אחת עשרונית. עיגול של
+     * כל אחת לאגורה שלמה מאבד את השארית בכל פעם, והשאריות אינן מתקזזות — הן
+     * פשוט נעלמות, מקטינות את העלות ומחמיאות למרווח.
+     */
+    public function test_sub_agora_residues_are_accumulated_and_not_dropped_per_point(): void
+    {
+        // ארבע נקודות של 0.004 ש״ח. עיגול לכל נקודה: 0+0+0+0 = 0.
+        // צבירה ואז עיגול: 0.016 ש״ח = 1.6 אגורות → 2.
+        $this->fakeMeta('ILS', [
+            ['pricing_category' => 'SERVICE', 'cost' => 0.004, 'volume' => 1],
+            ['pricing_category' => 'SERVICE', 'cost' => 0.004, 'volume' => 1],
+            ['pricing_category' => 'SERVICE', 'cost' => 0.004, 'volume' => 1],
+            ['pricing_category' => 'SERVICE', 'cost' => 0.004, 'volume' => 1],
+        ]);
+
+        app(MessagingCostReport::class)->refresh();
+        $summary = app(MessagingCostReport::class)->summary();
+
+        $this->assertSame(2, $summary['cost']['total']);
+        $this->assertSame(2, $summary['cost']['by_category']['service']['cost']);
+    }
+
+    /**
+     * והטבלה מסתכמת לסכום שלה.
+     *
+     * עיגול הקטגוריות והסכום הכולל בנפרד מאפשר להם לא להסכים באגורה, ודוח שאינו
+     * מסתכם גרוע מדוח פחות מדויק.
+     */
+    public function test_the_categories_add_up_to_the_total(): void
+    {
+        $this->fakeMeta('ILS', [
+            ['pricing_category' => 'SERVICE', 'cost' => 0.005, 'volume' => 1],
+            ['pricing_category' => 'UTILITY', 'cost' => 0.005, 'volume' => 1],
+            ['pricing_category' => 'AUTHENTICATION', 'cost' => 0.005, 'volume' => 1],
+        ]);
+
+        app(MessagingCostReport::class)->refresh();
+        $cost = app(MessagingCostReport::class)->summary()['cost'];
+
+        $this->assertSame(
+            $cost['total'],
+            array_sum(array_column($cost['by_category'], 'cost')),
+            'סכום הקטגוריות אינו שווה לסכום הכולל שמוצג מעליהן.',
+        );
+    }
+
+    /**
+     * הגבול העליון פתוח, כמו הדלי של מטא.
+     *
+     * ה-end שמטא עונה עליו הוא ה-start של הדלי הבא, ולכן שורה שנופלת בדיוק עליו
+     * אינה בתוך העלות — והיא הייתה נספרת אצלנו עם הכנסה ובלי עלות לידה.
+     */
+    public function test_a_row_landing_exactly_on_the_upper_bound_is_outside_the_window(): void
+    {
+        $this->fakeMeta();
+        app(MessagingCostReport::class)->refresh(7);
+
+        $to = Carbon::parse(
+            app(MessagingCostReport::class)->summary(7)['to'],
+        );
+
+        SiteAgentUsage::create([
+            'customer_id' => Customer::factory()->create()->id,
+            'provider_message_id' => 'wamid-on-the-boundary',
+            'billable' => true,
+            'sent_at' => $to,
+        ]);
+
+        $this->assertSame(0, app(MessagingCostReport::class)->summary(7)['sent_messages']);
+
+        // ושנייה אחת לפניו — כן בתוך החלון.
+        SiteAgentUsage::create([
+            'customer_id' => Customer::factory()->create()->id,
+            'provider_message_id' => 'wamid-just-inside',
+            'billable' => true,
+            'sent_at' => $to->copy()->subSecond(),
+        ]);
+
+        $this->assertSame(1, app(MessagingCostReport::class)->summary(7)['sent_messages']);
     }
 }

@@ -77,7 +77,12 @@ class MessagingCostReport
     {
         $days = in_array($days, self::WINDOWS, true) ? $days : 30;
 
-        $end = Carbon::now();
+        /*
+         | Truncated to the second, because that is what is transmitted: the Graph
+         | call sends a UNIX timestamp, and a cached bound carrying milliseconds
+         | would not be the bound Meta actually answered about.
+         */
+        $end = Carbon::now()->startOfSecond();
         $start = $end->copy()->subDays($days);
 
         $data = $this->whatsapp->pricingAnalytics($start, $end);
@@ -190,20 +195,44 @@ class MessagingCostReport
                 $costGiven = array_key_exists('cost', $point) && $point['cost'] !== null;
                 $hasCost = $hasCost || $costGiven;
 
-                // round(), not (int): 0.61 × 100 lands on 60.999… in binary, and
-                // truncating it loses an agora on every single row.
-                $cost = $costGiven ? (int) round(((float) $point['cost']) * 100) : 0;
+                /*
+                 | Accumulated in HUNDREDTHS of an agora, and rounded to agorot
+                 | only once the whole category is summed.
+                 |
+                 | DAILY granularity times category means many points, each a
+                 | decimal. Rounding every one of them to a whole agora first
+                 | throws away the fraction each time: two points of ILS 0.004
+                 | become 0 + 0 = 0, where the sum is 0.008 and rounds to 1. The
+                 | residues do not cancel, they are simply lost — understating the
+                 | cost and flattering the margin.
+                 |
+                 | Integers throughout, per the money rule: the decimal from Meta
+                 | is scaled once on the way in, and nothing downstream is a float.
+                 */
+                $scaled = $costGiven ? (int) round(((float) $point['cost']) * 10000) : 0;
                 $count = (int) ($point['volume'] ?? 0);
 
-                $byCategory[$category]['cost'] = ($byCategory[$category]['cost'] ?? 0) + $cost;
+                $byCategory[$category]['scaled'] = ($byCategory[$category]['scaled'] ?? 0) + $scaled;
                 $byCategory[$category]['messages'] = ($byCategory[$category]['messages'] ?? 0) + $count;
 
-                $total += $cost;
                 $messages += $count;
             }
         }
 
         krsort($byCategory);
+
+        /*
+         | Each category rounded once, and the overall total taken as the SUM of
+         | those rounded figures rather than rounded separately. Rounding the two
+         | independently lets the table disagree with its own total by an agora,
+         | and a report that does not add up is worse than one less precise.
+         */
+        foreach ($byCategory as $key => $row) {
+            $byCategory[$key]['cost'] = (int) round(((int) $row['scaled']) / 100);
+            unset($byCategory[$key]['scaled']);
+
+            $total += $byCategory[$key]['cost'];
+        }
 
         return [
             'by_category' => $byCategory,
@@ -318,7 +347,8 @@ class MessagingCostReport
     {
         // Messages sent in the window, grouped by the charge that settled them.
         $settled = SiteAgentUsage::query()
-            ->whereBetween('sent_at', [$from, $to])
+            ->where('sent_at', '>=', $from)
+            ->where('sent_at', '<', $to)
             ->whereNotNull('charge_id')
             ->groupBy('charge_id')
             ->selectRaw('charge_id, COUNT(*) as in_window')
@@ -327,7 +357,8 @@ class MessagingCostReport
         // Sent, billable, and not yet on any invoice. Revenue that is owed but
         // not yet earned — shown separately so it is neither claimed nor lost.
         $pending = SiteAgentUsage::query()
-            ->whereBetween('sent_at', [$from, $to])
+            ->where('sent_at', '>=', $from)
+            ->where('sent_at', '<', $to)
             ->whereNull('charge_id')
             ->where('billable', true)
             ->count();
@@ -395,7 +426,12 @@ class MessagingCostReport
         // Two plain counts rather than one aggregate with a CASE: a boolean in
         // raw SQL is 0/1 on SQLite and true/false on Postgres, and the tests run
         // on one while production runs on the other.
-        $base = fn () => SiteAgentUsage::query()->whereBetween('sent_at', [$from, $to]);
+        // Half-open, like the analytics bucket it is compared against: Meta's
+        // `end` is the next bucket's `start`, so a row landing exactly on it has
+        // no cost on our side of the comparison.
+        $base = fn () => SiteAgentUsage::query()
+            ->where('sent_at', '>=', $from)
+            ->where('sent_at', '<', $to);
 
         return [
             'sent' => $base()->count(),
