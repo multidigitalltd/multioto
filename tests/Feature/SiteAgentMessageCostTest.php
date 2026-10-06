@@ -1207,4 +1207,25 @@ class SiteAgentMessageCostTest extends TestCase
         $this->assertSame(1, $summary['sent_messages'], 'יחידת כתיבה נספרה כהודעה שנשלחה.');
         $this->assertSame(1, $summary['pending_messages'], 'יחידת כתיבה נספרה כהודעה שממתינה לחיוב.');
     }
+
+    /**
+     * המסך מזהיר על המכסה החינמית.
+     *
+     * וואטסאפ מעמיד לכל מספר מכסה חודשית של הודעות שירות בחינם. חודש שכולו בתוכה
+     * מציג נקודת איזון נמוכה מאוד, ומי שיקבע לפיה את "מחיר להודעה" יתמחר לפי
+     * עלות שאינה קיימת בנפח גבוה. העלות עצמה נכונה תמיד — היא נשלפת ממטא ולא
+     * מחושבת מתעריף — ולכן זו אזהרת קריאה ולא תיקון חישוב.
+     */
+    public function test_the_screen_warns_about_the_free_monthly_allowance(): void
+    {
+        $this->fakeMeta();
+        app(MessagingCostReport::class)->refresh();
+
+        $this->actingAs(User::factory()->create(['role' => UserRole::Admin]));
+
+        $this->get(SiteAgentMessageCost::getUrl())
+            ->assertOk()
+            ->assertSee('מכסה החינמית')
+            ->assertSee('אל תקבעו לפיו');
+    }
 }
