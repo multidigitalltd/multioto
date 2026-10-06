@@ -134,6 +134,14 @@ class SiteAgentStoreTest extends TestCase
      * בדיוק המשפט שעליו מתווכחים אחר כך מול החשבונית — ולכן נבדקים שני הדברים
      * יחד, וגם שהברוטו עצמו אינו מופיע כמחיר.
      */
+    /** The page promises the retention the pruning job actually applies. */
+    public function test_the_page_states_the_transcript_retention_actually_configured(): void
+    {
+        config(['siteagent.assistant.transcript_days' => 30]);
+
+        $this->get(route('store.agent'))->assertOk()->assertSee('30 ימים');
+    }
+
     public function test_the_page_quotes_net_prices_and_says_the_vat_out_loud(): void
     {
         $page = $this->get(route('store.agent'))->assertOk();
