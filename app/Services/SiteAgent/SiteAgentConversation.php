@@ -7,6 +7,7 @@ use App\Models\SiteAgentMessage;
 use App\Models\SiteAgentRequest;
 use App\Models\SiteAgentSubscriber;
 use App\Models\SystemLog;
+use App\Services\Ai\AiUsageAttribution;
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Storage;
@@ -55,6 +56,16 @@ class SiteAgentConversation
      */
     public function handle(SiteAgentSubscriber $subscriber, string $text, ?string $messageId, ?string $mediaId = null): string
     {
+        // Every AI call this message causes is booked to this customer, so the
+        // usage screen can set what they cost against what they pay.
+        return app(AiUsageAttribution::class)->for(
+            $subscriber->customer_id,
+            fn (): string => $this->handleFor($subscriber, $text, $messageId, $mediaId),
+        );
+    }
+
+    private function handleFor(SiteAgentSubscriber $subscriber, string $text, ?string $messageId, ?string $mediaId): string
+    {
         $text = trim($text);
 
         if ($text === '' && $mediaId === null) {
@@ -72,7 +83,10 @@ class SiteAgentConversation
         // site and calls the model several times; a lock that lapsed in the
         // middle of it would let the next message read a conversation this one
         // is still writing.
-        $lock = Cache::lock("site-agent:conversation:{$subscriber->id}", 600);
+        // Held as long as the job may run (1,200s): a confirmed batch of plugin
+        // updates can take most of that, and a lock that expires mid-turn lets
+        // a "בטל" in through the middle of it.
+        $lock = Cache::lock("site-agent:conversation:{$subscriber->id}", 1250);
 
         try {
             // WAITS for its turn rather than giving up on it. The job runs once
@@ -709,6 +723,9 @@ class SiteAgentConversation
         $last = SiteAgentRequest::query()
             ->where('site_agent_subscriber_id', $subscriber->id)
             ->revertable()
+            // A cache flush or an emailed note has nothing to put back; "בטל"
+            // means the last change that does.
+            ->whereNotNull('restore')
             ->latest('applied_at')
             ->first();
 

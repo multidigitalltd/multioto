@@ -232,12 +232,36 @@ class SiteAgentUsageMeter
             return;
         }
 
-        SiteAgentUsage::query()
+        $plan = $charge->subscription?->plan;
+        $priced = array_keys(array_filter([
+            SiteAgentUsage::MESSAGE => (bool) $plan?->billsMessages(),
+            SiteAgentUsage::WRITING => (bool) $plan?->billsWritings(),
+        ]));
+
+        $rows = fn () => SiteAgentUsage::query()
             ->where('subscription_id', $charge->subscription_id)
             ->where('billable', true)
             ->whereNull('charge_id')
+            ->where('sent_at', '<=', $until);
+
+        // The kinds this charge priced are stamped with it.
+        $rows()->whereIn('kind', $priced)->update(['charge_id' => $charge->id]);
+
+        // A kind the plan no longer prices was not on this charge and never
+        // will be: closed as not billable, rather than waiting for ever — or
+        // being stamped as paid when it was not.
+        $rows()->whereNotIn('kind', $priced)->update(['billable' => false]);
+    }
+
+    /** Is any billable row of this subscription still waiting, of any kind? */
+    public function anyUnsettled(Subscription $subscription, CarbonInterface $until): bool
+    {
+        return SiteAgentUsage::query()
+            ->where('subscription_id', $subscription->id)
+            ->where('billable', true)
+            ->whereNull('charge_id')
             ->where('sent_at', '<=', $until)
-            ->update(['charge_id' => $charge->id]);
+            ->exists();
     }
 
     /**
@@ -250,7 +274,9 @@ class SiteAgentUsageMeter
     {
         $cap = $subscription?->site_agent_message_cap;
 
-        return $cap !== null && $this->unbilled($subscription, now()) >= $cap;
+        // A plan that does not price messages has nothing for a ceiling to hold.
+        return $cap !== null && (bool) $subscription->plan?->billsMessages()
+            && $this->unbilled($subscription, now()) >= $cap;
     }
 
     /**

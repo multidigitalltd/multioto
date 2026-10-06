@@ -475,8 +475,17 @@ class MessagingCostReport
      */
     private function revenue(Carbon $from, Carbon $to): array
     {
-        // Messages sent in the window, grouped by the charge that settled them.
+        /*
+         | Messages only.
+         |
+         | The same ledger also holds writing units, told apart by `kind`, and a
+         | renewal settles both against the same charge. Counting them here would
+         | attribute writing revenue to messages, inflate the window's share of a
+         | charge, and report writing units as pending or unbilled messages — all
+         | inside a screen whose only subject is what Meta charges for messages.
+         */
         $settled = SiteAgentUsage::query()
+            ->where('kind', SiteAgentUsage::MESSAGE)
             ->where('sent_at', '>=', $from)
             ->where('sent_at', '<', $to)
             ->whereNotNull('charge_id')
@@ -497,6 +506,7 @@ class MessagingCostReport
          | cancelled is counted as sent, never as owed.
          */
         $pending = SiteAgentUsage::query()
+            ->where('kind', SiteAgentUsage::MESSAGE)
             ->where('sent_at', '>=', $from)
             ->where('sent_at', '<', $to)
             ->whereNull('charge_id')
@@ -573,6 +583,7 @@ class MessagingCostReport
         // `end` is the next bucket's `start`, so a row landing exactly on it has
         // no cost on our side of the comparison.
         $base = fn () => SiteAgentUsage::query()
+            ->where('kind', SiteAgentUsage::MESSAGE)
             ->where('sent_at', '>=', $from)
             ->where('sent_at', '<', $to);
 

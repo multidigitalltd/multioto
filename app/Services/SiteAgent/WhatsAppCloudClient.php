@@ -88,18 +88,23 @@ class WhatsAppCloudClient
      * allows in an interactive body goes as text first, with the buttons in
      * a short message after it.
      */
-    public function sendConfirmation(string $to, string $body): ?string
+    public function sendConfirmation(string $to, string $body, ?int $requestId = null): ?string
     {
         $question = 'לבצע את השינוי?';
+        $preview = null;
 
         if (mb_strlen($body) > self::INTERACTIVE_BODY_MAX) {
-            if ($this->sendText($to, $body) === null) {
+            $preview = $this->sendText($to, $body);
+
+            if ($preview === null) {
                 return null;
             }
         } else {
             $question = $body;
         }
 
+        // The preview already went out as text: a failed button message must
+        // not send it a second time — typing "כן" still works.
         return $this->send($to, [
             'type' => 'interactive',
             'interactive' => [
@@ -107,11 +112,11 @@ class WhatsAppCloudClient
                 'body' => ['text' => $question],
                 'footer' => ['text' => 'אפשר גם לכתוב "כן" או "לא"'],
                 'action' => ['buttons' => [
-                    ['type' => 'reply', 'reply' => ['id' => self::BUTTON_YES, 'title' => '✅ כן, לבצע']],
-                    ['type' => 'reply', 'reply' => ['id' => self::BUTTON_NO, 'title' => '❌ לא']],
+                    ['type' => 'reply', 'reply' => ['id' => self::BUTTON_YES.($requestId !== null ? ":{$requestId}" : ''), 'title' => '✅ כן, לבצע']],
+                    ['type' => 'reply', 'reply' => ['id' => self::BUTTON_NO.($requestId !== null ? ":{$requestId}" : ''), 'title' => '❌ לא']],
                 ]],
             ],
-        ]);
+        ]) ?? $preview;
     }
 
     /**
@@ -122,16 +127,38 @@ class WhatsAppCloudClient
      */
     public static function buttonText(array $payload): string
     {
-        $reply = match ((string) ($payload['type'] ?? '')) {
-            'interactive' => (array) data_get($payload, 'interactive.button_reply', []),
-            'button' => ['id' => '', 'title' => (string) data_get($payload, 'button.text', '')],
-            default => [],
-        };
+        $reply = self::buttonReply($payload);
 
-        return match ((string) ($reply['id'] ?? '')) {
+        return match (strtok((string) ($reply['id'] ?? ''), ':')) {
             self::BUTTON_YES => 'כן',
             self::BUTTON_NO => 'לא',
             default => trim((string) ($reply['title'] ?? '')),
+        };
+    }
+
+    /**
+     * The offer a tapped button belongs to, when it carries one — so an old
+     * button scrolled back to is not read as an answer to a newer offer.
+     *
+     * @param  array<string, mixed>  $payload
+     */
+    public static function buttonRequestId(array $payload): ?int
+    {
+        $id = (string) (self::buttonReply($payload)['id'] ?? '');
+
+        return preg_match('/^site_agent_(?:yes|no):(\d+)$/', $id, $match) === 1 ? (int) $match[1] : null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array<string, mixed>
+     */
+    private static function buttonReply(array $payload): array
+    {
+        return match ((string) ($payload['type'] ?? '')) {
+            'interactive' => (array) data_get($payload, 'interactive.button_reply', []),
+            'button' => ['id' => '', 'title' => (string) data_get($payload, 'button.text', '')],
+            default => [],
         };
     }
 

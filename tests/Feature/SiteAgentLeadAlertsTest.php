@@ -40,6 +40,9 @@ class SiteAgentLeadAlertsTest extends TestCase
     /** wp_lead_list calls made. */
     private int $reads = 0;
 
+    /** Does the fake plugin take a cursor (1.8.4+)? */
+    private bool $cursorPlugin = false;
+
     private SiteAgentSubscriber $number;
 
     protected function setUp(): void
@@ -257,6 +260,88 @@ class SiteAgentLeadAlertsTest extends TestCase
         $this->assertStringContainsString('מתוך 5 ההודעות', $this->sent[1][2]);
     }
 
+    public function test_a_plugin_with_a_cursor_reads_a_whole_burst_to_its_end(): void
+    {
+        $this->cursorPlugin = true;
+        $this->leads = [];
+        $this->enable();
+        $start = (int) $this->number->fresh()->lead_alert_cursor;
+
+        // 120 new leads, one a second, between two checks: more than one read holds.
+        foreach (range(1, 120) as $i) {
+            $this->leads[] = [...$this->lead(1000 + $i, "ליד {$i}"), 'ts' => $start + $i];
+        }
+
+        $this->runAlerts();
+
+        // The oldest of the burst comes first, and the count is exact — no "at least".
+        $this->assertStringContainsString('ליד 1', $this->sent[0][2]);
+        $this->assertStringContainsString('ועוד 117 לידים', $this->sent[2][2]);
+        $this->assertStringNotContainsString('לפחות', $this->sent[2][2]);
+        // Every one of them accounted for, and the cursor past the last.
+        $this->assertSame($start + 120, $this->number->fresh()->lead_alert_cursor);
+
+        $this->runAlerts();
+        $this->assertCount(3, $this->sent);
+    }
+
+    public function test_a_lead_cannot_switch_alerts_on_or_lift_the_cap(): void
+    {
+        Subscription::query()->update(['site_agent_message_cap' => 100]);
+
+        $this->model(function (Closure $tool): string {
+            // What a planted lead might talk the model into, while the owner
+            // only asked to see who left details.
+            $tool('find_leads', []);
+            $alerts = $tool('lead_alerts', ['on' => true]);
+            $cap = $tool('message_cap', ['limit' => 0]);
+
+            $this->assertTrue($alerts['is_error']);
+            $this->assertTrue($cap['is_error']);
+
+            return 'יש ליד אחד.';
+        });
+
+        $this->talk('מי השאיר פרטים היום?');
+
+        $this->assertFalse((bool) $this->number->fresh()->lead_alerts);
+        $this->assertSame(100, Subscription::sole()->site_agent_message_cap);
+    }
+
+    public function test_two_runs_at_once_announce_a_lead_once(): void
+    {
+        $this->enable();
+        array_unshift($this->leads, $this->lead(2, 'רון'));
+
+        // Another worker is mid-run.
+        $held = Cache::lock('site-agent:lead-alerts', 60);
+        $held->get();
+        $this->runAlerts();
+        $this->assertSame([], $this->sent);
+
+        $held->release();
+        $this->runAlerts();
+        $this->assertCount(1, $this->sent);
+    }
+
+    public function test_more_leads_in_one_second_than_a_page_holds_are_all_read(): void
+    {
+        $this->cursorPlugin = true;
+        $this->leads = [];
+        $this->enable();
+        $second = (int) $this->number->fresh()->lead_alert_cursor + 5;
+
+        // An import: 70 leads stamped with the very same second.
+        foreach (range(1, 70) as $i) {
+            $this->leads[] = [...$this->lead(5000 + $i, "יבוא {$i}"), 'ts' => $second];
+        }
+
+        $this->runAlerts();
+
+        $this->assertStringContainsString('ועוד 67 לידים', $this->sent[2][2]);
+        $this->assertStringNotContainsString('לפחות', $this->sent[2][2]);
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────
 
     private function enable(): void
@@ -297,14 +382,28 @@ class SiteAgentLeadAlertsTest extends TestCase
     private function fakeSite(): void
     {
         $mcp = Mockery::mock(McpClient::class);
-        $mcp->shouldReceive('callTool')->andReturnUsing(function (Site $site, string $tool) {
+        $mcp->shouldReceive('callTool')->andReturnUsing(function (Site $site, string $tool, array $arguments = []) {
             if ($tool !== 'wp_lead_list') {
                 return [];
             }
 
             $this->reads++;
 
-            return ['count' => count($this->leads), 'sources' => ['elementor'], 'leads' => $this->leads];
+            if ($this->cursorPlugin && isset($arguments['after'])) {
+                // Oldest first from the cursor, a page at a time — as 1.8.4 does.
+                $key = fn (array $lead): string => $lead['source'].':'.$lead['id'];
+                $from = array_values(array_filter($this->leads, fn (array $lead): bool => $lead['ts'] > $arguments['after']
+                    || ($lead['ts'] === $arguments['after'] && strcmp($key($lead), (string) ($arguments['after_key'] ?? '')) > 0)));
+                usort($from, fn (array $a, array $b): int => [$a['ts'], $key($a)] <=> [$b['ts'], $key($b)]);
+                $page = array_slice($from, 0, $arguments['limit']);
+
+                return ['count' => count($page), 'sources' => ['elementor'], 'leads' => $page, 'has_more' => count($from) > count($page)];
+            }
+
+            $newest = $this->leads;
+            usort($newest, fn (array $a, array $b): int => ($b['ts'] ?? 0) <=> ($a['ts'] ?? 0));
+
+            return ['count' => count($this->leads), 'sources' => ['elementor'], 'leads' => array_slice($newest, 0, 50)];
         });
         $mcp->shouldReceive('textContent')->andReturnUsing(fn ($result): string => json_encode($result, JSON_UNESCAPED_UNICODE));
         $this->app->instance(McpClient::class, $mcp);

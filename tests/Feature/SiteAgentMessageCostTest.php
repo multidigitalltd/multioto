@@ -1166,4 +1166,45 @@ class SiteAgentMessageCostTest extends TestCase
          */
         $this->assertSame(1220, $summary['unbilled_cost_agorot']);
     }
+
+    /**
+     * יחידות כתיבה אינן הודעות, גם כשהן באותו יומן ובאותו חיוב.
+     *
+     * אותה טבלה מחזיקה את שתיהן, מובדלות ב-kind, וחידוש מסדיר את שתיהן מול אותו
+     * חיוב. ספירתן כאן הייתה מייחסת הכנסה מכתיבה להודעות, מנפחת את חלקו של חלון
+     * בחיוב, ומדווחת יחידות כתיבה כהודעות שממתינות לחיוב — הכול בתוך מסך שכל
+     * נושאו הוא מה שמטא גובה על הודעות.
+     */
+    public function test_writing_units_are_not_counted_as_messages(): void
+    {
+        $this->fakeMeta();
+        app(MessagingCostReport::class)->refresh();
+
+        $subscription = $this->collectable();
+
+        // הודעה אחת ויחידת כתיבה אחת, שתיהן ממתינות ושתיהן באותו חלון.
+        SiteAgentUsage::create([
+            'customer_id' => $subscription->customer_id,
+            'subscription_id' => $subscription->id,
+            'provider_message_id' => 'wamid-a-message',
+            'kind' => SiteAgentUsage::MESSAGE,
+            'billable' => true,
+            'sent_at' => now()->subHour(),
+        ]);
+
+        SiteAgentUsage::create([
+            'customer_id' => $subscription->customer_id,
+            'subscription_id' => $subscription->id,
+            'provider_message_id' => 'wamid-a-writing',
+            'kind' => SiteAgentUsage::WRITING,
+            'words' => 900,
+            'billable' => true,
+            'sent_at' => now()->subHour(),
+        ]);
+
+        $summary = app(MessagingCostReport::class)->summary();
+
+        $this->assertSame(1, $summary['sent_messages'], 'יחידת כתיבה נספרה כהודעה שנשלחה.');
+        $this->assertSame(1, $summary['pending_messages'], 'יחידת כתיבה נספרה כהודעה שממתינה לחיוב.');
+    }
 }

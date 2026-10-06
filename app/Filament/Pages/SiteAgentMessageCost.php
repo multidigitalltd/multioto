@@ -36,7 +36,9 @@ class SiteAgentMessageCost extends Page
 
     protected static ?string $title = 'בוט ניהול האתר — עלות ההודעות מול מה שחויב';
 
-    protected static ?int $navigationSort = 24;
+    // 25 ולא 24: לוח השימוש בבוט יושב על 24 באותה קבוצה, ושני פריטים באותו
+    // מספר מסתדרים ביניהם באופן שרירותי.
+    protected static ?int $navigationSort = 25;
 
     protected static string $view = 'filament.pages.site-agent-message-cost';
 

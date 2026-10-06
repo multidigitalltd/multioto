@@ -587,6 +587,49 @@ class SiteAgentAssistantTest extends TestCase
         $this->assertSame(0, SiteAgentUsage::where('kind', SiteAgentUsage::WRITING)->count());
     }
 
+    public function test_a_change_whose_worker_died_is_not_left_applying_for_ever(): void
+    {
+        $subscriber = $this->subscriber();
+        $stuck = SiteAgentRequest::create([
+            'site_agent_subscriber_id' => $subscriber->id, 'site_id' => $subscriber->site_id, 'customer_id' => $subscriber->customer_id,
+            'message' => 'x', 'operation' => SiteAgentRequest::OP_CACHE_FLUSH, 'state' => SiteAgentRequest::APPLYING,
+            'plan' => ['operation' => SiteAgentRequest::OP_CACHE_FLUSH, 'summary' => 'x'], 'expires_at' => now()->addHour(),
+        ]);
+        SiteAgentRequest::query()->whereKey($stuck->id)->update(['updated_at' => now()->subHour()]);
+
+        app()->call([new PruneSiteAgentRequestsJob, 'handle']);
+
+        $this->assertSame(SiteAgentRequest::FAILED, $stuck->fresh()->state);
+    }
+
+    public function test_undo_skips_a_change_that_has_nothing_to_put_back(): void
+    {
+        $subscriber = $this->subscriber();
+        $this->ordersOnSite();
+        $restorable = SiteAgentRequest::create([
+            'site_agent_subscriber_id' => $subscriber->id, 'site_id' => $subscriber->site_id, 'customer_id' => $subscriber->customer_id,
+            'message' => 'x', 'operation' => SiteAgentRequest::OP_ORDER_STATUS, 'state' => SiteAgentRequest::APPLIED,
+            'plan' => ['operation' => SiteAgentRequest::OP_ORDER_STATUS, 'summary' => 'x'], 'applied_at' => now()->subMinutes(5),
+            'restore' => ['kind' => 'order_status', 'order_id' => 55, 'status' => 'processing', 'after' => 'completed'],
+            'expires_at' => now()->addHour(),
+        ]);
+        // A cache flush after it: applied, nothing to put back.
+        SiteAgentRequest::create([
+            'site_agent_subscriber_id' => $subscriber->id, 'site_id' => $subscriber->site_id, 'customer_id' => $subscriber->customer_id,
+            'message' => 'y', 'operation' => SiteAgentRequest::OP_CACHE_FLUSH, 'state' => SiteAgentRequest::APPLIED,
+            'plan' => ['operation' => SiteAgentRequest::OP_CACHE_FLUSH, 'summary' => 'y'], 'applied_at' => now(),
+            'expires_at' => now()->addHour(),
+        ]);
+
+        // The order is where the change left it.
+        $this->site['wc_order_status_set'] = ['changed' => true, 'order_id' => 55, 'status' => 'processing', 'previous' => 'completed'];
+
+        $this->talk($subscriber, 'בטל');
+
+        // "בטל" reached the order change, not the flush that came after it.
+        $this->assertSame(SiteAgentRequest::REVERTED, $restorable->fresh()->state);
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────
 
     /** @param array<string, mixed> $capabilities */

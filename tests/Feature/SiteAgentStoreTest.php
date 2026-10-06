@@ -654,50 +654,51 @@ class SiteAgentStoreTest extends TestCase
     }
 
     /**
-     * לקוח חוזר אינו הופך ללקוח שני — אבל אתר שני הוא שירות שני.
+     * אדם זר שיודע מייל ודומיין של לקוח קיים אינו יכול להשתלט על האתר שלו.
      *
-     * לקוח אחד: החשבונית, הגבייה וכל שיחה עתידית תלויות בו, ושניים מהם פירושם
-     * שני מאזנים ושני סולמות גבייה על אותו עסק.
-     *
-     * מנוי לכל אתר: מנוי משותף היה אומר שהאתר השני שולם פעם אחת בקופה ומתחדש
-     * בתוך המחיר של הראשון — לקוח שמקבל אתר שני חינם מהחודש השני, בלי שאיש
-     * יבחין. מה שכן משותף הוא מספר נוסף לאותו אתר, וזה מקום בתשלום.
+     * הטופס ציבורי ושום דבר בו אינו מוכיח בעלות על המייל. קודם לכן קנייה עם
+     * מייל של לקוח קיים חוברה לאותו לקוח, השתמשה באתר הקיים שלו, קשרה את
+     * הטלפון של הקונה לאתר — ועמוד האישור הציג את המפתח של האתר.
      */
-    public function test_a_returning_customer_is_one_customer_and_a_second_site_is_a_second_subscription(): void
+    public function test_a_stranger_cannot_buy_their_way_onto_an_existing_customers_site(): void
     {
         $this->fakeCardcom();
         $this->buy();
         $this->pay(SiteAgentOrder::sole());
+        $victimSite = Site::sole();
 
-        $this->buy(['domain' => 'second-site.co.il']);
-        $this->pay(SiteAgentOrder::query()->latest('id')->firstOrFail(), 'tx-2');
+        $response = $this->buy(['phone' => '052-9999999']);
 
-        $this->assertSame(1, Customer::count());
-        $this->assertSame(2, Site::count());
-        $this->assertSame(2, SiteAgentSubscriber::count());
-
-        $subscriptions = Subscription::all();
-        $this->assertCount(2, $subscriptions);
-        // Each one billing its own site, at the full plan price.
-        $this->assertEqualsCanonicalizing(
-            Site::pluck('id')->all(),
-            $subscriptions->pluck('site_id')->all(),
-        );
-        $this->assertSame([14900, 14900], $subscriptions->map->basePriceAgorot()->all());
+        $response->assertSessionHasErrors(['email']);
+        $this->assertSame(1, SiteAgentOrder::count());
+        $this->assertSame(1, Site::count());
+        $this->assertFalse(SiteAgentSubscriber::where('phone', '972529999999')->exists());
+        $this->assertSame($victimSite->id, Site::sole()->id);
     }
 
-    /** אבל קנייה חוזרת של אותו אתר אינה פותחת מנוי שני עליו. */
-    public function test_buying_the_same_site_again_does_not_open_a_second_subscription(): void
+    /** ולקוח חוזר אמיתי מופנה לאזור האישי — בלי מנוי כפול ובלי לקוח כפול. */
+    public function test_a_returning_customer_is_sent_to_their_personal_area(): void
     {
         $this->fakeCardcom();
         $this->buy();
         $this->pay(SiteAgentOrder::sole());
 
-        $this->buy();
-        $this->pay(SiteAgentOrder::query()->latest('id')->firstOrFail(), 'tx-2');
+        $this->buy(['domain' => 'second-site.co.il'])
+            ->assertSessionHasErrors(['email' => 'כתובת המייל הזאת כבר רשומה אצלנו כלקוח. כדי לחבר את הבוט לחשבון הקיים, היכנסו לאזור האישי או כתבו לנו ונחבר אותו עבורכם.']);
 
+        $this->assertSame(1, Customer::count());
         $this->assertSame(1, Subscription::count());
-        $this->assertSame(1, Site::count());
+    }
+
+    /** אבל ניסיון קודם שלא שולם אינו חוסם — ולא נפתח לקוח לכל ניסיון. */
+    public function test_an_unpaid_earlier_attempt_does_not_block_or_duplicate(): void
+    {
+        $this->fakeCardcom();
+        $this->buy();
+        $this->buy();
+
+        $this->assertSame(1, Customer::count());
+        $this->assertSame(2, SiteAgentOrder::count());
     }
 
     /**

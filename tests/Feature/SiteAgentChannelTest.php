@@ -20,6 +20,7 @@ use App\Services\Agent\McpClient;
 use App\Services\Ai\ClaudeClient;
 use App\Services\SiteAgent\SiteAgentAccess;
 use App\Services\SiteAgent\SiteAgentConversation;
+use App\Services\SiteAgent\SiteAgentWelcome;
 use App\Services\SiteAgent\SiteChoice;
 use App\Services\SiteAgent\WhatsAppCloudClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -811,6 +812,118 @@ class SiteAgentChannelTest extends TestCase
 
         $this->assertSame(1, $notices);
         $this->assertSame(5, SiteAgentUsage::count());
+    }
+
+    public function test_a_shop_is_welcomed_with_things_a_shop_does(): void
+    {
+        Http::fake(['*' => Http::response(['messages' => [['id' => 'wamid.reply']]])]);
+        $subscriber = $this->subscriber([
+            'verified_at' => null,
+            'verification_code' => Hash::make('447291'),
+            'verification_sent_at' => now(),
+        ]);
+        $subscriber->site->update(['mcp_capabilities' => ['tools' => [['name' => 'wc_order_list'], ['name' => 'wp_lead_list']]]]);
+
+        $this->deliver('972501234567', '447291');
+
+        $this->assertReplyContains('כמה הזמנות היו היום?');
+        $this->assertReplyContains('"בטל"');
+    }
+
+    public function test_a_site_without_a_shop_is_welcomed_with_leads_and_pages(): void
+    {
+        Http::fake(['*' => Http::response(['messages' => [['id' => 'wamid.reply']]])]);
+        $this->subscriber([
+            'verified_at' => null,
+            'verification_code' => Hash::make('447291'),
+            'verification_sent_at' => now(),
+        ]);
+
+        $this->deliver('972501234567', '447291');
+
+        $this->assertReplyContains('תודיע לי על כל ליד חדש');
+        $this->assertReplyDoesNotContain('כמה הזמנות היו היום?');
+    }
+
+    public function test_a_weekly_tip_rides_on_a_reply_once_a_week_in_the_first_month(): void
+    {
+        Http::fake(fn () => Http::response(['messages' => [['id' => 'wamid.'.uniqid('', true)]]]));
+        $subscriber = $this->subscriber(['verified_at' => now()->subDays(8)]);
+        $this->subscribe($subscriber->customer);
+        $conversation = Mockery::mock(SiteAgentConversation::class);
+        $conversation->shouldReceive('handle')->andReturn('תשובה');
+        $this->app->instance(SiteAgentConversation::class, $conversation);
+
+        $this->deliver('972501234567', 'שלום');
+        $this->deliver('972501234567', 'עוד שאלה');
+
+        $tips = 0;
+        Http::recorded(function ($request) use (&$tips) {
+            $tips += str_starts_with($this->bodyOf($request->data()), '💡 טיפ השבוע') ? 1 : 0;
+
+            return true;
+        });
+
+        // One this week, after the reply — not one per message.
+        $this->assertSame(1, $tips);
+        $this->assertSame(1, $subscriber->refresh()->tips_sent);
+
+        // A number past its first month gets none.
+        $this->travel(40)->days();
+        $this->assertFalse(app(SiteAgentWelcome::class)->tipDue($subscriber->refresh(), 4));
+    }
+
+    public function test_a_button_from_a_replaced_offer_does_not_confirm_the_new_one(): void
+    {
+        Http::fake(['*' => Http::response(['messages' => [['id' => 'wamid.reply']]])]);
+        $subscriber = $this->subscriber();
+        $this->subscribe($subscriber->customer);
+
+        $current = SiteAgentRequest::create([
+            'site_agent_subscriber_id' => $subscriber->id, 'site_id' => $subscriber->site_id, 'customer_id' => $subscriber->customer_id,
+            'message' => 'הצעה ב', 'operation' => SiteAgentRequest::OP_CACHE_FLUSH, 'state' => SiteAgentRequest::AWAITING,
+            'plan' => ['operation' => SiteAgentRequest::OP_CACHE_FLUSH, 'summary' => 'ניקוי'], 'preview' => 'ניקוי מטמון',
+            'expires_at' => now()->addHour(),
+        ]);
+
+        $conversation = Mockery::mock(SiteAgentConversation::class);
+        $conversation->shouldNotReceive('handle');
+        $this->app->instance(SiteAgentConversation::class, $conversation);
+
+        // "כן" tapped under an older offer (id below the current one).
+        $this->deliverTyped('972501234567', ['type' => 'interactive', 'interactive' => [
+            'type' => 'button_reply',
+            'button_reply' => ['id' => WhatsAppCloudClient::BUTTON_YES.':'.($current->id - 1), 'title' => '✅ כן, לבצע'],
+        ]]);
+
+        $this->assertReplyContains('שייך להצעה קודמת');
+        $this->assertSame(SiteAgentRequest::AWAITING, $current->fresh()->state);
+    }
+
+    public function test_a_lapsed_site_does_not_ride_on_another_paid_site(): void
+    {
+        Http::fake(['*' => Http::response(['messages' => [['id' => 'wamid.reply']]])]);
+        $subscriber = $this->subscriber();
+        $plan = Plan::factory()->create(['includes_site_agent' => true]);
+        $otherSite = Site::factory()->create(['customer_id' => $subscriber->customer_id]);
+
+        // Site A paid, this site's own subscription canceled.
+        Subscription::factory()->create(['customer_id' => $subscriber->customer_id, 'plan_id' => $plan->id, 'site_id' => $otherSite->id, 'status' => SubscriptionStatus::Active]);
+        Subscription::factory()->create(['customer_id' => $subscriber->customer_id, 'plan_id' => $plan->id, 'site_id' => $subscriber->site_id, 'status' => SubscriptionStatus::Suspended]);
+
+        $this->assertSame(SiteAgentAccess::NO_SUBSCRIPTION, app(SiteAgentAccess::class)->forSubscriber($subscriber->fresh())['status']);
+    }
+
+    public function test_a_long_offer_whose_buttons_fail_is_not_sent_twice(): void
+    {
+        $sequence = Http::fakeSequence()
+            ->push(['messages' => [['id' => 'wamid.text']]])
+            ->push(['error' => ['message' => 'interactive not allowed']], 400);
+
+        $id = app(WhatsAppCloudClient::class)->sendConfirmation('972501234567', str_repeat('א', 1100));
+
+        $this->assertSame('wamid.text', $id);
+        $this->assertTrue($sequence->isEmpty());
     }
 
     // ── helpers ──────────────────────────────────────────────────────────
