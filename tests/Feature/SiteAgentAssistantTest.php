@@ -414,7 +414,7 @@ class SiteAgentAssistantTest extends TestCase
         $this->assertStringContainsString('propose_product_create ישירות', $system);
         $this->assertStringContainsString('אל תפנה לצוות', $system);
         // Deleting products stays out of reach; creating them is not lumped in with it.
-        $this->assertStringContainsString('מוצרים: יצירה, עדכון והעברה לפח — כן', $system);
+        $this->assertStringContainsString('מוצרים: יצירה, עדכון, העברה לפח — כן', $system);
     }
 
     public function test_without_the_plugin_tool_new_products_are_not_promised(): void
@@ -426,6 +426,8 @@ class SiteAgentAssistantTest extends TestCase
 
         $this->assertStringNotContainsString('יצירת מוצרים חדשים', $this->seenByModel[0]);
         $this->assertStringNotContainsString('propose_product_create ישירות', $this->seenByModel[0]);
+        // Updating is said to be possible; creating is not claimed.
+        $this->assertStringContainsString('מוצרים: עדכון — כן', $this->seenByModel[0]);
     }
 
     public function test_a_store_is_offered_only_the_tools_its_plugin_has(): void

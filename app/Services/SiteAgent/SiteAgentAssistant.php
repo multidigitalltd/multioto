@@ -408,7 +408,7 @@ class SiteAgentAssistant
             '2. שינוי באתר נעשה אך ורק דרך כלי propose_* או edit_page_text. הצעה אחת בכל הודעה; אחרי שהגשת אותה — סיים. לעולם אל תכתוב שמשהו בוצע, עודכן או נשלח: שינוי קורה רק אחרי שבעל האתר עונה "כן" על התצוגה המקדימה, וזה מטופל מחוץ לשיחה איתך.',
             '3. לפני הצעה על פריט קיים, מצא אותו בכלי קריאה באותו סבב (find_* / get_*) והשתמש במזהה שהוחזר. אם יש כמה התאמות — שאל לאיזו הוא מתכוון, אל תבחר בעצמך.',
             '4. בקשה לא ברורה — שאל שאלה אחת ממוקדת. אל תציע שינוי שלא התבקש.',
-            '5. אי אפשר מכאן: החזר כספי, מחיקה סופית של תוכן (לפח — כן; קבצי מדיה — כן), מחיקה של הזמנות או משתמשים, מחיקה סופית של מוצרים (מוצרים: יצירה, עדכון והעברה לפח — כן, דרך propose_*), הרשאת מנהל אתר, עדכון וורדפרס עצמו, התקנת תוספים חדשים, כלי אבטחה, עיצוב וקוד. אמור זאת בנימוס'
+            '5. אי אפשר מכאן: החזר כספי, מחיקה סופית של תוכן (לפח — כן; קבצי מדיה — כן), מחיקה של הזמנות או משתמשים, מחיקה סופית של מוצרים'.$this->productAbilities($names).', הרשאת מנהל אתר, עדכון וורדפרס עצמו, התקנת תוספים חדשים, כלי אבטחה, עיצוב וקוד. אמור זאת בנימוס'
                 .($support !== '' ? " והפנה לצוות ({$support})." : ' והפנה לצוות Multi Digital.'),
             ($off = app(SiteAgentPermissions::class)->disabledLabels()) !== []
                 ? '5א. הצוות כיבה בחשבון הזה: '.implode('; ', $off).'. בקשה כזו — אמור בנימוס שהיא כבויה בחשבון והפנה לצוות; אל תציע דרך עוקפת.'
@@ -426,6 +426,24 @@ class SiteAgentAssistant
             'סגנון: עברית, קצר וברור, מותאם לוואטסאפ. *מודגש* בכוכבית אחת, רשימות עם •. בלי כותרות Markdown ובלי טבלאות. ברשימה ארוכה — עד 10 פריטים וסיכום של השאר. סכומים עם ₪.',
             ...$this->teamInstructions(),
         ], fn (?string $line): bool => $line !== null));
+    }
+
+    /**
+     * What may be done with products here, said beside what may not — so
+     * "no permanent delete" is never read as "nothing with products". Only
+     * what this site's tools actually offer.
+     *
+     * @param  list<string>  $names
+     */
+    private function productAbilities(array $names): string
+    {
+        $can = array_keys(array_filter([
+            'יצירה' => in_array('propose_product_create', $names, true),
+            'עדכון' => in_array('propose_product_update', $names, true),
+            'העברה לפח' => in_array('propose_product_trash', $names, true),
+        ]));
+
+        return $can === [] ? '' : ' (מוצרים: '.implode(', ', $can).' — כן, דרך propose_*)';
     }
 
     /**
