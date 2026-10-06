@@ -91,7 +91,21 @@ class MessagingCostReport
             return $this->fail($days, $this->whatsapp->lastError() ?: 'מטא לא החזירה נתוני עלות.');
         }
 
-        $parsed = $this->parse((array) ($data['analytics'] ?? []));
+        $analytics = (array) ($data['analytics'] ?? []);
+
+        /*
+         | A shape we do not recognise, kept apart from a period with nothing in
+         | it. Meta's envelope always carries `data` — a list of series, possibly
+         | empty. Its absence means the contract moved under us, and that must be
+         | reported rather than cached as zero spend: ₪0 is the figure nobody
+         | questions, and "the response shape changed" is the one cause that would
+         | otherwise go unnoticed for as long as the screen kept opening.
+         */
+        if (! array_key_exists('data', $analytics)) {
+            return $this->fail($days, 'התשובה ממטא אינה בצורה המצופה (חסר data). ייתכן ששונה חוזה ה-API — אין לקרוא את זה כאפס.');
+        }
+
+        $parsed = $this->parse($analytics);
 
         /*
          | COST withheld rather than refused.
@@ -103,7 +117,15 @@ class MessagingCostReport
          | this screen exists to preserve into a confident ₪0, and would clear
          | the recorded reason on its way.
          */
-        if (! $parsed['has_cost']) {
+        /*
+         | A period with no points at all is a period in which nothing was sent.
+         | That is a real answer and it caches as zero — treating it as a withheld
+         | cost would file the wrong diagnosis AND keep an older, larger figure on
+         | screen for an account that has simply gone quiet.
+         |
+         | Points that carry volume but no cost are the other thing entirely.
+         */
+        if ($parsed['has_points'] && ! $parsed['has_cost']) {
             return $this->fail($days, 'מטא החזירה נתונים אך בלי עלות. כך היא עונה לחשבון שמחויב דרך קו אשראי של שותף — ואז הסכום קיים רק בחיוב של השותף.');
         }
 
@@ -168,7 +190,11 @@ class MessagingCostReport
      * integer agorot/cents once, here — the only place a float touches money.
      *
      * @param  array<string, mixed>  $analytics
-     * @return array{by_category: array<string, array{cost: int, messages: int}>, total: int, messages: int, has_cost: bool}
+     *                                           `has_points` keeps "nothing was sent" apart from "the cost was withheld".
+     *                                           Both arrive as a response with no cost in it, and they mean opposite things:
+     *                                           one is a quiet month worth caching as zero, the other is an account whose
+     *                                           spend Meta will not disclose.
+     * @return array{by_category: array<string, array{cost: int, messages: int}>, total: int, messages: int, has_cost: bool, has_points: bool}
      */
     private function parse(array $analytics): array
     {
@@ -176,6 +202,7 @@ class MessagingCostReport
         $total = 0;
         $messages = 0;
         $hasCost = false;
+        $hasPoints = false;
 
         foreach ((array) ($analytics['data'] ?? []) as $series) {
             if (! is_array($series)) {
@@ -186,6 +213,8 @@ class MessagingCostReport
                 if (! is_array($point)) {
                     continue;
                 }
+
+                $hasPoints = true;
 
                 $category = strtolower(trim((string) ($point['pricing_category'] ?? 'unknown')));
                 $category = $category === '' ? 'unknown' : $category;
@@ -239,6 +268,7 @@ class MessagingCostReport
             'total' => $total,
             'messages' => $messages,
             'has_cost' => $hasCost,
+            'has_points' => $hasPoints,
         ];
     }
 
@@ -250,7 +280,8 @@ class MessagingCostReport
      *
      * @return array{
      *     cost: ?array<string, mixed>, cost_error: ?array<string, mixed>,
-     *     revenue_net: int, billed_messages: int, included_messages: int, estimated_rows: int,
+     *     revenue_net: int, billed_messages: int, included_messages: int,
+     *     charged_messages: int, break_even_agorot: ?int, estimated_rows: int,
      *     sent_messages: int, unbilled_messages: int,
      *     margin: ?int, comparable: bool, currency: string, days: int
      * }
@@ -294,6 +325,10 @@ class MessagingCostReport
         // nobody could see on the screen.
         $comparable = is_array($cost) && in_array($currency, ['ILS', 'NIS'], true);
 
+        // Messages that actually carry a per-message price: on an invoice, and
+        // not inside the plan's bundled allowance.
+        $charged = max(0, $revenue['messages'] - $revenue['included']);
+
         return [
             'cost' => is_array($cost) ? $cost : null,
             'cost_error' => is_array($error) ? $error : null,
@@ -305,6 +340,26 @@ class MessagingCostReport
             'unbilled_messages' => $counts['unbilled'],
             'pending_messages' => $revenue['pending'],
             'margin' => $comparable ? $revenue['net'] - (int) $cost['total'] : null,
+            /*
+             | What one CHARGED message has to earn to cover the product's whole
+             | messaging spend — the figure the plan's "price per message" is set
+             | against.
+             |
+             | The denominator is deliberately not every message Meta billed us
+             | for. Verification codes and system notices are charged to us and
+             | are never charged on (SiteAgentUsageMeter excludes them), so
+             | dividing by all of them spreads the cost over messages that cannot
+             | recover it: 100 billable replies beside 900 verification codes
+             | would report a tenth of the true break-even, under a label saying
+             | the plan price must beat it.
+             |
+             | Included-in-plan messages are out of the denominator for the same
+             | reason: they earn nothing per message.
+             */
+            'break_even_agorot' => $comparable && $charged > 0
+                ? (int) ceil(((int) $cost['total']) / $charged)
+                : null,
+            'charged_messages' => $charged,
             'comparable' => $comparable,
             'currency' => $currency,
             'days' => $days,
@@ -440,12 +495,16 @@ class MessagingCostReport
     }
 
     /**
-     * What a message costs us on average, in agorot, over the cached period.
+     * What one message costs us on average, over every message Meta billed.
      *
-     * The number the plan's "price per message" has to beat. Null when the cost
-     * is unavailable or in another currency, or when no messages were counted —
-     * dividing by zero to show "₪0.00 per message" would read as free. Per
-     * window, like the cost it divides.
+     * NOT the break-even price — that is `break_even_agorot` on the summary,
+     * which divides by the messages that actually earn. This is the blended cost
+     * of a message of any kind, and its use is pricing the messages nobody pays
+     * for: a trial reply and a verification code cost this much each.
+     *
+     * Null when the cost is unavailable or in another currency, or when no
+     * messages were counted — dividing by zero to show "₪0.00 per message" would
+     * read as free. Per window, like the cost it divides.
      */
     public function costPerMessage(int $days = 30): ?int
     {

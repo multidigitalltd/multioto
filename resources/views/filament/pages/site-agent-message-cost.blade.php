@@ -139,13 +139,22 @@
             @endif
         </div>
 
+        {{-- The break-even price, and deliberately NOT the blended cost of a
+             message. Verification codes and system notices are charged to us and
+             never charged on, so spreading the spend over them would report a
+             fraction of the true figure under a label saying the plan must beat
+             it. The denominator is the messages that actually carry a price. --}}
         <div class="rounded-xl bg-white p-4 shadow-sm dark:bg-gray-800">
-            <div class="text-xs text-gray-500 dark:text-gray-400">עלות ממוצעת להודעה</div>
+            <div class="text-xs text-gray-500 dark:text-gray-400">נקודת האיזון להודעה מחויבת</div>
             <div class="mt-1 text-2xl font-bold">
-                {{ $perMessage === null ? '—' : $ils($perMessage) }}
+                {{ $s['break_even_agorot'] === null ? '—' : $ils($s['break_even_agorot']) }}
             </div>
             <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                זה המספר ש"מחיר להודעה" במסך המסלולים צריך לכסות.
+                זה המספר ש"מחיר להודעה" במסך המסלולים צריך לכסות — כל ההוצאה על ההודעות
+                חלקי {{ number_format($s['charged_messages']) }} ההודעות שבאמת חויבו.
+                @if ($perMessage !== null)
+                    <br>העלות הממוצעת של הודעה כלשהי (כולל קודי אימות והודעות מערכת): {{ $ils($perMessage) }}.
+                @endif
             </div>
         </div>
     </div>

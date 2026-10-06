@@ -512,9 +512,10 @@ class SiteAgentMessageCostTest extends TestCase
         $result = app(MessagingCostReport::class)->refresh();
 
         $this->assertFalse($result['ok']);
-        // והכישלון הוא אחרי שהתשובה נקראה ולא לפניה: בלי האימות הזה הבדיקה
-        // עוברת גם אם הקריאה לא יצאה בכלל, מסיבה שאינה קשורה.
-        $this->assertStringContainsString('קו אשראי של שותף', (string) $result['reason']);
+        // והכישלון הוא על הצורה עצמה: תשובה שאינה בקינון המצופה אינה "חודש שקט"
+        // ואינה נשמרת כאפס. בלי האימות הזה הבדיקה עוברת גם אם הקריאה לא יצאה
+        // בכלל, מסיבה שאינה קשורה.
+        $this->assertStringContainsString('אינה בצורה המצופה', (string) $result['reason']);
         $this->assertNull(app(MessagingCostReport::class)->summary()['cost']);
     }
 
@@ -884,5 +885,85 @@ class SiteAgentMessageCostTest extends TestCase
         ]);
 
         $this->assertSame(1, app(MessagingCostReport::class)->summary(7)['sent_messages']);
+    }
+
+    /*
+    | ----------------------------------------------------------------
+    | סבב רביעי: נקודת איזון אמיתית, וחודש שקט
+    | ----------------------------------------------------------------
+    */
+
+    /**
+     * נקודת האיזון מחולקת בהודעות שבאמת מחויבות, לא בכל מה שמטא גבתה עליו.
+     *
+     * קודי אימות והודעות מערכת מחויבים לנו ואינם מחויבים ללקוח — פריסת ההוצאה
+     * עליהם מורידה את המספר פי כמה, מתחת לתווית שאומרת שמחיר המסלול צריך לכסות
+     * אותו. זה בדיוק המספר היחיד שהמסך הזה קיים כדי לתת.
+     */
+    public function test_the_break_even_rate_divides_by_the_messages_that_actually_earn(): void
+    {
+        // ₪10 בסך הכול: 100 תשובות ו-900 קודי אימות.
+        $this->fakeMeta('ILS', [
+            ['pricing_category' => 'SERVICE', 'cost' => 5.00, 'volume' => 100],
+            ['pricing_category' => 'AUTHENTICATION', 'cost' => 5.00, 'volume' => 900],
+        ]);
+        app(MessagingCostReport::class)->refresh();
+
+        // ומהצד שלנו: 100 הודעות שחויבו.
+        $this->settle($this->billedCharge(count: 100, netAgorot: 300), 100);
+
+        $summary = app(MessagingCostReport::class)->summary();
+
+        $this->assertSame(100, $summary['charged_messages']);
+        // 1000 אגורות / 100 הודעות = 10 אגורות, ולא 1 (שהיה יוצא מחלוקה ב-1,000).
+        $this->assertSame(10, $summary['break_even_agorot']);
+
+        // והעלות הממוצעת של הודעה כלשהי נשארת זמינה, לתמחור מה שלא חויב.
+        $this->assertSame(1, app(MessagingCostReport::class)->costPerMessage());
+    }
+
+    /** ובלי הודעות שחויבו אין נקודת איזון — חלוקה באפס אינה "חינם". */
+    public function test_no_charged_messages_means_no_break_even_rather_than_zero(): void
+    {
+        $this->fakeMeta();
+        app(MessagingCostReport::class)->refresh();
+
+        $this->assertNull(app(MessagingCostReport::class)->summary()['break_even_agorot']);
+    }
+
+    /**
+     * חודש שלא נשלחה בו אף הודעה נשמר כאפס, ולא כ"עלות נמנעה".
+     *
+     * שני המצבים מגיעים כתשובה בלי עלות בתוכה ומשמעותם הפוכה: אחד הוא חודש שקט,
+     * והשני חשבון שמטא אינה מגלה את ההוצאה שלו. אבחון שגוי כאן גם מציג סיבה לא
+     * נכונה וגם משאיר את הנתון הגדול מהתקופה הקודמת על המסך.
+     */
+    public function test_a_period_with_no_messages_is_cached_as_zero(): void
+    {
+        // תשובה תקפה ו"ריקה" — אין data_points בכלל.
+        $this->fakeGraph(['currency' => 'ILS', 'pricing_analytics' => ['data' => []]]);
+
+        $result = app(MessagingCostReport::class)->refresh();
+
+        $this->assertTrue($result['ok']);
+
+        $summary = app(MessagingCostReport::class)->summary();
+        $this->assertNotNull($summary['cost']);
+        $this->assertSame(0, $summary['cost']['total']);
+        $this->assertSame(0, $summary['cost']['messages']);
+        $this->assertNull($summary['cost_error']);
+    }
+
+    /** וחודש שקט אחרי חודש פעיל מחליף את הנתון, ולא משאיר אותו. */
+    public function test_a_quiet_period_replaces_the_previous_figure(): void
+    {
+        $this->fakeMeta();
+        app(MessagingCostReport::class)->refresh();
+        $this->assertSame(1281, app(MessagingCostReport::class)->summary()['cost']['total']);
+
+        $this->fakeGraph(['currency' => 'ILS', 'pricing_analytics' => ['data' => []]]);
+        app(MessagingCostReport::class)->refresh();
+
+        $this->assertSame(0, app(MessagingCostReport::class)->summary()['cost']['total']);
     }
 }
