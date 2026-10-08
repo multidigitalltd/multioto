@@ -136,7 +136,7 @@ class SiteAgentToolbox
     {
         $tools = [];
 
-        foreach (self::READS as $name => [$pluginTool, $description, $properties, $required]) {
+        foreach (self::reads() as $name => [$pluginTool, $description, $properties, $required]) {
             if (! $this->siteHas($site, $pluginTool)) {
                 continue;
             }
@@ -163,12 +163,17 @@ class SiteAgentToolbox
      */
     public static function pluginTools(): array
     {
-        return array_values(array_unique(array_column(self::READS, 0)));
+        return array_values(array_unique(array_column(self::reads(), 0)));
     }
 
     public function isRead(string $name): bool
     {
-        return array_key_exists($name, self::READS);
+        return array_key_exists($name, self::reads());
+    }
+
+    private static function reads(): array
+    {
+        return self::READS + SiteAgentExtendedCatalogue::reads();
     }
 
     /**
@@ -183,7 +188,7 @@ class SiteAgentToolbox
      */
     public function read(Site $site, string $name, array $input): array
     {
-        [$pluginTool, , $properties] = self::READS[$name];
+        [$pluginTool, , $properties] = self::reads()[$name];
 
         $arguments = array_intersect_key($input, $properties);
 
@@ -199,11 +204,52 @@ class SiteAgentToolbox
             $text = $this->redact($text);
         }
 
+        $data = json_decode($text, true);
+        $ids = str_starts_with($pluginTool, 'jet_cct_')
+            ? $this->cctReferences($pluginTool, $data, $arguments)
+            : $this->idsIn($data);
+        if ($pluginTool === 'wp_seo_get' && is_array($data) && isset($data['id'])
+            && in_array($data['provider'] ?? '', ['yoast', 'rank_math'], true)) {
+            $ids[] = 'seo:'.$data['provider'].':'.$data['id'];
+        }
+        if (in_array($pluginTool, ['wp_theme_list', 'wp_theme_active_get'], true) && is_array($data)) {
+            $themes = $pluginTool === 'wp_theme_list' ? $data : [['stylesheet' => data_get($data, 'values.stylesheet')]];
+            foreach ($themes as $theme) {
+                if (is_array($theme) && is_string($theme['stylesheet'] ?? null) && $theme['stylesheet'] !== '') {
+                    $ids[] = 'theme:'.$theme['stylesheet'];
+                }
+            }
+        }
+
         return [
             'content' => Str::limit($text, $limit, ' …[קוצר]'),
             'is_error' => false,
-            'ids' => $this->idsIn(json_decode($text, true)),
+            'ids' => $ids,
         ];
+    }
+
+    /** CCT ids belong to separate tables and must never authorize a WordPress id. */
+    private function cctReferences(string $tool, mixed $data, array $arguments): array
+    {
+        if (! is_array($data)) {
+            return [];
+        }
+
+        if ($tool === 'jet_cct_types') {
+            return array_values(array_map(fn (array $type): string => 'cct-type:'.($type['type'] ?? $type['slug'] ?? ''),
+                array_filter((array) ($data['types'] ?? []), 'is_array')));
+        }
+
+        $records = $tool === 'jet_cct_get' ? [$data] : (array) ($data['items'] ?? []);
+        $refs = [];
+        foreach ($records as $record) {
+            if (is_array($record) && (int) ($record['id'] ?? 0) > 0
+                && ($record['type'] ?? '') === ($arguments['type'] ?? null)) {
+                $refs[] = 'cct:'.$record['type'].':'.$record['id'];
+            }
+        }
+
+        return $refs;
     }
 
     /**

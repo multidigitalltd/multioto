@@ -8,7 +8,6 @@ use App\Models\SiteAgentRequest;
 use App\Models\SiteAgentSubscriber;
 use App\Services\Agent\McpClient;
 use App\Services\Ai\ClaudeClient;
-use App\Services\Notifications\TeamNotifier;
 use App\Services\SiteAgent\SiteActionProposer;
 use App\Services\SiteAgent\SiteAgentConversation;
 use App\Services\SiteAgent\SiteAgentToolbox;
@@ -46,10 +45,10 @@ class SiteAgentCoverageTest extends TestCase
         'wp_salts_rotate' => 'security', 'wp_sessions_destroy' => 'security', 'wp_admin_list' => 'security',
         // Raw configuration values.
         'wp_option_get' => 'configuration',
-        // WordPress itself — a failed core update is a site the team restores,
-        // so it stays under the team's maintenance. (Plugins and themes are
-        // updated from the bot, with a health check after each.)
+        // Updates need a verified file and database restoration path.
         'wp_core_update' => 'core', 'wp_core_rollback' => 'core',
+        'wp_plugin_update' => 'no verified restoration', 'wp_theme_update' => 'no verified restoration',
+        'wp_media_delete' => 'permanent deletion',
         // Code on the server — never from a phone.
         'wp_file_list' => 'code', 'wp_file_get' => 'code', 'wp_file_put' => 'code',
     ];
@@ -65,7 +64,7 @@ class SiteAgentCoverageTest extends TestCase
      * here because the plugin cannot list what is IN the trash, so the bot has
      * no way to find an older trashed item — "בטל" right after is the path.
      */
-    private const THROUGH_UNDO = ['wp_content_restore', 'wc_product_restore'];
+    private const THROUGH_UNDO = ['wp_content_restore', 'wc_product_restore', 'wp_menu_item_unlink'];
 
     private array $calls = [];
 
@@ -87,8 +86,13 @@ class SiteAgentCoverageTest extends TestCase
 
     public function test_every_plugin_capability_is_reachable_or_deliberately_excluded(): void
     {
-        $source = file_get_contents(base_path('wordpress-plugin/multioto-agent/includes/class-mcp-server.php'));
-        preg_match_all("/\\['name' => '((?:wp|wc|wcs)_[a-z_]+)'/", $source, $matches);
+        // The catalog includes provider definitions as well as the original
+        // inline entries; JetEngine tools are first-class inventory members.
+        $source = '';
+        foreach (['mcp-server', 'cct', 'media-management', 'content-management', 'site-administration'] as $provider) {
+            $source .= file_get_contents(base_path('wordpress-plugin/multioto-agent/includes/class-'.$provider.'.php'));
+        }
+        preg_match_all("/(?:\\['name' =>\\s*|self::definition\\(\\s*|\\[\\s*)'((?:wp|wc|wcs|jet)_[a-z_]+)'\\s*,/", $source, $matches);
         $plugin = array_values(array_unique($matches[1]));
 
         $this->assertGreaterThan(50, count($plugin), 'The plugin tool list could not be read.');
@@ -304,26 +308,24 @@ class SiteAgentCoverageTest extends TestCase
         $this->assertSame(0, SiteAgentRequest::count());
     }
 
-    public function test_a_menu_item_edited_since_the_preview_is_not_removed(): void
+    public function test_menu_removal_is_refused_before_a_confirmation_can_be_created(): void
     {
         $subscriber = $this->subscriber();
-        $menu = fn (string $title): array => [['menu' => 'ראשי', 'menu_id' => 2, 'items' => [
-            ['item_id' => 5, 'title' => $title, 'url' => '/a', 'parent_id' => 0, 'order' => 1],
+        $this->site['wp_menu_list'] = [['menu' => 'ראשי', 'menu_id' => 2, 'items' => [
+            ['item_id' => 5, 'title' => 'ישן', 'url' => '/a', 'parent_id' => 0, 'order' => 1],
         ]]];
-        $this->site['wp_menu_list'] = $menu('ישן');
 
         $this->model(function (Closure $tool): string {
             $tool('list_menus', []);
-            $tool('propose_menu_item_remove', ['item_id' => 5]);
+            $result = $tool('propose_menu_item_remove', ['item_id' => 5]);
+            $this->assertTrue($result['is_error']);
 
             return '';
         });
-        $this->talk($subscriber, 'תסיר את "ישן" מהתפריט');
-
-        $this->site['wp_menu_list'] = $menu('חדש');
+        $this->talk($subscriber, 'תסיר את הפריט מהתפריט');
         $this->talk($subscriber, 'כן');
 
-        $this->assertSame(SiteAgentRequest::FAILED, SiteAgentRequest::sole()->state);
+        $this->assertSame(0, SiteAgentRequest::count());
         $this->assertNotContains('wp_menu_item_unlink', array_column($this->calls, 0));
     }
 
@@ -372,81 +374,44 @@ class SiteAgentCoverageTest extends TestCase
         $this->assertNotContains('wc_coupon_expire', array_column($this->calls, 0));
     }
 
-    public function test_plugins_are_updated_one_by_one_and_stop_when_the_site_breaks(): void
+    public function test_plugin_updates_are_refused_without_a_verified_restoration_path(): void
     {
         $subscriber = $this->subscriber();
         $this->site['wp_plugin_list'] = [
             ['plugin' => 'forms/forms.php', 'name' => 'Forms', 'version' => '1.0', 'active' => true, 'update_available' => true],
-            ['plugin' => 'seo/seo.php', 'name' => 'SEO', 'version' => '2.0', 'active' => true, 'update_available' => true],
-            ['plugin' => 'cache/cache.php', 'name' => 'Cache', 'version' => '3.0', 'active' => true, 'update_available' => false],
         ];
 
         $this->model(function (Closure $tool): string {
-            $tool('propose_plugin_update', ['plugins' => ['all']]);
-
-            return '';
-        });
-
-        $preview = $this->talk($subscriber, 'תעדכן את כל התוספים');
-        $this->assertStringContainsString('Forms (עכשיו 1.0)', $preview);
-        $this->assertStringNotContainsString('Cache', $preview);
-        $this->assertStringContainsString('לא נלקח גיבוי', $preview);
-
-        // The first update leaves the site down.
-        $team = Mockery::mock(TeamNotifier::class);
-        $team->shouldNotReceive('alert');
-        $this->app->instance(TeamNotifier::class, $team);
-        $this->siteUp = false;
-        $reply = $this->talk($subscriber, 'כן');
-
-        // The owner is told what happened and what was updated; it is their
-        // request on their site, so nobody else is paged for it.
-        $this->assertStringContainsString('עצרתי את שאר העדכונים', $reply);
-        $this->assertStringContainsString('עודכנו: Forms', $reply);
-        $this->assertStringNotContainsString('הצוות', $reply);
-        $updates = array_values(array_filter($this->calls, fn (array $call): bool => $call[0] === 'wp_plugin_update'));
-        // Stopped after the first: the second is not piled on a broken site.
-        $this->assertSame([['wp_plugin_update', ['plugin' => 'forms/forms.php']]], $updates);
-    }
-
-    public function test_a_plugin_the_upgrader_left_off_is_switched_back_on(): void
-    {
-        $subscriber = $this->subscriber();
-        $active = ['elementor-pro/elementor-pro.php' => true, 'seo/seo.php' => true];
-        $this->site['wp_plugin_list'] = function () use (&$active): array {
-            return [
-                ['plugin' => 'elementor-pro/elementor-pro.php', 'name' => 'Elementor Pro', 'version' => '4.2.3', 'active' => $active['elementor-pro/elementor-pro.php'], 'update_available' => true],
-                ['plugin' => 'seo/seo.php', 'name' => 'SEO', 'version' => '2.0', 'active' => $active['seo/seo.php'], 'update_available' => true],
-            ];
-        };
-        // WordPress's upgrader deactivates a plugin before swapping its files.
-        $this->site['wp_plugin_update'] = function (array $arguments) use (&$active): string {
-            $active[$arguments['plugin']] = false;
-
-            return 'עודכן.';
-        };
-        $this->site['wp_plugin_activate'] = function (array $arguments) use (&$active): string {
-            if ($arguments['plugin'] === 'elementor-pro/elementor-pro.php') {
-                $active[$arguments['plugin']] = true;
-            }
-
-            return 'הופעל.';
-        };
-
-        $this->model(function (Closure $tool): string {
-            $tool('propose_plugin_update', ['plugins' => ['all']]);
+            $result = $tool('propose_plugin_update', ['plugins' => ['all']]);
+            $this->assertTrue($result['is_error']);
 
             return '';
         });
         $this->talk($subscriber, 'תעדכן את כל התוספים');
+        $this->talk($subscriber, 'כן');
 
-        $reply = $this->talk($subscriber, 'כן');
+        $this->assertSame(0, SiteAgentRequest::count());
+        $this->assertNotContains('wp_plugin_update', array_column($this->calls, 0));
+    }
 
-        $this->assertTrue($active['elementor-pro/elementor-pro.php']);
-        $this->assertContains(['wp_plugin_activate', ['plugin' => 'elementor-pro/elementor-pro.php']], $this->calls);
-        // One that would not come back is said, not left quietly off.
-        $this->assertStringContainsString('SEO לא חזר לפעול', $reply);
-        $this->assertStringNotContainsString('Elementor Pro לא חזר', $reply);
+    public function test_theme_updates_are_refused_without_a_verified_restoration_path(): void
+    {
+        $subscriber = $this->subscriber();
+        $this->site['wp_theme_list'] = [
+            ['stylesheet' => 'theme', 'name' => 'Theme', 'version' => '1.0', 'active' => true, 'update_available' => true],
+        ];
+
+        $this->model(function (Closure $tool): string {
+            $result = $tool('propose_theme_update', ['stylesheet' => 'theme']);
+            $this->assertTrue($result['is_error']);
+
+            return '';
+        });
+        $this->talk($subscriber, 'תעדכן את התבנית');
+        $this->talk($subscriber, 'כן');
+
+        $this->assertSame(0, SiteAgentRequest::count());
+        $this->assertNotContains('wp_theme_update', array_column($this->calls, 0));
     }
 
     public function test_switching_off_a_plugin_that_breaks_the_site_is_put_back_at_once(): void
@@ -490,25 +455,23 @@ class SiteAgentCoverageTest extends TestCase
         $this->assertSame(0, SiteAgentRequest::count());
     }
 
-    public function test_a_media_file_is_deleted_only_after_a_warning_that_it_is_final(): void
+    public function test_a_media_file_is_never_permanently_deleted_from_the_bot(): void
     {
         $subscriber = $this->subscriber();
         $this->site['wp_media_list'] = ['items' => [['id' => 61, 'title' => 'banner-old', 'url' => 'https://example.test/banner-old.jpg']]];
 
         $this->model(function (Closure $tool): string {
             $tool('find_media', ['search' => 'banner']);
-            $tool('propose_media_delete', ['attachment_id' => 61]);
+            $result = $tool('propose_media_delete', ['attachment_id' => 61]);
+            $this->assertTrue($result['is_error']);
 
             return '';
         });
+        $this->talk($subscriber, 'תמחק את הבאנר הישן');
+        $this->talk($subscriber, 'כן');
 
-        $this->assertStringContainsString('אין ביטול ואין פח', $this->talk($subscriber, 'תמחק את הבאנר הישן'));
-
-        $this->site['wp_media_delete'] = ['deleted_id' => 61];
-        $reply = $this->talk($subscriber, 'כן');
-
-        $this->assertContains(['wp_media_delete', ['attachment_id' => 61]], $this->calls);
-        $this->assertStringNotContainsString('בטל', $reply);
+        $this->assertSame(0, SiteAgentRequest::count());
+        $this->assertNotContains('wp_media_delete', array_column($this->calls, 0));
     }
 
     public function test_the_error_log_reaches_the_model_without_the_servers_internals(): void

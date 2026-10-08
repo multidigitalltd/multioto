@@ -14,7 +14,7 @@ use Carbon\CarbonImmutable;
  */
 final class SiteAgentTurn
 {
-    /** @var list<int> */
+    /** @var list<int|string> WordPress ids or type-scoped CCT references. */
     public array $seen = [];
 
     public ?SiteAgentRequest $request = null;
@@ -23,7 +23,7 @@ final class SiteAgentTurn
 
     public function __construct(private CarbonImmutable $startedAt) {}
 
-    /** @param list<int> $ids */
+    /** @param list<int|string> $ids */
     public function see(array $ids): void
     {
         $this->seen = array_values(array_unique([...$this->seen, ...$ids]));

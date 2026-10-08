@@ -414,6 +414,192 @@ class SiteAgentShopAndMediaTest extends TestCase
         Storage::disk('local')->assertExists($plan['image_path']);
     }
 
+    public function test_an_image_can_be_uploaded_to_the_library_without_any_page_or_product(): void
+    {
+        $subscriber = $this->subscriber();
+        $this->imageArrives();
+        $this->aiAnswers([
+            'can_do' => true, 'upload_only' => true, 'title' => 'כד כחול', 'alt' => 'כד קרמיקה כחול על שולחן',
+            // Untrusted model fields can neither choose a source file nor a URL.
+            'url' => 'https://attacker.example/evil.php', 'data' => 'UNTRUSTED_BYTES', 'image_path' => '../credentials',
+        ]);
+        $calls = $this->shopRecords([
+            'wp_content_list' => ['items' => []],
+            'wc_product_search' => ['products' => []],
+            'wp_media_upload' => ['attachment_id' => 501, 'url' => 'https://example.test/uploads/photo.png'],
+        ]);
+
+        $preview = $this->talk($subscriber, 'שמור בספריית המדיה בשם כד כחול — כד קרמיקה כחול על שולחן', mediaId: 'media-1');
+        $request = SiteAgentRequest::sole();
+        $path = $request->plan['image_path'];
+
+        $this->assertSame(SiteAgentRequest::OP_MEDIA_UPLOAD, $request->operation);
+        $this->assertStringContainsString('כד כחול', $preview);
+        $this->assertStringContainsString('קישור ציבורי', $preview);
+        $this->assertStringContainsString('הקובץ נשאר בספרייה', $preview);
+        $this->assertStringContainsString('לביצוע השיבו "כן"', $preview);
+        $this->assertArrayNotHasKey('target_id', $request->plan);
+        $this->assertArrayNotHasKey('url', $request->plan);
+        $this->assertArrayNotHasKey('data', $request->plan);
+        $this->assertNotContains('wp_media_upload', array_column($calls->getArrayCopy(), 0));
+        Storage::disk('local')->assertExists($path);
+
+        $calls->exchangeArray([]);
+        $reply = $this->talk($subscriber, 'כן');
+
+        $this->assertSame(['wp_media_upload'], array_column($calls->getArrayCopy(), 0));
+        $this->assertSame(base64_encode($this->png()), $calls[0][1]['data']);
+        $this->assertSame('כד כחול', $calls[0][1]['title']);
+        $this->assertSame('כד קרמיקה כחול על שולחן', $calls[0][1]['alt']);
+        $this->assertArrayNotHasKey('url', $calls[0][1]);
+        $this->assertArrayNotHasKey('attach_to', $calls[0][1]);
+        $this->assertSame(SiteAgentRequest::APPLIED, $request->refresh()->state);
+        $this->assertNull($request->restore);
+        $this->assertStringContainsString('נשמרה בספריית המדיה', $reply);
+        $this->assertStringContainsString('https://example.test/uploads/photo.png', $reply);
+        $this->assertStringNotContainsString('כתבו "בטל"', $reply);
+        Storage::disk('local')->assertMissing($path);
+    }
+
+    public function test_a_library_upload_waits_for_an_alt_description_without_losing_the_file_or_asking_for_a_target(): void
+    {
+        $subscriber = $this->subscriber();
+        $this->imageArrives();
+        $this->aiAnswers(['can_do' => false, 'upload_only' => true, 'needs' => 'alt']);
+
+        $question = $this->talk($subscriber, 'תעלה רק לספריית המדיה', mediaId: 'media-1');
+        $request = SiteAgentRequest::sole();
+        $path = $request->plan['image_path'];
+        $this->assertSame(SiteAgentRequest::OP_MEDIA_UPLOAD, $request->operation);
+        $this->assertNull($request->preview);
+        $this->assertStringContainsString('איך לתאר', $question);
+        $this->assertStringNotContainsString('עמוד', $question);
+
+        $this->aiAnswers(['can_do' => true, 'upload_only' => true, 'alt' => 'פרחים באגרטל']);
+        $preview = $this->talk($subscriber, 'פרחים באגרטל');
+
+        $this->assertSame(1, SiteAgentRequest::count());
+        $this->assertSame(SiteAgentRequest::OP_MEDIA_UPLOAD, $request->refresh()->operation);
+        $this->assertSame('פרחים באגרטל', $request->plan['title']);
+        $this->assertStringContainsString('ספריית המדיה', $preview);
+        $this->assertStringContainsString('לביצוע השיבו "כן"', $preview);
+        $this->assertArrayNotHasKey('target_id', $request->plan);
+        Storage::disk('local')->assertExists($path);
+    }
+
+    public function test_cancelled_and_expired_library_uploads_remove_the_private_image(): void
+    {
+        $subscriber = $this->subscriber();
+        $this->imageArrives();
+        $this->aiAnswers(['can_do' => true, 'upload_only' => true, 'alt' => 'פרחים באגרטל']);
+        $this->talk($subscriber, 'שמור בספריית המדיה', mediaId: 'media-1');
+        $first = SiteAgentRequest::sole();
+        $this->talk($subscriber, 'לא');
+
+        $this->assertSame(SiteAgentRequest::CANCELED, $first->refresh()->state);
+        Storage::disk('local')->assertMissing($first->plan['image_path']);
+
+        $this->talk($subscriber, 'שמור בספריית המדיה', mediaId: 'media-1');
+        $second = SiteAgentRequest::latest('id')->first();
+        $this->travel(2)->hours();
+        (new PruneSiteAgentRequestsJob)->handle();
+
+        $this->assertSame(SiteAgentRequest::EXPIRED, $second->refresh()->state);
+        Storage::disk('local')->assertMissing($second->plan['image_path']);
+    }
+
+    public function test_a_failed_library_upload_removes_its_private_copy_and_does_not_claim_success(): void
+    {
+        $subscriber = $this->subscriber();
+        $this->imageArrives();
+        $this->aiAnswers(['can_do' => true, 'upload_only' => true, 'alt' => 'פרחים באגרטל']);
+        $this->talk($subscriber, 'שמור בספריית המדיה', mediaId: 'media-1');
+        $request = SiteAgentRequest::sole();
+        $calls = $this->shopRecords(['wp_media_upload' => fn () => throw new \RuntimeException('PRIVATE_REMOTE_ERROR')]);
+
+        $reply = $this->talk($subscriber, 'כן');
+
+        $this->assertSame(SiteAgentRequest::FAILED, $request->refresh()->state);
+        $this->assertStringNotContainsString('PRIVATE_REMOTE_ERROR', $reply);
+        $this->assertStringNotContainsString('✅', $reply);
+        $this->assertSame(['wp_media_upload'], array_column($calls->getArrayCopy(), 0));
+        Storage::disk('local')->assertMissing($request->plan['image_path']);
+    }
+
+    public function test_a_disabled_library_upload_is_refused_before_storing_the_image(): void
+    {
+        config(['siteagent.assistant.disabled_permissions' => 'media']);
+        $subscriber = $this->subscriber();
+        $this->imageArrives();
+        $this->aiAnswers(['can_do' => true, 'upload_only' => true, 'alt' => 'פרחים באגרטל']);
+
+        $reply = $this->talk($subscriber, 'שמור בספריית המדיה', mediaId: 'media-1');
+
+        $this->assertStringContainsString('כבויה', $reply);
+        $this->assertSame(0, SiteAgentRequest::count());
+        $this->assertSame([], Storage::disk('local')->allFiles('site-agent'));
+    }
+
+    public function test_disabling_uploads_while_waiting_for_a_description_cleans_up_the_held_file(): void
+    {
+        $subscriber = $this->subscriber();
+        $this->imageArrives();
+        $this->aiAnswers(['can_do' => false, 'upload_only' => true, 'needs' => 'alt']);
+        $this->talk($subscriber, 'שמור בספריית המדיה', mediaId: 'media-1');
+        $request = SiteAgentRequest::sole();
+        config(['siteagent.assistant.disabled_permissions' => 'media']);
+        $this->aiAnswers(['can_do' => true, 'upload_only' => true, 'alt' => 'פרחים באגרטל']);
+
+        $reply = $this->talk($subscriber, 'פרחים באגרטל');
+
+        $this->assertStringContainsString('כבויה', $reply);
+        $this->assertSame(SiteAgentRequest::CANCELED, $request->refresh()->state);
+        Storage::disk('local')->assertMissing($request->plan['image_path']);
+    }
+
+    public function test_undo_after_a_library_upload_neither_deletes_it_nor_reverts_an_unrelated_older_change(): void
+    {
+        $subscriber = $this->subscriber();
+        $prior = SiteAgentRequest::create([
+            'site_agent_subscriber_id' => $subscriber->id, 'site_id' => $subscriber->site_id,
+            'customer_id' => $subscriber->customer_id, 'message' => 'עריכת כותרת',
+            'operation' => SiteAgentRequest::OP_TITLE, 'state' => SiteAgentRequest::APPLIED,
+            'applied_at' => now()->subMinute(), 'restore' => ['kind' => 'page', 'page_id' => 11],
+        ]);
+        $this->imageArrives();
+        $this->aiAnswers(['can_do' => true, 'upload_only' => true, 'alt' => 'פרחים באגרטל']);
+        $this->talk($subscriber, 'שמור בספריית המדיה', mediaId: 'media-1');
+        $calls = $this->shopRecords(['wp_media_upload' => ['attachment_id' => 501]]);
+        $this->talk($subscriber, 'כן');
+        $calls->exchangeArray([]);
+
+        $reply = $this->talk($subscriber, 'בטל');
+
+        $this->assertStringContainsString('נשארת בספריית המדיה', $reply);
+        $this->assertSame([], $calls->getArrayCopy());
+        $this->assertSame(SiteAgentRequest::APPLIED, $prior->refresh()->state);
+    }
+
+    public function test_library_upload_never_reads_a_private_file_from_another_subscriber(): void
+    {
+        $subscriber = $this->subscriber();
+        $path = 'site-agent/'.($subscriber->id + 1).'/'.str_repeat('x', 32).'.png';
+        Storage::disk('local')->put($path, $this->png());
+        $request = SiteAgentRequest::create([
+            'site_agent_subscriber_id' => $subscriber->id, 'site_id' => $subscriber->site_id,
+            'customer_id' => $subscriber->customer_id, 'message' => 'העלאה',
+            'operation' => SiteAgentRequest::OP_MEDIA_UPLOAD, 'state' => SiteAgentRequest::APPLYING,
+            'plan' => ['image_path' => $path, 'title' => 'תמונה', 'alt' => 'פרחים באגרטל'],
+        ]);
+        $calls = $this->shopRecords([]);
+
+        $result = app(SiteChangeApplier::class)->apply($request);
+
+        $this->assertFalse($result['ok']);
+        $this->assertSame([], $calls->getArrayCopy());
+        Storage::disk('local')->assertExists($path);
+    }
+
     public function test_a_file_that_is_not_an_image_never_reaches_the_site(): void
     {
         $subscriber = $this->subscriber();

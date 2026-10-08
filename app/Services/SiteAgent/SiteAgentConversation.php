@@ -117,6 +117,8 @@ class SiteAgentConversation
     {
         $pending = SiteAgentRequest::query()
             ->where('site_agent_subscriber_id', $subscriber->id)
+            ->where('site_id', $subscriber->site_id)
+            ->where('customer_id', $subscriber->customer_id)
             ->awaitingConfirmation()
             ->latest('id')
             ->first();
@@ -319,8 +321,9 @@ class SiteAgentConversation
         }
 
         [$plan, $offer] = $this->newProductOffer($site, $plan);
+        $operation = $offer !== null ? SiteAgentRequest::OP_PRODUCT_CREATE : ($plan['operation'] ?? SiteAgentRequest::OP_IMAGE);
 
-        if (! app(SiteAgentPermissions::class)->allowsOperation($offer !== null ? SiteAgentRequest::OP_PRODUCT_CREATE : SiteAgentRequest::OP_IMAGE)) {
+        if (! app(SiteAgentPermissions::class)->allowsOperation($operation)) {
             return SiteAgentPermissions::refusal();
         }
 
@@ -339,7 +342,7 @@ class SiteAgentConversation
             'customer_id' => $subscriber->customer_id,
             'message' => Str::limit($caption !== '' ? $caption : '[תמונה]', 2000),
             'inbound_message_id' => $messageId,
-            'operation' => $offer !== null ? SiteAgentRequest::OP_PRODUCT_CREATE : SiteAgentRequest::OP_IMAGE,
+            'operation' => $operation,
             'plan' => $offer !== null
                 ? [...$offer['plan'], 'image_path' => $path, 'extension' => $media['extension'], 'caption' => $caption]
                 : [
@@ -483,7 +486,7 @@ class SiteAgentConversation
      */
     private function isImageQuestion(SiteAgentRequest $request): bool
     {
-        return $request->operation === SiteAgentRequest::OP_IMAGE
+        return in_array($request->operation, [SiteAgentRequest::OP_IMAGE, SiteAgentRequest::OP_MEDIA_UPLOAD], true)
             && filled(data_get($request->plan, 'question'))
             && filled(data_get($request->plan, 'image_path'));
     }
@@ -517,6 +520,13 @@ class SiteAgentConversation
         }
 
         [$next, $offer] = $this->newProductOffer($site, $next);
+        $operation = $offer !== null ? SiteAgentRequest::OP_PRODUCT_CREATE : ($next['operation'] ?? SiteAgentRequest::OP_IMAGE);
+
+        if (! app(SiteAgentPermissions::class)->allowsOperation($operation)) {
+            $this->settle($request, SiteAgentRequest::CANCELED);
+
+            return SiteAgentPermissions::refusal();
+        }
 
         if ($offer !== null) {
             $request->update([
@@ -534,6 +544,7 @@ class SiteAgentConversation
         // question is asked again, refined — the customer never resends it.
         if (isset($next['question'])) {
             $request->update([
+                'operation' => $operation,
                 'plan' => [...$next, 'image_path' => $plan['image_path'], 'extension' => $plan['extension'] ?? 'jpg', 'caption' => $caption],
                 'message' => Str::limit($caption, 2000),
                 'expires_at' => now()->addMinutes(max(1, (int) config('siteagent.confirmation_minutes', 30))),
@@ -543,6 +554,7 @@ class SiteAgentConversation
         }
 
         $request->update([
+            'operation' => $operation,
             'plan' => [
                 ...$next,
                 'image_path' => $plan['image_path'],
@@ -602,6 +614,13 @@ class SiteAgentConversation
                 "🖼️ {$plan['target_title']}",
                 'התמונה ששלחתם תוגדר כתמונה הראשית.',
                 'תיאור לנגישות: "'.$plan['alt'].'"',
+            ]),
+            SiteAgentRequest::OP_MEDIA_UPLOAD => implode("\n", [
+                '🖼️ העלאת התמונה ששלחתם לספריית המדיה',
+                'כותרת: "'.$plan['title'].'"',
+                'תיאור לנגישות: "'.$plan['alt'].'"',
+                'הקובץ יישמר בספרייה ויהיה זמין בקישור ציבורי; הוא לא יוצב בעמוד או במוצר.',
+                'אחרי האישור הקובץ נשאר בספרייה — הבוט אינו מוחק אותו באמצעות "בטל".',
             ]),
             SiteAgentRequest::OP_TITLE => implode("\n", [
                 "📄 עמוד: {$page}",
@@ -719,7 +738,8 @@ class SiteAgentConversation
         // or a user already invited cannot be taken back, and the owner was
         // told so in the preview — saying "כתבו בטל" now would be a promise
         // the next message breaks.
-        if ($result['restore'] === null && in_array($request->operation, SiteAgentRequest::MANAGEMENT_OPERATIONS, true)) {
+        if ($result['restore'] === null && ($request->operation === SiteAgentRequest::OP_MEDIA_UPLOAD
+                || in_array($request->operation, SiteAgentRequest::MANAGEMENT_OPERATIONS, true))) {
             return '✅ בוצע.'.$done;
         }
 
@@ -736,17 +756,36 @@ class SiteAgentConversation
     /** Put the last applied change back. */
     private function revertLast(SiteAgentSubscriber $subscriber): string
     {
-        $last = SiteAgentRequest::query()
+        // An upload intentionally stays in the library. Do not silently undo
+        // an unrelated earlier page edit when "בטל" follows that upload.
+        $recent = SiteAgentRequest::query()
             ->where('site_agent_subscriber_id', $subscriber->id)
+            ->where('site_id', $subscriber->site_id)
+            ->where('customer_id', $subscriber->customer_id)
             ->revertable()
-            // A cache flush or an emailed note has nothing to put back; "בטל"
-            // means the last change that does.
-            ->whereNotNull('restore')
-            ->latest('applied_at')
-            ->first();
+            ->latest('applied_at')->latest('id');
+        $latest = (clone $recent)->first();
+
+        if ($latest?->operation === SiteAgentRequest::OP_MEDIA_UPLOAD) {
+            return 'התמונה נשארת בספריית המדיה. כדי להגן על קבצי האתר, הבוט אינו מוחק את הקובץ באמצעות "בטל".';
+        }
+
+        if ($latest !== null && $latest->restore === null && $latest->operation !== SiteAgentRequest::OP_CACHE_FLUSH) {
+            return $latest->operation === SiteAgentRequest::OP_CCT_CREATE
+                ? 'הרשומה נשמרה כטיוטה. הבוט אינו מוחק אותה באמצעות "בטל". אפשר להמשיך לערוך אותה.'
+                : 'לפעולה האחרונה אין שחזור אוטומטי. אפשר לומר לי איזה פרט לשנות ואכין הצעה לאישור.';
+        }
+
+        // A cache flush has nothing to put back; find the previous change only
+        // when that is necessary. The usual case needs a single query.
+        $last = $latest?->restore !== null ? $latest : (clone $recent)->whereNotNull('restore')->first();
 
         if ($last === null) {
             return 'אין שינוי אחרון שאפשר להחזיר.';
+        }
+
+        if (! app(SiteAgentPermissions::class)->allowsOperation($last->operation)) {
+            return SiteAgentPermissions::refusal();
         }
 
         // One undo per change. Without the lock, two "בטל" in quick succession

@@ -215,7 +215,8 @@ return [
     | כשה-AI אינו זמין, השיחה חוזרת למתכננים הקבועים.
     |
     | history_messages / history_hours: כמה מהשיחה הקודמת המודל רואה, כדי
-    | ש"ומה עם ההזמנה השנייה?" יובן. transcript_days: כמה זמן נשמר התמליל עצמו —
+    | ש"ומה עם ההזמנה השנייה?" יובן גם כשחוזרים מחר. history_chars מגביל את
+    | ההקשר כולו, כולל תוצאות הפעולות האחרונות. transcript_days: כמה זמן נשמר התמליל עצמו —
     | קצר בכוונה, כי תשובות על לידים והזמנות מכילות פרטים של לקוחות הקצה.
     |
     | max_turns / budget_seconds: תקרה על סבב אחד, כדי שהודעה אחת לא תחזיק את
@@ -234,8 +235,9 @@ return [
 
     'assistant' => [
         'enabled' => (bool) env('SITE_AGENT_ASSISTANT', true),
-        'history_messages' => (int) env('SITE_AGENT_ASSISTANT_HISTORY', 12),
-        'history_hours' => (int) env('SITE_AGENT_ASSISTANT_HISTORY_HOURS', 12),
+        'history_messages' => (int) env('SITE_AGENT_ASSISTANT_HISTORY', 40),
+        'history_hours' => (int) env('SITE_AGENT_ASSISTANT_HISTORY_HOURS', 168),
+        'history_chars' => (int) env('SITE_AGENT_ASSISTANT_HISTORY_CHARS', 24000),
         'transcript_days' => (int) env('SITE_AGENT_ASSISTANT_TRANSCRIPT_DAYS', 7),
         // הנחיות קבועות מהצוות לכל שיחה — נערכות במסך ההגדרות של המוצר.
         'instructions' => (string) env('SITE_AGENT_ASSISTANT_INSTRUCTIONS', ''),

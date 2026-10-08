@@ -162,6 +162,28 @@ class SiteAgentRequest extends Model
     /** Delete a file from the media library — permanently. */
     public const OP_MEDIA_DELETE = 'delete_media';
 
+    public const OP_MEDIA_UPLOAD = 'upload_media';
+
+    public const OP_CCT_CREATE = 'cct_create';
+
+    public const OP_CCT_UPDATE = 'cct_update';
+
+    public const OP_MEDIA_UPDATE = 'media_update';
+
+    public const OP_OPTIMOLE = 'optimole_update';
+
+    public const OP_CONTENT_MANAGE = 'content_manage';
+
+    public const OP_SEO = 'seo_update';
+
+    public const OP_INTERNAL_LINK = 'internal_link';
+
+    public const OP_SITE_SETTINGS = 'site_settings';
+
+    public const OP_USER_PROFILE = 'user_profile';
+
+    public const OP_THEME_SWITCH = 'theme_switch';
+
     /** The operations the assistant proposes, carried out by SiteActionApplier. */
     public const MANAGEMENT_OPERATIONS = [
         self::OP_PRODUCT_CREATE, self::OP_ORDER_STATUS, self::OP_ORDER_NOTE,
@@ -172,12 +194,15 @@ class SiteAgentRequest extends Model
         self::OP_TRASH, self::OP_COUPON_EXPIRE, self::OP_CACHE_FLUSH,
         self::OP_PLUGIN_UPDATE, self::OP_THEME_UPDATE, self::OP_PLUGIN_TOGGLE, self::OP_MEDIA_DELETE,
         self::OP_PRODUCT_TRASH,
+        self::OP_CCT_CREATE, self::OP_CCT_UPDATE, self::OP_MEDIA_UPDATE, self::OP_OPTIMOLE,
+        self::OP_CONTENT_MANAGE, self::OP_SEO, self::OP_INTERNAL_LINK, self::OP_SITE_SETTINGS,
+        self::OP_USER_PROFILE, self::OP_THEME_SWITCH,
     ];
 
     /** Everything the agent is allowed to do, in one list. */
     public const OPERATIONS = [
         self::OP_APPEND, self::OP_REPLACE, self::OP_TITLE,
-        self::OP_PRICE, self::OP_STOCK, self::OP_IMAGE, self::OP_PRODUCT,
+        self::OP_PRICE, self::OP_STOCK, self::OP_IMAGE, self::OP_PRODUCT, self::OP_MEDIA_UPLOAD,
         ...self::MANAGEMENT_OPERATIONS,
     ];
 

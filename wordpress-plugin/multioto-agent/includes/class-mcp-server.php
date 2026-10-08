@@ -17,6 +17,14 @@ class Multioto_Agent_Mcp_Server
 {
     private const PROTOCOL = '2025-06-18';
 
+    /** Optional vendor integrations report their own availability on reads. */
+    private const TOOL_PROVIDERS = [
+        Multioto_Agent_Cct::class,
+        Multioto_Agent_Media_Management::class,
+        Multioto_Agent_Content_Management::class,
+        Multioto_Agent_Site_Administration::class,
+    ];
+
     /** Options that are safe to read remotely (no secrets, no PII). */
     private const READABLE_OPTIONS = [
         'blogname', 'blogdescription', 'siteurl', 'home', 'template',
@@ -262,12 +270,24 @@ class Multioto_Agent_Mcp_Server
         // the answer itself says which sources were found.
         $tools[] = ['name' => 'wp_lead_list', 'description' => 'לידים שנאספו בטפסי האתר (Elementor Pro, Contact Form 7 דרך Flamingo, WPForms, Gravity Forms, Fluent Forms), מהחדש לישן: מקור, שם הטופס, תאריך והשדות שמולאו. אופציונלי: days (ברירת מחדל 30), search, limit (עד 50). sources מציין אילו תוספי טפסים נמצאו באתר. לתקופה סגורה — from ו-to (YYYY-MM-DD) במקום days. after (חותמת זמן Unix) — מהרגע הזה והלאה, מהישן לחדש, עם ts לכל ליד ו-has_more לעמוד הבא.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['after' => ['type' => 'integer'], 'after_key' => ['type' => 'string'], 'days' => ['type' => 'integer'], 'from' => ['type' => 'string'], 'to' => ['type' => 'string'], 'search' => ['type' => 'string'], 'limit' => ['type' => 'integer']]]];
 
+        foreach (self::TOOL_PROVIDERS as $provider) {
+            $tools = array_merge($tools, $provider::definitions());
+        }
+
         return $tools;
     }
 
     /** Execute an allow-listed tool. Unknown names are rejected. */
     private function callTool(string $name, array $args): array
     {
+        foreach (self::TOOL_PROVIDERS as $provider) {
+            if ($provider::handles($name)) {
+                $text = wp_json_encode($provider::call($name, $args), JSON_UNESCAPED_UNICODE);
+
+                return ['content' => [['type' => 'text', 'text' => $text]], 'isError' => false];
+            }
+        }
+
         // A name => method map instead of match(): same allow-list guarantee,
         // and it parses on PHP 7.4 (see the note in handle()). An unknown name
         // is still rejected — nothing outside this list can ever be called.
@@ -1762,7 +1782,7 @@ class Multioto_Agent_Mcp_Server
             'attachment', 'revision', 'nav_menu_item', 'custom_css', 'customize_changeset',
             'oembed_cache', 'user_request', 'wp_block', 'wp_template', 'wp_template_part',
             'wp_global_styles', 'wp_navigation', 'elementor_library', 'e-landing-page',
-            'product', 'product_variation', 'shop_order', 'shop_coupon',
+            'product', 'product_variation', 'shop_order', 'shop_order_refund', 'shop_subscription', 'shop_coupon',
         ];
 
         // get_post_types() returns name => name; the values are what we filter.

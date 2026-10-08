@@ -21,8 +21,8 @@ use Illuminate\Support\Str;
  *  - The target must have been SEEN. An id the model did not get back from a
  *    read in this same turn is refused, so a half-remembered or invented id can
  *    never become a change. "Look it up first" costs one call.
- *  - What cannot be undone says so before the owner approves — a note emailed
- *    to a buyer, a cancelled subscription, a new user — instead of after.
+ *  - Permanently destructive changes are refused. Reversible state changes
+ *    disclose their external effects before the owner approves.
  *
  * A refusal comes back as `error`, worded for the model: it is what lets the
  * model correct itself or explain to the owner, rather than a dead end.
@@ -55,7 +55,7 @@ class SiteActionProposer
     ];
 
     /** The subscription statuses the bot may set. */
-    public const SUBSCRIPTION_TARGETS = ['active', 'on-hold', 'cancelled', 'pending-cancel'];
+    public const SUBSCRIPTION_TARGETS = ['active', 'on-hold', 'pending-cancel'];
 
     public const POST_STATUSES = [
         'publish' => 'מפורסם',
@@ -134,6 +134,10 @@ class SiteActionProposer
         $out = [];
 
         foreach ($this->catalogue() as [$name, $pluginTool, $description, $properties, $required]) {
+            if (SiteAgentReversibility::reasonFor($name) !== null) {
+                continue;
+            }
+
             if ($this->toolbox->siteHas($site, $pluginTool)) {
                 $out[] = [
                     'name' => $name,
@@ -144,7 +148,7 @@ class SiteActionProposer
             }
         }
 
-        return $out;
+        return [...$out, ...app(SiteAgentExtendedActions::class)->definitions($site)];
     }
 
     /**
@@ -157,7 +161,10 @@ class SiteActionProposer
     public function pluginTools(): array
     {
         // One proposal switches plugins both ways; its row names only one.
-        return array_values(array_unique([...array_column($this->catalogue(), 1), 'wp_plugin_activate']));
+        $available = array_filter($this->catalogue(), fn (array $row): bool => SiteAgentReversibility::reasonFor($row[0]) === null);
+
+        return array_values(array_unique([...array_column($available, 1), 'wp_plugin_activate',
+            ...app(SiteAgentExtendedActions::class)->pluginTools()]));
     }
 
     /**
@@ -188,11 +195,11 @@ class SiteActionProposer
                 ['order_id' => ['type' => 'integer', 'description' => 'מספר ההזמנה'], 'status' => ['type' => 'string'], 'note' => ['type' => 'string', 'description' => 'הערה פנימית אופציונלית']],
                 ['order_id', 'status']],
             ['propose_order_note', 'wc_order_note_add',
-                'הצעה להוסיף הערה להזמנה. to_customer=true שולח אותה לקונה באימייל.',
-                ['order_id' => ['type' => 'integer'], 'note' => ['type' => 'string'], 'to_customer' => ['type' => 'boolean']], ['order_id', 'note']],
+                'הצעה להוסיף הערה פנימית להזמנה. שליחת הערה ללקוח באימייל אינה אפשרית כי אי אפשר להחזיר הודעה שנשלחה.',
+                ['order_id' => ['type' => 'integer'], 'note' => ['type' => 'string'], 'to_customer' => ['type' => 'boolean', 'enum' => [false]]], ['order_id', 'note']],
             ['propose_subscription_status', 'wcs_subscription_status_set',
-                'הצעה להשהות (on-hold), לחדש (active), לבטל בסוף התקופה (pending-cancel) או לבטל מיד (cancelled) מנוי מתחדש.',
-                ['subscription_id' => ['type' => 'integer'], 'status' => ['type' => 'string']], ['subscription_id', 'status']],
+                'הצעה להשהות (on-hold), לחדש (active) או לבטל בסוף התקופה (pending-cancel) מנוי מתחדש. ביטול מיידי סופי אינו אפשרי.',
+                ['subscription_id' => ['type' => 'integer'], 'status' => ['type' => 'string', 'enum' => self::SUBSCRIPTION_TARGETS]], ['subscription_id', 'status']],
             ['propose_post_create', 'wp_content_create',
                 'הצעה ליצור פוסט או עמוד. type = post (ברירת מחדל) / page / סוג מותאם; status = draft (ברירת מחדל) או publish. content בטקסט רגיל, פסקאות מופרדות בשורה ריקה.',
                 ['type' => ['type' => 'string'], 'title' => ['type' => 'string'], 'content' => ['type' => 'string'],
@@ -270,7 +277,7 @@ class SiteActionProposer
      */
     public function isProposal(string $name): bool
     {
-        return in_array($name, self::PROPOSALS, true);
+        return in_array($name, self::PROPOSALS, true) || app(SiteAgentExtendedActions::class)->handles($name);
     }
 
     /**
@@ -290,8 +297,29 @@ class SiteActionProposer
             return $this->error('הפעולה הזו כבויה בחשבון הזה על ידי הצוות. אמור זאת לבעל האתר בנימוס, בלי להציע דרך עוקפת.');
         }
 
+        if (($reason = SiteAgentReversibility::reasonFor($name, $input)) !== null) {
+            return $this->error($reason);
+        }
+
         try {
-            return $this->{Str::camel($name)}($site, $input, $seen);
+            $extended = app(SiteAgentExtendedActions::class);
+            $offer = $extended->handles($name)
+                ? $extended->propose($site, $name, $input, $seen)
+                : $this->{Str::camel($name)}($site, $input, $seen);
+
+            if (isset($offer['plan'], $offer['preview'])) {
+                $plan = $offer['plan'];
+
+                if (($reason = SiteAgentReversibility::reasonFor($plan['operation'], $plan)) !== null) {
+                    return $this->error($reason);
+                }
+
+                if (($notice = SiteAgentReversibility::sideEffectNoticeFor($plan['operation'], $plan)) !== null) {
+                    $offer['preview'] .= "\n".$notice;
+                }
+            }
+
+            return $offer;
         } catch (\Throwable $e) {
             // The site answered with an error, or did not answer: the model is
             // told, so it can say so — never a half-built offer.

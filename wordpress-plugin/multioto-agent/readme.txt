@@ -2,7 +2,7 @@
 Contributors: multidigital
 Requires at least: 6.0
 Requires PHP: 7.4
-Stable tag: 1.8.5
+Stable tag: 1.9.0
 License: GPLv2 or later
 
 מחבר את אתר הוורדפרס לפאנל התפעול של Multi Digital: נקודת קצה MCP מאובטחת
@@ -55,6 +55,13 @@ Cloudflare באתר כולו — די בחריגה לנתיב הזה.)
   RewriteRule .* - [E=HTTP_AUTHORIZATION:%1]
 
 == Changelog ==
+
+= 1.9.0 =
+* JetEngine CCT discovery, supported field schemas, list/read/create/update through the vendor API. Linked-post types remain read-only; no hard deletion.
+* Media metadata and registered taxonomy organization, and reversible Optimole settings through its public API.
+* Content scheduling and hierarchy, Yoast/Rank Math metadata, exact internal links, and safe presentation settings.
+* Restricted user profile editing and switching installed themes.
+* Expected-value guards and before/after snapshots for approval and undo. No arbitrary SQL, options, code, credentials, or physical filename changes.
 
 = 1.8.5 =
 * `wc_product_trash` / `wc_product_restore` — העברת מוצר לפח (לא מחיקה סופית) והחזרתו לסטטוס שהיה לו. כך "תמחק את המוצר X" מהוואטסאפ אפשרי, עם ביטול.

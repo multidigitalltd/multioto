@@ -25,7 +25,7 @@ class ImageChangePlanner
 
     /**
      * @param  list<array{id: int, title: string}>  $targets  pages and products the image could go on
-     * @return array{operation: string, target_id: int, target_title: string, alt: string, summary: string}|array{new_product: array<string, mixed>, alt: string}|array{question: string}|null
+     * @return array<string, mixed>|null
      */
     public function plan(Site $site, string $caption, array $targets): ?array
     {
@@ -36,7 +36,7 @@ class ImageChangePlanner
         }
 
         if (trim($caption) === '') {
-            return ['question' => 'קיבלתי את התמונה. לאיזה עמוד או מוצר לשים אותה, ואיך לתאר אותה במילה או שתיים (התיאור נדרש לנגישות)?'];
+            return ['question' => 'קיבלתי את התמונה. לשמור בספריית המדיה או לשים בעמוד או במוצר? ואיך לתאר אותה במילה או שתיים (לנגישות)?'];
         }
 
         $catalogue = collect($targets)
@@ -56,6 +56,8 @@ class ImageChangePlanner
                     'needs' => ['type' => 'string', 'enum' => ['target', 'alt', 'both', 'name']],
                     'summary' => ['type' => 'string'],
                     'new_product' => ['type' => 'boolean'],
+                    'upload_only' => ['type' => 'boolean'],
+                    'title' => ['type' => 'string'],
                     'name' => ['type' => 'string'],
                     'regular_price' => ['type' => 'string'],
                     'sale_price' => ['type' => 'string'],
@@ -69,6 +71,14 @@ class ImageChangePlanner
 
         if (! is_array($result)) {
             return null;
+        }
+
+        if (($result['upload_only'] ?? false) === true) {
+            if (($result['new_product'] ?? false) === true) {
+                return ['question' => 'לשמור את התמונה בספריית המדיה בלבד או ליצור איתה מוצר חדש?'];
+            }
+
+            return $this->uploadOnly($result);
         }
 
         if (($result['new_product'] ?? false) === true) {
@@ -96,6 +106,26 @@ class ImageChangePlanner
             'target_title' => $target['title'],
             'alt' => $alt,
             'summary' => trim((string) ($result['summary'] ?? '')) ?: "תמונה ל{$target['title']}",
+        ];
+    }
+
+    /** A library upload has no page or product target and never needs one. */
+    private function uploadOnly(array $result): array
+    {
+        $alt = is_string($result['alt'] ?? null) ? trim(strip_tags($result['alt'])) : '';
+
+        if ($alt === '' || ($result['can_do'] ?? false) !== true) {
+            return ['operation' => SiteAgentRequest::OP_MEDIA_UPLOAD, 'question' => $this->question('alt')];
+        }
+
+        $title = is_string($result['title'] ?? null) ? trim(strip_tags($result['title'])) : '';
+        $title = Str::limit($title !== '' ? $title : $alt, 200, '');
+
+        return [
+            'operation' => SiteAgentRequest::OP_MEDIA_UPLOAD,
+            'title' => $title,
+            'alt' => Str::limit($alt, 500, ''),
+            'summary' => 'העלאת תמונה לספריית המדיה: '.$title,
         ];
     }
 
@@ -140,9 +170,9 @@ class ImageChangePlanner
     {
         return match ($needs) {
             'name' => 'איך לקרוא למוצר החדש, ובכמה למכור אותו?',
-            'target' => 'לאיזה עמוד או מוצר לשים את התמונה?',
+            'target' => 'לשמור את התמונה בספריית המדיה בלבד, או לשים אותה בעמוד או במוצר מסוים?',
             'alt' => 'איך לתאר את התמונה במילה או שתיים? התיאור נדרש כדי שהאתר יישאר נגיש.',
-            default => 'לאיזה עמוד או מוצר לשים את התמונה, ואיך לתאר אותה (התיאור נדרש לנגישות)?',
+            default => 'לשמור בספריית המדיה או לשים בעמוד או במוצר? ואיך לתאר את התמונה (לנגישות)?',
         };
     }
 
@@ -154,10 +184,13 @@ class ImageChangePlanner
             '- target_id: מזהה העמוד או המוצר מהרשימה שניתנה לך בלבד. אל תמציא מזהה.',
             '- alt: תיאור קצר בעברית של מה שרואים בתמונה, לקוראי מסך. זהו תיאור של התוכן, לא של המיקום.',
             '  "התמונה החדשה" או "תמונה לדף הבית" אינם תיאור. "כיכר לחם על שולחן עץ" הוא תיאור.',
+            '- אם ביקש להעלות או לשמור את הקובץ בספריית המדיה בלי לשים אותו בעמוד או ליצור מוצר — upload_only=true.',
+            '  title = כותרת הקובץ שנמסרה, או כותרת קצרה מתיאורו. alt עדיין חובה. בלי target_id ובלי new_product.',
+            '  כשהתיאור חסר החזר upload_only=true, can_do=false, needs=alt. העלאה לספרייה אינה דורשת יעד.',
             '- אם הכיתוב מבקש ליצור מוצר חדש בחנות עם התמונה ("מוצר חדש", "תעלה אותו ב-89", "תוסיף לחנות") — new_product=true,',
             '  name = שם המוצר מהכיתוב, regular_price = המחיר בספרות בלבד (למשל 89 או 89.90), sale_price/stock_quantity/short_description רק אם נאמרו,',
             '  publish=true רק אם ביקש לפרסם. alt = תיאור התמונה. בלי target_id. אם אין שם — new_product=true ו-name ריק.',
-            '- אם הכיתוב אינו אומר לאן התמונה הולכת — can_do=false ו-needs=target.',
+            '- אם הכיתוב אינו אומר לאן התמונה הולכת וגם לא מבקש לשמור בספריית המדיה — can_do=false ו-needs=target.',
             '- אם הכיתוב אומר לאן אך אינו מתאר את התמונה — can_do=false ו-needs=alt.',
             '- אם חסרים שניהם — can_do=false ו-needs=both.',
             '',

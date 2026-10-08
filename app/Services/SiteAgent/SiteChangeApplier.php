@@ -52,6 +52,7 @@ class SiteChangeApplier
         return match ($request->operation) {
             SiteAgentRequest::OP_PRICE, SiteAgentRequest::OP_STOCK, SiteAgentRequest::OP_PRODUCT => $this->applyProduct($site, $plan),
             SiteAgentRequest::OP_IMAGE => $this->applyImage($site, $plan),
+            SiteAgentRequest::OP_MEDIA_UPLOAD => $this->uploadMedia($site, $request, $plan),
             default => $this->applyPage($site, $request, $plan),
         };
     }
@@ -502,6 +503,68 @@ class SiteChangeApplier
         }
 
         return is_array($product) ? array_intersect_key($product, $fields) : [];
+    }
+
+    /**
+     * A confirmed upload of the private WhatsApp image to the site's library.
+     *
+     * No URL or data from the model is accepted. The only file we read is the
+     * server-generated name under this subscriber's private image directory.
+     * The attachment stays in the library; undo must never delete it.
+     */
+    private function uploadMedia(Site $site, SiteAgentRequest $request, array $plan): array
+    {
+        $path = (string) ($plan['image_path'] ?? '');
+        $alt = trim((string) ($plan['alt'] ?? ''));
+        $title = trim((string) ($plan['title'] ?? ''));
+        $pattern = '~\Asite-agent/'.(int) $request->site_agent_subscriber_id.'/[A-Za-z0-9]{32}\.(jpg|png|gif|webp)\z~';
+
+        if ($alt === '' || $title === '' || preg_match($pattern, $path, $match) !== 1
+            || ! Storage::disk('local')->exists($path)) {
+            return $this->refuse('חסר קובץ תקין, כותרת או תיאור לתמונה. שלחו את התמונה מחדש.');
+        }
+
+        $limit = max(1, (int) config('siteagent.media.max_megabytes', 8)) * 1024 * 1024;
+
+        if (Storage::disk('local')->size($path) > $limit) {
+            return $this->refuse('קובץ התמונה גדול מהמגבלה. שלחו תמונה קטנה יותר.');
+        }
+
+        $bytes = (string) Storage::disk('local')->get($path);
+
+        if ($bytes === '') {
+            return $this->refuse('קובץ התמונה ריק. שלחו את התמונה מחדש.');
+        }
+
+        try {
+            $uploaded = json_decode($this->mcp->textContent($this->mcp->callTool($site, 'wp_media_upload', [
+                'filename' => 'whatsapp-'.now()->format('Ymd-His').'-'.Str::random(6).'.'.$match[1],
+                'data' => base64_encode($bytes),
+                'title' => $title,
+                'alt' => $alt,
+            ], 120)), true);
+        } catch (\Throwable $e) {
+            return $this->failure(Str::limit($e->getMessage(), 200));
+        }
+
+        $attachmentId = (int) data_get($uploaded, 'id', data_get($uploaded, 'attachment_id', 0));
+
+        if ($attachmentId <= 0) {
+            return $this->refuse('לא התקבל אישור שהתמונה נשמרה בספריית המדיה.');
+        }
+
+        Storage::disk('local')->delete($path);
+        $request->plan = $plan + ['attachment_id' => $attachmentId];
+        $url = (string) data_get($uploaded, 'url', '');
+        $link = filter_var($url, FILTER_VALIDATE_URL) && in_array(parse_url($url, PHP_URL_SCHEME), ['https', 'http'], true)
+            && parse_url($url, PHP_URL_USER) === null && parse_url($url, PHP_URL_PASS) === null
+            ? "\nקישור: {$url}"
+            : '';
+
+        return [
+            'ok' => true, 'reason' => null, 'message' => null, 'restore' => null,
+            'done' => 'התמונה "'.$title.'" נשמרה בספריית המדיה. הקובץ יישאר בספרייה; אין לו מחיקה אוטומטית באמצעות הבוט.'.$link,
+        ];
     }
 
     /**

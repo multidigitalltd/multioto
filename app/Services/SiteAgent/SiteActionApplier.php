@@ -23,9 +23,9 @@ use Illuminate\Support\Str;
  *
  * The undo is as honest as the change. Where the previous state can be put back
  * without erasing anybody else's work, it is kept on `restore`; where it
- * cannot — a note already emailed, a user already invited, a subscription
- * cancelled for good — `restore` stays null and the owner was told so in the
- * preview, before they agreed.
+ * cannot be automated — a user already invited, for example — `restore`
+ * stays null and the owner was told so in the preview. Permanently destructive
+ * operations are refused, including old offers created before that policy.
  *
  * Every result has the shape SiteChangeApplier returns, plus an optional
  * `done` line the conversation adds to its confirmation.
@@ -47,7 +47,15 @@ class SiteActionApplier
     {
         $plan = (array) $request->plan;
 
+        if (($reason = SiteAgentReversibility::reasonFor((string) $request->operation, $plan)) !== null) {
+            return $this->refuse($reason);
+        }
+
         try {
+            if (app(SiteAgentExtendedActions::class)->handlesOperation((string) $request->operation)) {
+                return app(SiteAgentExtendedActions::class)->apply($site, $request);
+            }
+
             return match ($request->operation) {
                 SiteAgentRequest::OP_ORDER_STATUS => $this->orderStatus($site, $plan),
                 SiteAgentRequest::OP_ORDER_NOTE => $this->orderNote($site, $plan),
@@ -84,7 +92,8 @@ class SiteActionApplier
     public function reverts(string $kind): bool
     {
         return in_array($kind, ['order_status', 'subscription_status', 'created_post', 'post', 'user_role', 'coupon',
-            'comment', 'post_terms', 'fields', 'menu_added', 'menu_item', 'trashed', 'plugin_toggle', 'trashed_product'], true);
+            'comment', 'post_terms', 'fields', 'menu_added', 'menu_item', 'trashed', 'plugin_toggle', 'trashed_product',
+            'extended', 'extended_cct_created'], true);
     }
 
     /**
@@ -95,6 +104,7 @@ class SiteActionApplier
     {
         try {
             return match ((string) ($restore['kind'] ?? '')) {
+                'extended', 'extended_cct_created' => app(SiteAgentExtendedActions::class)->revert($site, $restore),
                 'order_status' => $this->revertOrderStatus($site, $restore),
                 'subscription_status' => $this->revertSubscriptionStatus($site, $restore),
                 'created_post' => $this->revertCreatedPost($site, $restore),
@@ -170,7 +180,7 @@ class SiteActionApplier
         $this->call($site, 'wc_order_note_add', [
             'internal_id' => (int) $plan['order_id'],
             'note' => (string) $plan['note'],
-            'customer_note' => (bool) ($plan['to_customer'] ?? false),
+            'customer_note' => filter_var($plan['to_customer'] ?? false, FILTER_VALIDATE_BOOLEAN),
         ]);
 
         return $this->ok(null);
