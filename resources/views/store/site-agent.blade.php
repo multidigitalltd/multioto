@@ -16,8 +16,8 @@
      *
      * The running total is computed in JS as a convenience only. Without it the
      * page still states the plan's price, the price per extra number and how
-     * many were chosen, and the authoritative figure is the one Cardcom's own
-     * page shows before anybody types a card number.
+     * many were chosen. Cardcom captures the card without collecting this
+     * amount; the server builds the bill after the service month closes.
      */
     use App\Support\Money;
 
@@ -33,6 +33,7 @@
      | one. $headline is used exclusively where "the first/cheapest" is the honest
      | reading — the hero, and the default selection.
      */
+    $plans = $plans->sortBy(fn ($plan) => $plan->siteAgentMonthlyNetAgorot())->values();
     $headline = $plans->first();
     $single = $plans->count() === 1;
 
@@ -43,16 +44,22 @@
     // Plan figures for the running total, by id. Net agorot only — the page
     // quotes net, and the VAT line says so once rather than per row.
     $planData = $plans->mapWithKeys(fn ($plan) => [$plan->id => [
-        'net' => (int) $plan->price_agorot,
-        'extra' => (int) ($plan->extra_number_price_agorot ?? 0),
+        'net' => $plan->siteAgentMonthlyNetAgorot(),
+        'totals' => collect(range(0, $maxExtraNumbers))->map(fn ($count) => $plan->siteAgentMonthlyNetAgorot($count))->all(),
+        'extra' => $plan->siteAgentMonthlyExtraNetAgorot(),
+        'annual' => $plan->billing_interval === \App\Enums\BillingInterval::Yearly,
         'sells_extra' => $plan->sellsExtraNumbers(),
-        'interval' => $plan->intervalLabel(),
+        'extra_free' => (int) $plan->extra_number_price_agorot === 0,
+        'interval' => 'לחודש',
         'vat' => (bool) $plan->vat_applies,
         'trial' => (int) $plan->trial_days,
         // The usage charge cannot be part of a total — it is not known yet — but
         // it must follow the selection, or picking a plan that bills messages
         // leaves the figure beside the button belonging to one that does not.
         'message' => $plan->messageNetLabel(),
+        'included' => (int) $plan->included_messages,
+        'writing' => $plan->writingNetLabel(),
+        'included_writings' => (int) $plan->included_writings,
     ]]);
 
     $anySellsExtra = $plans->contains(fn ($plan) => $plan->sellsExtraNumbers());
@@ -694,7 +701,7 @@
                 <p class="hero-price">
                     {{-- $plans is ordered by price, so the first is the cheapest. With
                          more than one, "מ־" rather than a figure stated as the price. --}}
-                    <span class="amount">{{ $single ? '' : 'מ־' }}{{ Money::ils((int) $headline->price_agorot) }} {{ $headline->intervalLabel() }}</span>
+                    <span class="amount">{{ $single ? '' : 'מ־' }}{{ Money::ils($headline->siteAgentMonthlyNetAgorot()) }} לחודש</span>
                     @if ($headline->vat_applies)
                         <span class="vat">+ מע״מ</span>
                     @endif
@@ -1023,7 +1030,7 @@
             <section class="plans" aria-labelledby="price-title">
                 <p class="eyebrow">מחיר</p>
                 <h2 id="price-title">{{ $single ? 'המחיר' : 'המסלולים' }}</h2>
-                <p class="section-lead" style="margin-bottom:1.5rem">כל המחירים בעמוד זה הם לפני מע״מ.</p>
+                <p class="section-lead" style="margin-bottom:1.5rem">כל המחירים בעמוד זה הם לפני מע״מ. בהרשמה שומרים כרטיס ללא חיוב. בסיום כל חודש אישי ממועד ההצטרפות נגבים יחד המנוי והתוספות שנצברו בו — לא בסוף חודש קלנדרי.</p>
 
                 {{-- A card per plan, each stating ITS OWN terms. The trial, the price of
                      an extra number and the per-message charge are what a buyer is
@@ -1034,11 +1041,14 @@
                 <div class="price-card">
                     <p class="name">{{ $plan->name }}</p>
                     <p class="big">
-                        {{ Money::ils((int) $plan->price_agorot) }} {{ $plan->intervalLabel() }}
+                        {{ Money::ils($plan->siteAgentMonthlyNetAgorot()) }} לחודש
                         @if ($plan->vat_applies)
                             <span class="vat">+ מע״מ</span>
                         @endif
                     </p>
+                    @if ($plan->billing_interval === \App\Enums\BillingInterval::Yearly)
+                        <p class="note">המחיר השנתי {{ Money::ils((int) $plan->price_agorot) }} מחולק ל־12 חיובים חודשיים בדיעבד. הסכום המוצג הוא לחודש הראשון; חלוקת אגורות עשויה לשנות חודש אחר באגורה. גם מחיר המספרים הנוספים מחולק כך.</p>
+                    @endif
                     @if ($plan->billsMessages() || $plan->billsWritings())
                         <ul class="usage-prices">
                             @if ($plan->billsMessages())
@@ -1059,8 +1069,8 @@
                             <div>
                                 <dt><span class="tick" aria-hidden="true">✓</span> {{ $plan->trial_days }} ימים ניסיון חינם.</dt>
                                 <dd>
-                                    מזינים כרטיס ולא מחויבים — החיוב הראשון ביום ה־{{ $plan->trial_days + 1 }},
-                                    ואפשר לבטל לפני כן. תזכורת תישלח יומיים קודם.
+                                    מזינים כרטיס ולא מחויבים. ביום ה־{{ $plan->trial_days + 1 }} מתחיל חודש השירות הראשון בתשלום; החיוב הראשון רק בסופו.
+                                    אפשר לבטל במהלך הניסיון ללא חיוב. תזכורת תישלח יומיים לפני סיום הניסיון.
                                 </dd>
                             </div>
                         @endif
@@ -1073,7 +1083,7 @@
                         @if ($plan->sellsExtraNumbers())
                             <div>
                                 <dt><span class="tick" aria-hidden="true">✓</span> מספר נוסף:</dt>
-                                <dd>{{ $plan->extraNumberNetLabel() }} — אפשר להוסיף כאן בקנייה, או בכל שלב מהאזור האישי.</dd>
+                                <dd>{{ $plan->siteAgentMonthlyExtraNetLabel() }} — אפשר להוסיף כאן בקנייה, או בכל שלב מהאזור האישי.</dd>
                             </div>
                         @endif
 
@@ -1086,9 +1096,9 @@
                                 <dd>
                                     @if ((int) $plan->included_messages > 0)
                                         {{ number_format($plan->included_messages) }} הודעות בכל חודש כלולות במחיר; מעבר להן —
-                                        {{ $plan->messageNetLabel() }} להודעה, נגבה בחידוש החודשי לפי הספירה.
+                                        {{ $plan->messageNetLabel() }} להודעה, נגבה בסיום החודש האישי יחד עם המנוי לפי הספירה.
                                     @else
-                                        לכל הודעה שהבוט שולח לכם — {{ $plan->messageNetLabel() }}, נגבה בחידוש החודשי לפי הספירה.
+                                        לכל הודעה שהבוט שולח לכם — {{ $plan->messageNetLabel() }}, נגבה בסיום החודש האישי יחד עם המנוי לפי הספירה.
                                     @endif
                                     קודי אימות והודעות מערכת אינם נספרים@if ($plan->hasTrial()), והודעות בתקופת הניסיון אינן מחויבות@endif.
                                     {{-- The trial clause only where there is a trial: naming
@@ -1110,7 +1120,7 @@
                                     @else
                                         {{ $plan->writingNetLabel() }} לטקסט.
                                     @endif
-                                    כל טיוטה נספרת, גם אם בחרתם שלא לפרסם אותה; טקסט שכתבתם בעצמכם וביקשתם רק להעלות — לא נספר. הבוט מציין את זה ליד כל טיוטה.
+                                    התוספת נגבית בסיום החודש האישי יחד עם המנוי. כל טיוטה נספרת, גם אם בחרתם שלא לפרסם אותה; טקסט שכתבתם בעצמכם וביקשתם רק להעלות — לא נספר. הבוט מציין את זה ליד כל טיוטה.
                                 </dd>
                             </div>
                         @endif
@@ -1132,7 +1142,7 @@
                     @if ($allHaveTrial)
                         מזינים כרטיס, לא מחויבים היום, ואפשר לבטל בתוך {{ $headline->trial_days }} הימים.
                     @else
-                        התשלום מתבצע בעמוד מאובטח של חברת הסליקה.
+                        מזינים כרטיס בעמוד מאובטח של חברת הסליקה, ללא חיוב היום. משלמים אחרי חודש שירות מלא.
                     @endif
                 </p>
 
@@ -1168,7 +1178,7 @@
                                          charge or missing trial they never saw. --}}
                                     <span class="body">
                                         <span class="title">{{ $plan->name }}</span>
-                                        <span class="meta">{{ $plan->netPriceLabel() }}</span>
+                                        <span class="meta">{{ $plan->siteAgentMonthlyNetLabel() }}</span>
                                         @if ($plan->hasTrial())
                                             <span class="meta">{{ $plan->trial_days }} ימים ניסיון חינם, עם כרטיס ובלי חיוב.</span>
                                         @endif
@@ -1182,7 +1192,7 @@
                                             </span>
                                         @endif
                                         @if ($plan->sellsExtraNumbers())
-                                            <span class="meta">מספר נוסף: {{ $plan->extraNumberNetLabel() }}.</span>
+                                            <span class="meta">מספר נוסף: {{ $plan->siteAgentMonthlyExtraNetLabel() }}.</span>
                                         @endif
                                         @if (filled($plan->description))
                                             <span class="meta">{{ $plan->description }}</span>
@@ -1234,7 +1244,7 @@
                              has been warned about, and the ones who are careful are the
                              ones who will not answer it. --}}
                         <p class="hint" id="phone-hint">
-                            מיד אחרי התשלום יישלח למספר הזה קוד בן 6 ספרות בוואטסאפ. יש להשיב עליו באותה שיחה —
+                            מיד אחרי אישור הכרטיס יישלח למספר הזה קוד בן 6 ספרות בוואטסאפ. יש להשיב עליו באותה שיחה —
                             עד אז המספר אינו יכול לעשות דבר באתר.
                         </p>
                         @error('phone')<p class="error" id="phone-error">{{ $message }}</p>@enderror
@@ -1250,7 +1260,7 @@
                             <legend>מספרים נוספים (אופציונלי)</legend>
                             <p class="hint" id="extras-hint" style="margin:0 0 .7rem">
                                 שותף, מנהלת משרד או מישהו מהצוות שגם ינהל את האתר.
-                                <span id="extras-price">{{ $headline->extraNumberNetLabel() ?? $plans->firstWhere(fn ($plan) => $plan->sellsExtraNumbers())->extraNumberNetLabel() }}</span> לכל מספר.
+                                <span id="extras-price">{{ $headline->siteAgentMonthlyExtraNetLabel() ?? $plans->firstWhere(fn ($plan) => $plan->sellsExtraNumbers())->siteAgentMonthlyExtraNetLabel() }}</span> לכל מספר.
                                 כל מספר מקבל קוד אימות משלו, ואפשר לבטל מספר בכל עת מהאזור האישי.
                                 עד {{ $maxExtraNumbers }} כאן — נוספים מתווספים אחר כך מהאזור האישי.
                             </p>
@@ -1277,15 +1287,18 @@
                          plan — including its per-message charge, which cannot be part of
                          a total but must not belong to a different plan either. --}}
                     <p class="total" id="total" role="status" aria-live="polite">
-                        <span class="figure" id="total-figure">{{ $headline->netPriceLabel() }}</span><br>
+                        <span class="figure" id="total-figure">{{ $headline->siteAgentMonthlyNetLabel() }}</span><br>
                         <span class="note" id="total-note">
                             @if ($headline->hasTrial())
-                                היום לא תחויבו. החיוב הראשון בתום {{ $headline->trial_days }} ימי הניסיון.
+                                היום לא תחויבו. לאחר {{ $headline->trial_days }} ימי הניסיון מתחיל חודש בתשלום, והחיוב הראשון בסופו.
                             @else
-                                סה״כ לתשלום היום.
+                                היום לא תחויבו. מחיר המנוי נגבה אחרי חודש השירות הראשון.
                             @endif
                             @if ($headline->billsMessages())
-                                ובנוסף {{ $headline->messageNetLabel() }} לכל הודעה שהבוט שולח לכם.
+                                באותו חיוב: {{ $headline->messageNetLabel() }} לכל הודעה יוצאת מעבר ל־{{ number_format((int) $headline->included_messages) }} ההודעות הכלולות.
+                            @endif
+                            @if ($headline->billsWritings())
+                                {{ $headline->writingNetLabel() }} לכל טקסט ארוך מעבר ל־{{ number_format((int) $headline->included_writings) }} הכלולים.
                             @endif
                         </span>
                     </p>
@@ -1299,7 +1312,7 @@
                                    required @checked(old('install_mode', \App\Models\SiteAgentOrder::INSTALL_SELF) === \App\Models\SiteAgentOrder::INSTALL_SELF)>
                             <span class="body">
                                 <span class="title">אני אתקין לבד</span>
-                                <span class="meta">מיד אחרי התשלום תקבלו את קובץ התוסף והקודים להדבקה. כחמש דקות.</span>
+                                <span class="meta">מיד אחרי אישור הכרטיס תקבלו את קובץ התוסף והקודים להדבקה. כחמש דקות.</span>
                             </span>
                         </label>
 
@@ -1339,7 +1352,7 @@
                     @error('terms')<p class="error" id="terms-error">{{ $message }}</p>@enderror
 
                     <button type="submit" class="btn btn-primary">
-                        {{ $allHaveTrial ? 'מתחילים את תקופת הניסיון' : 'מעבר לתשלום מאובטח' }}
+                        {{ $allHaveTrial ? 'מתחילים את תקופת הניסיון' : 'שמירת כרטיס והפעלת השירות' }}
                     </button>
                     <p class="secure">
                         <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="10.5" width="15" height="10" rx="2"/><path d="M8 10.5V7a4 4 0 0 1 8 0v3.5"/></svg>
@@ -1440,12 +1453,8 @@
                     <details>
                         <summary>מה קורה בסוף תקופת הניסיון?</summary>
                         <p>
-                            @if ($single)
-                                ביום ה־{{ $headline->trial_days + 1 }} יוצא החיוב הראשון, בכרטיס שהזנתם.
-                            @else
-                                ביום שאחרי היום האחרון יוצא החיוב הראשון, בכרטיס שהזנתם.
-                            @endif
-                            תזכורת נשלחת יומיים לפני. ביטול לפני כן — ולא תחויבו בכלל.
+                            מתחיל חודש השירות הראשון בתשלום. רק בסופו נגבים בכרטיס ששמרתם המנוי, חריגת הודעות יוצאות ותוספות כתיבה לפי המסלול.
+                            תזכורת נשלחת יומיים לפני סיום הניסיון. ביטול במהלך הניסיון — ולא תחויבו בכלל.
                             הניסיון הוא פעם אחת ללקוח ופעם אחת לאתר.
                         </p>
                     </details>
@@ -1509,7 +1518,7 @@
             </span>
             בוט ניהול האתר
         </a>
-        <p>התשלום מתבצע בעמוד מאובטח של חברת הסליקה. פרטי האשראי אינם נשמרים אצלנו.</p>
+        <p>הכרטיס מוזן בעמוד מאובטח של חברת הסליקה ונשמר כאמצעי תשלום לחיוב בדיעבד. מספר הכרטיס אינו נשמר אצלנו.</p>
         <p>יש שאלה? <a href="mailto:{{ config('mail.from.address') }}">{{ config('mail.from.address') }}</a></p>
         <nav aria-label="מסמכים משפטיים">
             <ul>
@@ -1522,8 +1531,8 @@
 
 <script>
     // The running total, as a convenience. The page is complete without it: the
-    // plan's price is already printed, and the authoritative figure is the one
-    // Cardcom's own page shows before a card number is typed.
+    // plan's price is already printed. Cardcom only verifies the card now;
+    // final usage and VAT are calculated server-side after the service month.
     (function () {
         var form = document.getElementById('buy-form');
         var figure = document.getElementById('total-figure');
@@ -1563,7 +1572,8 @@
             if (!plan) { return; }
 
             var extras = plan.sells_extra ? extraCount() : 0;
-            var perCycle = plan.net + (extras * plan.extra);
+            // Every selectable seat total is calculated server-side in integer agorot.
+            var perCycle = plan.totals[Math.min(extras, plan.totals.length - 1)];
             var vat = plan.vat ? ' + מע״מ' : '';
 
             figure.textContent = money(perCycle) + ' ' + plan.interval + vat;
@@ -1576,7 +1586,7 @@
             if (block) { block.hidden = !plan.sells_extra; }
 
             if (priceLabel) {
-                priceLabel.textContent = plan.extra === 0
+                priceLabel.textContent = plan.extra_free
                     ? 'ללא תוספת תשלום'
                     : money(plan.extra) + ' ' + plan.interval + vat;
             }
@@ -1584,18 +1594,25 @@
             var text;
 
             if (plan.trial > 0) {
-                text = 'היום לא תחויבו. החיוב הראשון בתום ' + plan.trial + ' ימי הניסיון'
+                text = 'היום לא תחויבו. לאחר ' + plan.trial + ' ימי הניסיון מתחיל חודש בתשלום, והחיוב הראשון בסופו'
                     + (extras > 0 ? ', וכולל ' + extras + ' מספרים נוספים.' : '.');
             } else {
                 text = extras > 0
-                    ? 'סה״כ לתשלום היום, כולל ' + extras + ' מספרים נוספים.'
-                    : 'סה״כ לתשלום היום.';
+                    ? 'היום לא תחויבו. הסכום ייגבה בסיום חודש השירות הראשון, כולל ' + extras + ' מספרים נוספים.'
+                    : 'היום לא תחויבו. הסכום ייגבה בסיום חודש השירות הראשון.';
             }
 
             // The usage charge belongs to the plan that is selected, not to the
             // one the page happened to render first.
             if (plan.message) {
-                text += ' ובנוסף ' + plan.message + ' לכל הודעה שהבוט שולח לכם.';
+                text += ' באותו חיוב: ' + plan.message + ' לכל הודעה יוצאת מעבר ל־' + plan.included + ' הכלולות.';
+            }
+
+            if (plan.writing) {
+                text += ' ' + plan.writing + ' לכל טקסט ארוך מעבר ל־' + plan.included_writings + ' הכלולים.';
+            }
+            if (plan.annual) {
+                text += ' המחיר השנתי מחולק ל־12 חיובים; חלוקת אגורות עשויה לשנות את הסכום בחודש אחר.';
             }
 
             note.textContent = text;

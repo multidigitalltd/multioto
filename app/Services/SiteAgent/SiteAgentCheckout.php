@@ -3,6 +3,7 @@
 namespace App\Services\SiteAgent;
 
 use App\Enums\BillingInterval;
+use App\Enums\ChargeStatus;
 use App\Enums\SiteStatus;
 use App\Enums\SubscriptionStatus;
 use App\Enums\TokenStatus;
@@ -10,6 +11,7 @@ use App\Jobs\SendSiteAgentVerificationJob;
 use App\Mail\SiteAgentActivationMail;
 use App\Models\Charge;
 use App\Models\Customer;
+use App\Models\PaymentToken;
 use App\Models\Plan;
 use App\Models\Site;
 use App\Models\SiteAgentOrder;
@@ -17,7 +19,7 @@ use App\Models\SiteAgentSubscriber;
 use App\Models\SiteInstallation;
 use App\Models\Subscription;
 use App\Models\SystemLog;
-use App\Services\Billing\ManualChargeService;
+use App\Services\Billing\SiteAgentArrearsBilling;
 use App\Services\Cardcom\CardcomClient;
 use App\Support\CardcomWebhook;
 use Illuminate\Support\Carbon;
@@ -34,14 +36,13 @@ use Illuminate\Support\Facades\Mail;
  * leaves.** They go to Cardcom and what comes back is a webhook into a process
  * with no session, so the purchase is written down first and granted later.
  *
- * Nothing is granted before the money arrives. Not the subscription, not the
- * number's binding, not the connection codes — a service handed out at checkout
- * is a service kept by everyone who abandons the payment page.
+ * New orders capture a card without charging it. Access is granted only after
+ * Cardcom verifies that capture; the first personal month is billed in arrears.
+ * Historical paid orders keep the agreement recorded when they were opened.
  */
 class SiteAgentCheckout
 {
     public function __construct(
-        private ManualChargeService $charges,
         private WhatsAppCloudClient $whatsapp,
         private SiteAgentBilling $billing,
         private CardcomClient $cardcom,
@@ -90,44 +91,14 @@ class SiteAgentCheckout
             'total_agorot' => $plan->grossAgorot((bool) $customer->vat_exempt)
                 + (count($extras) * (int) ($plan->extraNumberGrossAgorot((bool) $customer->vat_exempt) ?? 0)),
             'trial_days' => $this->trialDaysFor($plan, $customer, $domain),
+            'billing_mode' => SiteAgentArrearsBilling::MODE,
             'install_mode' => in_array($buyer['install_mode'] ?? null, SiteAgentOrder::INSTALL_MODES, true)
                 ? $buyer['install_mode']
                 : SiteAgentOrder::INSTALL_SELF,
             'status' => SiteAgentOrder::PENDING,
         ]);
 
-        if ($order->isTrial()) {
-            return ['order' => $order, 'url' => $this->trialCardPage($order, $customer)];
-        }
-
-        try {
-            $page = $this->charges->createHostedPage(
-                customer: $customer,
-                totalAgorot: (int) $order->total_agorot,
-                description: $plan->name.' — '.$domain,
-                notes: 'רכישה עצמית של בוט ניהול האתר',
-                // Two different reasons for the same total to carry no VAT, and
-                // the charge has to know about both. grossAgorot() already adds
-                // nothing for a plan whose price does not carry VAT on top —
-                // without saying so here, the charge would split VAT back out of
-                // a total that never contained any, and the invoice would report
-                // tax we did not take.
-                vatExempt: (bool) $customer->vat_exempt || ! $plan->vat_applies,
-                // Always: this is a subscription, and a renewal that asks for the
-                // card again every month is not a renewal.
-                withToken: true,
-                successUrl: route('store.agent.done', ['reference' => $order->reference]),
-                failureUrl: route('store.agent.done', ['reference' => $order->reference]),
-            );
-        } catch (\Throwable $e) {
-            $order->update(['status' => SiteAgentOrder::FAILED]);
-
-            throw $e;
-        }
-
-        $order->update(['charge_id' => $page['charge']->id]);
-
-        return ['order' => $order, 'url' => $page['url']];
+        return ['order' => $order, 'url' => $this->cardPage($order, $customer)];
     }
 
     /**
@@ -188,17 +159,15 @@ class SiteAgentCheckout
             return $order;
         }
 
+        if ($charge->status !== ChargeStatus::Succeeded || $order->requiresCardCapture()) {
+            return $order;
+        }
+
         return $this->grant($order);
     }
 
-    /**
-     * The card for a free trial was captured — open the trial.
-     *
-     * Called from the Cardcom webhook once the token is on file, matched on the
-     * hosted page's own id. Nothing was charged, and nothing will be until the
-     * trial ends (see EndSiteAgentTrialsJob).
-     */
-    public function fulfilTrial(string $lowProfileId): ?SiteAgentOrder
+    /** Activate only the order whose hosted capture returned this customer's card. */
+    public function fulfilCardCapture(string $lowProfileId, PaymentToken $token): ?SiteAgentOrder
     {
         if ($lowProfileId === '') {
             return null;
@@ -206,22 +175,21 @@ class SiteAgentCheckout
 
         $order = SiteAgentOrder::query()->where('cardcom_low_profile_id', $lowProfileId)->first();
 
-        if ($order === null || ! $order->isTrial() || $order->isFulfilled()) {
+        if ($order === null || ! $order->requiresCardCapture() || $order->isFulfilled()) {
             return $order;
         }
 
-        // The webhook stores the card before calling here. A trial without one
-        // would end with nothing to charge, which is the outcome the card at
-        // signup exists to prevent.
-        if ($order->customer?->paymentTokens()->where('status', TokenStatus::Active)->doesntExist()) {
+        if ((int) $token->customer_id !== (int) $order->customer_id
+            || $token->status !== TokenStatus::Active
+            || blank($token->cardcom_token)) {
             return $order;
         }
 
-        return $this->grant($order);
+        return $this->grant($order, $token);
     }
 
     /** Switch the service on for a paid or trial order. */
-    private function grant(SiteAgentOrder $order): ?SiteAgentOrder
+    private function grant(SiteAgentOrder $order, ?PaymentToken $token = null): ?SiteAgentOrder
     {
         $customer = $order->customer;
         $plan = $order->plan;
@@ -233,7 +201,25 @@ class SiteAgentCheckout
         /** @var list<int> $toVerify */
         $toVerify = [];
 
-        DB::transaction(function () use ($order, $customer, $plan, &$toVerify): void {
+        $granted = false;
+        DB::transaction(function () use ($order, $customer, $plan, $token, &$toVerify, &$granted): void {
+            $order->setRawAttributes(SiteAgentOrder::query()->lockForUpdate()->findOrFail($order->id)->getAttributes(), true);
+            if ($order->isFulfilled()) {
+                return;
+            }
+
+            Customer::query()->lockForUpdate()->findOrFail($customer->id);
+            if ($token !== null) {
+                $token = PaymentToken::query()->lockForUpdate()->find($token->id);
+                if ($token === null || $token->status !== TokenStatus::Active
+                    || (int) $token->customer_id !== (int) $customer->id
+                    || blank($token->cardcom_token)) {
+                    // Roll back activation and leave the order pending. The
+                    // webhook must retry instead of acknowledging a capture
+                    // whose card was replaced before the subscription existed.
+                    throw new \RuntimeException('הכרטיס השתנה לפני הפעלת השירות. נדרש אימות כרטיס נוסף.');
+                }
+            }
             $site = $this->site($order, $customer);
 
             // A second SITE is a second service, at its own price.
@@ -250,22 +236,8 @@ class SiteAgentCheckout
                 'customer_id' => $customer->id,
                 'plan_id' => $plan->id,
                 'site_id' => $site->id,
-                'token_id' => $customer->paymentTokens()->latest('id')->value('id'),
-                ...($order->isTrial() ? [
-                    // Free until the trial ends; the first charge is dated the
-                    // moment it does, and EndSiteAgentTrialsJob hands it to
-                    // the ordinary renewal from there.
-                    'status' => SubscriptionStatus::Trialing,
-                    'trial_ends_at' => now()->addDays((int) $order->trial_days),
-                    'next_charge_at' => now()->addDays((int) $order->trial_days),
-                ] : [
-                    // The card was captured with this charge and the first cycle is
-                    // paid, so it collects itself from here on.
-                    'status' => SubscriptionStatus::Active,
-                    'current_period_start' => now()->toDateString(),
-                    'current_period_end' => $this->periodEnd($plan)->toDateString(),
-                    'next_charge_at' => $this->periodEnd($plan),
-                ]),
+                'token_id' => $token?->id ?? $customer->paymentTokens()->where('status', TokenStatus::Active)->latest('id')->value('id'),
+                ...$this->subscriptionDates($order, $plan),
             ]);
 
             // Re-used rather than created blindly: the same number may already
@@ -308,10 +280,15 @@ class SiteAgentCheckout
             $order->update([
                 'site_id' => $site->id,
                 'subscription_id' => $subscription->id,
-                'status' => SiteAgentOrder::PAID,
+                'status' => $order->isArrears() ? SiteAgentOrder::ACTIVE : SiteAgentOrder::PAID,
                 'fulfilled_at' => now(),
             ]);
+            $granted = true;
         });
+
+        if (! $granted) {
+            return $order->fresh();
+        }
 
         // Outside the transaction: nothing external may run before the rows it
         // talks about are committed.
@@ -415,7 +392,7 @@ class SiteAgentCheckout
 
         $hadTrial = SiteAgentOrder::query()
             ->where('trial_days', '>', 0)
-            ->where('status', SiteAgentOrder::PAID)
+            ->fulfilled()
             ->where(fn ($q) => $q->where('customer_id', $customer->id)->orWhere('domain', $domain))
             ->exists();
 
@@ -430,7 +407,7 @@ class SiteAgentCheckout
      * The same hosted page a customer uses to update their card, so the card
      * number never touches us and the webhook path is the one already proven.
      */
-    private function trialCardPage(SiteAgentOrder $order, Customer $customer): string
+    private function cardPage(SiteAgentOrder $order, Customer $customer): string
     {
         $done = route('store.agent.done', ['reference' => $order->reference]);
 
@@ -455,6 +432,37 @@ class SiteAgentCheckout
         $customer->update(['pending_card_lp_id' => $page['low_profile_id']]);
 
         return (string) $page['url'];
+    }
+
+    /** Preserve pre-existing prepaid agreements while initializing new personal cycles. */
+    private function subscriptionDates(SiteAgentOrder $order, Plan $plan): array
+    {
+        $trialEnd = $order->isTrial() ? now()->addDays((int) $order->trial_days) : null;
+
+        if ($order->isArrears()) {
+            return [
+                ...SiteAgentArrearsBilling::initializeDates($trialEnd ?? now()),
+                'status' => $trialEnd ? SubscriptionStatus::Trialing : SubscriptionStatus::Active,
+                'trial_ends_at' => $trialEnd,
+            ];
+        }
+
+        if ($trialEnd !== null) {
+            return [
+                'billing_mode' => 'advance',
+                'status' => SubscriptionStatus::Trialing,
+                'trial_ends_at' => $trialEnd,
+                'next_charge_at' => $trialEnd,
+            ];
+        }
+
+        return [
+            'billing_mode' => 'advance',
+            'status' => SubscriptionStatus::Active,
+            'current_period_start' => now()->toDateString(),
+            'current_period_end' => $this->periodEnd($plan)->toDateString(),
+            'next_charge_at' => $this->periodEnd($plan),
+        ];
     }
 
     private function periodEnd(Plan $plan): Carbon

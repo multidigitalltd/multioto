@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Enums\BillingInterval;
+use App\Services\Billing\SiteAgentArrearsBilling;
 use App\Support\Money;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -150,6 +151,41 @@ class Plan extends Model
     public function netPriceLabel(): string
     {
         return Money::ils((int) $this->price_agorot).' '.$this->intervalLabel().$this->vatSuffix();
+    }
+
+    /** Exact net quote for a personal bot month, including the selected seats. */
+    public function siteAgentMonthlyNetAgorot(int $extraNumbers = 0, int $cycleIndex = 0): int
+    {
+        return $this->siteAgentMonthlyShare((int) $this->price_agorot, $cycleIndex)
+            + $this->siteAgentMonthlyExtraNetAgorot($extraNumbers, $cycleIndex);
+    }
+
+    public function siteAgentMonthlyExtraNetAgorot(int $extraNumbers = 1, int $cycleIndex = 0): int
+    {
+        return $this->siteAgentMonthlyShare(max(0, $extraNumbers) * (int) $this->extra_number_price_agorot, $cycleIndex);
+    }
+
+    public function siteAgentMonthlyNetLabel(): string
+    {
+        return Money::ils($this->siteAgentMonthlyNetAgorot()).' לחודש'.$this->vatSuffix();
+    }
+
+    public function siteAgentMonthlyExtraNetLabel(): ?string
+    {
+        if (! $this->sellsExtraNumbers()) {
+            return null;
+        }
+
+        return (int) $this->extra_number_price_agorot === 0
+            ? 'ללא תוספת תשלום'
+            : Money::ils($this->siteAgentMonthlyExtraNetAgorot()).' לחודש'.$this->vatSuffix();
+    }
+
+    private function siteAgentMonthlyShare(int $amount, int $cycleIndex): int
+    {
+        return $this->billing_interval === BillingInterval::Yearly
+            ? SiteAgentArrearsBilling::annualShare($amount, max(0, $cycleIndex))
+            : $amount;
     }
 
     /** The net price of one extra manager number per cycle, or null when none are sold. */

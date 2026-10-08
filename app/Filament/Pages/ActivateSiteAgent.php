@@ -2,6 +2,7 @@
 
 namespace App\Filament\Pages;
 
+use App\Enums\BillingInterval;
 use App\Enums\SubscriptionStatus;
 use App\Filament\Concerns\RespectsModuleAccess;
 use App\Jobs\SendCardCaptureLinkJob;
@@ -10,6 +11,7 @@ use App\Models\Plan;
 use App\Models\Site;
 use App\Models\SiteAgentSubscriber;
 use App\Models\Subscription;
+use App\Services\Billing\SiteAgentArrearsBilling;
 use App\Services\SiteAgent\SiteAgentAccess;
 use App\Services\SiteAgent\SiteAgentBilling;
 use App\Services\SiteAgent\WhatsAppCloudClient;
@@ -26,6 +28,7 @@ use Filament\Forms\Form;
 use Filament\Forms\Get;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -121,7 +124,8 @@ class ActivateSiteAgent extends Page implements HasForms
                             ->live(onBlur: true)
                             ->helperText('רק אם סוכם מחיר שונה מהמסלול.'),
                         DatePicker::make('first_charge_at')
-                            ->label('תאריך חיוב ראשון')
+                            ->label('תחילת חודש השירות הראשון')
+                            ->helperText('החיוב הראשון בסיום חודש אישי מלא מתאריך זה; אין חיוב בעת ההפעלה.')
                             ->required()
                             ->native(false)
                             ->displayFormat('d/m/Y'),
@@ -207,8 +211,8 @@ class ActivateSiteAgent extends Page implements HasForms
         }
 
         return $customer->name.' — '.($customer->hasActiveCard()
-            ? 'יש כרטיס אשראי בתוקף, החיוב יתחיל בתאריך שנבחר.'
-            : 'אין כרטיס אשראי בתוקף. יישלח ללקוח קישור להזנת כרטיס, והחיוב יתחיל כשהכרטיס יוזן.');
+            ? 'יש כרטיס אשראי בתוקף; החיוב הראשון בסיום חודש השירות שמתחיל בתאריך שנבחר.'
+            : 'אין כרטיס אשראי בתוקף. יישלח קישור להזנת כרטיס; אין גבייה לפני סיום חודש השירות האישי.');
     }
 
     /** The money, said once, the way it will appear on the charge. */
@@ -224,13 +228,17 @@ class ActivateSiteAgent extends Page implements HasForms
             ? (int) round(((float) $get('price_override')) * 100)
             : (int) $plan->price_agorot;
 
+        if ($plan->billing_interval === BillingInterval::Yearly) {
+            $base = SiteAgentArrearsBilling::annualShare($base, 0);
+        }
+
         $exempt = (bool) $this->site($get)?->customer?->vat_exempt;
 
         $vat = ($exempt || ! $plan->vat_applies)
             ? 0
             : (int) round($base * config('billing.vat_rate'));
 
-        return $plan->name.' · '.Money::ils($base + $vat).' לחיוב'.($vat > 0 ? ' (כולל מע״מ)' : ' (ללא מע״מ)');
+        return $plan->name.' · '.Money::ils($base + $vat).' למנוי בסיום חודש אישי, בתוספת חריגות הודעות וכתיבה'.($vat > 0 ? ' (כולל מע״מ)' : ' (ללא מע״מ)');
     }
 
     private function site(Get $get): ?Site
@@ -308,7 +316,7 @@ class ActivateSiteAgent extends Page implements HasForms
                 'price_agorot_override' => filled($data['price_override'] ?? null)
                     ? (int) round(((float) $data['price_override']) * 100)
                     : null,
-                'next_charge_at' => $data['first_charge_at'],
+                ...SiteAgentArrearsBilling::initializeDates(Carbon::parse($data['first_charge_at'])),
             ]);
 
             // The same number may already be bound to this site — a manager who

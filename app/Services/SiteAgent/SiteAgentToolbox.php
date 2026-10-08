@@ -173,7 +173,7 @@ class SiteAgentToolbox
 
     private static function reads(): array
     {
-        return self::READS + SiteAgentExtendedCatalogue::reads();
+        return self::READS + SiteAgentExtendedCatalogue::reads() + SiteAgentAcfActions::reads();
     }
 
     /**
@@ -208,6 +208,30 @@ class SiteAgentToolbox
         $ids = str_starts_with($pluginTool, 'jet_cct_')
             ? $this->cctReferences($pluginTool, $data, $arguments)
             : $this->idsIn($data);
+        if (str_starts_with($pluginTool, 'wp_acf_')) {
+            if (! is_array($data)) {
+                return ['content' => 'האתר החזיר מידע ACF לא תקין. יש לנסות לקרוא מחדש.', 'is_error' => true, 'ids' => []];
+            }
+            $limit = min(48000, max(24000, $limit));
+            // ACF identifiers belong to a specific context and field, never a
+            // generic post/user id. Sealed state stays outside model context.
+            $ids = [];
+            if (is_array($data)) {
+                if ($pluginTool === 'wp_acf_get' && is_array($data['target'] ?? null)) {
+                    foreach ((array) ($data['fields'] ?? []) as $field) {
+                        if (is_array($field) && is_string($field['key'] ?? null)
+                            && array_key_exists($field['key'], (array) ($data['values'] ?? []))) {
+                            $ids[] = SiteAgentAcfActions::reference($data['target'], $field['key']);
+                        }
+                    }
+                }
+                unset($data['snapshots'], $data['target']['acf_id']);
+                foreach ($data['pages'] ?? [] as $index => $page) {
+                    unset($data['pages'][$index]['acf_id']);
+                }
+                $text = json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+            }
+        }
         if ($pluginTool === 'wp_seo_get' && is_array($data) && isset($data['id'])
             && in_array($data['provider'] ?? '', ['yoast', 'rank_math'], true)) {
             $ids[] = 'seo:'.$data['provider'].':'.$data['id'];
@@ -219,6 +243,10 @@ class SiteAgentToolbox
                     $ids[] = 'theme:'.$theme['stylesheet'];
                 }
             }
+        }
+
+        if (str_starts_with($pluginTool, 'wp_acf_') && mb_strlen($text) > $limit) {
+            return ['content' => 'מידע ACF גדול מדי לקריאה מלאה. בחרו field_key יחיד; אם גם השדה לבדו גדול מדי, יש לצמצם אותו באתר לפני עריכה דרך הבוט.', 'is_error' => true, 'ids' => []];
         }
 
         return [

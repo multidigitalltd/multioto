@@ -85,13 +85,19 @@
              browser, and telling a customer who just paid that they did not is
              how a completed sale becomes a support call and a chargeback. --}}
         <p class="lead">
-            {{ $order->isTrial() ? 'אנחנו ממתינים לאישור הכרטיס מחברת הסליקה (ללא חיוב).' : 'אנחנו ממתינים לאישור מחברת הסליקה.' }} זה לוקח בדרך כלל כמה שניות —
+            {{ $order->requiresCardCapture() ? 'אנחנו ממתינים לאישור הכרטיס מחברת הסליקה (ללא חיוב).' : 'אנחנו ממתינים לאישור מחברת הסליקה.' }} זה לוקח בדרך כלל כמה שניות —
             רעננו את העמוד בעוד רגע.
         </p>
         <div class="warn">
-            <strong>אם שילמתם:</strong> השירות ייפתח מעצמו והוראות ההפעלה יישלחו לאימייל
-            {{ $order->buyer_email }}. אין צורך לשלם שוב.<br>
-            <strong>אם ביטלתם או שהתשלום נדחה:</strong> אפשר להתחיל מחדש מעמוד הרכישה.
+            @if ($order->requiresCardCapture())
+                <strong>אם הזנתם כרטיס:</strong> אחרי האישור השירות ייפתח והוראות ההפעלה יישלחו לאימייל
+                {{ $order->buyer_email }}. אין צורך להזין שוב את הכרטיס, ולא נגבה תשלום בהרשמה.<br>
+                <strong>אם ביטלתם או שהכרטיס נדחה:</strong> אפשר להתחיל מחדש מעמוד הרכישה.
+            @else
+                <strong>אם שילמתם:</strong> השירות ייפתח מעצמו והוראות ההפעלה יישלחו לאימייל
+                {{ $order->buyer_email }}. אין צורך לשלם שוב.<br>
+                <strong>אם ביטלתם או שהתשלום נדחה:</strong> אפשר להתחיל מחדש מעמוד הרכישה.
+            @endif
         </div>
         <p class="lead">שמרו את הקישור הזה — הוא הכתובת של ההזמנה שלכם:</p>
         <div class="code"><span class="v">{{ route('store.agent.done', ['reference' => $order->reference]) }}</span></div>
@@ -103,7 +109,17 @@
             בוט ניהול האתר הופעל עבור <strong dir="ltr">{{ $order->domain }}</strong>.
         </p>
 
-        @if ($order->isTrial())
+        @if ($order->isArrears())
+            <div class="ok">
+                @if ($order->isTrial())
+                    <strong>{{ $order->trial_days }} ימי ניסיון בחינם התחילו.</strong>
+                    הניסיון מסתיים ב־{{ $order->subscription?->trial_ends_at?->format('d/m/Y') }}. אחריו מתחיל חודש השירות הראשון בתשלום.
+                    תזכורת תישלח יומיים לפני סיום הניסיון; אפשר לבטל במהלכו ללא חיוב.
+                @endif
+                הכרטיס נשמר ולא חויב. החיוב הראשון יהיה ב־{{ $order->subscription?->next_charge_at?->format('d/m/Y') }}, בסיום חודש השירות האישי.
+                המנוי, חריגת הודעות יוצאות ותוספות כתיבה לפי המסלול ייגבו יחד.
+            </div>
+        @elseif ($order->isTrial())
             <div class="ok">
                 <strong>{{ $order->trial_days }} ימי ניסיון בחינם התחילו.</strong>
                 הכרטיס נשמר ולא חויב. החיוב הראשון יהיה ב־{{ $order->subscription?->trial_ends_at?->format('d/m/Y') }},

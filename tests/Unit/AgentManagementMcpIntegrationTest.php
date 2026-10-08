@@ -23,7 +23,7 @@ class AgentManagementMcpIntegrationTest extends TestCase
         $response = $this->rpc('tools/list');
         $tools = $response['result']['tools'];
         $names = array_column($tools, 'name');
-        foreach ([\Multioto_Agent_Cct::class, \Multioto_Agent_Content_Management::class, \Multioto_Agent_Media_Management::class, \Multioto_Agent_Site_Administration::class] as $provider) {
+        foreach ([\Multioto_Agent_Cct::class, \Multioto_Agent_Content_Management::class, \Multioto_Agent_Media_Management::class, \Multioto_Agent_Site_Administration::class, \Multioto_Agent_Acf_Schema::class, \Multioto_Agent_Acf_Management::class] as $provider) {
             foreach ($provider::definitions() as $definition) {
                 $this->assertContainsEquals($definition, $tools);
             }
@@ -71,7 +71,7 @@ class AgentManagementMcpIntegrationTest extends TestCase
 
     public function test_missing_vendor_write_and_unknown_tools_are_rejected_without_internal_error(): void
     {
-        foreach (['jet_cct_create', 'wp_optimole_update', 'wp_unknown_tool'] as $tool) {
+        foreach (['jet_cct_create', 'wp_optimole_update', 'wp_acf_schema', 'wp_acf_get', 'wp_acf_prepare', 'wp_acf_update', 'wp_unknown_tool'] as $tool) {
             $response = $this->rpc('tools/call', ['name' => $tool, 'arguments' => []]);
             $this->assertSame(-32602, $response['error']['code']);
             $this->assertArrayNotHasKey('result', $response);

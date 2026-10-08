@@ -23,6 +23,8 @@ class Multioto_Agent_Mcp_Server
         Multioto_Agent_Media_Management::class,
         Multioto_Agent_Content_Management::class,
         Multioto_Agent_Site_Administration::class,
+        Multioto_Agent_Acf_Schema::class,
+        Multioto_Agent_Acf_Management::class,
     ];
 
     /** Options that are safe to read remotely (no secrets, no PII). */
@@ -185,7 +187,7 @@ class Multioto_Agent_Mcp_Server
             ['name' => 'wp_content_update', 'description' => 'עדכון פריט תוכן קיים לפי id: title, content, status, excerpt, publish_at (כל שדה אופציונלי; מה שלא צוין נשמר). publish_at לבדו מתזמן את הפריט לפרסום (YYYY-MM-DD HH:MM בשעון האתר; תאריך בלבד = 09:00), ותאריך שכבר עבר נדחה. מחזיר את הערכים הקודמים לצורך ביטול. לעמוד שבנוי באלמנטור — שדה content לא ישפיע על מה שרואים; השתמשו ב-wp_elementor_text_update.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['id' => ['type' => 'integer'], 'title' => ['type' => 'string'], 'content' => ['type' => 'string'], 'status' => ['type' => 'string'], 'excerpt' => ['type' => 'string'], 'publish_at' => ['type' => 'string']], 'required' => ['id']]],
             ['name' => 'wp_fields_schema', 'description' => 'השדות המותאמים (ACF) המוגדרים לסוג תוכן: מזהה השדה, התווית בעברית, הסוג והאפשרויות. קִראו את זה לפני עדכון שדה, כדי לכתוב למפתח הנכון — כתיבה למפתח שגוי יוצרת שדה חדש שאיש אינו קורא.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['type' => ['type' => 'string']], 'required' => ['type']]],
             ['name' => 'wp_fields_get', 'description' => 'הערכים הנוכחיים של השדות המותאמים בפריט תוכן לפי id.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['id' => ['type' => 'integer']], 'required' => ['id']]],
-            ['name' => 'wp_fields_update', 'description' => 'עדכון שדות מותאמים בפריט תוכן. fields = אובייקט של מפתח→ערך. עובד דרך ACF כשהוא פעיל, אחרת דרך meta רגיל (JetEngine). מחזיר את הערכים הקודמים לצורך ביטול. שדות פנימיים (מתחילים בקו תחתון) חסומים.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['id' => ['type' => 'integer'], 'fields' => ['type' => 'object']], 'required' => ['id', 'fields']]],
+            ['name' => 'wp_fields_update', 'description' => 'עדכון meta רגיל (למשל JetEngine) כש-ACF אינו פעיל. fields = אובייקט של מפתח→ערך. שדות פנימיים וסודות חסומים. כש-ACF פעיל יש להשתמש ב-wp_acf_prepare ואז wp_acf_update כדי לשמור על מבנה השדות ואפשרות השחזור.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['id' => ['type' => 'integer'], 'fields' => ['type' => 'object']], 'required' => ['id', 'fields']]],
             ['name' => 'wp_content_trash', 'description' => 'העברת עמוד/פוסט לפח לפי id (הפיך — ניתן לשחזר מהפח).', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['id' => ['type' => 'integer']], 'required' => ['id']]],
             ['name' => 'wp_content_restore', 'description' => 'שחזור פריט מהפח לפי id, למצב שהיה בו לפני שהועבר לפח.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['id' => ['type' => 'integer']], 'required' => ['id']]],
             ['name' => 'wp_file_list', 'description' => 'רשימת קבצים/תיקיות בתוך wp-content לפי path יחסי (ברירת מחדל: השורש של wp-content). לתיקון קוד — לאיתור הקובץ.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['path' => ['type' => 'string']]]],

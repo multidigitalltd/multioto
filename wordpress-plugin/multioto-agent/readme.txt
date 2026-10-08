@@ -2,7 +2,7 @@
 Contributors: multidigital
 Requires at least: 6.0
 Requires PHP: 7.4
-Stable tag: 1.9.0
+Stable tag: 1.10.0
 License: GPLv2 or later
 
 מחבר את אתר הוורדפרס לפאנל התפעול של Multi Digital: נקודת קצה MCP מאובטחת
@@ -55,6 +55,11 @@ Cloudflare באתר כולו — די בחריגה לנתיב הזה.)
   RewriteRule .* - [E=HTTP_AUTHORIZATION:%1]
 
 == Changelog ==
+
+= 1.10.0 =
+* ACF ו-ACF Pro: קריאה ועריכה של כל סוגי השדות המובנים, כולל Repeater, Flexible Content, Group, Clone, Gallery ועמודי אפשרויות רשומים.
+* הצעות ללא כתיבה, אישור שינויים מול נתונים טריים ושחזור מוצפן של ערכים וקשרים; סיסמאות וערכים מוגנים אינם נחשפים בשיחה.
+* המסלול הישן של שדות מטא אינו עוקף את הגנות ACF. שדות מהרחבות צד שלישי אינם נתמכים אוטומטית.
 
 = 1.9.0 =
 * JetEngine CCT discovery, supported field schemas, list/read/create/update through the vendor API. Linked-post types remain read-only; no hard deletion.

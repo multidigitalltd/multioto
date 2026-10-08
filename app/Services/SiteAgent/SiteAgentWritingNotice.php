@@ -2,7 +2,9 @@
 
 namespace App\Services\SiteAgent;
 
+use App\Enums\SubscriptionStatus;
 use App\Models\SiteAgentRequest;
+use App\Models\SiteAgentUsage;
 use App\Support\Money;
 
 /**
@@ -33,6 +35,18 @@ class SiteAgentWritingNotice
 
         if ($plan === null || ! $plan->billsWritings()) {
             return null;
+        }
+
+        if ($request->exists && SiteAgentUsage::query()
+            ->where('provider_message_id', "writing:{$request->id}")
+            ->where('subscription_id', $subscription->id)
+            ->where('billable', false)->exists()) {
+            return "✍️ נכתב בשבילכם טקסט של {$words} מילים — הטיוטה הזו אינה מחויבת.";
+        }
+
+        if ($subscription->status === SubscriptionStatus::Trialing
+            && ($subscription->trial_ends_at === null || $subscription->trial_ends_at->isFuture() || ! $subscription->hasChargeableToken())) {
+            return "✍️ נכתב בשבילכם טקסט של {$words} מילים — כלול בתקופת הניסיון בחינם ולא יחויב אחריה.";
         }
 
         $included = (int) $plan->included_writings;

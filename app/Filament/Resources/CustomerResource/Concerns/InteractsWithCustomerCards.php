@@ -5,6 +5,7 @@ namespace App\Filament\Resources\CustomerResource\Concerns;
 use App\Models\Customer;
 use App\Services\Cardcom\CardcomClient;
 use App\Services\Cardcom\CardTokenService;
+use App\Services\SiteAgent\SiteAgentCheckout;
 use App\Support\CardLink;
 use Filament\Actions;
 use Filament\Forms;
@@ -110,6 +111,7 @@ trait InteractsWithCustomerCards
                     return;
                 }
 
+                app(SiteAgentCheckout::class)->fulfilCardCapture((string) $lpId, $token);
                 $record->update(['pending_card_lp_id' => null]);
 
                 Notification::make()

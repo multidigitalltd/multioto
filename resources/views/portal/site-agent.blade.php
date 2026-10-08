@@ -6,6 +6,7 @@
     use App\Http\Controllers\Portal\PortalSiteAgentController as Agent;
 
     $priceLabel = Agent::priceLabel($extraPrice);
+    $arrears = $subscription !== null && \App\Services\Billing\SiteAgentArrearsBilling::applies($subscription);
 @endphp
 
 @section('content')
@@ -45,7 +46,18 @@
                 @endif
             </dl>
             <p class="muted" style="font-size:.9rem;margin-bottom:0;">
-                בחיוב החודשי יופיעו שורות נפרדות: המנוי, מספרים נוספים (אם יש), וההודעות שנשלחו מאז החיוב הקודם.
+                @if ($arrears)
+                    התשלום נגבה בסיום כל חודש שירות אישי לפי מועד ההצטרפות, עבור החודש שחלף.
+                    באותו חיוב יופיעו המנוי, מספרים נוספים, הודעות יוצאות מעבר למכסה ותוספות כתיבה לפי המסלול.
+                    @if ($subscription->billing_prepaid_until?->isFuture())
+                        מחיר הבסיס ששולם מראש עד {{ $subscription->billing_prepaid_until->format('d/m/Y') }} לא ייגבה שוב.
+                    @endif
+                    @if ($subscription->billingInterval() === \App\Enums\BillingInterval::Yearly)
+                        המחיר השנתי מחולק ל־12 חיובים חודשיים, עם חלוקת הפרשי אגורות בין החודשים.
+                    @endif
+                @else
+                    בחיוב החודשי יופיעו שורות נפרדות: המנוי, מספרים נוספים (אם יש), הודעות יוצאות מעבר למכסה ותוספות כתיבה.
+                @endif
                 קודי אימות והודעות מערכת אינם נספרים. אפשר גם לשאול את הבוט: "כמה הודעות שלחתי החודש?"
             </p>
 
@@ -173,8 +185,12 @@
                 שותף, מנהלת משרד או מי שמתחזק לכם את האתר — כל אחד יכול לנהל מהמספר שלו.
                 @if ($extraPrice > 0)
                     מספר נוסף עולה <strong>{{ $priceLabel }}</strong>
-                    {{ $subscription?->plan?->intervalLabel() ?? 'לחודש' }},
-                    והוא יתווסף לחיוב מהמחזור הבא — לא נגבה עליו תשלום עכשיו.
+                    {{ $arrears ? 'לחודש' : ($subscription?->plan?->intervalLabel() ?? 'לחודש') }},
+                    @if ($arrears)
+                        והוא ייכלל בחיוב בסיום המחזור האישי הנוכחי — לא נגבה עליו תשלום עכשיו.
+                    @else
+                        והוא יתווסף לחיוב מהמחזור הבא — לא נגבה עליו תשלום עכשיו.
+                    @endif
                 @else
                     בחשבון שלכם מספר נוסף אינו כרוך בתוספת תשלום.
                 @endif
@@ -216,7 +232,7 @@
                     <input id="confirm" name="confirm" type="checkbox" value="1" required>
                     <label for="confirm">
                         @if ($extraPrice > 0)
-                            אני מאשר/ת שהחיוב התקופתי יגדל ב־{{ $priceLabel }} החל מהמחזור הבא.
+                            אני מאשר/ת שהחיוב התקופתי יגדל ב־{{ $priceLabel }} {{ $arrears ? 'בחיוב בסיום המחזור האישי' : 'החל מהמחזור הבא' }}.
                         @else
                             אני מאשר/ת את הוספת המספר.
                         @endif

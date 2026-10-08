@@ -148,7 +148,7 @@ class SiteActionProposer
             }
         }
 
-        return [...$out, ...app(SiteAgentExtendedActions::class)->definitions($site)];
+        return [...$out, ...app(SiteAgentExtendedActions::class)->definitions($site), ...app(SiteAgentAcfActions::class)->definitions($site)];
     }
 
     /**
@@ -164,7 +164,7 @@ class SiteActionProposer
         $available = array_filter($this->catalogue(), fn (array $row): bool => SiteAgentReversibility::reasonFor($row[0]) === null);
 
         return array_values(array_unique([...array_column($available, 1), 'wp_plugin_activate',
-            ...app(SiteAgentExtendedActions::class)->pluginTools()]));
+            ...app(SiteAgentExtendedActions::class)->pluginTools(), ...SiteAgentAcfActions::pluginTools()]));
     }
 
     /**
@@ -233,7 +233,7 @@ class SiteActionProposer
                 ['id' => ['type' => 'integer'], 'taxonomy' => ['type' => 'string'], 'terms' => ['type' => 'array', 'items' => ['type' => 'string']],
                     'mode' => ['type' => 'string', 'enum' => ['add', 'replace']]], ['id', 'taxonomy', 'terms']],
             ['propose_fields_update', 'wp_fields_update',
-                'הצעה לעדכן שדות מותאמים (ACF וכדומה) בפריט: id ו-fields = אובייקט מפתח→ערך טקסט/מספר. רק מפתחות שקיימים בפריט או בהגדרת השדות (field_schema).',
+                'הצעה לעדכן שדות מטא פשוטים של JetEngine בפריט; לעריכת ACF השתמשו ב-propose_acf_update: id ו-fields = אובייקט מפתח→ערך טקסט/מספר. רק מפתחות שקיימים בפריט או בהגדרת השדות (field_schema).',
                 ['id' => ['type' => 'integer'], 'fields' => ['type' => 'object']], ['id', 'fields']],
             ['propose_menu_item_add', 'wp_menu_item_add',
                 'הצעה להוסיף פריט לתפריט: menu (שם או מזהה מתוך list_menus), title, ואחד מ: page_id (עמוד קיים) או url. אופציונלי parent_id (פריט הורה).',
@@ -277,7 +277,7 @@ class SiteActionProposer
      */
     public function isProposal(string $name): bool
     {
-        return in_array($name, self::PROPOSALS, true) || app(SiteAgentExtendedActions::class)->handles($name);
+        return $name === SiteAgentAcfActions::TOOL || in_array($name, self::PROPOSALS, true) || app(SiteAgentExtendedActions::class)->handles($name);
     }
 
     /**
@@ -303,9 +303,11 @@ class SiteActionProposer
 
         try {
             $extended = app(SiteAgentExtendedActions::class);
-            $offer = $extended->handles($name)
-                ? $extended->propose($site, $name, $input, $seen)
-                : $this->{Str::camel($name)}($site, $input, $seen);
+            $offer = $name === SiteAgentAcfActions::TOOL
+                ? app(SiteAgentAcfActions::class)->propose($site, $input, $seen)
+                : ($extended->handles($name)
+                    ? $extended->propose($site, $name, $input, $seen)
+                    : $this->{Str::camel($name)}($site, $input, $seen));
 
             if (isset($offer['plan'], $offer['preview'])) {
                 $plan = $offer['plan'];

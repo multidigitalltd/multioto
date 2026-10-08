@@ -42,7 +42,7 @@ class IssueInvoiceJob implements ShouldQueue
 
         $charge = Charge::find($this->chargeId);
 
-        if (! $charge || $charge->status !== ChargeStatus::Succeeded || $charge->invoice()->exists()) {
+        if (! $charge || $charge->status !== ChargeStatus::Succeeded || $charge->total_agorot <= 0 || $charge->invoice()->exists()) {
             return;
         }
 

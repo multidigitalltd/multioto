@@ -4,6 +4,15 @@
 <p>שלום,</p>
 <p>תודה על הרכישה! <strong>בוט ניהול האתר פעיל עבור {{ $order->domain }}</strong>.</p>
 
+@if ($order->isArrears())
+<p>הכרטיס נשמר ולא חויב. החיוב הראשון מתוכנן ל־{{ $order->subscription?->next_charge_at?->format('d/m/Y') }},
+בסיום חודש השירות האישי הראשון. באותו חיוב ייכללו המנוי, הודעות יוצאות מעבר למכסה ותוספות כתיבה לפי המסלול.</p>
+@if ($order->isTrial())
+<p>תקופת הניסיון בחינם מסתיימת ב־{{ $order->subscription?->trial_ends_at?->format('d/m/Y') }}.
+רק אחריה מתחיל חודש השירות בתשלום. תזכורת תישלח יומיים לפני סיום הניסיון.</p>
+@endif
+@endif
+
 @php $extraPhones = $order->extraPhones(); @endphp
 
 <p><strong>הדבר הראשון:</strong> שלחנו קוד בן 6 ספרות בוואטסאפ למספר

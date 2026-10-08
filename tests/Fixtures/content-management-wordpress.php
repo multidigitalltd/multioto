@@ -154,6 +154,8 @@ require __DIR__.'/../../wordpress-plugin/multioto-agent/includes/class-content-m
 require __DIR__.'/../../wordpress-plugin/multioto-agent/includes/class-cct.php';
 require __DIR__.'/../../wordpress-plugin/multioto-agent/includes/class-media-management.php';
 require __DIR__.'/../../wordpress-plugin/multioto-agent/includes/class-site-administration.php';
+require __DIR__.'/../../wordpress-plugin/multioto-agent/includes/class-acf-schema.php';
+require __DIR__.'/../../wordpress-plugin/multioto-agent/includes/class-acf-management.php';
 function call_tool($tool, $args = [])
 {
     return Multioto_Agent_Content_Management::call($tool, $args);

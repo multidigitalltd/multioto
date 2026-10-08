@@ -10,6 +10,7 @@ use App\Models\Site;
 use App\Models\SiteAgentSubscriber;
 use App\Models\Subscription;
 use App\Models\SystemLog;
+use App\Services\Billing\SiteAgentArrearsBilling;
 use App\Services\SiteAgent\SiteAgentAccess;
 use App\Services\SiteAgent\SiteAgentBilling;
 use App\Services\SiteAgent\SiteAgentMessageCap;
@@ -384,6 +385,17 @@ class PortalSiteAgentController extends Controller
      */
     private function extraPriceAgorot(?Subscription $subscription, Customer $customer): ?int
     {
+        if ($subscription !== null && SiteAgentArrearsBilling::applies($subscription) && $subscription->plan?->sellsExtraNumbers()) {
+            $period = SiteAgentArrearsBilling::windowAt($subscription, now());
+            $anchor = $subscription->billing_anchor_at;
+            $index = (($period['start']->year - $anchor->year) * 12) + $period['start']->month - $anchor->month;
+            $seats = (int) $subscription->agent_extra_numbers;
+            $net = $subscription->plan->siteAgentMonthlyExtraNetAgorot($seats + 1, $index)
+                - $subscription->plan->siteAgentMonthlyExtraNetAgorot($seats, $index);
+
+            return $subscription->plan->withVat($net, (bool) $customer->vat_exempt);
+        }
+
         return $subscription?->plan?->extraNumberGrossAgorot((bool) $customer->vat_exempt);
     }
 

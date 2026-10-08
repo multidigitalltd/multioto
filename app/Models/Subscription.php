@@ -6,7 +6,10 @@ use App\Enums\BillingInterval;
 use App\Enums\ChargeStatus;
 use App\Enums\PaymentMethod;
 use App\Enums\SubscriptionStatus;
+use App\Enums\TokenStatus;
 use App\Jobs\SyncSiteAgentServiceStateJob;
+use App\Services\Billing\SiteAgentArrearsBilling;
+use App\Services\Billing\SiteAgentBillingTransition;
 use App\Support\Money;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -15,6 +18,8 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
+use LogicException;
 
 class Subscription extends Model
 {
@@ -35,6 +40,8 @@ class Subscription extends Model
         'current_period_start', 'current_period_end', 'next_charge_at', 'card_expiry_alerted_at',
         'price_agorot_override', 'agent_extra_numbers', 'dunning_stage', 'canceled_at',
         'site_agent_message_cap', 'site_agent_cap_warned_at',
+        'billing_mode', 'billing_anchor_at', 'billing_period_start_at', 'billing_prepaid_until',
+        'billing_stop_at',
     ];
 
     protected function casts(): array
@@ -57,11 +64,35 @@ class Subscription extends Model
             'canceled_at' => 'datetime',
             'site_agent_message_cap' => 'integer',
             'site_agent_cap_warned_at' => 'datetime',
+            'billing_anchor_at' => 'immutable_datetime',
+            'billing_period_start_at' => 'immutable_datetime',
+            'billing_prepaid_until' => 'immutable_datetime',
+            'billing_stop_at' => 'immutable_datetime',
         ];
     }
 
     protected static function booted(): void
     {
+        // Every creation path, including the administrative screens, uses the
+        // same personal postpaid month. Historical checkout callbacks opt into
+        // "advance" explicitly so an already paid term is never charged twice.
+        static::creating(function (self $subscription): void {
+            if (! $subscription->plan?->includes_site_agent || $subscription->isInstallmentPlan()
+                || ($subscription->billing_mode !== null && $subscription->billing_mode !== SiteAgentArrearsBilling::MODE)) {
+                return;
+            }
+
+            $subscription->billing_mode = SiteAgentArrearsBilling::MODE;
+
+            if ($subscription->billing_anchor_at !== null && $subscription->billing_period_start_at !== null) {
+                return;
+            }
+
+            $subscription->fill(SiteAgentArrearsBilling::initializeDates(
+                $subscription->trial_ends_at ?? $subscription->current_period_start ?? now(),
+            ));
+        });
+
         // A card-first customer (signed up via /join, card captured) has a saved
         // default token but no subscription yet. When the team later adds a
         // custom subscription, inherit that saved card so it is chargeable —
@@ -105,6 +136,10 @@ class Subscription extends Model
         // A new card re-arms the "card expires before next charge" alert: the
         // old warning no longer applies once a fresh token is on file.
         static::updating(function (self $subscription): void {
+            if ($subscription->getOriginal('billing_anchor_at') !== null && $subscription->isDirty('billing_anchor_at')) {
+                throw new LogicException('The original subscription billing anniversary cannot be changed.');
+            }
+
             if ($subscription->isDirty('token_id')) {
                 $subscription->card_expiry_alerted_at = null;
             }
@@ -204,6 +239,85 @@ class Subscription extends Model
      */
     public const AUTO_CHARGE_STATUSES = [SubscriptionStatus::Active, SubscriptionStatus::PastDue];
 
+    /** A canceled service can still owe the final month that it already used. */
+    public function hasStoppedArrearsBilling(): bool
+    {
+        return $this->status === SubscriptionStatus::Canceled
+            && SiteAgentArrearsBilling::applies($this)
+            && $this->billing_stop_at !== null;
+    }
+
+    public function hasFinalArrearsDebt(): bool
+    {
+        return $this->hasStoppedArrearsBilling()
+            && $this->billing_period_start_at !== null
+            && $this->billing_period_start_at->lt($this->billing_stop_at);
+    }
+
+    public function scopeWhereFinalArrearsDebt(Builder $query): Builder
+    {
+        return $query->where('status', SubscriptionStatus::Canceled)
+            ->where('billing_mode', SiteAgentArrearsBilling::MODE)
+            ->whereNotNull('billing_stop_at')
+            ->whereColumn('billing_period_start_at', '<', 'billing_stop_at');
+    }
+
+    /** A canceled legacy service can settle only an already recorded attempt. */
+    public function hasFinalLegacyDebt(): bool
+    {
+        return $this->status === SubscriptionStatus::Canceled
+            && ! SiteAgentArrearsBilling::applies($this)
+            && $this->billing_stop_at !== null
+            && $this->hasUnsettledLegacyAttempts();
+    }
+
+    public function hasUnsettledLegacyAttempts(): bool
+    {
+        return $this->unsettledLegacyCharges()->exists();
+    }
+
+    public function unsettledLegacyCharges(): HasMany
+    {
+        return $this->charges()->where(fn (Builder $query) => self::unsettledAttemptConstraint($query));
+    }
+
+    public function scopeWhereFinalLegacyDebt(Builder $query): Builder
+    {
+        return $query->where('status', SubscriptionStatus::Canceled)
+            ->where(fn (Builder $mode) => $mode->whereNull('billing_mode')->orWhere('billing_mode', '!=', SiteAgentArrearsBilling::MODE))
+            ->whereNotNull('billing_stop_at')
+            ->whereHas('charges', fn (Builder $charge) => $charge->where(fn (Builder $attempt) => self::unsettledAttemptConstraint($attempt)));
+    }
+
+    public function hasFinalBillingDebt(): bool
+    {
+        return $this->hasFinalArrearsDebt() || $this->hasFinalLegacyDebt();
+    }
+
+    public function scopeWhereFinalBillingDebt(Builder $query): Builder
+    {
+        return $query->where(fn (Builder $debt) => $debt->whereFinalArrearsDebt()
+            ->orWhere(fn (Builder $legacy) => $legacy->whereFinalLegacyDebt()));
+    }
+
+    private static function unsettledAttemptConstraint(Builder $query): void
+    {
+        $query->where('status', ChargeStatus::Pending)
+            ->orWhere(fn (Builder $failed) => $failed->where('status', ChargeStatus::Failed)
+                ->whereNotExists(fn ($paid) => $paid->selectRaw('1')->from('charges as paid_legacy')
+                    ->whereColumn('paid_legacy.subscription_id', 'charges.subscription_id')
+                    ->whereColumn('paid_legacy.period_start', 'charges.period_start')
+                    ->where('paid_legacy.status', ChargeStatus::Succeeded->value)));
+    }
+
+    /** Automatic collection includes a stopped service's outstanding closing bill. */
+    public function scopeWhereAutoCollectible(Builder $query): Builder
+    {
+        return $query->where(fn (Builder $q) => $q
+            ->whereIn('status', self::AUTO_CHARGE_STATUSES)
+            ->orWhere(fn (Builder $stopped) => $stopped->whereFinalBillingDebt()));
+    }
+
     /**
      * How THIS subscription is paid: its own setting, or the customer's when it
      * has none. Null when neither says — which means a card, the default
@@ -271,7 +385,7 @@ class Subscription extends Model
     public function scopeDueForCharge(Builder $query): Builder
     {
         return $query
-            ->whereIn('status', self::AUTO_CHARGE_STATUSES)
+            ->whereAutoCollectible()
             ->whereNotNull('token_id')
             ->whereCollectedByCard()
             ->whereNotNull('next_charge_at')
@@ -292,7 +406,7 @@ class Subscription extends Model
     public function scopeDueForCardFallback(Builder $query): Builder
     {
         return $query
-            ->whereIn('status', self::AUTO_CHARGE_STATUSES)
+            ->whereAutoCollectible()
             ->whereNotNull('token_id')
             ->whereNotNull('card_fallback_days')
             ->whereCollectedByHand()
@@ -323,7 +437,7 @@ class Subscription extends Model
     public function collectsAutomatically(): bool
     {
         return $this->token_id !== null
-            && in_array($this->status, self::AUTO_CHARGE_STATUSES, true)
+            && (in_array($this->status, self::AUTO_CHARGE_STATUSES, true) || $this->hasFinalBillingDebt())
             // A card on file that the subscription is not paid with does not
             // make it self-collecting — somebody still has to go and get the
             // transfer, whatever the fallback does later.
@@ -344,7 +458,10 @@ class Subscription extends Model
      */
     public function scopeInArrears(Builder $query): Builder
     {
-        return $query->whereIn('status', [SubscriptionStatus::PastDue, SubscriptionStatus::Suspended]);
+        return $query->where(fn (Builder $q) => $q
+            ->whereIn('status', [SubscriptionStatus::PastDue, SubscriptionStatus::Suspended])
+            ->orWhere(fn (Builder $stopped) => $stopped->whereFinalArrearsDebt()->where('dunning_stage', '>', 0))
+            ->orWhere(fn (Builder $legacy) => $legacy->whereFinalLegacyDebt()));
     }
 
     /**
@@ -360,7 +477,8 @@ class Subscription extends Model
             // have a card on file as a fallback, and it is still collected by
             // hand until that fallback fires — leaving it off this list because
             // a card exists is how the collection quietly stops happening.
-            ->whereNot('status', SubscriptionStatus::Canceled)
+            ->where(fn (Builder $q) => $q->whereNot('status', SubscriptionStatus::Canceled)
+                ->orWhere(fn (Builder $stopped) => $stopped->whereFinalBillingDebt()))
             ->whereCollectedByHand();
     }
 
@@ -388,7 +506,7 @@ class Subscription extends Model
             // card (see OnboardCustomer), so calling it a debt would turn every
             // newly onboarded customer into a debtor on day one and send them a
             // demand for money they do not owe.
-            ->whereIn('status', self::AUTO_CHARGE_STATUSES)
+            ->whereAutoCollectible()
             ->whereNotNull('next_charge_at')
             // A blank payment method means nobody chose bank transfer, and the
             // default arrangement is a card — so it belongs here, not in limbo.
@@ -534,11 +652,19 @@ class Subscription extends Model
             return false;
         }
 
-        return in_array($this->status, [
+        return (in_array($this->status, [
             SubscriptionStatus::Active,
             SubscriptionStatus::PastDue,
             SubscriptionStatus::Suspended,
-        ], true) && $this->token_id !== null;
+        ], true) || $this->hasFinalBillingDebt()) && $this->hasChargeableToken();
+    }
+
+    public function hasChargeableToken(): bool
+    {
+        return $this->token !== null
+            && $this->token->status === TokenStatus::Active
+            && filled($this->token->cardcom_token)
+            && (int) $this->token->customer_id === (int) $this->customer_id;
     }
 
     /*
@@ -711,21 +837,49 @@ class Subscription extends Model
      * next_charge_at to that period's end.
      */
     /**
-     * Cancel the subscription: stop billing but keep it on record (its charges
-     * and history stay intact). Use delete only to remove one created in error.
+     * Stop service immediately. A postpaid closing invoice remains due on the
+     * existing anniversary; cancellation never invoices the upcoming month.
      */
     public function cancel(): void
     {
-        $this->update([
-            'status' => SubscriptionStatus::Canceled,
-            'canceled_at' => now(),
-            'next_charge_at' => null,
-        ]);
+        Cache::lock("charge-subscription:{$this->id}", 300)->block(10, function (): void {
+            $this->refresh();
+
+            if ($this->status === SubscriptionStatus::Canceled) {
+                return;
+            }
+
+            $transition = app(SiteAgentBillingTransition::class)->transitionLocked($this);
+            $arrears = SiteAgentArrearsBilling::applies($this);
+            $stop = now();
+            $paidService = $this->status !== SubscriptionStatus::Trialing
+                || ($this->trial_ends_at !== null && $this->trial_ends_at->lte($stop) && $this->hasChargeableToken());
+            $usedService = $arrears && $paidService
+                && $this->billing_period_start_at?->lt($stop);
+            $legacyDebt = ! $arrears && $transition === SiteAgentBillingTransition::UNRESOLVED
+                && $this->hasUnsettledLegacyAttempts();
+
+            $this->update([
+                'status' => SubscriptionStatus::Canceled,
+                'canceled_at' => $stop,
+                'billing_stop_at' => $usedService || $legacyDebt ? $stop : null,
+                'next_charge_at' => $usedService
+                    ? ($this->next_charge_at ?? SiteAgentArrearsBilling::period($this)['end'])
+                    : ($legacyDebt ? ($this->next_charge_at ?? $stop) : null),
+            ]);
+        });
     }
 
     public function markDueNow(): void
     {
         if ($this->next_charge_at !== null && $this->next_charge_at->isPast()) {
+            return;
+        }
+
+        if (SiteAgentArrearsBilling::applies($this)) {
+            $end = SiteAgentArrearsBilling::period($this)['end'];
+            $this->update(['next_charge_at' => $end->isFuture() ? $end : now()]);
+
             return;
         }
 

@@ -2,7 +2,6 @@
 
 namespace Tests\Feature;
 
-use App\Enums\ChargeStatus;
 use App\Enums\SubscriptionStatus;
 use App\Enums\UserRole;
 use App\Filament\Resources\PlanResource\Pages\EditPlan;
@@ -10,6 +9,7 @@ use App\Jobs\SendSiteAgentVerificationJob;
 use App\Mail\SiteAgentActivationMail;
 use App\Models\Charge;
 use App\Models\Customer;
+use App\Models\PaymentToken;
 use App\Models\Plan;
 use App\Models\Setting;
 use App\Models\Site;
@@ -19,6 +19,7 @@ use App\Models\SiteInstallation;
 use App\Models\Subscription;
 use App\Models\User;
 use App\Providers\SettingsServiceProvider;
+use App\Services\SiteAgent\SiteAgentCheckout;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
@@ -114,10 +115,8 @@ class SiteAgentStoreTest extends TestCase
     /** Pay for an order the way the webhook eventually does. */
     private function pay(SiteAgentOrder $order, string $transactionId = 'tx-1'): void
     {
-        Charge::find($order->charge_id)->update([
-            'status' => ChargeStatus::Succeeded,
-            'cardcom_transaction_id' => $transactionId,
-        ]);
+        $token = PaymentToken::factory()->create(['customer_id' => $order->customer_id]);
+        app(SiteAgentCheckout::class)->fulfilCardCapture($order->cardcom_low_profile_id, $token);
     }
 
     /*
@@ -179,7 +178,7 @@ class SiteAgentStoreTest extends TestCase
         // ומה שלא נאמר כאן שוב, כי הכרטיס אומר אותו.
         $this->assertStringNotContainsString('נגבה בחידוש החודשי', $answer,
             'תשובת ה-FAQ חוזרת על מכניקת החיוב שכרטיס המסלול כבר אומר.');
-        $this->assertStringContainsString('נגבה בחידוש החודשי', (string) preg_replace('/\s+/u', ' ', strip_tags($html)),
+        $this->assertStringContainsString('נגבה בסיום החודש האישי', (string) preg_replace('/\s+/u', ' ', strip_tags($html)),
             'מכניקת החיוב נעלמה מהעמוד כולו, ולא רק מה-FAQ.');
     }
 
@@ -290,6 +289,39 @@ class SiteAgentStoreTest extends TestCase
             ->assertOk()
             ->assertSee('כתיבת תוכן')
             ->assertSee('4 בחודש כלולים במחיר');
+    }
+
+    public function test_checkout_discloses_one_combined_bill_after_the_personal_month(): void
+    {
+        $this->plan->update(['message_price_agorot' => 15, 'included_messages' => 300, 'writing_price_agorot' => 1500]);
+
+        $this->get(route('store.agent'))->assertOk()
+            ->assertSee('בהרשמה שומרים כרטיס ללא חיוב')
+            ->assertSee('בסיום כל חודש אישי ממועד ההצטרפות')
+            ->assertSee('היום לא תחויבו')
+            ->assertSee('מעבר ל־300 ההודעות הכלולות')
+            ->assertSee('התוספת נגבית בסיום החודש האישי יחד עם המנוי')
+            ->assertDontSee('סה״כ לתשלום היום');
+    }
+
+    public function test_an_annual_plan_quotes_monthly_prices_and_server_calculated_seat_totals(): void
+    {
+        $this->plan->update(['billing_interval' => 'yearly', 'price_agorot' => 14901, 'extra_number_price_agorot' => 4907]);
+
+        $page = $this->get(route('store.agent'))->assertOk()
+            ->assertSee('12.41')
+            ->assertSee('מחולק ל־12 חיובים חודשיים בדיעבד')
+            ->assertSee('חלוקת אגורות');
+        preg_match('/data-plans="([^"]+)"/', $page->getContent(), $match);
+        $data = json_decode(html_entity_decode($match[1], ENT_QUOTES, 'UTF-8'), true, flags: JSON_THROW_ON_ERROR);
+
+        // The two seats are allocated as one amount, matching the invoice;
+        // multiplying a rounded per-seat monthly display would miss an agora.
+        $this->assertSame(2058, $data[$this->plan->id]['totals'][2]);
+        $this->assertSame('לחודש', $data[$this->plan->id]['interval']);
+        $this->assertSame(24715, collect(range(0, 11))->sum(fn ($index) => $this->plan->siteAgentMonthlyNetAgorot(2, $index)));
+        // Other products still use the plan's existing annual label.
+        $this->assertStringContainsString('לשנה', $this->plan->netPriceLabel());
     }
 
     /**
@@ -411,7 +443,9 @@ class SiteAgentStoreTest extends TestCase
         // no binding at all.
         $this->assertSame('972501234567', $order->manager_phone);
         $this->assertSame(17582, $order->total_agorot);
-        $this->assertNotNull($order->charge_id);
+        $this->assertNull($order->charge_id);
+        $this->assertSame('lp-1', $order->cardcom_low_profile_id);
+        $this->assertSame(0, Charge::count());
     }
 
     /**
@@ -471,8 +505,8 @@ class SiteAgentStoreTest extends TestCase
 
         $this->get(route('store.agent.done', ['reference' => SiteAgentOrder::sole()->reference]))
             ->assertOk()
-            ->assertSee('ממתינים לאישור מחברת הסליקה')
-            ->assertSee('אין צורך לשלם שוב')
+            ->assertSee('ממתינים לאישור הכרטיס מחברת הסליקה')
+            ->assertSee('אין צורך להזין שוב את הכרטיס')
             ->assertDontSee('התשלום נכשל');
     }
 
@@ -492,7 +526,7 @@ class SiteAgentStoreTest extends TestCase
         $this->pay($order);
 
         $order->refresh();
-        $this->assertSame(SiteAgentOrder::PAID, $order->status);
+        $this->assertSame(SiteAgentOrder::ACTIVE, $order->status);
 
         $subscription = Subscription::sole();
         $this->assertSame(SubscriptionStatus::Active, $subscription->status);
@@ -772,10 +806,8 @@ class SiteAgentStoreTest extends TestCase
 
         $this->buy();
 
-        $charge = Charge::sole();
-        $this->assertSame(14900, (int) $charge->total_agorot);
-        $this->assertSame(0, (int) $charge->vat_agorot);
-        $this->assertSame(14900, (int) $charge->amount_agorot);
+        $this->assertSame(14900, (int) SiteAgentOrder::sole()->total_agorot);
+        $this->assertSame(0, Charge::count());
     }
 
     /**
@@ -791,7 +823,7 @@ class SiteAgentStoreTest extends TestCase
         $order = SiteAgentOrder::sole();
 
         $this->pay($order);
-        Charge::find($order->charge_id)->update(['cardcom_transaction_id' => 'tx-1-again']);
+        $this->pay($order, 'duplicate-capture');
 
         $this->assertSame(1, Subscription::count());
         $this->assertSame(1, SiteAgentSubscriber::count());

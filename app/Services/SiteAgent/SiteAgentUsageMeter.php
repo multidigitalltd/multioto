@@ -8,6 +8,8 @@ use App\Models\SiteAgentRequest;
 use App\Models\SiteAgentSubscriber;
 use App\Models\SiteAgentUsage;
 use App\Models\Subscription;
+use App\Services\Billing\SiteAgentArrearsBilling;
+use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Database\QueryException;
@@ -96,6 +98,7 @@ class SiteAgentUsageMeter
 
         try {
             $subscription = $this->billing->subscriptionForSite($subscriber->customer, $subscriber->site_id);
+            $sentAt = now()->startOfSecond();
 
             SiteAgentUsage::create([
                 'kind' => SiteAgentUsage::WRITING,
@@ -105,10 +108,9 @@ class SiteAgentUsageMeter
                 'site_id' => $request->site_id,
                 'site_agent_subscriber_id' => $subscriber->id,
                 'provider_message_id' => "writing:{$request->id}",
-                'billable' => $subscription !== null
-                    && $subscription->status !== SubscriptionStatus::Trialing
+                'billable' => $this->paidServiceAt($subscription, $sentAt)
                     && (bool) $subscription->plan?->billsWritings(),
-                'sent_at' => now(),
+                'sent_at' => $sentAt,
             ]);
         } catch (QueryException $e) {
             Log::info('SiteAgentUsageMeter: writing unit not recorded', ['error' => $e->getMessage()]);
@@ -179,6 +181,8 @@ class SiteAgentUsageMeter
 
     private function write(SiteAgentSubscriber $subscriber, ?Subscription $subscription, ?string $providerMessageId, bool $withinCap): void
     {
+        $sentAt = now()->startOfSecond();
+
         SiteAgentUsage::create([
             'kind' => SiteAgentUsage::MESSAGE,
             'customer_id' => $subscriber->customer_id,
@@ -191,24 +195,41 @@ class SiteAgentUsageMeter
             // plan that starts pricing messages must not reach back to
             // the ones sent before it did.
             'billable' => $withinCap
-                && $subscription !== null
-                && $subscription->status !== SubscriptionStatus::Trialing
+                && $this->paidServiceAt($subscription, $sentAt)
                 && (bool) $subscription->plan?->billsMessages(),
-            'sent_at' => now(),
+            'sent_at' => $sentAt,
         ]);
+    }
+
+    /** The trial boundary is a timestamp, not the next hourly worker run. */
+    private function paidServiceAt(?Subscription $subscription, CarbonInterface $at): bool
+    {
+        if ($subscription === null || ($subscription->billing_stop_at !== null && $at->gte($subscription->billing_stop_at))) {
+            return false;
+        }
+
+        if ($subscription->status !== SubscriptionStatus::Trialing) {
+            return true;
+        }
+
+        return $subscription->trial_ends_at !== null
+            && $at->gte($subscription->trial_ends_at)
+            && $subscription->hasChargeableToken();
     }
 
     /**
      * Billable units of this subscription not yet on any invoice, up to $until —
      * messages by default, or writing units.
      */
-    public function unbilled(Subscription $subscription, CarbonInterface $until, string $kind = SiteAgentUsage::MESSAGE): int
+    public function unbilled(Subscription $subscription, CarbonInterface $until, string $kind = SiteAgentUsage::MESSAGE, ?CarbonInterface $from = null, ?int $maxId = null): int
     {
         return SiteAgentUsage::query()
             ->where('subscription_id', $subscription->id)
             ->where('kind', $kind)
             ->where('billable', true)
             ->whereNull('charge_id')
+            ->when($from !== null, fn ($query) => $query->where('sent_at', '>=', $from))
+            ->when($maxId !== null, fn ($query) => $query->where('id', '<=', $maxId))
             ->where('sent_at', '<=', $until)
             ->count();
     }
@@ -232,8 +253,9 @@ class SiteAgentUsageMeter
             return;
         }
 
+        $metadata = SiteAgentArrearsBilling::metadata($charge);
         $plan = $charge->subscription?->plan;
-        $priced = array_keys(array_filter([
+        $priced = $metadata['priced_kinds'] ?? array_keys(array_filter([
             SiteAgentUsage::MESSAGE => (bool) $plan?->billsMessages(),
             SiteAgentUsage::WRITING => (bool) $plan?->billsWritings(),
         ]));
@@ -242,6 +264,8 @@ class SiteAgentUsageMeter
             ->where('subscription_id', $charge->subscription_id)
             ->where('billable', true)
             ->whereNull('charge_id')
+            ->when(isset($metadata['usage_from']), fn ($query) => $query->where('sent_at', '>=', CarbonImmutable::parse($metadata['usage_from'])->setTimezone(config('app.timezone'))))
+            ->when(isset($metadata['usage_max_id']), fn ($query) => $query->where('id', '<=', $metadata['usage_max_id']))
             ->where('sent_at', '<=', $until);
 
         // The kinds this charge priced are stamped with it.
@@ -276,7 +300,7 @@ class SiteAgentUsageMeter
 
         // A plan that does not price messages has nothing for a ceiling to hold.
         return $cap !== null && (bool) $subscription->plan?->billsMessages()
-            && $this->unbilled($subscription, now()) >= $cap;
+            && $this->unbilled($subscription, now(), SiteAgentUsage::MESSAGE, $this->currentCycleStart($subscription)) >= $cap;
     }
 
     /**
@@ -326,13 +350,13 @@ class SiteAgentUsageMeter
         }
 
         $warned = $subscription->site_agent_cap_warned_at;
-        $cycle = $subscription->current_period_start;
+        $cycle = $this->currentCycleStart($subscription) ?? $subscription->current_period_start;
 
         if ($warned !== null && ($cycle === null || $warned->gte($cycle))) {
             return false;
         }
 
-        return $this->unbilled($subscription, now()) >= (int) ceil($cap * self::CAP_WARNING_SHARE);
+        return $this->unbilled($subscription, now(), SiteAgentUsage::MESSAGE, $this->currentCycleStart($subscription)) >= (int) ceil($cap * self::CAP_WARNING_SHARE);
     }
 
     /**
@@ -347,14 +371,15 @@ class SiteAgentUsageMeter
      */
     public function current(Subscription $subscription): array
     {
-        $since = $subscription->current_period_start;
-        $billable = $this->unbilled($subscription, now());
+        $cycleStart = $this->currentCycleStart($subscription);
+        $since = $cycleStart ?? $subscription->current_period_start;
+        $billable = $this->unbilled($subscription, now(), SiteAgentUsage::MESSAGE, $cycleStart);
         $plan = $subscription->plan;
         $exempt = (bool) $subscription->customer?->vat_exempt;
 
         $included = (int) ($plan?->included_messages ?? 0);
         $charged = max(0, $billable - $included);
-        $writings = $this->unbilled($subscription, now(), SiteAgentUsage::WRITING);
+        $writings = $this->unbilled($subscription, now(), SiteAgentUsage::WRITING, $cycleStart);
         $writingsCharged = max(0, $writings - (int) ($plan?->included_writings ?? 0));
 
         return [
@@ -379,5 +404,12 @@ class SiteAgentUsageMeter
             'next_charge_at' => $subscription->next_charge_at,
             'since' => $since,
         ];
+    }
+
+    private function currentCycleStart(Subscription $subscription): ?CarbonInterface
+    {
+        return SiteAgentArrearsBilling::applies($subscription)
+            ? SiteAgentArrearsBilling::windowAt($subscription, now())['start']
+            : null;
     }
 }

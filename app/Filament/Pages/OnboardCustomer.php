@@ -15,6 +15,7 @@ use App\Models\Plan;
 use App\Models\SignupInvite;
 use App\Models\Site;
 use App\Models\Subscription;
+use App\Services\Billing\SiteAgentArrearsBilling;
 use Filament\Actions\Action;
 use Filament\Forms\Components\DatePicker;
 use Filament\Forms\Components\Placeholder;
@@ -29,6 +30,7 @@ use Filament\Forms\Form;
 use Filament\Forms\Get;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Blade;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\HtmlString;
@@ -247,7 +249,9 @@ class OnboardCustomer extends Page implements HasForms
                                 ->helperText(fn (Get $get): string => blank($get('plan_id'))
                                     ? 'המחיר החודשי/שנתי של המנוי החופשי.'
                                     : 'רק אם סוכם מחיר שונה מהתוכנית.'),
-                            DatePicker::make('first_charge_at')->label('תאריך חיוב ראשון')
+                            DatePicker::make('first_charge_at')
+                                ->label(fn (Get $get): string => Plan::find($get('plan_id'))?->includes_site_agent ? 'תחילת חודש השירות הראשון' : 'תאריך חיוב ראשון')
+                                ->helperText(fn (Get $get): ?string => Plan::find($get('plan_id'))?->includes_site_agent ? 'בבוט: גבייה ראשונה אחרי חודש אישי מלא, ללא חיוב בעת ההפעלה.' : null)
                                 ->required()->native(false)->displayFormat('d/m/Y'),
                             Toggle::make('send_card_link')->label('שלח ללקוח קישור להזנת כרטיס')
                                 ->default(true)
@@ -283,13 +287,19 @@ class OnboardCustomer extends Page implements HasForms
             $vatApplies = (bool) ($get('vat_applies') ?? true);
         }
 
+        if ($plan?->includes_site_agent && $plan->billing_interval === BillingInterval::Yearly) {
+            $agorot = SiteAgentArrearsBilling::annualShare($agorot, 0);
+        }
+
         $vat = $get('vat_exempt') || ! $vatApplies
             ? 0
             : (int) round($agorot * config('billing.vat_rate'));
 
         $total = number_format(($agorot + $vat) / 100, 2);
 
-        return "המנוי {$label} · סה״כ לחיוב: {$total} ₪ (כולל מע״מ).";
+        return $plan?->includes_site_agent
+            ? "המנוי {$label} · {$total} ₪ בסיום חודש אישי, בתוספת חריגות הודעות וכתיבה לפי המסלול (כולל מע״מ)."
+            : "המנוי {$label} · סה״כ לחיוב: {$total} ₪ (כולל מע״מ).";
     }
 
     public function create(): void
@@ -343,7 +353,9 @@ class OnboardCustomer extends Page implements HasForms
                 'price_agorot_override' => filled($data['price_override'] ?? null)
                     ? (int) round(((float) $data['price_override']) * 100)
                     : null,
-                'next_charge_at' => $data['first_charge_at'],
+                ...(Plan::find($data['plan_id'] ?? null)?->includes_site_agent
+                    ? SiteAgentArrearsBilling::initializeDates(Carbon::parse($data['first_charge_at']))
+                    : ['next_charge_at' => $data['first_charge_at']]),
             ]);
         });
 

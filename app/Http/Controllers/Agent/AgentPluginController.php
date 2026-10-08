@@ -134,7 +134,7 @@ class AgentPluginController extends Controller
             return;
         }
 
-        $bought = SiteAgentOrder::query()->paid()->where('site_id', $site->id)->exists();
+        $bought = SiteAgentOrder::query()->fulfilled()->where('site_id', $site->id)->exists();
 
         if (! $bought) {
             return;

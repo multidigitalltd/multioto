@@ -2,11 +2,13 @@
 
 namespace App\Services\SiteAgent;
 
+use App\Enums\BillingInterval;
 use App\Models\Site;
 use App\Models\SiteAgentMessage;
 use App\Models\SiteAgentRequest;
 use App\Models\SiteAgentSubscriber;
 use App\Services\Ai\ClaudeClient;
+use App\Services\Billing\SiteAgentArrearsBilling;
 use App\Support\Money;
 use Carbon\CarbonImmutable;
 use Closure;
@@ -228,16 +230,47 @@ class SiteAgentAssistant
         }
 
         $usage = $this->usage->current($subscription);
-        $exempt = (bool) $subscriber->customer?->vat_exempt;
+        $exempt = (bool) $subscriber->customer?->vat_exempt || ! $subscription->vatApplies();
         $plan = $subscription->plan;
+        $arrears = SiteAgentArrearsBilling::applies($subscription);
+        $baseNet = $subscription->basePriceAgorot() - $subscription->extraNumbersAgorot();
+        $extraPrice = $plan?->extraNumberGrossAgorot($exempt);
+        $parts = null;
+        $estimate = null;
+
+        if ($arrears) {
+            $window = SiteAgentArrearsBilling::windowAt($subscription, now());
+            $anchor = $subscription->billing_anchor_at;
+            $index = (($window['start']->year - $anchor->year) * 12) + $window['start']->month - $anchor->month;
+            if ($subscription->billingInterval() === BillingInterval::Yearly) {
+                $baseNet = SiteAgentArrearsBilling::annualShare($baseNet, $index);
+            }
+            $extraPrice = $plan?->sellsExtraNumbers()
+                ? $plan->withVat($plan->siteAgentMonthlyExtraNetAgorot(1, $index), $exempt)
+                : null;
+            $parts = SiteAgentArrearsBilling::baseAmounts($subscription, $window['start'], $window['end']);
+            $net = $parts['plan'] + $parts['extras']
+                + max(0, $usage['billable'] - $usage['included']) * (int) $plan->message_price_agorot
+                + max(0, $usage['writings'] - $usage['included_writings']) * (int) $plan->writing_price_agorot;
+            $estimate = Money::ils($plan->withVat($net, $exempt));
+        }
 
         return json_encode(array_filter([
             'plan' => $subscription->planName(),
             'status' => $subscription->status->getLabel(),
             'trial_ends' => $subscription->trial_ends_at?->format('d/m/Y'),
-            'plan_price' => $plan ? Money::ils($plan->grossAgorot($exempt)).' '.$plan->intervalLabel() : null,
+            'plan_price' => $plan ? Money::ils($plan->withVat($baseNet, $exempt)).' '.($arrears ? 'לחודש אישי' : $plan->intervalLabel()) : null,
+            'billing_timing' => $arrears ? 'חיוב בדיעבד בסיום חודש אישי ממועד ההצטרפות: המנוי, חריגת הודעות יוצאות ותוספות כתיבה יחד. בהרשמה הכרטיס נשמר ולא נגבה תשלום; ניסיון חינם דוחה את תחילת חודש השירות בתשלום לסיומו.' : 'לפי מחזור המנוי הקיים',
+            'annual_price_allocation' => $arrears && $subscription->billingInterval() === BillingInterval::Yearly ? 'מחיר שנתי מחולק ל־12 חודשים; הפרשי אגורות מחולקים בין החודשים.' : null,
+            'base_amount_this_cycle' => $parts !== null ? Money::ils($plan->withVat($parts['plan'] + $parts['extras'], $exempt)) : null,
+            'estimated_current_cycle_total' => $estimate,
+            'prepaid_base_until' => $arrears ? $subscription->billing_prepaid_until?->format('d/m/Y') : null,
+            'prepaid_explanation' => $arrears && $subscription->billing_prepaid_until !== null ? 'תקופת הבסיס שכבר שולמה אינה מחויבת שוב.' : null,
+            'cancellation_billing' => $arrears ? 'ביטול עוצר את השירות; חוב על שירות שסופק נשאר לתשלום במועד סגירת המחזור, בלי לחייב חודש עתידי.' : null,
+            'final_debt_pending' => $arrears ? $subscription->hasFinalArrearsDebt() : null,
+            'service_stopped_at' => $arrears ? $subscription->billing_stop_at?->format('d/m/Y') : null,
             'extra_numbers' => (int) $subscription->agent_extra_numbers,
-            'extra_number_price' => $plan?->extraNumberGrossAgorot($exempt) !== null ? Money::ils($plan->extraNumberGrossAgorot($exempt)) : null,
+            'extra_number_price' => $extraPrice !== null ? Money::ils($extraPrice).($arrears ? ' לחודש אישי' : '') : null,
             'messages_sent_this_cycle' => $usage['sent'],
             'messages_counted_this_cycle' => $usage['billable'],
             'messages_included_in_plan' => $usage['included'] > 0 ? $usage['included'] : null,
@@ -250,7 +283,7 @@ class SiteAgentAssistant
             'messages_amount_so_far' => Money::ils($usage['estimate_gross_agorot']),
             'next_charge' => $usage['next_charge_at']?->format('d/m/Y'),
             'cycle_started' => $usage['since']?->format('d/m/Y'),
-            'prices_include_vat' => ! $exempt,
+            'prices_include_vat' => ! $exempt && $subscription->vatApplies(),
         ], fn ($value): bool => $value !== null), JSON_UNESCAPED_UNICODE);
     }
 
@@ -394,6 +427,7 @@ class SiteAgentAssistant
             in_array('propose_comment_moderation', $names, true) ? 'אישור תגובות, שיוך לקטגוריות, שדות מותאמים, עריכת תפריטים, העברה לפח וניקוי מטמון' : null,
             in_array('propose_plugin_toggle', $names, true) ? 'הפעלה וכיבוי של תוספים מותרים ובדיקת יומן השגיאות' : null,
             in_array('propose_theme_switch', $names, true) ? 'מעבר בין תבניות מותקנות' : null,
+            in_array('get_acf', $names, true) ? 'ACF ו-ACF Pro: קריאה ועריכה של כל סוגי השדות המובנים, כולל שדות מקוננים ועמודי אפשרויות, עם אישור ושחזור' : null,
             in_array('list_cct_types', $names, true) ? 'JetEngine CCT: גילוי סוגים ושדות, חיפוש, יצירה ועריכת רשומות נתמכות' : null,
             in_array('propose_content_manage', $names, true) ? 'תזמון תוכן, סדר והיררכיה' : null,
             in_array('propose_seo_update', $names, true) ? 'כותרות ותיאורי SEO עם Yoast או Rank Math וקישורים פנימיים' : null,
@@ -430,6 +464,7 @@ class SiteAgentAssistant
             in_array('propose_product_create', $names, true)
                 ? '12. מוצר חדש ("תעלה/תוסיף/תיצור מוצר…") — propose_product_create ישירות עם מה שנמסר (שם, מחיר, תיאור). זה אפשרי מכאן: אל תפנה לצוות. חסר שם — שאל עליו; את השאר אפשר להשלים אחר כך.'
                 : null,
+            '14. ACF: קרא get_acf למיקום ולשדה המדויקים בסבב הנוכחי, ואז propose_acf_update. השתמש במפתחות field_ ובנתיבים מהסכמה; ערוך תא או שורה ממוקדים. Repeater ו-Flexible Content תומכים בהוספה, עריכה, הסרה וסידור שורות; Group ו-Clone בשדות ילד. קרא list_acf_options לפני בחירת עמוד אפשרויות. אין לנחש סודות מוסתרים או להחליף אותם כשמשנים שדה סמוך. שדות מתוספי צד שלישי אינם מובטחים. propose_fields_update מיועד למטא פשוט של JetEngine.',
             '13. CCT אינו פוסט: השתמש רק בכלי CCT עם הסוג והמזהה המדויקים. אין למחוק רשומות; מעבר לטיוטה משאיר את הרשומה וייתכן שתצוגות מותאמות מציגות טיוטות. ערוך רק שדות נתמכים בסכמה. תוספי JetEngine, SEO ו-Optimole זמינים רק אם קריאת המצב הצליחה. אין לטעון שכל פעולה מלוח הבקרה אפשרית.',
             '14. תזמון מתייחס לאזור הזמן שהאתר החזיר. קישורים פנימיים דורשים טקסט מדויק ויעד מאומת. שינוי שם מדיה משנה את כותרת הספרייה, לא את שם הקובץ או כתובתו. כדי להעלות תמונה לספרייה בעל האתר שולח אותה בוואטסאפ עם בקשת העלאה ותיאור; השינוי ממתין לאישור.',
             '',
@@ -605,7 +640,7 @@ class SiteAgentAssistant
             }
         }
 
-        foreach (['order_number', 'post_type', 'taxonomy', 'cct_slug', 'content_type', 'type'] as $key) {
+        foreach (['order_number', 'post_type', 'taxonomy', 'cct_slug', 'content_type', 'type', 'context', 'options_page', 'field_key'] as $key) {
             $value = data_get($request->plan, $key) ?? data_get($request->plan, 'arguments.'.$key);
 
             if (is_string($value) && $value !== '') {

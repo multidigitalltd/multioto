@@ -38,6 +38,10 @@ class InvoiceIssuer
             return ['ok' => false, 'error' => 'החיוב אינו במצב "הצליח" — אי אפשר להנפיק חשבונית.'];
         }
 
+        if ($charge->total_agorot === 0) {
+            return ['ok' => true, 'error' => null]; // Local settlement only; no money or tax document.
+        }
+
         if ($charge->invoice) {
             return ['ok' => true, 'error' => null]; // Already issued.
         }

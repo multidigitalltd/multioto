@@ -16,6 +16,7 @@ use App\Models\SiteAgentRequest;
 use App\Models\SiteAgentSubscriber;
 use App\Models\SiteAgentUsage;
 use App\Models\Subscription;
+use App\Services\Billing\SiteAgentArrearsBilling;
 use App\Services\Billing\SubscriptionCollectionService;
 use App\Services\Cardcom\CardcomClient;
 use App\Services\Cardcom\ChargeResult;
@@ -54,6 +55,8 @@ class SiteAgentUsageBillingTest extends TestCase
     {
         parent::setUp();
 
+        $this->freezeTime();
+
         config(['billing.vat_rate' => 0.18]);
         Queue::fake([IssueInvoiceJob::class, SendDunningNotificationJob::class, SendMonthlyMonitoringReportJob::class]);
 
@@ -68,7 +71,8 @@ class SiteAgentUsageBillingTest extends TestCase
         $this->subscription = Subscription::factory()->create([
             'customer_id' => $this->customer->id, 'plan_id' => $this->plan->id, 'site_id' => $this->site->id,
             'status' => SubscriptionStatus::Active, 'price_agorot_override' => null,
-            'agent_extra_numbers' => 0, 'next_charge_at' => now()->subHour(),
+            'agent_extra_numbers' => 0,
+            ...SiteAgentArrearsBilling::initializeDates(now()),
         ]);
         $this->number = SiteAgentSubscriber::create([
             'phone' => '972501111111', 'customer_id' => $this->customer->id,
@@ -98,7 +102,7 @@ class SiteAgentUsageBillingTest extends TestCase
         $this->subscription->update(['status' => SubscriptionStatus::Active]);
         $this->chargeSucceeds();
 
-        $this->assertNull($this->subscription->charges()->sole()->lines);
+        $this->assertSame(['plan'], array_column($this->subscription->charges()->sole()->lines, 'kind'));
         $this->assertFalse(SiteAgentUsage::sole()->billable);
     }
 
@@ -112,7 +116,7 @@ class SiteAgentUsageBillingTest extends TestCase
         $this->plan->update(['message_price_agorot' => 15]);
         $this->chargeSucceeds();
 
-        $this->assertNull($this->subscription->charges()->sole()->lines);
+        $this->assertSame(['plan'], array_column($this->subscription->charges()->sole()->lines, 'kind'));
     }
 
     public function test_a_renewal_with_nothing_extra_is_exactly_what_it_was(): void
@@ -121,7 +125,7 @@ class SiteAgentUsageBillingTest extends TestCase
 
         $charge = $this->subscription->charges()->sole();
 
-        $this->assertNull($charge->lines);
+        $this->assertSame(['plan'], array_column($charge->lines, 'kind'));
         $this->assertSame(14900, $charge->amount_agorot);
         $this->assertSame(2682, $charge->vat_agorot);
         $this->assertSame(17582, $charge->total_agorot);
@@ -160,7 +164,7 @@ class SiteAgentUsageBillingTest extends TestCase
         $this->assertSame(10, SiteAgentUsage::where('charge_id', $first->id)->count());
 
         // A month later: only what was sent since.
-        $this->travel(1)->month();
+        $this->travel(20)->days();
         $this->sendMessages(4);
         $this->subscription->refresh()->update(['next_charge_at' => now()->subHour()]);
         $this->chargeSucceeds();
@@ -193,7 +197,7 @@ class SiteAgentUsageBillingTest extends TestCase
     {
         $this->sendMessages(3);
 
-        $this->travel(2)->seconds();
+        $this->travelTo(SiteAgentArrearsBilling::period($this->subscription)['end']);
         $charge = app(SubscriptionCollectionService::class)->recordPayment($this->subscription);
 
         $this->assertSame(3, collect($charge->lines)->firstWhere('kind', 'messages')['count']);
@@ -249,12 +253,12 @@ class SiteAgentUsageBillingTest extends TestCase
         $first = $this->subscription->charges()->sole();
 
         // The invoice is the plain plan, exactly as before…
-        $this->assertNull($first->lines);
+        $this->assertSame(['plan'], array_column($first->lines, 'kind'));
         $this->assertSame(14900, $first->amount_agorot);
         // …and the 120 are stamped all the same, so next month starts at zero.
         $this->assertSame(120, SiteAgentUsage::where('charge_id', $first->id)->count());
 
-        $this->travel(1)->month();
+        $this->travel(20)->days();
         $this->sendMessages(350);
         $this->subscription->refresh()->update(['next_charge_at' => now()->subHour()]);
         $this->chargeSucceeds();
@@ -437,6 +441,7 @@ class SiteAgentUsageBillingTest extends TestCase
         // שנחצה בין שליחת ההודעות לחיוב כדי שהן ייכנסו לחיוב הזה, והבדיקה
         // תיכשל על תזמון במקום על התנהגות. היא אכן נכשלה כך ב-CI.
         $this->freezeTime();
+        $this->travelTo(SiteAgentArrearsBilling::period($this->subscription)['end']);
 
         $this->sendMessages(3);
 
@@ -507,7 +512,13 @@ class SiteAgentUsageBillingTest extends TestCase
         // The renewal counts up to a whole second behind now; what was sent a
         // moment ago belongs to it.
         if ($wait) {
-            $this->travel(2)->seconds();
+            $end = SiteAgentArrearsBilling::period($this->subscription->refresh())['end'];
+
+            if ($end->isFuture()) {
+                $this->travelTo($end);
+            } else {
+                $this->travel(2)->seconds();
+            }
         }
 
         ChargeSubscriptionJob::dispatchSync($this->subscription->id);

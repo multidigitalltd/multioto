@@ -8,26 +8,30 @@ use App\Services\SiteAgent\SiteAgentUsageMeter;
 use App\Support\Money;
 use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
+use Illuminate\Support\Carbon;
 
 /**
  * What one renewal of a subscription costs, and how the invoice says it.
  *
- * Up to three lines, all integer agorot:
+ * Up to four lines, all integer agorot:
  *
  *   1. the plan, for the period being opened            (in advance)
  *   2. the additional manager numbers, for that period  (in advance)
  *   3. the messages the bot sent since the last invoice (in arrears), less
  *      the plan's included messages — only the ones beyond are charged
- *   4. the writing units since the last invoice: approved changes that put
- *      more than 300 words on the site, less the plan's included ones
+ *   4. generated writing units, less the plan's included ones
+ *
+ * Site-agent arrears subscriptions instead bill the personal month that just
+ * ended, including its base price. Their usage window and prices are frozen
+ * with the charge, so a delayed retry never bills next month's messages.
  *
  * VAT is computed once, on the net total, exactly as Subscription::vatAgorot()
  * always has — so a subscription with no extras and no messages costs to the
  * agora what it cost before this existed, and keeps its single-line invoice.
  *
  * The lines are VAT-inclusive (that is how Linet takes them) and must add up
- * to the total exactly. Each secondary line is rounded on its own, and the plan
- * line takes whatever agora of rounding is left, so the sum is never off by one.
+ * to the total exactly. Any rounding remainder is assigned to positive lines;
+ * an already prepaid base remains zero and never becomes a negative invoice line.
  *
  * Every line is quantity 1 with the count in its name: "1,240 הודעות". A
  * quantity of 1,240 at a rounded unit price would not multiply back to the
@@ -49,21 +53,34 @@ class RenewalBreakdown
      */
     public function for(Subscription $subscription, CarbonInterface $periodStart, CarbonInterface $periodEnd, CarbonInterface $until): array
     {
+        $arrears = SiteAgentArrearsBilling::applies($subscription);
+
+        if ($arrears && $periodEnd->isFuture()) {
+            throw new \LogicException('The service month must finish before it can be collected.');
+        }
+
         // A whole second behind now: a row recorded later in this same second
         // would carry this very timestamp and be stamped as billed by a count
         // that never saw it.
-        $until = CarbonImmutable::instance($until)->startOfSecond()->subSecond();
+        $until = CarbonImmutable::instance($arrears ? SiteAgentArrearsBilling::serviceEnd($subscription, $periodEnd) : $until)->startOfSecond()->subSecond();
+        $from = $arrears ? $periodStart : null;
+        $maxId = $arrears ? (int) SiteAgentUsage::query()
+            ->where('subscription_id', $subscription->id)
+            ->where('sent_at', '>=', $from)
+            ->where('sent_at', '<=', $until)
+            ->max('id') : null;
 
         $plan = $subscription->plan;
-        $planNet = $subscription->basePriceAgorot() - $subscription->extraNumbersAgorot();
-        $extrasNet = $subscription->extraNumbersAgorot();
+        $base = $arrears ? SiteAgentArrearsBilling::baseAmounts($subscription, $periodStart, $periodEnd) : null;
+        $planNet = $base['plan'] ?? ($subscription->basePriceAgorot() - $subscription->extraNumbersAgorot());
+        $extrasNet = $base['extras'] ?? $subscription->extraNumbersAgorot();
 
-        $messages = $plan?->billsMessages() ? $this->usage->unbilled($subscription, $until) : 0;
+        $messages = $plan?->billsMessages() ? $this->usage->unbilled($subscription, $until, SiteAgentUsage::MESSAGE, $from, $maxId) : 0;
         $included = min($messages, (int) ($plan?->included_messages ?? 0));
         $charged = $messages - $included;
         $messagesNet = $charged * (int) ($plan?->message_price_agorot ?? 0);
 
-        $writings = $plan?->billsWritings() ? $this->usage->unbilled($subscription, $until, SiteAgentUsage::WRITING) : 0;
+        $writings = $plan?->billsWritings() ? $this->usage->unbilled($subscription, $until, SiteAgentUsage::WRITING, $from, $maxId) : 0;
         $writingsIncluded = min($writings, (int) ($plan?->included_writings ?? 0));
         $writingsCharged = $writings - $writingsIncluded;
         $writingsNet = $writingsCharged * (int) ($plan?->writing_price_agorot ?? 0);
@@ -71,14 +88,14 @@ class RenewalBreakdown
         // Set whenever anything is waiting, priced or not: settle() also closes
         // the rows of a kind this plan no longer prices, so they neither wait
         // for ever nor hold a ceiling shut.
-        $usageUntil = $messages > 0 || $writings > 0 || $this->usage->anyUnsettled($subscription, $until) ? $until : null;
+        $usageUntil = $arrears || $messages > 0 || $writings > 0 || $this->usage->anyUnsettled($subscription, $until) ? $until : null;
 
         $net = $planNet + $extrasNet + $messagesNet + $writingsNet;
         $vat = $this->vat($subscription, $net);
         $total = $net + $vat;
 
         // Nothing beyond the plan itself: the invoice stays exactly as it was.
-        if ($extrasNet === 0 && $messagesNet === 0 && $writingsNet === 0) {
+        if (! $arrears && $extrasNet === 0 && $messagesNet === 0 && $writingsNet === 0) {
             return ['amount_agorot' => $net, 'vat_agorot' => $vat, 'total_agorot' => $total, 'lines' => null, 'usage_until' => $usageUntil];
         }
 
@@ -134,16 +151,29 @@ class RenewalBreakdown
 
         $first = [
             'kind' => 'plan',
-            'name' => $subscription->chargeDescription($periodStart, $periodEnd),
+            'name' => $subscription->chargeDescription(Carbon::instance($periodStart), Carbon::instance($periodEnd)),
             'qty' => 1,
-            'unit_price_agorot' => $total - array_sum(array_column($extras, 'unit_price_agorot')),
+            'unit_price_agorot' => $this->gross($subscription, $planNet),
         ];
+
+        if ($arrears) {
+            $first += [
+                'billing_mode' => SiteAgentArrearsBilling::MODE,
+                'usage_from' => $periodStart->toIso8601String(),
+                'period_end_at' => $periodEnd->toIso8601String(),
+                'usage_max_id' => $maxId,
+                'priced_kinds' => array_keys(array_filter([
+                    SiteAgentUsage::MESSAGE => (bool) $plan?->billsMessages(),
+                    SiteAgentUsage::WRITING => (bool) $plan?->billsWritings(),
+                ])),
+            ];
+        }
 
         return [
             'amount_agorot' => $net,
             'vat_agorot' => $vat,
             'total_agorot' => $total,
-            'lines' => [$first, ...$extras],
+            'lines' => $this->balanceLines([$first, ...$extras], $total),
             'usage_until' => $usageUntil,
         ];
     }
@@ -155,6 +185,37 @@ class RenewalBreakdown
         }
 
         return (int) round($net * config('billing.vat_rate'));
+    }
+
+    /** Keep free lines free and every payable line positive while totals agree. */
+    private function balanceLines(array $lines, int $total): array
+    {
+        $remainder = $total - array_sum(array_column($lines, 'unit_price_agorot'));
+
+        foreach ($lines as &$line) {
+            if ($remainder === 0) {
+                break;
+            }
+
+            $amount = $line['unit_price_agorot'];
+
+            if ($amount <= 0) {
+                continue;
+            }
+
+            // A negative remainder can span several lines; retain at least one
+            // agora for each positive service rather than losing it at invoice export.
+            $adjustment = $remainder > 0 ? $remainder : max($remainder, 1 - $amount);
+            $line['unit_price_agorot'] += $adjustment;
+            $remainder -= $adjustment;
+        }
+        unset($line);
+
+        if ($remainder !== 0) {
+            throw new \LogicException('Invoice rounding cannot be allocated to the charged services.');
+        }
+
+        return $lines;
     }
 
     private function gross(Subscription $subscription, int $net): int

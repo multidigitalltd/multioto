@@ -131,6 +131,8 @@ class SiteAgentRequest extends Model
     /** Change custom fields (ACF and the like) on an item. */
     public const OP_FIELDS = 'update_fields';
 
+    public const OP_ACF = 'acf_update';
+
     /** Add, change or remove a menu item. */
     public const OP_MENU_ADD = 'menu_item_add';
 
@@ -189,7 +191,7 @@ class SiteAgentRequest extends Model
         self::OP_PRODUCT_CREATE, self::OP_ORDER_STATUS, self::OP_ORDER_NOTE,
         self::OP_SUBSCRIPTION_STATUS, self::OP_POST_CREATE, self::OP_POST_UPDATE,
         self::OP_USER_CREATE, self::OP_USER_ROLE, self::OP_COUPON,
-        self::OP_COMMENT, self::OP_TERM_CREATE, self::OP_POST_TERMS, self::OP_FIELDS,
+        self::OP_COMMENT, self::OP_TERM_CREATE, self::OP_POST_TERMS, self::OP_FIELDS, self::OP_ACF,
         self::OP_MENU_ADD, self::OP_MENU_UPDATE, self::OP_MENU_REMOVE,
         self::OP_TRASH, self::OP_COUPON_EXPIRE, self::OP_CACHE_FLUSH,
         self::OP_PLUGIN_UPDATE, self::OP_THEME_UPDATE, self::OP_PLUGIN_TOGGLE, self::OP_MEDIA_DELETE,

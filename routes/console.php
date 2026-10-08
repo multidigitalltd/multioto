@@ -45,6 +45,7 @@ use App\Jobs\SendTaskRemindersJob;
 use App\Jobs\SyncPluginReleasesJob;
 use App\Jobs\SyncSiteAgentMessagingCostJob;
 use App\Jobs\SyncSiteAgentServiceStateJob;
+use App\Jobs\TransitionSiteAgentBillingJob;
 use App\Jobs\WeeklyMaintenanceJob;
 use App\Models\AuditLog;
 use App\Models\Broadcast;
@@ -130,6 +131,11 @@ Schedule::job(new CheckMoneyIntegrityJob)->dailyAt('08:15')
 // costs a day.
 Schedule::job(new DrillBackupJob)->dailyAt('04:30')
     ->name('backup:drill')->onOneServer();
+
+// Repeated reconciliation also catches historical payment attempts that only
+// settle after deployment. Charge workers run the same check under their lock.
+Schedule::job(new TransitionSiteAgentBillingJob)->everyFifteenMinutes()
+    ->name('siteagent:transition-arrears-billing')->onOneServer();
 
 // Billing: enqueue a charge for every subscription that is due. The job holds
 // a per-subscription lock and re-checks the due date, so double dispatch is safe.

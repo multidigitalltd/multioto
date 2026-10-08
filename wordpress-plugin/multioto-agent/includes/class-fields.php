@@ -15,9 +15,9 @@ if (! defined('ABSPATH')) {
  *
  * Two ways in, tried in order, because they behave differently:
  *
- *  · **ACF's own API** when it is active. `update_field()` knows the field's
- *    type, so a date goes in as ACF stores dates and a relationship as ids —
- *    writing raw meta instead would produce a value ACF cannot read back.
+ *  · **ACF's own API** for schema-aware, unformatted reads. Its writes use the
+ *    dedicated prepare/update tools, with typed validation and sealed undo
+ *    state. The legacy generic writer must never bypass that validation.
  *
  *  · **Plain post meta** otherwise (JetEngine, and hand-rolled meta boxes).
  *
@@ -59,13 +59,15 @@ class Multioto_Agent_Fields
 
         foreach ($groups as $group) {
             foreach ((array) acf_get_fields($group['key']) as $field) {
-                if (self::hidden((string) ($field['name'] ?? ''))) {
+                if (self::hidden((string) ($field['name'] ?? '')) || ($field['type'] ?? '') === 'password'
+                    || (class_exists('Multioto_Agent_Acf_Schema') && Multioto_Agent_Acf_Schema::isProtected($field))) {
                     continue;
                 }
 
                 $out[] = array_filter([
                     'group' => $group['title'] ?? '',
                     'key' => $field['name'] ?? '',
+                    'native_field_key' => $field['key'] ?? '',
                     'label' => $field['label'] ?? '',
                     'type' => $field['type'] ?? '',
                     // Only for the field types where the allowed values ARE the
@@ -90,15 +92,28 @@ class Multioto_Agent_Fields
     public static function values(int $postId): array
     {
         if (self::acfActive()) {
-            $fields = get_fields($postId);
-
-            if (is_array($fields)) {
-                return array_filter(
-                    $fields,
-                    static fn (string $key): bool => ! self::hidden($key),
-                    ARRAY_FILTER_USE_KEY
-                );
+            // Never fall through to raw post meta when ACF owns the data: its
+            // row storage contains secret children under otherwise public keys.
+            // The bootstrap always loads this dependency; isolated legacy
+            // consumers without it receive no ACF values rather than raw data.
+            if (! class_exists('Multioto_Agent_Acf_Schema')) {
+                return [];
             }
+
+            $target = Multioto_Agent_Acf_Schema::resolveTarget(['context' => 'post', 'id' => $postId]);
+            $out = [];
+            foreach (Multioto_Agent_Acf_Schema::fieldsForTarget($target) as $field) {
+                $definition = Multioto_Agent_Acf_Schema::fieldDefinition($field);
+                if (! $definition['editable'] || $definition['sensitive'] || self::hidden($definition['name'])) {
+                    continue;
+                }
+                $raw = get_field($field['key'], $target['acf_id'], false);
+                Multioto_Agent_Acf_Schema::bounded($raw);
+                $out[$definition['name']] = Multioto_Agent_Acf_Schema::redact($field, $raw);
+            }
+            Multioto_Agent_Acf_Schema::bounded($out);
+
+            return $out;
         }
 
         $out = [];
@@ -111,7 +126,8 @@ class Multioto_Agent_Fields
             // get_post_meta() without a key returns every value as an array,
             // even when there is exactly one — unwrapped here so a single value
             // reads as a single value.
-            $out[$key] = is_array($value) && count($value) === 1 ? maybe_unserialize($value[0]) : $value;
+            $raw = is_array($value) && count($value) === 1 ? maybe_unserialize($value[0]) : $value;
+            $out[$key] = self::redactMeta($raw);
         }
 
         return $out;
@@ -132,6 +148,11 @@ class Multioto_Agent_Fields
             throw new Multioto_Agent_Rpc_Error(-32602, 'לא צוין שום שדה לעדכון.');
         }
 
+        if (self::acfActive()) {
+            throw new Multioto_Agent_Rpc_Error(-32602,
+                'עריכת ACF ו-ACF Pro דורשת הכנה ואישור דרך wp_acf_prepare ו-wp_acf_update. יש להשתמש בכלי ACF המעודכנים. לא בוצע שום שינוי.');
+        }
+
         /*
          * Every key is checked before ANY key is written.
          *
@@ -145,7 +166,7 @@ class Multioto_Agent_Fields
         foreach (array_keys($fields) as $key) {
             $key = (string) $key;
 
-            if ($key === '' || self::hidden($key)) {
+            if ($key === '' || self::hidden($key) || self::containsProtectedMeta($fields[$key])) {
                 throw new Multioto_Agent_Rpc_Error(-32602,
                     "השדה {$key} מוגן ואינו ניתן לעדכון דרך הסוכן. לא בוצע שום שינוי.");
             }
@@ -154,15 +175,19 @@ class Multioto_Agent_Fields
         $previous = [];
         $updated = [];
 
+        // Collect and validate every snapshot before the first write. A public
+        // container may still contain protected children that must be preserved.
+        foreach (array_keys($fields) as $key) {
+            $previous[$key] = get_post_meta($postId, (string) $key, true);
+            if (self::containsProtectedMeta($previous[$key])) {
+                throw new Multioto_Agent_Rpc_Error(-32602,
+                    'השדה מכיל נתונים מוגנים ואינו ניתן להחלפה דרך כלי meta כללי. לא בוצע שום שינוי.');
+            }
+        }
+
         foreach ($fields as $key => $value) {
             $key = (string) $key;
-            $previous[$key] = self::single($postId, $key);
-
-            if (self::acfActive()) {
-                update_field($key, $value, $postId);
-            } else {
-                update_post_meta($postId, $key, $value);
-            }
+            update_post_meta($postId, $key, $value);
 
             $updated[] = $key;
         }
@@ -170,18 +195,40 @@ class Multioto_Agent_Fields
         return ['updated' => $updated, 'previous' => $previous];
     }
 
-    /** One field's current value, through ACF when it owns the field. */
-    private static function single(int $postId, string $key)
+    /** Raw meta never exports PHP objects or secret values nested in arrays. */
+    private static function redactMeta($value, int $depth = 0)
     {
-        if (self::acfActive()) {
-            $value = get_field($key, $postId);
+        if ($depth > 16 || is_object($value) || is_resource($value)) {
+            return null;
+        }
+        if (is_array($value)) {
+            $safe = [];
+            foreach ($value as $key => $child) {
+                if (! self::hidden((string) $key)) {
+                    $safe[$key] = self::redactMeta($child, $depth + 1);
+                }
+            }
 
-            if ($value !== null && $value !== false) {
-                return $value;
+            return $safe;
+        }
+
+        return $value;
+    }
+
+    private static function containsProtectedMeta($value, int $depth = 0): bool
+    {
+        if ($depth > 16 || is_object($value) || is_resource($value)) {
+            return true;
+        }
+        if (is_array($value)) {
+            foreach ($value as $key => $child) {
+                if (self::hidden((string) $key) || self::containsProtectedMeta($child, $depth + 1)) {
+                    return true;
+                }
             }
         }
 
-        return get_post_meta($postId, $key, true);
+        return false;
     }
 
     private static function hidden(string $key): bool
@@ -192,6 +239,8 @@ class Multioto_Agent_Fields
             }
         }
 
-        return false;
+        $key = (string) preg_replace('/([a-z])([A-Z])/', '$1_$2', $key);
+
+        return (bool) preg_match('/(^|[_\-\s])(password|passwd|pwd|secret|token|authorization|credential|private_?key|api_?key|access_?key|client_?secret)([_\-\s]|$)/i', $key);
     }
 }

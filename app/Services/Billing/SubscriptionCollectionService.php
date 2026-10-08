@@ -14,6 +14,7 @@ use App\Services\SiteAgent\SiteAgentUsageMeter;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 
 /**
  * Records a manual (off-card) payment for a subscription collected by hand —
@@ -34,9 +35,43 @@ class SubscriptionCollectionService
      */
     public function recordPayment(Subscription $subscription, ?string $notes = null): Charge
     {
-        return Cache::lock("manual-collect:{$subscription->id}", 30)->block(10, function () use ($subscription, $notes): Charge {
+        return Cache::lock("charge-subscription:{$subscription->id}", 300)->block(10, function () use ($subscription, $notes): Charge {
             return DB::transaction(function () use ($subscription, $notes): Charge {
                 $subscription->refresh()->loadMissing(['plan', 'customer']);
+                $transition = app(SiteAgentBillingTransition::class)->transitionLocked($subscription);
+
+                if ($transition === SiteAgentBillingTransition::INCOMPLETE) {
+                    throw ValidationException::withMessages(['payment' => 'יש להשלים את תקופת השירות ששולמה לפני רישום תשלום נוסף.']);
+                }
+
+                if (SiteAgentArrearsBilling::applies($subscription)) {
+                    return $this->recordArrearsPayment($subscription, $notes);
+                }
+
+                $stoppedLegacy = $subscription->status === SubscriptionStatus::Canceled
+                    && $subscription->billing_stop_at !== null;
+
+                if ($subscription->status === SubscriptionStatus::Canceled && $transition !== SiteAgentBillingTransition::UNRESOLVED) {
+                    $last = $subscription->charges()->where('status', ChargeStatus::Succeeded)->latest('id')->first();
+
+                    if ($last !== null) {
+                        return $last;
+                    }
+
+                    throw ValidationException::withMessages(['payment' => 'המנוי בוטל ואין חיוב קיים שממתין להסדרה.']);
+                }
+
+                $legacyAttempt = null;
+
+                if ($transition === SiteAgentBillingTransition::UNRESOLVED) {
+                    $this->assertNoUnknownAttempt($subscription);
+                    $legacyAttempt = $subscription->unsettledLegacyCharges()
+                        ->where('status', ChargeStatus::Failed)->oldest('id')->first();
+
+                    if ($legacyAttempt === null) {
+                        throw ValidationException::withMessages(['payment' => 'יש לבדוק את החוב הקודם לפני רישום תקופת חיוב חדשה.']);
+                    }
+                }
 
                 // A payment plan that is fully paid has nothing left to collect.
                 // This check comes FIRST because closing the plan clears
@@ -55,7 +90,7 @@ class SubscriptionCollectionService
                 // Already collected for the current period: next_charge_at has
                 // rolled into the future. A second click (double submit) must not
                 // bill the next period too — return the last recorded payment.
-                if ($subscription->next_charge_at !== null && $subscription->next_charge_at->isFuture()) {
+                if ($legacyAttempt === null && $subscription->next_charge_at !== null && $subscription->next_charge_at->isFuture()) {
                     $last = $subscription->charges()->where('status', ChargeStatus::Succeeded)->latest('id')->first();
 
                     if ($last) {
@@ -63,10 +98,10 @@ class SubscriptionCollectionService
                     }
                 }
 
-                $periodStart = Carbon::parse($subscription->next_charge_at ?? now());
-                $periodEnd = $subscription->billingInterval() === BillingInterval::Yearly
+                $periodStart = $legacyAttempt?->period_start ?? Carbon::parse($subscription->next_charge_at ?? now());
+                $periodEnd = $legacyAttempt?->period_end ?? ($subscription->billingInterval() === BillingInterval::Yearly
                     ? $periodStart->copy()->addYear()
-                    : $periodStart->copy()->addMonth();
+                    : $periodStart->copy()->addMonth());
 
                 // Never collect the same period twice.
                 $existing = $subscription->charges()
@@ -84,7 +119,8 @@ class SubscriptionCollectionService
 
                 // The same breakdown a card renewal uses: plan, extra numbers,
                 // and the messages sent since the last invoice.
-                $breakdown = app(RenewalBreakdown::class)->for($subscription, $periodStart, $periodEnd, now());
+                $breakdown = $legacyAttempt?->only(['amount_agorot', 'vat_agorot', 'total_agorot', 'lines', 'usage_until'])
+                    ?? app(RenewalBreakdown::class)->for($subscription, $periodStart, $periodEnd, now());
 
                 $charge = $subscription->charges()->create([
                     'customer_id' => $subscription->customer_id,
@@ -112,14 +148,18 @@ class SubscriptionCollectionService
                 $wasSuspended = $subscription->status === SubscriptionStatus::Suspended;
 
                 $subscription->update([
-                    'status' => SubscriptionStatus::Active,
-                    'current_period_start' => $periodStart,
-                    'current_period_end' => $periodEnd,
-                    'next_charge_at' => $periodEnd->copy()->startOfDay(),
+                    'status' => $stoppedLegacy ? SubscriptionStatus::Canceled : SubscriptionStatus::Active,
+                    ...($stoppedLegacy ? [
+                        'next_charge_at' => $subscription->hasFinalLegacyDebt() ? now() : null,
+                    ] : [
+                        'current_period_start' => $periodStart,
+                        'current_period_end' => $periodEnd,
+                        'next_charge_at' => $periodEnd->copy()->startOfDay(),
+                    ]),
                     'dunning_stage' => 0,
                 ]);
 
-                if ($wasSuspended && $subscription->site_id) {
+                if ($wasSuspended && ! $stoppedLegacy && ! $subscription->plan?->includes_site_agent && $subscription->site_id) {
                     RestoreSiteJob::dispatch($subscription->site_id);
                 }
 
@@ -138,5 +178,71 @@ class SubscriptionCollectionService
                 return $charge;
             });
         });
+    }
+
+    /** Under the shared financial lock and transaction, collect only completed service. */
+    private function recordArrearsPayment(Subscription $subscription, ?string $notes): Charge
+    {
+        $this->assertNoUnknownAttempt($subscription);
+        ['start' => $start, 'end' => $end] = SiteAgentArrearsBilling::period($subscription);
+
+        if ($end->isFuture() || $subscription->status === SubscriptionStatus::Trialing
+            || ($subscription->status === SubscriptionStatus::Canceled && ! $subscription->hasFinalArrearsDebt())) {
+            $last = $subscription->charges()->where('status', ChargeStatus::Succeeded)->latest('id')->get()
+                ->first(fn (Charge $charge): bool => SiteAgentArrearsBilling::metadata($charge) !== []);
+
+            if ($last !== null) {
+                return $last;
+            }
+
+            throw ValidationException::withMessages(['payment' => 'החיוב על הבוט מתבצע לאחר השלמת חודש השירות האישי.']);
+        }
+
+        $attempts = $subscription->charges()->whereDate('period_start', $start)->orderBy('id')->get();
+        $arrearsAttempts = $attempts->filter(fn (Charge $charge): bool => SiteAgentArrearsBilling::metadata($charge) !== []);
+        $charge = $arrearsAttempts->firstWhere('status', ChargeStatus::Succeeded);
+
+        if ($charge === null) {
+            $first = $arrearsAttempts->first();
+            $breakdown = $first?->only(['amount_agorot', 'vat_agorot', 'total_agorot', 'lines', 'usage_until'])
+                ?? app(RenewalBreakdown::class)->for($subscription, $start, $end, $end);
+
+            $charge = $subscription->charges()->create([
+                ...$breakdown,
+                'customer_id' => $subscription->customer_id,
+                'currency' => $first?->currency ?? config('billing.currency'),
+                'payment_method' => $subscription->effectivePaymentMethod(),
+                'status' => ChargeStatus::Succeeded,
+                'attempt_number' => (int) $attempts->max('attempt_number') + 1,
+                'description' => $subscription->chargeDescription(Carbon::instance($start), Carbon::instance($end)),
+                'invoice_notes' => filled($notes) ? $notes : null,
+                'period_start' => $start,
+                'period_end' => $end,
+                'charged_at' => now(),
+            ]);
+        }
+
+        app(SiteAgentUsageMeter::class)->settle($charge);
+        $stopped = $subscription->hasStoppedArrearsBilling();
+        $subscription->update([
+            ...SiteAgentArrearsBilling::afterPayment($subscription, $charge),
+            'status' => $stopped ? SubscriptionStatus::Canceled : SubscriptionStatus::Active,
+            'dunning_stage' => 0,
+        ]);
+
+        if ($charge->total_agorot > 0) {
+            IssueInvoiceJob::dispatch($charge->id);
+        }
+
+        SendMonthlyMonitoringReportJob::dispatch($subscription->customer_id);
+
+        return $charge;
+    }
+
+    private function assertNoUnknownAttempt(Subscription $subscription): void
+    {
+        if ($subscription->charges()->where('status', ChargeStatus::Pending)->exists()) {
+            throw ValidationException::withMessages(['payment' => 'קיים ניסיון חיוב שטרם הוכרע. יש לסנכרן את תוצאתו לפני רישום תשלום נוסף.']);
+        }
     }
 }

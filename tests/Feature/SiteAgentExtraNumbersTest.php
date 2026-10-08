@@ -149,7 +149,7 @@ class SiteAgentExtraNumbersTest extends TestCase
             ->assertOk()
             ->assertSee('57.82')
             // The sentence that decides whether the next invoice is a dispute.
-            ->assertSee('יתווסף לחיוב מהמחזור הבא');
+            ->assertSee('ייכלל בחיוב בסיום המחזור האישי הנוכחי');
     }
 
     public function test_adding_a_number_binds_it_charges_for_it_and_sends_a_code(): void

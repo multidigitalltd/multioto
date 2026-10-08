@@ -89,7 +89,7 @@ class SiteAgentCoverageTest extends TestCase
         // The catalog includes provider definitions as well as the original
         // inline entries; JetEngine tools are first-class inventory members.
         $source = '';
-        foreach (['mcp-server', 'cct', 'media-management', 'content-management', 'site-administration'] as $provider) {
+        foreach (['mcp-server', 'cct', 'media-management', 'content-management', 'site-administration', 'acf-schema', 'acf-management'] as $provider) {
             $source .= file_get_contents(base_path('wordpress-plugin/multioto-agent/includes/class-'.$provider.'.php'));
         }
         preg_match_all("/(?:\\['name' =>\\s*|self::definition\\(\\s*|\\[\\s*)'((?:wp|wc|wcs|jet)_[a-z_]+)'\\s*,/", $source, $matches);

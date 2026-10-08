@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Services\Billing\SiteAgentArrearsBilling;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -18,9 +19,8 @@ use Illuminate\Support\Str;
  * and everything afterwards is done from this row.
  *
  * Nothing is granted here. The subscription, the site and the number's binding
- * are all created by the money arriving (see SiteAgentCheckout::fulfil), never
- * by the form being submitted: a subscription opened hopefully at checkout is a
- * service somebody keeps when they abandon the payment page.
+ * are created only after a verified card capture (or a historical prepaid
+ * payment), never by submitting the public form.
  */
 class SiteAgentOrder extends Model
 {
@@ -29,6 +29,9 @@ class SiteAgentOrder extends Model
     public const PENDING = 'pending';
 
     public const PAID = 'paid';
+
+    /** Card verified; service active, with payment collected after the month. */
+    public const ACTIVE = 'active';
 
     public const FAILED = 'failed';
 
@@ -44,13 +47,23 @@ class SiteAgentOrder extends Model
         'reference', 'customer_id', 'plan_id',
         'buyer_name', 'buyer_email', 'manager_phone', 'manager_name', 'extra_phones',
         'domain', 'site_id', 'total_agorot', 'install_mode', 'status',
-        'charge_id', 'subscription_id', 'fulfilled_at', 'trial_days', 'cardcom_low_profile_id',
+        'charge_id', 'subscription_id', 'fulfilled_at', 'trial_days', 'cardcom_low_profile_id', 'billing_mode',
     ];
 
     /** A free trial: a card was captured and nothing was charged. */
     public function isTrial(): bool
     {
         return (int) $this->trial_days > 0;
+    }
+
+    public function isArrears(): bool
+    {
+        return $this->billing_mode === SiteAgentArrearsBilling::MODE;
+    }
+
+    public function requiresCardCapture(): bool
+    {
+        return $this->isArrears() || $this->isTrial();
     }
 
     protected function casts(): array
@@ -114,7 +127,7 @@ class SiteAgentOrder extends Model
 
     public function isFulfilled(): bool
     {
-        return $this->status === self::PAID;
+        return in_array($this->status, [self::PAID, self::ACTIVE], true);
     }
 
     public function wantsUsToInstall(): bool
@@ -137,6 +150,12 @@ class SiteAgentOrder extends Model
         } while (static::query()->where('reference', $reference)->exists());
 
         return $reference;
+    }
+
+    /** @param  Builder<SiteAgentOrder>  $query */
+    public function scopeFulfilled(Builder $query): Builder
+    {
+        return $query->whereIn('status', [self::PAID, self::ACTIVE]);
     }
 
     /** @param  Builder<SiteAgentOrder>  $query */

@@ -97,6 +97,9 @@ class CheckMoneyIntegrityJob implements ShouldQueue
         // fortnight, and the invoice job starts when it is PAID.
         $rows = Charge::query()
             ->where('status', ChargeStatus::Succeeded)
+            // A fully prepaid postpaid period can settle usage at zero cost.
+            // No payment was taken and no tax receipt is due for that marker.
+            ->where('total_agorot', '>', 0)
             ->where(fn (Builder $query) => $query
                 ->where(fn (Builder $paid) => $paid
                     ->whereNotNull('charged_at')

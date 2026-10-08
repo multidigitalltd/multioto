@@ -8,6 +8,7 @@ use App\Jobs\ChargeSubscriptionJob;
 use App\Models\Customer;
 use App\Models\PaymentToken;
 use App\Models\Subscription;
+use Illuminate\Support\Facades\Cache;
 use InvalidArgumentException;
 
 /**
@@ -119,47 +120,57 @@ class CardTokenService
         $customer->update(['default_token_id' => $token->id]);
 
         $customer->subscriptions()
-            ->whereNot('status', SubscriptionStatus::Canceled)
+            ->where(fn ($query) => $query->whereNot('status', SubscriptionStatus::Canceled)
+                ->orWhere(fn ($stopped) => $stopped->whereFinalBillingDebt()))
             ->each(function (Subscription $subscription) use ($customer, $token, $collectNow): void {
-                // The customer is already in hand — hand it over rather than
-                // letting each row fetch it again to answer "how is this paid".
-                $subscription->setRelation('customer', $customer);
-                $subscription->update(['token_id' => $token->id]);
+                Cache::lock("charge-subscription:{$subscription->id}", 300)->block(10, function () use ($subscription, $customer, $token, $collectNow): void {
+                    $subscription->refresh();
 
-                if (! $collectNow) {
-                    return;
-                }
+                    if ($subscription->status === SubscriptionStatus::Canceled && ! $subscription->hasFinalBillingDebt()) {
+                        return;
+                    }
 
-                // "Trialing" has two meanings. Without an end date it is the old
-                // one — opened before a card existed — and a card is what makes
-                // it real. With an end date still ahead it is a free trial the
-                // customer was promised, and a card updated in the middle of it
-                // must not end it early (and make its messages billable).
-                if ($subscription->status === SubscriptionStatus::Trialing
-                    && ($subscription->trial_ends_at === null || $subscription->trial_ends_at->isPast())) {
-                    $subscription->update(['status' => SubscriptionStatus::Active]);
-                } elseif (in_array($subscription->status, [SubscriptionStatus::PastDue, SubscriptionStatus::Suspended], true)) {
-                    // The debt is due now — make it collectable immediately, but
-                    // WITHOUT moving the billing anchor forward, so a late payer is
-                    // billed for the delayed period and keeps the original date.
-                    $subscription->markDueNow();
-                }
+                    // The customer is already in hand — hand it over rather than
+                    // letting each row fetch it again to answer "how is this paid".
+                    $subscription->setRelation('customer', $customer);
+                    $subscription->update(['token_id' => $token->id]);
 
-                $subscription->refresh();
+                    if (! $collectNow) {
+                        return;
+                    }
 
-                if ($subscription->status !== SubscriptionStatus::Canceled
-                    && $subscription->next_charge_at
-                    && $subscription->next_charge_at->isPast()
-                    // A subscription the customer pays by transfer keeps its
-                    // card as a fallback only. Entering a card must not collect
-                    // it here — that is the fallback's decision, after its grace
-                    // period, and taking the money now would be charging a card
-                    // the customer did not arrange to have charged.
-                    && ! $subscription->isManuallyCollected()) {
-                    // The customer just updated their card in order to pay —
-                    // charge now, even during the Shabbat quiet period.
-                    ChargeSubscriptionJob::dispatch($subscription->id, manual: true);
-                }
+                    // "Trialing" has two meanings. Without an end date it is the old
+                    // one — opened before a card existed — and a card is what makes
+                    // it real. With an end date still ahead it is a free trial the
+                    // customer was promised, and a card updated in the middle of it
+                    // must not end it early (and make its messages billable).
+                    if ($subscription->status === SubscriptionStatus::Trialing
+                        && ($subscription->trial_ends_at === null || $subscription->trial_ends_at->isPast())) {
+                        $subscription->update(['status' => SubscriptionStatus::Active]);
+                    } elseif (in_array($subscription->status, [SubscriptionStatus::PastDue, SubscriptionStatus::Suspended], true)
+                        || $subscription->hasFinalBillingDebt()) {
+                        // The debt is due now — make it collectable immediately, but
+                        // WITHOUT moving the billing anchor forward, so a late payer is
+                        // billed for the delayed period and keeps the original date.
+                        $subscription->markDueNow();
+                    }
+
+                    $subscription->refresh();
+
+                    if (($subscription->status !== SubscriptionStatus::Canceled || $subscription->hasFinalBillingDebt())
+                        && $subscription->next_charge_at
+                        && $subscription->next_charge_at->isPast()
+                        // A subscription the customer pays by transfer keeps its
+                        // card as a fallback only. Entering a card must not collect
+                        // it here — that is the fallback's decision, after its grace
+                        // period, and taking the money now would be charging a card
+                        // the customer did not arrange to have charged.
+                        && ! $subscription->isManuallyCollected()) {
+                        // The customer just updated their card in order to pay —
+                        // charge now, even during the Shabbat quiet period.
+                        ChargeSubscriptionJob::dispatch($subscription->id, manual: true);
+                    }
+                });
             });
     }
 

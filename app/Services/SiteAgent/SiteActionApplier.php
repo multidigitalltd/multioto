@@ -52,6 +52,10 @@ class SiteActionApplier
         }
 
         try {
+            if ($request->operation === SiteAgentRequest::OP_ACF) {
+                return app(SiteAgentAcfActions::class)->apply($site, $request);
+            }
+
             if (app(SiteAgentExtendedActions::class)->handlesOperation((string) $request->operation)) {
                 return app(SiteAgentExtendedActions::class)->apply($site, $request);
             }
@@ -93,7 +97,7 @@ class SiteActionApplier
     {
         return in_array($kind, ['order_status', 'subscription_status', 'created_post', 'post', 'user_role', 'coupon',
             'comment', 'post_terms', 'fields', 'menu_added', 'menu_item', 'trashed', 'plugin_toggle', 'trashed_product',
-            'extended', 'extended_cct_created'], true);
+            'extended', 'extended_cct_created', 'acf'], true);
     }
 
     /**
@@ -104,6 +108,7 @@ class SiteActionApplier
     {
         try {
             return match ((string) ($restore['kind'] ?? '')) {
+                'acf' => app(SiteAgentAcfActions::class)->revert($site, $restore),
                 'extended', 'extended_cct_created' => app(SiteAgentExtendedActions::class)->revert($site, $restore),
                 'order_status' => $this->revertOrderStatus($site, $restore),
                 'subscription_status' => $this->revertSubscriptionStatus($site, $restore),

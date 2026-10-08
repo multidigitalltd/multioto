@@ -28,18 +28,24 @@ class DunningMachine
         $stages = config('billing.dunning.stages');
         $stage = min($subscription->dunning_stage + 1, max(array_keys($stages)));
         $config = $stages[$stage];
+        $stopped = $subscription->hasStoppedArrearsBilling() || $subscription->hasFinalLegacyDebt();
 
         $subscription->update([
-            'status' => $config['suspend'] ? SubscriptionStatus::Suspended : SubscriptionStatus::PastDue,
+            'status' => $stopped ? SubscriptionStatus::Canceled
+                : ($config['suspend'] ? SubscriptionStatus::Suspended : SubscriptionStatus::PastDue),
             'dunning_stage' => $stage,
             'next_charge_at' => $config['retry_in_days'] !== null
                 ? now()->addDays($config['retry_in_days'])->startOfDay()
                 : null,
         ]);
 
-        $this->notify($subscription, $charge, $stage, $this->templateFor($subscription, $config['template']));
+        $template = $stopped
+            ? ($config['retry_in_days'] === null ? 'final_payment_failed_final' : 'final_payment_failed')
+            : $this->templateFor($subscription, $config['template']);
+        $this->notify($subscription, $charge, $stage, $template);
 
-        if ($config['suspend'] && $subscription->site_id) {
+        if ($config['suspend'] && ! $stopped && ! SiteAgentArrearsBilling::applies($subscription)
+            && ! $subscription->plan?->includes_site_agent && $subscription->site_id) {
             SuspendSiteJob::dispatch($subscription->site_id);
         }
     }
@@ -60,7 +66,8 @@ class DunningMachine
      */
     protected function templateFor(Subscription $subscription, string $template): string
     {
-        if ($subscription->site_id !== null) {
+        if ($subscription->site_id !== null && ! SiteAgentArrearsBilling::applies($subscription)
+            && ! $subscription->plan?->includes_site_agent) {
             return $template;
         }
 

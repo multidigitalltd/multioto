@@ -19,6 +19,7 @@ use App\Models\SiteAgentOrder;
 use App\Models\Subscription;
 use App\Models\WebhookEvent;
 use App\Providers\SettingsServiceProvider;
+use App\Services\Billing\SiteAgentArrearsBilling;
 use App\Services\Cardcom\CardTokenService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
@@ -161,7 +162,7 @@ class SiteAgentTrialTest extends TestCase
         Mail::assertSent(NotificationMail::class, fn (NotificationMail $mail): bool => str_contains($mail->bodyText, '175.82'));
     }
 
-    public function test_the_end_of_the_trial_makes_the_first_charge_due_without_charging_itself(): void
+    public function test_ending_a_legacy_trial_before_the_transition_job_starts_a_full_paid_month(): void
     {
         $subscription = $this->trialEndingIn(days: 0);
         $this->travel(1)->hour();
@@ -170,9 +171,10 @@ class SiteAgentTrialTest extends TestCase
 
         $subscription->refresh();
         $this->assertSame(SubscriptionStatus::Active, $subscription->status);
-        $this->assertTrue($subscription->next_charge_at->isPast());
-        // The ordinary renewal picks it up — with its lock, attempts and dunning.
-        $this->assertTrue(Subscription::query()->dueForCharge()->whereKey($subscription->id)->exists());
+        $this->assertSame('arrears', $subscription->billing_mode);
+        $this->assertTrue($subscription->billing_anchor_at->equalTo($subscription->trial_ends_at));
+        $this->assertTrue($subscription->next_charge_at->equalTo(SiteAgentArrearsBilling::firstChargeAt($subscription->trial_ends_at)));
+        $this->assertFalse(Subscription::query()->dueForCharge()->whereKey($subscription->id)->exists());
         $this->assertSame(0, Charge::count());
     }
 
@@ -185,6 +187,8 @@ class SiteAgentTrialTest extends TestCase
         (new EndSiteAgentTrialsJob)->handle();
 
         $this->assertSame(SubscriptionStatus::Canceled, $subscription->fresh()->status);
+        $this->assertNull($subscription->fresh()->next_charge_at);
+        $this->assertFalse($subscription->fresh()->hasFinalArrearsDebt());
     }
 
     public function test_a_trial_is_given_once_per_customer_and_once_per_site(): void
@@ -257,7 +261,7 @@ class SiteAgentTrialTest extends TestCase
 
         return Subscription::factory()->create([
             'customer_id' => $customer->id, 'plan_id' => $this->plan->id, 'token_id' => $token->id,
-            'status' => SubscriptionStatus::Trialing,
+            'status' => SubscriptionStatus::Trialing, 'billing_mode' => 'advance',
             'trial_ends_at' => now()->addDays($days), 'next_charge_at' => now()->addDays($days),
         ]);
     }

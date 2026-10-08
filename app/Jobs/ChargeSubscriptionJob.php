@@ -12,7 +12,10 @@ use App\Models\Charge;
 use App\Models\Subscription;
 use App\Services\Billing\DunningMachine;
 use App\Services\Billing\RenewalBreakdown;
+use App\Services\Billing\SiteAgentArrearsBilling;
+use App\Services\Billing\SiteAgentBillingTransition;
 use App\Services\Cardcom\CardcomClient;
+use App\Services\Cardcom\ChargeResult;
 use App\Services\SiteAgent\SiteAgentUsageMeter;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -118,6 +121,16 @@ class ChargeSubscriptionJob implements ShouldQueue
         try {
             $subscription->refresh()->load(['plan', 'customer', 'token']);
 
+            if (! $subscription->isChargeable()) {
+                return; // Cancellation or card removal may have won the lock first.
+            }
+
+            $transition = app(SiteAgentBillingTransition::class)->transitionLocked($subscription);
+
+            if ($transition === SiteAgentBillingTransition::INCOMPLETE) {
+                return; // An ambiguous legacy paid interval needs review before any new charge.
+            }
+
             if ($subscription->next_charge_at === null || $subscription->next_charge_at->isFuture()) {
                 return; // Already charged by a concurrent/earlier run.
             }
@@ -126,14 +139,38 @@ class ChargeSubscriptionJob implements ShouldQueue
                 return; // The arrangement changed while this waited in the queue.
             }
 
-            $charge = $this->createPendingCharge($subscription);
+            if (SiteAgentArrearsBilling::applies($subscription) && SiteAgentArrearsBilling::period($subscription)['end']->isFuture()) {
+                return; // Even a manual request cannot collect a month before it ends.
+            }
 
-            $result = $cardcom->chargeToken(
-                $subscription->token,
-                $charge->total_agorot,
-                $subscription->chargeDescription($charge->period_start, $charge->period_end),
-                sprintf('sub-%d-%s-a%d', $subscription->id, $charge->period_start->format('Ymd'), $charge->attempt_number),
-            );
+            $charge = $transition === SiteAgentBillingTransition::UNRESOLVED
+                ? $this->legacyRetry($subscription)
+                : $this->createPendingCharge($subscription);
+
+            if ($charge === null) {
+                return; // Legacy debt without a known attempt must be reviewed, not re-created.
+            }
+
+            if (SiteAgentArrearsBilling::applies($subscription) && $charge->status === ChargeStatus::Succeeded) {
+                // Recover a completed payment whose worker stopped before the
+                // cycle cursor advanced. Never send that payment to Cardcom again.
+                $this->activatePaidPeriod($subscription, $charge);
+
+                if ($charge->total_agorot > 0) {
+                    IssueInvoiceJob::dispatch($charge->id);
+                }
+
+                return;
+            }
+
+            $result = SiteAgentArrearsBilling::applies($subscription) && $charge->total_agorot === 0
+                ? new ChargeResult(true, null, '0')
+                : $cardcom->chargeToken(
+                    $subscription->token,
+                    $charge->total_agorot,
+                    $subscription->chargeDescription($charge->period_start, $charge->period_end),
+                    sprintf('sub-%d-%s-a%d', $subscription->id, $charge->period_start->format('Ymd'), $charge->attempt_number),
+                );
 
             $charge->update([
                 'status' => $result->success ? ChargeStatus::Succeeded : ChargeStatus::Failed,
@@ -145,7 +182,10 @@ class ChargeSubscriptionJob implements ShouldQueue
 
             if ($result->success) {
                 $this->activatePaidPeriod($subscription, $charge);
-                IssueInvoiceJob::dispatch($charge->id);
+
+                if ($charge->total_agorot > 0) {
+                    IssueInvoiceJob::dispatch($charge->id);
+                }
             } else {
                 $dunning->handleFailure($subscription, $charge);
             }
@@ -161,6 +201,10 @@ class ChargeSubscriptionJob implements ShouldQueue
      */
     protected function createPendingCharge(Subscription $subscription): Charge
     {
+        if (SiteAgentArrearsBilling::applies($subscription)) {
+            return $this->createArrearsCharge($subscription);
+        }
+
         $lastFailed = $subscription->charges()
             ->where('status', ChargeStatus::Failed)
             ->latest('id')
@@ -217,6 +261,64 @@ class ChargeSubscriptionJob implements ShouldQueue
         ]);
     }
 
+    private function createArrearsCharge(Subscription $subscription): Charge
+    {
+        ['start' => $start, 'end' => $end] = SiteAgentArrearsBilling::period($subscription);
+        $attempts = $subscription->charges()->whereDate('period_start', $start)->orderBy('id')->get();
+        // The closing usage invoice can share its start date with a legacy
+        // prepaid base invoice. Only postpaid snapshots belong to this cycle.
+        $arrearsAttempts = $attempts->filter(fn (Charge $charge): bool => SiteAgentArrearsBilling::metadata($charge) !== []);
+        $settled = $arrearsAttempts->firstWhere('status', ChargeStatus::Succeeded);
+
+        if ($settled !== null) {
+            return $settled;
+        }
+
+        $pending = $arrearsAttempts->firstWhere('status', ChargeStatus::Pending);
+
+        if ($pending !== null) {
+            return $pending;
+        }
+
+        $first = $arrearsAttempts->first();
+        $breakdown = $first !== null ? $first->only([
+            'amount_agorot', 'vat_agorot', 'total_agorot', 'lines', 'usage_until',
+        ]) : app(RenewalBreakdown::class)->for($subscription, $start, $end, $end);
+
+        return $subscription->charges()->create([
+            ...$breakdown,
+            'currency' => $first?->currency ?? config('billing.currency'),
+            'payment_method' => PaymentMethod::CreditCard->value,
+            'status' => ChargeStatus::Pending,
+            'attempt_number' => (int) $attempts->max('attempt_number') + 1,
+            'period_start' => $start,
+            'period_end' => $end,
+        ]);
+    }
+
+    private function legacyRetry(Subscription $subscription): ?Charge
+    {
+        $pending = $subscription->charges()->where('status', ChargeStatus::Pending)->oldest('id')->first();
+
+        if ($pending !== null) {
+            return $pending;
+        }
+
+        $failed = $subscription->unsettledLegacyCharges()
+            ->where('status', ChargeStatus::Failed)->oldest('id')->first();
+
+        if ($failed === null) {
+            return null;
+        }
+
+        return $subscription->charges()->create([
+            ...$failed->only(['amount_agorot', 'vat_agorot', 'total_agorot', 'lines', 'usage_until', 'currency', 'period_start', 'period_end']),
+            'payment_method' => PaymentMethod::CreditCard->value,
+            'status' => ChargeStatus::Pending,
+            'attempt_number' => (int) $subscription->charges()->whereDate('period_start', $failed->period_start)->max('attempt_number') + 1,
+        ]);
+    }
+
     /**
      * Success: roll the subscription into the paid period, clear dunning, and
      * restore the site if a previous dunning cycle suspended it.
@@ -224,20 +326,35 @@ class ChargeSubscriptionJob implements ShouldQueue
     protected function activatePaidPeriod(Subscription $subscription, Charge $charge): void
     {
         $wasSuspended = $subscription->status === SubscriptionStatus::Suspended;
+        $stopped = $subscription->billing_stop_at !== null;
+        $arrears = SiteAgentArrearsBilling::applies($subscription);
 
         // The messages this charge billed are now billed; the next renewal
         // counts from here.
         app(SiteAgentUsageMeter::class)->settle($charge);
 
+        if ($arrears) {
+            $dates = SiteAgentArrearsBilling::afterPayment($subscription, $charge);
+        } elseif ($stopped) {
+            // Cancellation preserves known legacy debt, not permission to
+            // open another prepaid period after that debt is paid.
+            $dates = ['next_charge_at' => $subscription->hasFinalLegacyDebt() ? now() : null];
+        } else {
+            $dates = [
+                'current_period_start' => $charge->period_start,
+                'current_period_end' => $charge->period_end,
+                'next_charge_at' => $charge->period_end->copy()->startOfDay(),
+            ];
+        }
+
         $subscription->update([
-            'status' => SubscriptionStatus::Active,
-            'current_period_start' => $charge->period_start,
-            'current_period_end' => $charge->period_end,
-            'next_charge_at' => $charge->period_end->copy()->startOfDay(),
+            'status' => $stopped ? SubscriptionStatus::Canceled : SubscriptionStatus::Active,
+            ...$dates,
             'dunning_stage' => 0,
         ]);
 
-        if ($wasSuspended && $subscription->site_id) {
+        if ($wasSuspended && ! $stopped && ! SiteAgentArrearsBilling::applies($subscription)
+            && ! $subscription->plan?->includes_site_agent && $subscription->site_id) {
             RestoreSiteJob::dispatch($subscription->site_id);
         }
 

@@ -6,6 +6,7 @@ use App\Enums\ChargeStatus;
 use App\Models\Charge;
 use App\Models\Customer;
 use App\Models\PendingSignup;
+use App\Models\SiteAgentOrder;
 use App\Models\WebhookEvent;
 use App\Services\Cardcom\CardcomClient;
 use App\Services\Cardcom\CardTokenService;
@@ -55,6 +56,10 @@ class ProcessCardcomLowProfileJob implements ShouldQueue
         // is created — before it, there is no customer record at all, which is
         // what stops a half-finished signup from looking like a finished one.
         if ($this->finishSignupIfMatched($payload, $event)) {
+            return;
+        }
+
+        if ($this->finishSiteAgentOrderIfMatched($payload, $event)) {
             return;
         }
 
@@ -108,13 +113,54 @@ class ProcessCardcomLowProfileJob implements ShouldQueue
             $customer->update(['pending_card_lp_id' => null]);
         }
 
-        // A site-agent trial was waiting on exactly this card. Opened here,
-        // after the card is on file, because the card is the condition.
-        if ($token !== null && $lowProfileId) {
-            app(SiteAgentCheckout::class)->fulfilTrial((string) $lowProfileId);
+        $event->markProcessed();
+    }
+
+    /** A postpaid signup needs a verified token, never an invented successful charge. */
+    private function finishSiteAgentOrderIfMatched(array $payload, WebhookEvent $event): bool
+    {
+        $lowProfileId = (string) ($payload['LowProfileId'] ?? '');
+        $order = $lowProfileId !== ''
+            ? SiteAgentOrder::query()->where('cardcom_low_profile_id', $lowProfileId)->first()
+            : null;
+
+        if ($order === null) {
+            return false;
+        }
+
+        if ($order->isFulfilled()) {
+            $event->markProcessed();
+
+            return true;
+        }
+
+        // Always verify with Cardcom for a new service, even when a notification
+        // includes a token. The exact hosted session must name the order owner.
+        $result = app(CardcomClient::class)->getLpResult($lowProfileId);
+        $customer = $order->customer;
+        if ($customer === null || (string) ($result['ReturnValue'] ?? '') !== (string) $order->customer_id) {
+            Log::warning('Site agent card capture did not match the order owner', ['order_id' => $order->id]);
+            $event->markProcessed();
+
+            return true;
+        }
+
+        $token = isset($result['ResponseCode']) && (string) $result['ResponseCode'] === '0'
+            ? app(CardTokenService::class)->storeFromLpResult($customer, $result)
+            : null;
+        if ($token !== null) {
+            if ((string) $customer->pending_card_lp_id === $lowProfileId) {
+                $customer->update(['pending_card_lp_id' => null]);
+            }
+            app(SiteAgentCheckout::class)->fulfilCardCapture($lowProfileId, $token);
+        } else {
+            $this->tellTheTeam($customer, (string) ($result['ResponseCode'] ?? ''),
+                trim((string) ($result['Description'] ?? '')) ?: 'לא התקבל אישור כרטיס תקין', $lowProfileId);
         }
 
         $event->markProcessed();
+
+        return true;
     }
 
     /**

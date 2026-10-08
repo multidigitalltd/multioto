@@ -4,11 +4,14 @@ namespace Tests\Feature;
 
 use App\Enums\ChargeStatus;
 use App\Jobs\CheckMoneyIntegrityJob;
+use App\Jobs\IssueInvoiceJob;
 use App\Mail\NotificationMail;
 use App\Models\Charge;
 use App\Models\Customer;
 use App\Models\Plan;
 use App\Models\Subscription;
+use App\Services\Linet\InvoiceIssuer;
+use App\Services\Linet\LinetClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Mail;
 use Tests\TestCase;
@@ -99,5 +102,28 @@ class MoneyIntegrityWindowTest extends TestCase
         $this->report();
 
         Mail::assertNothingSent();
+    }
+
+    public function test_zero_settlement_is_not_a_missing_tax_invoice(): void
+    {
+        $charge = $this->chargeWithoutInvoice(1);
+        $charge->update(['amount_agorot' => 0, 'vat_agorot' => 0, 'total_agorot' => 0]);
+
+        $this->report();
+
+        Mail::assertNothingSent();
+    }
+
+    public function test_zero_settlement_cannot_issue_an_invoice_through_the_queue_or_manual_button(): void
+    {
+        $charge = $this->chargeWithoutInvoice(1);
+        $charge->update(['amount_agorot' => 0, 'vat_agorot' => 0, 'total_agorot' => 0]);
+        $linet = $this->mock(LinetClient::class);
+        $linet->shouldNotReceive('issueDocument');
+        $issuer = new InvoiceIssuer($linet);
+
+        (new IssueInvoiceJob($charge->id))->handle($issuer);
+        $this->assertSame(['ok' => true, 'error' => null], $issuer->issue($charge));
+        $this->assertFalse($charge->invoice()->exists());
     }
 }
