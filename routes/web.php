@@ -31,6 +31,7 @@ use App\Http\Controllers\Webhooks\EmailWebhookController;
 use App\Http\Controllers\Webhooks\KesherWebhookController;
 use App\Http\Controllers\Webhooks\SiteAgentWhatsAppController;
 use App\Http\Controllers\Webhooks\WahaWebhookController;
+use App\Http\Middleware\EnsureModuleAccess;
 use App\Http\Middleware\EnsureTwoFactorConfirmed;
 use App\Http\Middleware\ThrottleHealthProbe;
 use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
@@ -177,11 +178,11 @@ Route::get('/marketing/resubscribed', [MarketingPreferencesController::class, 'r
     ->name('marketing.resubscribed');
 
 /*
- | Inbound support attachments — served only to a signed-in team member
- | (panel auth). Files live on a private disk; this is the sole read path.
+ | Inbound support attachments — served only after completed team sign-in and
+ | a support-module grant. Files live on a private disk; this is the read path.
  */
 Route::get('/support/attachments/{message}/{index}', SupportAttachmentController::class)
-    ->middleware(['web', 'auth'])
+    ->middleware(['web', 'auth', EnsureTwoFactorConfirmed::class, EnsureModuleAccess::class.':support'])
     ->whereNumber('index')
     ->name('support.attachment');
 
@@ -217,9 +218,9 @@ Route::middleware(['web', 'auth'])->group(function () {
         ->name('two-factor.resend');
 });
 
-// Print-friendly list of all open tasks — team-only (panel auth).
+// Print-friendly list of all open tasks — the same gates as task management.
 Route::get('/tasks/print', TasksPrintController::class)
-    ->middleware(['web', 'auth'])
+    ->middleware(['web', 'auth', EnsureTwoFactorConfirmed::class, EnsureModuleAccess::class.':management'])
     ->name('tasks.print');
 
 // Classic (non-Livewire) fallback save for the security API keys — admin-only
@@ -244,21 +245,22 @@ Route::middleware(['web', 'auth', EnsureTwoFactorConfirmed::class])->group(funct
         ->name('push-subscriptions.destroy');
 });
 
-// Speech to text for the agent console — team-only. The audio goes to a model
+// Speech to text throughout the panel — team-only. The audio goes to a model
 // on our own server and comes back as words the operator reads before sending;
 // nothing is acted on here. Throttled because each call costs real compute.
 Route::post('/agent/transcribe', TranscribeController::class)
-    ->middleware(['web', 'auth', 'throttle:30,1'])
+    ->middleware(['web', 'auth', EnsureTwoFactorConfirmed::class, 'throttle:30,1'])
     ->name('agent.transcribe');
 
-// Customer signup signature (consent record) — team-only, private disk.
+// Customer documents follow the customer-management screen's access rules.
+// Signup signature (consent record), stored on a private disk.
 Route::get('/customers/{customer}/signature', SignatureController::class)
-    ->middleware(['web', 'auth'])
+    ->middleware(['web', 'auth', EnsureTwoFactorConfirmed::class, EnsureModuleAccess::class.':management'])
     ->name('customer.signature');
 
 // Signed customer-card PDF (details + signature) — team-only, private disk.
 Route::get('/customers/{customer}/card-pdf', CustomerCardPdfController::class)
-    ->middleware(['web', 'auth'])
+    ->middleware(['web', 'auth', EnsureTwoFactorConfirmed::class, EnsureModuleAccess::class.':management'])
     ->name('customer.card-pdf');
 
 /*
@@ -342,9 +344,9 @@ Route::prefix('agent')->group(function () {
 
     // Admin-only download of the current plugin build (the copy shipped in the
     // repo), so a manager can grab the ZIP straight from the panel to install on
-    // a customer's site. Guarded by the panel login + an admin check.
+    // a customer's site. Guarded by completed panel sign-in + an admin check.
     Route::get('/plugin/latest', [AgentPluginController::class, 'latest'])
-        ->middleware(['web', 'auth', 'throttle:30,1'])
+        ->middleware(['web', 'auth', EnsureTwoFactorConfirmed::class, 'throttle:30,1'])
         ->name('agent.plugin.latest');
 });
 

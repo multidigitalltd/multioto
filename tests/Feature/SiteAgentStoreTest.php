@@ -859,6 +859,38 @@ class SiteAgentStoreTest extends TestCase
             ->assertDontSee('SECRETLINK');
     }
 
+    public function test_invalid_handover_keeps_only_non_secret_old_input(): void
+    {
+        $this->fakeCardcom();
+        $this->buy(['install_mode' => SiteAgentOrder::INSTALL_BY_US]);
+        $order = SiteAgentOrder::sole();
+        $this->pay($order);
+        $returnUrl = route('store.agent.done', ['reference' => $order->reference]);
+
+        $response = $this->from($returnUrl)->post(route('store.agent.access', ['reference' => $order->reference]), [
+            'access_method' => SiteInstallation::ACCESS_TEMP_LOGIN,
+            'access_secret' => 'https://example.test/?tml=PRIVATE-HANDOVER',
+            'access_note' => 'Please install in the morning',
+            'access_expires_at' => now()->subDay()->toDateTimeString(),
+            'current_password' => 'CURRENT-PASSWORD',
+            'password' => 'NEW-PASSWORD',
+            'password_confirmation' => 'NEW-PASSWORD',
+        ]);
+
+        $response->assertRedirect($returnUrl)
+            ->assertSessionHasErrors('access_expires_at')
+            ->assertSessionHasInput('access_method', SiteInstallation::ACCESS_TEMP_LOGIN)
+            ->assertSessionHasInput('access_note', 'Please install in the morning');
+
+        foreach (['access_secret', 'current_password', 'password', 'password_confirmation'] as $field) {
+            $response->assertSessionMissing('_old_input.'.$field);
+        }
+
+        $this->assertStringNotContainsString('PRIVATE-HANDOVER', serialize(session()->all()));
+        $this->assertNull(SiteInstallation::sole()->access_secret);
+        $this->get($returnUrl)->assertOk()->assertDontSee('PRIVATE-HANDOVER');
+    }
+
     /** גישה אינה נמסרת על הזמנה שלא שולמה, ולא על הזמנה שלא ביקשה התקנה. */
     public function test_the_handover_is_refused_when_it_was_never_asked_for(): void
     {

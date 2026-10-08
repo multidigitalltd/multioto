@@ -44,5 +44,15 @@ return Application::configure(basePath: dirname(__DIR__))
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {
-        //
+        // Validation redirects keep useful form input in the session, but site
+        // access and integration credentials must never be copied there.
+        // dontFlash extends Laravel's existing password exclusions.
+        $exceptions->dontFlash([
+            'access_secret',
+            'wpscan_token',
+            'safe_browsing_key',
+            'urlhaus_auth_key',
+            'wordfence_api_key',
+            'google_client_secret',
+        ]);
     })->create();

@@ -34,6 +34,35 @@ class IntegrationKeysFallbackTest extends TestCase
         $this->assertArrayNotHasKey('security.safe_browsing_key', Setting::map());
     }
 
+    public function test_invalid_form_does_not_flash_integration_secrets(): void
+    {
+        $this->actingAs(User::factory()->create());
+        $secrets = [
+            'wpscan_token' => 'private-wpscan-token',
+            'safe_browsing_key' => 'private-safe-browsing-key',
+            'urlhaus_auth_key' => 'private-urlhaus-auth-key',
+            'wordfence_api_key' => 'private-wordfence-api-key',
+            'google_client_secret' => 'private-google-client-secret',
+        ];
+
+        $response = $this->post(route('integrations.security-keys.fallback'), [
+            ...$secrets,
+            'google_client_id' => '1234.apps.googleusercontent.com',
+            'google_allowed_domain' => str_repeat('x', 256),
+        ]);
+
+        $response->assertRedirect()
+            ->assertSessionHasErrors('google_allowed_domain')
+            ->assertSessionHasInput('google_client_id', '1234.apps.googleusercontent.com');
+
+        foreach ($secrets as $field => $value) {
+            $response->assertSessionMissing('_old_input.'.$field);
+            $this->assertStringNotContainsString($value, serialize(session()->all()));
+        }
+
+        $this->assertSame(0, Setting::count());
+    }
+
     /**
      * מפתחות ההתחברות עם גוגל נשמרים גם דרך הטופס הזה.
      *
