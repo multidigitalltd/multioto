@@ -241,11 +241,20 @@ return [
         'transcript_days' => (int) env('SITE_AGENT_ASSISTANT_TRANSCRIPT_DAYS', 7),
         // הנחיות קבועות מהצוות לכל שיחה — נערכות במסך ההגדרות של המוצר.
         'instructions' => (string) env('SITE_AGENT_ASSISTANT_INSTRUCTIONS', ''),
+        'persona' => (string) env('SITE_AGENT_ASSISTANT_PERSONA', ''),
+        'style' => (string) env('SITE_AGENT_ASSISTANT_STYLE', ''),
+        'work_rules' => (string) env('SITE_AGENT_ASSISTANT_WORK_RULES', ''),
         // מה הבוט אינו רשאי לעשות — מפתחות של SiteAgentPermissions, מופרדים בפסיק.
         'disabled_permissions' => (string) env('SITE_AGENT_DISABLED_PERMISSIONS', ''),
         'max_turns' => (int) env('SITE_AGENT_ASSISTANT_MAX_TURNS', 6),
         'budget_seconds' => (int) env('SITE_AGENT_ASSISTANT_BUDGET_SECONDS', 240),
         'tool_result_chars' => (int) env('SITE_AGENT_ASSISTANT_TOOL_RESULT_CHARS', 6000),
+        // Gemini keeps the static instructions/tools between requests. The
+        // provider TTL renews while used; live site reads are never cached here.
+        'cache' => [
+            'enabled' => (bool) env('SITE_AGENT_ASSISTANT_CACHE', true),
+            'ttl_minutes' => (int) env('SITE_AGENT_ASSISTANT_CACHE_TTL_MINUTES', 60),
+        ],
     ],
 
 ];

@@ -99,6 +99,17 @@ class SettingsServiceProvider extends ServiceProvider
         // Standing instructions the team gives the assistant, and how long the
         // conversations are kept to read back and improve them.
         'siteagent.instructions' => 'siteagent.assistant.instructions',
+        'siteagent.persona' => 'siteagent.assistant.persona',
+        'siteagent.style' => 'siteagent.assistant.style',
+        'siteagent.work_rules' => 'siteagent.assistant.work_rules',
+        'siteagent.history_messages' => 'siteagent.assistant.history_messages',
+        'siteagent.history_hours' => 'siteagent.assistant.history_hours',
+        'siteagent.history_chars' => 'siteagent.assistant.history_chars',
+        'siteagent.max_turns' => 'siteagent.assistant.max_turns',
+        'siteagent.budget_seconds' => 'siteagent.assistant.budget_seconds',
+        'siteagent.tool_result_chars' => 'siteagent.assistant.tool_result_chars',
+        'siteagent.cache_enabled' => 'siteagent.assistant.cache.enabled',
+        'siteagent.cache_ttl_minutes' => 'siteagent.assistant.cache.ttl_minutes',
         'siteagent.transcript_days' => 'siteagent.assistant.transcript_days',
         'siteagent.disabled_permissions' => 'siteagent.assistant.disabled_permissions',
         'waha.api_key' => 'billing.waha.api_key',
@@ -232,6 +243,17 @@ class SettingsServiceProvider extends ServiceProvider
         // Standing instructions the team gives the assistant, and how long the
         // conversations are kept to read back and improve them.
         'siteagent.instructions' => 'siteagent.assistant.instructions',
+        'siteagent.persona' => 'siteagent.assistant.persona',
+        'siteagent.style' => 'siteagent.assistant.style',
+        'siteagent.work_rules' => 'siteagent.assistant.work_rules',
+        'siteagent.history_messages' => 'siteagent.assistant.history_messages',
+        'siteagent.history_hours' => 'siteagent.assistant.history_hours',
+        'siteagent.history_chars' => 'siteagent.assistant.history_chars',
+        'siteagent.max_turns' => 'siteagent.assistant.max_turns',
+        'siteagent.budget_seconds' => 'siteagent.assistant.budget_seconds',
+        'siteagent.tool_result_chars' => 'siteagent.assistant.tool_result_chars',
+        'siteagent.cache_enabled' => 'siteagent.assistant.cache.enabled',
+        'siteagent.cache_ttl_minutes' => 'siteagent.assistant.cache.ttl_minutes',
         'siteagent.transcript_days' => 'siteagent.assistant.transcript_days',
         'siteagent.disabled_permissions' => 'siteagent.assistant.disabled_permissions',
     ];
@@ -262,6 +284,7 @@ class SettingsServiceProvider extends ServiceProvider
         'agent.system_actions_enabled',
         'siteagent.enabled',
         'siteagent.template_verification_copy_button',
+        'siteagent.cache_enabled',
     ];
 
     /** Pristine config-file defaults for RESET_ON_CLEAR keys, memoized once. */

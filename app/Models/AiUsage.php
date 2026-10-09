@@ -6,11 +6,12 @@ use Illuminate\Database\Eloquent\Model;
 
 /**
  * A day's token usage for one AI model. Rows accumulate as the agent runs; the
- * cost is derived at read time from the model's price (config billing.ai.pricing),
- * so re-pricing never requires a backfill.
+ * normal-rate cost estimate is derived at read time from the model's price
+ * (config billing.ai.pricing), without cache discounts or storage charges.
  *
  * @property string $model
  * @property int $input_tokens
+ * @property int $cached_input_tokens
  * @property int $output_tokens
  * @property int $requests
  */
@@ -18,7 +19,7 @@ class AiUsage extends Model
 {
     protected $table = 'ai_usage_daily';
 
-    protected $fillable = ['date', 'provider', 'model', 'input_tokens', 'output_tokens', 'requests'];
+    protected $fillable = ['date', 'provider', 'model', 'input_tokens', 'cached_input_tokens', 'output_tokens', 'requests'];
 
     // NB: `date` is kept as a plain 'Y-m-d' string (no date cast). A cast would
     // serialize to 'Y-m-d H:i:s', so firstOrCreate() on a 'Y-m-d' key would miss
@@ -28,8 +29,9 @@ class AiUsage extends Model
     /**
      * Add one call's token counts to today's row for this model. Best-effort:
      * usage accounting must never break an AI call, so failures are swallowed.
+     * Cached input is a reported subset of input, never additional tokens.
      */
-    public static function record(string $provider, string $model, int $inputTokens, int $outputTokens): void
+    public static function record(string $provider, string $model, int $inputTokens, int $outputTokens, int $cachedInputTokens = 0): void
     {
         try {
             $row = static::query()->firstOrCreate(
@@ -42,6 +44,10 @@ class AiUsage extends Model
             }
             if ($outputTokens > 0) {
                 $row->increment('output_tokens', $outputTokens);
+            }
+            $cachedInputTokens = min(max(0, $inputTokens), max(0, $cachedInputTokens));
+            if ($cachedInputTokens > 0) {
+                $row->increment('cached_input_tokens', $cachedInputTokens);
             }
         } catch (\Throwable) {
             // Deliberately ignored — accounting is not worth failing a request for.
@@ -70,7 +76,7 @@ class AiUsage extends Model
         return [(float) ($fallback[0] ?? 0), (float) ($fallback[1] ?? 0)];
     }
 
-    /** USD cost of this row, from its model's price. */
+    /** Illustrative USD estimate at normal rates; excludes cache discounts and storage charges. */
     public function costUsd(): float
     {
         [$in, $out] = self::priceFor((string) $this->model);
@@ -81,17 +87,18 @@ class AiUsage extends Model
     /**
      * Aggregate cost + tokens across all rows since $since (null = all time).
      *
-     * @return array{usd: float, input_tokens: int, output_tokens: int, requests: int}
+     * @return array{usd: float, input_tokens: int, cached_input_tokens: int, output_tokens: int, requests: int}
      */
     public static function totals(?\DateTimeInterface $since = null): array
     {
         $rows = static::query()
             ->when($since, fn ($q) => $q->where('date', '>=', $since->format('Y-m-d')))
-            ->get(['model', 'input_tokens', 'output_tokens', 'requests']);
+            ->get(['model', 'input_tokens', 'cached_input_tokens', 'output_tokens', 'requests']);
 
         return [
             'usd' => round($rows->sum(fn (self $r): float => $r->costUsd()), 4),
             'input_tokens' => (int) $rows->sum('input_tokens'),
+            'cached_input_tokens' => (int) $rows->sum('cached_input_tokens'),
             'output_tokens' => (int) $rows->sum('output_tokens'),
             'requests' => (int) $rows->sum('requests'),
         ];
@@ -100,7 +107,7 @@ class AiUsage extends Model
     /**
      * Per-model cost breakdown since $since, most expensive first.
      *
-     * @return list<array{model: string, usd: float, input_tokens: int, output_tokens: int, requests: int}>
+     * @return list<array{model: string, usd: float, input_tokens: int, cached_input_tokens: int, output_tokens: int, requests: int}>
      */
     public static function byModel(?\DateTimeInterface $since = null): array
     {
@@ -108,6 +115,7 @@ class AiUsage extends Model
             ->when($since, fn ($q) => $q->where('date', '>=', $since->format('Y-m-d')))
             ->select('model')
             ->selectRaw('SUM(input_tokens) as input_tokens')
+            ->selectRaw('SUM(cached_input_tokens) as cached_input_tokens')
             ->selectRaw('SUM(output_tokens) as output_tokens')
             ->selectRaw('SUM(requests) as requests')
             ->groupBy('model')
@@ -119,6 +127,7 @@ class AiUsage extends Model
                     'model' => (string) $r->model,
                     'usd' => round($usage->costUsd(), 4),
                     'input_tokens' => (int) $r->input_tokens,
+                    'cached_input_tokens' => (int) $r->cached_input_tokens,
                     'output_tokens' => (int) $r->output_tokens,
                     'requests' => (int) $r->requests,
                 ];

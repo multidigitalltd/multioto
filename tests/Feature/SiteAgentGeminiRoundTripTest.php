@@ -6,6 +6,7 @@ use App\Models\Customer;
 use App\Models\Site;
 use App\Models\SiteAgentRequest;
 use App\Models\SiteAgentSubscriber;
+use App\Services\Ai\ClaudeClient;
 use App\Services\SiteAgent\SiteActionProposer;
 use App\Services\SiteAgent\SiteAgentConversation;
 use App\Services\SiteAgent\SiteAgentToolbox;
@@ -23,7 +24,7 @@ class SiteAgentGeminiRoundTripTest extends TestCase
     use RefreshDatabase;
 
     #[DataProvider('approvalStates')]
-    public function test_free_form_text_reaches_gemini_and_site_writes_wait_for_approval(bool $changedSincePreview): void
+    public function test_free_form_text_reaches_gemini_and_site_writes_wait_for_approval(bool $changedSincePreview, bool $cached): void
     {
         config([
             'billing.ai.enabled' => true, 'billing.ai.api_key' => 'test-key',
@@ -31,6 +32,7 @@ class SiteAgentGeminiRoundTripTest extends TestCase
             'billing.ai.base_url' => 'https://generativelanguage.googleapis.com',
             'siteagent.enabled' => true, 'siteagent.assistant.enabled' => true,
             'siteagent.assistant.disabled_permissions' => '',
+            'siteagent.assistant.cache.enabled' => $cached,
         ]);
         Cache::flush();
         Http::preventStrayRequests();
@@ -54,11 +56,32 @@ class SiteAgentGeminiRoundTripTest extends TestCase
         $reads = [];
         $writes = [];
         $approvalSent = false;
+        $cacheCreates = 0;
+        $catalogWire = null;
 
         Http::fake([
-            'generativelanguage.googleapis.com/*' => function (Request $request) use (&$modelTurns, $message) {
+            'generativelanguage.googleapis.com/v1beta/cachedContents' => function (Request $request) use (&$cacheCreates, &$catalogWire, $cached) {
+                $this->assertTrue($cached);
+                $this->assertSame('POST', $request->method());
+                $cacheCreates++;
+                $catalogWire = json_decode($request->body());
+
+                return Http::response([
+                    'name' => 'cachedContents/test-catalog',
+                    'model' => 'models/gemini-flash-latest',
+                    'expireTime' => now()->addHour()->toIso8601String(),
+                    'usageMetadata' => ['totalTokenCount' => 12000],
+                ]);
+            },
+            'generativelanguage.googleapis.com/v1beta/models/*:generateContent' => function (Request $request) use (&$modelTurns, $message, $cached, &$catalogWire) {
                 $data = json_decode($request->body(), true);
-                $tools = data_get($data, 'tools.0.functionDeclarations');
+                if ($cached) {
+                    $this->assertSame('cachedContents/test-catalog', $data['cachedContent'] ?? null);
+                    $this->assertArrayNotHasKey('tools', $data);
+                    $this->assertArrayNotHasKey('systemInstruction', $data);
+                }
+                $wire = $cached ? $catalogWire : json_decode($request->body());
+                $tools = json_decode(json_encode($wire->tools[0]->functionDeclarations), true);
                 $this->assertGreaterThan(65, count($tools));
                 $this->assertContains('propose_acf_update', array_column($tools, 'name'));
                 foreach ($tools as $tool) {
@@ -69,7 +92,6 @@ class SiteAgentGeminiRoundTripTest extends TestCase
                 if ($modelTurns === 1) {
                     // Associative decoding hides the difference between {} and
                     // []; inspect the actual serialized catalog as JSON objects.
-                    $wire = json_decode($request->body());
                     foreach ($wire->tools[0]->functionDeclarations as $declaration) {
                         $this->assertInstanceOf(\stdClass::class, $declaration->parametersJsonSchema);
                         $this->assertSame([], $this->invalidSchemaMaps($declaration->parametersJsonSchema), $declaration->name);
@@ -120,8 +142,11 @@ class SiteAgentGeminiRoundTripTest extends TestCase
             },
         ]);
 
+        $ai = app(ClaudeClient::class);
+        $this->app->instance(ClaudeClient::class, $ai);
         $preview = app(SiteAgentConversation::class)->handle($subscriber, $message, 'free-form-message');
-        $pending = SiteAgentRequest::sole();
+        $pending = SiteAgentRequest::first();
+        $this->assertNotNull($pending, $ai->lastError() ?? $preview);
         $this->assertSame(SiteAgentRequest::AWAITING, $pending->state);
         $this->assertSame(SiteAgentRequest::OP_PRODUCT, $pending->operation);
         $this->assertStringContainsString('חולצה כחולה', $preview);
@@ -138,6 +163,7 @@ class SiteAgentGeminiRoundTripTest extends TestCase
         $approvalSent = true;
         $reply = app(SiteAgentConversation::class)->handle($subscriber, 'כן', 'separate-approval');
         $this->assertSame(3, $modelTurns, 'Approval is handled by code, not another model call.');
+        $this->assertSame($cached ? 1 : 0, $cacheCreates, 'A cached catalog is created once for all model rounds.');
         $this->assertContains('wc_product_get', array_slice($reads, 2), 'The price is read again at approval.');
 
         if ($changedSincePreview) {
@@ -183,6 +209,11 @@ class SiteAgentGeminiRoundTripTest extends TestCase
 
     public static function approvalStates(): array
     {
-        return ['approved while unchanged' => [false], 'changed before approval' => [true]];
+        return [
+            'approved while unchanged' => [false, false],
+            'changed before approval' => [true, false],
+            'cached catalog, approved while unchanged' => [false, true],
+            'cached catalog, changed before approval' => [true, true],
+        ];
     }
 }

@@ -195,7 +195,7 @@ class ClaudeClient
      * @param  list<array<string, mixed>>  $tools  Anthropic tool definitions.
      * @param  callable(string, array<string, mixed>): array{content: string, is_error?: bool}  $handler
      */
-    public function converse(string $system, string $prompt, array $tools, callable $handler, int $maxTurns = 6): ?string
+    public function converse(string $system, string $prompt, array $tools, callable $handler, int $maxTurns = 6, ?string $cacheScope = null): ?string
     {
         $this->lastError = null;
 
@@ -203,12 +203,17 @@ class ClaudeClient
             return null;
         }
 
-        $system = $this->withCurrentTime($system);
+        if ($cacheScope !== null && config('billing.ai.provider') === 'google') {
+            // The clock is per request, never part of a reusable provider prefix.
+            $prompt = $this->withCurrentTime('')."\n\n".$prompt;
+        } else {
+            $system = $this->withCurrentTime($system);
+        }
 
         try {
             return match (config('billing.ai.provider', 'anthropic')) {
                 'openai' => $this->converseOpenai($system, $prompt, $tools, $handler, $maxTurns),
-                'google' => $this->converseGoogle($system, $prompt, $tools, $handler, $maxTurns),
+                'google' => $this->converseGoogle($system, $prompt, $tools, $handler, $maxTurns, $cacheScope),
                 default => $this->converseAnthropic($system, $prompt, $tools, $handler, $maxTurns),
             };
         } catch (\Throwable $e) {
@@ -360,7 +365,7 @@ class ClaudeClient
      * @param  list<array<string, mixed>>  $tools  Anthropic-style tool defs (name/description/input_schema).
      * @param  callable(string, array<string, mixed>): array{content: string, is_error?: bool}  $handler
      */
-    private function converseGoogle(string $system, string $prompt, array $tools, callable $handler, int $maxTurns): ?string
+    private function converseGoogle(string $system, string $prompt, array $tools, callable $handler, int $maxTurns, ?string $cacheScope = null): ?string
     {
         $config = config('billing.ai');
         $model = rawurlencode(preg_replace('#^models/#', '', trim((string) $config['model'])));
@@ -376,17 +381,37 @@ class ClaudeClient
             'parametersJsonSchema' => $t['input_schema'] ?? null,
         ], fn ($v): bool => $v !== null), $tools);
 
+        $prefix = [
+            'systemInstruction' => ['parts' => [['text' => $system]]],
+            'tools' => [['functionDeclarations' => array_values($declarations)]],
+        ];
+        $base = $this->googleBase($config['base_url'] ?? null);
+        $cache = app(GeminiContextCache::class);
+        $cached = $cacheScope !== null
+            ? $cache->acquire($cacheScope, $base, (string) $config['model'], (string) $config['api_key'], $system, $prefix['tools'])
+            : null;
         $contents = [['role' => 'user', 'parts' => [['text' => $prompt]]]];
 
         for ($turn = 0; $turn < $maxTurns; $turn++) {
-            $response = Http::baseUrl($this->googleBase($config['base_url'] ?? null))
+            if ($cached !== null && ! $cache->usable($cached)) {
+                // Another worker may already have renewed this resource. A
+                // locally old handle is not evidence the provider rejected it.
+                $cached = null;
+            }
+            $send = fn (array $static): Response => Http::baseUrl($base)
                 ->withHeaders(['x-goog-api-key' => $config['api_key']])
                 ->timeout(90)
-                ->post("/v1beta/models/{$model}:generateContent", [
-                    'systemInstruction' => ['parts' => [['text' => $system]]],
-                    'contents' => $contents,
-                    'tools' => [['functionDeclarations' => array_values($declarations)]],
-                ]);
+                ->post("/v1beta/models/{$model}:generateContent", [...$static, 'contents' => $contents]);
+            // Google forbids tools/systemInstruction beside cachedContent.
+            $response = $send($cached !== null ? ['cachedContent' => $cached['name']] : $prefix);
+
+            if ($cached !== null && $cache->isReferenceFailure($response)) {
+                $cache->reject($cached);
+                $cached = null;
+                // Retry only this unprocessed model request, with identical
+                // accumulated contents. Prior tool handlers are never repeated.
+                $response = $send($prefix);
+            }
 
             if ($response->failed()) {
                 $this->logFailure('google', $response->status(), $response->body());
@@ -492,18 +517,23 @@ class ClaudeClient
             ],
         };
 
+        $cachedInput = config('billing.ai.provider') === 'google'
+            ? min(max(0, $input), max(0, (int) $response->json('usageMetadata.cachedContentTokenCount', 0)))
+            : 0;
+
         AiUsage::record(
             (string) config('billing.ai.provider'),
             (string) config('billing.ai.model'),
             $input,
             $output,
+            $cachedInput,
         );
 
         // Booked to the customer too, when the call was made on their behalf.
         $customerId = app(AiUsageAttribution::class)->current();
 
         if ($customerId !== null) {
-            AiCustomerUsage::record($customerId, (string) config('billing.ai.provider'), (string) config('billing.ai.model'), $input, $output);
+            AiCustomerUsage::record($customerId, (string) config('billing.ai.provider'), (string) config('billing.ai.model'), $input, $output, $cachedInput);
         }
     }
 

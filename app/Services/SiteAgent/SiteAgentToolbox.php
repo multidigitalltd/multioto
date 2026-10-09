@@ -205,7 +205,7 @@ class SiteAgentToolbox
             return ['content' => str_starts_with($pluginTool, 'ld_') ? 'לא ניתן לקרוא את מידע LearnDash באתר. נסו לקרוא שוב לאחר בדיקת החיבור והיכולות.' : Str::limit($e->getMessage(), 400), 'is_error' => true, 'ids' => []];
         }
 
-        $limit = max(1000, (int) config('siteagent.assistant.tool_result_chars', 6000));
+        $limit = min(12000, max(1000, (int) config('siteagent.assistant.tool_result_chars', 6000)));
 
         if ($pluginTool === 'wp_error_log_tail') {
             $text = $this->redact($text);

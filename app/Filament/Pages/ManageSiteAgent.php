@@ -7,10 +7,13 @@ use App\Filament\Concerns\AdminOnly;
 use App\Filament\Concerns\PersistsSettings;
 use App\Filament\Resources\SiteAgentMessageResource;
 use App\Models\Setting;
+use App\Services\Ai\GeminiContextCache;
 use App\Services\SiteAgent\InboundChannelHealth;
 use App\Services\SiteAgent\SiteAgentAssistant;
 use App\Services\SiteAgent\SiteAgentPermissions;
 use App\Services\SiteAgent\SiteAgentProduct;
+use Filament\Forms\Components\Actions;
+use Filament\Forms\Components\Actions\Action;
 use Filament\Forms\Components\CheckboxList;
 use Filament\Forms\Components\Placeholder;
 use Filament\Forms\Components\Section;
@@ -25,6 +28,7 @@ use Filament\Pages\Page;
 use Filament\Pages\SubNavigationPosition;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\HtmlString;
+use Throwable;
 
 /**
  * בוט ניהול אתר — הגדרות המוצר.
@@ -87,6 +91,16 @@ class ManageSiteAgent extends Page implements HasForms
         'siteagent.template_report',
         'siteagent.binding_ttl_minutes',
         'siteagent.instructions',
+        'siteagent.persona',
+        'siteagent.style',
+        'siteagent.work_rules',
+        'siteagent.history_messages',
+        'siteagent.history_hours',
+        'siteagent.history_chars',
+        'siteagent.max_turns',
+        'siteagent.budget_seconds',
+        'siteagent.tool_result_chars',
+        'siteagent.cache_ttl_minutes',
         'siteagent.transcript_days',
     ];
 
@@ -111,6 +125,17 @@ class ManageSiteAgent extends Page implements HasForms
                 'template_report' => config('siteagent.whatsapp.templates.report_ready'),
                 'binding_ttl_minutes' => config('siteagent.binding.verification_ttl_minutes'),
                 'instructions' => config('siteagent.assistant.instructions'),
+                'persona' => config('siteagent.assistant.persona'),
+                'style' => config('siteagent.assistant.style'),
+                'work_rules' => config('siteagent.assistant.work_rules'),
+                'history_messages' => config('siteagent.assistant.history_messages'),
+                'history_hours' => config('siteagent.assistant.history_hours'),
+                'history_chars' => config('siteagent.assistant.history_chars'),
+                'max_turns' => config('siteagent.assistant.max_turns'),
+                'budget_seconds' => config('siteagent.assistant.budget_seconds'),
+                'tool_result_chars' => config('siteagent.assistant.tool_result_chars'),
+                'cache_enabled' => (bool) config('siteagent.assistant.cache.enabled', true),
+                'cache_ttl_minutes' => config('siteagent.assistant.cache.ttl_minutes'),
                 'transcript_days' => config('siteagent.assistant.transcript_days'),
                 'allowed' => array_values(array_diff(array_keys(SiteAgentPermissions::GROUPS), app(SiteAgentPermissions::class)->disabled())),
             ],
@@ -277,11 +302,38 @@ class ManageSiteAgent extends Page implements HasForms
                             ->bulkToggleable(),
                     ]),
 
-                Section::make('הנחיות ל-AI')
-                    ->description('מה שנכתב כאן מצורף לכל שיחה של הבוט, בכל האתרים. לכוונון סגנון והרגלים — לא לעקיפת כללי הבטיחות: שינוי באתר עדיין קורה רק אחרי "כן", ובסתירה הכללים הקבועים גוברים.')
+                Section::make('זהות הסוכן וסגנון השיחה')
+                    ->description('ההנחיות חלות על בוט ניהול האתר בכל האתרים. הן מכוונות את אופן השיחה והעבודה; הרשאות האתר והצגת השינוי לאישור "כן" נשארות בתוקף.')
                     ->schema([
+                        Textarea::make('siteagent.persona')
+                            ->label('זהות ותפקיד')
+                            ->rule('string')
+                            ->rows(5)
+                            ->maxLength(SiteAgentAssistant::INSTRUCTIONS_MAX_CHARS)
+                            ->placeholder('למשל: אתה עוזר אישי לבעלי אתרים. הסבר בשפה פשוטה ועזור להפוך את הבקשה שלהם לשינוי ברור.')
+                            ->helperText('איך הסוכן מציג את תפקידו ולמי הוא עוזר. ריק = התנהגות ברירת המחדל.'),
+                        Textarea::make('siteagent.style')
+                            ->label('סגנון התשובות')
+                            ->rule('string')
+                            ->rows(5)
+                            ->maxLength(SiteAgentAssistant::INSTRUCTIONS_MAX_CHARS)
+                            ->placeholder("למשל:\n• כתוב תשובות קצרות וטבעיות.\n• פנה בלשון רבים.\n• שאל שאלת הבהרה אחת בכל פעם.")
+                            ->helperText('טון, אורך התשובות, שפה וצורת הפנייה. ריק = התנהגות ברירת המחדל.'),
+                    ]),
+
+                Section::make('הנחיות עבודה עם האתר')
+                    ->description('אפשר לקבוע איך לברר פרטים, לקרוא מידע ולהציג הצעות. הסוכן ממשיך להשתמש רק בכלים ובהרשאות הזמינים לאתר, ואינו רשאי לבצע שינוי לפני אישור.')
+                    ->schema([
+                        Textarea::make('siteagent.work_rules')
+                            ->label('כללי עבודה')
+                            ->rule('string')
+                            ->rows(7)
+                            ->maxLength(SiteAgentAssistant::INSTRUCTIONS_MAX_CHARS)
+                            ->placeholder("למשל:\n• לפני הצעת מבצע, ברר מתי הוא אמור להסתיים.\n• כשיש כמה עמודים מתאימים, הצג אפשרויות לבחירה.\n• הצג את הטקסט הקיים ואת הטקסט המוצע.")
+                            ->helperText('העדפות עבודה קבועות. הן אינן מרחיבות הרשאות או מבטלות אישור ושחזור.'),
                         Textarea::make('siteagent.instructions')
-                            ->label('הנחיות קבועות')
+                            ->label('הנחיות נוספות')
+                            ->rule('string')
                             ->rows(8)
                             ->maxLength(SiteAgentAssistant::INSTRUCTIONS_MAX_CHARS)
                             ->placeholder("למשל:\n• פתח כל תשובה על מכירות בסכום הכולל, ורק אחר כך פירוט.\n• כשמבקשים \"מבצע\" בלי אחוז — שאל כמה אחוז, אל תציע 10%.\n• פנה בלשון רבים.")
@@ -289,6 +341,17 @@ class ManageSiteAgent extends Page implements HasForms
                                 'כדי לראות מה עבד ומה לא — <a class="underline" href="'.e(SiteAgentMessageResource::getUrl()).'">שיחות הבוט</a>: מה בעלי האתרים כתבו ומה הבוט ענה.'
                             ))
                             ->columnSpanFull(),
+                    ]),
+
+                Section::make('זיכרון השיחה')
+                    ->description('כמה מהשיחה האחרונה לצרף לבקשה כדי להבין המשכים ותיקונים. ההקשר נשמר בנפרד לכל לקוח ואתר; הרחבתו עשויה להוסיף עלות וזמן תגובה.')
+                    ->schema([
+                        $this->boundedInteger('history_messages', 'מספר הודעות קודמות', 0, 80, 40)
+                            ->helperText('עד 80 הודעות. 0 = ללא היסטוריית שיחה. פרטי האישור הנוכחי עדיין נשמרים.'),
+                        $this->boundedInteger('history_hours', 'טווח ההיסטוריה (שעות)', 1, 2160, 168)
+                            ->helperText('ברירת המחדל היא שבוע. ניתן לקרוא רק הודעות שעדיין נשמרות לפי תקופת השמירה.'),
+                        $this->boundedInteger('history_chars', 'תקרת תווים בהקשר השיחה', 0, 48000, 24000)
+                            ->helperText('מגביל את ההיסטוריה ותוצאות הפעולות האחרונות. 0 = ללא היסטוריית שיחה.'),
                         TextInput::make('siteagent.transcript_days')
                             ->label('כמה ימים לשמור את השיחות')
                             ->numeric()
@@ -299,12 +362,100 @@ class ManageSiteAgent extends Page implements HasForms
                             ->live(onBlur: true)
                             ->helperText('השיחות מכילות פרטים של לקוחות הקצה (שמות, טלפונים, הזמנות), ולכן נמחקות אחרי התקופה הזו. 30 יום מספיקים בדרך כלל כדי ללמוד מהן; עד 90.'),
                     ])->columns(2),
+
+                Section::make('גבולות העבודה לכל הודעה')
+                    ->description('הגבולות מונעים מבקשה אחת להחזיק את השיחה זמן רב. ערכים גבוהים מאפשרים בירור מורכב יותר ועשויים להגדיל את עלות השימוש ואת ההמתנה.')
+                    ->schema([
+                        $this->boundedInteger('max_turns', 'סבבי עבודה מול ה-AI', 2, 10, 6)
+                            ->helperText('סבב כולל תשובת מודל ויכול לכלול בקשות לקריאת מידע מהאתר.'),
+                        $this->boundedInteger('budget_seconds', 'חלון זמן לקריאות כלים (שניות)', 30, 240, 240)
+                            ->helperText('בין 30 ל־240 שניות. בסיום החלון לא מתחילות קריאות כלים נוספות; קריאה שכבר התחילה והתשובה המסכמת עשויות להסתיים מאוחר יותר.'),
+                        $this->boundedInteger('tool_result_chars', 'אורך תשובות כלי קריאה רגילים (תווים)', 1000, 12000, 6000)
+                            ->helperText('מגביל את המידע מקריאות רגילות שנשלח למודל. לקריאות מובנות כמו שדות ACF, מבצעי קטגוריה ו־LearnDash יש גבולות נפרדים כדי לשמור על שלמות הנתונים.'),
+                    ])->columns(2),
+
+                Section::make('מטמון ההנחיות וקטלוג הכלים')
+                    ->description('ב־Gemini ניתן לשמור אצל הספק את ההנחיות הקבועות ואת קטלוג הכלים לשימוש חוזר. נתוני האתר ותשובות לקריאות חיות נבדקים מחדש לפי הבקשה.')
+                    ->schema([
+                        Toggle::make('siteagent.cache_enabled')
+                            ->label('הפעלת מטמון קבוע בין בקשות')
+                            ->rule('boolean')
+                            ->helperText('המטמון מתחדש בזמן שימוש ונבנה מחדש כשההנחיות, הכלים או ההרשאות משתנים. זמינותו תלויה בספק ובמודל.'),
+                        $this->boundedInteger('cache_ttl_minutes', 'תוקף המטמון אצל הספק (דקות)', 15, 1440, 60)
+                            ->helperText('תוקף מתחדש, בין 15 דקות ליום. Gemini גובה גם על אחסון המטמון; תוקף ארוך יותר משאיר אותו זמין בין שיחות ומגדיל את עלות האחסון.'),
+                        Placeholder::make('assistant_cache_provider')
+                            ->label('ספק ומודל שמורים')
+                            ->content(fn (): string => (string) config('billing.ai.provider').' · '.(string) config('billing.ai.model'))
+                            ->helperText('הספק והמודל נבחרים בהגדרות ה־AI.'),
+                        Placeholder::make('assistant_cache_status')
+                            ->label('מצב המטמון בשימוש האחרון')
+                            ->content(fn (): string => $this->assistantCacheStatus())
+                            ->helperText('החיווי מתייחס לקריאה האחרונה בהגדרות השמורות, ואינו מעיד שכבר נוצר מטמון לכל האתרים.'),
+                        Actions::make([
+                            Action::make('rebuildAssistantCache')
+                                ->label('בנייה מחדש בשימוש הבא')
+                                ->icon('heroicon-o-arrow-path')
+                                ->action(fn () => $this->rebuildAssistantCache()),
+                        ])->columnSpanFull(),
+                        Placeholder::make('assistant_cache_rebuild_help')
+                            ->label('לאחר בקשת בנייה מחדש')
+                            ->content('המטמון החדש ייבנה בפנייה הבאה לבוט. עותקים קודמים אצל הספק יפוגו לפי התוקף שלהם; עלות האחסון שלהם נמשכת עד אז. שינויים בטופס נכנסים לתוקף רק לאחר שמירה.')
+                            ->columnSpanFull(),
+                    ])->columns(2),
             ])
             ->statePath('data');
     }
 
+    /** Present enum-only metadata; never expose provider resource names or errors. */
+    public function assistantCacheStatus(): string
+    {
+        abort_unless(static::canAccess(), 403);
+
+        $status = app(GeminiContextCache::class)->status();
+
+        return match ($status['state'] ?? 'idle') {
+            'disabled' => 'המטמון כבוי בהגדרות השמורות.',
+            'unsupported_provider' => 'המטמון המפורש זמין כרגע עבור Gemini בלבד. הסוכן ממשיך לפעול עם הספק שנבחר.',
+            'active' => 'קיים מטמון תקף שנמצא או חודש בפנייה האחרונה. תוקפו מתחדש בזמן שימוש.',
+            'fallback' => match ($status['reason'] ?? null) {
+                'prefix_too_short' => 'ההנחיות והכלים קצרים מדרישת המינימום של המודל; הבקשה נשלחת ללא מטמון.',
+                'model_unsupported' => 'המודל שנבחר אינו תומך במטמון הזה; הבקשה נשלחת ללא מטמון.',
+                default => 'המטמון לא היה זמין בקריאה האחרונה; הסוכן ממשיך לשלוח את ההנחיות והכלים ללא מטמון.',
+            },
+            default => ($status['reason'] ?? null) === 'expired'
+                ? 'תוקף המטמון הקודם הסתיים. מטמון חדש ייבנה בשימוש הבא, אם הספק והמודל תומכים בכך.'
+                : 'עדיין אין שימוש מתועד במטמון עבור ההגדרות השמורות. הוא ייבנה בפנייה הבאה לבוט, אם הספק והמודל תומכים בכך.',
+        };
+    }
+
+    /** Invalidate local references only; the next queued request rebuilds them. */
+    public function rebuildAssistantCache(): void
+    {
+        abort_unless(static::canAccess(), 403);
+
+        try {
+            app(GeminiContextCache::class)->invalidate();
+        } catch (Throwable) {
+            Notification::make()
+                ->title('לא ניתן לבקש בנייה מחדש כרגע')
+                ->body('המטמון המקומי אינו זמין. אפשר לנסות שוב; שיחות הבוט ממשיכות לפעול.')
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        Notification::make()
+            ->title('המטמון ייבנה מחדש בשימוש הבא')
+            ->body('עותקים קודמים אצל הספק יפוגו לפי התוקף שלהם.')
+            ->success()
+            ->send();
+    }
+
     public function save(): void
     {
+        abort_unless(static::canAccess(), 403);
+
         // Validated state, not the raw component data: the field rules are the
         // only thing standing between a replayed Livewire request and a code
         // lifetime of minus one, or of a year. Reading $this->data straight
@@ -312,6 +463,7 @@ class ManageSiteAgent extends Page implements HasForms
         $state = $this->form->getState();
 
         Setting::put('siteagent.enabled', data_get($state, 'siteagent.enabled') ? '1' : '0');
+        Setting::put('siteagent.cache_enabled', data_get($state, 'siteagent.cache_enabled') ? '1' : '0');
         Setting::put(
             'siteagent.template_verification_copy_button',
             data_get($state, 'siteagent.template_verification_copy_button') ? '1' : '0',
@@ -380,6 +532,18 @@ class ManageSiteAgent extends Page implements HasForms
             ->title('הגדרות בוט ניהול האתר נשמרו')
             ->success()
             ->send();
+    }
+
+    /** Optional numeric overrides return to their config default when cleared. */
+    protected function boundedInteger(string $key, string $label, int $min, int $max, int $default): TextInput
+    {
+        return TextInput::make('siteagent.'.$key)
+            ->label($label)
+            ->numeric()
+            ->rule('integer')
+            ->minValue($min)
+            ->maxValue($max)
+            ->placeholder((string) $default);
     }
 
     /** Is there a stored value behind this blank secret field? */

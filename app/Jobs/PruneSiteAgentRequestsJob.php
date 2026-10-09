@@ -46,7 +46,7 @@ class PruneSiteAgentRequestsJob implements ShouldQueue
     /** The conversation memory, past the few days it is kept for. */
     private function forgetTranscript(): void
     {
-        $days = max(1, (int) config('siteagent.assistant.transcript_days', 7));
+        $days = min(90, max(1, (int) config('siteagent.assistant.transcript_days', 7)));
 
         SiteAgentMessage::query()
             ->where('created_at', '<', now()->subDays($days))
