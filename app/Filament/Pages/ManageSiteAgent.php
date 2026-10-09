@@ -70,6 +70,16 @@ class ManageSiteAgent extends Page implements HasForms
 
     protected static string $view = 'filament.pages.manage-site-agent';
 
+    protected function getHeaderActions(): array
+    {
+        return [
+            \Filament\Actions\Action::make('evaluation')
+                ->label('בדיקות הבוט')
+                ->icon('heroicon-o-beaker')
+                ->url(SiteAgentEvaluation::getUrl()),
+        ];
+    }
+
     /**
      * Setting key => whether a blank field erases the override.
      *
