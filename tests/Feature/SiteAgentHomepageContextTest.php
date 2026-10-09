@@ -148,6 +148,30 @@ class SiteAgentHomepageContextTest extends TestCase
         $this->assertNotContains('wp_site_settings_get', array_column($this->calls, 0));
     }
 
+    #[DataProvider('excludedHomepageRequests')]
+    public function test_a_homepage_exclusion_does_not_bind_the_changed_page_to_the_homepage(string $message): void
+    {
+        $subscriber = $this->subscriber();
+        $result = app(SiteActionProposer::class)->propose($subscriber->site, 'propose_text_edit',
+            ['id' => 7, 'action' => 'replace', 'find' => 'איזה כייף', 'text' => 'כמה נחמד'], [7], $message);
+
+        $this->assertArrayNotHasKey('error', $result);
+        $this->assertArrayNotHasKey('front_page', $result['plan']);
+        $this->assertSame(7, $result['plan']['page_id']);
+        $this->assertNotContains('wp_site_settings_get', array_column($this->calls, 0));
+    }
+
+    public static function excludedHomepageRequests(): array
+    {
+        return [
+            ['אני מתכוונת לעמוד צור קשר, לא לדף הבית.'],
+            ['רגע, התכוונתי לצור קשר. תשאיר את דף הבית כמו שהוא ותשנה רק בצור קשר.'],
+            ['אל תשנה את דף הבית. תחליף רק בצור קשר.'],
+            ['בעמוד אודות ולא בעמוד הבית להחליף את הטקסט.'],
+            ["תעדכן את דף הבית\nשאלת הבהרה: איזה טקסט?\nתשובת בעל האתר: החלף בצור קשר, לא בדף הבית."],
+        ];
+    }
+
     public function test_legacy_callers_can_still_propose_a_named_page_edit(): void
     {
         $subscriber = $this->subscriber();

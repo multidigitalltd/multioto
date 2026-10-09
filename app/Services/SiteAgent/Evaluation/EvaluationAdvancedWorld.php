@@ -224,7 +224,7 @@ final class EvaluationAdvancedWorld
             $this->require(is_array($operations) && array_is_list($operations) && count($operations) >= 1 && count($operations) <= 30, 'פעולות ACF אינן תקינות.');
             $after = $before;
             foreach ($operations as $operation) {
-                $after = $this->patch($after, $operation['path'] ?? null, $operation);
+                $after = $this->patch($field, $after, $operation['path'] ?? null, $operation);
                 $this->validateAcf($fieldKey, $after, $state);
             }
 
@@ -262,13 +262,28 @@ final class EvaluationAdvancedWorld
             ['key' => 'field_api_key', 'name' => 'api_key', 'label' => 'מפתח API מוגן', 'type' => 'password', 'editable' => false]];
     }
 
-    private function patch(mixed $value, mixed $path, array $operation): mixed
+    private function patch(array $field, mixed $value, mixed $path, array $operation): mixed
     {
         $this->require(is_array($path) && array_is_list($path) && count($path) <= 16, 'נתיב ACF אינו תקין.');
+        $this->require(($field['editable'] ?? false) === true, 'שדה ACF מוגן.');
+        $type = $field['type'] ?? '';
         if ($path !== []) {
             $segment = array_shift($path);
-            $this->require((is_string($segment) || is_int($segment)) && is_array($value) && array_key_exists($segment, $value), 'נתיב ACF אינו קיים.');
-            $value[$segment] = $this->patch($value[$segment], $path, $operation);
+            if (in_array($type, ['repeater', 'flexible_content'], true)) {
+                $this->require(is_int($segment) && is_array($value) && array_key_exists($segment, $value) && $path !== [], 'נדרשים אינדקס שורה ומפתח שדה ילד.');
+                $key = array_shift($path);
+                $children = $type === 'repeater' ? ($field['sub_fields'] ?? [])
+                    : (collect($field['layouts'] ?? [])->firstWhere('name', $value[$segment]['acf_fc_layout'] ?? '')['sub_fields'] ?? []);
+                $child = collect($children)->firstWhere('key', $key);
+                $this->require(is_string($key) && is_array($child), 'שדה ילד אינו קיים בפריסה.');
+                $value[$segment][$key] = $this->patch($child, $value[$segment][$key] ?? false, $path, $operation);
+            } else {
+                $this->require(in_array($type, ['group', 'clone'], true), 'הנתיב אינו תואם למבנה השדה.');
+                $child = collect($field['sub_fields'] ?? [])->firstWhere('key', $segment);
+                $this->require(is_string($segment) && is_array($child), 'שדה ילד אינו קיים.');
+                $value = is_array($value) ? $value : [];
+                $value[$segment] = $this->patch($child, $value[$segment] ?? false, $path, $operation);
+            }
 
             return $value;
         }
@@ -282,7 +297,8 @@ final class EvaluationAdvancedWorld
         }
         $index = $operation['index'] ?? null;
         $op = $operation['op'] ?? '';
-        $this->require(is_array($value) && array_is_list($value) && in_array($op, ['insert', 'remove', 'move'], true)
+        $this->require(in_array($type, ['repeater', 'flexible_content', 'gallery'], true)
+            && is_array($value) && array_is_list($value) && in_array($op, ['insert', 'remove', 'move'], true)
             && is_int($index) && $index >= 0 && $index <= count($value) && ($op === 'insert' || $index < count($value)), 'פעולת שורה אינה תקינה.');
         if ($op === 'insert') {
             $this->require(array_key_exists('value', $operation), 'חסר ערך שורה.');

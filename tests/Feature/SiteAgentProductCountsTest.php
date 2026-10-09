@@ -108,13 +108,35 @@ class SiteAgentProductCountsTest extends TestCase
         $this->assertSame(4, $modelTurns);
     }
 
+    public function test_a_count_read_for_context_does_not_replace_the_original_clarification(): void
+    {
+        $subscriber = $this->subscriber();
+        $this->fakeCounts($this->counts());
+        $ai = Mockery::mock(ClaudeClient::class);
+        $ai->shouldReceive('supportsAgent')->andReturn(true);
+        $ai->shouldReceive('converse')->once()->andReturnUsing(function ($system, $prompt, $tools, $handler): string {
+            $read = $handler('get_product_counts', ['purpose' => 'context']);
+            $this->assertFalse($read['is_error']);
+            $this->assertStringContainsString('41', $read['content']);
+
+            return 'אילו מוצרים להעביר לפח? לא אבחר בעצמי מוצרים להסרה. אפשר לשלוח שמות או מזהים.';
+        });
+        $this->app->instance(ClaudeClient::class, $ai);
+
+        $reply = app(SiteAgentConversation::class)->handle($subscriber, 'תסיר מהחנות את המוצרים המיותרים. תחליט לבד מה מיותר.', 'count-context');
+
+        $this->assertStringContainsString('אילו מוצרים להעביר לפח?', $reply);
+        $this->assertStringNotContainsString('בקטלוג האתר יש', $reply);
+        $this->assertSame(0, SiteAgentRequest::count());
+    }
+
     public function test_the_count_tool_is_advertised_only_after_the_site_reports_its_capability(): void
     {
         $toolbox = app(SiteAgentToolbox::class);
         $subscriber = $this->subscriber();
         $definition = collect($toolbox->definitions($subscriber->site))->firstWhere('name', 'get_product_counts');
         $this->assertNotNull($definition);
-        $this->assertEquals((object) [], $definition['input_schema']['properties']);
+        $this->assertSame(['answer', 'context'], $definition['input_schema']['properties']['purpose']['enum']);
         $this->assertContains('wc_product_counts', SiteAgentToolbox::pluginTools());
 
         foreach ([null, ['server' => ['version' => '1.12.0']], ['tools' => [['name' => 'wc_product_search']]]] as $capabilities) {

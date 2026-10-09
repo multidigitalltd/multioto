@@ -5,13 +5,13 @@ namespace App\Filament\Pages;
 use App\Filament\Clusters\Settings;
 use App\Filament\Concerns\AdminOnly;
 use App\Services\Ai\ClaudeClient;
+use App\Services\SiteAgent\Evaluation\EvaluationCorpus;
 use App\Services\SiteAgent\Evaluation\EvaluationRuns;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 use Filament\Pages\SubNavigationPosition;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
-use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class SiteAgentEvaluation extends Page
 {
@@ -31,6 +31,8 @@ class SiteAgentEvaluation extends Page
 
     protected static string $view = 'filament.pages.site-agent-evaluation';
 
+    public string $suite = 'original';
+
     protected function getViewData(): array
     {
         abort_unless(auth()->user()?->isAdmin(), 403);
@@ -43,6 +45,7 @@ class SiteAgentEvaluation extends Page
             'configured' => $this->aiConfigured(),
             'provider' => (string) config('billing.ai.provider'),
             'model' => (string) config('billing.ai.model'),
+            'selectedCount' => EvaluationCorpus::SUITES[$this->suite] ?? 400,
         ];
     }
 
@@ -56,11 +59,12 @@ class SiteAgentEvaluation extends Page
             ]);
         }
 
-        app(EvaluationRuns::class)->start((int) auth()->id());
+        $this->validate(['suite' => 'required|in:original,round2,all']);
+        app(EvaluationRuns::class)->start((int) auth()->id(), $this->suite);
 
         Notification::make()
             ->title('הבדיקה נוספה לתור')
-            ->body('400 התרחישים ירוצו ברקע. אפשר לצאת מהמסך ולחזור לצפות בתוצאות.')
+            ->body(EvaluationCorpus::SUITES[$this->suite].' התרחישים שנבחרו ירוצו ברקע. אפשר לצאת מהמסך ולחזור לצפות בתוצאות.')
             ->success()
             ->send();
     }
@@ -79,22 +83,14 @@ class SiteAgentEvaluation extends Page
             ->send();
     }
 
-    public function download(string $id): StreamedResponse
+    public function download(string $id): void
     {
         abort_unless(auth()->user()?->isAdmin(), 403);
         $this->validateRunId($id);
 
-        // Read through the authorized service, never from a client-supplied path.
-        $report = app(EvaluationRuns::class)->report($id);
-        $json = json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
-
-        return response()->streamDownload(
-            static function () use ($json): void {
-                echo $json;
-            },
-            "site-agent-evaluation-{$id}.json",
-            ['Content-Type' => 'application/json; charset=UTF-8'],
-        );
+        // Compatibility with an already-open page. Direct HTTP streaming avoids
+        // Livewire retaining the complete JSON and a second base64 copy in memory.
+        $this->redirect(route('site-agent.evaluation.download', ['run' => $id]), navigate: false);
     }
 
     private function aiConfigured(): bool

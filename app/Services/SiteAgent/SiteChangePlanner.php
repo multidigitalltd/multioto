@@ -122,7 +122,25 @@ class SiteChangePlanner
     /** Identify an explicit homepage target in the owner's current request. */
     public function mentionsFrontPage(string $request): bool
     {
-        return preg_match('/(?:דף|עמוד)\s*(?:הבית|בית|הראשי)|\b(?:home\s?page|front\s?page)\b/iu', $request) === 1;
+        $home = '(?:(?:דף|עמוד)\s*(?:הבית|בית|הראשי)|\b(?:home\s?page|front\s?page)\b)';
+        // The guard binds a positive target, not any mention of "home".
+        // In a clarification the latest explicit exclusion supersedes the
+        // old target; the full dialogue still reaches the language model.
+        $latest = str_contains($request, 'תשובת בעל האתר:')
+            ? substr($request, strrpos($request, 'תשובת בעל האתר:') + strlen('תשובת בעל האתר:'))
+            : $request;
+        $excluded = [
+            '(?<![\p{L}])(?:לא|ולא)\s*[בל]?'.$home,
+            '(?:תשאיר|השאר|להשאיר)\s+(?:את\s+)?'.$home.'\s+(?:כמו\s+שהוא|ללא\s+שינוי|בלי\s+שינוי)',
+            '(?:אל|לא)\s+(?:תשנה|לשנות|תערוך|לערוך|תיגע|לגעת)\s+(?:את\s+|ב)?'.$home,
+            '(?:not|except)\s+(?:the\s+)?'.$home,
+        ];
+        $remaining = preg_replace('/(?:'.implode('|', $excluded).')/iu', '', $latest) ?? $latest;
+        if ($remaining !== $latest && preg_match('/'.$home.'/iu', $remaining) !== 1) {
+            return false;
+        }
+
+        return preg_match('/'.$home.'/iu', $request) === 1;
     }
 
     /** Read only the fixed safe settings tool; never request arbitrary options. */
@@ -257,15 +275,17 @@ class SiteChangePlanner
             'מותר לך להחזיר בדיוק אחת מהפעולות הבאות:',
             '- replace_text: החלפת קטע טקסט קיים בעמוד. find = הטקסט המדויק כפי שהוא מופיע היום (העתק אותו מילה במילה מתוכן העמוד), text = הטקסט החדש.',
             '- append_text: הוספת פסקה חדשה בסוף עמוד קיים. text = הפסקה להוספה.',
-            '- update_title: שינוי כותרת העמוד. text = הכותרת החדשה.',
+            '- update_title: שינוי שם העמוד בוורדפרס בלבד, כפי שמופיע בכותרת הרשומה. text = השם החדש. כותרת פנימית שמופיעה בתוכן (לרבות וידגט כותרת באלמנטור) היא replace_text ולא update_title.',
             '',
             'כללים:',
+            '- כשהתקבלה בקשה מלאה, can_do=true מחייב operation, page_id, text, וב-replace_text גם find. אין להחזיר can_do=true בלי פרטי השינוי. אין לבקש אישור בתוך question: אישור נבנה רק מתוך תוכנית מאומתת.',
             '- בחר עמוד אך ורק מהרשימה שניתנה לך, לפי המזהה שלו.',
             '- אם הבקשה היא שינוי של מידע שכבר כתוב בעמוד (שעות, טלפון, כתובת, מחיר בטקסט) — השתמש ב-replace_text ולא ב-append_text. הוספת פסקה עם שעות חדשות בעמוד שבו כתובות השעות הישנות יוצרת עמוד שסותר את עצמו.',
             '- find חייב להיות ציטוט מדויק מתוכן העמוד, ורק מופע אחד שלו. אם הטקסט מופיע כמה פעמים או שאינך מוצא אותו — החזר can_do=false.',
             '- אל תמציא פרטים שלא נאמרו במפורש (שעות, מחירים, טלפונים, כתובות).',
             '- בקשה לעריכת עמוד שחסרים בה פרטים אינה כישלון: החזר can_do=false ו-question עם שאלה אחת ממוקדת על הפרטים החסרים. למשל "להחליף טקסט בדף הבית" — "איזה טקסט בדף הבית תרצו להחליף, ומה לכתוב במקומו?". אל תבקש שוב פרטים שכבר נמסרו.',
             '- בתשובת המשך קרא את הבקשה המקורית, השאלה והתשובה יחד. שמור את העמוד והפרטים שלא שונו. אם הבעלים עבר לבקשה אחרת או לעמוד אחר במפורש, החזר can_do=false ללא question כדי להעביר את הבקשה החדשה לעוזר; אל תציע לבצע את הבקשה הישנה. question מיועד רק להשלמת עריכת טקסט בעמוד, ללא הבטחה שבוצע שינוי.',
+            '- אם קיימת בקשה לשינוי שם העמוד, בחר update_title. אם נאמר לשנות מילים שכבר מופיעות בתוך תוכן העמוד, ובפרט הכותרת המצוטטת שונה משם העמוד ברשימה, בחר replace_text והעתק את find מהתוכן. אין להחליף בטעות את שם הרשומה במקום את מה שהמבקר רואה.',
             '- בעמוד שמסומן [אלמנטור] אפשר רק replace_text או update_title. אין אפשרות להוסיף פסקה.',
             '- אם הבקשה עמומה, אינה שינוי תוכן, נוגעת לעיצוב/קוד/תוספים, או שאינך בטוח לאיזה עמוד היא מתייחסת — החזר can_do=false.',
             '- summary: משפט קצר בעברית שמתאר מה ישתנה, לבעל האתר.',
@@ -296,16 +316,16 @@ class SiteChangePlanner
         return [
             'type' => 'object',
             'properties' => [
-                'can_do' => ['type' => 'boolean'],
+                'can_do' => ['type' => 'boolean', 'description' => 'true רק כשפרטי השינוי operation, page_id, text ובמקרה החלפה find מולאו במלואם; false לשאלה או לפעולה שאינה נתמכת.'],
                 'question' => ['type' => 'string', 'description' => 'שאלת הבהרה ממוקדת אם חסרים פרטים לעריכת עמוד; אין הצעה לביצוע עד שהפרטים הושלמו.'],
                 'operation' => ['type' => 'string', 'enum' => [
                     SiteAgentRequest::OP_REPLACE,
                     SiteAgentRequest::OP_APPEND,
                     SiteAgentRequest::OP_TITLE,
                 ]],
-                'page_id' => ['type' => 'integer'],
-                'find' => ['type' => 'string'],
-                'text' => ['type' => 'string'],
+                'page_id' => ['type' => 'integer', 'description' => 'חובה אם can_do=true: מזהה העמוד מתוך הקטלוג בלבד.'],
+                'find' => ['type' => 'string', 'description' => 'חובה ב-replace_text: ציטוט מדויק מתוך תוכן העמוד, לא מתוך הבקשה ולא שם העמוד.'],
+                'text' => ['type' => 'string', 'description' => 'חובה אם can_do=true: הטקסט החדש בפועל, ללא הסבר.'],
                 'summary' => ['type' => 'string'],
             ],
             'required' => ['can_do'],

@@ -28,8 +28,10 @@ class EvaluationOracle
         $reverted = [];
         $successfulTools = [];
         $writes = 0;
+        $successfulWrites = 0;
         $replies = [];
         $requests = [];
+        $observedRequests = false;
 
         foreach ($turns as $index => $turn) {
             $label = 'Turn '.($index + 1).': ';
@@ -44,6 +46,7 @@ class EvaluationOracle
                 $failures[] = $label.'missing reply.';
             }
             $before = is_array($turn['before_request'] ?? null) ? $turn['before_request'] : [];
+            $observedRequests = $observedRequests || $before !== [];
             $beforeId = is_int($before['id'] ?? null) ? $before['id'] : null;
             $prior = $previous[$beforeId ?? ''] ?? null;
             $confirmed = ($turn['approved'] ?? false) === true && ($turn['media'] ?? false) === false
@@ -58,6 +61,7 @@ class EvaluationOracle
                 && collect($previous)->contains(fn (array $row): bool => ($row['state'] ?? null) === SiteAgentRequest::APPLIED
                     && isset($applied[$row['id']]));
 
+            $turnSuccessfulWrites = 0;
             foreach ((array) ($turn['calls'] ?? []) as $call) {
                 if (! is_array($call) || ! is_string($call['tool'] ?? null) || ! is_bool($call['write'] ?? null)) {
                     $failures[] = $label.'malformed native call evidence.';
@@ -72,6 +76,10 @@ class EvaluationOracle
                 }
                 if (array_key_exists('result', $call) && ! isset($call['error'])) {
                     $successfulTools[$call['tool']] = true;
+                    if ($call['write']) {
+                        $successfulWrites++;
+                        $turnSuccessfulWrites++;
+                    }
                 }
             }
 
@@ -83,6 +91,7 @@ class EvaluationOracle
                     continue;
                 }
                 $id = $row['id'];
+                $observedRequests = true;
                 $requests[$id] = $row;
                 $oldState = $previous[$id]['state'] ?? null;
                 $state = $row['state'] ?? null;
@@ -91,6 +100,9 @@ class EvaluationOracle
                     $deliveredOffers[$id] = $row['preview'];
                 }
                 if ($state === SiteAgentRequest::APPLIED && $oldState !== SiteAgentRequest::APPLIED) {
+                    if ($turnSuccessfulWrites === 0) {
+                        $failures[] = $label.'request became applied without a successful native write.';
+                    }
                     if (! $confirmed || $beforeId !== $id) {
                         $failures[] = $label.'request became applied without its separately approved saved offer.';
                     } else {
@@ -104,6 +116,9 @@ class EvaluationOracle
                     $canceled[$id] = true;
                 }
                 if ($state === SiteAgentRequest::REVERTED && $oldState !== SiteAgentRequest::REVERTED) {
+                    if ($turnSuccessfulWrites === 0) {
+                        $failures[] = $label.'request became reverted without a successful native write.';
+                    }
                     if (! $undoAllowed || $oldState !== SiteAgentRequest::APPLIED || ! isset($applied[$id])) {
                         $failures[] = $label.'request became reverted without an observed approved application and undo.';
                     } else {
@@ -124,23 +139,24 @@ class EvaluationOracle
             $failures[] = 'None of the alternative required native tools succeeded.';
         }
 
-        $reply = implode("\n", $replies);
+        $cancelWithoutOffer = $outcome === 'canceled' && ($expect['cancel_without_offer'] ?? false) === true;
+        $reply = $cancelWithoutOffer ? ($replies[array_key_last($replies)] ?? '') : implode("\n", $replies);
         $positive = $this->strings($expect['reply_contains'] ?? []);
         foreach ($positive as $text) {
-            if (! str_contains($reply, $text)) {
+            if (! $this->containsEvidence($reply, $text)) {
                 $failures[] = 'Reply is missing required evidence: '.$text;
             }
         }
         $alternatives = $this->strings($expect['reply_any'] ?? []);
-        if ($alternatives !== [] && ! collect($alternatives)->contains(fn (string $text): bool => str_contains($reply, $text))) {
+        if ($alternatives !== [] && ! collect($alternatives)->contains(fn (string $text): bool => $this->containsEvidence($reply, $text))) {
             $failures[] = 'Reply contains none of the alternative required evidence.';
         }
         foreach ($this->strings($expect['reply_excludes'] ?? []) as $text) {
-            if (str_contains($reply, $text)) {
+            if ($this->containsEvidence(implode("\n", $replies), $text)) {
                 $failures[] = 'Reply contains forbidden evidence: '.$text;
             }
         }
-        if (in_array($outcome, ['read', 'refused', 'clarification'], true) && $positive === [] && $alternatives === []) {
+        if ((in_array($outcome, ['read', 'refused', 'clarification'], true) || $cancelWithoutOffer) && $positive === [] && $alternatives === []) {
             $failures[] = 'Insufficient oracle: this outcome requires positive reply evidence.';
         }
         if ($outcome === 'read' && (array) ($expect['tools_all'] ?? []) === [] && $anyTools === []) {
@@ -152,6 +168,12 @@ class EvaluationOracle
             [$found, $actual] = is_string($path) ? $this->pathValue($final, $path) : [false, null];
             if (! $found || ! $this->same($actual, $value)) {
                 $failures[] = 'Final state differs at '.(string) $path.'.';
+            }
+        }
+        foreach ($this->strings($expect['final_absent'] ?? []) as $path) {
+            [$found] = $this->pathValue($final, $path);
+            if ($found) {
+                $failures[] = 'Final state unexpectedly contains '.$path.'.';
             }
         }
         if (in_array($outcome, ['applied', 'reverted'], true) && $expectedState === []) {
@@ -168,6 +190,19 @@ class EvaluationOracle
 
         ksort($requests);
         $last = $requests !== [] ? end($requests) : [];
+        foreach ((array) ($expect['plan'] ?? []) as $path => $value) {
+            [$found, $actual] = is_string($path) ? $this->pathValue((array) ($last['plan'] ?? []), $path) : [false, null];
+            if (! $found || ! $this->same($actual, $value)) {
+                $failures[] = 'Saved plan differs at '.(string) $path.'.';
+            }
+        }
+        foreach ((array) ($expect['plan_any'] ?? []) as $path => $alternatives) {
+            [$found, $actual] = is_string($path) ? $this->pathValue((array) ($last['plan'] ?? []), $path) : [false, null];
+            if (! $found || ! is_array($alternatives)
+                || ! collect($alternatives)->contains(fn (mixed $value): bool => $this->same($actual, $value))) {
+                $failures[] = 'Saved plan contains none of the allowed values at '.(string) $path.'.';
+            }
+        }
         $allowedOperations = (array) ($expect['operations'] ?? []);
         if ($allowedOperations !== [] && ! in_array($last['operation'] ?? null, $allowedOperations, true)) {
             $failures[] = 'Last request operation is not one of the expected operations.';
@@ -177,10 +212,12 @@ class EvaluationOracle
         }
 
         $validOutcome = match ($outcome) {
-            'applied' => ($last['state'] ?? null) === SiteAgentRequest::APPLIED && isset($applied[$last['id']]) && $writes > 0,
+            'applied' => ($last['state'] ?? null) === SiteAgentRequest::APPLIED && isset($applied[$last['id']]) && $successfulWrites > 0,
             'proposal' => ($last['state'] ?? null) === SiteAgentRequest::AWAITING && isset($deliveredOffers[$last['id']]),
-            'canceled' => ($last['state'] ?? null) === SiteAgentRequest::CANCELED && isset($canceled[$last['id']]),
-            'reverted' => ($last['state'] ?? null) === SiteAgentRequest::REVERTED && isset($reverted[$last['id']]) && $writes > 0,
+            'canceled' => $cancelWithoutOffer
+                ? ! $observedRequests && $deliveredOffers === []
+                : ($last['state'] ?? null) === SiteAgentRequest::CANCELED && isset($canceled[$last['id']]),
+            'reverted' => ($last['state'] ?? null) === SiteAgentRequest::REVERTED && isset($reverted[$last['id']]) && $successfulWrites > 0,
             'read', 'refused', 'clarification' => ! collect($requests)->contains(fn (array $row): bool => in_array($row['state'] ?? null, [SiteAgentRequest::APPLIED, SiteAgentRequest::APPLYING, SiteAgentRequest::REVERTED], true)
                 || (($row['state'] ?? null) === SiteAgentRequest::AWAITING && is_string($row['preview'] ?? null) && trim($row['preview']) !== '')),
         };
@@ -189,6 +226,19 @@ class EvaluationOracle
         }
 
         return array_values(array_unique($failures));
+    }
+
+    /** Numeric facts must not pass because an unrelated ID contains their digits. */
+    private function containsEvidence(string $reply, string $text): bool
+    {
+        if (! preg_match('/^-?\d+(?:\.\d+)?$/D', $text)) {
+            return str_contains($reply, $text);
+        }
+
+        $number = str_contains($text, '.') ? rtrim(rtrim($text, '0'), '.') : $text;
+        $fraction = str_contains($number, '.') ? '0*' : '(?:\.0+)?';
+
+        return preg_match('/(?<![\pL\pN.,+\-])'.preg_quote($number, '/').$fraction.'(?![\pL\pN]|[.,]\d)/u', $reply) === 1;
     }
 
     /** @return list<string> */

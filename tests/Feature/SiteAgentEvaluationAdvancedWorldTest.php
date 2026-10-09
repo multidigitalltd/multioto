@@ -104,6 +104,40 @@ class SiteAgentEvaluationAdvancedWorldTest extends TestCase
             'clone' => [$post + ['field_key' => 'field_contact'], [['op' => 'set', 'path' => ['field_phone'], 'value' => '03-7654321']], 'acf.post.43.field_contact.field_phone', '03-7654321'],
             'gallery' => [$post + ['field_key' => 'field_gallery'], [['op' => 'set', 'path' => [], 'value' => [90, 91]]], 'acf.post.43.field_gallery', [90, 91]],
             'options' => [['context' => 'options', 'options_page' => 'site-options', 'field_key' => 'field_footer'], [['op' => 'set', 'path' => [], 'value' => 'טקסט תחתון חדש']], 'acf.options.site-options.field_footer', 'טקסט תחתון חדש'],
+            'model root prefix' => [$post + ['field_key' => 'field_heading'], [['op' => 'set', 'path' => ['field_heading'], 'value' => 'הבית החדש']], 'acf.post.43.field_heading', 'הבית החדש'],
+            'model zero with root prefix' => [$post + ['field_key' => 'field_score'], [['op' => 'set', 'path' => ['field_score'], 'value' => 0]], 'acf.post.43.field_score', 0],
+            'model clone root prefix' => [$post + ['field_key' => 'field_contact'], [['op' => 'set', 'path' => ['field_contact', 'field_phone'], 'value' => '03-7654321']], 'acf.post.43.field_contact.field_phone', '03-7654321'],
+            'model repeater row address' => [$post + ['field_key' => 'field_faq'], [['op' => 'insert', 'path' => [1], 'value' => ['field_question' => 'איפה?', 'field_answer' => 'בישראל']]], 'acf.post.43.field_faq.1.field_answer', 'בישראל'],
+            'model remove row address' => [$post + ['field_key' => 'field_faq'], [['op' => 'remove', 'path' => [0]]], 'acf.post.43.field_faq', []],
+            'model flexible row address' => [$post + ['field_key' => 'field_sections'], [['op' => 'insert', 'path' => [1], 'value' => ['acf_fc_layout' => 'hero', 'field_title' => 'בואו להכיר אותנו']]], 'acf.post.43.field_sections.1.field_title', 'בואו להכיר אותנו'],
+            'model gallery row address' => [$post + ['field_key' => 'field_gallery'], [['op' => 'insert', 'path' => [1], 'value' => 91], ['op' => 'move', 'path' => [1], 'to' => 0]], 'acf.post.43.field_gallery', [91, 90]],
+            'model options root prefix' => [['context' => 'options', 'options_page' => 'site-options', 'field_key' => 'field_footer'], [['op' => 'set', 'path' => ['field_footer'], 'value' => 'טקסט תחתון חדש']], 'acf.options.site-options.field_footer', 'טקסט תחתון חדש'],
+        ];
+    }
+
+    #[DataProvider('invalidAcfEdits')]
+    public function test_model_address_normalization_never_guesses_missing_rows_or_bypasses_native_schema(string $field, array $operation): void
+    {
+        $baseline = $this->state;
+        $selector = ['context' => 'post', 'id' => 43, 'field_key' => $field];
+        $offer = app(SiteActionProposer::class)->propose($this->site, 'propose_acf_update', $selector + ['operations' => [$operation]], $this->read('get_acf', $selector));
+        $this->assertArrayHasKey('error', $offer);
+        $this->assertArrayNotHasKey('plan', $offer);
+        $this->assertSame($baseline, $this->state);
+    }
+
+    public static function invalidAcfEdits(): array
+    {
+        return [
+            'missing insertion position' => ['field_gallery', ['op' => 'insert', 'path' => [], 'value' => 91]],
+            'invalid insertion position' => ['field_gallery', ['op' => 'insert', 'path' => [20], 'value' => 91]],
+            'missing move target' => ['field_gallery', ['op' => 'move', 'path' => [0]]],
+            'gallery items are not subfields' => ['field_gallery', ['op' => 'set', 'path' => [0], 'value' => 91]],
+            'gallery clear requires list address' => ['field_gallery', ['op' => 'clear', 'path' => [0]]],
+            'repeater row needs field key' => ['field_faq', ['op' => 'set', 'path' => [0], 'value' => ['field_question' => 'replacement']]],
+            'unknown clone child' => ['field_contact', ['op' => 'set', 'path' => ['field_contact', 'field_forged'], 'value' => 'replacement']],
+            'layout child from another layout' => ['field_sections', ['op' => 'set', 'path' => [0, 'field_body'], 'value' => 'replacement']],
+            'protected root stays protected' => ['field_api_key', ['op' => 'set', 'path' => ['field_api_key'], 'value' => 'replacement']],
         ];
     }
 

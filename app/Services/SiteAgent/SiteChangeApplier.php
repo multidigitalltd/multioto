@@ -100,10 +100,14 @@ class SiteChangeApplier
             return $this->refuse('לא הצלחתי לקרוא את העמוד באתר.');
         }
 
-        // Unpublished, made private or trashed since the preview. Editing it
-        // anyway would report a change live on a page nobody can see.
-        if ((string) ($page['status'] ?? '') !== 'publish') {
-            return $this->refuse('העמוד אינו מפורסם יותר, ולכן לא שיניתי בו דבר.');
+        // Explicitly read draft/private content can be edited without publishing.
+        // Legacy page plans still require publish; every plan keeps the status
+        // which was shown in its preview, including scheduled publication.
+        $expectedStatus = $plan['page_status'] ?? 'publish';
+        if (! in_array($expectedStatus, ['publish', 'draft', 'pending', 'private', 'future'], true)
+            || ($page['status'] ?? '') !== $expectedStatus) {
+            return $this->refuse(array_key_exists('page_status', $plan)
+                ? self::STALE : 'העמוד אינו מפורסם יותר, ולכן לא שיניתי בו דבר.');
         }
 
         $content = (string) ($page['content'] ?? '');
@@ -145,6 +149,7 @@ class SiteChangeApplier
             'page_id' => $pageId,
             'title' => $title,
             'content' => $content,
+            ...(array_key_exists('page_status', $plan) ? ['page_status' => $expectedStatus] : []),
         ];
 
         try {
@@ -426,8 +431,11 @@ class SiteChangeApplier
             return $this->refuse('חסר מצב וירטואלי מאומת להצעה. עדכנו את תוסף הסוכן ובקשו הצעה חדשה.');
         }
 
-        if ($current !== []) {
-            $live = $this->productNow($site, $productId, $current);
+        $saleDates = ProductSaleWindow::changesDates($fields);
+        $live = [];
+        if ($current !== [] || $saleDates) {
+            $live = $this->productNow($site, $productId, $current + ($saleDates
+                ? array_fill_keys(['sale_from', 'sale_to', 'timezone'], true) : []));
 
             if ($live === []) {
                 return $this->refuse(array_key_exists('virtual', $fields)
@@ -440,6 +448,12 @@ class SiteChangeApplier
                     return $this->refuse(self::STALE);
                 }
             }
+        }
+        if ($saleDates && isset($plan['sale_timezone']) && ($live['timezone'] ?? null) !== $plan['sale_timezone']) {
+            return $this->refuse(self::STALE);
+        }
+        if (($problem = ProductSaleWindow::problem($fields, $live)) !== null) {
+            return $this->refuse($problem);
         }
 
         try {
@@ -842,7 +856,8 @@ class SiteChangeApplier
                 return $this->refuse('לא הצלחתי לקרוא את העמוד באתר.');
             }
 
-            if (! $this->sameText($live['title'], (string) ($after['title'] ?? ''))
+            if ((array_key_exists('page_status', $restore) && ($live['status'] ?? '') !== $restore['page_status'])
+                || ! $this->sameText($live['title'], (string) ($after['title'] ?? ''))
                 || ! $this->sameText($live['content'], (string) ($after['content'] ?? ''))) {
                 return $this->refuse(self::STALE);
             }
@@ -1049,7 +1064,7 @@ class SiteChangeApplier
             'id' => $pageId,
         ])), true);
 
-        if (! is_array($page) || ! isset($page['content'])) {
+        if (! is_array($page) || ($page['id'] ?? null) !== $pageId || ! is_string($page['content'] ?? null)) {
             return null;
         }
 

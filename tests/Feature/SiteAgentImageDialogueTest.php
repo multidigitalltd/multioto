@@ -138,6 +138,39 @@ class SiteAgentImageDialogueTest extends TestCase
         $this->assertSame(['id' => 33852, 'attachment_id' => 99, 'if_current' => 42], $sets[0][1]);
     }
 
+    public function test_explicit_alt_in_the_original_caption_survives_a_model_omission(): void
+    {
+        $this->answers = [
+            ['can_do' => false, 'relation' => 'image', 'destination' => 'attach', 'target_id' => 33852, 'alt' => '', 'needs' => 'alt'],
+        ];
+        // This target is present in the verified search results. The omitted
+        // model field must not cause another question about the supplied alt.
+        $this->searchResponse = ['products' => [$this->products[33852]]];
+
+        $reply = $this->talk('הגדר את התמונה הזאת כתמונה הראשית של מוצר דוגמה. הטקסט החלופי שלה: "הכניסה לחנות שלנו".', 'photo-explicit-alt');
+        $request = SiteAgentRequest::sole();
+
+        $this->assertStringContainsString(SiteAgentConversation::CONFIRM_PROMPT, $reply);
+        $this->assertSame('הכניסה לחנות שלנו', $request->plan['alt']);
+        $this->assertSame(33852, $request->plan['target_id']);
+        $this->assertNotContains('wp_media_upload', array_column($this->calls, 0));
+        $this->allowWrites = true;
+        $this->assertStringContainsString('בוצע', $this->talk('כן'));
+        $upload = collect($this->calls)->first(fn (array $call): bool => $call[0] === 'wp_media_upload');
+        $this->assertSame('הכניסה לחנות שלנו', $upload[1]['alt']);
+    }
+
+    public function test_a_negated_alt_label_is_not_used_as_an_accessibility_description(): void
+    {
+        $this->answers = [['can_do' => false, 'target_id' => 33852, 'needs' => 'alt']];
+        $this->searchResponse = ['products' => [$this->products[33852]]];
+
+        $reply = $this->talk('שים את התמונה במוצר דוגמה. אל תשתמש בטקסט החלופי: "לא נכון".', 'photo-negated-alt');
+
+        $this->assertStringContainsString('איך לתאר', $reply);
+        $this->assertArrayNotHasKey('alt', SiteAgentRequest::sole()->plan['image_draft']);
+    }
+
     public function test_saving_in_media_and_setting_the_product_picture_are_one_attach_proposal(): void
     {
         $this->talk('', 'photo-1');

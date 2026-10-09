@@ -1,6 +1,6 @@
 <x-filament-panels::page>
     <div dir="rtl" class="space-y-6" @if ($active) wire:poll.5s="$refresh" @endif>
-        <x-filament::section heading="400 תרחישי שיחה עם הבוט">
+        <x-filament::section heading="800 תרחישי שיחה עם הבוט">
             <div class="space-y-3 text-sm text-gray-700 dark:text-gray-300">
                 <p>
                     הבדיקה מפעילה את ספק ה־AI והמודל שהוגדרו במערכת מול אתר WordPress וחנות WooCommerce מדומים.
@@ -23,8 +23,17 @@
                         <a href="{{ \App\Filament\Pages\ManageAiAgent::getUrl() }}" class="font-medium underline">בהגדרות ה־AI</a>.
                     </p>
                 @endif
+                <div class="max-w-lg space-y-1">
+                    <label for="evaluation-suite" class="block font-medium">תרחישים להרצה</label>
+                    <select id="evaluation-suite" wire:model.live="suite" @disabled($active) aria-describedby="evaluation-suite-help" class="w-full rounded-lg border-gray-300 bg-white text-gray-950 focus:border-primary-500 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white">
+                        <option value="original">400 התרחישים המקוריים — בדיקה חוזרת אחרי התיקונים</option>
+                        <option value="round2">400 תרחישים חדשים — סבב שני</option>
+                        <option value="all">כל 800 התרחישים</option>
+                    </select>
+                    <p id="evaluation-suite-help" class="text-sm">אפשר לחזור על הסבב המקורי כדי להשוות תוצאות, להפעיל את התרחישים החדשים או להריץ את שני הסבבים יחד.</p>
+                </div>
                 <x-filament::button wire:click="start" wire:loading.attr="disabled" :disabled="! $configured || $active" icon="heroicon-o-play">
-                    הפעלת 400 התרחישים
+                    הפעלת {{ $selectedCount }} התרחישים
                 </x-filament::button>
                 <span wire:loading wire:target="start" role="status">מוסיפים את הבדיקה לתור…</span>
             </div>
@@ -69,6 +78,7 @@
                     </dl>
 
                     <dl class="space-y-1 text-sm text-gray-600 dark:text-gray-400">
+                        <div><dt class="inline font-medium">קבוצת תרחישים:</dt> <dd class="inline">{{ ['original' => 'הסבב המקורי', 'round2' => 'הסבב החדש', 'all' => 'שני הסבבים'][$run['suite'] ?? 'original'] ?? 'לא ידועה' }}</dd></div>
                         <div><dt class="inline font-medium">ספק ומודל בריצה זו:</dt> <dd class="inline" dir="ltr">{{ $run['provider'] }} · {{ $run['model'] }}</dd></div>
                         <div><dt class="inline font-medium">מזהה ריצה:</dt> <dd class="inline break-all" dir="ltr">{{ $run['id'] }}</dd></div>
                         @if ($run['current_case'] ?? null)
@@ -95,7 +105,7 @@
                                 עצירה אחרי התרחיש הנוכחי
                             </x-filament::button>
                         @endif
-                        <x-filament::button color="gray" wire:click="download('{{ $run['id'] }}')" wire:loading.attr="disabled" icon="heroicon-o-arrow-down-tray">
+                        <x-filament::button tag="a" color="gray" :href="route('site-agent.evaluation.download', ['run' => $run['id']])" :spa-mode="false" icon="heroicon-o-arrow-down-tray">
                             הורדת דוח JSON
                         </x-filament::button>
                     </div>

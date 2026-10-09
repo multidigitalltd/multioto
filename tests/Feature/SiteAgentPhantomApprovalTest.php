@@ -132,6 +132,31 @@ class SiteAgentPhantomApprovalTest extends TestCase
         $this->assertSame('models/gemini-3.1-flash-lite', $this->cacheRequests[0]['model']);
     }
 
+    public function test_a_request_to_prepare_a_proposal_is_repaired_before_the_owner_needs_to_say_yes(): void
+    {
+        $this->pages = [43 => [
+            'id' => 43, 'title' => 'עמוד הבית', 'type' => 'page', 'status' => 'publish', 'content' => 'איזה כייף שבאת',
+        ]];
+        $this->fakeRemote(fn (int $turn): PromiseInterface => match ($turn) {
+            1 => $this->modelText('מצאתי את עמוד הבית. האם תרצי שאגיש הצעה לשינוי הברכה ל"כמה נחמד שבאת"?'),
+            2 => $this->editPage('בדף הבית להחליף איזה כייף שבאת בכמה נחמד שבאת'),
+            default => $this->modelText('הוכנה הצעה.'),
+        }, plannedPage: 43, frontPage: 43, replacement: ['find' => 'איזה כייף שבאת', 'text' => 'כמה נחמד שבאת']);
+        $subscriber = $this->subscriber();
+        $conversation = app(SiteAgentConversation::class);
+
+        $reply = $conversation->handle($subscriber, 'בדף הבית החלף את "איזה כייף שבאת" ב"כמה נחמד שבאת".', 'prepare-request');
+
+        $this->assertSame(SiteAgentRequest::AWAITING, SiteAgentRequest::sole()->state);
+        $this->assertStringContainsString(SiteAgentConversation::CONFIRM_PROMPT, $reply);
+        $this->assertStringNotContainsString('האם תרצי שאגיש', $reply);
+        $this->assertSame('איזה כייף שבאת', $this->pages[43]['content']);
+        $this->approvalSent = true;
+        $this->assertStringContainsString('בוצע', $conversation->handle($subscriber, 'כן', 'prepare-confirm'));
+        $this->assertSame('כמה נחמד שבאת', $this->pages[43]['content']);
+        $this->assertSame(SiteAgentRequest::APPLIED, SiteAgentRequest::sole()->state);
+    }
+
     public function test_repeated_phantom_preview_is_never_sent_or_saved_as_a_proposal(): void
     {
         $this->fakeRemote(fn (): PromiseInterface => $this->modelText(self::PHANTOM));

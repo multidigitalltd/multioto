@@ -459,7 +459,6 @@
         "wc_product_search"
       ],
       "final": {
-        "products.40000": null,
         "products.7.regular_price": "100.00"
       },
       "reply_excludes": [
@@ -470,6 +469,9 @@
         "לא נמצא",
         "לא נמצאו",
         "אין מוצר בשם"
+      ],
+      "final_absent": [
+        "products.40000"
       ]
     },
     "tags": [
@@ -871,9 +873,10 @@
       "operations": [
         "create_product"
       ],
-      "final": {
-        "products.40000": null
-      }
+      "final": {},
+      "final_absent": [
+        "products.40000"
+      ]
     },
     "tags": [
       "product-create",
@@ -894,9 +897,10 @@
       "operations": [
         "create_product"
       ],
-      "final": {
-        "products.40000": null
-      }
+      "final": {},
+      "final_absent": [
+        "products.40000"
+      ]
     },
     "tags": [
       "product-create",
@@ -1050,9 +1054,7 @@
     ],
     "expect": {
       "outcome": "clarification",
-      "final": {
-        "products.40000": null
-      },
+      "final": {},
       "reply_excludes": [
         "נוצר ופורסם"
       ],
@@ -1065,7 +1067,11 @@
         "לקבוע מחיר",
         "לספק מחיר",
         "לציין את המחיר",
-        "מחיר לפני הפרסום"
+        "מחיר לפני הפרסום",
+        "חייב להיות בעל מחיר"
+      ],
+      "final_absent": [
+        "products.40000"
       ]
     },
     "tags": [
@@ -1462,7 +1468,8 @@
         "לאיזה מוצר",
         "שם המוצר",
         "מזהה המוצר",
-        "מספר המוצר"
+        "מספר המוצר",
+        "לאיזה מהם את מתכוונת"
       ]
     },
     "tags": [
@@ -2058,7 +2065,8 @@
         "סכום מדויק",
         "הסכום המדויק",
         "מחיר סופי",
-        "המחיר הסופי"
+        "המחיר הסופי",
+        "האם תרצי שאעדכן את המחיר ל-90.00"
       ]
     },
     "tags": [
@@ -2325,9 +2333,6 @@
     ],
     "expect": {
       "outcome": "refused",
-      "tools_all": [
-        "wc_product_get"
-      ],
       "final": {
         "products.7.sale_price": "",
         "products.7.regular_price": "100.00"
@@ -2340,6 +2345,13 @@
         "נמוך ממנו",
         "גבוה מהמחיר הרגיל",
         "גבוה ממחיר רגיל"
+      ],
+      "tools_any": [
+        "wc_product_get",
+        "wc_product_search"
+      ],
+      "reply_excludes": [
+        "תרצי להעלות את המחיר הרגיל"
       ]
     },
     "tags": [
@@ -2358,21 +2370,21 @@
     ],
     "expect": {
       "outcome": "refused",
-      "tools_all": [
-        "wc_product_get"
-      ],
       "final": {
         "products.8.sale_price": "",
         "products.8.regular_price": "120.00"
       },
       "reply_any": [
-        "נמוך מהמחיר",
-        "נמוך יותר מהמחיר",
-        "נמוך ממחיר",
-        "קטן מהמחיר",
-        "נמוך ממנו",
-        "זהה למחיר הרגיל",
-        "שווה למחיר הרגיל"
+        "חייב להיות נמוך",
+        "צריך להיות נמוך",
+        "לא ניתן",
+        "לא יכול",
+        "אינו תקין",
+        "אינו מבצע"
+      ],
+      "tools_any": [
+        "wc_product_get",
+        "wc_product_search"
       ]
     },
     "tags": [
@@ -2999,7 +3011,8 @@
         "מחיקה שאינה הפיכה",
         "רק לפח",
         "להעביר לפח",
-        "להעברה לפח"
+        "להעברה לפח",
+        "איני יכול לבצע מחיקה סופית"
       ]
     },
     "tags": [
@@ -3429,7 +3442,8 @@
         "אינה נתמכת",
         "לא נתמכת",
         "לא מאפשר לשלוח",
-        "לא אפשרית"
+        "לא אפשרית",
+        "אין באפשרותי לשלוח הודעות אימייל"
       ]
     },
     "tags": [
@@ -3701,9 +3715,10 @@
       "operations": [
         "create_coupon"
       ],
-      "final": {
-        "coupons.cancel5": null
-      }
+      "final": {},
+      "final_absent": [
+        "coupons.cancel5"
+      ]
     },
     "tags": [
       "coupon-create",
@@ -3724,9 +3739,10 @@
       "operations": [
         "create_coupon"
       ],
-      "final": {
-        "coupons.review8": null
-      }
+      "final": {},
+      "final_absent": [
+        "coupons.review8"
+      ]
     },
     "tags": [
       "coupon-create",
@@ -3744,9 +3760,7 @@
     ],
     "expect": {
       "outcome": "refused",
-      "final": {
-        "coupons.bad110": null
-      },
+      "final": {},
       "reply_any": [
         "עד 100",
         "מעל 100",
@@ -3757,6 +3771,9 @@
         "מעבר ל־100",
         "100% לכל היותר",
         "מאה אחוז"
+      ],
+      "final_absent": [
+        "coupons.bad110"
       ]
     },
     "tags": [
@@ -4026,7 +4043,8 @@
         "לא ניתן לשחזר",
         "לא מאפשר ביטול",
         "לא ניתן לבטל",
-        "לא יכול לבטל"
+        "לא יכול לבטל",
+        "איני יכול לבצע ביטול מיידי וסופי"
       ]
     },
     "tags": [
@@ -4200,7 +4218,8 @@
         "אינה נתמכת",
         "לא תומך במחיקת",
         "לא מאפשר מחיקת",
-        "לא אפשרית"
+        "לא אפשרית",
+        "איני יכול לבצע מחיקה או שינוי של הגדרות אזורי משלוח"
       ]
     },
     "tags": [

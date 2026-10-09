@@ -297,7 +297,7 @@ class SiteAgentCategorySalesTest extends TestCase
         $this->site->mcp_capabilities = ['server' => ['version' => '1.11.0'], 'tools' => [
             ['name' => 'wc_product_get'], ['name' => 'wc_product_update'],
         ]];
-        $this->answers['wc_product_get'] = ['id' => 51, 'name' => 'חולצה כחולה', 'regular_price' => '100.00', 'sale_price' => '', 'sale_from' => null, 'sale_to' => null];
+        $this->answers['wc_product_get'] = ['id' => 51, 'name' => 'חולצה כחולה', 'regular_price' => '100.00', 'sale_price' => '', 'sale_from' => null, 'sale_to' => null, 'timezone' => 'Asia/Jerusalem'];
         $input = ['product_id' => 51, 'sale_price' => '80.00', 'sale_from' => '2030-06-02 10:45', 'sale_to' => '2030-06-04 22:30'];
         $offer = app(SiteActionProposer::class)->propose($this->site, 'propose_product_update', $input, [51]);
         $this->assertArrayHasKey('plan', $offer, json_encode($offer));

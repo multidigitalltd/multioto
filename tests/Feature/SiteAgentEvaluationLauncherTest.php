@@ -28,7 +28,7 @@ class SiteAgentEvaluationLauncherTest extends TestCase
             $this->assertFileExists($output);
             $serialized = file_get_contents($output);
             $report = json_decode($serialized, true, 128, JSON_THROW_ON_ERROR);
-            $this->assertSame(['total' => 400, 'passed' => 0, 'failed' => 0, 'blocked' => 400], $report['summary']);
+            $this->assertSame(['total' => 800, 'passed' => 0, 'failed' => 0, 'blocked' => 800], $report['summary']);
             $this->assertSame(0, $report['provider_requests']);
             $this->assertSame('2026-10-09T12:00:00+03:00', $report['benchmark_time']);
             foreach (['inherited-secret-must-not-appear', 'stdin-secret-must-not-appear'] as $secret) {

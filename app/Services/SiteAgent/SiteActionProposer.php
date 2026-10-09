@@ -180,15 +180,15 @@ class SiteActionProposer
     {
         return [
             ['propose_product_update', 'wc_product_update',
-                'הצעה לעדכן מוצר קיים: שם, תיאור קצר, מחיר רגיל, מחיר מבצע (ריק = סיום המבצע), מועדי מבצע לפי שעון האתר (YYYY-MM-DD או YYYY-MM-DD HH:mm בתוסף 1.11.0 ומעלה), כמות במלאי, מצב מלאי (instock/outofstock/onbackorder), סטטוס (publish/draft/private). רק השדות שמשתנים. מבצע קטגוריה שלמה נעשה דרך propose_category_sale.',
-                ['product_id' => ['type' => 'integer'], 'name' => ['type' => 'string'], 'short_description' => ['type' => 'string'],
-                    'regular_price' => ['type' => 'string'], 'sale_price' => ['type' => 'string'], 'sale_from' => ['type' => 'string'],
-                    'sale_to' => ['type' => 'string'], 'stock_quantity' => ['type' => 'integer'], 'stock_status' => ['type' => 'string'],
+                'הצעה לעדכן מוצר קיים: שם, תיאור קצר, מחיר רגיל, מחיר מבצע (ריק = סיום המבצע), מועדי מבצע לפי שעון האתר (YYYY-MM-DD או YYYY-MM-DD HH:mm בתוסף 1.11.0 ומעלה), כמות במלאי, מצב מלאי (instock/outofstock/onbackorder), סטטוס (publish/draft/private). רק השדות שמשתנים. תאריכי מבצע למוצר יחיד הם רשות: אם לא נתבקש מועד, השמט אותו ואל תעכב הצעה כדי לדרוש אותו. אל תוסיף תאריך התחלה של היום כשלא התבקש. מחיר מבצע חייב להיות נמוך מהרגיל; אין להציע שינוי של מחיר רגיל שבעל האתר ביקש להשאיר. מבצע קטגוריה שלמה נעשה דרך propose_category_sale. קרא לכלי להכנת התצוגה לאישור; אין צורך באישור מקדים להכנת ההצעה עצמה.',
+                ['product_id' => ['type' => 'integer'], 'name' => ['type' => 'string'], 'short_description' => ['type' => 'string', 'description' => 'הטקסט שבעל האתר ביקש, בדיוק כולל סימני פיסוק ושורות. אין להסיר נקודה בסוף או לשכתב בלי בקשה.'],
+                    'regular_price' => ['type' => 'string'], 'sale_price' => ['type' => 'string', 'description' => 'מחיר המבצע כמחרוזת מספרית; "0" הוא חינם, "" מסיים מבצע. תאריך סיום אינו תנאי למחיר מבצע.'], 'sale_from' => ['type' => 'string', 'description' => 'אופציונלי, רק אם נתבקש מועד התחלה או ניקוי שלו.'],
+                    'sale_to' => ['type' => 'string', 'description' => 'אופציונלי, רק אם נתבקש מועד סיום או ניקוי שלו.'], 'stock_quantity' => ['type' => 'integer'], 'stock_status' => ['type' => 'string'],
                     'status' => ['type' => 'string'], 'virtual' => ['type' => 'boolean', 'description' => 'true = וירטואלי ללא משלוח; false = פיזי. מוצר פשוט או וריאציה בלבד; תוסף 1.12.0 ומעלה.']], ['product_id']],
             ['propose_product_create', 'wc_product_create',
-                'הצעה ליצור מוצר חדש: שם, מחיר, מחיר מבצע, תיאור קצר ומלא, מק"ט, כמות במלאי, קטגוריות מוצרים קיימות (שמות, מ-find_terms עם product_cat) ו-publish=true כדי לפרסם מיד. בלי publish הוא נוצר כטיוטה. תמונה — בעל האתר שולח אותה אחרי שהמוצר נוצר, עם שם המוצר.',
-                ['name' => ['type' => 'string'], 'regular_price' => ['type' => 'string'], 'sale_price' => ['type' => 'string'],
-                    'short_description' => ['type' => 'string'], 'description' => ['type' => 'string'], 'sku' => ['type' => 'string'],
+                'הצעה ליצור מוצר חדש: שם, מחיר, מחיר מבצע, תיאור קצר ומלא, מק"ט, כמות במלאי, קטגוריות מוצרים קיימות (שמות, מ-find_terms עם product_cat) ו-publish=true כדי לפרסם מיד. בלי publish הוא נוצר כטיוטה. דרוש שם שהמשתמש מסר או ביקש במפורש להמציא; "מוצר וירטואלי חדש" הוא תיאור בקשה ולא שם אם לא צוין כשם. אם חסר שם שאל רק מהו ושמור את המחיר, הסוג והסטטוס שכבר נמסרו. תיאור, מלאי וקטגוריות הם רשות: היעדרם אינו מעכב הכנת הצעה. קרא לכלי גם כשהבקשה היא רק להציג הצעה: הכלי אינו יוצר מוצר, והביצוע דורש אישור נפרד. תמונה — בעל האתר שולח אותה אחרי שהמוצר נוצר, עם שם המוצר.',
+                ['name' => ['type' => 'string', 'description' => 'שם המוצר שנמסר בשיחה. אם לא נמסר שם ולא נתבקשת להמציא אחד, שאל מה השם ואל תמציא מציין מקום.'], 'regular_price' => ['type' => 'string'], 'sale_price' => ['type' => 'string'],
+                    'short_description' => ['type' => 'string', 'description' => 'תיאור קצר שנמסר או נתבקשה כתיבתו. טקסט מפורש נשמר בדיוק, כולל נקודה בסוף וסימני פיסוק.'], 'description' => ['type' => 'string', 'description' => 'תיאור מלא שנמסר או נתבקשה כתיבתו; אין לשכתב טקסט מפורש בלי בקשה.'], 'sku' => ['type' => 'string'],
                     'stock_quantity' => ['type' => 'integer'], 'categories' => ['type' => 'array', 'items' => ['type' => 'string']],
                     'publish' => ['type' => 'boolean'], 'virtual' => ['type' => 'boolean', 'description' => 'true = וירטואלי ללא משלוח; false או ללא השדה = מוצר פיזי. תוסף 1.12.0 ומעלה נדרש לשדה מפורש.']], ['name']],
             ['propose_product_trash', 'wc_product_trash',
@@ -212,7 +212,7 @@ class SiteActionProposer
                 'הצעה לשנות כותרת, סטטוס (publish/draft/private) או תקציר של פוסט/עמוד קיים לפי id. לשינוי טקסט בתוך התוכן — propose_text_edit או edit_page_text.',
                 ['id' => ['type' => 'integer'], 'title' => ['type' => 'string'], 'status' => ['type' => 'string'], 'excerpt' => ['type' => 'string']], ['id']],
             ['propose_text_edit', 'wp_content_update',
-                'הצעה לשנות טקסט בתוך פוסט מפורסם לפי id: action=replace מחליף את find (ציטוט מדויק שמופיע פעם אחת בתוכן, כפי שהוחזר ב-get_content) ב-text; action=append מוסיף את text בסוף. לא לעמודי אלמנטור — להם edit_page_text.',
+                'הצעה לשנות טקסט בתוך פוסט או עמוד שנקרא לפי id, כולל טיוטה, ממתין לאישור או פרטי בלי לשנות את מצב הפרסום: action=replace מחליף את find (ציטוט מדויק שמופיע פעם אחת בתוכן, כפי שהוחזר ב-get_content) ב-text; action=append מוסיף את text בסוף. לא לעמודי אלמנטור — להם edit_page_text.',
                 ['id' => ['type' => 'integer'], 'action' => ['type' => 'string', 'enum' => ['replace', 'append']],
                     'find' => ['type' => 'string'], 'text' => ['type' => 'string']], ['id', 'action', 'text']],
             ['propose_user_create', 'wp_user_create',
@@ -460,6 +460,9 @@ class SiteActionProposer
         if ($sale !== '' && $regular !== '' && $this->agorot($sale) >= $this->agorot($regular)) {
             return $this->error("מחיר המבצע ({$sale}) חייב להיות נמוך מהמחיר הרגיל ({$regular}).");
         }
+        if (($problem = ProductSaleWindow::problem($fields, $product)) !== null) {
+            return $this->error($problem);
+        }
 
         $name = (string) $product['name'];
         $lines = ["🛒 מוצר: {$name}"];
@@ -478,6 +481,8 @@ class SiteActionProposer
                 'product_name' => $name,
                 'fields' => $fields,
                 'current' => array_intersect_key($product, $fields),
+                ...ProductSaleWindow::changesDates($fields) && is_string($product['timezone'] ?? null)
+                    ? ['sale_timezone' => $product['timezone']] : [],
                 'summary' => "עדכון המוצר {$name}",
             ],
             'preview' => implode("\n", $lines),
@@ -996,7 +1001,7 @@ class SiteActionProposer
 
         $post = $this->json($site, 'wp_content_get', ['id' => $id]);
 
-        if (! isset($post['id'], $post['content'])) {
+        if (($post['id'] ?? null) !== $id || ! is_string($post['content'] ?? null)) {
             return $this->error("פריט התוכן {$id} לא נמצא.");
         }
 
@@ -1004,8 +1009,9 @@ class SiteActionProposer
             return $this->error('העמוד בנוי באלמנטור — לשינוי טקסט בו השתמשו ב-edit_page_text.');
         }
 
-        if (($post['status'] ?? '') !== 'publish') {
-            return $this->error('אפשר לערוך כך רק פריט מפורסם. לטיוטה — אפשר לפרסם קודם עם propose_post_update.');
+        $status = $post['status'] ?? null;
+        if (! in_array($status, ['publish', 'draft', 'pending', 'private', 'future'], true)) {
+            return $this->error('מצב הפריט אינו מאפשר עריכת תוכן בטוחה. אין לערוך פריט בפח, טיוטה אוטומטית או גרסה משנית.');
         }
 
         // The quote must be there exactly once, in the content as the site has
@@ -1016,19 +1022,28 @@ class SiteActionProposer
         }
 
         $title = (string) ($post['title'] ?? '');
+        $heading = "📄 {$title}";
+        if ($status !== 'publish') {
+            $label = match ($status) {
+                'draft' => 'טיוטה', 'pending' => 'ממתין לאישור',
+                'private' => 'פרטי', 'future' => 'מתוזמן',
+            };
+            $heading .= "\nמצב: {$label}. העריכה אינה משנה את מצב הפרסום.";
+        }
 
         return [
             'plan' => [
                 'operation' => $action === 'replace' ? SiteAgentRequest::OP_REPLACE : SiteAgentRequest::OP_APPEND,
                 'page_id' => $id,
                 'page_title' => $title,
+                'page_status' => $status,
                 'find' => $action === 'replace' ? $find : null,
                 'text' => $text,
                 'summary' => "עריכת טקסט ב{$title}",
             ],
             'preview' => $action === 'replace'
-                ? implode("\n", ["📄 {$title}", 'להחליף את:', '"'.$find.'"', '', 'ב:', '"'.$text.'"'])
-                : implode("\n", ["📄 {$title}", 'להוסיף בסוף:', '"'.$text.'"']),
+                ? implode("\n", [$heading, 'להחליף את:', '"'.$find.'"', '', 'ב:', '"'.$text.'"'])
+                : implode("\n", [$heading, 'להוסיף בסוף:', '"'.$text.'"']),
         ];
     }
 

@@ -220,6 +220,45 @@ class AiReplyRepairTest extends TestCase
     }
 
     #[DataProvider('providers')]
+    public function test_one_opted_in_reserve_repairs_a_final_round_without_repeating_reads(string $provider): void
+    {
+        $this->enable($provider);
+        Http::fake(['provider.example/*' => Http::sequence()
+            ->push($this->toolResponse($provider, 'read_page'))
+            ->push($this->reply($provider, self::BAD_REPLY))
+            ->push($this->toolResponse($provider, 'propose_page_update')),
+        ]);
+        $calls = [];
+        $this->assertNull(app(ClaudeClient::class)->converse('s', 'p', $this->tools(), function (string $name) use (&$calls): array {
+            $calls[] = $name;
+
+            return ['content' => 'validated result'];
+        }, maxTurns: 2, reviewReply: fn (): string => self::CORRECTION, replyRepairTurns: 1));
+        $this->assertSame(['read_page', 'propose_page_update'], $calls);
+        Http::assertSentCount(3);
+    }
+
+    #[DataProvider('providers')]
+    public function test_repair_reserve_cannot_extend_a_regular_tool_loop(string $provider): void
+    {
+        $this->enable($provider);
+        Http::fake(['provider.example/*' => Http::response($this->toolResponse($provider, 'read_page'))]);
+        $this->assertNull(app(ClaudeClient::class)->converse('s', 'p', $this->tools(), fn (): array => ['content' => 'read'],
+            maxTurns: 2, reviewReply: fn (): string => self::CORRECTION, replyRepairTurns: 1));
+        Http::assertSentCount(2);
+    }
+
+    #[DataProvider('providers')]
+    public function test_repeated_bad_prose_cannot_extend_the_single_repair_reserve(string $provider): void
+    {
+        $this->enable($provider);
+        Http::fake(['provider.example/*' => Http::response($this->reply($provider, self::BAD_REPLY))]);
+        $this->assertNull(app(ClaudeClient::class)->converse('s', 'p', $this->tools(), fn (): array => [],
+            maxTurns: 2, reviewReply: fn (): string => self::CORRECTION, replyRepairTurns: 99));
+        Http::assertSentCount(3);
+    }
+
+    #[DataProvider('providers')]
     public function test_an_accepted_answer_is_returned_unchanged(string $provider): void
     {
         $this->enable($provider);

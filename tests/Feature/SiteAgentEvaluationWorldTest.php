@@ -14,6 +14,23 @@ use Tests\TestCase;
 /** Checks simulator contracts, not live model or real WordPress behavior. */
 class SiteAgentEvaluationWorldTest extends TestCase
 {
+    public function test_lists_expose_only_native_plugin_metadata_not_single_item_content(): void
+    {
+        $world = new EvaluationWorld;
+        $pages = $world->handle('wp_content_list');
+        $this->assertNotEmpty($pages);
+        foreach ($pages as $page) {
+            $this->assertSame('page', $page['type']);
+            $this->assertArrayNotHasKey('content', $page);
+            $this->assertArrayNotHasKey('date', $page);
+            $this->assertArrayNotHasKey('fields', $page);
+        }
+        $logo = $world->handle('wp_media_list', ['search' => 'לוגו'])['items'][0];
+        $this->assertSame('לוגו כחול', $logo['alt']);
+        $this->assertArrayNotHasKey('description', $logo);
+        $this->assertArrayNotHasKey('filename', $logo);
+    }
+
     public function test_product_count_and_paginated_search_do_not_depend_on_the_last_created_product(): void
     {
         $world = new EvaluationWorld;

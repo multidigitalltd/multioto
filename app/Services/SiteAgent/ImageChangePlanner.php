@@ -49,6 +49,10 @@ class ImageChangePlanner
         }
 
         $draft = (array) ($context['image_draft'] ?? []);
+        $explicitAlt = $this->explicitAlt($caption);
+        if ($explicitAlt !== null) {
+            $draft['alt'] = $explicitAlt;
+        }
         $unavailableTargets = [];
         if (isset($draft['target_id'], $draft['target_title'])) {
             $fresh = $this->refreshTarget($site, (int) $draft['target_id']);
@@ -86,6 +90,11 @@ class ImageChangePlanner
             }
 
             $draft = $this->mergeDraft($draft, $result, $targets);
+            // An explicit accessibility field supplied by the owner is not
+            // lost when the model omits or paraphrases that scalar field.
+            if ($explicitAlt !== null) {
+                $draft['alt'] = $explicitAlt;
+            }
             $query = $this->string($result['target_query'] ?? '', 120);
             $kind = in_array($result['target_kind'] ?? '', ['product', 'page'], true) ? $result['target_kind'] : 'product';
             $key = $kind.':'.$query;
@@ -139,6 +148,18 @@ class ImageChangePlanner
         return [...$plan, 'image_draft' => $draft, 'image_no_progress' => $noProgress];
     }
 
+    /** Read a labelled, quoted scalar only; ordinary captions still use the model. */
+    private function explicitAlt(string $caption): ?string
+    {
+        $label = '(?:ה?טקסט\s+ה?חלופי|(?:תיאור\s+)?לנגישות|alt(?:\s+text)?)';
+        if (preg_match('/(?:^|[.!?]\s+)'.$label.'(?:\s+שלה)?\s*[:=]\s*["״“]([^"״”\r\n]{1,500})["״”]/iu', trim($caption), $match) !== 1) {
+            return null;
+        }
+        $value = $this->string($match[1], 500);
+
+        return $value !== '' ? $value : null;
+    }
+
     /** Only validated target identities and supported scalar fields survive. */
     private function mergeDraft(array $draft, array $result, array $targets): array
     {
@@ -183,6 +204,10 @@ class ImageChangePlanner
             // Attaching already includes a library upload. A missing target is
             // a clarification, never permission to silently upload only.
             $draft['upload_only'] = false;
+        }
+        if (($result['destination'] ?? '') === 'unspecified' && ! isset($draft['target_id'])) {
+            $draft['upload_only'] = false;
+            $draft['new_product'] = false;
         }
         if (($result['destination'] ?? '') === 'library') {
             unset($draft['target_id'], $draft['target_title']);
@@ -296,12 +321,12 @@ class ImageChangePlanner
             'properties' => [
                 'can_do' => ['type' => 'boolean'],
                 'relation' => ['type' => 'string', 'enum' => ['image', 'topic_switch', 'cancel']],
-                'destination' => ['type' => 'string', 'enum' => ['attach', 'library', 'new_product']],
-                'target_id' => ['type' => 'integer'],
+                'destination' => ['type' => 'string', 'enum' => ['attach', 'library', 'new_product', 'unspecified'], 'description' => 'יעד שהתבקש במפורש או נשמר בשיחה; unspecified כשהבעלים עדיין לא בחר.'],
+                'target_id' => ['type' => 'integer', 'description' => 'מזהה יעד מאומת שהתבקש; 0 כשהיעד אינו ידוע או לא נבחר. אין לבחור את המועמד הראשון כברירת מחדל.'],
                 'target_query' => ['type' => 'string', 'description' => 'שם קצר לחיפוש כשאין יעד מאומת, ללא מילות הבקשה'],
                 'target_kind' => ['type' => 'string', 'enum' => ['product', 'page']],
                 'target_changed' => ['type' => 'boolean'],
-                'alt' => ['type' => 'string'],
+                'alt' => ['type' => 'string', 'description' => 'תיאור שכבר מסר הבעלים, לרבות טקסט חלופי מפורש בתוך הכיתוב; מחרוזת ריקה רק אם לא נמסר תיאור ולא נשמר קודם.'],
                 'needs' => ['type' => 'string', 'enum' => ['target', 'alt', 'both', 'name']],
                 'summary' => ['type' => 'string'],
                 'new_product' => ['type' => 'boolean'],
@@ -315,7 +340,7 @@ class ImageChangePlanner
                 'publish' => ['type' => 'boolean'],
                 'virtual' => ['type' => 'boolean'],
             ],
-            'required' => ['can_do'],
+            'required' => ['can_do', 'relation', 'destination', 'target_id', 'alt'],
         ];
     }
 
@@ -408,6 +433,8 @@ class ImageChangePlanner
             '- target_changed=true רק כשהבעלים מחליף יעד שכבר נבחר; חפש ובחר את החדש ולא את הקודם.',
             '- destination=attach להצבה בעמוד/מוצר קיים; library לשמירה בספרייה בלבד; new_product ליצירת מוצר חדש. העלאה לספרייה והצבה כתמונת מוצר הן פעולה אחת מסוג attach — ההצבה כוללת שמירה בספרייה.',
             '',
+            '- כשהבעלים מסר טקסט חלופי מפורש, למשל הטקסט החלופי שלה: "הכניסה לחנות שלנו", העתק אותו ל-alt בדיוק. אין לשאול שוב על תיאור שכבר נמסר. לא קיבלת כאן את פיקסלי התמונה ולכן אינך יכול להמציא תיאור חזותי.',
+            '- הודעה כללית כמו הנה תמונה חדשה אינה בחירה בעמוד או במוצר. החזר destination=unspecified, target_id=0 ו-alt ריק אם לא נמסרו פרטים; אל תחפש או תבחר יעד בלי שם, תיאור יעד או הפניה ברורה מהשיחה.',
             '- target_id: מזהה העמוד או המוצר מהרשימה שניתנה לך בלבד. אל תמציא מזהה.',
             '- alt: תיאור קצר בעברית של מה שרואים בתמונה, לקוראי מסך. זהו תיאור של התוכן, לא של המיקום.',
             '  "התמונה החדשה" או "תמונה לדף הבית" אינם תיאור. "כיכר לחם על שולחן עץ" הוא תיאור.',

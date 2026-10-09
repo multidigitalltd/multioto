@@ -28,6 +28,38 @@ class GeminiModelTest extends TestCase
         Http::preventStrayRequests();
     }
 
+    public function test_structured_json_can_follow_a_thought_and_span_multiple_visible_parts(): void
+    {
+        $this->enableGemini();
+        Http::fake(['generativelanguage.googleapis.com/*' => Http::response([
+            'candidates' => [['content' => ['parts' => [
+                ['thought' => true, 'text' => 'private internal note'],
+                ['text' => '{"ok":'], ['text' => 'true}'],
+            ]]]],
+        ])]);
+        $this->assertSame(['ok' => true], app(ClaudeClient::class)->structured('s', 'p', [
+            'type' => 'object', 'properties' => ['ok' => ['type' => 'boolean']],
+        ]));
+    }
+
+    public function test_only_visible_gemini_text_is_reviewed_and_returned_to_the_owner(): void
+    {
+        $this->enableGemini();
+        Http::fake(['generativelanguage.googleapis.com/*' => Http::response([
+            'candidates' => [['content' => ['parts' => [
+                ['thought' => true, 'text' => 'private internal note'],
+                null, ['text' => 'המחיר הוא 100 ש״ח.'],
+            ]]]],
+        ])]);
+        $this->assertSame('המחיר הוא 100 ש״ח.', app(ClaudeClient::class)->converse(
+            's', 'p', [], fn (): array => [], reviewReply: function (string $reply): ?string {
+                $this->assertSame('המחיר הוא 100 ש״ח.', $reply);
+
+                return null;
+            },
+        ));
+    }
+
     public function test_the_site_catalog_uses_native_json_schema_without_losing_dynamic_fields(): void
     {
         $this->enableGemini();

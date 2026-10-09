@@ -47,7 +47,7 @@ class SiteAgentEvaluationRunsTest extends TestCase
         $this->actingAs($this->admin);
         $this->runs = new class(app(EvaluationCorpus::class)) extends EvaluationRuns
         {
-            protected function manifest(): array
+            protected function manifest(string $suite = 'original'): array
             {
                 return array_map(fn (int $index): array => ['id' => sprintf('case-%03d', $index)], range(1, 400));
             }
@@ -64,26 +64,100 @@ class SiteAgentEvaluationRunsTest extends TestCase
         return $this->runs->start($this->admin->id);
     }
 
-    private function fakeCase(string $status = 'passed', ?callable $during = null, ?string $caseOverride = null): void
+    private function fakeCase(string $status = 'passed', ?callable $during = null, ?string $caseOverride = null, array $caseOverrides = []): void
     {
-        Process::fake(function (PendingProcess $process) use ($status, $during, $caseOverride) {
+        Process::fake(function (PendingProcess $process) use ($status, $during, $caseOverride, $caseOverrides) {
             $during?->__invoke($process);
             $caseId = $caseOverride ?? substr($process->command[4], strlen('--case='));
             $output = substr($process->command[5], strlen('--output='));
             file_put_contents($output, json_encode(['schema_version' => 1, 'mode' => 'live_model_simulated_site',
                 'provider' => 'google', 'model' => 'gemini-3.1-flash-lite', 'corpus_sha256' => str_repeat('a', 64),
-                'summary' => ['total' => 1, 'passed' => (int) ($status === 'passed'), 'failed' => (int) ($status === 'failed'), 'blocked' => (int) ($status === 'blocked')], 'cases' => [[
+                'summary' => ['total' => 1, 'passed' => (int) ($status === 'passed'), 'failed' => (int) ($status === 'failed'), 'blocked' => (int) ($status === 'blocked')], 'cases' => [array_replace([
                     'id' => $caseId, 'status' => $status, 'model_executed' => $status !== 'blocked',
                     'provider_requests' => $status === 'blocked' ? 0 : 2,
+                    'provider_responses' => $status === 'blocked' ? 0 : 2,
+                    'execution' => $status === 'blocked' ? 'not_executed' : 'model',
                     'usage' => ['input_tokens' => 123, 'output_tokens' => 45],
                     'turns' => [], 'semantic_review' => 'not_performed',
-                ]]]));
+                ], $caseOverrides)]]));
 
             return Process::result(output: 'do not store process stdout private-test-api-key',
                 errorOutput: 'do not store stderr private-test-api-key', exitCode: match ($status) {
                     'passed' => 0, 'failed' => 1, default => 3,
                 });
         });
+    }
+
+    private function allowDeterministicFirstCase(): void
+    {
+        $this->runs = new class(app(EvaluationCorpus::class)) extends EvaluationRuns
+        {
+            protected function manifest(string $suite = 'original'): array
+            {
+                return array_map(fn (int $index): array => ['id' => sprintf('case-%03d', $index),
+                    'expect' => ['model_required' => $index !== 1 || config('evaluation_test.require_model', false)]], range(1, 400));
+            }
+
+            protected function fingerprint(): string
+            {
+                return str_repeat('a', 64);
+            }
+        };
+    }
+
+    public function test_an_explicit_trusted_deterministic_case_may_pass_without_provider_traffic(): void
+    {
+        $this->allowDeterministicFirstCase();
+        $id = $this->start();
+        $this->fakeCase(caseOverrides: ['model_executed' => false, 'execution' => 'deterministic',
+            'provider_requests' => 0, 'provider_responses' => 0]);
+        $this->runs->process($id, 0);
+
+        self::assertSame(1, $this->runs->get($id)['passed']);
+        self::assertSame(0, $this->runs->get($id)['provider_requests']);
+        self::assertArrayNotHasKey('deterministic_case_ids', $this->runs->get($id));
+        self::assertSame('deterministic', $this->runs->report($id)['cases'][0]['execution']);
+        self::assertFalse($this->runs->report($id)['cases'][0]['model_executed']);
+        config(['evaluation_test.require_model' => true]);
+        self::assertSame('deterministic', $this->runs->report($id)['cases'][0]['execution']);
+    }
+
+    public function test_child_report_cannot_opt_itself_out_of_required_model_execution(): void
+    {
+        $id = $this->start();
+        $this->fakeCase(caseOverrides: ['model_executed' => false, 'execution' => 'deterministic',
+            'provider_requests' => 0, 'provider_responses' => 0, 'expect' => ['model_required' => false]]);
+        $this->runs->process($id, 0);
+
+        self::assertSame('failed', $this->runs->get($id)['status']);
+        self::assertSame(0, $this->runs->get($id)['passed']);
+        self::assertSame(0, $this->runs->get($id)['completed']);
+    }
+
+    public static function invalidDeterministicEvidence(): array
+    {
+        return [
+            'attempted provider call' => [['provider_requests' => 1]],
+            'provider response without a request' => [['provider_responses' => 1]],
+            'missing execution marker' => [['execution' => null]],
+            'incorrect model marker' => [['execution' => 'model']],
+            'model claim without provider traffic' => [['model_executed' => true, 'execution' => 'model']],
+            'failed provider call hidden as a model pass' => [['model_executed' => true, 'execution' => 'model', 'provider_requests' => 2, 'provider_responses' => 1]],
+        ];
+    }
+
+    #[DataProvider('invalidDeterministicEvidence')]
+    public function test_the_deterministic_exception_never_hides_missing_or_failed_provider_evidence(array $overrides): void
+    {
+        $this->allowDeterministicFirstCase();
+        $id = $this->start();
+        $this->fakeCase(caseOverrides: array_replace(['model_executed' => false, 'execution' => 'deterministic',
+            'provider_requests' => 0, 'provider_responses' => 0], $overrides));
+        $this->runs->process($id, 0);
+
+        self::assertSame('failed', $this->runs->get($id)['status']);
+        self::assertSame(0, $this->runs->get($id)['passed']);
+        self::assertSame(0, $this->runs->get($id)['completed']);
     }
 
     public function test_start_only_queues_and_keeps_the_key_out_of_metadata_and_job_payload(): void
@@ -107,7 +181,7 @@ class SiteAgentEvaluationRunsTest extends TestCase
 
     public static function protectedActions(): array
     {
-        return [['start'], ['latest'], ['get'], ['cancel'], ['report']];
+        return [['start'], ['latest'], ['get'], ['cancel'], ['report'], ['streamReport']];
     }
 
     #[DataProvider('protectedActions')]
@@ -122,6 +196,7 @@ class SiteAgentEvaluationRunsTest extends TestCase
                 'get' => $this->runs->get($id),
                 'cancel' => $this->runs->cancel($id),
                 'report' => $this->runs->report($id),
+                'streamReport' => $this->runs->streamReport($id),
             };
             self::fail('Non-admin access must be denied.');
         } catch (HttpException $error) {

@@ -194,4 +194,124 @@ class SiteAgentEvaluationOracleTest extends TestCase
             'final' => ['plugins.hello-dolly/hello.php.active' => false, 'options.a.b.value' => null]],
             [$this->turn(['requests' => [$this->request()]])], $state, $state));
     }
+
+    public function test_absent_assertions_do_not_conflate_a_missing_record_with_a_present_null_value(): void
+    {
+        $expect = ['outcome' => 'proposal', 'operations' => ['update_price'], 'final_absent' => ['products.40000']];
+        $turns = [$this->turn(['requests' => [$this->request()]])];
+        self::assertSame([], $this->evaluate($expect, $turns, ['products' => []], ['products' => []]));
+
+        foreach ([null, ['name' => 'Unexpected product']] as $value) {
+            $state = ['products' => [40000 => $value]];
+            self::assertContains('Final state unexpectedly contains products.40000.', $this->evaluate($expect, $turns, $state, $state));
+        }
+
+        self::assertContains('Final state differs at products.40000.', $this->evaluate(
+            ['outcome' => 'proposal', 'operations' => ['update_price'], 'final' => ['products.40000' => null]],
+            $turns, ['products' => []], ['products' => []]));
+    }
+
+    public function test_proposal_checks_the_saved_target_and_value_not_only_its_operation(): void
+    {
+        $expect = ['outcome' => 'proposal', 'operations' => ['update_price'],
+            'plan' => ['product_id' => 7, 'fields.regular_price' => '90.00']];
+        $turns = [$this->turn(['requests' => [$this->request()]])];
+        self::assertSame([], $this->evaluate($expect, $turns));
+        $turns[0]['requests'][0]['plan']['product_id'] = 8;
+        $turns[0]['requests'][0]['plan']['fields']['regular_price'] = '9.00';
+        $failures = $this->evaluate($expect, $turns);
+        self::assertContains('Saved plan differs at product_id.', $failures);
+        self::assertContains('Saved plan differs at fields.regular_price.', $failures);
+    }
+
+    public function test_explicit_plan_alternatives_accept_only_the_enumerated_formats_without_coercion(): void
+    {
+        $expect = ['outcome' => 'proposal', 'operations' => ['update_price'], 'plan' => ['product_id' => 7],
+            'plan_any' => ['fields.regular_price' => ['90', '90.00']]];
+        $turns = [$this->turn(['requests' => [$this->request()]])];
+        foreach (['90', '90.00'] as $value) {
+            $turns[0]['requests'][0]['plan']['fields']['regular_price'] = $value;
+            self::assertSame([], $this->evaluate($expect, $turns));
+        }
+        foreach (['9.00', 90, null] as $value) {
+            $turns[0]['requests'][0]['plan']['fields']['regular_price'] = $value;
+            self::assertContains('Saved plan contains none of the allowed values at fields.regular_price.', $this->evaluate($expect, $turns));
+        }
+        unset($turns[0]['requests'][0]['plan']['fields']['regular_price']);
+        self::assertContains('Saved plan contains none of the allowed values at fields.regular_price.', $this->evaluate($expect, $turns));
+    }
+
+    public function test_withdrawal_during_conversation_can_be_explicitly_tested_without_a_saved_offer(): void
+    {
+        $expect = ['outcome' => 'canceled', 'cancel_without_offer' => true, 'reply_contains' => ['I will stop.']];
+        $turns = [$this->turn(['reply' => 'What would you like to change?']),
+            $this->turn(['user' => 'Never mind.', 'reply' => 'I will stop.'])];
+        self::assertSame([], $this->evaluate($expect, $turns));
+
+        $turns[0]['requests'] = [$this->request('awaiting', null)];
+        self::assertContains('Observed request lifecycle does not establish expected outcome: canceled.', $this->evaluate($expect, $turns));
+    }
+
+    public function test_conversational_withdrawal_requires_positive_final_reply_evidence_and_no_mutation(): void
+    {
+        $expect = ['outcome' => 'canceled', 'cancel_without_offer' => true, 'reply_contains' => ['I will stop.']];
+        $turns = [$this->turn(['reply' => 'I will stop.']), $this->turn(['user' => 'Never mind.', 'reply' => 'I am changing the price now.'])];
+        self::assertContains('Reply is missing required evidence: I will stop.', $this->evaluate($expect, $turns));
+        unset($expect['reply_contains']);
+        self::assertContains('Insufficient oracle: this outcome requires positive reply evidence.', $this->evaluate($expect, $turns));
+
+        $expect['reply_contains'] = ['I will stop.'];
+        $turns[1]['reply'] = 'I will stop.';
+        $turns[1]['calls'] = [$this->write()];
+        self::assertContains('A non-writing outcome attempted a native mutation.', $this->evaluate($expect, $turns));
+        $turns[1]['calls'] = [];
+        self::assertContains('A non-writing outcome changed fixture state.', $this->evaluate($expect, $turns, ['price' => 100], ['price' => 90]));
+    }
+
+    public static function incorrectNumericEvidence(): array
+    {
+        return [['Product 140'], ['Price: 40.50'], ['Reference: SKU40'], ['Reference: 40SKU'], ['Amount: -40'], ['Amount: 1,040'], ['Amount: 0.40']];
+    }
+
+    #[DataProvider('incorrectNumericEvidence')]
+    public function test_a_number_inside_another_fact_is_not_positive_evidence(string $reply): void
+    {
+        $call = ['tool' => 'wc_product_counts', 'arguments' => [], 'write' => false, 'result' => ['products' => ['total' => 40]]];
+        self::assertContains('Reply is missing required evidence: 40', $this->evaluate(
+            ['outcome' => 'read', 'tools_all' => ['wc_product_counts'], 'reply_contains' => ['40']],
+            [$this->turn(['reply' => $reply, 'calls' => [$call]])]));
+    }
+
+    public function test_a_numeric_fact_accepts_equivalent_zero_decimal_formatting(): void
+    {
+        $call = ['tool' => 'wc_product_get', 'arguments' => [], 'write' => false, 'result' => ['regular_price' => '40.00']];
+        foreach (['40', '40.0', '40.00'] as $number) {
+            self::assertSame([], $this->evaluate(['outcome' => 'read', 'tools_all' => ['wc_product_get'], 'reply_contains' => [$number]],
+                [$this->turn(['reply' => 'The price is **40.00**.', 'calls' => [$call]])]));
+        }
+    }
+
+    public function test_failed_write_attempts_cannot_establish_an_application_even_if_the_final_value_already_matches(): void
+    {
+        $turns = $this->application();
+        unset($turns[1]['calls'][0]['result']);
+        $turns[1]['calls'][0]['error'] = 'Unavailable';
+        self::assertContains('Observed request lifecycle does not establish expected outcome: applied.', $this->evaluate(
+            ['outcome' => 'applied', 'operations' => ['update_price'], 'final' => ['price' => '90.00']],
+            $turns, ['price' => '90.00'], ['price' => '90.00']));
+    }
+
+    public function test_a_successful_application_cannot_hide_a_failed_undo_write(): void
+    {
+        $turns = $this->application();
+        $failedWrite = $this->write();
+        unset($failedWrite['result']);
+        $failedWrite['error'] = 'Unavailable';
+        $turns[] = $this->turn(['user' => 'בטל', 'reply' => 'Reverted', 'undo' => true,
+            'calls' => [$failedWrite], 'requests' => [$this->request('reverted')]]);
+
+        self::assertContains('Turn 3: request became reverted without a successful native write.', $this->evaluate(
+            ['outcome' => 'reverted', 'operations' => ['update_price'], 'final' => ['price' => '100.00']],
+            $turns, ['price' => '100.00'], ['price' => '100.00']));
+    }
 }

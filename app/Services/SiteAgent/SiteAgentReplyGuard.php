@@ -31,8 +31,9 @@ final class SiteAgentReplyGuard
         $continuation = '(?:עם\s+(?:השינוי|העדכון|הפעולה|ההצעה)|ב(?:שינוי|עדכון|פעולה|הצעה)|לביצוע)';
         $boundary = '(?![\p{L}\p{N}_])';
         $affirmative = '(?:ב\s*)?["\']?'.$yes.$boundary.'["\']?';
-        $consentStart = '(?:^\s*|(?<=[.!?؟:;])\s+|(?<=\n)\s*)(?:האם\s+)?(?:תרצה|תרצי|תרצו|רוצה|רוצים|רוצות|אפשר)\s+ש';
-        $writeVerb = '(?:אבצע|אעדכן|אשמור|אחיל|אשנה|אגדיר|אהפוך|אסמן|אחליף|נבצע|נעדכן|נשמור|נחיל|נשנה|נגדיר|נהפוך|נסמן|נחליף)';
+        $clauseStart = '(?:^\s*|(?<=[.!?؟:;])\s+|(?<=\n)\s*)';
+        $consentStart = $clauseStart.'(?:האם\s+)?(?:(?:את|אתה|אתם|אתן)\s+)?(?:תרצה|תרצי|תרצו|רוצה|רוצים|רוצות|אפשר)\s+ש';
+        $writeVerb = '(?:אבצע|אעדכן|אשמור|אחיל|אשנה|אגדיר|אהפוך|אסמן|אחליף|אוסיף|אעביר|אצור|איצור|אפרסם|אתזמן|אכבה|אפעיל|אסיר|אמחק|ארשום|אאשר|נבצע|נעדכן|נשמור|נחיל|נשנה|נגדיר|נהפוך|נסמן|נחליף|נוסיף|נעביר|ניצור|נפרסם|נתזמן|נכבה|נפעיל|נסיר|נמחק|נרשום|נאשר)';
         $patterns = [
             // Quoted and unquoted yes/no can both answer an ordinary
             // clarification. Require an execution/approval purpose nearby.
@@ -46,6 +47,19 @@ final class SiteAgentReplyGuard
             '(?:מאשר|מאשרת|מאשרים|מאשרות|מאושר)(?:\s+(?:את\s+)?'.$target.')?\s*[?؟]',
             $consentStart.$writeVerb.'(?:\s+(?:את\s+)?'.$target.')?\s*[?؟]',
             $consentStart.$writeVerb.'\s+(?:אותו|אותה|אותם|אותן|את\s+[^\s?؟.!]+)'.$boundary.'[^\r\n?؟]{0,180}[?؟]',
+            // Preparing an offer is already authorized by the owner's request.
+            // A permission question before preparing it adds a phantom step:
+            // the first "yes" cannot execute any stored proposal.
+            $consentStart.'(?:אגיש|אכין|אציע|נגיש|נכין|נציע)\s+(?:את\s+)?(?:הצעה|ההצעה|שינוי|השינוי|שינויים|השינויים|עדכון|העדכון|פעולה|הפעולה)'.$boundary.'[^\r\n?؟]{0,220}[?؟]',
+            '(?:האם\s+)?(?:ליצור|להוסיף|להעביר|לפרסם|לתזמן|להפעיל|לכבות|להסיר|לרשום)\s+[^\r\n?؟]{0,160}[?؟]\s*[^\r\n]{0,40}(?:כן\s*[\/או]+\s*לא|'.$directive.$connector.'\s*[:—–-]?\s*'.$affirmative.')',
+            '(?:האם\s+)?(?:את|אתה|אתם|אתן)\s+(?:מאשר|מאשרת|מאשרים|מאשרות)\s+(?:ל|את\s+)[^\r\n?؟]{1,180}[?؟]',
+            $clauseStart.'(?:האם\s+)?(?:להגיש|להכין|להציע|ליצור)\s+(?:את\s+)?(?:הצעה|ההצעה|שינוי|השינוי|עדכון|העדכון)'.$boundary.'[^\r\n?؟]{0,180}[?؟]',
+            $consentStart.'(?:אצור|איצור|ניצור)\s+(?:הצעה|תצוגה\s+מקדימה)'.$boundary.'[^\r\n?؟]{0,180}[?؟]',
+            $consentStart.'(?:אציע|נציע)\s+(?:לרשום|להחליף|להעביר|לשנות|לעדכן|להוסיף|להסיר|ליצור|לפרסם)'.$boundary.'[^\r\n?؟]{0,180}[?؟]',
+            '(?:אשמח|נשמח|זקוק|זקוקה|ממתין|ממתינה)\s+(?:לאישורך|לאישורכם|לאישורכן)'.$boundary.'\s+(?:כדי\s+(?:להוסיף|לשנות|לעדכן|להעביר|ליצור|לפרסם|לבצע)|לפני\s+(?:שאגיש|שאכין|שאבצע)|לביצוע|לבצע|להגיש)',
+            // A claimed handoff to an editor is also unbacked unless the
+            // delegate actually ran and returned the saved preview.
+            '(?:העברתי|הוגשה|נשלחה)\s+(?:את\s+)?(?:הבקשה|ההצעה)[^\r\n.]{0,180}(?:לטיפול|לעורך|לאישור)',
             // English providers sometimes answer in English despite the site
             // language. Keep the same distinction between approval and data.
             '(?:reply|respond|type|send|say|answer|click|press)\s+(?:with\s+)?["\']?yes\b["\']?\s+(?:to\s+)?(?:confirm|approve|proceed|apply)\b',
@@ -55,6 +69,7 @@ final class SiteAgentReplyGuard
             '(?:^|[.!?]\s+)(?:confirm|approve)\s*\?',
             '(?:shall|should|can|may)\s+i\s+(?:proceed|apply\s+(?:the|this)\s+(?:change|update)|make\s+(?:the|this)\s+change)\s*\?',
             'would\s+you\s+like\s+me\s+to\s+(?:proceed|apply\s+(?:the|this)\s+(?:change|update)|make\s+(?:the|this)\s+change)\s*\?',
+            '(?:would\s+you\s+like\s+me\s+to|shall\s+i|should\s+i|can\s+i)\s+(?:prepare|submit|create)\s+(?:an?\s+|the\s+)?(?:proposal|preview|change|update)\b[^\r\n?]{0,180}\?',
             'do\s+you\s+(?:approve|confirm)(?:\s+(?:the|this)\s+(?:change|update|proposal))?\s*\?',
         ];
 

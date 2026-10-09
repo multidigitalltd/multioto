@@ -129,6 +129,34 @@ class SiteAgentAssistantTest extends TestCase
         $this->assertSame([], $this->calls);
     }
 
+    public function test_yes_with_no_previous_question_does_not_call_the_model_or_revive_a_canceled_request(): void
+    {
+        $subscriber = $this->subscriber();
+        $ai = Mockery::mock(ClaudeClient::class);
+        $ai->shouldReceive('supportsAgent')->andReturn(true);
+        $ai->shouldReceive('isEnabled')->andReturn(true);
+        $ai->shouldNotReceive('converse');
+        $ai->shouldNotReceive('structured');
+        $this->app->instance(ClaudeClient::class, $ai);
+
+        $this->assertSame(SiteAgentConversation::NO_PENDING_PROPOSAL, $this->talk($subscriber, 'כן'));
+        SiteAgentRequest::create([
+            'site_agent_subscriber_id' => $subscriber->id, 'site_id' => $subscriber->site_id,
+            'customer_id' => $subscriber->customer_id, 'message' => 'תשנה את הטלפון',
+            'operation' => SiteAgentRequest::OP_REPLACE, 'plan' => ['page_id' => 11],
+            'preview' => 'החלפת מספר הטלפון', 'state' => SiteAgentRequest::CANCELED,
+            'expires_at' => now()->addMinutes(30),
+        ]);
+        SiteAgentMessage::create([
+            'site_agent_subscriber_id' => $subscriber->id, 'site_id' => $subscriber->site_id,
+            'role' => SiteAgentMessage::ASSISTANT, 'body' => 'בוטל, לא שיניתי כלום. אפשר לבקש משהו אחר.',
+        ]);
+
+        $this->assertSame(SiteAgentConversation::NO_PENDING_PROPOSAL, $this->talk($subscriber, 'כן'));
+        $this->assertSame(SiteAgentRequest::CANCELED, SiteAgentRequest::sole()->state);
+        $this->assertSame([], $this->calls);
+    }
+
     public function test_an_order_the_model_never_looked_up_cannot_be_proposed(): void
     {
         $subscriber = $this->subscriber();
@@ -350,7 +378,7 @@ class SiteAgentAssistantTest extends TestCase
         $this->assertSame(SiteAgentRequest::OP_REPLACE, SiteAgentRequest::sole()->operation);
     }
 
-    public function test_without_the_assistant_the_fixed_planners_still_answer(): void
+    public function test_a_failed_enabled_assistant_never_reinterprets_an_acf_request_as_plain_text(): void
     {
         $subscriber = $this->subscriber();
         $this->site['wp_content_list'] = [['id' => 11, 'title' => 'דף הבית']];
@@ -361,13 +389,15 @@ class SiteAgentAssistantTest extends TestCase
         $ai->shouldReceive('supportsAgent')->andReturn(true);
         // The provider failed mid-conversation.
         $ai->shouldReceive('converse')->andReturn(null);
-        $ai->shouldReceive('structured')->once()->andReturn(null);
+        $ai->shouldNotReceive('structured');
         $this->app->instance(ClaudeClient::class, $ai);
 
-        $reply = $this->talk($subscriber, 'משהו');
+        $reply = $this->talk($subscriber, 'ב-ACF בדף הבית תחליף את טלפון יצירת הקשר ל-050-1234567.');
 
         $this->assertStringContainsString('הבוט לא הצליח לעבד את הבקשה כרגע', $reply);
         $this->assertStringNotContainsString('לא הצלחתי להבין', $reply);
+        $this->assertSame([], $this->calls);
+        $this->assertSame(0, SiteAgentRequest::count());
     }
 
     public function test_the_conversation_so_far_is_context_and_old_turns_are_not(): void

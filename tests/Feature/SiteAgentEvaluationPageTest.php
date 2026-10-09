@@ -62,7 +62,7 @@ class SiteAgentEvaluationPageTest extends TestCase
         $runs->shouldReceive('latest')->andReturnUsing(function () use (&$summary) {
             return $summary;
         });
-        $runs->shouldReceive('start')->once()->with($admin->id)->andReturnUsing(function () use (&$summary) {
+        $runs->shouldReceive('start')->once()->with($admin->id, 'original')->andReturnUsing(function () use (&$summary) {
             $summary = $this->summary();
 
             return $summary['id'];
@@ -75,6 +75,43 @@ class SiteAgentEvaluationPageTest extends TestCase
             ->assertSeeText('ממתינה בתור');
 
         $this->assertSame('queued', $summary['status']);
+        Http::assertNothingSent();
+    }
+
+    #[DataProvider('selectedSuites')]
+    public function test_selected_suite_controls_the_button_count_and_queued_manifest(string $suite, int $count): void
+    {
+        $admin = User::factory()->create();
+        $this->actingAs($admin);
+        $runs = $this->runs();
+        $runs->shouldReceive('latest')->andReturnNull();
+        $runs->shouldReceive('start')->once()->with($admin->id, $suite)->andReturn((string) Str::uuid());
+
+        Livewire::test(SiteAgentEvaluation::class)
+            ->set('suite', $suite)
+            ->assertSeeText('הפעלת '.$count.' התרחישים')
+            ->call('start')
+            ->assertHasNoErrors()
+            ->assertNotified('הבדיקה נוספה לתור');
+        Http::assertNothingSent();
+    }
+
+    public static function selectedSuites(): array
+    {
+        return [['round2', 400], ['all', 800]];
+    }
+
+    public function test_invalid_livewire_suite_never_reaches_the_queue_service(): void
+    {
+        $this->actingAs(User::factory()->create());
+        $runs = $this->runs();
+        $runs->shouldReceive('latest')->andReturnNull();
+        $runs->shouldNotReceive('start');
+
+        Livewire::test(SiteAgentEvaluation::class)
+            ->set('suite', '../untrusted')
+            ->call('start')
+            ->assertHasErrors(['suite']);
         Http::assertNothingSent();
     }
 
@@ -148,18 +185,20 @@ class SiteAgentEvaluationPageTest extends TestCase
             ->assertDontSeeText('עצירה אחרי התרחיש הנוכחי');
     }
 
-    public function test_admin_can_download_the_service_report_with_unicode_and_truthful_outcomes_intact(): void
+    public function test_admin_download_uses_a_direct_http_link_instead_of_buffering_json_in_livewire(): void
     {
         $this->actingAs(User::factory()->create());
         $summary = $this->summary(['status' => 'completed', 'completed' => 400, 'passed' => 399, 'failed' => 1]);
-        $report = ['summary' => $summary, 'cases' => [['id' => 'commerce-001', 'status' => 'failed', 'reason' => 'מחיר שגוי']]];
         $runs = $this->runs();
         $runs->shouldReceive('latest')->andReturn($summary);
-        $runs->shouldReceive('report')->once()->with($summary['id'])->andReturn($report);
+        $runs->shouldNotReceive('report', 'streamReport');
+        $url = route('site-agent.evaluation.download', ['run' => $summary['id']]);
 
         Livewire::test(SiteAgentEvaluation::class)
+            ->assertSeeHtml('href="'.$url.'"')
+            ->assertDontSeeHtml('wire:click="download(')
             ->call('download', $summary['id'])
-            ->assertFileDownloaded('site-agent-evaluation-'.$summary['id'].'.json', json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR));
+            ->assertRedirect($url);
     }
 
     public function test_model_and_failure_text_are_escaped_in_the_admin_page(): void

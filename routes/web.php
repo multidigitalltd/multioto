@@ -21,6 +21,7 @@ use App\Http\Controllers\PushSubscriptionController;
 use App\Http\Controllers\SignatureController;
 use App\Http\Controllers\SignupCardController;
 use App\Http\Controllers\SignupController;
+use App\Http\Controllers\SiteAgentEvaluationDownloadController;
 use App\Http\Controllers\SiteAgentStoreController;
 use App\Http\Controllers\SupportAttachmentController;
 use App\Http\Controllers\SupportFormController;
@@ -186,6 +187,13 @@ Route::get('/support/attachments/{message}/{index}', SupportAttachmentController
     ->middleware(['web', 'auth', EnsureTwoFactorConfirmed::class, EnsureModuleAccess::class.':support'])
     ->whereNumber('index')
     ->name('support.attachment');
+
+// Reports stream outside Livewire so large evaluation exports are not buffered
+// and base64-encoded. The service also enforces an administrator role.
+Route::get('/site-agent/evaluations/{run}/download', SiteAgentEvaluationDownloadController::class)
+    ->middleware(['auth', EnsureTwoFactorConfirmed::class, 'throttle:10,1'])
+    ->whereUuid('run')
+    ->name('site-agent.evaluation.download');
 
 /*
  | Google sign-in. Guest-only by nature and rate limited, because the callback

@@ -242,9 +242,13 @@ class EvaluationWorld
 
     private function contentList(array $a): array
     {
-        $a += ['type' => 'post', 'status' => 'any'];
+        $a += ['type' => 'page', 'status' => 'any'];
 
-        return $this->filter($this->state['content'], $a, ['title', 'content']);
+        // Match the plugin's list projection. Reading content/dates requires
+        // the corresponding single-item tool, just as on an actual site.
+        return array_map(fn (array $row): array => array_intersect_key($row, array_flip([
+            'id', 'title', 'type', 'status', 'built_with_elementor', 'modified', 'url',
+        ])), $this->filter($this->state['content'], $a, ['title', 'content']));
     }
 
     private function contentCreate(array $a): array
@@ -632,6 +636,9 @@ class EvaluationWorld
         $limit = min(50, max(1, (int) ($a['limit'] ?? 20)));
         $page = max(1, (int) ($a['page'] ?? 1));
         $items = array_slice($rows, ($page - 1) * $limit, $limit);
+        $items = array_map(fn (array $row): array => array_intersect_key($row, array_flip([
+            'id', 'title', 'url', 'mime', 'alt', 'date',
+        ])), $items);
 
         return ['total' => count($rows), 'returned' => count($items), 'page' => $page, 'pages' => (int) ceil(count($rows) / $limit), 'items' => $items];
     }

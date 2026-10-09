@@ -7,8 +7,13 @@ use InvalidArgumentException;
 /** Versioned owner messages and independent assertions; never model instructions. */
 final class EvaluationCorpus
 {
-    public function cases(?string $only = null): array
+    public const SUITES = ['original' => 400, 'round2' => 400, 'all' => 800];
+
+    public function cases(?string $only = null, string $suite = 'all'): array
     {
+        if (! array_key_exists($suite, self::SUITES)) {
+            throw new InvalidArgumentException('Unknown evaluation suite.');
+        }
         $cases = [];
         foreach (glob(base_path('resources/site-agent-evaluation/*.json')) ?: [] as $path) {
             $rows = json_decode(file_get_contents($path), true, 64, JSON_THROW_ON_ERROR);
@@ -23,10 +28,14 @@ final class EvaluationCorpus
                 $cases[$row['id']] = $row;
             }
         }
-        if (count($cases) !== 400) {
-            throw new InvalidArgumentException('The evaluation corpus must contain exactly 400 scenarios.');
+        $original = array_filter($cases, fn (array $case): bool => ! str_starts_with($case['id'], 'round2-'));
+        if (count($cases) !== 800 || count($original) !== 400) {
+            throw new InvalidArgumentException('The evaluation corpus must contain two suites of 400 scenarios.');
         }
         ksort($cases);
+        if ($suite !== 'all') {
+            $cases = array_filter($cases, fn (array $case): bool => str_starts_with($case['id'], 'round2-') === ($suite === 'round2'));
+        }
         if ($only !== null) {
             if (! isset($cases[$only])) {
                 throw new InvalidArgumentException('Unknown evaluation case ID.');
@@ -41,7 +50,7 @@ final class EvaluationCorpus
     public function validate(mixed $case): void
     {
         if (! is_array($case) || ! is_string($case['id'] ?? null)
-            || ! preg_match('/^[a-z]+-[0-9]{3}$/D', $case['id'])
+            || ! preg_match('/^(?:[a-z]+|round2-(?:shop|content|manage))-[0-9]{3}$/D', $case['id'])
             || ! is_string($case['domain'] ?? null) || ! is_string($case['title'] ?? null)
             || ! is_array($case['turns'] ?? null) || ! array_is_list($case['turns'])
             || count($case['turns']) < 1 || count($case['turns']) > 12) {
@@ -58,7 +67,10 @@ final class EvaluationCorpus
             ['read', 'applied', 'clarification', 'refused', 'canceled', 'reverted', 'proposal'], true)) {
             throw new InvalidArgumentException('Missing evaluation outcome.');
         }
-        foreach (['tools_all', 'tools_any', 'operations', 'reply_contains', 'reply_any', 'reply_excludes'] as $key) {
+        if (array_key_exists('model_required', $expect) && ! is_bool($expect['model_required'])) {
+            throw new InvalidArgumentException('The model-required assertion must be boolean.');
+        }
+        foreach (['tools_all', 'tools_any', 'operations', 'reply_contains', 'reply_any', 'reply_excludes', 'final_absent'] as $key) {
             if (isset($expect[$key]) && (! is_array($expect[$key]) || ! array_is_list($expect[$key])
                     || count(array_filter($expect[$key], fn ($value) => is_string($value) && $value !== '')) !== count($expect[$key]))) {
                 throw new InvalidArgumentException('Invalid evaluation assertion.');
@@ -66,6 +78,24 @@ final class EvaluationCorpus
         }
         if (isset($expect['final']) && ! is_array($expect['final'])) {
             throw new InvalidArgumentException('Invalid final-state assertions.');
+        }
+        if (isset($expect['plan']) && ! is_array($expect['plan'])) {
+            throw new InvalidArgumentException('Invalid proposal assertions.');
+        }
+        if (array_key_exists('plan_any', $expect)) {
+            if (! is_array($expect['plan_any'])) {
+                throw new InvalidArgumentException('Invalid proposal alternatives.');
+            }
+            foreach ($expect['plan_any'] as $path => $values) {
+                if (! is_string($path) || $path === '' || ! is_array($values) || ! array_is_list($values)
+                    || count($values) < 1 || count($values) > 20) {
+                    throw new InvalidArgumentException('Invalid proposal alternatives.');
+                }
+            }
+        }
+        if (isset($expect['cancel_without_offer']) && (! is_bool($expect['cancel_without_offer'])
+            || $expect['outcome'] !== 'canceled' || (empty($expect['reply_contains']) && empty($expect['reply_any'])))) {
+            throw new InvalidArgumentException('A withdrawal without a proposal requires positive reply evidence.');
         }
         if (in_array($expect['outcome'], ['read', 'clarification', 'refused'], true)
             && empty($expect['reply_contains']) && empty($expect['reply_any'])) {

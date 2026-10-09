@@ -17,7 +17,7 @@ class SiteAgentAcfActions
 
     public static function selectors(): array
     {
-        return ['context' => ['type' => 'string', 'enum' => ['post', 'user', 'term', 'options']],
+        return ['context' => ['type' => 'string', 'enum' => ['post', 'user', 'term', 'options'], 'description' => 'שדה בעמוד/פוסט/מוצר/מדיה: post עם id. options רק עבור עמוד אפשרויות גלובלי רשום, לא עבור דף הבית או כל עמוד תוכן אחר.'],
             'id' => ['type' => 'integer', 'minimum' => 1], 'options_page' => ['type' => 'string'],
             'field_key' => ['type' => 'string', 'description' => 'מפתח field_ המדויק מתוך סכמת ACF.']];
     }
@@ -25,9 +25,9 @@ class SiteAgentAcfActions
     public static function reads(): array
     {
         return [
-            'acf_schema' => ['wp_acf_schema', 'סכמת ACF ו-ACF Pro במיקום העריכה: פוסט/מוצר/מדיה (post), משתמש (user), מונח (term) או עמוד אפשרויות רשום (options). כוללת שדות מקוננים, פריסות, Clone ואפשרויות חוקיות. ניתן לצמצם לשדה אחד באמצעות field_key.', self::selectors(), ['context']],
-            'get_acf' => ['wp_acf_get', 'ערכי ACF גולמיים לפי מפתחות field_ כפי שהם נדרשים לעריכה; סיסמאות מוסתרות. קראו שדה מסוים לפני הצעת שינוי. שורות ממוספרות החל מאפס.', self::selectors(), ['context']],
-            'list_acf_options' => ['wp_acf_options_pages', 'עמודי אפשרויות ACF הרשומים באתר; קראו לפני בחירת options_page.', [], []],
+            'acf_schema' => ['wp_acf_schema', 'סכמת ACF ו-ACF Pro במיקום העריכה: פוסט/מוצר/מדיה (post), משתמש (user), מונח (term) או עמוד אפשרויות רשום (options). לשדה בעמוד מסוים מצאו את מזהה העמוד וקראו context=post,id; אין צורך לחפש בעמודי האפשרויות. כוללת שדות מקוננים, פריסות, Clone ואפשרויות חוקיות. ניתן לצמצם לשדה אחד באמצעות field_key.', self::selectors(), ['context']],
+            'get_acf' => ['wp_acf_get', 'ערכי ACF גולמיים וסכמת השדות לפי מפתחות field_; סיסמאות מוסתרות. קראו שדה מסוים לפני הצעת שינוי. שורות ממוספרות מאפס. שדה בעמוד, לרבות דף הבית, נקרא עם context=post,id; אין צורך בקריאת list_acf_options. אם המיקום והשדה כבר ידועים, אפשר לקרוא ישירות ללא קריאת סכמה נוספת.', self::selectors(), ['context']],
+            'list_acf_options' => ['wp_acf_options_pages', 'עמודי אפשרויות ACF גלובליים הרשומים באתר. קראו רק כשהבקשה נוגעת להגדרות גלובליות/עמוד אפשרויות ולפני בחירת options_page. לשדות של עמוד תוכן, לרבות דף הבית, השתמשו ב-context=post ובמזהה העמוד; כלי זה אינו נדרש.', [], []],
         ];
     }
 
@@ -37,14 +37,15 @@ class SiteAgentAcfActions
             return [];
         }
 
-        return [['name' => self::TOOL, 'description' => 'הצעת עריכה מוקדית של כל סוגי השדות המובנים ב-ACF ו-ACF Pro, כולל Repeater, Flexible Content, Group, Clone, Gallery וקשרים. קראו get_acf באותו סבב. operations כוללות set/clear/insert/remove/move; path יחסי לשדה הראשי, לפי מפתחות field_ ואינדקס שורה מאפס. לשינוי תא השתמשו בנתיב שלו, בלי להחליף את כל השורות. סיסמאות מוסתרות בתצוגת האישור. רכיבי Tab/Accordion/Message הם מבנה טופס ולא ערכים לעריכה.',
+        return [['name' => self::TOOL, 'description' => 'מכין הצעת עריכת ACF ו-ACF Pro ומחזיר תצוגה מאומתת לאישור, בלי לבצע את השינוי. לאחר get_acf קראו לכלי זה מיד; אין לבקש אישור לפני הקריאה. path יחסי לשדה שנבחר ב-field_key ואינו כולל את אותו מפתח שוב. דוגמאות: טקסט/מספר: {"op":"set","path":[],"value":0}; תא Repeater/Flexible: {"op":"set","path":[0,"field_title"],"value":"חדש"}; Clone/Group: {"op":"set","path":["field_phone"],"value":"03-1234567"}; הוספת שורה/תמונת גלריה: {"op":"insert","path":[],"index":1,"value":91}; הסרה: {"op":"remove","path":[],"index":0}; סידור: {"op":"move","path":[],"index":1,"to":0}. ב-Flexible שורה חדשה כוללת acf_fc_layout בשם הפריסה מתוך הסכמה. להסרת כל תמונות הגלריה השתמשו ב-clear עם path=[]; הדבר אינו מוחק קבצי מדיה. סיסמאות מוסתרות; Tab/Accordion/Message הם מבנה טופס בלבד.',
             'input_schema' => ['type' => 'object', 'properties' => self::selectors() + [
                 'operations' => ['type' => 'array', 'minItems' => 1, 'maxItems' => 30, 'items' => [
                     'type' => 'object', 'properties' => [
                         'op' => ['type' => 'string', 'enum' => ['set', 'clear', 'insert', 'remove', 'move']],
-                        'path' => ['type' => 'array', 'items' => ['anyOf' => [['type' => 'string'], ['type' => 'integer']]], 'description' => 'נתיב יחסי. [] לשדה הראשי; [0,"field_title"] לתא בשורה הראשונה.'],
+                        'path' => ['type' => 'array', 'items' => ['anyOf' => [['type' => 'string'], ['type' => 'integer']]], 'description' => '[] לשדה הראשי, ללא field_key. set/clear על תא: [0,"field_title"]. בפעולות insert/remove/move הנתיב מצביע לרשימה, ואת מספר השורה מציינים ב-index בנפרד; רשימה ראשית היא path=[].'],
                         'value' => ['description' => 'ערך מהסוג שהסכמה דורשת. שדות ילד לפי מפתח field_, לא לפי תווית.'],
-                        'index' => ['type' => 'integer', 'minimum' => 0], 'to' => ['type' => 'integer', 'minimum' => 0],
+                        'index' => ['type' => 'integer', 'minimum' => 0, 'description' => 'חובה ב-insert/remove/move: אינדקס שורה/תמונה מאפס בתוך הרשימה שב-path. להוספה בסוף, index שווה למספר הפריטים שנקראו.'],
+                        'to' => ['type' => 'integer', 'minimum' => 0, 'description' => 'חובה ב-move: האינדקס החדש של השורה לאחר העברתה, מאפס.'],
                     ], 'required' => ['op', 'path'], 'additionalProperties' => false,
                 ]],
             ], 'required' => ['context', 'field_key', 'operations'], 'additionalProperties' => false]]];
@@ -74,13 +75,13 @@ class SiteAgentAcfActions
             if (! is_array($operations) || ! array_is_list($operations) || count($operations) < 1 || count($operations) > 30) {
                 throw new InvalidArgumentException('נדרשות 1–30 פעולות ממוקדות.');
             }
-            $operations = array_map(function ($operation): array {
+            $operations = array_map(function ($operation) use ($args): array {
                 if (! is_array($operation) || ! in_array($operation['op'] ?? null, ['set', 'clear', 'insert', 'remove', 'move'], true)
                     || ! is_array($operation['path'] ?? null) || ! array_is_list($operation['path']) || count($operation['path']) > 16) {
                     throw new InvalidArgumentException('פעולת השדה או הנתיב אינם תקינים.');
                 }
 
-                return array_intersect_key($operation, array_flip(['op', 'path', 'value', 'index', 'to']));
+                return $this->normalizeOperation($operation, $args['field_key']);
             }, $operations);
             $read = $this->call($site, 'wp_acf_get', $args);
             $field = collect($read['fields'] ?? [])->firstWhere('key', $args['field_key']);
@@ -126,6 +127,28 @@ class SiteAgentAcfActions
         } catch (\Throwable $e) {
             return ['error' => Str::limit($e->getMessage(), 400)];
         }
+    }
+
+    /** Accept unambiguous model addressing aliases; WordPress still validates the schema and seals the exact preview. */
+    private function normalizeOperation(array $operation, string $fieldKey): array
+    {
+        $operation = array_intersect_key($operation, array_flip(['op', 'path', 'value', 'index', 'to']));
+        if (($operation['path'][0] ?? null) === $fieldKey) {
+            array_shift($operation['path']);
+        }
+        if (in_array($operation['op'], ['insert', 'remove', 'move'], true)) {
+            if (! array_key_exists('index', $operation) && is_int(end($operation['path']))) {
+                $operation['index'] = array_pop($operation['path']);
+            }
+            if (! is_int($operation['index'] ?? null) || $operation['index'] < 0) {
+                throw new InvalidArgumentException('ב-insert/remove/move חובה לציין index מאפס. path מצביע לרשימה ([] לרשימה הראשית), ולא לשורה.');
+            }
+            if ($operation['op'] === 'move' && (! is_int($operation['to'] ?? null) || $operation['to'] < 0)) {
+                throw new InvalidArgumentException('ב-move חובה לציין to: אינדקס היעד החדש מאפס.');
+            }
+        }
+
+        return $operation;
     }
 
     public function apply(Site $site, SiteAgentRequest $request): array

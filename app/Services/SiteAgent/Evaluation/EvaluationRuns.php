@@ -5,6 +5,8 @@ namespace App\Services\SiteAgent\Evaluation;
 use App\Enums\UserRole;
 use App\Jobs\RunSiteAgentEvaluationJob;
 use App\Support\Changelog;
+use Closure;
+use Generator;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Bus;
@@ -23,33 +25,46 @@ class EvaluationRuns
 
     private const TERMINAL = ['completed', 'failed', 'canceled'];
 
+    private const REPORT_LIMITS = [
+        'כלי האתר ואתר WordPress מדומים; אין כאן בדיקה של אתר חי.',
+        'הסטטוס מציין עמידה בבדיקות המוגדרות לתרחיש. לא בוצעה הערכה סמנטית אנושית.',
+        'הרצה שבוטלה או נקטעה אינה משלימה תרחישים שלא הורצו.',
+    ];
+
+    private const STREAM_LIMIT = 256 * 1024 * 1024;
+
     public function __construct(private EvaluationCorpus $corpus) {}
 
-    public function start(int $adminId): string
+    public function start(int $adminId, string $suite = 'original'): string
     {
         $this->authorize();
         abort_unless((int) Auth::id() === $adminId, 403);
+        if (! array_key_exists($suite, EvaluationCorpus::SUITES)) {
+            throw ValidationException::withMessages(['evaluation' => 'יש לבחור קבוצת תרחישים תקינה.']);
+        }
         $payload = $this->configuration();
         if (! $payload['ai']['enabled'] || trim($payload['ai']['api_key']) === '') {
             throw ValidationException::withMessages(['evaluation' => 'יש להגדיר ולהפעיל את ספק ה-AI לפני התחלת הבדיקה.']);
         }
 
-        return Cache::lock('site-agent-evaluation:start', 15)->block(5, function () use ($adminId, $payload): string {
+        return Cache::lock('site-agent-evaluation:start', 15)->block(5, function () use ($adminId, $payload, $suite): string {
             $latest = $this->latest();
             if ($latest !== null && ! in_array($latest['status'], self::TERMINAL, true)) {
                 throw ValidationException::withMessages(['evaluation' => 'כבר קיימת בדיקה פעילה. אפשר להמתין או לבקש לעצור אותה.']);
             }
-            $cases = $this->manifest();
+            $cases = $this->manifest($suite);
             $id = (string) Str::uuid();
             $now = now()->toIso8601String();
             $run = [
-                'id' => $id, 'status' => 'queued', 'admin_id' => $adminId,
+                'id' => $id, 'status' => 'queued', 'admin_id' => $adminId, 'suite' => $suite,
                 'provider' => $payload['ai']['provider'], 'model' => $payload['ai']['model'],
                 'total' => count($cases), 'completed' => 0, 'passed' => 0, 'failed' => 0, 'blocked' => 0,
                 'created_at' => $now, 'started_at' => null, 'updated_at' => $now, 'finished_at' => null,
                 'reason' => null, 'current_case' => null, 'next_index' => 0, 'claimed_index' => null,
                 'version' => Changelog::currentVersion(), 'corpus_sha256' => $this->fingerprint(),
                 'configuration_digest' => $this->digest($payload), 'case_ids' => array_column($cases, 'id'),
+                'deterministic_case_ids' => array_values(array_column(array_filter($cases,
+                    fn (array $case): bool => ($case['expect']['model_required'] ?? true) === false), 'id')),
                 'provider_requests' => 0, 'input_tokens' => 0, 'output_tokens' => 0,
                 'semantic_review' => 'not_performed',
             ];
@@ -99,25 +114,53 @@ class EvaluationRuns
     {
         $this->authorize();
         $run = $this->load($id);
-        $cases = [];
-        $bytes = 0;
-        foreach (array_slice($run['case_ids'], 0, $run['completed']) as $caseId) {
-            $relative = $this->casePath($id, $caseId);
-            if (! Storage::disk('local')->exists(self::ROOT.'/'.$relative)) {
-                continue;
-            }
-            $bytes += Storage::disk('local')->size(self::ROOT.'/'.$relative);
-            if ($bytes > 64 * 1024 * 1024) {
-                throw ValidationException::withMessages(['evaluation' => 'הדוח גדול מדי להורדה אחת. יש לפנות לצוות לקבלת קובצי התרחישים.']);
-            }
-            $report = $this->read($relative, 8 * 1024 * 1024);
-            $cases[] = $this->caseResult($report, $caseId, $run);
+
+        return ['schema_version' => 1, 'summary' => $this->publicSummary($run),
+            'cases' => iterator_to_array($this->reportCases($run, 64 * 1024 * 1024), false),
+            'limits' => self::REPORT_LIMITS];
+    }
+
+    /**
+     * Authorize and validate the snapshot before response headers are sent.
+     * Only one immutable case is decoded at a time, including while exporting.
+     * Call from a normal HTTP response: Livewire buffers and base64-encodes downloads.
+     */
+    public function streamReport(string $id): Closure
+    {
+        $this->authorize();
+        $run = $this->load($id);
+        $summary = $this->publicSummary($run);
+        foreach ($this->reportCases($run, self::STREAM_LIMIT) as $case) {
+            unset($case);
         }
 
-        return ['schema_version' => 1, 'summary' => $this->publicSummary($run), 'cases' => $cases,
-            'limits' => ['כלי האתר ואתר WordPress מדומים; אין כאן בדיקה של אתר חי.',
-                'הסטטוס מציין עמידה בבדיקות המוגדרות לתרחיש. לא בוצעה הערכה סמנטית אנושית.',
-                'הרצה שבוטלה או נקטעה אינה משלימה תרחישים שלא הורצו.']];
+        return function () use ($run, $summary): void {
+            $flags = JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR;
+            echo '{"schema_version":1,"summary":', json_encode($summary, $flags), ',"cases":[';
+            $separator = '';
+            foreach ($this->reportCases($run, self::STREAM_LIMIT) as $case) {
+                echo $separator, json_encode($case, $flags);
+                $separator = ',';
+                unset($case);
+            }
+            echo '],"limits":', json_encode(self::REPORT_LIMITS, $flags), '}';
+        };
+    }
+
+    /** Yield accepted cases only; missing or corrupt accepted output must not disappear silently. */
+    private function reportCases(array $run, int $limit): Generator
+    {
+        $bytes = 0;
+        foreach (array_slice($run['case_ids'], 0, $run['completed']) as $caseId) {
+            $relative = $this->casePath($run['id'], $caseId);
+            $report = $this->read($relative, 8 * 1024 * 1024);
+            $bytes += Storage::disk('local')->size(self::ROOT.'/'.$relative);
+            if ($bytes > $limit) {
+                throw ValidationException::withMessages(['evaluation' => 'הדוח גדול מדי להורדה אחת. יש לפנות לצוות לקבלת קובצי התרחישים.']);
+            }
+            yield $this->caseResult($report, $caseId, $run);
+            unset($report);
+        }
     }
 
     /** Queue entry point; no authenticated session or customer/site data is needed. */
@@ -264,9 +307,9 @@ class EvaluationRuns
         return ['ai' => $ai, 'assistant' => $assistant];
     }
 
-    protected function manifest(): array
+    protected function manifest(string $suite = 'original'): array
     {
-        return $this->corpus->cases();
+        return $this->corpus->cases(suite: $suite);
     }
 
     protected function fingerprint(): string
@@ -302,7 +345,7 @@ class EvaluationRuns
     private function casePath(string $id, string $caseId): string
     {
         $this->validateId($id);
-        if (! preg_match('/^[a-z]+-[0-9]{3}$/D', $caseId)) {
+        if (! preg_match('/^(?:[a-z]+|round2-(?:shop|content|manage))-[0-9]{3}$/D', $caseId)) {
             throw new RuntimeException('Invalid evaluation case ID.');
         }
 
@@ -332,7 +375,7 @@ class EvaluationRuns
                 $run['reason'] = 'התבקשה עצירה; תרחיש שכבר התחיל רשאי להסתיים.';
             }
         }
-        unset($run['configuration_digest'], $run['case_ids'], $run['admin_id'], $run['claimed_index']);
+        unset($run['configuration_digest'], $run['case_ids'], $run['deterministic_case_ids'], $run['admin_id'], $run['claimed_index']);
 
         return $run;
     }
@@ -360,9 +403,23 @@ class EvaluationRuns
             || ($report['corpus_sha256'] ?? null) !== $run['corpus_sha256']
             || ! is_array($case) || ($case['id'] ?? null) !== $caseId
             || ! in_array($case['status'] ?? null, ['passed', 'failed', 'blocked'], true)
-            || ! is_bool($case['model_executed'] ?? null)
-            || ($case['status'] === 'passed' && $case['model_executed'] !== true)) {
+            || ! is_bool($case['model_executed'] ?? null)) {
             throw new RuntimeException('Invalid evaluation case report.');
+        }
+        if ($case['status'] !== 'blocked' && $case['model_executed'] === false) {
+            // This allowlist was pinned from the server-owned corpus at run
+            // creation; later corpus releases must not reinterpret old runs.
+            if (! in_array($caseId, $run['deterministic_case_ids'] ?? [], true)
+                || ($case['execution'] ?? null) !== 'deterministic'
+                || ($case['provider_requests'] ?? null) !== 0 || ($case['provider_responses'] ?? null) !== 0) {
+                throw new RuntimeException('Invalid deterministic evaluation case report.');
+            }
+        }
+        if ($case['status'] === 'passed' && $case['model_executed'] === true
+            && (! is_int($case['provider_requests'] ?? null) || $case['provider_requests'] <= 0
+                || ($case['provider_responses'] ?? null) !== $case['provider_requests']
+                || (isset($case['execution']) && $case['execution'] !== 'model'))) {
+            throw new RuntimeException('Passed evaluation case requires successful provider evidence.');
         }
         if (($report['summary'] ?? null) !== ['total' => 1, 'passed' => (int) ($case['status'] === 'passed'),
             'failed' => (int) ($case['status'] === 'failed'), 'blocked' => (int) ($case['status'] === 'blocked')]) {

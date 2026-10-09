@@ -13,7 +13,7 @@ use Illuminate\Support\Facades\DB;
 
 require dirname(__DIR__).'/vendor/autoload.php';
 
-$options = getopt('', ['live', 'platform', 'case:', 'output:', 'preflight']);
+$options = getopt('', ['live', 'platform', 'case:', 'suite:', 'output:', 'preflight']);
 $root = dirname(__DIR__);
 $runtime = sys_get_temp_dir().'/multioto-evaluation-'.bin2hex(random_bytes(12));
 foreach (['', '/storage/framework/cache/data', '/storage/framework/views', '/storage/framework/sessions', '/storage/logs', '/storage/app/private', '/bootstrap'] as $part) {
@@ -106,7 +106,7 @@ try {
     Carbon\Carbon::setTestNow(new CarbonImmutable('2026-10-09 12:00:00', 'Asia/Jerusalem'));
     CarbonImmutable::setTestNow(new CarbonImmutable('2026-10-09 12:00:00', 'Asia/Jerusalem'));
 
-    $cases = app(EvaluationCorpus::class)->cases($options['case'] ?? null);
+    $cases = app(EvaluationCorpus::class)->cases($options['case'] ?? null, $options['suite'] ?? 'all');
     $report = app(EvaluationRunner::class)->run(
         $cases, isset($options['live']),
         static fn (array $progress) => fwrite(STDOUT, json_encode($progress, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)."\n"),

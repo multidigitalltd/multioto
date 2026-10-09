@@ -208,7 +208,7 @@ class SiteAgentConversation
         }
 
         $isApproval = $this->matches($text, self::YES);
-        if ($isApproval && $this->previousReplyAskedForApproval($subscriber)) {
+        if ($isApproval && ! $this->previousReplyAllowsClarification($subscriber)) {
             // Older versions could emit a model-written preview without saving
             // a request. An expired or missing offer cannot be approved by prose.
             return self::NO_PENDING_PROPOSAL;
@@ -218,10 +218,14 @@ class SiteAgentConversation
 
         // A yes can answer an ordinary clarification, so the assistant may use
         // its context. It must never reach a planner as a standalone edit.
-        return $reply ?? ($isApproval ? self::NO_PENDING_PROPOSAL : $this->propose($subscriber, $text, $messageId));
+        if ($reply !== null) {
+            return $reply;
+        }
+
+        return $isApproval ? self::NO_PENDING_PROPOSAL : $this->propose($subscriber, $text, $messageId);
     }
 
-    private function previousReplyAskedForApproval(SiteAgentSubscriber $subscriber): bool
+    private function previousReplyAllowsClarification(SiteAgentSubscriber $subscriber): bool
     {
         $previous = SiteAgentMessage::query()
             ->where('site_agent_subscriber_id', $subscriber->id)
@@ -230,14 +234,17 @@ class SiteAgentConversation
             ->latest('id')
             ->value('body');
 
-        return is_string($previous) && app(SiteAgentReplyGuard::class)->asksForApproval($previous);
+        return is_string($previous)
+            && preg_match('/[?؟]/u', $previous) === 1
+            && ! app(SiteAgentReplyGuard::class)->asksForApproval($previous);
     }
 
     /**
      * Hand the message to the assistant, if it can take it.
      *
-     * Null means it could not — AI off, provider down, nothing usable back —
-     * and the fixed planners answer instead, as they did before it existed.
+     * Null means the assistant is disabled. Once the full assistant accepts
+     * a turn, failure cannot be rerouted to a narrower planner which could
+     * misinterpret an ACF, SEO or internal-link request as a plain text edit.
      * Page text stays with the page planner even when the assistant runs: it
      * knows Elementor and how to quote a page exactly, and the assistant hands
      * those requests over rather than re-learning that.
@@ -266,7 +273,7 @@ class SiteAgentConversation
                 return $this->propose($subscriber, $instruction, $messageId, tryShop: false);
             },
             pendingOffer: $pendingOffer,
-        );
+        ) ?? ProductChangePlanner::AI_UNAVAILABLE;
     }
 
     /**

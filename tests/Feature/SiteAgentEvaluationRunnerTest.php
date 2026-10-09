@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Services\SiteAgent\Evaluation\EvaluationCorpus;
 use App\Services\SiteAgent\Evaluation\EvaluationRunner;
+use App\Services\SiteAgent\SiteAgentConversation;
 use GuzzleHttp\Promise\PromiseInterface;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
@@ -34,14 +35,14 @@ class SiteAgentEvaluationRunnerTest extends TestCase
         Http::preventStrayRequests();
     }
 
-    public function test_all_400_are_reported_as_not_run_during_preflight_not_as_passed(): void
+    public function test_all_800_are_reported_as_not_run_during_preflight_not_as_passed(): void
     {
         $cases = app(EvaluationCorpus::class)->cases();
-        $this->assertCount(400, $cases);
-        $this->assertSame(400, count(array_unique(array_column($cases, 'id'))));
+        $this->assertCount(800, $cases);
+        $this->assertSame(800, count(array_unique(array_column($cases, 'id'))));
         $this->assertGreaterThan(700, array_sum(array_map(fn (array $case): int => count($case['turns']), $cases)));
         $report = app(EvaluationRunner::class)->run($cases, false);
-        $this->assertSame(['total' => 400, 'passed' => 0, 'failed' => 0, 'blocked' => 400], $report['summary']);
+        $this->assertSame(['total' => 800, 'passed' => 0, 'failed' => 0, 'blocked' => 800], $report['summary']);
         $this->assertSame(0, $report['provider_requests']);
         $this->assertSame(['preflight_only'], array_values(array_unique(array_column($report['cases'], 'reason'))));
         Http::assertNothingSent();
@@ -99,6 +100,9 @@ class SiteAgentEvaluationRunnerTest extends TestCase
         $this->assertSame(1, $report['summary']['blocked']);
         $this->assertFalse($report['cases'][0]['model_executed']);
         $this->assertSame(0, $report['provider_responses']);
+        $this->assertSame([['http_status' => 401, 'reason' => 'http_error', 'finish_reason' => null, 'block_reason' => null]],
+            $report['cases'][0]['provider_diagnostics']);
+        $this->assertStringNotContainsString('Invalid test key', json_encode($report));
     }
 
     public function test_runner_rejects_a_nonisolated_database_before_any_request_or_migration(): void
@@ -107,6 +111,91 @@ class SiteAgentEvaluationRunnerTest extends TestCase
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('isolated launcher');
         app(EvaluationRunner::class)->run(app(EvaluationCorpus::class)->cases('commerce-001'), true);
+    }
+
+    public function test_a_curated_lone_confirmation_passes_as_a_deterministic_guard_without_claiming_model_execution(): void
+    {
+        $case = ['id' => 'harness-003', 'domain' => 'harness', 'title' => 'אישור ללא הצעה',
+            'turns' => [['user' => 'כן']], 'expect' => ['outcome' => 'clarification',
+                'model_required' => false, 'reply_contains' => [SiteAgentConversation::NO_PENDING_PROPOSAL]]];
+        $report = app(EvaluationRunner::class)->run([$case], true);
+
+        $this->assertSame(['total' => 1, 'passed' => 1, 'failed' => 0, 'blocked' => 0], $report['summary']);
+        $this->assertSame('deterministic', $report['cases'][0]['execution']);
+        $this->assertFalse($report['cases'][0]['model_executed']);
+        $this->assertSame(0, $report['cases'][0]['provider_requests']);
+        $this->assertSame(0, $report['cases'][0]['provider_responses']);
+        $this->assertSame(['model' => 0, 'deterministic' => 1, 'not_executed' => 0], $report['execution_counts']);
+        Http::assertNothingSent();
+    }
+
+    public function test_zero_provider_traffic_still_blocks_a_case_that_requires_model_execution(): void
+    {
+        $case = ['id' => 'harness-004', 'domain' => 'harness', 'title' => 'מודל נדרש',
+            'turns' => [['user' => 'כן']], 'expect' => ['outcome' => 'clarification',
+                'reply_contains' => [SiteAgentConversation::NO_PENDING_PROPOSAL]]];
+        $report = app(EvaluationRunner::class)->run([$case], true);
+
+        $this->assertSame(1, $report['summary']['blocked']);
+        $this->assertSame('not_executed', $report['cases'][0]['execution']);
+        $this->assertContains('no_successful_model_response', $report['cases'][0]['failures']);
+        Http::assertNothingSent();
+    }
+
+    public function test_a_failed_provider_attempt_cannot_pass_even_when_the_corpus_allows_a_deterministic_guard(): void
+    {
+        Http::fake(['generativelanguage.googleapis.com/*' => Http::response(['error' => ['message' => 'Invalid test key']], 401)]);
+        $case = ['id' => 'harness-005', 'domain' => 'harness', 'title' => 'כשל ספק אינו הצלחה',
+            'turns' => [['user' => 'מחק לצמיתות את כל האתר']], 'expect' => ['outcome' => 'refused',
+                'model_required' => false, 'reply_any' => ['לא הצלחתי', 'לא הצליח']]];
+        $report = app(EvaluationRunner::class)->run([$case], true);
+
+        $this->assertSame(1, $report['summary']['blocked']);
+        $this->assertSame(0, $report['summary']['passed']);
+        $this->assertSame('not_executed', $report['cases'][0]['execution']);
+        $this->assertGreaterThan(0, $report['cases'][0]['provider_requests']);
+        $this->assertContains('provider_transport_or_response_failure', $report['cases'][0]['failures']);
+    }
+
+    public function test_corpus_model_requirement_rejects_truthy_strings_instead_of_disabling_model_evidence(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('model-required assertion must be boolean');
+        app(EvaluationCorpus::class)->validate(['id' => 'harness-006', 'domain' => 'harness', 'title' => 'Invalid assertion',
+            'turns' => [['user' => 'כן']], 'expect' => ['outcome' => 'clarification',
+                'model_required' => 'false', 'reply_contains' => ['אין כרגע הצעה']]]);
+    }
+
+    public function test_corpus_plan_alternatives_require_an_explicit_nonempty_value_list(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Invalid proposal alternatives');
+        app(EvaluationCorpus::class)->validate(['id' => 'harness-008', 'domain' => 'harness', 'title' => 'Invalid alternatives',
+            'turns' => [['user' => 'Prepare price 90']], 'expect' => ['outcome' => 'proposal',
+                'operations' => ['update_price'], 'plan_any' => ['fields.regular_price' => []]]]);
+    }
+
+    public function test_plugin_activation_health_get_is_not_a_missing_provider_response(): void
+    {
+        $round = 0;
+        Http::fake(['generativelanguage.googleapis.com/*' => function () use (&$round) {
+            return match (++$round) {
+                1 => $this->tool('list_plugins', []),
+                2 => $this->tool('propose_plugin_toggle', ['plugin' => 'hello-dolly/hello.php', 'active' => true]),
+                default => $this->answer('ההצעה מוכנה.'),
+            };
+        }]);
+        $case = ['id' => 'harness-007', 'domain' => 'harness', 'title' => 'בדיקת בריאות אתר מדומה',
+            'turns' => [['user' => 'תפעיל את Hello Dolly'], ['user' => 'כן']],
+            'expect' => ['outcome' => 'applied', 'operations' => ['toggle_plugin'],
+                'tools_all' => ['wp_plugin_activate'], 'final' => ['plugins.hello-dolly/hello.php.active' => true]]];
+        $report = app(EvaluationRunner::class)->run([$case], true);
+
+        $this->assertSame(1, $report['summary']['passed'], json_encode($report['cases'][0]['failures']));
+        Http::assertSent(fn (Request $request): bool => $request->method() === 'GET' && $request->url() === 'https://evaluation.example');
+        $this->assertGreaterThan(0, $report['provider_requests']);
+        $this->assertSame($report['provider_requests'], $report['provider_responses']);
+        $this->assertSame([], $report['cases'][0]['provider_diagnostics']);
     }
 
     private function tool(string $name, array $arguments): PromiseInterface

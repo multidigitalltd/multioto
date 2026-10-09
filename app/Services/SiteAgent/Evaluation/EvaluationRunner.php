@@ -13,6 +13,7 @@ use App\Models\SiteAgentSubscriber;
 use App\Services\Agent\McpClient;
 use App\Services\SiteAgent\SiteAgentConversation;
 use App\Services\SiteAgent\WhatsAppCloudClient;
+use GuzzleHttp\Promise\PromiseInterface;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -30,6 +31,8 @@ final class EvaluationRunner
     private int $providerResponses = 0;
 
     private int $caseRequestStart = 0;
+
+    private array $providerDiagnostics = [];
 
     private float $caseStarted;
 
@@ -64,7 +67,8 @@ final class EvaluationRunner
             if (! $live || ! $configured || $networkError !== null || $missingTools !== []) {
                 $result = [
                     'id' => $case['id'], 'domain' => $case['domain'], 'title' => $case['title'],
-                    'status' => 'blocked', 'model_executed' => false,
+                    'status' => 'blocked', 'model_executed' => false, 'execution' => 'not_executed',
+                    'provider_requests' => 0, 'provider_responses' => 0,
                     'reason' => $missingTools !== [] ? 'fixture_missing_tools' : (! $live ? 'preflight_only' : ($networkError !== null ? 'provider_not_allowed' : 'missing_ai_configuration')),
                     'failures' => $missingTools, 'turns' => [], 'expect' => $case['expect'],
                 ];
@@ -84,6 +88,8 @@ final class EvaluationRunner
             'started_at' => (new \DateTimeImmutable('@'.(int) $this->started))->format(DATE_ATOM),
             'benchmark_time' => now()->toIso8601String(), 'duration_seconds' => round(microtime(true) - $this->started, 3),
             'provider_requests' => $this->providerRequests, 'provider_responses' => $this->providerResponses,
+            'execution_counts' => array_replace(['model' => 0, 'deterministic' => 0, 'not_executed' => 0],
+                array_count_values(array_column($results, 'execution'))),
             'summary' => ['total' => count($cases), 'passed' => $counts['passed'] ?? 0,
                 'failed' => $counts['failed'] ?? 0, 'blocked' => $counts['blocked'] ?? 0],
             'limits' => ['אתר WordPress וכלי האתר מדומים; הבדיקה אינה בדיקת תוספים באתר חי.',
@@ -105,6 +111,7 @@ final class EvaluationRunner
         $responsesBefore = $this->providerResponses;
         $this->caseRequestStart = $requestsBefore;
         $this->caseStarted = microtime(true);
+        $this->providerDiagnostics = [];
         DB::beginTransaction();
         try {
             $customer = Customer::create(['name' => 'לקוח בדיקה מדומה', 'business_number' => '500000001',
@@ -149,9 +156,14 @@ final class EvaluationRunner
         } finally {
             DB::rollBack();
         }
-        $modelExecuted = $this->providerResponses > $responsesBefore;
-        $providerFailed = $this->providerRequests - $requestsBefore > $this->providerResponses - $responsesBefore;
-        if (! $modelExecuted) {
+        $requests = $this->providerRequests - $requestsBefore;
+        $responses = $this->providerResponses - $responsesBefore;
+        $modelExecuted = $responses > 0;
+        $providerFailed = $requests !== $responses;
+        // Only a curated corpus assertion permits a local guard to pass
+        // without AI. A failed provider attempt can never use this exception.
+        $deterministic = ($case['expect']['model_required'] ?? true) === false && $requests === 0 && $responses === 0;
+        if (! $modelExecuted && ! $deterministic) {
             $failures[] = 'no_successful_model_response';
         }
         if ($providerFailed) {
@@ -159,11 +171,12 @@ final class EvaluationRunner
         }
 
         return ['id' => $case['id'], 'domain' => $case['domain'], 'title' => $case['title'],
-            'status' => ! $modelExecuted || $providerFailed ? 'blocked' : ($failures === [] ? 'passed' : 'failed'), 'model_executed' => $modelExecuted,
+            'status' => (! $modelExecuted && ! $deterministic) || $providerFailed ? 'blocked' : ($failures === [] ? 'passed' : 'failed'),
+            'model_executed' => $modelExecuted, 'execution' => $modelExecuted ? 'model' : ($deterministic ? 'deterministic' : 'not_executed'),
             'failures' => $failures, 'semantic_review' => 'not_performed',
             'turns' => $turns, 'expect' => $case['expect'], 'final' => $this->world->state,
-            'provider_requests' => $this->providerRequests - $requestsBefore,
-            'provider_responses' => $this->providerResponses - $responsesBefore, 'usage' => $usage];
+            'provider_requests' => $requests, 'provider_responses' => $responses,
+            'provider_diagnostics' => $this->providerDiagnostics, 'usage' => $usage];
     }
 
     private function requests(): array
@@ -227,20 +240,48 @@ final class EvaluationRunner
 
             return $request;
         });
-        Http::globalResponseMiddleware(function (ResponseInterface $response) use ($provider): ResponseInterface {
-            $body = json_decode((string) $response->getBody(), true);
-            if ($response->getStatusCode() >= 200 && $response->getStatusCode() < 300 && is_array($body)) {
-                $content = match ($provider) {
-                    'google' => data_get($body, 'candidates.0.content.parts'),
-                    'anthropic' => $body['content'] ?? null,
-                    'openai' => data_get($body, 'choices.0.message'),
-                };
-                if (is_array($content) && $content !== []) {
-                    $this->providerResponses++;
-                }
-            }
+        Http::globalMiddleware(function (callable $handler) use ($provider, $host): callable {
+            return function (RequestInterface $request, array $options) use ($handler, $provider, $host): PromiseInterface {
+                return $handler($request, $options)->then(function (ResponseInterface $response) use ($request, $provider, $host): ResponseInterface {
+                    // Capture this request in its own promise: synthetic site
+                    // health checks must never become provider diagnostics.
+                    if ($request->getMethod() === 'POST' && $request->getUri()->getHost() === $host) {
+                        $this->recordProviderResponse($response, $provider);
+                    }
 
-            return $response;
+                    return $response;
+                });
+            };
         });
+    }
+
+    /** Export bounded status metadata only, never provider response text. */
+    private function recordProviderResponse(ResponseInterface $response, string $provider): void
+    {
+        $body = json_decode((string) $response->getBody(), true);
+        if ($response->getStatusCode() >= 200 && $response->getStatusCode() < 300 && is_array($body)) {
+            $content = match ($provider) {
+                'google' => data_get($body, 'candidates.0.content.parts'),
+                'anthropic' => $body['content'] ?? null,
+                'openai' => data_get($body, 'choices.0.message'),
+            };
+            if (is_array($content) && $content !== []) {
+                $this->providerResponses++;
+
+                return;
+            }
+        }
+
+        if (count($this->providerDiagnostics) < 80) {
+            $status = $response->getStatusCode();
+            $finish = data_get($body, 'candidates.0.finishReason');
+            $block = data_get($body, 'promptFeedback.blockReason');
+            $allowed = ['STOP', 'MAX_TOKENS', 'SAFETY', 'RECITATION', 'OTHER', 'BLOCKLIST',
+                'PROHIBITED_CONTENT', 'SPII', 'MALFORMED_FUNCTION_CALL', 'UNEXPECTED_TOOL_CALL'];
+            $this->providerDiagnostics[] = ['http_status' => $status,
+                'reason' => $status >= 200 && $status < 300 ? 'missing_model_content' : 'http_error',
+                'finish_reason' => in_array($finish, $allowed, true) ? $finish : null,
+                'block_reason' => in_array($block, $allowed, true) ? $block : null];
+        }
     }
 }
