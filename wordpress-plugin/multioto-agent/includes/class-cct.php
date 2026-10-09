@@ -117,7 +117,15 @@ class Multioto_Agent_Cct
     {
         $fields = [];
         foreach (self::schema($factory) as $key => $field) {
-            $fields[] = ['key' => $key, 'label' => $field['label'], 'type' => $field['type'], 'writable' => $field['writable'], 'required' => $field['required'], 'choices' => $field['choices']];
+            $definition = ['key' => $key, 'label' => $field['label'], 'type' => $field['type'], 'writable' => $field['writable'], 'required' => $field['required'], 'choices' => $field['choices']];
+            if ($field['type'] === 'number') {
+                foreach (['min', 'max'] as $bound) {
+                    if (isset($field[$bound]) && is_numeric($field[$bound]) && is_finite((float) $field[$bound])) {
+                        $definition[$bound] = $field[$bound];
+                    }
+                }
+            }
+            $fields[] = $definition;
         }
 
         return ['type' => $slug, 'slug' => $slug, 'label' => (string) ($factory->get_arg('name') ?: $slug),

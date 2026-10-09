@@ -41,16 +41,24 @@ class OpenAiModelTest extends TestCase
         $this->app->instance(McpClient::class, $mcp);
     }
 
-    public function test_real_page_and_product_planners_keep_optional_fields_in_non_strict_mode(): void
+    public function test_real_planners_preserve_their_distinct_required_fields_in_non_strict_mode(): void
     {
         $question = 'איזה טקסט בדף הבית תרצו להחליף, ומה לכתוב במקומו?';
         Http::fake(['api.openai.test/*' => function ($request) use ($question) {
             $format = data_get($request->data(), 'response_format.json_schema');
             $this->assertFalse($format['strict']);
-            $this->assertSame(['can_do'], $format['schema']['required']);
             $this->assertArrayNotHasKey('additionalProperties', $format['schema']);
             $page = isset($format['schema']['properties']['page_id']);
-            $result = $page ? ['can_do' => false, 'question' => $question] : ['can_do' => false];
+            if ($page) {
+                $this->assertSame(['can_do', 'operation', 'page_id', 'find', 'text', 'summary', 'question', 'refusal'], $format['schema']['required']);
+                $result = ['can_do' => false, 'operation' => 'none', 'page_id' => 0, 'find' => '', 'text' => '',
+                    'summary' => '', 'question' => $question, 'refusal' => ''];
+            } else {
+                $this->assertSame(['can_do'], $format['schema']['required']);
+                $this->assertArrayHasKey('operation', $format['schema']['properties']);
+                $this->assertNotContains('operation', $format['schema']['required']);
+                $result = ['can_do' => false];
+            }
 
             return Http::response(['choices' => [['message' => ['content' => json_encode($result)]]]]);
         }]);

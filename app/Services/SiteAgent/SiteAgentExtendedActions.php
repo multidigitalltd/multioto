@@ -86,7 +86,7 @@ class SiteAgentExtendedActions
             if ($create) {
                 $schema = $this->cctSchema($site, $args['type']);
                 $values += ['cct_status' => 'draft'];
-                $this->validateCct($schema, $values, true);
+                $values = $this->validateCct($schema, $values, true);
                 $record = ['label' => $schema['label'] ?? $args['type'], 'values' => []];
             } else {
                 $readArgs = $args;
@@ -107,7 +107,7 @@ class SiteAgentExtendedActions
                     if (($record['type'] ?? null) !== $args['type']) {
                         throw new InvalidArgumentException('סוג רשומת ה־CCT אינו תואם.');
                     }
-                    $this->validateCct($this->cctSchema($site, $args['type']), $values, false);
+                    $values = $this->validateCct($this->cctSchema($site, $args['type']), $values, false, $record['values']);
                 }
             }
 
@@ -330,6 +330,24 @@ class SiteAgentExtendedActions
                 if (isset($schema[$key]['enum']) && ! in_array($value, $schema[$key]['enum'], true)) {
                     throw new InvalidArgumentException('הערך אינו מותר עבור '.$key.'.');
                 }
+                if (is_int($value) || is_float($value)) {
+                    $minimum = $schema[$key]['minimum'] ?? null;
+                    $maximum = $schema[$key]['maximum'] ?? null;
+                    if (! is_finite((float) $value) || ($minimum !== null && $value < $minimum) || ($maximum !== null && $value > $maximum)) {
+                        $range = $minimum !== null && $maximum !== null ? ' ('.$minimum.'–'.$maximum.')' : '';
+                        throw new InvalidArgumentException('הערך מחוץ לטווח המותר עבור '.$key.$range.'.');
+                    }
+                }
+                if (is_string($value)) {
+                    // Profile fields and slugs use native byte limits; media
+                    // editors use Unicode character counts like their schema.
+                    $length = in_array($spec['operation'], ['user_profile', 'content_manage'], true)
+                        ? strlen($value) : mb_strlen($value, 'UTF-8');
+                    if ((isset($schema[$key]['minLength']) && mb_strlen($value, 'UTF-8') < $schema[$key]['minLength'])
+                        || (isset($schema[$key]['maxLength']) && $length > $schema[$key]['maxLength'])) {
+                        throw new InvalidArgumentException('אורך הטקסט אינו תקין עבור '.$key.'.');
+                    }
+                }
             } elseif ($spec['fields'] === ['*'] && ! is_scalar($value) && $value !== null) {
                 throw new InvalidArgumentException('שדות CCT מורכבים אינם נתמכים עדיין.');
             }
@@ -349,16 +367,60 @@ class SiteAgentExtendedActions
         throw new InvalidArgumentException('סוג ה־CCT אינו זמין לעריכה באתר הזה.');
     }
 
-    private function validateCct(array $schema, array $values, bool $create): void
+    /** Validate against the live field schema before approval; preserve native switcher representation. */
+    private function validateCct(array $schema, array $values, bool $create, array $current = []): array
     {
         if ($create && empty($schema['create_supported'])) {
             throw new InvalidArgumentException('יצירה בסוג ה־CCT הזה אינה נתמכת.');
         }
         $fields = collect((array) ($schema['fields'] ?? []))->keyBy('key')->all();
-        $fields['cct_status'] ??= ['writable' => true];
+        $fields['cct_status'] ??= ['writable' => true, 'type' => 'select', 'choices' => ['publish', 'draft'], 'required' => true];
         foreach ($values as $key => $value) {
             if (empty($fields[$key]['writable']) || ($key === 'cct_status' && ! in_array($value, ['publish', 'draft'], true))) {
                 throw new InvalidArgumentException('השדה '.$key.' מוגן או אינו נתמך.');
+            }
+            $field = $fields[$key];
+            if ($value === null && empty($field['required'])) {
+                continue;
+            }
+            $type = $field['type'] ?? '';
+            if (! is_scalar($value) || (! empty($field['required']) && $value === '')) {
+                throw new InvalidArgumentException('חסר ערך תקין לשדה '.($field['label'] ?? $key).'.');
+            }
+            if ($type === 'switcher') {
+                if (! in_array($value, [true, false, 0, 1, '0', '1', 'true', 'false'], true)) {
+                    throw new InvalidArgumentException('שדה '.($field['label'] ?? $key).' מחייב true או false.');
+                }
+                $enabled = in_array($value, [true, 1, '1', 'true'], true);
+                $values[$key] = in_array($current[$key] ?? null, ['true', 'false'], true)
+                    ? ($enabled ? 'true' : 'false') : $enabled;
+
+                continue;
+            }
+            if ($type === 'number') {
+                if (is_bool($value) || ! is_numeric($value) || ! is_finite((float) $value)
+                    || (isset($field['min']) && is_numeric($field['min']) && (float) $value < (float) $field['min'])
+                    || (isset($field['max']) && is_numeric($field['max']) && (float) $value > (float) $field['max'])) {
+                    throw new InvalidArgumentException('השדה '.($field['label'] ?? $key).' מחייב מספר בטווח שהוגדר באתר.');
+                }
+
+                continue;
+            }
+            if (! is_string($value) || strlen($value) > 50000) {
+                throw new InvalidArgumentException('השדה '.($field['label'] ?? $key).' מחייב טקסט עד 50,000 בתים.');
+            }
+            if (in_array($type, ['select', 'radio'], true) && ! in_array($value, (array) ($field['choices'] ?? []), true)) {
+                throw new InvalidArgumentException('הערך אינו אחת האפשרויות המוגדרות לשדה '.($field['label'] ?? $key).'.');
+            }
+            if (in_array($type, ['date', 'datetime-local', 'time'], true) && $value !== '') {
+                $format = ['date' => 'Y-m-d', 'datetime-local' => 'Y-m-d\\TH:i', 'time' => 'H:i'][$type];
+                $date = \DateTimeImmutable::createFromFormat('!'.$format, $value);
+                if (! $date || $date->format($format) !== $value) {
+                    throw new InvalidArgumentException('תאריך או שעה אינם תקינים בשדה '.($field['label'] ?? $key).'.');
+                }
+            }
+            if ($type === 'colorpicker' && $value !== '' && ! preg_match('/^#[a-fA-F0-9]{6}$/D', $value)) {
+                throw new InvalidArgumentException('צבע חייב להיות בפורמט #RRGGBB.');
             }
         }
         if ($create) {
@@ -368,6 +430,8 @@ class SiteAgentExtendedActions
                 }
             }
         }
+
+        return $values;
     }
 
     private function requireSeen(mixed $id, array $seen): void

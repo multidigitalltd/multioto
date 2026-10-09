@@ -193,7 +193,7 @@ class SiteAgentHomepageTest extends TestCase
         $this->assertNotContains('wp_content_update', array_column($this->calls, 0));
         $this->assertStringContainsString('בוצע', $this->talk($subscriber, 'כן'));
         $this->assertSame('שלום לכולם', $this->pages[999]['content']);
-        $this->assertSame(2, $agentTurns);
+        $this->assertSame(1, $agentTurns, 'A settled clarification needs no additional provider turn.');
         $this->assertSame(2, $plannerTurns);
     }
 

@@ -17,7 +17,7 @@ class SiteAgentAcfActions
 
     public static function selectors(): array
     {
-        return ['context' => ['type' => 'string', 'enum' => ['post', 'user', 'term', 'options'], 'description' => 'שדה בעמוד/פוסט/מוצר/מדיה: post עם id. options רק עבור עמוד אפשרויות גלובלי רשום, לא עבור דף הבית או כל עמוד תוכן אחר.'],
+        return ['context' => ['type' => 'string', 'enum' => ['post', 'user', 'term', 'options'], 'description' => 'שדה בעמוד/פוסט/מוצר/מדיה: post עם id. ״בבית״ או ״בדף הבית״ פירושם post עם page_on_front מקריאת get_site_settings; אין לנחש מזהה. options רק עבור עמוד אפשרויות גלובלי רשום, לא עבור דף הבית או כל עמוד תוכן אחר.'],
             'id' => ['type' => 'integer', 'minimum' => 1], 'options_page' => ['type' => 'string'],
             'field_key' => ['type' => 'string', 'description' => 'מפתח field_ המדויק מתוך סכמת ACF.']];
     }
@@ -26,7 +26,7 @@ class SiteAgentAcfActions
     {
         return [
             'acf_schema' => ['wp_acf_schema', 'סכמת ACF ו-ACF Pro במיקום העריכה: פוסט/מוצר/מדיה (post), משתמש (user), מונח (term) או עמוד אפשרויות רשום (options). לשדה בעמוד מסוים מצאו את מזהה העמוד וקראו context=post,id; אין צורך לחפש בעמודי האפשרויות. כוללת שדות מקוננים, פריסות, Clone ואפשרויות חוקיות. ניתן לצמצם לשדה אחד באמצעות field_key.', self::selectors(), ['context']],
-            'get_acf' => ['wp_acf_get', 'ערכי ACF גולמיים וסכמת השדות לפי מפתחות field_; סיסמאות מוסתרות. קראו שדה מסוים לפני הצעת שינוי. שורות ממוספרות מאפס. שדה בעמוד, לרבות דף הבית, נקרא עם context=post,id; אין צורך בקריאת list_acf_options. אם המיקום והשדה כבר ידועים, אפשר לקרוא ישירות ללא קריאת סכמה נוספת.', self::selectors(), ['context']],
+            'get_acf' => ['wp_acf_get', 'ערכי ACF גולמיים וסכמת השדות לפי מפתחות field_; סיסמאות מוסתרות. שורות ממוספרות מאפס. שדה בעמוד, לרבות ״בבית״/״בדף הבית״, נקרא עם context=post,id; אין צורך בקריאת list_acf_options. דף הבית מזוהה לפי page_on_front מתוך get_site_settings. ניתן לקרוא את כל השדות בלי field_key ולבחור מהתוצאה; התוצאה כבר כוללת סכמה ולכן אין צורך בקריאת acf_schema נוספת. אחרי שזוהו השדה והערך המבוקש קראו מיד propose_acf_update; אם חסר הערך שאלו רק אותו.', self::selectors(), ['context']],
             'list_acf_options' => ['wp_acf_options_pages', 'עמודי אפשרויות ACF גלובליים הרשומים באתר. קראו רק כשהבקשה נוגעת להגדרות גלובליות/עמוד אפשרויות ולפני בחירת options_page. לשדות של עמוד תוכן, לרבות דף הבית, השתמשו ב-context=post ובמזהה העמוד; כלי זה אינו נדרש.', [], []],
         ];
     }

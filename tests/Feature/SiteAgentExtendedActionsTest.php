@@ -134,6 +134,72 @@ class SiteAgentExtendedActionsTest extends TestCase
         $this->assertNotContains('jet_cct_update', array_column($this->calls, 0));
     }
 
+    #[DataProvider('cctSwitcherProvider')]
+    public function test_cct_switcher_aliases_are_normalized_before_preview_and_creation(mixed $value, bool $expected): void
+    {
+        $this->answers['jet_cct_create'] = function (array $args) use ($expected): array {
+            $this->assertSame($expected, $args['values']['available']);
+            $this->assertSame(0, $args['values']['price']);
+
+            return ['id' => 12, 'type' => 'houses', 'values' => $args['values'], 'created' => true, 'changed' => true];
+        };
+        $offer = $this->propose('propose_cct_create', ['type' => 'houses', 'values' => [
+            'title' => 'Test house', 'price' => 0, 'available' => $value,
+        ]], ['cct-type:houses']);
+        $this->assertArrayHasKey('plan', $offer, json_encode($offer));
+        $this->assertSame($expected, $offer['plan']['values']['available']);
+        $this->assertStringContainsString('available: '.($expected ? 'כן' : 'לא'), $offer['preview']);
+        $this->assertNotContains('jet_cct_create', array_column($this->calls, 0));
+        $result = app(SiteChangeApplier::class)->apply($this->request($offer));
+        $this->assertTrue($result['ok'], json_encode($result));
+    }
+
+    public static function cctSwitcherProvider(): array
+    {
+        return [[true, true], [false, false], [1, true], [0, false], ['1', true], ['0', false], ['true', true], ['false', false]];
+    }
+
+    public function test_cct_switcher_update_preserves_native_string_storage_for_noop_and_undo(): void
+    {
+        $this->editor('jet_cct_get', 'jet_cct_update', ['id' => 7, 'type' => 'houses', 'values' => ['available' => 'true']]);
+        $noop = $this->propose('propose_cct_update', ['type' => 'houses', 'id' => 7, 'values' => ['available' => 1]], ['cct:houses:7']);
+        $this->assertArrayHasKey('error', $noop);
+        $this->assertStringContainsString('אין מה לשנות', $noop['error']);
+        $offer = $this->propose('propose_cct_update', ['type' => 'houses', 'id' => 7, 'values' => ['available' => 0]], ['cct:houses:7']);
+        $this->assertArrayHasKey('plan', $offer, json_encode($offer));
+        $this->assertSame(['available' => 'true'], $offer['plan']['expected']);
+        $this->assertSame(['available' => 'false'], $offer['plan']['values']);
+        $request = $this->request($offer);
+        $result = app(SiteChangeApplier::class)->apply($request);
+        $this->assertTrue($result['ok']);
+        $this->assertSame('false', $this->live['jet_cct_update']['values']['available']);
+        $request->restore = $result['restore'];
+        $this->assertTrue(app(SiteChangeApplier::class)->revert($request)['ok']);
+        $this->assertSame('true', $this->live['jet_cct_update']['values']['available']);
+    }
+
+    public function test_cct_live_schema_rejects_invalid_field_values_before_consent(): void
+    {
+        $this->answers['jet_cct_types']['types'][0]['fields'] = [
+            ['key' => 'title', 'type' => 'text', 'writable' => true, 'required' => true],
+            ['key' => 'price', 'type' => 'number', 'writable' => true, 'min' => 0, 'max' => 500],
+            ['key' => 'available', 'type' => 'switcher', 'writable' => true],
+            ['key' => 'kind', 'type' => 'select', 'writable' => true, 'choices' => ['home', 'office']],
+            ['key' => 'date', 'type' => 'date', 'writable' => true],
+            ['key' => 'color', 'type' => 'colorpicker', 'writable' => true],
+        ];
+        foreach ([['title' => ''], ['title' => 123], ['price' => -1], ['price' => 501], ['price' => true], ['price' => '1e9999'],
+            ['available' => 'anything'], ['available' => 2], ['kind' => 'warehouse'], ['date' => '2026-02-30'], ['color' => 'red']] as $values) {
+            $offer = $this->propose('propose_cct_create', ['type' => 'houses', 'values' => $values + ['title' => 'Test']], ['cct-type:houses']);
+            $this->assertArrayHasKey('error', $offer, json_encode($values));
+        }
+        $this->assertNotContains('jet_cct_create', array_column($this->calls, 0));
+        $offer = $this->propose('propose_cct_create', ['type' => 'houses', 'values' => [
+            'title' => 'Test', 'price' => 0, 'available' => false, 'kind' => 'home', 'date' => '2026-02-28', 'color' => '#fF0011',
+        ]], ['cct-type:houses']);
+        $this->assertArrayHasKey('plan', $offer, json_encode($offer));
+    }
+
     public function test_sensitive_fields_and_free_html_replacement_are_not_exposed_through_bounded_editors(): void
     {
         foreach ([
@@ -338,6 +404,7 @@ class SiteAgentExtendedActionsTest extends TestCase
         return ['available' => true, 'types' => [['type' => 'houses', 'label' => 'Houses', 'writable' => true, 'create_supported' => true, 'fields' => [
             ['key' => 'title', 'label' => 'Title', 'type' => 'text', 'writable' => true, 'required' => true],
             ['key' => 'price', 'label' => 'Price', 'type' => 'number', 'writable' => true, 'required' => false],
+            ['key' => 'available', 'label' => 'Available', 'type' => 'switcher', 'writable' => true, 'required' => false],
             ['key' => 'private_token', 'type' => 'text', 'writable' => false, 'required' => false],
             ['key' => 'gallery', 'type' => 'repeater', 'writable' => false, 'required' => false],
         ]]]];

@@ -99,6 +99,11 @@ class SiteChangePlanner
         }
 
         if (($result['can_do'] ?? false) !== true) {
+            $refusal = is_string($result['refusal'] ?? null) ? trim($result['refusal']) : '';
+            if ($refusal !== '') {
+                return ['refusal' => app(SiteAgentReplyGuard::class)->asksForApproval($refusal)
+                    ? SiteAgentAssistant::NO_VERIFIED_PROPOSAL : Str::limit($refusal, 500)];
+            }
             $question = is_string($result['question'] ?? null) ? trim($result['question']) : '';
 
             // A model-written question is still prose, even when returned by
@@ -222,6 +227,10 @@ class SiteChangePlanner
             return null;
         }
 
+        if (strip_tags($text) !== $text) {
+            return ['refusal' => 'לא ניתן להכניס HTML דרך עריכת טקסט. יצירת קישור פנימי דורשת את כלי הקישורים ויעד שנקרא ואומת.'];
+        }
+
         $page = collect($pages)->firstWhere('id', $pageId);
 
         // The model must have chosen from the list it was given. Anything else
@@ -257,7 +266,7 @@ class SiteChangePlanner
 
         $find = trim((string) ($result['find'] ?? ''));
 
-        if ($find === '' || mb_substr_count($page['content'], $find) !== 1) {
+        if (! VisibleTextReplacement::matchesOnce($page['content'], $find)) {
             // Not there, or there more than once. Both are "we do not know
             // which words they meant", and guessing edits the wrong sentence
             // on somebody's live website.
@@ -279,6 +288,8 @@ class SiteChangePlanner
             '',
             'כללים:',
             '- כשהתקבלה בקשה מלאה, can_do=true מחייב operation, page_id, text, וב-replace_text גם find. אין להחזיר can_do=true בלי פרטי השינוי. אין לבקש אישור בתוך question: אישור נבנה רק מתוך תוכנית מאומתת.',
+            '- החזר את כל שדות הסכמה. לפעולה אפשרית can_do=true, question ו-refusal ריקים. לבירור חסר can_do=false, operation=none, page_id=0, find/text/summary ריקים ו-question ממוקד. לפעולה שאינה נתמכת כמו עיצוב, מחיקת וידגט או HTML החזר can_do=false ו-refusal שמסביר את המגבלה, לא שאלת המשך שמציעה פעולה אחרת.',
+            '- text הוא רק התחליף ל-find, לא כל העמוד לאחר השינוי. העתק את הנוסח המבוקש בדיוק, כולל הפיסוק; אל תחזור על טקסט מסביב שכבר נמצא בעמוד. למשל החלפת ברכה אינה משכפלת את שורת הטלפון שמופיעה אחריה.',
             '- בחר עמוד אך ורק מהרשימה שניתנה לך, לפי המזהה שלו.',
             '- אם הבקשה היא שינוי של מידע שכבר כתוב בעמוד (שעות, טלפון, כתובת, מחיר בטקסט) — השתמש ב-replace_text ולא ב-append_text. הוספת פסקה עם שעות חדשות בעמוד שבו כתובות השעות הישנות יוצרת עמוד שסותר את עצמו.',
             '- find חייב להיות ציטוט מדויק מתוכן העמוד, ורק מופע אחד שלו. אם הטקסט מופיע כמה פעמים או שאינך מוצא אותו — החזר can_do=false.',
@@ -317,18 +328,20 @@ class SiteChangePlanner
             'type' => 'object',
             'properties' => [
                 'can_do' => ['type' => 'boolean', 'description' => 'true רק כשפרטי השינוי operation, page_id, text ובמקרה החלפה find מולאו במלואם; false לשאלה או לפעולה שאינה נתמכת.'],
+                'refusal' => ['type' => 'string', 'description' => 'הסבר מגבלה לפעולה שאינה נתמכת; ריק לפעולה תקינה או לשאלת הבהרה.'],
                 'question' => ['type' => 'string', 'description' => 'שאלת הבהרה ממוקדת אם חסרים פרטים לעריכת עמוד; אין הצעה לביצוע עד שהפרטים הושלמו.'],
                 'operation' => ['type' => 'string', 'enum' => [
                     SiteAgentRequest::OP_REPLACE,
                     SiteAgentRequest::OP_APPEND,
                     SiteAgentRequest::OP_TITLE,
+                    'none',
                 ]],
                 'page_id' => ['type' => 'integer', 'description' => 'חובה אם can_do=true: מזהה העמוד מתוך הקטלוג בלבד.'],
                 'find' => ['type' => 'string', 'description' => 'חובה ב-replace_text: ציטוט מדויק מתוך תוכן העמוד, לא מתוך הבקשה ולא שם העמוד.'],
                 'text' => ['type' => 'string', 'description' => 'חובה אם can_do=true: הטקסט החדש בפועל, ללא הסבר.'],
                 'summary' => ['type' => 'string'],
             ],
-            'required' => ['can_do'],
+            'required' => ['can_do', 'operation', 'page_id', 'find', 'text', 'summary', 'question', 'refusal'],
         ];
     }
 
@@ -456,6 +469,10 @@ class SiteChangePlanner
                 'error' => Str::limit($e->getMessage(), 200),
             ]);
 
+            return [];
+        }
+
+        if (! is_array($result) || ($result['id'] ?? null) !== $pageId || ! is_array($result['texts'] ?? null)) {
             return [];
         }
 

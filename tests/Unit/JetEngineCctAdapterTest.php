@@ -70,6 +70,38 @@ class JetEngineCctAdapterTest extends TestCase
         \Multioto_Agent_Cct::call('jet_cct_get', ['type' => 'properties', 'id' => 7]);
     }
 
+    public function test_discovery_exposes_registered_numeric_bounds_used_by_the_native_setter(): void
+    {
+        $fields = array_column(\Multioto_Agent_Cct::call('jet_cct_types', [])['types'][0]['fields'], null, 'key');
+        $this->assertSame(0, $fields['price']['min']);
+        $this->assertSame(999999999, $fields['price']['max']);
+        $this->assertArrayNotHasKey('min', $fields['title']);
+        $this->assertArrayNotHasKey('max', $fields['active']);
+
+        foreach ([-1, 1000000000] as $price) {
+            try {
+                $this->update(['price' => $price], ['price' => '250']);
+                $this->fail('Out-of-schema price must be rejected.');
+            } catch (\Multioto_Agent_Rpc_Error $error) {
+                $this->assertStringContainsString('בטווח', $error->getMessage());
+                $this->assertSame('250', $this->store->items[7]['price']);
+                $this->assertSame([], $this->store->writes);
+            }
+        }
+    }
+
+    public function test_discovery_does_not_invent_bounds_or_expose_non_numeric_field_settings(): void
+    {
+        $this->factory->fields['price']['min_value'] = 'not-a-number';
+        $this->factory->fields['price']['max_value'] = '1e9999';
+        $this->factory->fields['title']['min_value'] = 10;
+        $fields = array_column(\Multioto_Agent_Cct::call('jet_cct_types', [])['types'][0]['fields'], null, 'key');
+        foreach (['price', 'title'] as $key) {
+            $this->assertArrayNotHasKey('min', $fields[$key]);
+            $this->assertArrayNotHasKey('max', $fields[$key]);
+        }
+    }
+
     public function test_get_uses_registered_type_and_preserves_global_result_format(): void
     {
         $item = \Multioto_Agent_Cct::call('jet_cct_get', ['type' => 'properties', 'id' => 7]);

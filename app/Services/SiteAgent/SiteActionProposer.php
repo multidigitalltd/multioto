@@ -212,7 +212,7 @@ class SiteActionProposer
                 'הצעה לשנות כותרת, סטטוס (publish/draft/private) או תקציר של פוסט/עמוד קיים לפי id. לשינוי טקסט בתוך התוכן — propose_text_edit או edit_page_text.',
                 ['id' => ['type' => 'integer'], 'title' => ['type' => 'string'], 'status' => ['type' => 'string'], 'excerpt' => ['type' => 'string']], ['id']],
             ['propose_text_edit', 'wp_content_update',
-                'הצעה לשנות טקסט בתוך פוסט או עמוד שנקרא לפי id, כולל טיוטה, ממתין לאישור או פרטי בלי לשנות את מצב הפרסום: action=replace מחליף את find (ציטוט מדויק שמופיע פעם אחת בתוכן, כפי שהוחזר ב-get_content) ב-text; action=append מוסיף את text בסוף. לא לעמודי אלמנטור — להם edit_page_text.',
+                'הצעה לשנות טקסט בתוך פוסט או עמוד שנקרא לפי id, כולל טיוטה, ממתין לאישור או פרטי בלי לשנות את מצב הפרסום: action=replace מחליף את find (ציטוט מדויק שמופיע פעם אחת בתוכן, כפי שהוחזר ב-get_content) ב-text; action=append מוסיף את text בסוף. בעמודי אלמנטור action=replace נתמך אחרי get_page_texts; find הוא ציטוט מווידגט יחיד. אין הוספת פסקה באלמנטור. text הוא רק התחליף המדויק, בלי להוסיף תוכן שלא נבחר ובלי HTML.',
                 ['id' => ['type' => 'integer'], 'action' => ['type' => 'string', 'enum' => ['replace', 'append']],
                     'find' => ['type' => 'string'], 'text' => ['type' => 'string']], ['id', 'action', 'text']],
             ['propose_user_create', 'wp_user_create',
@@ -220,7 +220,7 @@ class SiteActionProposer
                 ['email' => ['type' => 'string'], 'first_name' => ['type' => 'string'], 'last_name' => ['type' => 'string'], 'role' => ['type' => 'string']],
                 ['email', 'role']],
             ['propose_user_role', 'wp_user_role_set',
-                'הצעה לשנות תפקיד של משתמש קיים. user_id ו-email כפי שהוחזרו ב-find_users. role אחד מ: '.implode(', ', array_keys(self::ROLES)).'.',
+                'הצעה לשנות תפקיד של משתמש קיים. user_id ו-email כפי שהוחזרו ב-find_users או get_user. אין לשנות משתמש עם editable=false, כולל הורדת תפקיד של מנהל. role אחד מ: '.implode(', ', array_keys(self::ROLES)).'.',
                 ['user_id' => ['type' => 'integer'], 'email' => ['type' => 'string'], 'role' => ['type' => 'string']], ['user_id', 'email', 'role']],
             ['propose_coupon', 'wc_coupon_create',
                 'הצעה ליצור קופון. type = percent / fixed_cart / fixed_product; amount; אופציונלי expires (YYYY-MM-DD), minimum_amount, usage_limit.',
@@ -1005,8 +1005,26 @@ class SiteActionProposer
             return $this->error("פריט התוכן {$id} לא נמצא.");
         }
 
-        if ((bool) ($post['built_with_elementor'] ?? false)) {
-            return $this->error('העמוד בנוי באלמנטור — לשינוי טקסט בו השתמשו ב-edit_page_text.');
+        if (strip_tags($text) !== $text) {
+            return $this->error('עריכת טקסט אינה יצירת HTML. לקישור פנימי קראו get_internal_links למקור ו-get_content ליעד, ואז propose_internal_link עם values.text ו-values.target_id. אין להכניס קישור משוער דרך החלפת טקסט.');
+        }
+        $elementor = (bool) ($post['built_with_elementor'] ?? false);
+        $current = $post['content'];
+        if ($elementor) {
+            if ($action !== 'replace') {
+                return $this->error('באלמנטור אפשר להחליף טקסט קיים בלבד; הוספת פסקה, מחיקת וידגט ושינוי פריסה אינם נתמכים.');
+            }
+            $native = $this->json($site, 'wp_elementor_texts_get', ['id' => $id]);
+            if (($native['id'] ?? null) !== $id || ! is_array($native['texts'] ?? null)) {
+                return $this->error('לא ניתן לאמת את טקסטי אלמנטור של העמוד שנבחר.');
+            }
+            $texts = array_values(array_filter($native['texts'], fn ($widget): bool => is_array($widget)
+                && is_string($widget['widget_id'] ?? null) && is_string($widget['text'] ?? null)));
+            $matches = array_values(array_filter($texts, fn (array $widget): bool => $find !== '' && mb_substr_count($widget['text'], $find) > 0));
+            if (count($matches) !== 1 || mb_substr_count($matches[0]['text'], $find) !== 1) {
+                return $this->error('יש לבחור ציטוט שמופיע פעם אחת בלבד בווידגט אחד. קראו get_page_texts ובחרו את הטקסט המדויק.');
+            }
+            $current = $matches[0]['text'];
         }
 
         $status = $post['status'] ?? null;
@@ -1017,8 +1035,8 @@ class SiteActionProposer
         // The quote must be there exactly once, in the content as the site has
         // it — the same test the execution repeats. A quote the model could not
         // reproduce, or one that appears twice, is a guess about where to edit.
-        if ($action === 'replace' && ($find === '' || mb_substr_count((string) $post['content'], $find) !== 1)) {
-            return $this->error('הטקסט להחלפה (find) חייב להופיע בתוכן בדיוק פעם אחת, כפי שהוא מופיע ב-get_content.');
+        if ($action === 'replace' && ! VisibleTextReplacement::matchesOnce($current, $find)) {
+            return $this->error('הטקסט להחלפה (find) חייב להופיע בטקסט הגלוי בדיוק פעם אחת. אין לערוך תגיות HTML או מאפייני קישור דרך עריכת טקסט.');
         }
 
         $title = (string) ($post['title'] ?? '');
@@ -1037,6 +1055,7 @@ class SiteActionProposer
                 'page_id' => $id,
                 'page_title' => $title,
                 'page_status' => $status,
+                'elementor' => $elementor,
                 'find' => $action === 'replace' ? $find : null,
                 'text' => $text,
                 'summary' => "עריכת טקסט ב{$title}",
@@ -1924,6 +1943,13 @@ class SiteActionProposer
     {
         if ($email === '') {
             return null;
+        }
+
+        if ($this->toolbox->siteHas($site, 'wp_user_get')) {
+            $user = $this->json($site, 'wp_user_get', ['user_id' => $userId]);
+
+            return ($user['id'] ?? null) === $userId && strcasecmp((string) ($user['email'] ?? ''), $email) === 0
+                ? $user : null;
         }
 
         $users = (array) ($this->json($site, 'wp_user_list', ['search' => $email, 'limit' => 20])['users'] ?? []);

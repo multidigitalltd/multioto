@@ -127,7 +127,7 @@ class SiteAgentPhantomApprovalTest extends TestCase
         $this->assertSame('כמה נחמד שבאת', $this->pages[11]['content']);
         $this->assertSame('איזה כייף שבאת', $this->pages[12]['content']);
         $this->assertCount(1, array_filter($this->siteCalls, fn (array $call): bool => $call[0] === 'wp_content_update'));
-        $this->assertCount(4, $this->agentRequests, 'Approval must not call the model again.');
+        $this->assertCount(3, $this->agentRequests, 'Neither a settled proposal nor approval needs another model call.');
         $this->assertCount(1, $this->cacheRequests, 'Messages and the repair share one stable cached catalog.');
         $this->assertSame('models/gemini-3.1-flash-lite', $this->cacheRequests[0]['model']);
     }
@@ -217,7 +217,7 @@ class SiteAgentPhantomApprovalTest extends TestCase
         $this->assertSame('כמה נחמד שבאת', $this->pages[43]['content']);
         $this->assertSame(SiteAgentRequest::APPLIED, $pending->fresh()->state);
         $this->assertCount(1, array_filter($this->siteCalls, fn (array $call): bool => $call[0] === 'wp_content_update'));
-        $this->assertCount(3, $this->agentRequests);
+        $this->assertCount(2, $this->agentRequests, 'Stop immediately after the repair saves a proposal.');
         $this->assertCount(1, $this->plannerPrompts);
         $this->assertCount(1, $this->cacheRequests);
     }

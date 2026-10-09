@@ -24,7 +24,7 @@ final class SiteAgentReplyGuard
         $reply = str_replace(["\r\n", "\r"], "\n", $reply);
         $reply = preg_replace('/[^\S\r\n]+/u', ' ', $reply) ?? '';
 
-        $directive = '(?:השיבו|השב|השיבי|הגיבו|הגב|הגיבי|כתבו|כתוב|כתבי|שלחו|שלח|שלחי|ענו|ענה|עני|תכתבו|תכתוב|תכתבי|תשיבו|תשיב|תשיבי|לחצו|לחץ|לחצי)';
+        $directive = '(?:השיבו|השב|השיבי|השבי|הגיבו|הגב|הגיבי|כתבו|כתוב|כתבי|שלחו|שלח|שלחי|ענו|ענה|עני|תכתבו|תכתוב|תכתבי|תשיבו|תשיב|תשיבי|לחצו|לחץ|לחצי)';
         $connector = '(?:\s+(?:לי|כאן|בתשובה|בהודעה|רק|במילה|את\s+המילה|על\s+הכפתור|על)){0,3}';
         $yes = '(?:כן|מאשר|מאשרת|מאשרים|מאשרות|אישור|yes)';
         $target = '(?:השינוי|העדכון|הפעולה|ההצעה|זה|זאת|אותו|אותה)';
@@ -37,7 +37,7 @@ final class SiteAgentReplyGuard
         $patterns = [
             // Quoted and unquoted yes/no can both answer an ordinary
             // clarification. Require an execution/approval purpose nearby.
-            '(?:(?:לאישור|לביצוע)(?:\s+'.$target.')?|כדי\s+(?:לאשר|לבצע|להחיל))\s*[:—–,-]?\s*'.$directive.$connector.'\s*[:—–-]?\s*'.$affirmative,
+            '(?:(?:לאישור|לביצוע)(?:\s+'.$target.')?|כדי\s+(?:לאשר|לבצע|להחיל))\s*[:—–,-]?\s*(?:אנא\s+|בבקשה\s+)?'.$directive.$connector.'\s*[:—–-]?\s*'.$affirmative,
             $directive.$connector.'\s*[:—–-]?\s*'.$affirmative.'\s*(?:לאישור|לביצוע|כדי\s+(?:לאשר|לבצע)|ואבצע|ואעדכן)',
             // Questions explicitly asking permission to perform a change.
             'האם\s+(?:לאשר|לבצע|להחיל)'.$boundary,
@@ -57,6 +57,8 @@ final class SiteAgentReplyGuard
             $consentStart.'(?:אצור|איצור|ניצור)\s+(?:הצעה|תצוגה\s+מקדימה)'.$boundary.'[^\r\n?؟]{0,180}[?؟]',
             $consentStart.'(?:אציע|נציע)\s+(?:לרשום|להחליף|להעביר|לשנות|לעדכן|להוסיף|להסיר|ליצור|לפרסם)'.$boundary.'[^\r\n?؟]{0,180}[?؟]',
             '(?:אשמח|נשמח|זקוק|זקוקה|ממתין|ממתינה)\s+(?:לאישורך|לאישורכם|לאישורכן)'.$boundary.'\s+(?:כדי\s+(?:להוסיף|לשנות|לעדכן|להעביר|ליצור|לפרסם|לבצע)|לפני\s+(?:שאגיש|שאכין|שאבצע)|לביצוע|לבצע|להגיש)',
+            $consentStart.'(?:אשלח|נעביר|אעביר)\s+(?:את\s+)?(?:הבקשה|השינוי|העדכון)'.$boundary.'[^\r\n?؟]{0,180}(?:לביצוע|לעורך)[?؟]',
+            '(?:ברגע|אחרי)\s+ש(?:אגיש|אכין)[^\r\n]{0,200}[.\n]\s*האם\s+להמשיך\s*[?؟]',
             // A claimed handoff to an editor is also unbacked unless the
             // delegate actually ran and returned the saved preview.
             '(?:העברתי|הוגשה|נשלחה)\s+(?:את\s+)?(?:הבקשה|ההצעה)[^\r\n.]{0,180}(?:לטיפול|לעורך|לאישור)',

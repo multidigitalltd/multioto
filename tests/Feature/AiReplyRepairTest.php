@@ -286,6 +286,108 @@ class AiReplyRepairTest extends TestCase
         Http::assertSentCount(1);
     }
 
+    #[DataProvider('providers')]
+    public function test_a_verified_tool_result_stops_before_an_unnecessary_model_answer(string $provider): void
+    {
+        $this->enable($provider);
+        Http::fake(['provider.example/*' => Http::sequence()
+            ->push($this->toolResponse($provider, 'read_page'))
+            ->push($this->toolResponse($provider, 'propose_page_update')),
+        ]);
+        $handled = [];
+        $savedPreview = null;
+
+        $answer = app(ClaudeClient::class)->converse('s', 'p', $this->tools(),
+            function (string $name) use (&$handled, &$savedPreview): array {
+                $handled[] = $name;
+                if ($name === 'propose_page_update') {
+                    $this->assertSame(['read_page', 'propose_page_update'], $handled);
+                    $savedPreview = self::FINAL_REPLY;
+                }
+
+                return ['content' => $savedPreview ?? 'current page'];
+            },
+            reviewReply: function (): ?string {
+                $this->fail('A saved tool preview does not need another model answer.');
+            },
+            shouldStopAfterTools: function () use (&$savedPreview): bool {
+                return $savedPreview !== null;
+            },
+        );
+
+        $this->assertNull($answer);
+        $this->assertSame(self::FINAL_REPLY, $savedPreview);
+        $this->assertSame(['read_page', 'propose_page_update'], $handled);
+        Http::assertSentCount(2);
+    }
+
+    #[DataProvider('providers')]
+    public function test_a_rejected_proposal_can_be_corrected_before_stopping(string $provider): void
+    {
+        $this->enable($provider);
+        Http::fake(['provider.example/*' => Http::sequence()
+            ->push($this->toolResponse($provider, 'propose_page_update'))
+            ->push($this->toolResponse($provider, 'read_page'))
+            ->push($this->toolResponse($provider, 'propose_page_update')),
+        ]);
+        $read = $saved = false;
+        $handled = [];
+
+        $this->assertNull(app(ClaudeClient::class)->converse('s', 'p', $this->tools(),
+            function (string $name) use (&$read, &$saved, &$handled): array {
+                $handled[] = $name;
+                if ($name === 'read_page') {
+                    $read = true;
+
+                    return ['content' => 'current page'];
+                }
+                if (! $read) {
+                    return ['content' => 'Read this page before proposing a change.', 'is_error' => true];
+                }
+                $saved = true;
+
+                return ['content' => self::FINAL_REPLY];
+            },
+            shouldStopAfterTools: function () use (&$saved): bool {
+                return $saved;
+            },
+        ));
+
+        $this->assertTrue($saved);
+        $this->assertSame(['propose_page_update', 'read_page', 'propose_page_update'], $handled);
+        Http::assertSentCount(3);
+        $this->assertStringContainsString('Read this page before proposing a change.', Http::recorded()[1][0]->body());
+    }
+
+    #[DataProvider('providers')]
+    public function test_stopping_after_a_saved_result_does_not_execute_the_rest_of_a_tool_batch(string $provider): void
+    {
+        $this->enable($provider);
+        $response = $this->toolResponse($provider, 'propose_page_update');
+        $extra = $this->toolResponse($provider, 'read_page');
+        if ($provider === 'google') {
+            $response['candidates'][0]['content']['parts'][] = $extra['candidates'][0]['content']['parts'][0];
+        } elseif ($provider === 'openai') {
+            $response['choices'][0]['message']['tool_calls'][] = $extra['choices'][0]['message']['tool_calls'][0];
+        } else {
+            $response['content'][] = $extra['content'][1];
+        }
+        Http::fake(['provider.example/*' => Http::response($response)]);
+        $handled = [];
+
+        $this->assertNull(app(ClaudeClient::class)->converse('s', 'p', $this->tools(),
+            function (string $name) use (&$handled): array {
+                $handled[] = $name;
+
+                return ['content' => self::FINAL_REPLY];
+            },
+            shouldStopAfterTools: fn (): bool => true,
+        ));
+
+        $this->assertSame(['propose_page_update'], $handled);
+        Http::assertSentCount(1);
+    }
+
     public function test_gemini_repairs_reuse_the_same_remote_prefix_without_resending_tools(): void
     {
         $this->enable('google');

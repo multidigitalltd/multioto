@@ -113,6 +113,9 @@ class SiteChangeApplier
         $content = (string) ($page['content'] ?? '');
         $title = (string) ($page['title'] ?? '');
         $text = (string) ($plan['text'] ?? '');
+        if (strip_tags($text) !== $text) {
+            return $this->refuse('עריכת טקסט אינה מאפשרת הכנסת HTML. יש להכין הצעה חדשה בכלי הייעודי.');
+        }
 
         // A title change that would overwrite somebody else's rename.
         //
@@ -129,7 +132,8 @@ class SiteChangeApplier
         // The visible text of an Elementor page is not in `content`, so the
         // ordinary update would change a field nobody reads and report success.
         if ((bool) ($plan['elementor'] ?? false) && $request->operation === SiteAgentRequest::OP_REPLACE) {
-            return $this->applyElementor($site, $pageId, (string) ($plan['find'] ?? ''), $text);
+            return $this->applyElementor($site, $pageId, (string) ($plan['find'] ?? ''), $text,
+                array_key_exists('page_status', $plan) ? $expectedStatus : null);
         }
 
         $update = match ($request->operation) {
@@ -193,7 +197,7 @@ class SiteChangeApplier
      *
      * @return array{ok: bool, reason: string|null, message: string|null, restore: array<string, mixed>|null}
      */
-    private function applyElementor(Site $site, int $pageId, string $find, string $text): array
+    private function applyElementor(Site $site, int $pageId, string $find, string $text, ?string $pageStatus = null): array
     {
         if ($find === '') {
             return $this->refuse(self::STALE);
@@ -201,7 +205,7 @@ class SiteChangeApplier
 
         $matches = array_values(array_filter(
             $this->planner->elementorTexts($site, $pageId),
-            fn (array $widget): bool => mb_substr_count($widget['text'], $find) === 1,
+            fn (array $widget): bool => mb_substr_count($widget['text'], $find) > 0,
         ));
 
         if (count($matches) !== 1) {
@@ -231,6 +235,7 @@ class SiteChangeApplier
         return ['ok' => true, 'reason' => null, 'message' => null, 'restore' => [
             'kind' => 'elementor',
             'page_id' => $pageId,
+            ...($pageStatus !== null ? ['page_status' => $pageStatus] : []),
             'widget_id' => $widget['widget_id'],
             'setting' => (string) data_get($result, 'setting', $widget['setting']),
             // Elementor's own "before", not the text we read a moment earlier.
@@ -252,6 +257,17 @@ class SiteChangeApplier
 
         if ($pageId <= 0 || $widgetId === '') {
             return $this->refuse('אין לי גיבוי לשחזור הבקשה הזו.');
+        }
+
+        if (array_key_exists('page_status', $restore)) {
+            try {
+                $page = $this->read($site, $pageId);
+            } catch (\Throwable) {
+                return $this->refuse(self::STALE);
+            }
+            if (($page['status'] ?? null) !== $restore['page_status']) {
+                return $this->refuse(self::STALE);
+            }
         }
 
         $setting = (string) ($restore['setting'] ?? '');
@@ -1048,7 +1064,7 @@ class SiteChangeApplier
      */
     private function replacement(string $content, string $find, string $text): ?array
     {
-        if ($find === '' || mb_substr_count($content, $find) !== 1) {
+        if (! VisibleTextReplacement::matchesOnce($content, $find) || strip_tags($text) !== $text) {
             return null;
         }
 

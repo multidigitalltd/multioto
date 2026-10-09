@@ -106,14 +106,11 @@ class SiteAgentGeminiRoundTripTest extends TestCase
                     $this->assertStringContainsString('חולצה כחולה', $result['response']['result']);
                     $this->assertStringContainsString('7', $result['response']['result']);
 
-                    return $this->functionCall('propose_product_update', ['product_id' => 7, 'sale_price' => '79.90'], 'proposal');
+                    // Even text accompanying the tool call cannot replace
+                    // the verified proposal with a premature success claim.
+                    return $this->functionCall('propose_product_update', ['product_id' => 7, 'sale_price' => '79.90'], 'proposal', 'בוצע כבר בחנות!');
                 }
-                $this->assertSame(3, $modelTurns);
-                $this->assertSame('proposal', data_get($data, 'contents.4.parts.0.functionResponse.id'));
-
-                // The authoritative preview must win even if the model claims
-                // the proposal already happened.
-                return Http::response(['candidates' => [['content' => ['parts' => [['text' => 'בוצע כבר בחנות!']]]]]]);
+                $this->fail('A verified proposal must end the model loop without another request.');
             },
             'store.test/*' => function (Request $request) use (&$product, &$reads, &$writes, &$approvalSent) {
                 $data = $request->data();
@@ -162,7 +159,7 @@ class SiteAgentGeminiRoundTripTest extends TestCase
         }
         $approvalSent = true;
         $reply = app(SiteAgentConversation::class)->handle($subscriber, 'כן', 'separate-approval');
-        $this->assertSame(3, $modelTurns, 'Approval is handled by code, not another model call.');
+        $this->assertSame(2, $modelTurns, 'The saved proposal ends the model loop; approval is handled by code.');
         $this->assertSame($cached ? 1 : 0, $cacheCreates, 'A cached catalog is created once for all model rounds.');
         $this->assertContains('wc_product_get', array_slice($reads, 2), 'The price is read again at approval.');
 
@@ -179,12 +176,15 @@ class SiteAgentGeminiRoundTripTest extends TestCase
         }
     }
 
-    private function functionCall(string $name, array $arguments, string $id): PromiseInterface
+    private function functionCall(string $name, array $arguments, string $id, string $text = ''): PromiseInterface
     {
-        return Http::response(['candidates' => [['content' => ['parts' => [[
+        $parts = $text === '' ? [] : [['text' => $text]];
+        $parts[] = [
             'functionCall' => ['id' => $id, 'name' => $name, 'args' => $arguments],
             'thoughtSignature' => 'test-signature',
-        ]]]]]]);
+        ];
+
+        return Http::response(['candidates' => [['content' => ['parts' => $parts]]]]);
     }
 
     /** Schema maps must serialize as JSON objects, including empty maps. */

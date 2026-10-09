@@ -38,7 +38,7 @@ class SiteAgentLearnDashActions
             'get_ld_student_course' => ['ld_student_course_get', 'מצב הגישה וההתקדמות של תלמיד בקורס, לקריאה בלבד. user_id מתוך find_users; אין להציג אימיילים או סודות.', ['user_id' => $id, 'course_id' => $id], ['user_id', 'course_id']],
             'find_ld_groups' => ['ld_groups_list', 'קבוצות LearnDash, מזהים, כותרות ומצב. אין פרטי תלמידים ברשימה. יש לעקוב אחרי has_more.', $page + ['search' => ['type' => 'string']], []],
             'get_ld_group' => ['ld_group_get', 'קבוצה, הקורסים המשויכים ורשימת תלמידים מדופדפת ללא אימיילים. שיוך קורסים לקבוצה הוא לקריאה בלבד.', ['group_id' => $id] + $page, ['group_id']],
-            'get_ld_membership' => ['ld_membership_get', 'רישום ישיר של תלמיד לקורס או חברות בקבוצה, כולל מקורות גישה נוספים, השפעה על קורסים והאם עריכה אפשרית. חובה לקרוא את אותו תלמיד ויעד בסבב הנוכחי לפני הצעה.', self::selectors(), ['user_id', 'kind', 'target_id']],
+            'get_ld_membership' => ['ld_membership_get', 'רישום ישיר של תלמיד לקורס או חברות בקבוצה, כולל מקורות גישה נוספים, השפעה על קורסים והאם עריכה אפשרית. חובה לקרוא את אותו תלמיד ויעד בסבב הנוכחי לפני הצעה. direct_member הוא הרישום שמבקשים לשנות; effective_access עשוי להגיע מקבוצה גם ללא רישום ישיר. בקשה מפורשת לרישום ישיר נוסף מחייבת הצעה גם כשכבר יש גישה דרך קבוצה.', self::selectors(), ['user_id', 'kind', 'target_id']],
         ];
     }
 
@@ -59,7 +59,7 @@ class SiteAgentLearnDashActions
         }
 
         return [['name' => self::TOOL,
-            'description' => 'הצעה להוסיף או להסיר רישום ישיר לקורס LearnDash או חברות בקבוצה. קראו get_ld_membership לאותו תלמיד, סוג ויעד בסבב הנוכחי. action=add/remove. הסרת רישום ישיר אינה מסירה גישה שמגיעה מקבוצה או ממקור אחר. אין איפוס התקדמות, תשלומים, מבחנים או שיוך קורס לקבוצה.',
+            'description' => 'הצעה להוסיף או להסיר רישום ישיר לקורס LearnDash או חברות בקבוצה. קראו get_ld_membership לאותו תלמיד, סוג ויעד בסבב הנוכחי ואז הכינו את ההצעה באותה תשובה; אין לשאול האם להכין הצעה כאשר המשתמש כבר ביקש את הפעולה. action=add/remove. להוספת רישום ישיר בודקים direct_member=false, גם אם effective_access=true דרך קבוצה. הסרת רישום ישיר אינה מסירה גישה שמגיעה מקבוצה או ממקור אחר. אישור ביצוע נדרש רק לאחר הכנת ההצעה המאומתת. אין איפוס התקדמות, תשלומים, מבחנים או שיוך קורס לקבוצה.',
             'input_schema' => ['type' => 'object', 'properties' => self::selectors() + ['action' => ['type' => 'string', 'enum' => ['add', 'remove']]],
                 'required' => ['user_id', 'kind', 'target_id', 'action'], 'additionalProperties' => false]]];
     }

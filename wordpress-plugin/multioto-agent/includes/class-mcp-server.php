@@ -200,6 +200,7 @@ class Multioto_Agent_Mcp_Server
         // People on the site. The write half never reaches administrators —
         // see Multioto_Agent_Users for why that boundary is absolute.
         $tools[] = ['name' => 'wp_user_list', 'description' => 'המשתמשים באתר: מזהה, שם משתמש, אימייל, שם תצוגה, תפקידים ותאריך הרשמה. אופציונלי role (סינון לפי תפקיד), search, limit, page — יש total ו-pages, אז אל תתייחסו לעמוד הראשון כאילו הוא כולם. לכל משתמש editable אומר אם הסוכן רשאי לשנות אותו בכלל (מנהל אתר — לא), ו-status_meta_keys מראה שמות שדות שנראים כמו סימון אישור/מצב שהאתר משתמש בהם.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['role' => ['type' => 'string'], 'search' => ['type' => 'string'], 'limit' => ['type' => 'integer'], 'page' => ['type' => 'integer']]]];
+        $tools[] = ['name' => 'wp_user_get', 'description' => 'משתמש אחד באתר הנוכחי לפי user_id מדויק: מזהה, שם, אימייל, תפקידים ו-editable. מנהל אתר או משתמש עם כמה תפקידים אינו ניתן לשינוי. אין סיסמאות או ערכי מטא.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['user_id' => ['type' => 'integer', 'minimum' => 1]], 'required' => ['user_id']]];
         $tools[] = ['name' => 'wp_user_create', 'description' => 'הוספת משתמש. email חובה; אופציונלי login, display_name, first_name, last_name, role (ברירת מחדל subscriber) ו-notify (ברירת מחדל true — וורדפרס שולח למשתמש קישור לקביעת סיסמה). **סיסמה אינה נקבעת כאן ואינה מוחזרת.** תפקיד administrator אינו ניתן להקצאה מכאן בשום מצב.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['email' => ['type' => 'string'], 'login' => ['type' => 'string'], 'display_name' => ['type' => 'string'], 'first_name' => ['type' => 'string'], 'last_name' => ['type' => 'string'], 'role' => ['type' => 'string'], 'notify' => ['type' => 'boolean']], 'required' => ['email']]];
         $tools[] = ['name' => 'wp_user_role_set', 'description' => 'שינוי תפקיד של משתמש — וברוב האתרים זהו גם "אישור" של נרשם חדש. user_id + role. מחזיר את התפקיד הקודם לצורך ביטול — גם כשהתפקיד הקודם היה "אין תפקיד", שזה המצב הרגיל של נרשם שממתין לאישור. role ריק פירושו הסרת כל התפקידים, וזהו הביטול של אישור; הוא נשלח מהיומן ולא מוצע בשיחה. מסרב על מנהל אתר, על הקצאת תפקיד administrator, ועל משתמש שיש לו יותר מתפקיד אחד (שינוי כזה היה מוחק את השאר).', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['user_id' => ['type' => 'integer'], 'role' => ['type' => 'string']], 'required' => ['user_id', 'role']]];
 
@@ -327,6 +328,7 @@ class Multioto_Agent_Mcp_Server
             'wp_fields_get' => 'fieldsGet',
             'wp_fields_update' => 'fieldsUpdate',
             'wp_user_list' => 'userList',
+            'wp_user_get' => 'userGet',
             'wp_user_create' => 'userCreate',
             'wp_user_role_set' => 'userRoleSet',
             'wp_comment_list' => 'commentList',
@@ -545,6 +547,11 @@ class Multioto_Agent_Mcp_Server
     private function userList(array $args): string
     {
         return Multioto_Agent_Users::listUsers($args);
+    }
+
+    private function userGet(array $args): string
+    {
+        return Multioto_Agent_Users::getUser($args);
     }
 
     private function userCreate(array $args): string

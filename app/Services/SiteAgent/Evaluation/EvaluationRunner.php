@@ -12,8 +12,12 @@ use App\Models\SiteAgentRequest;
 use App\Models\SiteAgentSubscriber;
 use App\Services\Agent\McpClient;
 use App\Services\Ai\GeminiContextCache;
+use App\Services\SiteAgent\SiteActionProposer;
 use App\Services\SiteAgent\SiteAgentConversation;
 use App\Services\SiteAgent\WhatsAppCloudClient;
+use GuzzleHttp\Exception\ConnectException;
+use GuzzleHttp\Exception\RequestException;
+use GuzzleHttp\Promise\Create;
 use GuzzleHttp\Promise\PromiseInterface;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Artisan;
@@ -155,11 +159,13 @@ final class EvaluationRunner
                 'status' => SiteStatus::Active, 'monitor_enabled' => false, 'mcp_enabled' => true,
                 'mcp_endpoint' => 'https://evaluation.example/wp-json/multioto/v1/mcp',
                 'mcp_secret' => 'synthetic-evaluation-secret',
-                'mcp_capabilities' => ['server' => ['version' => '1.12.0'], 'tools' => array_map(
+                'mcp_capabilities' => ['server' => ['version' => '1.12.1'], 'tools' => array_map(
                     fn (string $name): array => ['name' => $name], $this->world->supportedTools())]]);
             $subscriber = SiteAgentSubscriber::create(['customer_id' => $customer->id, 'site_id' => $site->id,
                 'phone' => '972500000001', 'name' => 'נועה', 'verified_at' => now()]);
             app()->instance(McpClient::class, new EvaluationMcpClient($this->world, $site->id));
+            $proposer = app(EvaluationSiteActionProposer::class);
+            app()->instance(SiteActionProposer::class, $proposer);
             $conversation = app(SiteAgentConversation::class);
             foreach ($case['turns'] as $index => $turn) {
                 $before = $this->requests();
@@ -171,10 +177,12 @@ final class EvaluationRunner
                 $undo = ! $media && $pending === null
                     && in_array($word, ['בטל', 'תבטל', 'תחזיר', 'החזר', 'שחזר', 'undo'], true);
                 $callOffset = count($this->world->calls);
+                $proposalOffset = count($proposer->diagnostics());
                 $reply = $conversation->handle($subscriber, $turn['user'], $case['id'].'-'.$index, $media ? 'fixture-image' : null);
                 $turns[] = [
                     'user' => $turn['user'], 'media' => $media, 'reply' => $reply,
                     'calls' => array_slice($this->world->calls, $callOffset),
+                    'proposal_diagnostics' => array_slice($proposer->diagnostics(), $proposalOffset),
                     'before_request' => $pending, 'requests' => $this->requests(),
                     'approved' => $approved, 'undo' => $undo,
                 ];
@@ -295,7 +303,13 @@ final class EvaluationRunner
         });
         Http::globalMiddleware(function (callable $handler) use ($provider, $host): callable {
             return function (RequestInterface $request, array $options) use ($handler, $provider, $host): PromiseInterface {
-                return $handler($request, $options)->then(function (ResponseInterface $response) use ($request, $provider, $host): ResponseInterface {
+                try {
+                    $promise = $handler($request, $options);
+                } catch (Throwable $error) {
+                    $promise = Create::rejectionFor($error);
+                }
+
+                return $promise->then(function (ResponseInterface $response) use ($request, $provider, $host): ResponseInterface {
                     // Capture this request in its own promise: synthetic site
                     // health checks must never become provider diagnostics.
                     if ($request->getUri()->getHost() === $host) {
@@ -311,9 +325,49 @@ final class EvaluationRunner
                     }
 
                     return $response;
+                }, function (mixed $reason) use ($request, $host): PromiseInterface {
+                    // A connection timeout has no HTTP response. Preserve that
+                    // distinction without exporting exception text or credentials.
+                    if ($request->getUri()->getHost() === $host) {
+                        $this->recordTransportFailure($request, $reason);
+                    }
+
+                    return Create::rejectionFor($reason);
                 });
             };
         });
+    }
+
+    private function recordTransportFailure(RequestInterface $request, mixed $reason): void
+    {
+        $context = $reason instanceof ConnectException || $reason instanceof RequestException
+            ? $reason->getHandlerContext() : [];
+        $kind = match ($context['errno'] ?? null) {
+            28 => 'timeout',
+            6 => 'dns',
+            7 => 'connection',
+            35, 51, 58, 59, 60, 64, 66, 77, 80, 82, 83, 90, 91 => 'tls',
+            default => 'transport_error',
+        };
+        if ($this->isCacheManagementRequest($request)) {
+            if (count($this->cacheDiagnostics) < 6) {
+                $this->cacheDiagnostics[] = ['operation' => $request->getMethod() === 'PATCH' ? 'renew' : 'create',
+                    'http_status' => null, 'reason' => 'transport_error', 'error_kind' => $kind];
+            }
+
+            return;
+        }
+        if ($request->getMethod() !== 'POST' || count($this->providerDiagnostics) >= 80) {
+            return;
+        }
+
+        $payload = json_decode((string) $request->getBody(), true);
+        $requestKind = data_get($payload, 'generationConfig.responseMimeType') === 'application/json'
+            ? 'structured_output'
+            : (isset($payload['cachedContent']) || isset($payload['tools']) ? 'tool_use' : 'text_generation');
+        $this->providerDiagnostics[] = ['http_status' => null, 'reason' => 'transport_error',
+            'error_kind' => $kind, 'request_kind' => $requestKind,
+            'finish_reason' => null, 'block_reason' => null];
     }
 
     /** Export bounded status metadata only, never provider response text. */
@@ -329,7 +383,7 @@ final class EvaluationRunner
                 'anthropic' => $body['content'] ?? null,
                 'openai' => data_get($body, 'choices.0.message'),
             };
-            if (is_array($content) && $content !== []) {
+            if ($this->hasModelContent($provider, $content)) {
                 $this->providerResponses++;
                 if ($provider === 'google') {
                     $payload = json_decode((string) $request->getBody(), true);
@@ -369,6 +423,39 @@ final class EvaluationRunner
                 'finish_reason' => in_array($finish, $allowed, true) ? $finish : null,
                 'block_reason' => in_array($block, $allowed, true) ? $block : null];
         }
+    }
+
+    private function hasModelContent(string $provider, mixed $content): bool
+    {
+        if (! is_array($content) || $content === []) {
+            return false;
+        }
+        if ($provider !== 'google') {
+            return true;
+        }
+
+        foreach ($content as $part) {
+            if (! is_array($part)) {
+                continue;
+            }
+            if (($part['thought'] ?? false) !== true && is_string($part['text'] ?? null) && trim($part['text']) !== '') {
+                return true;
+            }
+            $call = $part['functionCall'] ?? null;
+            if (is_array($call) && is_string($call['name'] ?? null) && trim($call['name']) !== '') {
+                if (! array_key_exists('args', $call)) {
+                    // The native protocol permits omitting empty arguments.
+                    return true;
+                }
+                // JSON objects, including args:{}, decode to associative PHP arrays.
+                // A nonempty JSON list is not a native function argument object.
+                if (is_array($call['args']) && ($call['args'] === [] || ! array_is_list($call['args']))) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private function cacheMode(): string

@@ -2,14 +2,21 @@
 
 namespace Tests\Feature;
 
+use App\Models\Site;
+use App\Services\Agent\McpClient;
 use App\Services\Ai\GeminiContextCache;
 use App\Services\SiteAgent\Evaluation\EvaluationCorpus;
 use App\Services\SiteAgent\Evaluation\EvaluationGeminiContextCache;
 use App\Services\SiteAgent\Evaluation\EvaluationRunner;
+use App\Services\SiteAgent\Evaluation\EvaluationSiteActionProposer;
+use App\Services\SiteAgent\SiteActionProposer;
 use App\Services\SiteAgent\SiteAgentConversation;
+use GuzzleHttp\Exception\ConnectException;
+use GuzzleHttp\Promise\Create;
 use GuzzleHttp\Promise\PromiseInterface;
 use GuzzleHttp\Psr7\Response;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use PHPUnit\Framework\Attributes\TestWith;
@@ -42,11 +49,11 @@ class SiteAgentEvaluationRunnerTest extends TestCase
     public function test_all_current_cases_are_reported_as_not_run_during_preflight_not_as_passed(): void
     {
         $cases = app(EvaluationCorpus::class)->cases();
-        $this->assertCount(752, $cases);
-        $this->assertSame(752, count(array_unique(array_column($cases, 'id'))));
-        $this->assertGreaterThan(700, array_sum(array_map(fn (array $case): int => count($case['turns']), $cases)));
+        $this->assertCount(150, $cases);
+        $this->assertSame(150, count(array_unique(array_column($cases, 'id'))));
+        $this->assertSame(288, array_sum(array_map(fn (array $case): int => count($case['turns']), $cases)));
         $report = app(EvaluationRunner::class)->run($cases, false);
-        $this->assertSame(['total' => 752, 'passed' => 0, 'failed' => 0, 'blocked' => 752], $report['summary']);
+        $this->assertSame(['total' => 150, 'passed' => 0, 'failed' => 0, 'blocked' => 150], $report['summary']);
         $this->assertSame(0, $report['provider_requests']);
         $this->assertSame(['preflight_only'], array_values(array_unique(array_column($report['cases'], 'reason'))));
         Http::assertNothingSent();
@@ -63,7 +70,7 @@ class SiteAgentEvaluationRunnerTest extends TestCase
         $case = $this->countCase();
         $report = app(EvaluationRunner::class)->run($case, true);
         $this->assertSame(['total' => 1, 'passed' => 1, 'failed' => 0, 'blocked' => 0], $report['summary'], json_encode($report['cases'][0]['failures']));
-        $this->assertSame(2, $report['provider_responses']);
+        $this->assertSame(1, $report['provider_responses']);
         $this->assertTrue($report['cases'][0]['model_executed']);
         $this->assertStringContainsString('40', $report['cases'][0]['turns'][0]['reply']);
         $this->assertSame('not_performed', $report['cases'][0]['semantic_review']);
@@ -93,6 +100,78 @@ class SiteAgentEvaluationRunnerTest extends TestCase
         $this->assertDatabaseCount('site_agent_requests', 0);
     }
 
+    public function test_proposal_diagnostics_capture_validation_then_read_and_retry_without_changing_execution(): void
+    {
+        $round = 0;
+        Http::fake(['generativelanguage.googleapis.com/*' => function () use (&$round) {
+            return match (++$round) {
+                1, 3 => $this->tool('propose_product_update', ['product_id' => 7, 'regular_price' => '90.00']),
+                2 => $this->tool('get_product', ['product_id' => 7]),
+                default => $this->answer('Unused response'),
+            };
+        }]);
+        $case = ['id' => 'harness-proposal-diagnostics', 'domain' => 'harness', 'title' => 'תיקון הצעה לאחר קריאת היעד',
+            'turns' => [['user' => 'שנה את מחיר חולצה כחולה ל-90'], ['user' => 'כן']],
+            'expect' => ['outcome' => 'applied', 'operations' => ['update_product'],
+                'tools_all' => ['wc_product_get', 'wc_product_update'], 'final' => ['products.7.regular_price' => '90.00']]];
+        $report = app(EvaluationRunner::class)->run([$case], true);
+        $result = $report['cases'][0];
+
+        $this->assertSame('passed', $result['status'], json_encode($result['failures']));
+        $this->assertSame(['rejected', 'prepared'], array_column($result['turns'][0]['proposal_diagnostics'], 'result_kind'));
+        $diagnostic = $result['turns'][0]['proposal_diagnostics'][0];
+        $this->assertSame('propose_product_update', $diagnostic['tool']);
+        $this->assertSame('target_not_read', $diagnostic['rejection_code']);
+        $this->assertSame(['product_id', 'regular_price'], $diagnostic['input_keys']);
+        $this->assertArrayNotHasKey('arguments', $diagnostic);
+        $this->assertArrayNotHasKey('plan', $diagnostic);
+        $this->assertStringNotContainsString('90.00', json_encode($diagnostic));
+        $this->assertSame([], $result['turns'][1]['proposal_diagnostics']);
+        $this->assertFalse(collect($result['turns'][0]['calls'])->contains('write', true));
+        $this->assertTrue($result['turns'][1]['approved']);
+        $this->assertSame('90.00', $result['final']['products'][7]['regular_price']);
+        $this->assertSame(3, $report['provider_requests']);
+    }
+
+    public function test_proposal_diagnostics_are_bounded_and_never_include_values_or_credential_shaped_keys(): void
+    {
+        config(['billing.ai.api_key' => 'private_credential']);
+        $proposer = app(EvaluationSiteActionProposer::class);
+        $site = new Site(['domain' => 'evaluation.example', 'mcp_secret' => 'synthetic_secret']);
+        for ($attempt = 0; $attempt < 55; $attempt++) {
+            $result = $proposer->propose($site, 'propose_product_update', [
+                'product_id' => 7, 'regular_price' => 'private raw value', 'private_credential' => 'hidden',
+                'values' => ['synthetic_secret' => 'hidden nested value', 'stock_quantity' => 9],
+            ], []);
+        }
+        $this->assertArrayHasKey('error', $result);
+        $diagnostics = $proposer->diagnostics();
+        $this->assertCount(50, $diagnostics);
+        $this->assertContains('redacted_field', $diagnostics[0]['input_keys']);
+        $this->assertSame(['redacted_field', 'stock_quantity'], $diagnostics[0]['value_keys']);
+        foreach (['private_credential', 'synthetic_secret', 'private raw value', 'hidden nested value'] as $value) {
+            $this->assertStringNotContainsString($value, json_encode($diagnostics));
+        }
+        $this->assertSame([], app(EvaluationSiteActionProposer::class)->diagnostics());
+        $this->assertNotInstanceOf(EvaluationSiteActionProposer::class, app(SiteActionProposer::class));
+    }
+
+    public function test_proposal_read_exceptions_are_diagnosed_by_fixed_code_without_exporting_exception_text(): void
+    {
+        $mcp = \Mockery::mock(McpClient::class);
+        $mcp->shouldReceive('callTool')->once()->andThrow(new \RuntimeException('private stack trace credential https://secret.example'));
+        app()->instance(McpClient::class, $mcp);
+        $proposer = app(EvaluationSiteActionProposer::class);
+        $site = new Site(['domain' => 'evaluation.example', 'mcp_secret' => 'synthetic_secret']);
+        $result = $proposer->propose($site, 'propose_product_update', ['product_id' => 7, 'regular_price' => '90.00'], [7]);
+
+        $this->assertStringContainsString('private stack trace', $result['error']);
+        $this->assertSame('read_failed', $proposer->diagnostics()[0]['rejection_code']);
+        $this->assertSame('לא ניתן היה לקרוא ולאמת את נתוני האתר.', $proposer->diagnostics()[0]['validation_message']);
+        $this->assertStringNotContainsString('private', json_encode($proposer->diagnostics()));
+        $this->assertStringNotContainsString('secret.example', json_encode($proposer->diagnostics()));
+    }
+
     public function test_a_rejected_provider_key_is_blocked_and_never_passes_a_refusal_case(): void
     {
         Http::fake(['generativelanguage.googleapis.com/*' => Http::response(['error' => ['message' => 'Invalid test key']], 401)]);
@@ -107,6 +186,100 @@ class SiteAgentEvaluationRunnerTest extends TestCase
         $this->assertSame([['http_status' => 401, 'reason' => 'http_error', 'finish_reason' => null, 'block_reason' => null]],
             $report['cases'][0]['provider_diagnostics']);
         $this->assertStringNotContainsString('Invalid test key', json_encode($report));
+    }
+
+    public function test_a_connection_timeout_is_diagnosed_without_raw_messages_or_an_automatic_retry(): void
+    {
+        Http::fake(['generativelanguage.googleapis.com/*' => function () {
+            $reason = new ConnectException('sensitive-provider-key timeout detail',
+                new \GuzzleHttp\Psr7\Request('POST', 'https://generativelanguage.googleapis.com/private-sensitive-path'),
+                null, ['errno' => 28]);
+
+            return Create::rejectionFor($reason);
+        }]);
+        $report = app(EvaluationRunner::class)->run($this->countCase(), true);
+
+        $this->assertSame(1, $report['summary']['blocked']);
+        $this->assertSame(1, $report['provider_requests']);
+        $this->assertSame(0, $report['provider_responses']);
+        $this->assertSame([['http_status' => null, 'reason' => 'transport_error', 'error_kind' => 'timeout',
+            'request_kind' => 'tool_use', 'finish_reason' => null, 'block_reason' => null]], $report['cases'][0]['provider_diagnostics']);
+        $this->assertStringNotContainsString('sensitive', json_encode($report));
+        $this->assertFalse($report['cases'][0]['model_executed']);
+    }
+
+    public function test_structured_request_connection_failures_remain_distinct_from_cache_management_failures(): void
+    {
+        config(['siteagent.assistant.cache.enabled' => true]);
+        $runner = app(EvaluationRunner::class);
+        (new \ReflectionProperty($runner, 'caseStarted'))->setValue($runner, microtime(true));
+        (new \ReflectionMethod($runner, 'restrictNetwork'))->invoke($runner);
+        Http::fake(['generativelanguage.googleapis.com/*' => Http::failedConnection('sensitive private URL')]);
+        foreach (['/v1beta/cachedContents', '/v1beta/models/gemini-3.1-flash-lite:generateContent'] as $path) {
+            try {
+                Http::post('https://generativelanguage.googleapis.com'.$path, [
+                    'generationConfig' => ['responseMimeType' => 'application/json'],
+                    'contents' => [['parts' => [['text' => 'private prompt']]]],
+                ]);
+                $this->fail('The failed connection must remain rejected.');
+            } catch (ConnectionException) {
+                // No successful response exists for either request.
+            }
+        }
+        $provider = (new \ReflectionProperty($runner, 'providerDiagnostics'))->getValue($runner);
+        $cache = (new \ReflectionProperty($runner, 'cacheDiagnostics'))->getValue($runner);
+        $this->assertSame('structured_output', $provider[0]['request_kind']);
+        $this->assertSame('transport_error', $provider[0]['reason']);
+        $this->assertSame([['operation' => 'create', 'http_status' => null,
+            'reason' => 'transport_error', 'error_kind' => 'transport_error']], $cache);
+        $this->assertSame(1, (new \ReflectionProperty($runner, 'providerRequests'))->getValue($runner));
+        $this->assertSame(0, (new \ReflectionProperty($runner, 'providerResponses'))->getValue($runner));
+        $this->assertSame(1, (new \ReflectionProperty($runner, 'cacheManagementRequests'))->getValue($runner));
+        $this->assertStringNotContainsString('private', json_encode([$provider, $cache]));
+    }
+
+    public function test_an_empty_stop_response_is_not_invented_model_evidence(): void
+    {
+        Http::fake(['generativelanguage.googleapis.com/*' => Http::response([
+            'candidates' => [['finishReason' => 'STOP', 'content' => ['role' => 'model']]],
+        ])]);
+        $report = app(EvaluationRunner::class)->run($this->countCase(), true);
+
+        $this->assertSame(1, $report['summary']['blocked']);
+        $this->assertSame(0, $report['provider_responses']);
+        $this->assertFalse($report['cases'][0]['model_executed']);
+        $this->assertSame('missing_model_content', $report['cases'][0]['provider_diagnostics'][0]['reason']);
+        $this->assertSame('STOP', $report['cases'][0]['provider_diagnostics'][0]['finish_reason']);
+    }
+
+    #[TestWith([[['text' => 'Private reasoning only', 'thought' => true]]])]
+    #[TestWith([[[]]])]
+    #[TestWith([[['text' => '   ']]])]
+    #[TestWith([[['functionCall' => ['args' => []]]]])]
+    #[TestWith([[['functionCall' => ['name' => 'get_product_counts', 'args' => ['not', 'an', 'object']]]]])]
+    public function test_thought_only_or_malformed_parts_do_not_count_as_visible_model_evidence(array $parts): void
+    {
+        Http::fake(['generativelanguage.googleapis.com/*' => Http::response([
+            'candidates' => [['finishReason' => 'STOP', 'content' => ['role' => 'model', 'parts' => $parts]]],
+        ])]);
+        $report = app(EvaluationRunner::class)->run($this->countCase(), true);
+
+        $this->assertSame(1, $report['summary']['blocked']);
+        $this->assertSame(0, $report['provider_responses']);
+        $this->assertFalse($report['cases'][0]['model_executed']);
+        $this->assertSame('missing_model_content', $report['cases'][0]['provider_diagnostics'][0]['reason']);
+    }
+
+    public function test_a_native_no_argument_function_call_may_omit_the_optional_args_object(): void
+    {
+        Http::fake(['generativelanguage.googleapis.com/*' => Http::response([
+            'candidates' => [['content' => ['parts' => [['functionCall' => ['name' => 'get_product_counts']]]]]],
+        ])]);
+        $report = app(EvaluationRunner::class)->run($this->countCase(), true);
+
+        $this->assertSame(1, $report['summary']['passed'], json_encode($report['cases'][0]['failures']));
+        $this->assertSame(1, $report['provider_requests']);
+        $this->assertSame(1, $report['provider_responses']);
     }
 
     public function test_runner_rejects_a_nonisolated_database_before_any_request_or_migration(): void
@@ -222,13 +395,13 @@ class SiteAgentEvaluationRunnerTest extends TestCase
         $report = app(EvaluationRunner::class)->run($this->countCase(), true);
 
         $this->assertSame(1, $report['summary']['passed'], json_encode($report['cases'][0]['failures']));
-        $this->assertSame(2, $report['provider_requests']);
-        $this->assertSame(2, $report['provider_responses']);
+        $this->assertSame(1, $report['provider_requests']);
+        $this->assertSame(1, $report['provider_responses']);
         $this->assertSame(1, $report['cache_management_requests']);
         $this->assertSame(1, $report['cache_management_responses']);
         $this->assertSame('google_explicit', $report['cache_mode']);
-        $this->assertSame(['input_tokens' => 2000, 'cached_input_tokens' => 1600, 'uncached_input_tokens' => 400,
-            'output_tokens' => 40, 'cache_hit_requests' => 2], $report['cases'][0]['usage']);
+        $this->assertSame(['input_tokens' => 1000, 'cached_input_tokens' => 800, 'uncached_input_tokens' => 200,
+            'output_tokens' => 20, 'cache_hit_requests' => 1], $report['cases'][0]['usage']);
         $this->assertSame($report['cases'][0]['usage'], $report['provider_usage']);
         $this->assertStringNotContainsString('evaluation-reference', json_encode($report));
     }
@@ -237,13 +410,12 @@ class SiteAgentEvaluationRunnerTest extends TestCase
     {
         config(['siteagent.assistant.cache.enabled' => true]);
         app()->instance(GeminiContextCache::class, new EvaluationGeminiContextCache([], 'isolated-run-stable-salt'));
-        $round = 0;
-        Http::fake(['generativelanguage.googleapis.com/*' => function (Request $request) use (&$round) {
+        Http::fake(['generativelanguage.googleapis.com/*' => function (Request $request) {
             if (str_ends_with($request->url(), '/cachedContents')) {
                 return $this->cacheResponse();
             }
 
-            return ++$round % 2 === 1 ? $this->tool('get_product_counts', []) : $this->answer('יש 40 מוצרים.');
+            return $this->tool('get_product_counts', []);
         }]);
         $cases = $this->countCase();
         $cases[] = [...$cases[0], 'id' => 'harness-next-count'];
@@ -251,7 +423,7 @@ class SiteAgentEvaluationRunnerTest extends TestCase
 
         $this->assertSame(2, $report['summary']['passed'], json_encode(array_column($report['cases'], 'failures')));
         $this->assertSame(1, $report['cache_management_requests']);
-        $this->assertSame(4, $report['provider_responses']);
+        $this->assertSame(2, $report['provider_responses']);
         $this->assertSame(0, $report['cases'][1]['cache_management_requests']);
         $this->assertNotEmpty($report['_cache_state']['entries']);
         $this->assertArrayNotHasKey('_cache_state', $report['cases'][0]);
@@ -291,8 +463,8 @@ class SiteAgentEvaluationRunnerTest extends TestCase
         $report = app(EvaluationRunner::class)->run($this->countCase(), true);
 
         $this->assertSame(1, $report['summary']['passed'], json_encode($report['cases'][0]['failures']));
-        $this->assertSame(2, $report['provider_requests']);
-        $this->assertSame(2, $report['provider_responses']);
+        $this->assertSame(1, $report['provider_requests']);
+        $this->assertSame(1, $report['provider_responses']);
         $this->assertSame(1, $report['cache_management_requests']);
         $this->assertSame([['operation' => 'create', 'http_status' => 503]], $report['cases'][0]['cache_diagnostics']);
         $this->assertSame('fallback', $report['cache_status']['state']);
@@ -324,8 +496,8 @@ class SiteAgentEvaluationRunnerTest extends TestCase
         $report = app(EvaluationRunner::class)->run($this->countCase(), true);
 
         $this->assertSame(1, $report['summary']['passed'], json_encode($report['cases'][0]['failures']));
-        $this->assertSame(3, $report['provider_requests']);
-        $this->assertSame(2, $report['provider_responses']);
+        $this->assertSame(2, $report['provider_requests']);
+        $this->assertSame(1, $report['provider_responses']);
         $this->assertSame(1, $report['cache_reference_retries']);
         $this->assertSame(1, $report['cases'][0]['cache_reference_retries']);
         $this->assertSame('cache_reference_rejected', $report['cases'][0]['provider_diagnostics'][0]['reason']);

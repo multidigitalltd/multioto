@@ -195,12 +195,16 @@ class ClaudeClient
      * string, or supplies an internal correction. Corrections share tool state
      * and cache. Callers may reserve one extra request for a rejected final
      * reply; ordinary tool loops never consume that reserve.
+     * A caller that already has a verified reply may stop after a tool handler.
+     * In that case no further tool or paid model request runs, and the caller
+     * returns its saved result rather than an additional model-written answer.
      *
      * @param  list<array<string, mixed>>  $tools  Anthropic tool definitions.
      * @param  callable(string, array<string, mixed>): array{content: string, is_error?: bool}  $handler
      * @param  (callable(string): ?string)|null  $reviewReply
+     * @param  (callable(): bool)|null  $shouldStopAfterTools
      */
-    public function converse(string $system, string $prompt, array $tools, callable $handler, int $maxTurns = 6, ?string $cacheScope = null, ?callable $reviewReply = null, int $replyRepairTurns = 0): ?string
+    public function converse(string $system, string $prompt, array $tools, callable $handler, int $maxTurns = 6, ?string $cacheScope = null, ?callable $reviewReply = null, int $replyRepairTurns = 0, ?callable $shouldStopAfterTools = null): ?string
     {
         $this->lastError = null;
 
@@ -217,9 +221,9 @@ class ClaudeClient
 
         try {
             return match (config('billing.ai.provider', 'anthropic')) {
-                'openai' => $this->converseOpenai($system, $prompt, $tools, $handler, $maxTurns, $reviewReply, min(1, max(0, $replyRepairTurns))),
-                'google' => $this->converseGoogle($system, $prompt, $tools, $handler, $maxTurns, $cacheScope, $reviewReply, min(1, max(0, $replyRepairTurns))),
-                default => $this->converseAnthropic($system, $prompt, $tools, $handler, $maxTurns, $reviewReply, min(1, max(0, $replyRepairTurns))),
+                'openai' => $this->converseOpenai($system, $prompt, $tools, $handler, $maxTurns, $reviewReply, min(1, max(0, $replyRepairTurns)), $shouldStopAfterTools),
+                'google' => $this->converseGoogle($system, $prompt, $tools, $handler, $maxTurns, $cacheScope, $reviewReply, min(1, max(0, $replyRepairTurns)), $shouldStopAfterTools),
+                default => $this->converseAnthropic($system, $prompt, $tools, $handler, $maxTurns, $reviewReply, min(1, max(0, $replyRepairTurns)), $shouldStopAfterTools),
             };
         } catch (\Throwable $e) {
             $this->lastError = $e->getMessage();
@@ -235,7 +239,7 @@ class ClaudeClient
      * @param  list<array<string, mixed>>  $tools
      * @param  callable(string, array<string, mixed>): array{content: string, is_error?: bool}  $handler
      */
-    private function converseAnthropic(string $system, string $prompt, array $tools, callable $handler, int $maxTurns, ?callable $reviewReply = null, int $replyRepairTurns = 0): ?string
+    private function converseAnthropic(string $system, string $prompt, array $tools, callable $handler, int $maxTurns, ?callable $reviewReply = null, int $replyRepairTurns = 0, ?callable $shouldStopAfterTools = null): ?string
     {
         $config = config('billing.ai');
         $messages = [['role' => 'user', 'content' => $prompt]];
@@ -293,6 +297,9 @@ class ClaudeClient
             $results = [];
             foreach ($toolUses as $call) {
                 $out = $handler((string) ($call['name'] ?? ''), (array) ($call['input'] ?? []));
+                if ($shouldStopAfterTools !== null && $shouldStopAfterTools() === true) {
+                    return null;
+                }
                 $results[] = [
                     'type' => 'tool_result',
                     'tool_use_id' => $call['id'] ?? '',
@@ -313,7 +320,7 @@ class ClaudeClient
      * @param  list<array<string, mixed>>  $tools  Anthropic-style tool defs (name/description/input_schema).
      * @param  callable(string, array<string, mixed>): array{content: string, is_error?: bool}  $handler
      */
-    private function converseOpenai(string $system, string $prompt, array $tools, callable $handler, int $maxTurns, ?callable $reviewReply = null, int $replyRepairTurns = 0): ?string
+    private function converseOpenai(string $system, string $prompt, array $tools, callable $handler, int $maxTurns, ?callable $reviewReply = null, int $replyRepairTurns = 0, ?callable $shouldStopAfterTools = null): ?string
     {
         $config = config('billing.ai');
         $functions = array_map(fn (array $t): array => [
@@ -379,6 +386,9 @@ class ClaudeClient
             foreach ($toolCalls as $call) {
                 $args = json_decode((string) data_get($call, 'function.arguments', '{}'), true);
                 $out = $handler((string) data_get($call, 'function.name', ''), is_array($args) ? $args : []);
+                if ($shouldStopAfterTools !== null && $shouldStopAfterTools() === true) {
+                    return null;
+                }
                 $messages[] = [
                     'role' => 'tool',
                     'tool_call_id' => (string) ($call['id'] ?? ''),
@@ -396,7 +406,7 @@ class ClaudeClient
      * @param  list<array<string, mixed>>  $tools  Anthropic-style tool defs (name/description/input_schema).
      * @param  callable(string, array<string, mixed>): array{content: string, is_error?: bool}  $handler
      */
-    private function converseGoogle(string $system, string $prompt, array $tools, callable $handler, int $maxTurns, ?string $cacheScope = null, ?callable $reviewReply = null, int $replyRepairTurns = 0): ?string
+    private function converseGoogle(string $system, string $prompt, array $tools, callable $handler, int $maxTurns, ?string $cacheScope = null, ?callable $reviewReply = null, int $replyRepairTurns = 0, ?callable $shouldStopAfterTools = null): ?string
     {
         $config = config('billing.ai');
         $model = rawurlencode(preg_replace('#^models/#', '', trim((string) $config['model'])));
@@ -494,6 +504,9 @@ class ClaudeClient
             foreach ($calls as $part) {
                 $fc = (array) $part['functionCall'];
                 $out = $handler((string) ($fc['name'] ?? ''), (array) ($fc['args'] ?? []));
+                if ($shouldStopAfterTools !== null && $shouldStopAfterTools() === true) {
+                    return null;
+                }
                 // Echo back the call id when Gemini supplies one (parallel calls,
                 // incl. several to the same function) so each response correlates
                 // to its originating call; omit it otherwise.

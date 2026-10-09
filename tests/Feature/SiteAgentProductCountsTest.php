@@ -51,7 +51,7 @@ class SiteAgentProductCountsTest extends TestCase
             'generativelanguage.googleapis.com/*' => function (Request $request) use (&$modelTurns) {
                 $body = $request->data();
                 $modelTurns++;
-                if ($modelTurns % 2 === 1) {
+                if (count($body['contents']) === 1) {
                     $this->assertStringContainsString('מוצר דוגמה', data_get($body, 'contents.0.parts.0.text'));
                     $this->assertStringContainsString('get_product_counts', data_get($body, 'systemInstruction.parts.0.text'));
                     $tool = collect(data_get($body, 'tools.0.functionDeclarations'))->firstWhere('name', 'get_product_counts');
@@ -99,13 +99,14 @@ class SiteAgentProductCountsTest extends TestCase
         $this->assertStringNotContainsString('כנראה', $reply);
         $this->assertSame(['wc_product_counts'], $siteCalls);
         $this->assertSame(0, SiteAgentRequest::count());
+        $this->assertSame(1, $modelTurns, 'The verified count needs no model retelling.');
 
         $counts['products']['by_status']['publish'] = 34;
         $counts['products']['total'] = 44;
         $reply = $conversation->handle($subscriber, 'וכמה מוצרים יש עכשיו?', 'counts-2');
         $this->assertStringContainsString('בקטלוג האתר יש 44 מוצרים', $reply);
         $this->assertSame(['wc_product_counts', 'wc_product_counts'], $siteCalls);
-        $this->assertSame(4, $modelTurns);
+        $this->assertSame(2, $modelTurns, 'A new owner question reads the live count with one model request.');
     }
 
     public function test_a_count_read_for_context_does_not_replace_the_original_clarification(): void

@@ -740,6 +740,31 @@ class SiteAgentShopAndMediaTest extends TestCase
         Http::assertNothingSent();
     }
 
+    public function test_a_new_product_photo_preview_can_be_corrected_without_resending_the_image(): void
+    {
+        $subscriber = $this->subscriber();
+        $this->imageArrives();
+        $this->aiAnswers(['new_product' => true, 'name' => 'כד קרמיקה', 'regular_price' => '89', 'alt' => 'כד כחול', 'publish' => true]);
+        $this->talk($subscriber, 'מוצר חדש כד קרמיקה ב-89', mediaId: 'media-1');
+        $request = SiteAgentRequest::sole();
+        $path = $request->plan['image_path'];
+        $this->aiAnswers(['relation' => 'image', 'destination' => 'new_product', 'new_product' => true, 'regular_price' => '99', 'alt' => 'כד קרמיקה אדום']);
+
+        $preview = $this->talk($subscriber, 'בעצם המחיר 99 והכד אדום');
+
+        $this->assertStringContainsString('מחיר: 99', $preview);
+        $this->assertStringContainsString('כד קרמיקה אדום', $preview);
+        $this->assertSame('כד קרמיקה', $request->refresh()->plan['fields']['name']);
+        $this->assertSame($path, $request->plan['image_path']);
+        $this->assertSame(1, SiteAgentRequest::count());
+        Storage::disk('local')->assertExists($path);
+        $calls = $this->shopRecords(['wc_product_create' => ['id' => 70], 'wp_media_upload' => ['id' => 501]]);
+
+        $this->assertStringContainsString('נוצר ופורסם', $this->talk($subscriber, 'כן'));
+        $this->assertSame('99', $calls[0][1]['regular_price']);
+        $this->assertSame('כד קרמיקה אדום', $calls[1][1]['alt']);
+    }
+
     public function test_photo_product_planning_rejects_a_string_virtual_value(): void
     {
         $site = $this->subscriber()->site;

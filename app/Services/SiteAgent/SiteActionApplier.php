@@ -1110,16 +1110,19 @@ class SiteActionApplier
     }
 
     /**
-     * The roles a user has now, found through the email the list searches on.
+     * Read the exact account when supported; older plugins retain their email search.
      *
      * @return list<string>|null null when the user could not be found
      */
     private function rolesOf(Site $site, int $userId, string $email): ?array
     {
-        $users = (array) ($this->call($site, 'wp_user_list', ['search' => $email, 'limit' => 20])['users'] ?? []);
+        $users = app(SiteAgentToolbox::class)->siteHas($site, 'wp_user_get')
+            ? [$this->call($site, 'wp_user_get', ['user_id' => $userId])]
+            : (array) ($this->call($site, 'wp_user_list', ['search' => $email, 'limit' => 20])['users'] ?? []);
 
         foreach ($users as $user) {
-            if ((int) ($user['id'] ?? 0) === $userId) {
+            if ((int) ($user['id'] ?? 0) === $userId && strcasecmp((string) ($user['email'] ?? ''), $email) === 0
+                && ($user['editable'] ?? true) !== false && ! in_array('administrator', (array) ($user['roles'] ?? []), true)) {
                 return array_values((array) ($user['roles'] ?? []));
             }
         }

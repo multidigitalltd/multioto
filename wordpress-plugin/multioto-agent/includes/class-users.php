@@ -73,24 +73,7 @@ class Multioto_Agent_Users
         $users = [];
 
         foreach ($found->get_results() as $user) {
-            $users[] = [
-                'id' => (int) $user->ID,
-                'login' => (string) $user->user_login,
-                'email' => (string) $user->user_email,
-                'display_name' => (string) $user->display_name,
-                'roles' => array_values((array) $user->roles),
-                'registered' => (string) $user->user_registered,
-                // Whether this row is one the agent is allowed to move at all,
-                // stated up front so a proposal is never built against a user
-                // the write tool will refuse.
-                'editable' => self::isEditable($user),
-                // Key names only — never values. Sites gate registration in
-                // many different ways, and the point here is to SEE which
-                // mechanism a real site uses before writing anything against a
-                // guessed field name. A value could be anything, including
-                // personal data, so it does not travel.
-                'status_meta_keys' => self::statusMetaKeys((int) $user->ID),
-            ];
+            $users[] = self::publicUser($user);
         }
 
         return wp_json_encode([
@@ -101,6 +84,44 @@ class Multioto_Agent_Users
             'assignable_roles' => self::ASSIGNABLE,
             'users' => $users,
         ], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    }
+
+    /** Read one exact account on this site; never expose password hashes or metadata values. */
+    public static function getUser(array $args): string
+    {
+        $id = $args['user_id'] ?? null;
+        if (! is_int($id) || $id < 1) {
+            throw new Multioto_Agent_Rpc_Error(-32602, 'יש לציין מזהה משתמש חיובי ומדויק.');
+        }
+        $user = self::user($id);
+        if (! is_user_member_of_blog($id, get_current_blog_id())) {
+            throw new Multioto_Agent_Rpc_Error(-32602, "משתמש #{$id} לא נמצא באתר הזה.");
+        }
+
+        return wp_json_encode(self::publicUser($user), JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    }
+
+    /** The exact read and paginated list expose the same bounded, safe fields. */
+    private static function publicUser(WP_User $user): array
+    {
+        return [
+            'id' => (int) $user->ID,
+            'login' => (string) $user->user_login,
+            'email' => (string) $user->user_email,
+            'display_name' => (string) $user->display_name,
+            'roles' => array_values((array) $user->roles),
+            'registered' => (string) $user->user_registered,
+            // Whether this row is one the agent is allowed to move at all,
+            // stated up front so a proposal is never built against a user
+            // the write tool will refuse.
+            'editable' => self::isEditable($user),
+            // Key names only — never values. Sites gate registration in
+            // many different ways, and the point here is to SEE which
+            // mechanism a real site uses before writing anything against a
+            // guessed field name. A value could be anything, including
+            // personal data, so it does not travel.
+            'status_meta_keys' => self::statusMetaKeys((int) $user->ID),
+        ];
     }
 
     /**

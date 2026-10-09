@@ -538,6 +538,7 @@ class SiteAgentCoverageTest extends TestCase
 
     private function fakeSite(): void
     {
+        $this->site['wp_post_types_list'] = [['type' => 'page'], ['type' => 'post'], ['type' => 'property']];
         $mcp = Mockery::mock(McpClient::class);
         $mcp->shouldReceive('callTool')->andReturnUsing(function (Site $site, string $tool, array $arguments = []) {
             $this->calls[] = [$tool, $arguments];

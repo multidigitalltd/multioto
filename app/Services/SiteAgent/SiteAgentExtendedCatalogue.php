@@ -19,14 +19,14 @@ final class SiteAgentExtendedCatalogue
             'list_cct_types' => ['jet_cct_types', 'גילוי סוגי JetEngine CCT, מפתחות השדות, אפשרויות והרשאות עריכה. יש לקרוא לפני חיפוש או הצעה. CCT נשמר בטבלאות נפרדות מפוסטים.', [], []],
             'find_cct' => ['jet_cct_list', 'חיפוש פריטי CCT מסוג שהתגלה, כולל טיוטות. filters הוא מיפוי מפתח שדה נתמך לערך מדויק. יש לעקוב אחרי has_more ולדפדף; אין להסיק שהעמוד הראשון מכיל הכול.', [
                 'type' => $type,
-                'filters' => ['type' => 'object', 'maxProperties' => 10, 'description' => 'שמות שדות מתוך הסכמה וערכים מדויקים בלבד; אין SQL או אופרטורים.'],
+                'filters' => ['type' => 'object', 'maxProperties' => 10, 'description' => 'שמות שדות מתוך הסכמה וערכים מדויקים בלבד; אין SQL או אופרטורים. שדה switcher נשלח כ-true או false, לא 0/1 או מילים בעברית.'],
                 'page' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 10000],
                 'limit' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 100],
             ], ['type']],
             'get_cct' => ['jet_cct_get', 'קריאת פריט CCT לפי הסוג והמזהה שנמצאו; values מכיל את הערכים לסקירה ולשינוי.', ['type' => $type, 'id' => $id], ['type', 'id']],
             'get_media_details' => ['wp_media_get', 'פרטי קובץ מדיה: כותרת, טקסט חלופי, כיתוב, תיאור, שיוך לתוכן ומונחי מיון זמינים. שינוי שם משמעו כותרת בספרייה; שם הקובץ הפיזי וכתובת הקובץ אינם משתנים.', ['id' => $id], ['id']],
             'get_optimole' => ['wp_optimole_get', 'מצב חיבור Optimole והגדרות האופטימיזציה הזמינות. אין להציע שינוי אם התוסף אינו פעיל ומחובר. אין גישה לסודות או שינוי קובצי מקור.', [], []],
-            'get_content_details' => ['wp_content_details', 'פרטי תזמון וסידור פוסט או עמוד: מצב, מועד פרסום, אזור זמן האתר, אב, סדר ו-slug. תזמון נבדק לפי אזור הזמן שמוחזר.', ['id' => $id], ['id']],
+            'get_content_details' => ['wp_content_details', 'פרטי תזמון וסידור פוסט או עמוד: מצב, מועד פרסום, אזור זמן האתר, אב, סדר ו-slug. לשיוך עמוד אב קראו כלי זה גם לילד וגם לאב; זו היררכיית עמודים ואינה פריט תפריט. תזמון נבדק לפי אזור הזמן שמוחזר.', ['id' => $id], ['id']],
             'get_seo' => ['wp_seo_get', 'כותרת ותיאור SEO מהתוסף הפעיל, Yoast או Rank Math. null פירושו שאין התאמה אישית. אם שני התוספים פעילים יש לבחור provider בקריאה.', ['id' => $id, 'provider' => ['type' => 'string', 'enum' => ['yoast', 'rank_math']]], ['id']],
             'get_internal_links' => ['wp_internal_links_get', 'התוכן והקישורים הפנימיים בעמוד, לצורך קישור טקסט קיים לפריט אחר באותו אתר. עמודי Elementor אינם נתמכים בפעולה זו.', ['id' => $id], ['id']],
             'get_site_settings' => ['wp_site_settings_get', 'הגדרות תצוגת האתר: שם, תיאור, אזור זמן, תאריכים, עמוד הבית, עמוד הפוסטים וכמות הפוסטים בעמוד.', [], []],
@@ -43,7 +43,7 @@ final class SiteAgentExtendedCatalogue
         $text = ['type' => 'string'];
         $enabled = ['type' => 'string', 'enum' => ['enabled', 'disabled']];
         $cctValues = ['type' => 'object', 'minProperties' => 1, 'maxProperties' => 100,
-            'description' => 'מפתחות וערכים מסכמת CCT החיה בלבד. שדות מורכבים ומוגנים חסומים. cct_status יכול להיות publish או draft; אין מחיקה סופית.'];
+            'description' => 'מפתחות וערכים מסכמת CCT החיה בלבד. switcher דורש true/false; number דורש מספר בטווח min/max אם הוגדר. שדות מורכבים ומוגנים חסומים. cct_status יכול להיות publish או draft; אין מחיקה סופית.'];
 
         return [
             'propose_cct_create' => [
@@ -55,7 +55,7 @@ final class SiteAgentExtendedCatalogue
             'propose_cct_update' => [
                 'operation' => 'cct_update', 'read' => 'jet_cct_get', 'write' => 'jet_cct_update',
                 'title' => 'עדכון פריט CCT',
-                'description' => 'הצעת שינוי שדות רשומים בפריט CCT שנקרא, או מעבר הפיך בין publish ל-draft. אין מחיקה סופית או עריכת עמודות מערכת.',
+                'description' => 'הצעת שינוי שדות רשומים בפריט CCT שנקרא, או מעבר הפיך בין publish ל-draft. אחרי זיהוי הרשומה קראו לכלי זה באותה תשובה לקבלת סקירה מאומתת; אל תבקשו אישור על סיכום מילולי לפני הכנת ההצעה. אין מחיקה סופית או עריכת עמודות מערכת.',
                 'properties' => ['type' => $type, 'id' => $id, 'values' => $cctValues], 'required' => ['type', 'id', 'values'], 'fields' => ['*'], 'identity' => ['type', 'id'],
             ],
             'propose_media_update' => self::action('media_update', 'wp_media_get', 'wp_media_update', 'עדכון פרטי מדיה',
@@ -75,7 +75,7 @@ final class SiteAgentExtendedCatalogue
                     'resize_smart' => $enabled, 'native_lazyload' => $enabled,
                 ], []),
             'propose_content_manage' => self::action('content_manage', 'wp_content_details', 'wp_content_manage', 'תזמון וסידור תוכן',
-                'הצעת תזמון, שינוי מצב, עמוד אב, סדר או slug לפוסט/עמוד שנקרא. לפרסום עתידי יש לשלוח status=future ו-date לפי אזור זמן האתר. date_gmt מחושב בשרת.', [
+                'הצעת תזמון, שינוי מצב, עמוד אב, סדר או slug לפוסט/עמוד שנקרא. parent הוא מזהה עמוד אב, ויש לקרוא גם אותו ב-get_content_details; parent=0 מסיר הורה. לפרסום עתידי יש לשלוח status=future ו-date לפי אזור זמן האתר. date_gmt מחושב בשרת. כשמשנים שעה בהצעה שטרם אושרה שומרים גם status=future.', [
                     'status' => ['type' => 'string', 'enum' => ['draft', 'pending', 'publish', 'private', 'future']],
                     'date' => ['type' => 'string', 'description' => 'תאריך ושעה מקומיים באזור זמן האתר בפורמט YYYY-MM-DD HH:mm:ss.'],
                     'parent' => ['type' => 'integer', 'minimum' => 0],
@@ -83,12 +83,12 @@ final class SiteAgentExtendedCatalogue
                     'slug' => ['type' => 'string', 'maxLength' => 200],
                 ], ['id']),
             'propose_seo_update' => self::action('seo_update', 'wp_seo_get', 'wp_seo_update', 'עדכון כותרת ותיאור SEO',
-                'הצעת עריכת כותרת ותיאור SEO בתוסף הפעיל שנקרא. null מסיר התאמה אישית ומחזיר את ברירת המחדל של התוסף. ספק SEO נקבע מהמידע החי.', [
+                'הצעת עריכת שדות SEO שהתבקשו בלבד בתוסף הפעיל שנקרא. אם התבקשה רק כותרת, אל תשלחו description ולהפך. null מסיר התאמה אישית רק כאשר הבעלים ביקש להסיר אותה; אין להשתמש בו כערך חסר. ספק SEO נקבע מהמידע החי.', [
                     'title' => ['type' => ['string', 'null']],
                     'description' => ['type' => ['string', 'null']],
                 ], ['id']),
             'propose_internal_link' => self::action('internal_link', 'wp_internal_links_get', 'wp_internal_link_update', 'הוספת קישור פנימי',
-                'הצעת קישור הופעה יחידה של טקסט קיים לפריט מפורסם שנקרא באותו אתר. text חייב להיות טקסט גלוי מדויק ולא HTML; target_id הוא מזהה פריט היעד. אין החלפת תוכן חופשי.', [
+                'הצעת קישור הופעה יחידה של טקסט קיים לפריט מפורסם באותו אתר. קראו get_internal_links למקור ו-get_content ליעד לפני ההצעה, גם אם מזהה היעד הגיע מהגדרות הבית. id הוא המקור; values.text הוא הציטוט המדויק; values.target_id הוא היעד. אין להחליף את המקור ביעד או להעביר טקסט ביניהם. אין HTML ואין קישורים באלמנטור.', [
                     'text' => ['type' => 'string', 'minLength' => 1],
                     'target_id' => $id,
                 ], ['id'], ['text', 'target_id']),

@@ -38,7 +38,7 @@ class SiteAgentEvaluationAdvancedWorldTest extends TestCase
             'users' => [1 => ['id' => 1], 5 => ['id' => 5]], 'media' => [90 => ['id' => 90], 91 => ['id' => 91]]];
         $this->world->seed($this->state);
         $this->site = Site::factory()->create(['mcp_enabled' => true, 'mcp_secret' => 'evaluation-secret',
-            'mcp_capabilities' => ['server' => ['version' => '1.12.0'],
+            'mcp_capabilities' => ['server' => ['version' => '1.12.1'],
                 'tools' => array_map(fn (string $name): array => ['name' => $name], $this->world->supportedTools())]]);
         $mcp = Mockery::mock(McpClient::class);
         $mcp->shouldReceive('callTool')->andReturnUsing(fn (Site $site, string $name, array $args = []): array => $this->world->handle($name, $args, $this->state) ?? throw new \RuntimeException('Unexpected fixture tool '.$name));

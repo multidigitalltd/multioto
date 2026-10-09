@@ -34,6 +34,8 @@ class SiteAgentImageDialogueTest extends TestCase
 
     private array $products = [];
 
+    private array $content = [];
+
     private ?array $searchResponse = null;
 
     private ?array $pageResponse = null;
@@ -68,12 +70,13 @@ class SiteAgentImageDialogueTest extends TestCase
 
             return match ($tool) {
                 'wp_content_list' => $this->pageResponse ?? [],
-                'wp_content_get' => throw new \RuntimeException('Products use their native getter.'),
+                'wp_post_types_list' => [['type' => 'page'], ['type' => 'post'], ['type' => 'project']],
+                'wp_content_get' => $this->content[$arguments['id']] ?? throw new \RuntimeException('Products use their native getter.'),
                 'wc_product_search' => $this->searchResponse ?? ['products' => array_values(array_filter($this->products,
                     fn (array $product): bool => $product['name'] === ($arguments['search'] ?? null)))],
                 'wc_product_get' => $this->products[$arguments['product_id']] ?? [],
                 'wp_media_upload' => $this->allowWrites ? ['id' => 99] : throw new \RuntimeException('Unapproved upload'),
-                'wp_post_thumbnail_set' => $this->allowWrites ? ['id' => $arguments['id'], 'attachment_id' => 99, 'previous' => ['attachment_id' => 42], 'changed' => true] : throw new \RuntimeException('Unapproved thumbnail change'),
+                'wp_post_thumbnail_set' => $this->allowWrites ? ['id' => $arguments['id'], 'attachment_id' => 99, 'previous' => ['attachment_id' => $arguments['if_current'] ?? 42], 'changed' => true] : throw new \RuntimeException('Unapproved thumbnail change'),
                 default => throw new \RuntimeException('Unexpected write before confirmation: '.$tool),
             };
         });
@@ -226,6 +229,183 @@ class SiteAgentImageDialogueTest extends TestCase
 
         $this->assertStringContainsString('מוצר ותיק 35', $this->talk('בעצם שים במוצר ותיק 35, רואים כוס כחולה'));
         $this->assertSame(35, SiteAgentRequest::sole()->plan['target_id']);
+    }
+
+    public function test_an_explicit_product_id_cannot_be_replaced_by_a_number_inside_another_product_name(): void
+    {
+        $this->products[107] = ['id' => 107, 'name' => 'מוצר קטלוג 7', 'status' => 'publish', 'thumbnail_id' => 0];
+        $this->searchResponse = ['products' => [$this->products[107]]];
+        $this->answers = [['can_do' => true, 'target_id' => 107, 'alt' => 'חולצה אדומה מקופלת']];
+
+        $reply = $this->talk('שים כתמונה ראשית במוצר 7. alt: "חולצה אדומה מקופלת".', 'photo-id');
+
+        $this->assertStringContainsString('מוצר ותיק 7', $reply);
+        $this->assertSame(7, SiteAgentRequest::sole()->plan['target_id']);
+        $this->assertContains(['wc_product_get', ['product_id' => 7]], $this->calls);
+        $this->assertNotContains('wp_media_upload', array_column($this->calls, 0));
+    }
+
+    public function test_a_numeric_lookup_uses_the_getter_instead_of_matching_a_product_title(): void
+    {
+        $this->answers = [['can_do' => false, 'target_id' => 0, 'target_query' => '8', 'target_kind' => 'product', 'alt' => 'חולצה אדומה']];
+
+        $plan = app(ImageChangePlanner::class)->plan($this->subscriber->site, 'זו תמונת הפריט שציינתי', []);
+
+        $this->assertSame(8, $plan['target_id']);
+        $this->assertNotContains('wc_product_search', array_column($this->calls, 0));
+        $this->assertCount(1, $this->prompts);
+    }
+
+    public function test_a_negated_product_destination_does_not_override_a_library_upload(): void
+    {
+        $this->answers = [['can_do' => true, 'destination' => 'library', 'alt' => 'חולצה אדומה']];
+
+        $plan = app(ImageChangePlanner::class)->plan($this->subscriber->site, 'אל תשים במוצר 7, שמור בספרייה בלבד.', []);
+
+        $this->assertSame(SiteAgentRequest::OP_MEDIA_UPLOAD, $plan['operation']);
+        $this->assertArrayNotHasKey('target_id', $plan);
+        $this->assertSame([], $this->calls);
+    }
+
+    public function test_an_id_in_a_quoted_description_does_not_choose_a_destination(): void
+    {
+        $this->answers = [['can_do' => false, 'destination' => 'unspecified', 'target_id' => 0, 'alt' => 'מוצר 7 על שולחן']];
+
+        $plan = app(ImageChangePlanner::class)->plan($this->subscriber->site, 'alt: "מוצר 7 על שולחן".', []);
+
+        $this->assertArrayHasKey('question', $plan);
+        $this->assertArrayNotHasKey('target_id', $plan['image_draft']);
+        $this->assertSame([], $this->calls);
+    }
+
+    #[DataProvider('changedTargetFlags')]
+    public function test_rejecting_the_current_product_without_choosing_a_new_destination_clears_the_preview(bool $targetChanged): void
+    {
+        $this->answers = [['can_do' => true, 'destination' => 'attach', 'target_reference_id' => 7, 'alt' => 'חולצה אדומה']];
+        $this->talk('שים במוצר 7', 'photo-reject-target');
+        $request = SiteAgentRequest::sole();
+        $path = $request->plan['image_path'];
+        $this->answers = [['can_do' => false, 'relation' => 'image', 'destination' => 'unspecified', 'target_changed' => $targetChanged, 'target_id' => 0]];
+
+        $reply = $this->talk('לא במוצר 7, עוד לא בחרתי יעד');
+
+        $this->assertStringNotContainsString(SiteAgentConversation::CONFIRM_PROMPT, $reply);
+        $this->assertNull($request->refresh()->preview);
+        $this->assertArrayNotHasKey('target_id', $request->plan['image_draft']);
+        $this->assertSame('חולצה אדומה', $request->plan['image_draft']['alt']);
+        $this->assertSame($path, $request->plan['image_path']);
+        Storage::disk('local')->assertExists($path);
+        $this->assertStringNotContainsString('בוצע', $this->talk('כן'));
+        $this->assertNotContains('wp_media_upload', array_column($this->calls, 0));
+    }
+
+    public static function changedTargetFlags(): array
+    {
+        return ['explicitly changed' => [true], 'only unspecified destination' => [false]];
+    }
+
+    public function test_an_explicit_custom_post_type_id_survives_the_followup_accessibility_description(): void
+    {
+        $this->content[47] = ['id' => 47, 'title' => 'פרויקט צפון', 'type' => 'project', 'status' => 'publish', 'thumbnail_id' => 0];
+        $this->answers = [['can_do' => false, 'target_reference_id' => 47, 'target_id' => 0, 'needs' => 'alt']];
+
+        $this->assertStringContainsString('איך לתאר', $this->talk('שים את התמונה הראשית בעמוד פרויקט צפון 47.', 'photo-project'));
+        $this->assertSame(47, SiteAgentRequest::sole()->plan['image_draft']['target_id']);
+        $this->answers = [['can_do' => false, 'target_id' => 0, 'alt' => '', 'needs' => 'target']];
+        $reply = $this->talk('תיאור לנגישות: "המרכז הקהילתי בצפון".');
+
+        $this->assertStringContainsString(SiteAgentConversation::CONFIRM_PROMPT, $reply);
+        $this->assertSame(47, SiteAgentRequest::sole()->plan['target_id']);
+        $this->assertSame('המרכז הקהילתי בצפון', SiteAgentRequest::sole()->plan['alt']);
+        $this->allowWrites = true;
+        $this->assertStringContainsString('בוצע', $this->talk('כן'));
+        $this->assertContains(['wp_post_thumbnail_set', ['id' => 47, 'attachment_id' => 99, 'if_current' => 0]], $this->calls);
+    }
+
+    public function test_a_name_lookup_for_an_image_includes_custom_and_unpublished_content(): void
+    {
+        $this->subscriber->site->update(['mcp_capabilities' => ['tools' => [['name' => 'wp_post_types_list']]]]);
+        $this->pageResponse = [['id' => 47, 'title' => 'פרויקט צפון', 'type' => 'project', 'status' => 'draft']];
+        $this->answers = [
+            ['can_do' => false, 'target_query' => 'פרויקט צפון', 'target_kind' => 'content', 'alt' => 'מרכז קהילתי'],
+            ['can_do' => true, 'target_id' => 47],
+        ];
+
+        $plan = app(ImageChangePlanner::class)->plan($this->subscriber->site, 'שים את התמונה בפרויקט צפון', []);
+
+        $this->assertSame(47, $plan['target_id']);
+        $this->assertContains(['wp_content_list', ['search' => 'פרויקט צפון', 'limit' => 10, 'status' => 'any', 'type' => 'project']], $this->calls);
+    }
+
+    public function test_an_image_preview_can_be_corrected_to_a_different_product_before_any_upload(): void
+    {
+        $this->answers = [['can_do' => true, 'target_reference_id' => 7, 'alt' => 'חולצה אדומה מקופלת']];
+        $this->talk('שים כתמונה ראשית במוצר 7. alt: "חולצה אדומה מקופלת".', 'photo-correction');
+        $request = SiteAgentRequest::sole();
+        $path = $request->plan['image_path'];
+        $this->answers = [['can_do' => true, 'target_reference_id' => 8, 'target_changed' => true, 'alt' => '']];
+
+        $reply = $this->talk('טעיתי במוצר, לשים במוצר 8.');
+
+        $this->assertStringContainsString('מוצר ותיק 8', $reply);
+        $this->assertSame(8, $request->refresh()->plan['target_id']);
+        $this->assertSame('חולצה אדומה מקופלת', $request->plan['alt']);
+        $this->assertSame($path, $request->plan['image_path']);
+        $this->assertSame(1, SiteAgentRequest::count());
+        Storage::disk('local')->assertExists($path);
+        $this->assertNotContains('wp_media_upload', array_column($this->calls, 0));
+        $this->allowWrites = true;
+        $this->assertStringContainsString('בוצע', $this->talk('כן'));
+        $sets = collect($this->calls)->where(0, 'wp_post_thumbnail_set')->values();
+        $this->assertCount(1, $sets);
+        $this->assertSame(8, $sets[0][1]['id']);
+    }
+
+    public function test_a_library_upload_preview_can_update_alt_without_discarding_its_file_or_title(): void
+    {
+        $this->answers = [['can_do' => true, 'destination' => 'library', 'title' => 'צילום צוות', 'alt' => 'שלושה אנשים']];
+        $this->talk('העלה לספרייה בלבד. כותרת "צילום צוות". alt: "שלושה אנשים".', 'photo-library');
+        $request = SiteAgentRequest::sole();
+        $path = $request->plan['image_path'];
+        $this->answers = [['can_do' => true, 'relation' => 'image', 'destination' => 'library', 'alt' => 'שלוש חברות צוות במשרד']];
+
+        $reply = $this->talk('תקן את הטקסט החלופי ל"שלוש חברות צוות במשרד".');
+
+        $this->assertStringContainsString('שלוש חברות צוות במשרד', $reply);
+        $this->assertSame('צילום צוות', $request->refresh()->plan['title']);
+        $this->assertSame($path, $request->plan['image_path']);
+        Storage::disk('local')->assertExists($path);
+        $this->assertNotContains('wp_media_upload', array_column($this->calls, 0));
+        $this->allowWrites = true;
+        $this->assertStringContainsString('בוצע', $this->talk('כן'));
+        $uploads = collect($this->calls)->where(0, 'wp_media_upload')->values();
+        $this->assertCount(1, $uploads);
+        $this->assertSame('שלוש חברות צוות במשרד', $uploads[0][1]['alt']);
+        $this->assertSame('צילום צוות', $uploads[0][1]['title']);
+        $this->assertNotContains('wp_post_thumbnail_set', array_column($this->calls, 0));
+    }
+
+    #[DataProvider('unresolvedImageCorrections')]
+    public function test_an_unresolved_correction_revokes_the_previous_image_preview(?array $answer): void
+    {
+        $this->answers = [['can_do' => true, 'target_reference_id' => 7, 'alt' => 'חולצה אדומה']];
+        $this->talk('שים במוצר 7', 'photo-before-correction');
+        $request = SiteAgentRequest::sole();
+        $this->answers = [$answer];
+        $this->talk('בעצם שים בפריט האחר');
+
+        $this->assertNull($request->refresh()->preview);
+        $this->assertStringNotContainsString('בוצע', $this->talk('כן'));
+        Storage::disk('local')->assertExists($request->plan['image_path']);
+        $this->assertNotContains('wp_media_upload', array_column($this->calls, 0));
+    }
+
+    public static function unresolvedImageCorrections(): array
+    {
+        return [
+            'model unavailable' => [null],
+            'unknown target' => [['can_do' => false, 'relation' => 'image', 'target_changed' => true, 'target_reference_id' => 999999, 'needs' => 'target']],
+        ];
     }
 
     public function test_a_deleted_saved_target_and_an_invented_id_never_produce_a_preview(): void

@@ -15,7 +15,7 @@ class EvaluationMcpClient extends McpClient
     {
         $this->assertSite($site);
 
-        return ['protocolVersion' => self::PROTOCOL_VERSION, 'serverInfo' => ['name' => 'isolated-evaluation-world', 'version' => '1.12.0'], 'capabilities' => ['tools' => (object) []]];
+        return ['protocolVersion' => self::PROTOCOL_VERSION, 'serverInfo' => ['name' => 'isolated-evaluation-world', 'version' => '1.12.1'], 'capabilities' => ['tools' => (object) []]];
     }
 
     public function listTools(Site $site): array

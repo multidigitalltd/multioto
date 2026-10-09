@@ -50,6 +50,7 @@ class ImageChangePlanner
 
         $draft = (array) ($context['image_draft'] ?? []);
         $explicitAlt = $this->explicitAlt($caption);
+        $explicitId = $this->explicitTargetId($caption);
         if ($explicitAlt !== null) {
             $draft['alt'] = $explicitAlt;
         }
@@ -69,6 +70,7 @@ class ImageChangePlanner
         }
         $targets = collect($targets)->unique('id')->values()->all();
         $searches = [];
+        $lookups = [];
         $result = null;
 
         // At most two live searches and three model interpretations per turn.
@@ -89,6 +91,38 @@ class ImageChangePlanner
                 return ['cancel' => true];
             }
 
+            // Numeric references are identities, not search terms. Read them
+            // from this site before using them; a name containing "7" must
+            // never substitute for the owner's explicit product ID 7.
+            $query = $this->string($result['target_query'] ?? '', 120);
+            $reference = null;
+            if (! in_array($result['destination'] ?? '', ['library', 'new_product', 'unspecified'], true) && ($result['new_product'] ?? false) !== true) {
+                $reference = $explicitId ?? $this->positiveId($result['target_reference_id'] ?? null);
+                if ($reference === null && ctype_digit($query)) {
+                    $reference = $this->positiveId($query);
+                }
+                $candidateId = $this->positiveId($result['target_id'] ?? null);
+                if ($reference === null && $candidateId !== null && ! collect($targets)->contains('id', $candidateId)) {
+                    $reference = $candidateId;
+                }
+            }
+            if ($reference !== null) {
+                if (! array_key_exists($reference, $lookups) && count($lookups) < 2) {
+                    $lookups[$reference] = $this->refreshTarget($site, $reference);
+                }
+                $target = $lookups[$reference] ?? null;
+                unset($draft['target_id'], $draft['target_title']);
+                $result['target_id'] = $target !== null ? $reference : 0;
+                $result['target_changed'] = true;
+                $result['destination'] = 'attach';
+                $result['target_query'] = '';
+                if ($target !== null) {
+                    $targets = collect([...$targets, $target])->unique('id')->values()->all();
+                } else {
+                    $searches['id:'.$reference] = 'unavailable';
+                }
+            }
+
             $draft = $this->mergeDraft($draft, $result, $targets);
             // An explicit accessibility field supplied by the owner is not
             // lost when the model omits or paraphrases that scalar field.
@@ -96,7 +130,7 @@ class ImageChangePlanner
                 $draft['alt'] = $explicitAlt;
             }
             $query = $this->string($result['target_query'] ?? '', 120);
-            $kind = in_array($result['target_kind'] ?? '', ['product', 'page'], true) ? $result['target_kind'] : 'product';
+            $kind = in_array($result['target_kind'] ?? '', ['product', 'page', 'content'], true) ? $result['target_kind'] : 'product';
             $key = $kind.':'.$query;
             if ($query === '' || isset($draft['target_id']) || isset($searches[$key]) || $round === 2) {
                 break;
@@ -160,6 +194,23 @@ class ImageChangePlanner
         return $value !== '' ? $value : null;
     }
 
+    /** Ground a single labelled ID; names and ambiguous multiple IDs use the model. */
+    private function explicitTargetId(string $caption): ?int
+    {
+        $caption = preg_replace('/["״“][^"״”\r\n]*["״”]/u', '', $caption) ?? $caption;
+        preg_match_all('/(?<![\pL\pN])(?:[בל]?(?:מוצר|עמוד|דף|פוסט)|product|page|post|מזהה|id)\s*(?:(?:מספר|מס[\'׳]?|#|:)\s*)?([1-9][0-9]{0,9})(?![\pL\pN])/iu', $caption, $matches);
+        $ids = array_values(array_unique($matches[1]));
+
+        return count($ids) === 1 ? $this->positiveId($ids[0]) : null;
+    }
+
+    private function positiveId(mixed $value): ?int
+    {
+        $id = is_int($value) || (is_string($value) && ctype_digit($value)) ? filter_var($value, FILTER_VALIDATE_INT) : false;
+
+        return $id !== false && $id > 0 ? $id : null;
+    }
+
     /** Only validated target identities and supported scalar fields survive. */
     private function mergeDraft(array $draft, array $result, array $targets): array
     {
@@ -205,7 +256,8 @@ class ImageChangePlanner
             // a clarification, never permission to silently upload only.
             $draft['upload_only'] = false;
         }
-        if (($result['destination'] ?? '') === 'unspecified' && ! isset($draft['target_id'])) {
+        if (($result['destination'] ?? '') === 'unspecified') {
+            unset($draft['target_id'], $draft['target_title']);
             $draft['upload_only'] = false;
             $draft['new_product'] = false;
         }
@@ -254,11 +306,10 @@ class ImageChangePlanner
             return null;
         }
         try {
-            $data = json_decode($this->mcp->textContent($this->mcp->callTool(
-                $site,
-                $kind === 'product' ? 'wc_product_search' : 'wp_content_list',
-                ['search' => $query, 'limit' => 10, ...($kind === 'page' ? ['type' => 'page', 'status' => 'publish'] : [])],
-            )), true);
+            $arguments = ['search' => $query, 'limit' => 10];
+            $data = json_decode($kind === 'product'
+                ? $this->mcp->textContent($this->mcp->callTool($site, 'wc_product_search', $arguments))
+                : app(SiteAgentToolbox::class)->discoverContent($site, [...$arguments, 'status' => 'any']), true);
         } catch (\Throwable) {
             return null;
         }
@@ -267,6 +318,9 @@ class ImageChangePlanner
         }
         $rows = $kind === 'product' ? ($data['products'] ?? null) : ($data['items'] ?? (array_is_list($data) ? $data : null));
         if (! is_array($rows) || ! array_is_list($rows)) {
+            return null;
+        }
+        if ($rows === [] && (filled($data['failed_types'] ?? []) || filled($data['remaining_types'] ?? []))) {
             return null;
         }
         foreach (['total', 'returned'] as $field) {
@@ -323,8 +377,9 @@ class ImageChangePlanner
                 'relation' => ['type' => 'string', 'enum' => ['image', 'topic_switch', 'cancel']],
                 'destination' => ['type' => 'string', 'enum' => ['attach', 'library', 'new_product', 'unspecified'], 'description' => 'יעד שהתבקש במפורש או נשמר בשיחה; unspecified כשהבעלים עדיין לא בחר.'],
                 'target_id' => ['type' => 'integer', 'description' => 'מזהה יעד מאומת שהתבקש; 0 כשהיעד אינו ידוע או לא נבחר. אין לבחור את המועמד הראשון כברירת מחדל.'],
+                'target_reference_id' => ['type' => 'integer', 'description' => 'מזהה מפורש שמסר הבעלים גם אם אינו במועמדים, למשל עמוד פרויקט צפון 47. השרת יקרא אותו לאימות. 0 אם נמסר רק שם; אין להמציא מזהה או לפרש מספר בשם כמזהה.'],
                 'target_query' => ['type' => 'string', 'description' => 'שם קצר לחיפוש כשאין יעד מאומת, ללא מילות הבקשה'],
-                'target_kind' => ['type' => 'string', 'enum' => ['product', 'page']],
+                'target_kind' => ['type' => 'string', 'enum' => ['product', 'page', 'content']],
                 'target_changed' => ['type' => 'boolean'],
                 'alt' => ['type' => 'string', 'description' => 'תיאור שכבר מסר הבעלים, לרבות טקסט חלופי מפורש בתוך הכיתוב; מחרוזת ריקה רק אם לא נמסר תיאור ולא נשמר קודם.'],
                 'needs' => ['type' => 'string', 'enum' => ['target', 'alt', 'both', 'name']],
@@ -428,7 +483,8 @@ class ImageChangePlanner
             '- relation=image להמשך הטיפול בתמונה; topic_switch לשאלה עצמאית שאינה עונה על התמונה (למשל מספר מוצרים); cancel לביטול מפורש. אל תהפוך שאלה חדשה לתיאור תמונה.',
             '- שמור יעד ותיאור שכבר נמסרו. החזר גם מידע חלקי ידוע, אפילו can_do=false. כשהבעלים עונה לשאלת התיאור, תשובתו היא alt ואינה מוחקת את היעד.',
             '- אין לדרוש ניסוח מסוים. הבן שגיאות כתיב, כינויי רמז והמשך שיחה. השיחה הקודמת היא הקשר בלבד, ולא הוכחה שמזהה קיים.',
-            '- target_id רק ממועמדים מאומתים. אם המוצר או העמוד אינם ברשימה, החזר target_query=השם הקצר ו-target_kind=product/page כדי לחפש באתר. אל תסיק שאין מוצר מהרשימה החלקית.',
+            '- כשהבעלים מסר מזהה מפורש, החזר target_reference_id גם אם הוא אינו במועמדים. אין לחפש מזהה מספרי בתוך שמות: מוצר 7 הוא מזהה 7, לא מוצר שכותרתו מכילה 7. מזהה יאומת בקריאה מהאתר.',
+            '- target_id רק ממועמדים מאומתים. אם נמסר שם בלבד והוא אינו ברשימה, החזר target_query=השם הקצר בלבד ו-target_kind=product/content כדי לחפש באתר. חיפוש תוכן כולל פוסטים וסוגי תוכן מותאמים. אל תסיק שאין יעד מהרשימה החלקית.',
             '- אחרי חיפוש שלא מצא יעד אפשר לנסות כתיב מתוקן או חלק ייחודי מהשם ב-target_query. לאחר תוצאות החיפוש בחר רק התאמה ברורה; אם יש כמה שאל על היעד.',
             '- target_changed=true רק כשהבעלים מחליף יעד שכבר נבחר; חפש ובחר את החדש ולא את הקודם.',
             '- destination=attach להצבה בעמוד/מוצר קיים; library לשמירה בספרייה בלבד; new_product ליצירת מוצר חדש. העלאה לספרייה והצבה כתמונת מוצר הן פעולה אחת מסוג attach — ההצבה כוללת שמירה בספרייה.',

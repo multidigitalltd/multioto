@@ -62,23 +62,20 @@ class SiteAgentVirtualProductConversationTest extends TestCase
 
                 return $this->functionCall('propose_product_create', [
                     'name' => 'דןגמא', 'regular_price' => '150.00', 'virtual' => true, 'publish' => true,
-                ]);
+                ], 'המוצר כבר נוצר ופורסם.');
             }
-            if ($turn === 2) {
-                return $this->modelText('המוצר כבר נוצר ופורסם.');
-            }
-            if (in_array($turn, [3, 5], true)) {
+            if (in_array($turn, [2, 4], true)) {
                 $prompt = data_get($body, 'contents.0.parts.0.text');
                 $this->assertStringContainsString('המוצר וירטואלי?', $prompt);
                 $this->assertStringContainsString('90', $prompt, 'The previous creation result must remain in context.');
 
                 return $this->functionCall('get_product', ['product_id' => 90]);
             }
-            $this->assertContains($turn, [4, 6]);
+            $this->assertContains($turn, [3, 5]);
             $result = json_decode(data_get($body, 'contents.2.parts.0.functionResponse.response.result'), true);
             $this->assertSame(90, $result['id']);
             $this->assertSame('simple', $result['type']);
-            $this->assertSame($turn === 4, $result['virtual']);
+            $this->assertSame($turn === 3, $result['virtual']);
 
             return $this->modelText($result['virtual'] ? 'כן, המוצר מוגדר וירטואלי — ללא משלוח.' : 'לא, כרגע המוצר מוגדר פיזי.');
         });
@@ -112,7 +109,7 @@ class SiteAgentVirtualProductConversationTest extends TestCase
         $this->assertTrue($this->product['virtual']);
         $this->assertSame('דןגמא', $this->product['name']);
         $this->assertSame('150.00', $this->product['regular_price']);
-        $this->assertCount(2, $this->modelRequests, 'Approval is performed without another model turn.');
+        $this->assertCount(1, $this->modelRequests, 'The proposal ends the model loop; approval adds no model turn.');
 
         $readCount = count($this->siteCalls);
         $this->assertSame('כן, המוצר מוגדר וירטואלי — ללא משלוח.', $conversation->handle($subscriber, 'המוצר וירטואלי?', 'type-question'));
@@ -142,11 +139,9 @@ class SiteAgentVirtualProductConversationTest extends TestCase
                 $update = collect($body['tools'][0]['functionDeclarations'])->firstWhere('name', 'propose_product_update');
                 $this->assertSame('boolean', data_get($update, 'parametersJsonSchema.properties.virtual.type'));
 
-                return $this->functionCall('propose_product_update', ['product_id' => 90, 'virtual' => true]);
+                return $this->functionCall('propose_product_update', ['product_id' => 90, 'virtual' => true], 'הסוג כבר עודכן.');
             }
-            $this->assertSame(3, $turn);
-
-            return $this->modelText('הסוג כבר עודכן.');
+            $this->fail('The verified conversion proposal must end the model loop.');
         });
         $subscriber = $this->subscriber();
         $conversation = app(SiteAgentConversation::class);
@@ -178,7 +173,7 @@ class SiteAgentVirtualProductConversationTest extends TestCase
         ], $this->writes());
         $this->assertSame('דןגמא', $this->product['name']);
         $this->assertSame('150.00', $this->product['regular_price']);
-        $this->assertCount(3, $this->modelRequests);
+        $this->assertCount(2, $this->modelRequests);
     }
 
     #[DataProvider('invalidCreatedProductReadbacks')]
@@ -191,9 +186,7 @@ class SiteAgentVirtualProductConversationTest extends TestCase
                     'name' => 'דןגמא', 'regular_price' => '150.00', 'virtual' => true, 'publish' => true,
                 ]);
             }
-            if ($turn === 2) {
-                return $this->modelText('ההצעה הוכנה.');
-            }
+            $this->assertSame(2, $turn, 'Only the later question needs another model call.');
             $prompt = data_get($body, 'contents.0.parts.0.text');
             $this->assertStringContainsString('"state":"partially_applied"', $prompt);
             $this->assertStringContainsString('"created_id":90', $prompt);
@@ -237,6 +230,11 @@ class SiteAgentVirtualProductConversationTest extends TestCase
         // persisted action outcome must prevent a false full-success recap.
         SiteAgentMessage::where('site_agent_subscriber_id', $subscriber->id)->delete();
         $conversation->handle($subscriber, 'כן', 'old-approval-repeated');
+        $this->assertCount(1, $this->modelRequests, 'A repeated bare yes cannot restart the model or creation.');
+        SiteAgentMessage::where('site_agent_subscriber_id', $subscriber->id)->delete();
+        $recap = $conversation->handle($subscriber, 'מה קרה לבקשת יצירת המוצר?', 'partial-outcome-question');
+        $this->assertStringContainsString('בוצעה חלקית', $recap);
+        $this->assertCount(2, $this->modelRequests, 'The persisted partial outcome is provided to the actual follow-up question.');
         $this->assertCount(1, $this->writes());
         $this->assertSame('wc_product_create', $this->writes()[0][0]);
         $this->assertSame('draft', $this->product['status']);
@@ -361,11 +359,14 @@ class SiteAgentVirtualProductConversationTest extends TestCase
             'regular_price' => '150.00', 'sale_price' => '', 'status' => 'publish'];
     }
 
-    private function functionCall(string $name, array $arguments): PromiseInterface
+    private function functionCall(string $name, array $arguments, string $text = ''): PromiseInterface
     {
-        return Http::response(['candidates' => [['content' => ['parts' => [[
-            'functionCall' => ['id' => $name, 'name' => $name, 'args' => $arguments]],
-        ]]]]]);
+        $parts = $text === '' ? [] : [['text' => $text]];
+        $parts[] = [
+            'functionCall' => ['id' => $name, 'name' => $name, 'args' => $arguments],
+        ];
+
+        return Http::response(['candidates' => [['content' => ['parts' => $parts]]]]);
     }
 
     private function modelText(string $text): PromiseInterface

@@ -184,6 +184,12 @@ class SiteAgentConversation
                 return 'בוטל, לא שיניתי כלום. אפשר לבקש משהו אחר.';
             }
 
+            // A correction to an image offer still refers to its staged file.
+            // Re-plan it in place and require approval of the revised preview.
+            if ($mediaId === null && $this->hasStagedImage($pending)) {
+                return $this->answerImageQuestion($subscriber, $pending, $text, $messageId);
+            }
+
             if ($mediaId === null && $this->assistant->available()
                 && app(SiteAgentOfferQuestion::class)->relatesTo($pending, $text)) {
                 $answer = $this->converse($subscriber, $text, $messageId, $pending);
@@ -646,7 +652,7 @@ class SiteAgentConversation
         }
 
         return [$plan, [
-            'plan' => [...$offer['plan'], 'image_alt' => (string) $plan['alt']],
+            'plan' => [...$offer['plan'], 'image_alt' => (string) $plan['alt'], 'image_draft' => $plan['image_draft'] ?? []],
             'preview' => $offer['preview'],
         ]];
     }
@@ -686,8 +692,12 @@ class SiteAgentConversation
      */
     private function isImageQuestion(SiteAgentRequest $request): bool
     {
-        return in_array($request->operation, [SiteAgentRequest::OP_IMAGE, SiteAgentRequest::OP_MEDIA_UPLOAD], true)
-            && filled(data_get($request->plan, 'question'))
+        return $this->hasStagedImage($request) && filled(data_get($request->plan, 'question'));
+    }
+
+    private function hasStagedImage(SiteAgentRequest $request): bool
+    {
+        return in_array($request->operation, [SiteAgentRequest::OP_IMAGE, SiteAgentRequest::OP_MEDIA_UPLOAD, SiteAgentRequest::OP_PRODUCT_CREATE], true)
             && filled(data_get($request->plan, 'image_path'));
     }
 
@@ -723,6 +733,11 @@ class SiteAgentConversation
             'recent_conversation' => $this->imageHistory($subscriber),
         ]);
         if ($next === null) {
+            $request->update([
+                'preview' => null,
+                'plan' => [...$plan, 'question' => ImageChangePlanner::UNRESOLVED_IMAGE.' מה לתקן בהצעה?'],
+            ]);
+
             return 'קיבלתי את התמונה, אבל לא הצלחתי להבין לאן לשים אותה.';
         }
         if (($next['cancel'] ?? false) === true) {
@@ -734,7 +749,7 @@ class SiteAgentConversation
             return $this->imageTopicSwitch($subscriber, $request, $answer, $messageId);
         }
         $caption = Str::limit((string) ($plan['caption'] ?? ''), 1000, '')
-            ."\nשאלת הבהרה: ".(string) $plan['question']."\nתשובת בעל האתר: ".$answer;
+            ."\nהצעה או שאלת הבהרה: ".(string) ($plan['question'] ?? $request->preview ?? '')."\nתשובת בעל האתר: ".$answer;
         $caption = Str::limit($caption, 6000, '');
 
         [$next, $offer] = $this->newProductOffer($site, $next);
@@ -763,6 +778,7 @@ class SiteAgentConversation
         if (isset($next['question'])) {
             $request->update([
                 'operation' => $operation,
+                'preview' => null,
                 'plan' => [...$next, 'image_path' => $plan['image_path'], 'extension' => $plan['extension'] ?? 'jpg', 'caption' => $caption],
                 'message' => Str::limit($caption, 2000),
                 'expires_at' => now()->addMinutes(max(1, (int) config('siteagent.confirmation_minutes', 30))),

@@ -61,7 +61,7 @@ class SiteAgentToolbox
             'פרטי מנוי אחד לפי מזהה.',
             ['subscription_id' => ['type' => 'integer']], ['subscription_id']],
         'find_content' => ['wp_content_list',
-            'פוסטים, עמודים או כל סוג תוכן אחר: מזהה, כותרת, סטטוס, תאריך עדכון וקישור. type = post / page / סוג מותאם.',
+            'פוסטים, עמודים או כל סוג תוכן אחר: מזהה, כותרת, סטטוס, תאריך עדכון וקישור. type = post / page / סוג מותאם. אם type חסר החיפוש כולל סוגי תוכן זמינים (עד 8), לרבות פוסטים וטיוטות; תוצאות ריקות אינן הוכחה שאין פריט בסוג שלא נסרק. אם הבעלים ציין מזהה קרא get_content ישירות.',
             ['type' => ['type' => 'string'], 'status' => ['type' => 'string'], 'search' => ['type' => 'string'], 'limit' => ['type' => 'integer']], []],
         'get_content' => ['wp_content_get',
             'פריט תוכן אחד לפי מזהה: כותרת, תוכן מלא, סטטוס, והאם הוא בנוי באלמנטור.',
@@ -70,8 +70,11 @@ class SiteAgentToolbox
             'סוגי התוכן שקיימים באתר (פוסטים, עמודים, וסוגים מותאמים כמו נכסים או פרויקטים).',
             [], []],
         'find_users' => ['wp_user_list',
-            'משתמשי האתר: מזהה, שם משתמש, אימייל, שם תצוגה, תפקידים ותאריך הרשמה. סינון לפי search ו-role.',
+            'משתמשי האתר: מזהה, שם משתמש, אימייל, שם תצוגה, תפקידים ותאריך הרשמה. search מחפש בשם או באימייל, לא לפי מזהה. למזהה משתמש מפורש קרא get_user ישירות. editable=false פירושו שאין להכין שינוי תפקיד למשתמש.',
             ['search' => ['type' => 'string'], 'role' => ['type' => 'string'], 'limit' => ['type' => 'integer']], []],
+        'get_user' => ['wp_user_get',
+            'משתמש אחד לפי מזהה מספרי מדויק: שם, אימייל, תפקידים והאם מותר לשנותו. כשבעל האתר מסר מזהה, קרא כאן במקום לחפש את המספר ב-find_users. מנהל אתר או משתמש עם כמה תפקידים מסומן editable=false: אין להציע שינוי תפקיד שלו, גם אם התפקיד החדש אינו מנהל.',
+            ['user_id' => ['type' => 'integer', 'minimum' => 1]], ['user_id']],
         'find_leads' => ['wp_lead_list',
             'לידים מטפסי האתר (Elementor, Contact Form 7, WPForms, Gravity Forms, Fluent Forms): טופס, תאריך והשדות שמולאו. ברירת מחדל 30 ימים; לתקופה סגורה — from ו-to (YYYY-MM-DD).',
             ['days' => ['type' => 'integer'], 'from' => ['type' => 'string'], 'to' => ['type' => 'string'],
@@ -205,9 +208,14 @@ class SiteAgentToolbox
 
         // Count purpose controls the conversation only, never the site's count.
         $arguments = $pluginTool === 'wc_product_counts' ? [] : array_intersect_key($input, $properties);
+        if ($pluginTool === 'wp_user_get' && (! is_int($arguments['user_id'] ?? null) || $arguments['user_id'] < 1)) {
+            return ['content' => 'יש לציין מזהה משתמש חיובי ומדויק.', 'is_error' => true, 'ids' => []];
+        }
 
         try {
-            $text = $this->mcp->textContent($this->mcp->callTool($site, $pluginTool, $arguments));
+            $text = $name === 'find_content' && trim((string) ($arguments['type'] ?? '')) === ''
+                ? $this->discoverContent($site, $arguments)
+                : $this->mcp->textContent($this->mcp->callTool($site, $pluginTool, $arguments));
         } catch (\Throwable $e) {
             if ($pluginTool === 'wc_product_counts') {
                 return $this->productCountsError('לא הצלחתי לקרוא מהאתר את ספירת המוצרים כרגע. אין לי מספר מאומת; אפשר לנסות שוב לאחר בדיקת החיבור.');
@@ -223,6 +231,10 @@ class SiteAgentToolbox
         }
 
         $data = json_decode($text, true);
+        if ($pluginTool === 'wp_user_get' && (! is_array($data) || ($data['id'] ?? null) !== $arguments['user_id']
+            || ! is_array($data['roles'] ?? null) || ! is_bool($data['editable'] ?? null))) {
+            return ['content' => 'האתר לא החזיר את פרטי המשתמש המבוקש. יש לקרוא שוב לפני שינוי.', 'is_error' => true, 'ids' => []];
+        }
         if ($pluginTool === 'wc_product_counts') {
             return $this->productCountsRead($data);
         }
@@ -359,6 +371,60 @@ class SiteAgentToolbox
     private function productCountsError(string $message = 'האתר החזיר ספירת מוצרים חסרה או לא עקבית, ולכן אין לי מספר מאומת. יש לבדוק את החיבור ולעדכן את תוסף הסוכן.'): array
     {
         return ['content' => $message, 'is_error' => true, 'ids' => [], 'reply' => $message];
+    }
+
+    /**
+     * Raw bounded discovery shared by authorized content and image planners.
+     * Callers must check content-read permission before requesting this data.
+     * A missing type must never silently fall back to the plugin's page default.
+     */
+    public function discoverContent(Site $site, array $arguments): string
+    {
+        $types = ['page', 'post'];
+        $discovered = false;
+        if ($this->siteHas($site, 'wp_post_types_list')) {
+            $catalogue = json_decode($this->mcp->textContent($this->mcp->callTool($site, 'wp_post_types_list')), true);
+            if (! is_array($catalogue) || ! array_is_list($catalogue)) {
+                throw new \RuntimeException('לא ניתן לקרוא את סוגי התוכן באתר. ציינו type מפורש או נסו שוב.');
+            }
+            $types = [];
+            foreach ($catalogue as $type) {
+                $name = is_array($type) ? ($type['type'] ?? null) : null;
+                if (is_string($name) && preg_match('/^[a-z0-9_-]{1,32}$/D', $name) === 1) {
+                    $types[] = $name;
+                }
+            }
+            $types = array_values(array_unique($types));
+            $discovered = true;
+        }
+        $searched = array_slice($types, 0, 8);
+        $rows = [];
+        $failed = [];
+        foreach ($searched as $type) {
+            try {
+                $items = json_decode($this->mcp->textContent($this->mcp->callTool($site, 'wp_content_list', [
+                    ...$arguments, 'type' => $type, 'limit' => min(30, max(1, (int) ($arguments['limit'] ?? 20))),
+                ])), true);
+                if (! is_array($items) || ! array_is_list($items)) {
+                    throw new \RuntimeException('Invalid content list');
+                }
+                foreach ($items as $item) {
+                    if (is_array($item) && is_int($item['id'] ?? null) && $item['id'] > 0) {
+                        $rows[$item['id']] = $item;
+                    }
+                }
+            } catch (\Throwable) {
+                $failed[] = $type;
+            }
+        }
+        if ($searched === [] || count($failed) === count($searched)) {
+            throw new \RuntimeException('לא ניתן להשלים את חיפוש התוכן באתר כרגע; אין להסיק שהפריט אינו קיים.');
+        }
+
+        return json_encode(['items' => array_values($rows), 'searched_types' => $searched,
+            'failed_types' => $failed, 'remaining_types' => array_slice($types, 8),
+            'all_types_discovered' => $discovered,
+            'note' => 'רשימה מוגבלת מכל סוג תוכן. מזהים, כותרות וסטטוסים הם תוצאות חיות; תוכן מלא דורש get_content.'], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
     }
 
     /** CCT ids belong to separate tables and must never authorize a WordPress id. */

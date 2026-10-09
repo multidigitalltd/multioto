@@ -37,7 +37,7 @@
                     <label for="evaluation-suite" class="block font-medium">תרחישים להרצה</label>
                     <select id="evaluation-suite" wire:model.live="suite" @disabled($active) aria-describedby="evaluation-suite-help" class="w-full rounded-lg border-gray-300 bg-white text-gray-950 focus:border-primary-500 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white">
                         <option value="original">{{ $suiteCounts['original'] }} התרחישים שנותרו מהסבב המקורי</option>
-                        <option value="round2">{{ $suiteCounts['round2'] }} תרחישים חדשים — סבב שני</option>
+                        <option value="round2">{{ $suiteCounts['round2'] }} התרחישים שנותרו מהסבב השני</option>
                         <option value="all">כל {{ $suiteCounts['all'] }} התרחישים</option>
                     </select>
                     <p id="evaluation-suite-help" class="text-sm">התרחישים שכבר עברו בדוח שסופק הוסרו מהרצות חדשות. אפשר לבדוק את התרחישים שנותרו, את הסבב החדש או את שניהם יחד. דוחות קודמים שומרים על התוצאות והמספרים המקוריים שלהם.</p>

@@ -24,7 +24,7 @@ class EvaluationWorld
     private const READS = [
         'wp_health', 'wp_plugin_list', 'wp_theme_list', 'wp_admin_list', 'wp_option_get', 'wp_error_log_tail',
         'wp_menu_list', 'wp_post_types_list', 'wp_content_list', 'wp_content_get', 'wp_content_details', 'wp_internal_links_get',
-        'wp_user_list', 'wp_user_profile_get', 'wp_theme_active_get', 'wp_comment_list', 'wp_taxonomy_list', 'wp_term_list', 'wp_post_terms_get',
+        'wp_user_list', 'wp_user_get', 'wp_user_profile_get', 'wp_theme_active_get', 'wp_comment_list', 'wp_taxonomy_list', 'wp_term_list', 'wp_post_terms_get',
         'wp_media_list', 'wp_media_get', 'wp_elementor_texts_get', 'wc_product_search', 'wc_product_counts', 'wc_product_get',
         'wc_coupon_list', 'wc_order_get', 'wc_order_list', 'wc_order_stats_get', 'wc_sales_report', 'wc_shipping_zones_list',
         'wcs_subscription_list', 'wcs_subscription_get', 'wp_lead_list',
@@ -181,6 +181,7 @@ class EvaluationWorld
             'wp_post_thumbnail_set' => $this->thumbnail($a),
             'wp_media_delete' => $this->mediaDelete($a),
             'wp_user_list' => $this->userList($a),
+            'wp_user_get' => $this->publicUser($this->row('users', $this->id($a, 'user_id'))),
             'wp_user_create' => $this->userCreate($a),
             'wp_user_role_set' => $this->userRole($a),
             'wp_user_profile_get' => $this->userProfile($a),
@@ -720,9 +721,15 @@ class EvaluationWorld
             $rows = array_values(array_filter($rows, fn (array $r): bool => in_array($a['role'], $r['roles'], true)));
         }
 
-        $rows = array_map(fn (array $row): array => [...$row, 'editable' => ! in_array('administrator', $row['roles'], true), 'status_meta_keys' => []], $rows);
+        $rows = array_map($this->publicUser(...), $rows);
 
         return ['total' => count($rows), 'count' => count($rows), 'returned' => count($rows), 'page' => 1, 'pages' => $rows === [] ? 0 : 1, 'assignable_roles' => ['subscriber', 'customer', 'contributor', 'author', 'editor', 'shop_manager'], 'users' => $rows];
+    }
+
+    private function publicUser(array $row): array
+    {
+        return array_intersect_key($row, array_flip(['id', 'login', 'email', 'display_name', 'roles', 'registered']))
+            + ['editable' => ! in_array('administrator', $row['roles'], true) && count($row['roles']) <= 1, 'status_meta_keys' => []];
     }
 
     private function userCreate(array $a): array
@@ -899,7 +906,7 @@ class EvaluationWorld
         } $menuId = array_key_first($matches);
         $title = $this->text($a, 'title');
         $url = isset($a['page_id']) ? $this->row('content', $this->positive($a['page_id']))['url'] : $this->text($a, 'url');
-        if (! preg_match('#^https?://#', $url)) {
+        if (! preg_match('#^(?:https?://|/)#', $url)) {
             throw new InvalidArgumentException('Invalid URL');
         }
         $id = $this->next('menu_items');

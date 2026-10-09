@@ -161,6 +161,24 @@ class SiteAgentLearnDashConversationTest extends TestCase
         $this->assertSame($this->selector, array_intersect_key(end($this->calls)[1], $this->selector));
     }
 
+    public function test_direct_enrollment_can_be_added_and_undone_while_group_access_remains(): void
+    {
+        $before = $this->state(false, true, ['group:19']);
+        $this->editor($before, $this->state(true, true, ['direct', 'group:19']));
+        $request = $this->offer();
+        $this->assertSame(0, $this->remote['writes']);
+        $this->assertStringContainsString('רישום ישיר: לא ← כן', $request->preview);
+        $this->assertStringContainsString('גישה לקורס: כן ← כן', $request->preview);
+
+        $this->talk('כן');
+        $this->assertSame(SiteAgentRequest::APPLIED, $request->refresh()->state);
+        $this->assertSame(['direct', 'group:19'], $this->remote['current']['access_sources']);
+        $this->talk('בטל');
+        $this->assertSame(SiteAgentRequest::REVERTED, $request->refresh()->state);
+        $this->assertSame($before, $this->remote['current']);
+        $this->assertTrue($this->remote['current']['effective_access']);
+    }
+
     public function test_canceling_or_disabling_student_management_never_changes_enrollment(): void
     {
         $request = $this->offer();

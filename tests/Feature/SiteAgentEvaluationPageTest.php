@@ -42,8 +42,8 @@ class SiteAgentEvaluationPageTest extends TestCase
 
         Livewire::test(SiteAgentEvaluation::class)
             ->assertSuccessful()
-            ->assertSeeText('הפעלת 352 התרחישים')
-            ->assertSeeText('752 תרחישי שיחה עם הבוט')
+            ->assertSeeText('הפעלת 69 התרחישים')
+            ->assertSeeText('150 תרחישי שיחה עם הבוט')
             ->assertSeeText('התרחישים שכבר עברו בדוח שסופק הוסרו מהרצות חדשות')
             ->assertDontSeeText('כל 800 התרחישים')
             ->assertSeeText('google')
@@ -105,7 +105,7 @@ class SiteAgentEvaluationPageTest extends TestCase
 
     public static function selectedSuites(): array
     {
-        return [['original', 352], ['round2', 400], ['all', 752]];
+        return [['original', 69], ['round2', 81], ['all', 150]];
     }
 
     public function test_invalid_livewire_suite_never_reaches_the_queue_service(): void

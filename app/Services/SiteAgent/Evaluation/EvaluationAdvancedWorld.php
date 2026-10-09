@@ -130,7 +130,7 @@ final class EvaluationAdvancedWorld
     private function cct(string $name, array $args, array &$state): array
     {
         $fields = [['key' => 'title', 'label' => 'כותרת', 'type' => 'text', 'required' => true, 'writable' => true],
-            ['key' => 'price', 'label' => 'מחיר', 'type' => 'number', 'required' => false, 'writable' => true],
+            ['key' => 'price', 'label' => 'מחיר', 'type' => 'number', 'required' => false, 'writable' => true, 'min' => 0],
             ['key' => 'available', 'label' => 'זמין', 'type' => 'switcher', 'required' => false, 'writable' => true],
             ['key' => 'private_token', 'label' => 'מפתח פרטי', 'type' => 'text', 'required' => false, 'writable' => false]];
         if ($name === 'jet_cct_types') {
@@ -140,9 +140,18 @@ final class EvaluationAdvancedWorld
         if ($name === 'jet_cct_list') {
             $filters = $args['filters'] ?? [];
             $this->require(is_array($filters) && array_diff(array_keys($filters), ['title', 'price', 'available', 'cct_status']) === [], 'מסנן CCT לא מוכר.');
+            if ($filters !== []) {
+                $filters = $this->cctValues(['values' => $filters]);
+            }
             $rows = [];
             foreach ($state['cct']['houses'] as $id => $values) {
-                if (array_intersect_key($values, $filters) === $filters) {
+                $matches = true;
+                foreach ($filters as $key => $filter) {
+                    $value = $values[$key] ?? null;
+                    $matches = $matches && ($key === 'price' && $filter !== null && $value !== null
+                        ? (float) $value === (float) $filter : $value === $filter);
+                }
+                if ($matches) {
                     $rows[] = ['type' => 'houses', 'id' => $id, 'label' => $values['title'], 'values' => $values];
                 }
             }
@@ -172,10 +181,17 @@ final class EvaluationAdvancedWorld
         $values = $this->values($args, ['title', 'price', 'available', 'cct_status']);
         foreach ($values as $key => $value) {
             $valid = match ($key) {
-                'title' => is_string($value), 'price' => (is_int($value) || is_float($value)) && $value >= 0,
-                'available' => is_bool($value), 'cct_status' => in_array($value, ['publish', 'draft'], true),
+                'title' => is_string($value) && $value !== '',
+                'price' => $value === null || (! is_bool($value) && is_numeric($value) && is_finite((float) $value) && (float) $value >= 0),
+                'available' => in_array($value, [null, true, false, 'true', 'false'], true),
+                'cct_status' => in_array($value, ['publish', 'draft'], true),
             };
             $this->require($valid, 'ערך שדה CCT אינו תקין.');
+            // JetEngine's native adapter accepts bool/string true/false, never
+            // numeric 0/1. The simulated state uses canonical booleans.
+            if ($key === 'available' && $value !== null) {
+                $values[$key] = in_array($value, [true, 'true'], true);
+            }
         }
 
         return $values;

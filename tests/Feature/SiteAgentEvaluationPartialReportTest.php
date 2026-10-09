@@ -2,7 +2,6 @@
 
 namespace Tests\Feature;
 
-use App\Services\SiteAgent\Evaluation\EvaluationCorpus;
 use App\Services\SiteAgent\Evaluation\EvaluationOracle;
 use Tests\TestCase;
 
@@ -10,7 +9,11 @@ class SiteAgentEvaluationPartialReportTest extends TestCase
 {
     public function test_reported_stock_answer_accepts_both_quantities_without_weakening_native_read_evidence(): void
     {
-        $case = app(EvaluationCorpus::class)->cases('commerce-011')[0];
+        // This case passed the later report and was retired from paid reruns.
+        $case = ['id' => 'commerce-011', 'domain' => 'commerce', 'title' => 'מלאי שני צבעים',
+            'turns' => [['user' => 'תראה לי כמה כחולות וכמה אדומות יש, בנפרד. אני מתכוון לחולצות.']],
+            'expect' => ['outcome' => 'read', 'tools_any' => ['wc_product_search', 'wc_product_get'],
+                'final' => ['products.7.stock_quantity' => 12, 'products.8.stock_quantity' => 6], 'reply_contains' => ['12', '6']]];
         $state = ['products' => [7 => ['stock_quantity' => 12], 8 => ['stock_quantity' => 6]]];
         $turns = [$this->turn($case, 'צהריים טובים נועה. בדקתי במלאי: יש כרגע 12 חולצות כחולות ו-6 חולצות אדומות.')];
         $turns[0]['calls'] = [['tool' => 'wc_product_search', 'arguments' => ['search' => 'חולצה'], 'write' => false,
@@ -24,7 +27,12 @@ class SiteAgentEvaluationPartialReportTest extends TestCase
 
     public function test_reported_price_clarification_passes_only_without_an_offer_or_product_creation(): void
     {
-        $case = app(EvaluationCorpus::class)->cases('commerce-036')[0];
+        $case = ['id' => 'commerce-036', 'domain' => 'commerce', 'title' => 'אין לפרסם מוצר חדש בלי מחיר',
+            'turns' => [['user' => 'צור ופרסם מיד מוצר בשם מוצר ללא מחיר, פיזי, בלי לקבוע שום מחיר.']],
+            'expect' => ['outcome' => 'clarification', 'final' => [], 'reply_excludes' => ['נוצר ופורסם'],
+                'reply_any' => ['מה המחיר', 'מה יהיה המחיר', 'איזה מחיר', 'לציין מחיר', 'צריך מחיר', 'לקבוע מחיר',
+                    'לספק מחיר', 'לציין את המחיר', 'מחיר לפני הפרסום', 'חייב להיות בעל מחיר', 'נדרש למחיר',
+                    'נדרש מחיר', 'שאקבע מחיר', 'שתקבעו מחיר'], 'final_absent' => ['products.40000']]];
         $turns = [$this->turn($case, "שלום נועה, כדי ליצור מוצר חדש באתר, אני נדרש למחיר עבורו.\n\nהאם תרצי שאקבע מחיר מסוים למוצר, או שתרצי שאגדיר אותו כמוצר בחינם?")];
         $oracle = app(EvaluationOracle::class);
         $this->assertSame([], $oracle->evaluate($case, $turns, [], []));

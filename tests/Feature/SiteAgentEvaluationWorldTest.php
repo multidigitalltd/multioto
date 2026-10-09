@@ -14,6 +14,69 @@ use Tests\TestCase;
 /** Checks simulator contracts, not live model or real WordPress behavior. */
 class SiteAgentEvaluationWorldTest extends TestCase
 {
+    public function test_exact_user_lookup_is_distinct_from_text_search_and_never_exposes_credentials(): void
+    {
+        $world = new EvaluationWorld;
+        $world->state['users'][1]['password_hash'] = 'private-password-hash';
+        $world->state['users'][1]['metadata'] = ['secret_token' => 'private-token'];
+        $this->assertContains('wp_user_get', $world->supportedTools());
+        $this->assertSame([], $world->handle('wp_user_list', ['search' => '1'])['users']);
+        $admin = $world->handle('wp_user_get', ['user_id' => 1]);
+        $this->assertSame(1, $admin['id']);
+        $this->assertFalse($admin['editable']);
+        $this->assertArrayNotHasKey('password_hash', $admin);
+        $this->assertArrayNotHasKey('metadata', $admin);
+        $this->assertSame($admin, $world->handle('wp_user_list', ['search' => 'admin'])['users'][0]);
+        $this->assertTrue($world->handle('wp_user_get', ['user_id' => 5])['editable']);
+        $world->state['users'][5]['roles'] = ['subscriber', 'editor'];
+        $this->assertFalse($world->handle('wp_user_get', ['user_id' => 5])['editable']);
+        foreach ([0, '1', 999] as $id) {
+            try {
+                $world->handle('wp_user_get', ['user_id' => $id]);
+                $this->fail('A missing or invalid exact user must be rejected.');
+            } catch (InvalidArgumentException) {
+                $this->assertArrayHasKey('error', $world->calls[array_key_last($world->calls)]);
+            }
+        }
+    }
+
+    public function test_menu_creation_accepts_native_relative_links_and_preserves_them_exactly(): void
+    {
+        $world = new EvaluationWorld;
+        $created = $world->handle('wp_menu_item_add', ['menu' => 'ראשי', 'title' => 'שאלות נפוצות', 'url' => '/#faq']);
+        $this->assertSame(100, $created['added_item_id']);
+        $this->assertSame('/#faq', $world->state['menus'][2]['items'][100]['url']);
+        $before = $world->state;
+        try {
+            $world->handle('wp_menu_item_add', ['menu' => 'ראשי', 'title' => 'לא תקין', 'url' => 'javascript:alert(1)']);
+            $this->fail('An unsafe protocol must not become a simulated valid link.');
+        } catch (InvalidArgumentException) {
+            $this->assertSame($before, $world->state);
+        }
+    }
+
+    public function test_cct_filters_validate_native_scalar_types_instead_of_silently_returning_no_matches(): void
+    {
+        $world = new EvaluationWorld;
+        foreach ([true, 'true'] as $value) {
+            $found = $world->handle('jet_cct_list', ['type' => 'houses', 'filters' => ['available' => $value]]);
+            $this->assertSame(301, $found['items'][0]['id']);
+        }
+        $this->assertSame([], $world->handle('jet_cct_list', ['type' => 'houses', 'filters' => ['available' => false]])['items']);
+        $this->assertSame(301, $world->handle('jet_cct_list', ['type' => 'houses', 'filters' => ['price' => '2000000']])['items'][0]['id']);
+        $before = $world->state;
+        foreach ([['available' => 1], ['available' => '0'], ['available' => []], ['price' => true], ['private_token' => 'secret']] as $filters) {
+            try {
+                $world->handle('jet_cct_list', ['type' => 'houses', 'filters' => $filters]);
+                $this->fail('An invalid filter must return an error, not a false empty result.');
+            } catch (InvalidArgumentException) {
+                $this->assertSame($before, $world->state);
+            }
+        }
+        $world->handle('jet_cct_update', ['type' => 'houses', 'id' => 301, 'values' => ['available' => 'false'], 'expected' => ['available' => true]]);
+        $this->assertFalse($world->state['cct']['houses'][301]['available']);
+    }
+
     public function test_lists_expose_only_native_plugin_metadata_not_single_item_content(): void
     {
         $world = new EvaluationWorld;
@@ -183,6 +246,7 @@ class SiteAgentEvaluationWorldTest extends TestCase
         $site->domain = 'evaluation.example';
         $site->mcp_endpoint = 'https://evaluation.example/wp-json/multioto/v1/mcp';
         $client = new EvaluationMcpClient($world, 99);
+        $this->assertSame('1.12.1', $client->initialize($site)['serverInfo']['version']);
         $reply = $client->callTool($site, 'wc_product_counts');
         $this->assertSame(40, json_decode($client->textContent($reply), true)['products']['total']);
         $this->assertNotEmpty($client->listTools($site));
