@@ -8,6 +8,7 @@ use App\Models\SiteAgentRequest;
 use App\Models\SiteAgentSubscriber;
 use App\Models\SystemLog;
 use App\Services\Ai\AiUsageAttribution;
+use Closure;
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Storage;
@@ -31,6 +32,8 @@ class SiteAgentConversation
      */
     public const CONFIRM_PROMPT = 'לביצוע השיבו "כן". לביטול — "לא".';
 
+    public const NO_PENDING_PROPOSAL = 'אין כרגע הצעה שמורה ותקפה לביצוע, ולכן לא שיניתי דבר. כתבו שוב את השינוי המבוקש ואכין הצעה חדשה לאישור.';
+
     private const YES = ['כן', 'אשר', 'אישור', 'מאשר', 'מאשרת', 'בצע', 'תבצע', 'אוקיי', 'אוקי', 'ok', 'yes', 'כן.', '👍'];
 
     /** Words that mean no. */
@@ -52,23 +55,26 @@ class SiteAgentConversation
     /**
      * Read the message and act.
      *
+     * @param  Closure(): void|null  $beforeTurn  captures the alert history boundary after any preceding turn completes
      * @return string the reply to send back
      */
-    public function handle(SiteAgentSubscriber $subscriber, string $text, ?string $messageId, ?string $mediaId = null): string
+    public function handle(SiteAgentSubscriber $subscriber, string $text, ?string $messageId, ?string $mediaId = null, ?Closure $beforeTurn = null): string
     {
         // Every AI call this message causes is booked to this customer, so the
         // usage screen can set what they cost against what they pay.
         return app(AiUsageAttribution::class)->for(
             $subscriber->customer_id,
-            fn (): string => $this->handleFor($subscriber, $text, $messageId, $mediaId),
+            fn (): string => $this->handleFor($subscriber, $text, $messageId, $mediaId, $beforeTurn),
         );
     }
 
-    private function handleFor(SiteAgentSubscriber $subscriber, string $text, ?string $messageId, ?string $mediaId): string
+    private function handleFor(SiteAgentSubscriber $subscriber, string $text, ?string $messageId, ?string $mediaId, ?Closure $beforeTurn): string
     {
         $text = trim($text);
 
         if ($text === '' && $mediaId === null) {
+            $beforeTurn?->__invoke();
+
             return 'לא הבנתי מה לשנות. כתבו לי מה תרצו לעדכן באתר.';
         }
 
@@ -94,7 +100,10 @@ class SiteAgentConversation
             // dropped here is the customer's instruction — or their "כן" —
             // thrown away in silence. Queueing behind the message before it is
             // what they expect; being ignored is not.
-            return $lock->block(90, function () use ($subscriber, $text, $messageId, $mediaId): string {
+            return $lock->block(90, function () use ($subscriber, $text, $messageId, $mediaId, $beforeTurn): string {
+                // Capture diagnostic history only after the preceding turn
+                // finished, while the same lock excludes later messages.
+                $beforeTurn?->__invoke();
                 $reply = $this->act($subscriber, $text, $messageId, $mediaId);
 
                 // Every turn, whichever path answered it — a "כן" and its
@@ -193,8 +202,30 @@ class SiteAgentConversation
             return $this->revertLast($subscriber);
         }
 
-        return $this->converse($subscriber, $text, $messageId)
-            ?? $this->propose($subscriber, $text, $messageId);
+        $isApproval = $this->matches($text, self::YES);
+        if ($isApproval && $this->previousReplyAskedForApproval($subscriber)) {
+            // Older versions could emit a model-written preview without saving
+            // a request. An expired or missing offer cannot be approved by prose.
+            return self::NO_PENDING_PROPOSAL;
+        }
+
+        $reply = $this->converse($subscriber, $text, $messageId);
+
+        // A yes can answer an ordinary clarification, so the assistant may use
+        // its context. It must never reach a planner as a standalone edit.
+        return $reply ?? ($isApproval ? self::NO_PENDING_PROPOSAL : $this->propose($subscriber, $text, $messageId));
+    }
+
+    private function previousReplyAskedForApproval(SiteAgentSubscriber $subscriber): bool
+    {
+        $previous = SiteAgentMessage::query()
+            ->where('site_agent_subscriber_id', $subscriber->id)
+            ->where('site_id', $subscriber->site_id)
+            ->where('role', SiteAgentMessage::ASSISTANT)
+            ->latest('id')
+            ->value('body');
+
+        return is_string($previous) && app(SiteAgentReplyGuard::class)->asksForApproval($previous);
     }
 
     /**
@@ -219,7 +250,16 @@ class SiteAgentConversation
             $site,
             $text,
             $messageId,
-            fn (string $instruction): string => $this->propose($subscriber, $instruction, $messageId, tryShop: false),
+            function (string $instruction) use ($subscriber, $text, $messageId): string {
+                if ($this->planner->mentionsFrontPage($text) && ! $this->planner->mentionsFrontPage($instruction)) {
+                    // The user's actual target survives a model rewriting the
+                    // homepage as a page title such as "login".
+                    $instruction = "בקשת בעל האתר בהודעה הנוכחית:\n".$text
+                        ."\nפירוט שהוכן לעורך; יעד הבקשה המקורית נשאר מחייב:\n".$instruction;
+                }
+
+                return $this->propose($subscriber, $instruction, $messageId, tryShop: false);
+            },
         );
     }
 

@@ -46,6 +46,8 @@ class SiteAgentAssistant
     /** Ceiling on the team's standing instructions, as they enter every prompt. */
     public const INSTRUCTIONS_MAX_CHARS = 4000;
 
+    public const NO_VERIFIED_PROPOSAL = 'עדיין לא הוכנה הצעה מאומתת לביצוע, ולא שיניתי דבר באתר. אפשר לנסות שוב את הבקשה; אציג שינוי לאישור רק לאחר שאבדוק אותו באתר.';
+
     /** The delegate for page text, handled by the existing page planner. */
     private const EDIT_PAGES = 'edit_page_text';
 
@@ -85,6 +87,9 @@ class SiteAgentAssistant
         }
 
         $turn = new SiteAgentTurn(now()->toImmutable());
+        $replyGuard = app(SiteAgentReplyGuard::class);
+        $repairUsed = false;
+        $unbackedApproval = false;
         $permissions = app(SiteAgentPermissions::class);
         $tools = array_values(array_filter([
             ...$this->toolbox->definitions($site),
@@ -102,6 +107,26 @@ class SiteAgentAssistant
             fn (string $name, array $input): array => $this->call($turn, $subscriber, $site, $text, $messageId, $editPages, $name, $input),
             min(10, max(2, (int) config('siteagent.assistant.max_turns', 6))),
             cacheScope: 'site-agent:customer:'.$subscriber->customer_id.':site:'.$site->id,
+            reviewReply: function (string $reply) use ($turn, $replyGuard, &$repairUsed, &$unbackedApproval): ?string {
+                if ($turn->settled() || ! $replyGuard->asksForApproval($reply)) {
+                    return null;
+                }
+
+                $unbackedApproval = true;
+                if ($repairUsed || $turn->elapsed() > min(240, max(30, (int) config('siteagent.assistant.budget_seconds', 240)))) {
+                    return '';
+                }
+
+                $repairUsed = true;
+
+                // The provider continues its existing loop: same tool results,
+                // permission checks and remaining round budget, one repair only.
+                return 'בדיקת המערכת: התשובה האחרונה ביקשה אישור, אבל לא נוצרה במערכת הצעה לביצוע ולכן היא לא נשלחה לבעל האתר. '
+                    .'אין להסיק מהנוסח שכתבת שהנתונים נבדקו או שנשמרה פעולה. חזור לבקשת בעל האתר ולהקשר השיחה: '
+                    .'לעריכת טקסט בעמוד קרא עכשיו ל-edit_page_text עם הבקשה המלאה, גם אם חסר פרט. '
+                    .'לפעולה אחרת השתמש בכלי הקריאה וההצעה המתאימים. רק כלי ששומר הצעה רשאי לבקש אישור. '
+                    .'אם אי אפשר להכין הצעה, הסבר את המגבלה או שאל את הפרט החסר בלי להציג שינוי כמוכן לביצוע.';
+            },
         );
 
         // Whatever the model said after its offer, the offer is the answer: the
@@ -115,6 +140,12 @@ class SiteAgentAssistant
         }
 
         $answer = trim((string) $answer);
+
+        // Defence at the user-facing boundary as well as inside the provider
+        // loop. A plain model sentence is never an approval record.
+        if ($replyGuard->asksForApproval($answer) || ($answer === '' && $unbackedApproval)) {
+            return self::NO_VERIFIED_PROPOSAL;
+        }
 
         // WhatsApp's own ceiling is 4096 characters; a reply cut by the
         // network loses its end, which is usually where the answer is.
@@ -371,7 +402,7 @@ class SiteAgentAssistant
      */
     private function propose(SiteAgentTurn $turn, SiteAgentSubscriber $subscriber, Site $site, string $text, ?string $messageId, string $name, array $input): array
     {
-        $offer = $this->proposer->propose($site, $name, $input, $turn->seen);
+        $offer = $this->proposer->propose($site, $name, $input, $turn->seen, ownerRequest: $text);
 
         if (isset($offer['error'])) {
             return ['content' => $offer['error'], 'is_error' => true];
@@ -404,7 +435,7 @@ class SiteAgentAssistant
         return [
             'name' => self::EDIT_PAGES,
             'description' => 'שינוי טקסט בעמודי האתר (כולל עמודים שבנויים באלמנטור): החלפת טקסט, הוספת פסקה או שינוי כותרת של עמוד. '
-                .'כתבו ב-instruction את הבקשה המלאה במילים — באיזה עמוד, מה להחליף ובמה, כולל הפרטים מהשיחה הקודמת. אם חסר הטקסט הישן או החדש, שאלו עליו לפני הקריאה. העורך מאתר את העמוד ומציג לבעל האתר תצוגה מקדימה בעצמו.',
+                .'כתבו ב-instruction את הבקשה המלאה במילים — באיזה עמוד, מה להחליף ובמה, כולל הפרטים מהשיחה הקודמת. קראו לכלי גם אם חסר פרט: העורך שומר שאלת הבהרה וממשיך עם תשובת בעל האתר. שמרו את הביטוי דף הבית כשהוא היעד, גם אם ידוע שם העמוד. העורך מאמת את העמוד ומציג תצוגה מקדימה בעצמו; אין לנסח בקשת אישור בטקסט חופשי.',
             'input_schema' => [
                 'type' => 'object',
                 'properties' => ['instruction' => ['type' => 'string']],
@@ -462,7 +493,7 @@ class SiteAgentAssistant
             '2. שינוי באתר נעשה אך ורק דרך כלי propose_* או edit_page_text. הצעה אחת בכל הודעה; אחרי שהגשת אותה — סיים. לעולם אל תכתוב שההצעה החדשה בוצעה, עודכנה או נשלחה: שינוי קורה רק אחרי שבעל האתר עונה "כן" על התצוגה המקדימה, וזה מטופל מחוץ לשיחה איתך. על פעולה קודמת מותר לומר שבוצעה רק אם מצב הפעולה שסופק הוא applied; reverted פירושו שהוחזרה. זה תיעוד העבר, לא אישור למצב האתר כיום.',
             '3. לפני הצעה על פריט קיים, מצא אותו בכלי קריאה באותו סבב (find_* / get_*) והשתמש במזהה שהוחזר. אם יש כמה התאמות — שאל לאיזו הוא מתכוון, אל תבחר בעצמך.',
             '4. המשך את השיחה מהנקודה שבה נעצרה: "אותו מוצר", "שם", "השנייה", "תקצר את זה" או תשובה לשאלה שלך מתייחסים להקשר האחרון המתאים באתר הזה. השתמש בפרטים שכבר נמסרו בלי לשאול עליהם שוב. אם יש כמה פירושים סבירים או שההקשר חסר — שאל שאלה אחת ממוקדת עם האפשרויות הידועות. אל תנחש יעד ואל תציע שינוי שלא התבקש.',
-            '4א. "להחליף טקסט בדף הבית" היא בקשת עריכה ברורה שחסרים בה פרטים: שאל "איזה טקסט בדף הבית תרצו להחליף, ומה לכתוב במקומו?". כשהתשובה מגיעה, שמור את דף הבית כיעד והעבר לעורך את הבקשה המלאה. אל תגיד שלא הבנת כשאפשר לשאול מה חסר.',
+            '4א. בקשת עריכת עמוד, גם "לעדכן תוכן בדף הבית" או "להחליף טקסט בדף הבית", מועברת מיד ל-edit_page_text עם כל הפרטים שכבר נמסרו. העורך שואל על החסר ושומר את ההקשר; אין לשאול במקום העורך או לנסח לבד הצעה. בהמשך שמור את דף הבית כיעד גם אם שם העמוד הוא login. בקשת אישור נשלחת רק מהצעה שנשמרה בכלי, ולא מטקסט שאתה מחבר. אם כלי לא שמר הצעה, אסור לומר שהיא מוכנה או לבקש כן/לא לביצוע.',
             '5. אי אפשר מכאן: החזר כספי, מחיקה סופית של תוכן או קובצי מדיה, מחיקה של הזמנות או משתמשים, מחיקה סופית של מוצרים'.$this->productAbilities($names).', הרשאת מנהל אתר, עדכון וורדפרס עצמו, התקנה או עדכון של תוספים ותבניות ללא מסלול שחזור מאומת, הסרת פריט תפריט, ביטול מנוי סופי, הערה הנשלחת באימייל ללקוח, כלי אבטחה או עריכת קוד. תוכן ניתן להעביר לפח עם שחזור; ניתן להחליף תבנית מותקנת רק אם קיים הכלי. אמור זאת בנימוס'
                 .($support !== '' ? " והפנה לצוות ({$support})." : ' והפנה לצוות Multi Digital.'),
             ($off = app(SiteAgentPermissions::class)->disabledLabels()) !== []

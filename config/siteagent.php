@@ -157,6 +157,12 @@ return [
         'cooldown_hours' => (int) env('SITE_AGENT_CHANNEL_WATCH_COOLDOWN_HOURS', 24),
     ],
 
+    // Delivered misunderstanding replies are reported with their conversation
+    // context. Without an explicit destination, only platform admins receive it.
+    'alerts' => [
+        'failure_email' => (string) env('SITE_AGENT_FAILURE_ALERT_EMAIL', ''),
+    ],
+
     /*
     | How long an offer waits for a yes. Long enough to answer after a meeting,
     | short enough that a "כן" typed tomorrow cannot confirm something the

@@ -45,6 +45,25 @@ class SiteChangeApplier
             return $this->refuse('הבקשה חסרה אתר.');
         }
 
+        // The target called "homepage" is both a post and a setting. Keep this
+        // check before either executor: generic title/status proposals use the
+        // management route while text and Elementor edits use the page route.
+        if (array_key_exists('front_page', $plan)) {
+            $pageId = match ($request->operation) {
+                SiteAgentRequest::OP_APPEND, SiteAgentRequest::OP_REPLACE, SiteAgentRequest::OP_TITLE => $plan['page_id'] ?? null,
+                SiteAgentRequest::OP_POST_UPDATE => $plan['post_id'] ?? null,
+                default => null,
+            };
+            $currentFront = $this->planner->frontPage($site);
+            $expectedFront = $plan['front_page'];
+            if (! is_int($pageId) || $pageId <= 0 || ! is_array($expectedFront) || $currentFront === null
+                || ($expectedFront['mode'] ?? null) !== 'page' || $currentFront['mode'] !== 'page'
+                || ($expectedFront['id'] ?? null) !== $pageId || $currentFront['id'] !== $pageId
+                || ($expectedFront['blog_id'] ?? null) !== $currentFront['blog_id']) {
+                return $this->refuse(self::STALE);
+            }
+        }
+
         if (in_array($request->operation, SiteAgentRequest::MANAGEMENT_OPERATIONS, true)) {
             return $this->actions->apply($site, $request);
         }
@@ -69,20 +88,6 @@ class SiteChangeApplier
 
         if ($pageId <= 0) {
             return $this->refuse('הבקשה חסרה עמוד.');
-        }
-
-        // "The homepage" refers to a setting as well as to the post's text.
-        // If it moved while approval waited, editing the old page is not the
-        // change the owner approved. Undo still targets the exact edited post.
-        if (array_key_exists('front_page', $plan)) {
-            $currentFront = $this->planner->frontPage($site);
-            $expectedFront = $plan['front_page'];
-            if (! is_array($expectedFront) || $currentFront === null
-                || ($expectedFront['mode'] ?? null) !== $currentFront['mode']
-                || ($expectedFront['id'] ?? null) !== $pageId || $currentFront['id'] !== $pageId
-                || ($expectedFront['blog_id'] ?? null) !== $currentFront['blog_id']) {
-                return $this->refuse(self::STALE);
-            }
         }
 
         try {

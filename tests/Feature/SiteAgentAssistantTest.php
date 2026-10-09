@@ -109,6 +109,26 @@ class SiteAgentAssistantTest extends TestCase
         $this->assertNotContains('wc_order_status_set', array_column($this->calls, 0));
     }
 
+    public function test_yes_to_a_quoted_clarification_keeps_the_conversation_context(): void
+    {
+        $subscriber = $this->subscriber();
+        $question = 'האם לכלול תתי־קטגוריות? השיבו "כן" או "לא".';
+        $this->model(fn (): string => $question);
+        $this->assertSame($question, $this->talk($subscriber, 'אני רוצה מבצע על הקטגוריה'));
+        $this->assertSame(0, SiteAgentRequest::count());
+
+        $this->model(function (): string {
+            $this->assertStringContainsString('האם לכלול תתי־קטגוריות', $this->seenByModel[1]);
+            $this->assertStringContainsString('אני רוצה מבצע על הקטגוריה', $this->seenByModel[1]);
+
+            return 'מה גובה ההנחה ומתי המבצע יסתיים?';
+        });
+
+        $this->assertSame('מה גובה ההנחה ומתי המבצע יסתיים?', $this->talk($subscriber, 'כן'));
+        $this->assertSame(0, SiteAgentRequest::count());
+        $this->assertSame([], $this->calls);
+    }
+
     public function test_an_order_the_model_never_looked_up_cannot_be_proposed(): void
     {
         $subscriber = $this->subscriber();

@@ -71,6 +71,35 @@ class SiteAgentConversationTest extends TestCase
         Http::assertNothingSent();
     }
 
+    public function test_diagnostic_history_boundary_is_captured_inside_the_turn_lock_before_planning(): void
+    {
+        $subscriber = $this->subscriber();
+        $captured = false;
+        $this->planning(null);
+        $planner = Mockery::mock(SiteChangePlanner::class);
+        $planner->shouldReceive('plan')->once()->andReturnUsing(function () use (&$captured): ?array {
+            $this->assertTrue($captured);
+
+            return null;
+        });
+        $this->app->instance(SiteChangePlanner::class, $planner);
+
+        $reply = app(SiteAgentConversation::class)->handle(
+            $subscriber,
+            'עדכן את הכותרת',
+            'wamid.history-boundary',
+            beforeTurn: function () use ($subscriber, &$captured): void {
+                $otherWorker = Cache::lock("site-agent:conversation:{$subscriber->id}", 1250);
+                $this->assertFalse($otherWorker->get());
+                $captured = true;
+            },
+        );
+
+        $this->assertTrue($captured);
+        $this->assertStringContainsString('לא הצלחתי להבין בוודאות', $reply);
+        Http::assertNothingSent();
+    }
+
     public function test_yes_applies_the_change_and_keeps_what_was_there(): void
     {
         $subscriber = $this->subscriber();
@@ -162,7 +191,7 @@ class SiteAgentConversationTest extends TestCase
         $this->travel(2)->hours();
 
         // A "כן" typed the next day must not confirm something they have long
-        // stopped thinking about — it is read as a new request instead.
+        // stopped thinking about — explain that no valid proposal is pending.
         $this->planning(null);
         $reply = $this->talk($subscriber, 'כן');
 

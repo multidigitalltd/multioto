@@ -62,7 +62,7 @@ class SiteChangePlanner
         }
 
         $front = null;
-        if (preg_match('/(?:דף|עמוד)\s*(?:הבית|בית|הראשי)|\b(?:home\s?page|front\s?page)\b/iu', $request)) {
+        if ($this->mentionsFrontPage($request)) {
             $front = $this->frontPage($site);
             if ($front === null) {
                 return ['refusal' => 'לא הצלחתי לוודא איזה עמוד מוגדר כדף הבית. יש לבדוק את החיבור ולעדכן את תוסף הסוכן. אפשר גם לציין עמוד אחר בשמו המדויק. לא שיניתי דבר.'];
@@ -101,6 +101,12 @@ class SiteChangePlanner
         if (($result['can_do'] ?? false) !== true) {
             $question = is_string($result['question'] ?? null) ? trim($result['question']) : '';
 
+            // A model-written question is still prose, even when returned by
+            // the editor tool. It cannot invite execution without a valid plan.
+            if (app(SiteAgentReplyGuard::class)->asksForApproval($question)) {
+                return ['refusal' => SiteAgentAssistant::NO_VERIFIED_PROPOSAL];
+            }
+
             return $question !== '' ? ['question' => Str::limit($question, 500)] : null;
         }
 
@@ -111,6 +117,12 @@ class SiteChangePlanner
         $plan = $this->validate($result, $pages);
 
         return $front !== null && isset($plan['operation']) ? [...$plan, 'front_page' => $front] : $plan;
+    }
+
+    /** Identify an explicit homepage target in the owner's current request. */
+    public function mentionsFrontPage(string $request): bool
+    {
+        return preg_match('/(?:דף|עמוד)\s*(?:הבית|בית|הראשי)|\b(?:home\s?page|front\s?page)\b/iu', $request) === 1;
     }
 
     /** Read only the fixed safe settings tool; never request arbitrary options. */

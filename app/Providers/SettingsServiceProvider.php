@@ -112,6 +112,7 @@ class SettingsServiceProvider extends ServiceProvider
         'siteagent.cache_ttl_minutes' => 'siteagent.assistant.cache.ttl_minutes',
         'siteagent.transcript_days' => 'siteagent.assistant.transcript_days',
         'siteagent.disabled_permissions' => 'siteagent.assistant.disabled_permissions',
+        'siteagent.failure_alert_email' => 'siteagent.alerts.failure_email',
         'waha.api_key' => 'billing.waha.api_key',
         'waha.base_url' => 'billing.waha.base_url',
         'waha.session' => 'billing.waha.session',
@@ -256,6 +257,7 @@ class SettingsServiceProvider extends ServiceProvider
         'siteagent.cache_ttl_minutes' => 'siteagent.assistant.cache.ttl_minutes',
         'siteagent.transcript_days' => 'siteagent.assistant.transcript_days',
         'siteagent.disabled_permissions' => 'siteagent.assistant.disabled_permissions',
+        'siteagent.failure_alert_email' => 'siteagent.alerts.failure_email',
     ];
 
     /**

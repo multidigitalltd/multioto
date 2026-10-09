@@ -287,9 +287,10 @@ class SiteActionProposer
      *
      * @param  array<string, mixed>  $input
      * @param  list<int>  $seen  ids the reads of this turn returned
+     * @param  string|null  $ownerRequest  the owner's current message, never the model's rewritten instruction or the whole transcript
      * @return array{plan: array<string, mixed>, preview: string}|array{error: string}
      */
-    public function propose(Site $site, string $name, array $input, array $seen): array
+    public function propose(Site $site, string $name, array $input, array $seen, ?string $ownerRequest = null): array
     {
         if (! $this->isProposal($name)) {
             return $this->error("אין כלי בשם {$name}.");
@@ -304,6 +305,21 @@ class SiteActionProposer
         }
 
         try {
+            $frontPage = null;
+            if (in_array($name, ['propose_text_edit', 'propose_post_update'], true)
+                && $ownerRequest !== null && app(SiteChangePlanner::class)->mentionsFrontPage($ownerRequest)) {
+                $frontPage = app(SiteChangePlanner::class)->frontPage($site);
+                if ($frontPage === null) {
+                    return $this->error('לא הצלחתי לוודא איזה עמוד מוגדר כדף הבית. יש לבדוק את החיבור ואת תוסף הסוכן לפני הצעת השינוי.');
+                }
+                if ($frontPage['mode'] !== 'page') {
+                    return $this->error('דף הבית מוגדר כרשימת הפוסטים האחרונים, ולא כעמוד תוכן קבוע. אין לבחור עמוד אחר במקומו.');
+                }
+                if ($frontPage['id'] !== (int) ($input['id'] ?? 0)) {
+                    return $this->error('העמוד שנבחר אינו דף הבית שמוגדר באתר. קרא את העמוד שמופיע בהגדרות הבית לפני הצעת השינוי.');
+                }
+            }
+
             $extended = app(SiteAgentExtendedActions::class);
             $offer = match ($name) {
                 SiteAgentAcfActions::TOOL => app(SiteAgentAcfActions::class)->propose($site, $input, $seen),
@@ -315,6 +331,11 @@ class SiteActionProposer
             };
 
             if (isset($offer['plan'], $offer['preview'])) {
+                if ($frontPage !== null) {
+                    // Preserve the meaning of "homepage" for the approval-time
+                    // check, including proposals made through generic tools.
+                    $offer['plan']['front_page'] = $frontPage;
+                }
                 $plan = $offer['plan'];
 
                 if (($reason = SiteAgentReversibility::reasonFor($plan['operation'], $plan)) !== null) {

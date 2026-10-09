@@ -102,6 +102,7 @@ class ManageSiteAgent extends Page implements HasForms
         'siteagent.tool_result_chars',
         'siteagent.cache_ttl_minutes',
         'siteagent.transcript_days',
+        'siteagent.failure_alert_email',
     ];
 
     /** @var array<string, mixed> */
@@ -137,6 +138,7 @@ class ManageSiteAgent extends Page implements HasForms
                 'cache_enabled' => (bool) config('siteagent.assistant.cache.enabled', true),
                 'cache_ttl_minutes' => config('siteagent.assistant.cache.ttl_minutes'),
                 'transcript_days' => config('siteagent.assistant.transcript_days'),
+                'failure_alert_email' => config('siteagent.alerts.failure_email'),
                 'allowed' => array_values(array_diff(array_keys(SiteAgentPermissions::GROUPS), app(SiteAgentPermissions::class)->disabled())),
             ],
         ]);
@@ -362,6 +364,20 @@ class ManageSiteAgent extends Page implements HasForms
                             ->live(onBlur: true)
                             ->helperText('השיחות מכילות פרטים של לקוחות הקצה (שמות, טלפונים, הזמנות), ולכן נמחקות אחרי התקופה הזו. 30 יום מספיקים בדרך כלל כדי ללמוד מהן; עד 90.'),
                     ])->columns(2),
+
+                Section::make('התראות על בקשות שלא הובנו')
+                    ->description('כשנשלחת לבעל האתר תשובה שהבקשה לא הובנה או שלא הוכנה הצעה מאומתת לביצוע, נשלחת התראה באימייל. היא כוללת את פרטי בעל האתר והאתר, מועד האירוע, עד 40 הודעות אחרונות שנשמרו מאותה שיחה וקישור לשיחה במערכת.')
+                    ->schema([
+                        TextInput::make('siteagent.failure_alert_email')
+                            ->label('כתובת אימייל לקבלת ההתראות')
+                            ->email()
+                            ->rule('string')
+                            ->maxLength(254)
+                            ->mutateStateForValidationUsing(fn (mixed $state): mixed => is_string($state) ? trim($state) : $state)
+                            ->autocomplete('email')
+                            ->extraInputAttributes(['dir' => 'ltr'])
+                            ->helperText('כתובת אחת, לפי בחירתך. ריק = ברירת המחדל של המערכת; ללא כתובת מוגדרת ההתראות נשלחות למשתמשים עם תפקיד מנהל במערכת, ולא לכלל הצוות או ללקוחות.'),
+                    ]),
 
                 Section::make('גבולות העבודה לכל הודעה')
                     ->description('הגבולות מונעים מבקשה אחת להחזיק את השיחה זמן רב. ערכים גבוהים מאפשרים בירור מורכב יותר ועשויים להגדיל את עלות השימוש ואת ההמתנה.')

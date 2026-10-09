@@ -8,6 +8,7 @@ use App\Models\SiteAgentRequest;
 use App\Models\SiteAgentSubscriber;
 use App\Services\Agent\McpClient;
 use App\Services\Ai\ClaudeClient;
+use App\Services\SiteAgent\SiteAgentAssistant;
 use App\Services\SiteAgent\SiteAgentConversation;
 use App\Services\SiteAgent\SiteChangeApplier;
 use App\Services\SiteAgent\SiteChangePlanner;
@@ -92,7 +93,8 @@ class SiteAgentPageClarificationTest extends TestCase
         $ai->shouldReceive('isEnabled')->andReturn(true);
         $ai->shouldReceive('supportsAgent')->andReturn(true);
         $ai->shouldReceive('converse')->once()->andReturnUsing(function ($system, $prompt, $tools, $handler): string {
-            $this->assertStringContainsString('איזה טקסט בדף הבית', $system);
+            $this->assertStringContainsString('מועברת מיד ל-edit_page_text', $system);
+            $this->assertStringContainsString('העורך שואל על החסר ושומר את ההקשר', $system);
             $handler('edit_page_text', ['instruction' => 'להחליף טקסט בדף הבית']);
 
             return 'הכנתי.';
@@ -103,6 +105,20 @@ class SiteAgentPageClarificationTest extends TestCase
         $this->assertSame(self::QUESTION, $this->talk($this->subscriber(), 'להחליף טקסט בדף הבית'));
         $this->assertEmpty(SiteAgentRequest::sole()->preview);
         $this->assertSame('page', SiteAgentRequest::sole()->plan['kind']);
+    }
+
+    public function test_a_planner_question_cannot_masquerade_as_an_execution_preview(): void
+    {
+        $this->model([
+            ['can_do' => false],
+            ['can_do' => false, 'question' => 'אחליף את הטקסט בדף הבית. לביצוע השיבו "כן". לביטול — "לא".'],
+        ]);
+
+        $reply = $this->talk($this->subscriber(), 'להחליף טקסט בדף הבית');
+
+        $this->assertSame(SiteAgentAssistant::NO_VERIFIED_PROPOSAL, $reply);
+        $this->assertSame(0, SiteAgentRequest::count());
+        $this->assertStringNotContainsString(SiteAgentConversation::CONFIRM_PROMPT, $reply);
     }
 
     public function test_a_canceled_question_never_reaches_the_applier(): void
@@ -149,8 +165,9 @@ class SiteAgentPageClarificationTest extends TestCase
         $request = SiteAgentRequest::sole();
         $request->update(['expires_at' => now()->subSecond()]);
 
-        $this->talk($subscriber, 'כן');
-        $this->assertStringNotContainsString('להחליף טקסט בדף הבית', $this->prompts[3]);
+        $callsBeforeApproval = count($this->prompts);
+        $this->assertSame(SiteAgentConversation::NO_PENDING_PROPOSAL, $this->talk($subscriber, 'כן'));
+        $this->assertCount($callsBeforeApproval, $this->prompts, 'An orphan yes must not reach a planner as a new edit.');
         $this->assertEmpty($request->fresh()->preview);
         $this->assertNull($request->fresh()->operation);
     }

@@ -183,7 +183,7 @@ class ClaudeClient
     }
 
     /**
-     * Run a tool-use conversation with Claude (Anthropic only). The model may
+     * Run a tool-use conversation with the configured provider. The model may
      * call the supplied tools; $handler executes each call and returns its
      * result. Loops until the model stops requesting tools or a turn cap is
      * hit, and returns the model's final text — or null on failure/refusal.
@@ -191,11 +191,15 @@ class ClaudeClient
      * Tool inputs reach $handler already decoded. The handler returns
      * ['content' => string, 'is_error' => bool]. Every mutating side-effect is
      * the handler's responsibility — this method only relays the conversation.
+     * An optional final-reply reviewer accepts with null, stops with an empty
+     * string, or supplies an internal correction for the next existing turn.
+     * Corrections share the same tool state, cache and total turn budget.
      *
      * @param  list<array<string, mixed>>  $tools  Anthropic tool definitions.
      * @param  callable(string, array<string, mixed>): array{content: string, is_error?: bool}  $handler
+     * @param  (callable(string): ?string)|null  $reviewReply
      */
-    public function converse(string $system, string $prompt, array $tools, callable $handler, int $maxTurns = 6, ?string $cacheScope = null): ?string
+    public function converse(string $system, string $prompt, array $tools, callable $handler, int $maxTurns = 6, ?string $cacheScope = null, ?callable $reviewReply = null): ?string
     {
         $this->lastError = null;
 
@@ -212,9 +216,9 @@ class ClaudeClient
 
         try {
             return match (config('billing.ai.provider', 'anthropic')) {
-                'openai' => $this->converseOpenai($system, $prompt, $tools, $handler, $maxTurns),
-                'google' => $this->converseGoogle($system, $prompt, $tools, $handler, $maxTurns, $cacheScope),
-                default => $this->converseAnthropic($system, $prompt, $tools, $handler, $maxTurns),
+                'openai' => $this->converseOpenai($system, $prompt, $tools, $handler, $maxTurns, $reviewReply),
+                'google' => $this->converseGoogle($system, $prompt, $tools, $handler, $maxTurns, $cacheScope, $reviewReply),
+                default => $this->converseAnthropic($system, $prompt, $tools, $handler, $maxTurns, $reviewReply),
             };
         } catch (\Throwable $e) {
             $this->lastError = $e->getMessage();
@@ -230,7 +234,7 @@ class ClaudeClient
      * @param  list<array<string, mixed>>  $tools
      * @param  callable(string, array<string, mixed>): array{content: string, is_error?: bool}  $handler
      */
-    private function converseAnthropic(string $system, string $prompt, array $tools, callable $handler, int $maxTurns): ?string
+    private function converseAnthropic(string $system, string $prompt, array $tools, callable $handler, int $maxTurns, ?callable $reviewReply = null): ?string
     {
         $config = config('billing.ai');
         $messages = [['role' => 'user', 'content' => $prompt]];
@@ -268,7 +272,17 @@ class ClaudeClient
             $toolUses = array_values(array_filter($content, fn ($b): bool => ($b['type'] ?? null) === 'tool_use'));
 
             if ($toolUses === []) {
-                return $this->joinText($content);
+                $text = $this->joinText($content);
+                $correction = $reviewReply !== null ? $reviewReply($text ?? '') : null;
+                if ($correction === null) {
+                    return $text;
+                }
+                if ($correction === '') {
+                    return null;
+                }
+                $messages[] = ['role' => 'user', 'content' => $correction];
+
+                continue;
             }
 
             $results = [];
@@ -294,7 +308,7 @@ class ClaudeClient
      * @param  list<array<string, mixed>>  $tools  Anthropic-style tool defs (name/description/input_schema).
      * @param  callable(string, array<string, mixed>): array{content: string, is_error?: bool}  $handler
      */
-    private function converseOpenai(string $system, string $prompt, array $tools, callable $handler, int $maxTurns): ?string
+    private function converseOpenai(string $system, string $prompt, array $tools, callable $handler, int $maxTurns, ?callable $reviewReply = null): ?string
     {
         $config = config('billing.ai');
         $functions = array_map(fn (array $t): array => [
@@ -341,8 +355,16 @@ class ClaudeClient
 
             if ($toolCalls === []) {
                 $text = (string) ($message['content'] ?? '');
+                $correction = $reviewReply !== null ? $reviewReply($text) : null;
+                if ($correction === null) {
+                    return $text !== '' ? $text : null;
+                }
+                if ($correction === '') {
+                    return null;
+                }
+                $messages[] = ['role' => 'user', 'content' => $correction];
 
-                return $text !== '' ? $text : null;
+                continue;
             }
 
             foreach ($toolCalls as $call) {
@@ -365,7 +387,7 @@ class ClaudeClient
      * @param  list<array<string, mixed>>  $tools  Anthropic-style tool defs (name/description/input_schema).
      * @param  callable(string, array<string, mixed>): array{content: string, is_error?: bool}  $handler
      */
-    private function converseGoogle(string $system, string $prompt, array $tools, callable $handler, int $maxTurns, ?string $cacheScope = null): ?string
+    private function converseGoogle(string $system, string $prompt, array $tools, callable $handler, int $maxTurns, ?string $cacheScope = null, ?callable $reviewReply = null): ?string
     {
         $config = config('billing.ai');
         $model = rawurlencode(preg_replace('#^models/#', '', trim((string) $config['model'])));
@@ -441,8 +463,16 @@ class ClaudeClient
 
             if ($calls === []) {
                 $text = collect($parts)->pluck('text')->filter()->implode("\n");
+                $correction = $reviewReply !== null ? $reviewReply($text) : null;
+                if ($correction === null) {
+                    return $text !== '' ? $text : null;
+                }
+                if ($correction === '') {
+                    return null;
+                }
+                $contents[] = ['role' => 'user', 'parts' => [['text' => $correction]]];
 
-                return $text !== '' ? $text : null;
+                continue;
             }
 
             $responseParts = [];

@@ -10,6 +10,7 @@ use App\Models\WebhookEvent;
 use App\Services\SiteAgent\SiteAgentAccess;
 use App\Services\SiteAgent\SiteAgentBilling;
 use App\Services\SiteAgent\SiteAgentConversation;
+use App\Services\SiteAgent\SiteAgentFailureAlerts;
 use App\Services\SiteAgent\SiteAgentMessageCap;
 use App\Services\SiteAgent\SiteAgentPitch;
 use App\Services\SiteAgent\SiteAgentUsageMeter;
@@ -164,6 +165,7 @@ class HandleSiteAgentMessageJob implements ShouldQueue
         // itself.
         $billable = false;
         $subscription = null;
+        $historyThroughId = 0;
 
         if ($decision['status'] === SiteAgentAccess::ALLOWED && $subscriber !== null) {
             $subscriber->forceFill(['last_seen_at' => now()])->save();
@@ -184,6 +186,9 @@ class HandleSiteAgentMessageJob implements ShouldQueue
                         $text,
                         (string) ($payload['id'] ?? '') ?: null,
                         $mediaId !== '' ? $mediaId : null,
+                        beforeTurn: function () use ($subscriber, &$historyThroughId): void {
+                            $historyThroughId = app(SiteAgentFailureAlerts::class)->captureHistoryBoundary($subscriber);
+                        },
                     );
             }
         } else {
@@ -205,6 +210,7 @@ class HandleSiteAgentMessageJob implements ShouldQueue
         // is entitled to it. A refusal to an unpaid or unknown number is the
         // system talking about itself, and nobody is billed for that.
         if ($delivered !== null && $billable && $subscriber !== null) {
+            app(SiteAgentFailureAlerts::class)->dispatch($event->id, $subscriber, $text, $reply, $historyThroughId);
             $meter->record($subscriber, $delivered);
             app(SiteAgentMessageCap::class)->warnIfDue($whatsapp, $from, $subscription);
             app(SiteAgentWelcome::class)->sendTipIfDue($whatsapp, $subscriber);
