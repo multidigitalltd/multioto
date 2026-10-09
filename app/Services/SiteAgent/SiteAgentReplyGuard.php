@@ -13,16 +13,9 @@ final class SiteAgentReplyGuard
 {
     public function asksForApproval(string $reply): bool
     {
-        $reply = mb_strtolower(mb_substr($reply, 0, 20000, 'UTF-8'), 'UTF-8');
-        $reply = str_replace(
-            ['״', '“', '”', '„', '«', '»', '׳', '‘', '’', '`', '*', '_', "\u{200E}", "\u{200F}", "\u{200B}"],
-            ['"', '"', '"', '"', '"', '"', "'", "'", "'", "'", '', '', '', '', ''],
-            $reply,
-        );
+        $reply = $this->normalize($reply);
         // Keep paragraph boundaries: a yes/no consent question starts a
         // clause, unlike "איזה מוצר תרצי שאעדכן?", which asks for a target.
-        $reply = str_replace(["\r\n", "\r"], "\n", $reply);
-        $reply = preg_replace('/[^\S\r\n]+/u', ' ', $reply) ?? '';
 
         $directive = '(?:השיבו|השב|השיבי|השבי|הגיבו|הגב|הגיבי|כתבו|כתוב|כתבי|שלחו|שלח|שלחי|ענו|ענה|עני|תכתבו|תכתוב|תכתבי|תשיבו|תשיב|תשיבי|לחצו|לחץ|לחצי)';
         $connector = '(?:\s+(?:לי|כאן|בתשובה|בהודעה|רק|במילה|את\s+המילה|על\s+הכפתור|על)){0,3}';
@@ -41,9 +34,10 @@ final class SiteAgentReplyGuard
             $directive.$connector.'\s*[:—–-]?\s*'.$affirmative.'\s*(?:לאישור|לביצוע|כדי\s+(?:לאשר|לבצע)|ואבצע|ואעדכן)',
             // Questions explicitly asking permission to perform a change.
             'האם\s+(?:לאשר|לבצע|להחיל)'.$boundary,
-            '(?:לאשר|לבצע|להחיל)(?:\s+(?:את\s+)?'.$target.')?\s*[?؟]',
+            $clauseStart.'(?:לאשר|לבצע|להחיל)(?:\s+(?:את\s+)?'.$target.')?\s*[?؟]',
             '(?:האם\s+)?(?:להמשיך|להתקדם)\s+'.$continuation.'\s*[?؟]',
             'האם\s+(?:להמשיך|להתקדם)\s+'.$continuation.$boundary,
+            $consentStart.'(?:אמשיך|נמשיך|אתקדם|נתקדם)\s+(?:בכך|בזה|עם\s+זה)\s*[?؟]',
             '(?:מאשר|מאשרת|מאשרים|מאשרות|מאושר)(?:\s+(?:את\s+)?'.$target.')?\s*[?؟]',
             $consentStart.$writeVerb.'(?:\s+(?:את\s+)?'.$target.')?\s*[?؟]',
             $consentStart.$writeVerb.'\s+(?:אותו|אותה|אותם|אותן|את\s+[^\s?؟.!]+)'.$boundary.'[^\r\n?؟]{0,180}[?؟]',
@@ -82,5 +76,43 @@ final class SiteAgentReplyGuard
         }
 
         return false;
+    }
+
+    /** No support-contact tool exists: neither an offer nor a claimed send is grounded. */
+    public function offersUnsupportedHandoff(string $reply): bool
+    {
+        $reply = $this->normalize($reply);
+        $destination = '(?:לצוות(?:\s+(?:התמיכה|הטכני))?|לתמיכה|לשירות\s+הלקוחות)';
+        $patterns = [
+            '(?<!לא )(?<!אין )(?<!איני )(?<!אינני )(?<!איננו )(?<!אינו )(?<!אינה )(?:(?:אני|אנחנו)\s+)?(?:מעביר|מעבירה|מעבירים|שולח|שולחת|שולחים|אעביר|נעביר|אשלח|נשלח|אפנה|נפנה|פניתי|פנינו|העברתי|העברנו|שלחתי|שלחנו)\s+[^\r\n.!?؟]{0,180}'.$destination,
+            'ש?(?:תרצה|תרצי|תרצו|רוצה|רוצים)\s+ש(?:אפנה|נפנה|אעביר|נעביר|אשלח|נשלח)\s+[^\r\n.!?؟]{0,180}'.$destination,
+            '(?:אני\s+(?:יכול|יכולה)|אוכל|נוכל)\s+(?:לפנות|להעביר|לשלוח)\s+[^\r\n.!?؟]{0,180}'.$destination,
+            '(?:הבקשה|הפנייה|הפניה|פנייתך|קריאת\s+השירות)\s+(?:נשלחה|הועברה|הועברו)\s+[^\r\n.!?؟]{0,180}'.$destination,
+            '(?<!לא )(?:(?:אני|אנחנו)\s+)?(?:פתחתי|פתחנו|אפתח|נפתח|פותח|פותחת|פותחים)\s+(?:עבורך\s+|לך\s+)?(?:פנייה|פניה|קריאת\s+שירות|קריאה\s+לתמיכה)',
+            '\bi\s+(?:have\s+|will\s+|can\s+)?(?:sent|send|forwarded|forward|contacted|contact)\b[^\r\n.!?]{0,160}\b(?:support|technical\s+team)\b',
+            '\b(?:would\s+you\s+like\s+me\s+to|shall\s+i|should\s+i)\s+(?:send|forward|contact)\b[^\r\n.!?]{0,160}\b(?:support|technical\s+team)\b',
+            '\byour\s+(?:request|ticket)\s+(?:has\s+been|was)\s+(?:sent|forwarded)\b[^\r\n.!?]{0,160}\bsupport\b',
+        ];
+        foreach ($patterns as $pattern) {
+            if (preg_match('/(?<![\p{L}\p{N}_])(?:'.$pattern.')/u', $reply, $match) === 1
+                && preg_match('/\b(?:אותך|אתכם|אתכן)\b/u', $match[0]) !== 1) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function normalize(string $reply): string
+    {
+        $reply = mb_strtolower(mb_substr($reply, 0, 20000, 'UTF-8'), 'UTF-8');
+        $reply = str_replace(
+            ['״', '“', '”', '„', '«', '»', '׳', '‘', '’', '`', '*', '_', "\u{200E}", "\u{200F}", "\u{200B}"],
+            ['"', '"', '"', '"', '"', '"', "'", "'", "'", "'", '', '', '', '', ''],
+            $reply,
+        );
+        $reply = str_replace(["\r\n", "\r"], "\n", $reply);
+
+        return preg_replace('/[^\S\r\n]+/u', ' ', $reply) ?? '';
     }
 }

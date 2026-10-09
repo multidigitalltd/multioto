@@ -17,6 +17,7 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Mockery;
 use Symfony\Component\Process\Process;
+use Tests\Concerns\FakesSiteAgentProposalFidelity;
 use Tests\TestCase;
 
 /**
@@ -33,6 +34,7 @@ use Tests\TestCase;
  */
 class SiteAgentCoverageTest extends TestCase
 {
+    use FakesSiteAgentProposalFidelity;
     use RefreshDatabase;
 
     /**
@@ -76,6 +78,7 @@ class SiteAgentCoverageTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        $this->fakeProposalFidelity();
 
         config(['siteagent.enabled' => true, 'siteagent.assistant.enabled' => true]);
         Cache::flush();

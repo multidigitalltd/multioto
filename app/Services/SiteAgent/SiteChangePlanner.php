@@ -100,12 +100,15 @@ class SiteChangePlanner
 
         if (($result['can_do'] ?? false) !== true) {
             $refusal = is_string($result['refusal'] ?? null) ? trim($result['refusal']) : '';
+            $question = is_string($result['question'] ?? null) ? trim($result['question']) : '';
+            if (app(SiteAgentReplyGuard::class)->offersUnsupportedHandoff($refusal)
+                || app(SiteAgentReplyGuard::class)->offersUnsupportedHandoff($question)) {
+                return ['refusal' => app(SiteAgentCapabilityReply::class)->reply('support_handoff')];
+            }
             if ($refusal !== '') {
                 return ['refusal' => app(SiteAgentReplyGuard::class)->asksForApproval($refusal)
                     ? SiteAgentAssistant::NO_VERIFIED_PROPOSAL : Str::limit($refusal, 500)];
             }
-            $question = is_string($result['question'] ?? null) ? trim($result['question']) : '';
-
             // A model-written question is still prose, even when returned by
             // the editor tool. It cannot invite execution without a valid plan.
             if (app(SiteAgentReplyGuard::class)->asksForApproval($question)) {

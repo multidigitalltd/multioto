@@ -16,10 +16,12 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Log;
 use Mockery;
 use PHPUnit\Framework\Attributes\DataProvider;
+use Tests\Concerns\FakesSiteAgentProposalFidelity;
 use Tests\TestCase;
 
 class SiteAgentProductClarificationFlowTest extends TestCase
 {
+    use FakesSiteAgentProposalFidelity;
     use RefreshDatabase;
 
     private array $intents = [];
@@ -37,6 +39,7 @@ class SiteAgentProductClarificationFlowTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        $this->fakeProposalFidelity();
         config(['siteagent.confirmation_minutes' => 30, 'siteagent.assistant.disabled_permissions' => '']);
         $this->searchResponse = ['products' => [
             ['id' => 5, 'name' => 'חולצה כחולה', 'regular_price' => '120', 'sale_price' => ''],

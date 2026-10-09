@@ -16,11 +16,13 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Mockery;
 use RuntimeException;
+use Tests\Concerns\FakesSiteAgentProposalFidelity;
 use Tests\TestCase;
 
 /** Real conversation/approval persistence; only the AI and remote MCP boundary are mocked. */
 class SiteAgentAcfConversationTest extends TestCase
 {
+    use FakesSiteAgentProposalFidelity;
     use RefreshDatabase;
 
     private SiteAgentSubscriber $subscriber;
@@ -40,6 +42,7 @@ class SiteAgentAcfConversationTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        $this->fakeProposalFidelity();
         config([
             'siteagent.enabled' => true, 'siteagent.assistant.enabled' => true,
             'siteagent.assistant.disabled_permissions' => [],

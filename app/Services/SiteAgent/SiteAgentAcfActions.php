@@ -104,11 +104,18 @@ class SiteAgentAcfActions
             $changes = [];
             $labels = [];
             $this->fieldLabels($field, $labels);
-            $this->differences($offer['before'] ?? null, $offer['after'] ?? null, $title, $changes, $labels);
+            $mediaTypes = [];
+            $this->mediaFieldTypes($field, $mediaTypes);
+            $mediaNames = [];
+            $before = $this->qualifyMedia($site, $offer['before'] ?? null, $field['type'] ?? null, $mediaTypes, $mediaNames, $offer['after'] ?? null);
+            $after = $this->qualifyMedia($site, $offer['after'] ?? null, $field['type'] ?? null, $mediaTypes, $mediaNames, $offer['before'] ?? null);
+            $this->differences($before, $after, $title, $changes, $labels);
             if ($changes === []) {
                 $changes[] = $title.': עדכון ערך מוסתר.';
             }
-            $lines = ['עדכון ACF — '.$label, 'אתר: '.$site->domain, ...$changes];
+            $identity = ($args['context'] === 'options' ? 'options:'.$args['options_page'] : $args['context'].':'.$args['id'])
+                .' / '.$args['field_key'];
+            $lines = ['עדכון ACF — '.$label, 'אתר: '.$site->domain, 'מיקום השדה: '.$identity, ...$changes];
             foreach ((array) ($offer['notes'] ?? []) as $note) {
                 if (is_string($note)) {
                     $lines[] = $note;
@@ -299,6 +306,78 @@ class SiteAgentAcfActions
             $value === null => '(אין ערך)', $value === '' => '(ריק)', is_bool($value) => $value ? 'כן' : 'לא',
             is_array($value) => json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), default => (string) $value,
         };
+    }
+
+    /** Only media fields receive media labels: an unrelated number is never an attachment id. */
+    private function mediaFieldTypes(array $field, array &$types, int $depth = 0): void
+    {
+        if ($depth > 16) {
+            return;
+        }
+        if (is_string($field['key'] ?? null) && in_array($field['type'] ?? null, ['image', 'file', 'gallery'], true)) {
+            $types[$field['key']] = $field['type'];
+        }
+        foreach ([...(array) ($field['sub_fields'] ?? []), ...(array) ($field['layouts'] ?? [])] as $child) {
+            if (is_array($child)) {
+                $this->mediaFieldTypes($child, $types, $depth + 1);
+            }
+        }
+    }
+
+    /**
+     * Qualify the redacted display copy, never the sealed mutation. Names come
+     * from this site's exact attachment id; no URL, alt text or metadata enters
+     * the preview. One offer performs at most 30 distinct attachment lookups.
+     */
+    private function qualifyMedia(Site $site, mixed $value, ?string $type, array $types, array &$names, mixed $other, int $depth = 0): mixed
+    {
+        if ($value === $other || $depth > 16 || (is_array($value) && isset($value['redacted']))) {
+            return $value;
+        }
+        if ($type === 'gallery' && in_array($value, [[], null, false, ''], true)) {
+            return '(גלריה ריקה)';
+        }
+        if (is_array($value)) {
+            $out = [];
+            foreach ($value as $key => $item) {
+                $childType = is_int($key) && $type === 'gallery' ? 'image' : ($types[$key] ?? null);
+                $out[$key] = $this->qualifyMedia($site, $item, $childType, $types, $names, is_array($other) ? ($other[$key] ?? null) : null, $depth + 1);
+            }
+
+            return $out;
+        }
+        if (! in_array($type, ['image', 'file'], true)) {
+            return $value;
+        }
+        if (in_array($value, [0, '0', '', null, false], true)) {
+            return $type === 'image' ? '(אין תמונה)' : '(אין קובץ)';
+        }
+        if ((! is_int($value) && ! is_string($value))
+            || ($id = filter_var($value, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]])) === false
+            || ! $this->toolbox->siteHas($site, 'wp_media_get')) {
+            return $value;
+        }
+        if (! array_key_exists($id, $names)) {
+            if (count($names) >= 30) {
+                return $value;
+            }
+            $names[$id] = null;
+            try {
+                $record = $this->call($site, 'wp_media_get', ['id' => $id]);
+                $label = $record['values']['title'] ?? $record['label'] ?? null;
+                if (($record['id'] ?? null) === $id && is_string($label)) {
+                    $label = trim(preg_replace('/[\p{C}\s]+/u', ' ', strip_tags(html_entity_decode($label, ENT_QUOTES | ENT_HTML5, 'UTF-8'))) ?? '');
+                    if ($label !== '') {
+                        $names[$id] = Str::limit($label, 160, '…');
+                    }
+                }
+            } catch (\Throwable) {
+                // A missing title cannot invalidate the native sealed edit;
+                // retain its exact id so the owner still sees what will change.
+            }
+        }
+
+        return $names[$id] !== null ? '״'.$names[$id].'״ (מדיה #'.$id.')' : $value;
     }
 
     private function ok(?array $restore): array

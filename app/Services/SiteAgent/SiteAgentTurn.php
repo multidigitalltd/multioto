@@ -21,6 +21,11 @@ final class SiteAgentTurn
 
     public ?string $reply = null;
 
+    /** One independent review, plus at most one review of a corrected offer. */
+    public int $proposalReviews = 0;
+
+    public ?string $fidelityFailureReply = null;
+
     public function __construct(private CarbonImmutable $startedAt) {}
 
     /** @param list<int|string> $ids */

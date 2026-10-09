@@ -363,6 +363,7 @@ class SiteAgentExtendedActionsTest extends TestCase
         $this->assertArrayHasKey('plan', $offer);
         $this->assertSame(['content' => '<p>Learn more here</p>'], $offer['plan']['expected']);
         $this->assertStringContainsString('More information', $offer['preview']);
+        $this->assertStringContainsString('מזהה הפריט: #7', $offer['preview']);
         $this->assertNotContains('wp_internal_link_update', array_column($this->calls, 0));
     }
 

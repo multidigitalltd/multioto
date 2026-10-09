@@ -60,6 +60,7 @@ class SiteAgentReplyGuardTest extends TestCase
             'execute question' => ['האם לבצע את העדכון'],
             'continue question' => ['האם להמשיך בשינוי?'],
             'continue without punctuation' => ['האם להמשיך בשינוי'],
+            'continue after preparation offer' => ['אשמח לבדוק את רשימת התוספים ולהכין עבורך הצעה. האם תרצי שאמשיך בכך?'],
             'approval plural' => ['מאשרים את השינוי?'],
             'approval feminine' => ['מאשרת?'],
             'execution shortcut' => ['לבצע?'],
@@ -98,6 +99,7 @@ class SiteAgentReplyGuardTest extends TestCase
             'which product to propose' => ['לאיזה מוצר ליצור הצעה?'],
             'target understanding confirmation' => ['האם הכוונה לעמוד הבית? אשמח לאישורך שהבנתי את היעד.'],
             'text clarification' => ['איזה טקסט להחליף ובמה?'],
+            'missing action clarification' => ['איזו פעולה רצית לבצע?'],
             'missing new text' => ['מה לכתוב במקום "איזה כייף"?'],
             'which product to update' => ['איזה מוצר תרצי שאעדכן?'],
             'which field to update' => ['איזה שדה תרצי שאעדכן במוצר?'],
@@ -141,5 +143,36 @@ class SiteAgentReplyGuardTest extends TestCase
     public function test_a_long_non_approval_reply_is_bounded(): void
     {
         $this->assertFalse((new SiteAgentReplyGuard)->asksForApproval(str_repeat('מידע רגיל. ', 20000)));
+    }
+
+    #[DataProvider('supportClaims')]
+    public function test_support_handoffs_need_a_real_capability(string $reply, bool $blocked): void
+    {
+        $this->assertSame($blocked, (new SiteAgentReplyGuard)->offersUnsupportedHandoff($reply));
+    }
+
+    public static function supportClaims(): array
+    {
+        return [
+            ['אני מעביר את הפנייה לצוות התמיכה שלנו בכתובת support@example.test.', true],
+            ['האם תרצי שאפנה לצוות התמיכה?', true],
+            ['אפשר לערוך תוכן, או שתרצי שאפנה את הבקשה לצוות הטכני?', true],
+            ['העברתי את הבקשה לצוות הטכני.', true],
+            ['אני יכולה להעביר את הפנייה לצוות התמיכה.', true],
+            ['הבקשה נשלחה לצוות התמיכה.', true],
+            ['פתחתי עבורך קריאת שירות.', true],
+            ['I have sent your request to support.', true],
+            ['Would you like me to contact support?', true],
+            ['Your request was forwarded to support.', true],
+            ['אפשר לפנות בעצמך לצוות התמיכה בכתובת support@example.test.', false],
+            ['לא העברתי את הבקשה לצוות התמיכה.', false],
+            ['אין לי כלי לשליחת פנייה לתמיכה.', false],
+            ['אני לא שולח פנייה לצוות התמיכה.', false],
+            ['איני מעביר פניות לצוות התמיכה.', false],
+            ['אפנה אותך לצוות התמיכה דרך פרטי הקשר.', false],
+            ['הבקשה לא נשלחה לצוות התמיכה.', false],
+            ['I cannot send a request to support.', false],
+            ['Please contact support directly.', false],
+        ];
     }
 }

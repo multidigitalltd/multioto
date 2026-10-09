@@ -14,6 +14,7 @@ use App\Services\Agent\McpClient;
 use App\Services\Ai\GeminiContextCache;
 use App\Services\SiteAgent\SiteActionProposer;
 use App\Services\SiteAgent\SiteAgentConversation;
+use App\Services\SiteAgent\SiteAgentProposalFidelity;
 use App\Services\SiteAgent\WhatsAppCloudClient;
 use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Exception\RequestException;
@@ -92,6 +93,7 @@ final class EvaluationRunner
                     'provider_requests' => 0, 'provider_responses' => 0,
                     'reason' => $missingTools !== [] ? 'fixture_missing_tools' : (! $live ? 'preflight_only' : ($networkError !== null ? 'provider_not_allowed' : 'missing_ai_configuration')),
                     'failures' => $missingTools, 'turns' => [], 'expect' => $case['expect'],
+                    'reply_evidence' => $this->oracle->replyEvidence($case, []),
                 ];
             } else {
                 $result = $this->scenario($case, $progress);
@@ -150,6 +152,9 @@ final class EvaluationRunner
         $this->providerDiagnostics = [];
         $this->cacheDiagnostics = [];
         $this->pendingCacheRetries = [];
+        $originalFidelity = null;
+        $fidelityAbstract = null;
+        $restoreSharedFidelity = false;
         DB::beginTransaction();
         try {
             $customer = Customer::create(['name' => 'לקוח בדיקה מדומה', 'business_number' => '500000001',
@@ -166,6 +171,12 @@ final class EvaluationRunner
             app()->instance(McpClient::class, new EvaluationMcpClient($this->world, $site->id));
             $proposer = app(EvaluationSiteActionProposer::class);
             app()->instance(SiteActionProposer::class, $proposer);
+            // Resolve before decorating, preserving custom bindings and test doubles.
+            $fidelityAbstract = app()->getAlias(SiteAgentProposalFidelity::class);
+            $restoreSharedFidelity = app()->isShared($fidelityAbstract);
+            $originalFidelity = app($fidelityAbstract);
+            $fidelity = new EvaluationSiteAgentProposalFidelity($originalFidelity);
+            app()->instance($fidelityAbstract, $fidelity);
             $conversation = app(SiteAgentConversation::class);
             foreach ($case['turns'] as $index => $turn) {
                 $before = $this->requests();
@@ -178,11 +189,13 @@ final class EvaluationRunner
                     && in_array($word, ['בטל', 'תבטל', 'תחזיר', 'החזר', 'שחזר', 'undo'], true);
                 $callOffset = count($this->world->calls);
                 $proposalOffset = count($proposer->diagnostics());
+                $fidelityOffset = count($fidelity->diagnostics());
                 $reply = $conversation->handle($subscriber, $turn['user'], $case['id'].'-'.$index, $media ? 'fixture-image' : null);
                 $turns[] = [
                     'user' => $turn['user'], 'media' => $media, 'reply' => $reply,
                     'calls' => array_slice($this->world->calls, $callOffset),
                     'proposal_diagnostics' => array_slice($proposer->diagnostics(), $proposalOffset),
+                    'proposal_fidelity_diagnostics' => array_slice($fidelity->diagnostics(), $fidelityOffset),
                     'before_request' => $pending, 'requests' => $this->requests(),
                     'approved' => $approved, 'undo' => $undo,
                 ];
@@ -196,6 +209,13 @@ final class EvaluationRunner
             $failures = ['runner_exception:'.$exception];
             $usage = [];
         } finally {
+            if ($originalFidelity !== null) {
+                if ($restoreSharedFidelity) {
+                    app()->instance($fidelityAbstract, $originalFidelity);
+                } else {
+                    app()->forgetInstance($fidelityAbstract);
+                }
+            }
             DB::rollBack();
         }
         $requests = $this->providerRequests - $requestsBefore;
@@ -225,6 +245,7 @@ final class EvaluationRunner
             'status' => (! $modelExecuted && ! $deterministic) || $providerFailed ? 'blocked' : ($failures === [] ? 'passed' : 'failed'),
             'model_executed' => $modelExecuted, 'execution' => $modelExecuted ? 'model' : ($deterministic ? 'deterministic' : 'not_executed'),
             'failures' => $failures, 'semantic_review' => 'not_performed',
+            'reply_evidence' => $this->oracle->replyEvidence($case, $turns),
             'turns' => $turns, 'expect' => $case['expect'], 'final' => $this->world->state,
             'provider_requests' => $requests, 'provider_responses' => $responses,
             'cache_management_requests' => $this->cacheManagementRequests - $managementRequestsBefore,

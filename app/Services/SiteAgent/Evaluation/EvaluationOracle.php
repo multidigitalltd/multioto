@@ -148,7 +148,16 @@ class EvaluationOracle
             }
         }
         $alternatives = $this->strings($expect['reply_any'] ?? []);
-        if ($alternatives !== [] && ! collect($alternatives)->contains(fn (string $text): bool => $this->containsEvidence($reply, $text))) {
+        $replyEvidence = $this->replyEvidence($case, $turns);
+        if ($replyEvidence['status'] !== 'not_configured' && $deliveredOffers !== []) {
+            $failures[] = 'A non-writing reply contract delivered an actionable offer.';
+        }
+        foreach ($replyEvidence['turns'] as $assessment) {
+            if ($assessment['status'] !== 'matched') {
+                $failures[] = 'Turn '.$assessment['turn'].': reply contract '.$assessment['status'].': '.$assessment['reason'].'.';
+            }
+        }
+        if ($replyEvidence['status'] === 'not_configured' && $alternatives !== [] && ! collect($alternatives)->contains(fn (string $text): bool => $this->containsEvidence($reply, $text))) {
             $failures[] = 'Reply contains none of the alternative required evidence.';
         }
         foreach ($this->strings($expect['reply_excludes'] ?? []) as $text) {
@@ -156,7 +165,7 @@ class EvaluationOracle
                 $failures[] = 'Reply contains forbidden evidence: '.$text;
             }
         }
-        if ((in_array($outcome, ['read', 'refused', 'clarification'], true) || $cancelWithoutOffer) && $positive === [] && $alternatives === []) {
+        if ((in_array($outcome, ['read', 'refused', 'clarification'], true) || $cancelWithoutOffer) && $positive === [] && $alternatives === [] && $replyEvidence['status'] === 'not_configured') {
             $failures[] = 'Insufficient oracle: this outcome requires positive reply evidence.';
         }
         if ($outcome === 'read' && (array) ($expect['tools_all'] ?? []) === [] && $anyTools === []) {
@@ -226,6 +235,12 @@ class EvaluationOracle
         }
 
         return array_values(array_unique($failures));
+    }
+
+    /** No model is called; an inconclusive lexical contract remains a failure. */
+    public function replyEvidence(array $case, array $turns): array
+    {
+        return (new EvaluationReplyEvidence)->assess($case, $turns);
     }
 
     /** Numeric facts must not pass because an unrelated ID contains their digits. */

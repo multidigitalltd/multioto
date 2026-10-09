@@ -19,11 +19,13 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 use Mockery;
 use PHPUnit\Framework\Attributes\DataProvider;
+use Tests\Concerns\FakesSiteAgentProposalFidelity;
 use Tests\TestCase;
 
 /** Real conversation state transitions; only model/site/transport boundaries are faked. */
 class SiteAgentImageDialogueTest extends TestCase
 {
+    use FakesSiteAgentProposalFidelity;
     use RefreshDatabase;
 
     private array $answers = [];
@@ -47,6 +49,7 @@ class SiteAgentImageDialogueTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        $this->fakeProposalFidelity();
         Cache::flush();
         Storage::fake('local');
         Http::preventStrayRequests();

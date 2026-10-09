@@ -17,10 +17,12 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Mockery;
+use Tests\Concerns\FakesSiteAgentProposalFidelity;
 use Tests\TestCase;
 
 class SiteAgentContentEvaluationRegressionTest extends TestCase
 {
+    use FakesSiteAgentProposalFidelity;
     use RefreshDatabase;
 
     private EvaluationWorld $world;
@@ -30,6 +32,7 @@ class SiteAgentContentEvaluationRegressionTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        $this->fakeProposalFidelity();
         Cache::flush();
         Http::preventStrayRequests();
         config(['siteagent.assistant.enabled' => false]);

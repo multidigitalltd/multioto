@@ -18,6 +18,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Livewire\Livewire;
 use Mockery;
+use Tests\Concerns\FakesSiteAgentProposalFidelity;
 use Tests\TestCase;
 
 /**
@@ -26,6 +27,7 @@ use Tests\TestCase;
  */
 class SiteAgentPermissionsTest extends TestCase
 {
+    use FakesSiteAgentProposalFidelity;
     use RefreshDatabase;
 
     private array $calls = [];
@@ -37,6 +39,7 @@ class SiteAgentPermissionsTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        $this->fakeProposalFidelity();
 
         config(['siteagent.enabled' => true, 'siteagent.assistant.enabled' => true, 'siteagent.undo_minutes' => 1440]);
         Cache::flush();

@@ -19,11 +19,13 @@ use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use PHPUnit\Framework\Attributes\DataProvider;
+use Tests\Concerns\FakesSiteAgentProposalFidelity;
 use Tests\TestCase;
 
 /** Production conversation and transports; only the remote HTTP boundaries are faked. */
 class SiteAgentPhantomApprovalTest extends TestCase
 {
+    use FakesSiteAgentProposalFidelity;
     use RefreshDatabase;
 
     private const PHANTOM = 'בוקר טוב ריקי, אני מכין את השינוי בדף הבית (עמוד "login"): להחליף את: "איזה כייף שבאת" ב: "כמה נחמד שבאת" לביצוע השיבו "כן". לביטול — "לא".';
@@ -45,6 +47,7 @@ class SiteAgentPhantomApprovalTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        $this->fakeProposalFidelity();
         config([
             'billing.ai.enabled' => true, 'billing.ai.api_key' => 'test-key',
             'billing.ai.provider' => 'google', 'billing.ai.model' => 'gemini-3.1-flash-lite',

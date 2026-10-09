@@ -60,6 +60,9 @@ class ProductChangePlanner
 
         if ($intent['can_do'] !== true) {
             $question = is_string($intent['question'] ?? null) ? trim($intent['question']) : '';
+            if (app(SiteAgentReplyGuard::class)->offersUnsupportedHandoff($question)) {
+                return ['refusal' => app(SiteAgentCapabilityReply::class)->reply('support_handoff')];
+            }
             if (app(SiteAgentReplyGuard::class)->asksForApproval($question)) {
                 return ['refusal' => SiteAgentAssistant::NO_VERIFIED_PROPOSAL];
             }

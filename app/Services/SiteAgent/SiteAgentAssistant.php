@@ -90,6 +90,7 @@ class SiteAgentAssistant
         $replyGuard = app(SiteAgentReplyGuard::class);
         $repairUsed = false;
         $unbackedApproval = false;
+        $unbackedHandoff = false;
         $permissions = app(SiteAgentPermissions::class);
         $tools = array_values(array_filter([
             ...$this->toolbox->definitions($site),
@@ -97,6 +98,7 @@ class SiteAgentAssistant
             $this->editPagesTool(),
             $this->myAccountTool(),
             $this->messageCapTool(),
+            app(SiteAgentCapabilityReply::class)->definition(),
             ...$this->reports->definitions(),
         ], fn (array $tool): bool => $permissions->allowsTool($tool['name'])
             && ($pendingOffer === null || $this->toolbox->isRead($tool['name']))));
@@ -117,26 +119,38 @@ class SiteAgentAssistant
             },
             min(10, max(2, (int) config('siteagent.assistant.max_turns', 6))),
             cacheScope: 'site-agent:customer:'.$subscriber->customer_id.':site:'.$site->id,
-            reviewReply: function (string $reply) use ($turn, $replyGuard, $pendingOffer, &$repairUsed, &$unbackedApproval): ?string {
-                if ($turn->settled() || ! $replyGuard->asksForApproval($reply)) {
+            reviewReply: function (string $reply) use ($turn, $replyGuard, $pendingOffer, &$repairUsed, &$unbackedApproval, &$unbackedHandoff): ?string {
+                if ($turn->settled()) {
                     return null;
                 }
 
-                $unbackedApproval = true;
+                $approval = $replyGuard->asksForApproval($reply);
+                $handoff = $replyGuard->offersUnsupportedHandoff($reply);
+                if (! $approval && ! $handoff) {
+                    return null;
+                }
+                $unbackedApproval = $unbackedApproval || $approval;
+                $unbackedHandoff = $unbackedHandoff || $handoff;
                 if ($repairUsed || $turn->elapsed() > min(240, max(30, (int) config('siteagent.assistant.budget_seconds', 240)))) {
                     return '';
                 }
 
                 $repairUsed = true;
                 if ($pendingOffer !== null) {
-                    return 'ענה רק על שאלת ההסבר, בלי לבקש אישור ובלי לשנות או ליצור הצעה. ההצעה המקורית נשמרה והמערכת תצרף אותה אחרי תשובתך. מותר להשתמש רק בכלי הקריאה הזמינים.';
+                    return 'ענה רק על שאלת ההסבר, בלי לבקש אישור ובלי לשנות או ליצור הצעה. ההצעה המקורית נשמרה והמערכת תצרף אותה אחרי תשובתך. מותר להשתמש רק בכלי הקריאה הזמינים. אין כלי לשליחת פנייה לתמיכה; אין להציע או לטעון שהעברת את הפנייה. אפשר למסור פרטי קשר כדי שהבעלים יפנה בעצמו.';
+                }
+                if ($handoff) {
+                    return 'בדיקת המערכת: אין כלי לשליחת פנייה לצוות או פתיחת קריאה לתמיכה, ולכן ההבטחה או טענת ההעברה לא נשלחה לבעל האתר. '
+                        .'אם הבקשה אינה נתמכת, קרא explain_capability_limit עם reason שמתאר את הבקשה המקורית, כגון elementor_link או seo_canonical; הכלי מסביר את המגבלה ומוסר פרטי קשר בלבד. '
+                        .'אם נשאלה רק שאלה על פנייה לתמיכה השתמש ב-support_handoff. אין להציע העברה, להבטיח טיפול או להחליף פעולה לא נתמכת במסלול ACF או פעולה אחרת.';
                 }
 
                 // The provider continues its existing loop: same tool results,
                 // permission checks and one bounded repair allowance.
                 return 'בדיקת המערכת: התשובה האחרונה ביקשה אישור, אבל לא נוצרה במערכת הצעה לביצוע ולכן היא לא נשלחה לבעל האתר. '
                     .'אין להסיק מהנוסח שכתבת שהנתונים נבדקו או שנשמרה פעולה. חזור לבקשת בעל האתר ולהקשר השיחה: '
-                    .'קרא עכשיו לכלי ההצעה שמתאים לפעולה שבעל האתר ביקש. לעריכת טקסט שקראת השתמש ב-propose_text_edit עם מזהה, הציטוט והתחליף המדויקים; אם חסרים פרטים אפשר להיעזר ב-edit_page_text. '
+                    .'בחר את המסלול שמתאים לבקשה המקורית: פעולה נתמכת ושלמה — קרא לכלי ההצעה; שאלה לקריאה — קרא וענה בלי לבקש רשות לקרוא; פרט חסר — שאל רק עליו; פעולה שאינה נתמכת — קרא explain_capability_limit עם reason מתאים, בלי להציע חלופה שנשללה. '
+                    .'לעריכת טקסט שקראת השתמש ב-propose_text_edit עם מזהה, הציטוט והתחליף המדויקים; אם חסרים פרטים אפשר להיעזר ב-edit_page_text. '
                     .'ACF, SEO, קישורים פנימיים, מוצרים ומדיה דורשים את הכלים הייעודיים שלהם; אין להמיר אותם לעריכת טקסט. אל תבקש רשות להכין הצעה: ההכנה כבר התבקשה. רק כלי ששומר הצעה רשאי לבקש אישור. '
                     .'אם אי אפשר להכין הצעה, הסבר את המגבלה או שאל את הפרט החסר בלי להציג שינוי כמוכן לביצוע.';
             },
@@ -155,6 +169,13 @@ class SiteAgentAssistant
         }
 
         $answer = trim((string) $answer);
+        if ($answer === '' && $turn->fidelityFailureReply !== null) {
+            return $turn->fidelityFailureReply;
+        }
+
+        if ($replyGuard->offersUnsupportedHandoff($answer) || ($answer === '' && $unbackedHandoff)) {
+            return app(SiteAgentCapabilityReply::class)->reply('support_handoff');
+        }
 
         // Defence at the user-facing boundary as well as inside the provider
         // loop. A plain model sentence is never an approval record.
@@ -211,6 +232,16 @@ class SiteAgentAssistant
 
         if ($turn->elapsed() > min(240, max(30, (int) config('siteagent.assistant.budget_seconds', 240)))) {
             return ['content' => 'נגמר הזמן לסבב הזה. ענה עכשיו לבעל האתר במה שכבר ידוע, ואם חסר משהו — אמור מה.', 'is_error' => true];
+        }
+
+        if ($name === SiteAgentCapabilityReply::TOOL) {
+            $reply = app(SiteAgentCapabilityReply::class)->reply($input['reason'] ?? null);
+            if ($reply === null) {
+                return ['content' => 'יש לבחור reason מתוך רשימת מגבלות היכולת. פרט חסר בפעולה נתמכת דורש שאלת הבהרה, לא סירוב.', 'is_error' => true];
+            }
+            $turn->reply = $reply;
+
+            return ['content' => 'הסבר מגבלת היכולת נשלח כלשונו. לא נעשתה פעולה באתר ולא נשלחה פנייה לתמיכה.'];
         }
 
         if ($this->toolbox->isRead($name)) {
@@ -430,6 +461,25 @@ class SiteAgentAssistant
             return ['content' => $offer['error'], 'is_error' => true];
         }
 
+        // Existence and editability do not establish what the owner asked for.
+        // Check the server-built preview against the real message before an
+        // approvable row (including its portal link) can exist.
+        $review = app(SiteAgentProposalFidelity::class)->review($subscriber, $text, $offer['plan']['operation'], $offer['preview']);
+        $turn->proposalReviews++;
+        if ($review['verdict'] !== 'allow') {
+            $turn->fidelityFailureReply = $review['reply'];
+            if ($review['verdict'] === 'revise' && $turn->proposalReviews === 1) {
+                return ['content' => 'ההצעה לא נשמרה: בדיקת ההתאמה לבקשת הבעלים דחתה אותה ('.$review['reason'].'). '
+                    .$review['feedback'].' מותר ניסיון תיקון אחד לפי הבקשה המקורית בלבד, באמצעות כלי ההצעה המתאים. '
+                    .'אם חסר פרט שאל עליו; אם הפעולה אינה נתמכת השתמש ב-explain_capability_limit. אין להציג את ההצעה שנדחתה לאישור.',
+                    'is_error' => true];
+            }
+
+            $turn->reply = $review['reply'];
+
+            return ['content' => 'לא נשמרה הצעה לאישור. המערכת מציגה לבעל האתר הבהרה על תוצאת הבדיקה. סיים עכשיו.', 'is_error' => true];
+        }
+
         $turn->request = SiteAgentRequest::create([
             'site_agent_subscriber_id' => $subscriber->id,
             'site_id' => $site->id,
@@ -516,6 +566,7 @@ class SiteAgentAssistant
                 ? '1א. לשאלה כמה מוצרים יש באתר קרא get_product_counts בסבב הנוכחי. הכלי מחזיר את כל מוצרי האתר עם פירוט סטטוסים ווריאציות בנפרד. מספר תוצאות find_products או total של חיפוש מסונן אינו מספר המוצרים באתר; מוצר שנוצר בשיחה אינו ראיה שאין מוצרים נוספים. אין להסיק מהזיכרון מספרים או לטעון שהאחרים טיוטות בלי פירוט שהאתר החזיר. לשאלת ספירה בלבד purpose=answer מציג תשובה מאומתת ומסיים את הסבב. אם הספירה היא רק רקע לבקשה אחרת או לבירור, בחר purpose=context והמשך לטפל בכוונה המקורית; ספירה אינה תשובה לבקשה לשנות או להסיר מוצרים.'
                 : '1א. באתר הזה אין כרגע כלי מאומת לספירת כל המוצרים. אם נשאלת על מספר המוצרים, הסבר שנדרש עדכון תוסף הסוכן וסריקת יכולות. אין לנחש מהיסטוריית השיחה, ממוצר שנוצר לאחרונה או ממספר התוצאות בעמוד חיפוש; אין לטעון שהמוצרים האחרים טיוטות בלי מידע שהאתר החזיר.',
             '2. שינוי באתר נעשה אך ורק דרך כלי propose_* או edit_page_text. הצעה אחת בכל הודעה; אחרי שהגשת אותה — סיים. לעולם אל תכתוב שההצעה החדשה בוצעה, עודכנה או נשלחה: שינוי קורה רק אחרי שבעל האתר עונה "כן" על התצוגה המקדימה, וזה מטופל מחוץ לשיחה איתך. על פעולה קודמת מותר לומר שבוצעה רק אם מצב הפעולה שסופק הוא applied; reverted פירושו שהוחזרה. זה תיעוד העבר, לא אישור למצב האתר כיום.',
+            '2ד. לפעולה שאינה נתמכת יש מסלול סיום explain_capability_limit: בחר reason שמתאר את הבקשה המקורית והמערכת תסביר את המגבלה בלי לשנות דבר. אין להציע מסלול עקיפה, חלופה שהבעלים שלל או פנייה לתמיכה בשם הבעלים. אין כלי לשליחת פניות או פתיחת קריאות שירות; אפשר למסור פרטי קשר כדי שהבעלים יפנה בעצמו.',
             '2א. כשהבעלים כבר ביקש שינוי ויש די פרטים, הכן מיד הצעה דרך הכלי. אין שלב נוסף של האם תרצה שאגיש הצעה, האם להכין, האם ליצור או האם לאשר: האישור היחיד הוא על התצוגה המאומתת ששומר הכלי. אל תמציא העברה לעורך או לצוות; קריאה ל-edit_page_text מחזירה תשובה באותו סבב. אם חסרים פרטים שאל רק עליהם, ולא אם הבעלים מעוניין בפעולה שכבר ביקש.',
             '2ב. אל תמציא תנאים או בחירות מעבר לבקשת הבעלים. שדה אופציונלי כמו תאריך תפוגה למבצע, עדכון לתבנית מותקנת או הודעה ללקוח אינו סיבה לעצור בקשה שלמה. אם נאמר לא לבחור בעצמך, לא להמציא ערך מדויק, לא לבחור פריט, או שפעולה חלופית אינה רצויה — שאל על החסר או הסבר שהפעולה אינה נתמכת; אל תבחר חלופה בשמו. לבקשת ערך אחד שלח רק את השדה שנבחר, ואל תמלא שדות סמוכים ב-null; null פירושו מחיקה מכוונת ולא ערך חסר.',
             '2ג. נוסח שהבעלים מסר להחלפה, כותרת, תיאור או פסקה מועתק בדיוק, כולל הפיסוק ובפרט בתוך מירכאות. אל תוסיף נקודה, אל תשפר ניסוח ואל תצרף מחדש את שאר העמוד ל-text. ב-replace רק find מוחלף ב-text; שאר התוכן נשמר במערכת. אל תטען שבדקת או סרקת נתון אם לא קראת אותו בפועל בכלי בסבב הנוכחי.',
@@ -524,7 +575,7 @@ class SiteAgentAssistant
             '4א. לעריכת טקסט: מצא את הפריט וקרא get_content. אם built_with_elementor=true קרא get_page_texts. כאשר ידועים המזהה, הציטוט והתחליף המדויקים, קרא מיד propose_text_edit (גם באלמנטור), בלי לפרש את הבקשה שוב בעורך אחר. בקשת עריכה עמומה מועברת מיד ל-edit_page_text עם כל ההקשר; העורך שואל על החסר ושומר את ההקשר. שמור את דף הבית כיעד גם אם שם העמוד login. אין לנסח הצעה או בקשת אישור בעצמך.',
             '4ב. לעריכת תוכן בטיוטה, פוסט פרטי, ממתין לאישור או מתוזמן: מצא את הפריט במפורש ב-find_content עם status מתאים או קרא get_content לפי המזהה שנמסר, ואז propose_text_edit. אין לפרסם טיוטה כדי לערוך את הטקסט שלה. ההצעה שומרת את מצב הפרסום הקיים. עורך העמודים edit_page_text מיועד לגילוי עמודים מפורסמים; אל תשלח אליו בקשה מפורשת לעריכת טיוטה.',
             '5. אי אפשר מכאן: החזר כספי, מחיקה סופית של תוכן או קובצי מדיה, מחיקה של הזמנות או משתמשים, מחיקה סופית של מוצרים'.$this->productAbilities($names).', הרשאת מנהל אתר, עדכון וורדפרס עצמו, התקנה או עדכון של תוספים ותבניות ללא מסלול שחזור מאומת, הסרת פריט תפריט, ביטול מנוי סופי, הערה הנשלחת באימייל ללקוח, כלי אבטחה או עריכת קוד. תוכן ניתן להעביר לפח עם שחזור; ניתן להחליף תבנית מותקנת רק אם קיים הכלי. אמור זאת בנימוס'
-                .($support !== '' ? " והפנה לצוות ({$support})." : ' והפנה לצוות Multi Digital.'),
+                .($support !== '' ? " ומסור שהבעלים יכול לפנות בעצמו לצוות ({$support})." : ' ומסור שהבעלים יכול לפנות בעצמו לצוות Multi Digital.'),
             ($off = app(SiteAgentPermissions::class)->disabledLabels()) !== []
                 ? '5א. הצוות כיבה בחשבון הזה: '.implode('; ', $off).'. בקשה כזו — אמור בנימוס שהיא כבויה בחשבון והפנה לצוות; אל תציע דרך עוקפת.'
                 : null,

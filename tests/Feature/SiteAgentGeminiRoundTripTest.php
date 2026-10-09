@@ -16,12 +16,20 @@ use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use PHPUnit\Framework\Attributes\DataProvider;
+use Tests\Concerns\FakesSiteAgentProposalFidelity;
 use Tests\TestCase;
 
 /** Real conversation, AI transport, MCP client and approval; only HTTP is faked. */
 class SiteAgentGeminiRoundTripTest extends TestCase
 {
+    use FakesSiteAgentProposalFidelity;
     use RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        $this->fakeProposalFidelity();
+    }
 
     #[DataProvider('approvalStates')]
     public function test_free_form_text_reaches_gemini_and_site_writes_wait_for_approval(bool $changedSincePreview, bool $cached): void

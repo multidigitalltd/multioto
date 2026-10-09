@@ -17,15 +17,18 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Mockery;
 use PHPUnit\Framework\Attributes\DataProvider;
+use Tests\Concerns\FakesSiteAgentProposalFidelity;
 use Tests\TestCase;
 
 class SiteAgentProductCountsTest extends TestCase
 {
+    use FakesSiteAgentProposalFidelity;
     use RefreshDatabase;
 
     protected function setUp(): void
     {
         parent::setUp();
+        $this->fakeProposalFidelity();
         config([
             'billing.ai.enabled' => true, 'billing.ai.api_key' => 'test-key',
             'billing.ai.provider' => 'google', 'billing.ai.model' => 'gemini-3.1-flash-lite',

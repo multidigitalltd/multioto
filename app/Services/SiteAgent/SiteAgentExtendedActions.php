@@ -160,6 +160,9 @@ class SiteAgentExtendedActions
 
             $label = (string) ($record['label'] ?? $site->domain);
             $lines = [$spec['title'].' — '.$label, 'אתר: '.$site->domain];
+            if (! $cct && isset($args['id'])) {
+                $lines[] = 'מזהה הפריט: #'.$args['id'];
+            }
             if ($cct) {
                 $lines[] = 'סוג: '.$args['type'].(isset($args['id']) ? ' · רשומה #'.$args['id'] : ' · רשומה חדשה');
             }

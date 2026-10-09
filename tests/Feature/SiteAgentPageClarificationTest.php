@@ -16,10 +16,12 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Mockery;
+use Tests\Concerns\FakesSiteAgentProposalFidelity;
 use Tests\TestCase;
 
 class SiteAgentPageClarificationTest extends TestCase
 {
+    use FakesSiteAgentProposalFidelity;
     use RefreshDatabase;
 
     private const QUESTION = 'איזה טקסט בדף הבית תרצו להחליף, ומה לכתוב במקומו?';
@@ -29,6 +31,7 @@ class SiteAgentPageClarificationTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        $this->fakeProposalFidelity();
         config(['siteagent.assistant.enabled' => false, 'siteagent.confirmation_minutes' => 30]);
         Cache::flush();
         Http::preventStrayRequests();

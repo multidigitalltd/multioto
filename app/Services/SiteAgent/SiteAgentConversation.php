@@ -50,6 +50,7 @@ class SiteAgentConversation
         private WhatsAppCloudClient $whatsapp,
         private SiteAgentAssistant $assistant,
         private SiteActionProposer $proposer,
+        private SiteAgentProposalFidelity $fidelity,
     ) {}
 
     /**
@@ -276,7 +277,7 @@ class SiteAgentConversation
                         ."\nפירוט שהוכן לעורך; יעד הבקשה המקורית נשאר מחייב:\n".$instruction;
                 }
 
-                return $this->propose($subscriber, $instruction, $messageId, tryShop: false);
+                return $this->propose($subscriber, $instruction, $messageId, tryShop: false, ownerText: $text);
             },
             pendingOffer: $pendingOffer,
         ) ?? ProductChangePlanner::AI_UNAVAILABLE;
@@ -289,8 +290,9 @@ class SiteAgentConversation
      * and after, so "כן" is consent to something specific rather than to the
      * agent's good intentions.
      */
-    private function propose(SiteAgentSubscriber $subscriber, string $text, ?string $messageId, bool $tryShop = true): string
+    private function propose(SiteAgentSubscriber $subscriber, string $text, ?string $messageId, bool $tryShop = true, ?string $ownerText = null): string
     {
+        $ownerText ??= $text;
         $site = $subscriber->site;
 
         if ($site === null) {
@@ -311,7 +313,7 @@ class SiteAgentConversation
             // the price they wanted was in the message before it — planning
             // that name on its own would look for an instruction that is not
             // in it and come back with nothing.
-            $this->holdQuestion($subscriber, $site, $text, $messageId, [
+            $this->holdQuestion($subscriber, $site, $ownerText, $messageId, [
                 'kind' => 'product',
                 'question' => $plan['question'],
             ]);
@@ -322,7 +324,7 @@ class SiteAgentConversation
         $plan ??= $this->planner->plan($site, $text);
 
         if (is_array($plan) && isset($plan['question'])) {
-            $this->holdQuestion($subscriber, $site, $text, $messageId, [
+            $this->holdQuestion($subscriber, $site, $ownerText, $messageId, [
                 'kind' => 'page',
                 'question' => $plan['question'],
             ]);
@@ -350,17 +352,22 @@ class SiteAgentConversation
             return SiteAgentPermissions::refusal();
         }
 
+        $preview = $this->preview($plan);
+        if (($rejection = $this->reviewOffer($subscriber, $ownerText, $plan['operation'], $preview)) !== null) {
+            return $rejection;
+        }
+
         $minutes = max(1, (int) config('siteagent.confirmation_minutes', 30));
 
         $request = SiteAgentRequest::create([
             'site_agent_subscriber_id' => $subscriber->id,
             'site_id' => $site->id,
             'customer_id' => $subscriber->customer_id,
-            'message' => Str::limit($text, 2000),
+            'message' => Str::limit($ownerText, 2000),
             'inbound_message_id' => $messageId,
             'operation' => $plan['operation'],
             'plan' => $plan,
-            'preview' => $this->preview($plan),
+            'preview' => $preview,
             'state' => SiteAgentRequest::AWAITING,
             'expires_at' => now()->addMinutes($minutes),
         ]);
@@ -415,6 +422,16 @@ class SiteAgentConversation
             return SiteAgentPermissions::refusal();
         }
 
+        $preview = $offer['preview'] ?? (isset($plan['question']) ? null : $this->preview($plan));
+        if ($preview !== null && ($rejection = $this->reviewOffer($subscriber, $caption !== '' ? $caption : '[תמונה]', $operation, $preview)) !== null) {
+            // Keep the downloaded photograph, but no target or action selected
+            // by the rejected interpretation may become approvable later.
+            $plan = ['question' => $rejection, 'image_draft' => []];
+            $offer = null;
+            $operation = SiteAgentRequest::OP_IMAGE;
+            $preview = null;
+        }
+
         $minutes = max(1, (int) config('siteagent.confirmation_minutes', 30));
 
         // Held on a private disk, not in the database row: an eight-megabyte
@@ -432,12 +449,14 @@ class SiteAgentConversation
             'inbound_message_id' => $messageId,
             'operation' => $operation,
             'plan' => $offer !== null
-                ? [...$offer['plan'], 'image_path' => $path, 'extension' => $media['extension'], 'caption' => $caption]
+                ? [...$offer['plan'], 'image_path' => $path, 'extension' => $media['extension'], 'caption' => $caption,
+                    ...$this->appendOwnerMessage(['owner_messages' => []], $caption !== '' ? $caption : '[תמונה]')]
                 : [
                     ...$plan,
                     'image_path' => $path,
                     'extension' => $media['extension'],
                     'caption' => $caption,
+                    ...$this->appendOwnerMessage(['owner_messages' => []], $caption !== '' ? $caption : '[תמונה]'),
                     // What is on the target now, so the execution can tell whether
                     // somebody put a different picture there in the meantime.
                     'thumbnail_id' => isset($plan['target_id'])
@@ -447,7 +466,7 @@ class SiteAgentConversation
             // A question is not an offer, so there is nothing to preview and
             // nothing a "כן" could confirm — the row exists to hold the picture
             // and the caption while we wait for the missing half.
-            'preview' => $offer['preview'] ?? (isset($plan['question']) ? null : $this->preview($plan)),
+            'preview' => $preview,
             'state' => SiteAgentRequest::AWAITING,
             'expires_at' => now()->addMinutes($minutes),
         ]);
@@ -477,7 +496,7 @@ class SiteAgentConversation
             'customer_id' => $subscriber->customer_id,
             'message' => Str::limit($text, 2000),
             'inbound_message_id' => $messageId,
-            'plan' => [...$plan, 'text' => $text],
+            'plan' => [...$plan, 'text' => $text, ...$this->appendOwnerMessage(['owner_messages' => []], $text)],
             'state' => SiteAgentRequest::AWAITING,
             'expires_at' => now()->addMinutes(max(1, (int) config('siteagent.confirmation_minutes', 30))),
         ]);
@@ -522,7 +541,7 @@ class SiteAgentConversation
 
         if (isset($plan['refusal'])) {
             // A temporary service/read failure must not discard their context.
-            $request->update(['plan' => [...$request->plan, 'text' => $combined]]);
+            $request->update(['plan' => [...$request->plan, 'text' => $combined, ...$this->appendOwnerMessage($request->plan, $answer)]]);
 
             return $plan['refusal'];
         }
@@ -538,7 +557,7 @@ class SiteAgentConversation
         if (isset($plan['question'])) {
             $question = $plan['question'];
             $request->update([
-                'plan' => ['kind' => 'page', 'question' => $question, 'text' => Str::limit($combined, 6000)],
+                'plan' => ['kind' => 'page', 'question' => $question, 'text' => Str::limit($combined, 6000), ...$this->appendOwnerMessage($request->plan, $answer)],
                 'message' => Str::limit($combined, 2000),
                 'expires_at' => now()->addMinutes(max(1, (int) config('siteagent.confirmation_minutes', 30))),
             ]);
@@ -550,10 +569,17 @@ class SiteAgentConversation
             return SiteAgentPermissions::refusal();
         }
 
+        $preview = $this->preview($plan);
+        if (($rejection = $this->reviewOffer($subscriber, $answer, $plan['operation'], $preview, $this->ownerMessages($request->plan))) !== null) {
+            $this->retainQuestion($request, 'page', $combined, $rejection, $answer);
+
+            return $rejection;
+        }
+
         $request->update([
             'operation' => $plan['operation'],
             'plan' => $plan,
-            'preview' => $this->preview($plan),
+            'preview' => $preview,
             'message' => Str::limit($combined, 2000),
             'expires_at' => now()->addMinutes(max(1, (int) config('siteagent.confirmation_minutes', 30))),
         ]);
@@ -588,14 +614,14 @@ class SiteAgentConversation
         $plan = $this->products->plan($site, $context, latestAnswer: $answer);
 
         if (isset($plan['refusal'])) {
-            $request->update(['plan' => [...$request->plan, 'text' => Str::limit($combined, 6000)]]);
+            $request->update(['plan' => [...$request->plan, 'text' => Str::limit($combined, 6000), ...$this->appendOwnerMessage($request->plan, $answer)]]);
 
             return $plan['refusal'];
         }
 
         if (is_array($plan) && isset($plan['question'])) {
             $request->update([
-                'plan' => ['kind' => 'product', 'question' => $plan['question'], 'text' => Str::limit($combined, 6000)],
+                'plan' => ['kind' => 'product', 'question' => $plan['question'], 'text' => Str::limit($combined, 6000), ...$this->appendOwnerMessage($request->plan, $answer)],
                 'message' => Str::limit($combined, 2000),
                 'expires_at' => now()->addMinutes(max(1, (int) config('siteagent.confirmation_minutes', 30))),
             ]);
@@ -615,10 +641,17 @@ class SiteAgentConversation
             return SiteAgentPermissions::refusal();
         }
 
+        $preview = $this->preview($plan);
+        if (($rejection = $this->reviewOffer($subscriber, $answer, $plan['operation'], $preview, $this->ownerMessages($request->plan))) !== null) {
+            $this->retainQuestion($request, 'product', $combined, $rejection, $answer);
+
+            return $rejection;
+        }
+
         $request->update([
             'operation' => $plan['operation'],
             'plan' => $plan,
-            'preview' => $this->preview($plan),
+            'preview' => $preview,
             'message' => Str::limit($combined, 2000),
             'expires_at' => now()->addMinutes(max(1, (int) config('siteagent.confirmation_minutes', 30))),
         ]);
@@ -660,6 +693,13 @@ class SiteAgentConversation
     /** Read questions preserve the photo; another proposal supersedes and cleans it. */
     private function imageTopicSwitch(SiteAgentSubscriber $subscriber, SiteAgentRequest $request, string $text, ?string $messageId): string
     {
+        // A different topic cannot leave an older image preview approvable if
+        // the new request is rejected before another request row is created.
+        // Retain the file and draft as a question, never a stale yes target.
+        $request->update([
+            'preview' => null,
+            'plan' => [...$request->plan, 'question' => 'התמונה נשמרה להמשך. לאיזה עמוד או מוצר לשייך אותה, או לשמור רק בספריית המדיה?'],
+        ]);
         $reply = $this->converse($subscriber, $text, $messageId)
             ?? $this->propose($subscriber, $text, $messageId);
         if (SiteAgentRequest::query()->where('site_agent_subscriber_id', $subscriber->id)
@@ -735,7 +775,7 @@ class SiteAgentConversation
         if ($next === null) {
             $request->update([
                 'preview' => null,
-                'plan' => [...$plan, 'question' => ImageChangePlanner::UNRESOLVED_IMAGE.' מה לתקן בהצעה?'],
+                'plan' => [...$plan, 'question' => ImageChangePlanner::UNRESOLVED_IMAGE.' מה לתקן בהצעה?', ...$this->appendOwnerMessage($plan, $answer)],
             ]);
 
             return 'קיבלתי את התמונה, אבל לא הצלחתי להבין לאן לשים אותה.';
@@ -761,12 +801,34 @@ class SiteAgentConversation
             return SiteAgentPermissions::refusal();
         }
 
+        $preview = $offer['preview'] ?? (isset($next['question']) ? null : $this->preview($next));
+        if ($preview !== null && ($rejection = $this->reviewOffer($subscriber, $answer, $operation, $preview, $this->ownerMessages($plan))) !== null) {
+            $missingOwnerContext = $this->ownerMessages($plan) === null;
+            $request->update([
+                'operation' => SiteAgentRequest::OP_IMAGE,
+                'preview' => null,
+                'plan' => [
+                    'question' => $rejection,
+                    'image_draft' => $missingOwnerContext ? [] : (array) ($plan['image_draft'] ?? []),
+                    'image_path' => $plan['image_path'],
+                    'extension' => $plan['extension'] ?? 'jpg',
+                    'caption' => $missingOwnerContext ? '' : $caption,
+                    ...($missingOwnerContext ? ['owner_messages' => [], 'owner_messages_complete' => true] : $this->appendOwnerMessage($plan, $answer)),
+                ],
+                'message' => Str::limit($caption, 2000),
+                'expires_at' => now()->addMinutes(max(1, (int) config('siteagent.confirmation_minutes', 30))),
+            ]);
+
+            return $rejection;
+        }
+
         if ($offer !== null) {
             $request->update([
                 'operation' => SiteAgentRequest::OP_PRODUCT_CREATE,
-                'plan' => [...$offer['plan'], 'image_path' => $plan['image_path'], 'extension' => $plan['extension'] ?? 'jpg', 'caption' => $caption],
+                'plan' => [...$offer['plan'], 'image_path' => $plan['image_path'], 'extension' => $plan['extension'] ?? 'jpg', 'caption' => $caption,
+                    ...$this->appendOwnerMessage($plan, $answer)],
                 'message' => Str::limit($caption, 2000),
-                'preview' => $offer['preview'],
+                'preview' => $preview,
                 'expires_at' => now()->addMinutes(max(1, (int) config('siteagent.confirmation_minutes', 30))),
             ]);
 
@@ -779,7 +841,8 @@ class SiteAgentConversation
             $request->update([
                 'operation' => $operation,
                 'preview' => null,
-                'plan' => [...$next, 'image_path' => $plan['image_path'], 'extension' => $plan['extension'] ?? 'jpg', 'caption' => $caption],
+                'plan' => [...$next, 'image_path' => $plan['image_path'], 'extension' => $plan['extension'] ?? 'jpg', 'caption' => $caption,
+                    ...$this->appendOwnerMessage($plan, $answer)],
                 'message' => Str::limit($caption, 2000),
                 'expires_at' => now()->addMinutes(max(1, (int) config('siteagent.confirmation_minutes', 30))),
             ]);
@@ -794,16 +857,79 @@ class SiteAgentConversation
                 'image_path' => $plan['image_path'],
                 'extension' => $plan['extension'] ?? 'jpg',
                 'caption' => $caption,
+                ...$this->appendOwnerMessage($plan, $answer),
                 'thumbnail_id' => isset($next['target_id'])
                     ? $this->planner->thumbnailOf($site, (int) $next['target_id'])
                     : null,
             ],
             'message' => Str::limit($caption, 2000),
-            'preview' => $this->preview($next),
+            'preview' => $preview,
             'expires_at' => now()->addMinutes(max(1, (int) config('siteagent.confirmation_minutes', 30))),
         ]);
 
         return $request->refresh()->preview."\n\n".self::CONFIRM_PROMPT;
+    }
+
+    /** Only the owner's actual words and canonical display text enter the independent check. */
+    private function reviewOffer(SiteAgentSubscriber $subscriber, string $ownerText, string $operation, string $preview, ?array $ownerMessages = []): ?string
+    {
+        if ($ownerMessages === null) {
+            return 'אין לי את כל פרטי הבקשה המקורית כדי לאמת את השינוי. כתבו מחדש את הבקשה המלאה, כולל היעד והערך הרצוי; לא שמרתי הצעה לאישור.';
+        }
+        $review = $this->fidelity->review($subscriber, $ownerText, $operation, $preview, $ownerMessages);
+
+        return $review['verdict'] === 'allow' ? null : $review['reply'];
+    }
+
+    /** A failed interpretation cannot leave the old question row carrying an executable preview. */
+    private function retainQuestion(SiteAgentRequest $request, string $kind, string $context, string $question, string $answer): void
+    {
+        $missingOwnerContext = $this->ownerMessages($request->plan) === null;
+        $request->update([
+            'operation' => null,
+            'preview' => null,
+            'plan' => ['kind' => $kind, 'text' => $missingOwnerContext ? '' : Str::limit($context, 6000), 'question' => $question,
+                ...($missingOwnerContext ? ['owner_messages' => [], 'owner_messages_complete' => true] : $this->appendOwnerMessage($request->plan, $answer))],
+            'message' => Str::limit($context, 2000),
+            'expires_at' => now()->addMinutes(max(1, (int) config('siteagent.confirmation_minutes', 30))),
+        ]);
+    }
+
+    /** Pending drafts retain actual owner messages separately from model instructions and questions. */
+    private function appendOwnerMessage(array $plan, string $message): array
+    {
+        $messages = $this->ownerMessages($plan);
+        if ($messages === null) {
+            return ['owner_messages' => [], 'owner_messages_complete' => false];
+        }
+        $messages[] = $message;
+        if (count($messages) > 20 || array_sum(array_map('mb_strlen', $messages)) > 12000) {
+            return ['owner_messages' => [], 'owner_messages_complete' => false];
+        }
+
+        return ['owner_messages' => $messages, 'owner_messages_complete' => true];
+    }
+
+    /** null means context is unknown or incomplete; never silently truncate a negative constraint. */
+    private function ownerMessages(array $plan): ?array
+    {
+        $messages = $plan['owner_messages'] ?? null;
+        if (($plan['owner_messages_complete'] ?? true) !== true || ! is_array($messages) || ! array_is_list($messages)
+            || count($messages) > 20 || count(array_filter($messages, 'is_string')) !== count($messages)
+            || array_sum(array_map('mb_strlen', $messages)) > 12000) {
+            return null;
+        }
+
+        return $messages;
+    }
+
+    /** Label a homepage only when the server-bound front-page identity matches this exact target. */
+    private function targetLabel(array $plan, string $title, mixed $id): string
+    {
+        $front = $plan['front_page'] ?? null;
+
+        return is_array($front) && ($front['mode'] ?? null) === 'page' && is_int($id) && $id > 0
+            && ($front['id'] ?? null) === $id ? 'דף הבית — עמוד "'.$title.'"' : $title;
     }
 
     /**
@@ -819,7 +945,7 @@ class SiteAgentConversation
     {
         // Only the page operations have a page. Reading it unconditionally is
         // how a price change crashed on its own preview.
-        $page = (string) ($plan['page_title'] ?? '');
+        $page = $this->targetLabel($plan, (string) ($plan['page_title'] ?? ''), $plan['page_id'] ?? null);
 
         return match ($plan['operation']) {
             SiteAgentRequest::OP_PRICE => implode("\n", array_filter([
@@ -845,7 +971,7 @@ class SiteAgentConversation
                     },
             ]),
             SiteAgentRequest::OP_IMAGE => implode("\n", [
-                "🖼️ {$plan['target_title']}",
+                '🖼️ '.$this->targetLabel($plan, (string) $plan['target_title'], $plan['target_id'] ?? null),
                 'התמונה ששלחתם תוגדר כתמונה הראשית.',
                 'תיאור לנגישות: "'.$plan['alt'].'"',
             ]),

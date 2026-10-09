@@ -20,11 +20,13 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 use PHPUnit\Framework\Attributes\DataProvider;
+use Tests\Concerns\FakesSiteAgentProposalFidelity;
 use Tests\TestCase;
 
 /** Real conversation, AI client, proposals, approval and MCP; only HTTP is faked. */
 class SiteAgentVirtualProductConversationTest extends TestCase
 {
+    use FakesSiteAgentProposalFidelity;
     use RefreshDatabase;
 
     private ?array $product = null;
@@ -38,6 +40,7 @@ class SiteAgentVirtualProductConversationTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        $this->fakeProposalFidelity();
         config([
             'billing.ai.enabled' => true, 'billing.ai.api_key' => 'test-key',
             'billing.ai.provider' => 'google', 'billing.ai.model' => 'gemini-3.1-flash-lite',

@@ -338,6 +338,7 @@ class SiteActionProposer
                     // Preserve the meaning of "homepage" for the approval-time
                     // check, including proposals made through generic tools.
                     $offer['plan']['front_page'] = $frontPage;
+                    $offer['preview'] = 'דף הבית (עמוד #'.$frontPage['id'].")\n".$offer['preview'];
                 }
                 $plan = $offer['plan'];
 
@@ -1040,7 +1041,7 @@ class SiteActionProposer
         }
 
         $title = (string) ($post['title'] ?? '');
-        $heading = "📄 {$title}";
+        $heading = "📄 {$title} (#{$id})";
         if ($status !== 'publish') {
             $label = match ($status) {
                 'draft' => 'טיוטה', 'pending' => 'ממתין לאישור',

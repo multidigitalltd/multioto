@@ -6,6 +6,7 @@ use App\Enums\ActionStatus;
 use App\Jobs\InvestigateSiteJob;
 use App\Models\AgentCommand;
 use App\Models\PendingAction;
+use App\Models\Setting;
 use App\Models\Site;
 use App\Models\SystemLog;
 use App\Models\User;
@@ -23,6 +24,7 @@ class SiteAgentTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        Http::preventStrayRequests();
         config([
             'billing.ai.enabled' => true,
             'billing.ai.provider' => 'anthropic',
@@ -366,6 +368,9 @@ class SiteAgentTest extends TestCase
         // only to the event log.
         $user = User::factory()->create();
         $site = $this->connectedSite();
+        // The queue refreshes settings before the job. Keep its transport on
+        // the same fake endpoint after that refresh, not the pristine URL.
+        Setting::put('ai.base_url', 'https://api.anthropic.test');
 
         $this->fakeClaude([
             ['stop_reason' => 'tool_use', 'content' => [

@@ -32,6 +32,7 @@ use Illuminate\Support\Facades\Queue;
 use Illuminate\Testing\TestResponse;
 use Livewire\Livewire;
 use Mockery;
+use Tests\Concerns\FakesSiteAgentProposalFidelity;
 use Tests\TestCase;
 
 /**
@@ -45,11 +46,13 @@ use Tests\TestCase;
  */
 class SiteAgentChannelTest extends TestCase
 {
+    use FakesSiteAgentProposalFidelity;
     use RefreshDatabase;
 
     protected function setUp(): void
     {
         parent::setUp();
+        $this->fakeProposalFidelity();
 
         config([
             'siteagent.enabled' => true,

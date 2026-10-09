@@ -16,10 +16,12 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Mockery;
 use PHPUnit\Framework\Attributes\DataProvider;
+use Tests\Concerns\FakesSiteAgentProposalFidelity;
 use Tests\TestCase;
 
 class SiteAgentHomepageTest extends TestCase
 {
+    use FakesSiteAgentProposalFidelity;
     use RefreshDatabase;
 
     private array $settings = ['show_on_front' => 'page', 'page_on_front' => 999, 'page_for_posts' => 0];
@@ -33,6 +35,7 @@ class SiteAgentHomepageTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        $this->fakeProposalFidelity();
         config(['siteagent.assistant.enabled' => false]);
         Cache::flush();
         Http::preventStrayRequests();

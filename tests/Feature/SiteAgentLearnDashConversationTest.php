@@ -16,11 +16,13 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Mockery;
 use RuntimeException;
+use Tests\Concerns\FakesSiteAgentProposalFidelity;
 use Tests\TestCase;
 
 /** Real WhatsApp approvals and undo; AI and the native LearnDash boundary are mocked. */
 class SiteAgentLearnDashConversationTest extends TestCase
 {
+    use FakesSiteAgentProposalFidelity;
     use RefreshDatabase;
 
     private SiteAgentSubscriber $subscriber;
@@ -42,6 +44,7 @@ class SiteAgentLearnDashConversationTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        $this->fakeProposalFidelity();
         config([
             'siteagent.enabled' => true, 'siteagent.assistant.enabled' => true,
             'siteagent.assistant.disabled_permissions' => [], 'siteagent.assistant.history_messages' => 4,

@@ -16,11 +16,13 @@ use Illuminate\Support\Facades\Cache;
 use Mockery;
 use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
+use Tests\Concerns\FakesSiteAgentProposalFidelity;
 use Tests\TestCase;
 
 /** Integration across the actual conversation, confirmation and undo paths. */
 class SiteAgentExtendedConversationTest extends TestCase
 {
+    use FakesSiteAgentProposalFidelity;
     use RefreshDatabase;
 
     private SiteAgentSubscriber $subscriber;
@@ -40,6 +42,7 @@ class SiteAgentExtendedConversationTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        $this->fakeProposalFidelity();
         config([
             'siteagent.enabled' => true,
             'siteagent.assistant.enabled' => true,

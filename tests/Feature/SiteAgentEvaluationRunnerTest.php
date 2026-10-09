@@ -3,14 +3,17 @@
 namespace Tests\Feature;
 
 use App\Models\Site;
+use App\Models\SiteAgentSubscriber;
 use App\Services\Agent\McpClient;
 use App\Services\Ai\GeminiContextCache;
 use App\Services\SiteAgent\Evaluation\EvaluationCorpus;
 use App\Services\SiteAgent\Evaluation\EvaluationGeminiContextCache;
 use App\Services\SiteAgent\Evaluation\EvaluationRunner;
 use App\Services\SiteAgent\Evaluation\EvaluationSiteActionProposer;
+use App\Services\SiteAgent\Evaluation\EvaluationSiteAgentProposalFidelity;
 use App\Services\SiteAgent\SiteActionProposer;
 use App\Services\SiteAgent\SiteAgentConversation;
+use App\Services\SiteAgent\SiteAgentProposalFidelity;
 use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Promise\Create;
 use GuzzleHttp\Promise\PromiseInterface;
@@ -20,16 +23,19 @@ use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use PHPUnit\Framework\Attributes\TestWith;
+use Tests\Concerns\FakesSiteAgentProposalFidelity;
 use Tests\TestCase;
 
 /** Harness wiring only: these scripted HTTP responses do not grade real language understanding. */
 class SiteAgentEvaluationRunnerTest extends TestCase
 {
+    use FakesSiteAgentProposalFidelity;
     use RefreshDatabase;
 
     protected function setUp(): void
     {
         parent::setUp();
+        $this->fakeProposalFidelity();
         if (! defined('SITE_AGENT_EVALUATION_ISOLATED')) {
             define('SITE_AGENT_EVALUATION_ISOLATED', true);
         }
@@ -80,6 +86,7 @@ class SiteAgentEvaluationRunnerTest extends TestCase
 
     public function test_scripted_product_update_reaches_actual_approval_apply_and_exact_state_oracle(): void
     {
+        $originalFidelity = app(SiteAgentProposalFidelity::class);
         $round = 0;
         Http::fake(['generativelanguage.googleapis.com/*' => function () use (&$round) {
             return match (++$round) {
@@ -97,7 +104,123 @@ class SiteAgentEvaluationRunnerTest extends TestCase
         $this->assertFalse(collect($report['cases'][0]['turns'][0]['calls'])->contains('write', true));
         $this->assertTrue($report['cases'][0]['turns'][1]['approved']);
         $this->assertSame('90.00', $report['cases'][0]['final']['products'][7]['regular_price']);
+        $this->assertSame([['ordinal' => 1, 'operation' => 'update_product', 'verdict' => 'allow', 'reason' => 'matched']],
+            $report['cases'][0]['turns'][0]['proposal_fidelity_diagnostics']);
+        $this->assertSame([], $report['cases'][0]['turns'][1]['proposal_fidelity_diagnostics']);
+        $this->assertSame($originalFidelity, app(SiteAgentProposalFidelity::class));
         $this->assertDatabaseCount('site_agent_requests', 0);
+    }
+
+    public function test_real_fidelity_review_uses_a_short_uncached_request_and_all_usage_is_accounted_for(): void
+    {
+        app()->forgetInstance(SiteAgentProposalFidelity::class);
+        config(['siteagent.assistant.cache.enabled' => true]);
+        app()->instance(GeminiContextCache::class, new EvaluationGeminiContextCache([], 'fidelity-run-stable-salt'));
+        $mainCalls = 0;
+        $reviews = 0;
+        Http::fake(['generativelanguage.googleapis.com/*' => function (Request $request) use (&$mainCalls, &$reviews) {
+            if (str_ends_with($request->url(), '/cachedContents')) {
+                return $this->cacheResponse();
+            }
+            if (($request['generationConfig']['responseMimeType'] ?? null) === 'application/json') {
+                $reviews++;
+                $this->assertArrayNotHasKey('cachedContent', $request->data());
+                $this->assertArrayNotHasKey('tools', $request->data());
+                $this->assertStringNotContainsString('functionDeclarations', json_encode($request->data()));
+                $this->assertLessThan(6000, mb_strlen($request['systemInstruction']['parts'][0]['text']));
+
+                return Http::response(['candidates' => [['content' => ['parts' => [['text' => json_encode([
+                    'verdict' => 'allow', 'reason' => 'matched', 'feedback' => '',
+                ])]]]]], 'usageMetadata' => ['promptTokenCount' => 300, 'totalTokenCount' => 330]]);
+            }
+            $this->assertSame('cachedContents/evaluation-reference', $request['cachedContent']);
+            $tool = ++$mainCalls === 1
+                ? ['name' => 'get_product', 'args' => ['product_id' => 7]]
+                : ['name' => 'propose_product_update', 'args' => ['product_id' => 7, 'regular_price' => '90.00']];
+
+            return Http::response(['candidates' => [['content' => ['parts' => [['functionCall' => $tool]]]]],
+                'usageMetadata' => ['promptTokenCount' => 1000, 'cachedContentTokenCount' => 800, 'totalTokenCount' => 1020]]);
+        }]);
+        $case = ['id' => 'harness-fidelity-review', 'domain' => 'harness', 'title' => 'בדיקת התאמה אמיתית מול תעבורה מדומה',
+            'turns' => [['user' => 'שנה את מחיר חולצה כחולה ל-90'], ['user' => 'כן']],
+            'expect' => ['outcome' => 'applied', 'operations' => ['update_product'],
+                'tools_all' => ['wc_product_get', 'wc_product_update'], 'final' => ['products.7.regular_price' => '90.00']]];
+        $report = app(EvaluationRunner::class)->run([$case], true);
+
+        $this->assertSame(1, $report['summary']['passed'], json_encode($report['cases'][0]['failures']));
+        $this->assertSame(2, $mainCalls);
+        $this->assertSame(1, $reviews);
+        $this->assertSame(3, $report['provider_requests']);
+        $this->assertSame(3, $report['provider_responses']);
+        $this->assertSame(1, $report['cache_management_requests']);
+        $this->assertSame(['input_tokens' => 2300, 'cached_input_tokens' => 1600, 'uncached_input_tokens' => 700,
+            'output_tokens' => 70, 'cache_hit_requests' => 2], $report['cases'][0]['usage']);
+        $this->assertSame([['ordinal' => 1, 'operation' => 'update_product', 'verdict' => 'allow', 'reason' => 'matched']],
+            $report['cases'][0]['turns'][0]['proposal_fidelity_diagnostics']);
+        $this->assertNotInstanceOf(EvaluationSiteAgentProposalFidelity::class, app(SiteAgentProposalFidelity::class));
+        $this->assertFalse(app()->isShared(SiteAgentProposalFidelity::class));
+    }
+
+    public function test_fidelity_observer_restores_a_custom_binding_even_when_the_scenario_throws(): void
+    {
+        $original = app(SiteAgentProposalFidelity::class);
+        $created = 0;
+        app()->bind(SiteAgentProposalFidelity::class, function () use ($original, &$created) {
+            $created++;
+
+            return $original;
+        });
+        Http::fake(['generativelanguage.googleapis.com/*' => $this->tool('get_product_counts', [])]);
+        $report = app(EvaluationRunner::class)->run($this->countCase(), true, function (array $progress): void {
+            if ($progress['event'] === 'turn_complete') {
+                throw new \RuntimeException('private exception content');
+            }
+        });
+
+        $this->assertContains('runner_exception:RuntimeException', $report['cases'][0]['failures']);
+        $this->assertSame(1, $created);
+        $this->assertSame($original, app(SiteAgentProposalFidelity::class));
+        $this->assertSame(2, $created);
+        $this->assertFalse(app()->isShared(SiteAgentProposalFidelity::class));
+        $this->assertStringNotContainsString('private exception content', json_encode($report));
+    }
+
+    public function test_fidelity_diagnostics_are_bounded_and_do_not_store_review_or_owner_text(): void
+    {
+        $subscriber = new SiteAgentSubscriber;
+        $result = ['verdict' => 'revise', 'reason' => 'wrong_value', 'feedback' => 'private review feedback', 'reply' => 'private reply'];
+        $delegate = \Mockery::mock(SiteAgentProposalFidelity::class);
+        $delegate->shouldReceive('review')->times(55)->with($subscriber, 'private owner message', 'update_product',
+            'private preview /secret/path token', ['private prior owner message'])->andReturn($result);
+        $observer = new EvaluationSiteAgentProposalFidelity($delegate);
+        for ($index = 0; $index < 55; $index++) {
+            $returned = $observer->review($subscriber, 'private owner message', 'update_product',
+                'private preview /secret/path token', ['private prior owner message']);
+        }
+
+        $this->assertSame($result, $returned);
+        $this->assertCount(50, $observer->diagnostics());
+        $this->assertSame(['ordinal' => 50, 'operation' => 'update_product', 'verdict' => 'revise', 'reason' => 'wrong_value'],
+            $observer->diagnostics()[49]);
+        $this->assertStringNotContainsString('private', json_encode($observer->diagnostics()));
+        $this->assertStringNotContainsString('secret', json_encode($observer->diagnostics()));
+        Http::assertNothingSent();
+    }
+
+    #[TestWith(['איזה שדה לעדכן?', 'matched', 'passed'])]
+    #[TestWith(['השדה הזה מיוחד.', 'inconclusive', 'failed'])]
+    public function test_reply_evidence_is_exported_without_replacing_the_case_result(string $reply, string $evidenceStatus, string $caseStatus): void
+    {
+        Http::fake(['generativelanguage.googleapis.com/*' => $this->answer($reply)]);
+        $case = ['id' => 'harness-reply-evidence', 'domain' => 'harness', 'title' => 'הבהרה ממוקדת',
+            'turns' => [['user' => 'עדכן את השדה הזה']],
+            'expect' => ['outcome' => 'clarification', 'reply_contract' => ['topic_groups' => [['שדה']]]]];
+        $report = app(EvaluationRunner::class)->run([$case], true);
+
+        $this->assertSame($caseStatus, $report['cases'][0]['status']);
+        $this->assertSame($evidenceStatus, $report['cases'][0]['reply_evidence']['status']);
+        $this->assertSame(1, $report['cases'][0]['reply_evidence']['turns'][0]['turn']);
+        $this->assertSame('not_performed', $report['cases'][0]['semantic_review']);
     }
 
     public function test_proposal_diagnostics_capture_validation_then_read_and_retry_without_changing_execution(): void

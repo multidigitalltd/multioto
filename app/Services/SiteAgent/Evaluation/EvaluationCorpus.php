@@ -106,8 +106,27 @@ final class EvaluationCorpus
             || $expect['outcome'] !== 'canceled' || (empty($expect['reply_contains']) && empty($expect['reply_any'])))) {
             throw new InvalidArgumentException('A withdrawal without a proposal requires positive reply evidence.');
         }
+        if (array_key_exists('reply_contract', $expect)) {
+            $contract = $expect['reply_contract'];
+            if (! in_array($expect['outcome'], ['refused', 'clarification'], true) || ! is_array($contract)
+                || array_diff(array_keys($contract), ['topic_groups', 'unsupported_routes']) !== []
+                || ! is_array($contract['topic_groups'] ?? null) || ! array_is_list($contract['topic_groups'])
+                || count($contract['topic_groups']) < 1 || count($contract['topic_groups']) > 8) {
+                throw new InvalidArgumentException('Invalid bounded reply contract.');
+            }
+            $groups = $contract['topic_groups'];
+            if (array_key_exists('unsupported_routes', $contract)) {
+                $groups[] = $contract['unsupported_routes'];
+            }
+            foreach ($groups as $alternatives) {
+                if (! is_array($alternatives) || ! array_is_list($alternatives) || count($alternatives) < 1 || count($alternatives) > 20
+                    || count(array_filter($alternatives, fn ($value): bool => is_string($value) && mb_strlen(trim($value)) >= 2 && mb_strlen($value) <= 100)) !== count($alternatives)) {
+                    throw new InvalidArgumentException('A reply contract needs bounded nonempty topic alternatives.');
+                }
+            }
+        }
         if (in_array($expect['outcome'], ['read', 'clarification', 'refused'], true)
-            && empty($expect['reply_contains']) && empty($expect['reply_any'])) {
+            && empty($expect['reply_contains']) && empty($expect['reply_any']) && ! isset($expect['reply_contract'])) {
             throw new InvalidArgumentException('A read, clarification or refusal requires positive reply evidence: '.$case['id']);
         }
         if ($expect['outcome'] === 'read' && empty($expect['tools_all']) && empty($expect['tools_any'])) {
