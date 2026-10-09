@@ -270,7 +270,9 @@ class SiteAgentEvaluationOracleTest extends TestCase
 
     public static function incorrectNumericEvidence(): array
     {
-        return [['Product 140'], ['Price: 40.50'], ['Reference: SKU40'], ['Reference: 40SKU'], ['Amount: -40'], ['Amount: 1,040'], ['Amount: 0.40']];
+        return [['Product 140'], ['Price: 40.50'], ['Reference: SKU40'], ['Reference: 40SKU'], ['Amount: -40'],
+            ['Amount: 1,040'], ['Amount: 0.40'], ['Amount: −40'], ['Reference: SKU-40'], ['Reference: 40-SKU'],
+            ['מק״ט מקטו-40'], ['מק״ט ו-400'], ['מחיר ו-40.50'], ['מחיר ו--40']];
     }
 
     #[DataProvider('incorrectNumericEvidence')]
@@ -289,6 +291,27 @@ class SiteAgentEvaluationOracleTest extends TestCase
             self::assertSame([], $this->evaluate(['outcome' => 'read', 'tools_all' => ['wc_product_get'], 'reply_contains' => [$number]],
                 [$this->turn(['reply' => 'The price is **40.00**.', 'calls' => [$call]])]));
         }
+    }
+
+    public static function hebrewNumericEvidence(): array
+    {
+        return [['ו-40'], ['ו־40'], ['ו40'], ['ב-40'], ['ב־40'], ['ב40'], ['וב-40'], ['ל-40'], ['ו-40.00']];
+    }
+
+    #[DataProvider('hebrewNumericEvidence')]
+    public function test_a_numeric_fact_accepts_a_bounded_hebrew_quantity_prefix(string $quantity): void
+    {
+        $call = ['tool' => 'wc_product_get', 'arguments' => [], 'write' => false, 'result' => ['stock_quantity' => 40]];
+        self::assertSame([], $this->evaluate(['outcome' => 'read', 'tools_all' => ['wc_product_get'], 'reply_contains' => ['40']],
+            [$this->turn(['reply' => 'הכמות: '.$quantity.' יחידות.', 'calls' => [$call]])]));
+    }
+
+    public function test_a_hebrew_conjunction_is_not_evidence_of_a_negative_number(): void
+    {
+        $call = ['tool' => 'wc_product_get', 'arguments' => [], 'write' => false, 'result' => ['stock_quantity' => -40]];
+        $expect = ['outcome' => 'read', 'tools_all' => ['wc_product_get'], 'reply_contains' => ['-40']];
+        self::assertNotSame([], $this->evaluate($expect, [$this->turn(['reply' => '12 כחולות ו-40 אדומות', 'calls' => [$call]])]));
+        self::assertSame([], $this->evaluate($expect, [$this->turn(['reply' => 'המלאי: -40', 'calls' => [$call]])]));
     }
 
     public function test_failed_write_attempts_cannot_establish_an_application_even_if_the_final_value_already_matches(): void

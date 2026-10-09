@@ -237,8 +237,12 @@ class EvaluationOracle
 
         $number = str_contains($text, '.') ? rtrim(rtrim($text, '0'), '.') : $text;
         $fraction = str_contains($number, '.') ? '0*' : '(?:\.0+)?';
+        // Hebrew attaches conjunctions/prepositions to quantities ("ו-6", "ב־40").
+        // Permit only a bounded prefix, not arbitrary SKU text or a negative sign.
+        $prefix = str_starts_with($number, '-') ? '' : '(?:(?:ו?[בכלמ]|ו)[-\x{05BE}]?)?';
 
-        return preg_match('/(?<![\pL\pN.,+\-])'.preg_quote($number, '/').$fraction.'(?![\pL\pN]|[.,]\d)/u', $reply) === 1;
+        return preg_match('/(?<![\pL\pN.,+\-\x{05BE}\x{2212}])'.$prefix.preg_quote($number, '/').$fraction
+            .'(?![\pL\pN]|[.,]\d|[-\x{05BE}][\pL\pN])/u', $reply) === 1;
     }
 
     /** @return list<string> */

@@ -71,6 +71,7 @@ class SiteAgentEvaluationRunsTest extends TestCase
             $caseId = $caseOverride ?? substr($process->command[4], strlen('--case='));
             $output = substr($process->command[5], strlen('--output='));
             file_put_contents($output, json_encode(['schema_version' => 1, 'mode' => 'live_model_simulated_site',
+                '_cache_state' => ['schema' => 1, 'entries' => []],
                 'provider' => 'google', 'model' => 'gemini-3.1-flash-lite', 'corpus_sha256' => str_repeat('a', 64),
                 'summary' => ['total' => 1, 'passed' => (int) ($status === 'passed'), 'failed' => (int) ($status === 'failed'), 'blocked' => (int) ($status === 'blocked')], 'cases' => [array_replace([
                     'id' => $caseId, 'status' => $status, 'model_executed' => $status !== 'blocked',
@@ -240,7 +241,9 @@ class SiteAgentEvaluationRunsTest extends TestCase
                 $payload = json_decode($process->input, true, flags: JSON_THROW_ON_ERROR);
                 self::assertSame('private-test-api-key', $payload['ai']['api_key']);
                 self::assertSame(['enabled', 'provider', 'model', 'base_url', 'api_key', 'effort'], array_keys($payload['ai']));
-                self::assertSame(['ai', 'assistant'], array_keys($payload));
+                self::assertSame(['ai', 'assistant', 'evaluation_cache'], array_keys($payload));
+                self::assertMatchesRegularExpression('/^[a-f0-9]{64}$/D', $payload['evaluation_cache']['salt']);
+                self::assertSame(['schema' => 1, 'entries' => []], $payload['evaluation_cache']['state']);
                 self::assertFalse($process->environment['EVALUATION_TEST_OTHER_INTEGRATION']);
                 self::assertFalse($process->environment['EVALUATION_TEST_ENV_ONLY_SECRET']);
                 self::assertFalse($process->environment['EVALUATION_TEST_SERVER_ONLY_SECRET']);

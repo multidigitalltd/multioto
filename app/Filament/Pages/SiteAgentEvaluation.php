@@ -38,6 +38,7 @@ class SiteAgentEvaluation extends Page
         abort_unless(auth()->user()?->isAdmin(), 403);
 
         $run = app(EvaluationRuns::class)->latest();
+        $suiteCounts = app(EvaluationCorpus::class)->suiteCounts();
 
         return [
             'run' => $run,
@@ -45,7 +46,9 @@ class SiteAgentEvaluation extends Page
             'configured' => $this->aiConfigured(),
             'provider' => (string) config('billing.ai.provider'),
             'model' => (string) config('billing.ai.model'),
-            'selectedCount' => EvaluationCorpus::SUITES[$this->suite] ?? 400,
+            'suiteCounts' => $suiteCounts,
+            'selectedCount' => $suiteCounts[$this->suite] ?? 0,
+            'cacheStatus' => $this->cacheStatus($run),
         ];
     }
 
@@ -64,7 +67,7 @@ class SiteAgentEvaluation extends Page
 
         Notification::make()
             ->title('הבדיקה נוספה לתור')
-            ->body(EvaluationCorpus::SUITES[$this->suite].' התרחישים שנבחרו ירוצו ברקע. אפשר לצאת מהמסך ולחזור לצפות בתוצאות.')
+            ->body(app(EvaluationCorpus::class)->suiteCounts()[$this->suite].' התרחישים שנבחרו ירוצו ברקע. אפשר לצאת מהמסך ולחזור לצפות בתוצאות.')
             ->success()
             ->send();
     }
@@ -98,6 +101,26 @@ class SiteAgentEvaluation extends Page
         return app(ClaudeClient::class)->isEnabled()
             && filled(config('billing.ai.provider'))
             && filled(config('billing.ai.model'));
+    }
+
+    /** Render only known states; provider resource names and errors stay private. */
+    private function cacheStatus(?array $run): string
+    {
+        if ($run === null || ! array_key_exists('cached_input_tokens', $run)) {
+            return 'לא נמדד בריצה זו';
+        }
+
+        return match ($run['cache_status']['state'] ?? null) {
+            'active' => 'מטמון תקף נמצא בבדיקה האחרונה. השימוש בפועל מופיע במדדי הטוקנים להלן.',
+            'disabled' => 'המטמון המפורש כבוי בריצה זו.',
+            'unsupported_provider' => 'המטמון המפורש משותף בין התרחישים רק עבור Gemini.',
+            'fallback' => match ($run['cache_status']['reason'] ?? null) {
+                'prefix_too_short' => 'ההנחיות והכלים קצרים מדרישת המינימום של המודל למטמון.',
+                'model_unsupported' => 'המודל שנבחר אינו תומך במטמון המפורש.',
+                default => 'המטמון לא היה זמין בבדיקה האחרונה.',
+            },
+            default => 'טרם התקבל מצב מטמון בריצה זו.',
+        };
     }
 
     private function validateRunId(string $id): void

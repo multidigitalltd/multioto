@@ -11,9 +11,11 @@ use App\Models\Site;
 use App\Models\SiteAgentRequest;
 use App\Models\SiteAgentSubscriber;
 use App\Services\Agent\McpClient;
+use App\Services\Ai\GeminiContextCache;
 use App\Services\SiteAgent\SiteAgentConversation;
 use App\Services\SiteAgent\WhatsAppCloudClient;
 use GuzzleHttp\Promise\PromiseInterface;
+use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -30,9 +32,24 @@ final class EvaluationRunner
 
     private int $providerResponses = 0;
 
+    private int $cacheManagementRequests = 0;
+
+    private int $cacheManagementResponses = 0;
+
+    private int $cacheReferenceRetries = 0;
+
+    private int $caseManagementStart = 0;
+
     private int $caseRequestStart = 0;
 
     private array $providerDiagnostics = [];
+
+    private array $cacheDiagnostics = [];
+
+    private array $pendingCacheRetries = [];
+
+    private array $providerUsage = ['input_tokens' => 0, 'cached_input_tokens' => 0, 'uncached_input_tokens' => 0,
+        'output_tokens' => 0, 'cache_hit_requests' => 0];
 
     private float $caseStarted;
 
@@ -80,6 +97,10 @@ final class EvaluationRunner
         }
 
         $counts = array_count_values(array_column($results, 'status'));
+        $usage = [];
+        foreach (array_keys($this->providerUsage) as $metric) {
+            $usage[$metric] = array_sum(array_map(fn (array $result): int => $result['usage'][$metric] ?? 0, $results));
+        }
 
         return [
             'schema_version' => 1, 'mode' => $live ? 'live_model_simulated_site' : 'preflight',
@@ -88,14 +109,20 @@ final class EvaluationRunner
             'started_at' => (new \DateTimeImmutable('@'.(int) $this->started))->format(DATE_ATOM),
             'benchmark_time' => now()->toIso8601String(), 'duration_seconds' => round(microtime(true) - $this->started, 3),
             'provider_requests' => $this->providerRequests, 'provider_responses' => $this->providerResponses,
+            'cache_management_requests' => $this->cacheManagementRequests, 'cache_management_responses' => $this->cacheManagementResponses,
+            'cache_reference_retries' => $this->cacheReferenceRetries, 'provider_usage' => $usage,
+            'cache_mode' => $this->cacheMode(), 'cache_status' => app(GeminiContextCache::class)->status(),
             'execution_counts' => array_replace(['model' => 0, 'deterministic' => 0, 'not_executed' => 0],
                 array_count_values(array_column($results, 'execution'))),
             'summary' => ['total' => count($cases), 'passed' => $counts['passed'] ?? 0,
                 'failed' => $counts['failed'] ?? 0, 'blocked' => $counts['blocked'] ?? 0],
             'limits' => ['אתר WordPress וכלי האתר מדומים; הבדיקה אינה בדיקת תוספים באתר חי.',
                 'מעבר פירושו שהבדיקות המוגדרות לתרחיש עברו. אין בכך הבטחה להבנת כל ניסוח או לאיכות כל טקסט חופשי.',
-                'מטמון ספק ה-AI כבוי בהרצת הבדיקה; השימוש מחויב אצל הספק לפי הקריאות בפועל.'],
+                'מטמון Gemini משמש להוראות ולקטלוג כלים קבועים כאשר הוא מופעל ונתמך. שיחות ותוצאות כלים אינן נשמרות במטמון המשותף.',
+                'ספירת טוקנים מהמטמון היא נתון שימוש מהספק ואינה חישוב חיסכון כספי; קריאות ואחסון מטמון מחויבים לפי תנאי הספק.'],
             'cases' => $results,
+            ...(app(GeminiContextCache::class) instanceof EvaluationGeminiContextCache
+                ? ['_cache_state' => app(GeminiContextCache::class)->exportState()] : []),
         ];
     }
 
@@ -109,9 +136,16 @@ final class EvaluationRunner
         $exception = null;
         $requestsBefore = $this->providerRequests;
         $responsesBefore = $this->providerResponses;
+        $managementRequestsBefore = $this->cacheManagementRequests;
+        $managementResponsesBefore = $this->cacheManagementResponses;
+        $retriesBefore = $this->cacheReferenceRetries;
+        $usageBefore = $this->providerUsage;
         $this->caseRequestStart = $requestsBefore;
+        $this->caseManagementStart = $managementRequestsBefore;
         $this->caseStarted = microtime(true);
         $this->providerDiagnostics = [];
+        $this->cacheDiagnostics = [];
+        $this->pendingCacheRetries = [];
         DB::beginTransaction();
         try {
             $customer = Customer::create(['name' => 'לקוח בדיקה מדומה', 'business_number' => '500000001',
@@ -158,8 +192,17 @@ final class EvaluationRunner
         }
         $requests = $this->providerRequests - $requestsBefore;
         $responses = $this->providerResponses - $responsesBefore;
+        $recoveredCacheRetries = $this->cacheReferenceRetries - $retriesBefore;
+        $transportUsage = [];
+        foreach ($this->providerUsage as $metric => $value) {
+            $transportUsage[$metric] = $value - $usageBefore[$metric];
+        }
+        // Google includes cached prompt tokens in promptTokenCount. Never add
+        // them to input a second time; preserve recorded usage for other APIs.
+        $usage = config('billing.ai.provider') === 'google' ? $transportUsage
+            : [...$usage, 'cached_input_tokens' => 0, 'uncached_input_tokens' => $usage['input_tokens'] ?? 0, 'cache_hit_requests' => 0];
         $modelExecuted = $responses > 0;
-        $providerFailed = $requests !== $responses;
+        $providerFailed = $requests !== $responses + $recoveredCacheRetries;
         // Only a curated corpus assertion permits a local guard to pass
         // without AI. A failed provider attempt can never use this exception.
         $deterministic = ($case['expect']['model_required'] ?? true) === false && $requests === 0 && $responses === 0;
@@ -176,6 +219,11 @@ final class EvaluationRunner
             'failures' => $failures, 'semantic_review' => 'not_performed',
             'turns' => $turns, 'expect' => $case['expect'], 'final' => $this->world->state,
             'provider_requests' => $requests, 'provider_responses' => $responses,
+            'cache_management_requests' => $this->cacheManagementRequests - $managementRequestsBefore,
+            'cache_management_responses' => $this->cacheManagementResponses - $managementResponsesBefore,
+            'cache_reference_retries' => $recoveredCacheRetries,
+            'cache_mode' => $this->cacheMode(), 'cache_status' => app(GeminiContextCache::class)->status(),
+            'cache_diagnostics' => $this->cacheDiagnostics,
             'provider_diagnostics' => $this->providerDiagnostics, 'usage' => $usage];
     }
 
@@ -230,11 +278,16 @@ final class EvaluationRunner
                 'anthropic' => $path === '/v1/messages',
                 'openai' => $path === '/v1/chat/completions',
             };
-            if ($request->getMethod() !== 'POST' || $uri->getScheme() !== 'https' || $uri->getHost() !== $host
-                || $uri->getUserInfo() !== '' || ($uri->getPort() !== null && $uri->getPort() !== 443) || ! $validPath) {
+            $management = $this->isCacheManagementRequest($request);
+            if ((! $management && ($request->getMethod() !== 'POST' || ! $validPath))
+                || $uri->getScheme() !== 'https' || $uri->getHost() !== $host
+                || $uri->getUserInfo() !== '' || ($uri->getPort() !== null && $uri->getPort() !== 443)) {
                 throw new RuntimeException('Evaluation blocked external traffic.');
             }
-            if (++$this->providerRequests - $this->caseRequestStart > 80 || microtime(true) - $this->caseStarted > 1000) {
+            $overBudget = $management
+                ? ++$this->cacheManagementRequests - $this->caseManagementStart > 6
+                : ++$this->providerRequests - $this->caseRequestStart > 80;
+            if ($overBudget || microtime(true) - $this->caseStarted > 1000) {
                 throw new RuntimeException('Evaluation provider budget reached.');
             }
 
@@ -245,8 +298,16 @@ final class EvaluationRunner
                 return $handler($request, $options)->then(function (ResponseInterface $response) use ($request, $provider, $host): ResponseInterface {
                     // Capture this request in its own promise: synthetic site
                     // health checks must never become provider diagnostics.
-                    if ($request->getMethod() === 'POST' && $request->getUri()->getHost() === $host) {
-                        $this->recordProviderResponse($response, $provider);
+                    if ($request->getUri()->getHost() === $host) {
+                        if ($this->isCacheManagementRequest($request)) {
+                            $this->cacheManagementResponses++;
+                            if (count($this->cacheDiagnostics) < 6) {
+                                $this->cacheDiagnostics[] = ['operation' => $request->getMethod() === 'PATCH' ? 'renew' : 'create',
+                                    'http_status' => $response->getStatusCode()];
+                            }
+                        } elseif ($request->getMethod() === 'POST') {
+                            $this->recordProviderResponse($response, $provider, $request);
+                        }
                     }
 
                     return $response;
@@ -256,10 +317,13 @@ final class EvaluationRunner
     }
 
     /** Export bounded status metadata only, never provider response text. */
-    private function recordProviderResponse(ResponseInterface $response, string $provider): void
+    private function recordProviderResponse(ResponseInterface $response, string $provider, RequestInterface $request): void
     {
         $body = json_decode((string) $response->getBody(), true);
         if ($response->getStatusCode() >= 200 && $response->getStatusCode() < 300 && is_array($body)) {
+            if ($provider === 'google') {
+                $this->recordGoogleUsage($body);
+            }
             $content = match ($provider) {
                 'google' => data_get($body, 'candidates.0.content.parts'),
                 'anthropic' => $body['content'] ?? null,
@@ -267,8 +331,30 @@ final class EvaluationRunner
             };
             if (is_array($content) && $content !== []) {
                 $this->providerResponses++;
+                if ($provider === 'google') {
+                    $payload = json_decode((string) $request->getBody(), true);
+                    if (is_array($payload) && ! array_key_exists('cachedContent', $payload)) {
+                        $fingerprint = $this->retryFingerprint($request, $payload);
+                        if (($this->pendingCacheRetries[$fingerprint] ?? 0) > 0) {
+                            $this->pendingCacheRetries[$fingerprint]--;
+                            $this->cacheReferenceRetries++;
+                        }
+                    }
+                }
 
                 return;
+            }
+        }
+
+        $referenceFailure = false;
+        if ($provider === 'google' && $this->cacheMode() === 'google_explicit') {
+            $payload = json_decode((string) $request->getBody(), true);
+            $reference = $payload['cachedContent'] ?? null;
+            if (is_array($payload) && is_string($reference) && preg_match('#^cachedContents/[A-Za-z0-9_-]{1,256}$#D', $reference)
+                && app(GeminiContextCache::class)->isReferenceFailure(new Response($response))) {
+                $fingerprint = $this->retryFingerprint($request, $payload);
+                $this->pendingCacheRetries[$fingerprint] = ($this->pendingCacheRetries[$fingerprint] ?? 0) + 1;
+                $referenceFailure = true;
             }
         }
 
@@ -279,9 +365,54 @@ final class EvaluationRunner
             $allowed = ['STOP', 'MAX_TOKENS', 'SAFETY', 'RECITATION', 'OTHER', 'BLOCKLIST',
                 'PROHIBITED_CONTENT', 'SPII', 'MALFORMED_FUNCTION_CALL', 'UNEXPECTED_TOOL_CALL'];
             $this->providerDiagnostics[] = ['http_status' => $status,
-                'reason' => $status >= 200 && $status < 300 ? 'missing_model_content' : 'http_error',
+                'reason' => $referenceFailure ? 'cache_reference_rejected' : ($status >= 200 && $status < 300 ? 'missing_model_content' : 'http_error'),
                 'finish_reason' => in_array($finish, $allowed, true) ? $finish : null,
                 'block_reason' => in_array($block, $allowed, true) ? $block : null];
         }
+    }
+
+    private function cacheMode(): string
+    {
+        if (! config('siteagent.assistant.cache.enabled')) {
+            return 'disabled';
+        }
+
+        return config('billing.ai.provider') === 'google' ? 'google_explicit' : 'unsupported_provider';
+    }
+
+    private function isCacheManagementRequest(RequestInterface $request): bool
+    {
+        if ($this->cacheMode() !== 'google_explicit' || $request->getUri()->getQuery() !== '') {
+            return false;
+        }
+
+        return ($request->getMethod() === 'POST' && $request->getUri()->getPath() === '/v1beta/cachedContents')
+            || ($request->getMethod() === 'PATCH'
+                && preg_match('#^/v1beta/cachedContents/[A-Za-z0-9_-]{1,256}$#D', $request->getUri()->getPath()) === 1);
+    }
+
+    /** Only an identical dynamic request may resolve a failed cache reference. */
+    private function retryFingerprint(RequestInterface $request, array $payload): string
+    {
+        unset($payload['cachedContent'], $payload['systemInstruction'], $payload['tools']);
+
+        return hash('sha256', $request->getUri()->getPath().'|'.json_encode($payload));
+    }
+
+    private function recordGoogleUsage(array $body): void
+    {
+        $input = $this->tokenCount(data_get($body, 'usageMetadata.promptTokenCount'));
+        $cached = min($input, $this->tokenCount(data_get($body, 'usageMetadata.cachedContentTokenCount')));
+        $total = $this->tokenCount(data_get($body, 'usageMetadata.totalTokenCount'));
+        $this->providerUsage['input_tokens'] += $input;
+        $this->providerUsage['cached_input_tokens'] += $cached;
+        $this->providerUsage['uncached_input_tokens'] += $input - $cached;
+        $this->providerUsage['output_tokens'] += max(0, $total - $input);
+        $this->providerUsage['cache_hit_requests'] += $cached > 0 ? 1 : 0;
+    }
+
+    private function tokenCount(mixed $value): int
+    {
+        return is_int($value) && $value >= 0 && $value <= 100_000_000 ? $value : 0;
     }
 }

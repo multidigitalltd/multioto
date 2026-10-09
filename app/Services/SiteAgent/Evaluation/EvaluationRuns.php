@@ -66,6 +66,10 @@ class EvaluationRuns
                 'deterministic_case_ids' => array_values(array_column(array_filter($cases,
                     fn (array $case): bool => ($case['expect']['model_required'] ?? true) === false), 'id')),
                 'provider_requests' => 0, 'input_tokens' => 0, 'output_tokens' => 0,
+                'cache_enabled' => $payload['ai']['provider'] === 'google',
+                'cache_status' => ['state' => $payload['ai']['provider'] === 'google' ? 'idle' : 'unsupported_provider', 'reason' => null],
+                'cached_input_tokens' => 0, 'uncached_input_tokens' => 0, 'cache_hit_requests' => 0,
+                'cache_management_requests' => 0, 'cache_management_responses' => 0,
                 'semantic_review' => 'not_performed',
             ];
             $this->write($id.'/run.json', $run);
@@ -229,6 +233,10 @@ class EvaluationRuns
                 }
             }
             $environment['PATH'] = ($environment['PATH'] ?? null) ?: '/usr/bin:/bin';
+            if ($run['cache_enabled'] ?? false) {
+                $providerCache = $this->providerCache($run['configuration_digest']);
+                $payload['evaluation_cache'] = $providerCache;
+            }
             $result = Process::path(base_path())->env($environment)
                 ->input(json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR))
                 ->timeout(1100)->run([PHP_BINARY, $script, '--platform', '--live', '--case='.$caseId, '--output='.$output]);
@@ -240,11 +248,36 @@ class EvaluationRuns
             }
             $report = $this->read($this->casePath($id, $caseId), 8 * 1024 * 1024);
             $case = $this->caseResult($report, $caseId, $run);
+            if ($run['cache_enabled'] ?? false) {
+                if (! is_array($report['_cache_state'] ?? null)) {
+                    $this->terminate($run, 'failed', 'לא התקבל מצב מטמון תקין. ההרצה נעצרה כדי למנוע המשך ללא שיתוף ההנחיות והכלים.');
+
+                    return;
+                }
+                $cacheState = EvaluationGeminiContextCache::sanitizeState($report['_cache_state']);
+                if ($cacheState !== $report['_cache_state']) {
+                    $this->terminate($run, 'failed', 'מצב המטמון שהוחזר אינו תקין. ההרצה נעצרה כדי למנוע שימוש חוזר לא מאומת או שליחת ההנחיות מחדש.');
+
+                    return;
+                }
+                $this->write('provider-cache/'.$run['configuration_digest'].'.json', [
+                    'salt' => $providerCache['salt'],
+                    'state' => $cacheState,
+                ]);
+            }
             $run['completed']++;
             $run[$case['status']]++;
             $run['provider_requests'] += max(0, (int) ($case['provider_requests'] ?? 0));
             $run['input_tokens'] += max(0, (int) ($case['usage']['input_tokens'] ?? 0));
             $run['output_tokens'] += max(0, (int) ($case['usage']['output_tokens'] ?? 0));
+            $cached = min(max(0, (int) ($case['usage']['input_tokens'] ?? 0)), max(0, (int) ($case['usage']['cached_input_tokens'] ?? 0)));
+            $run['cached_input_tokens'] += $cached;
+            $run['uncached_input_tokens'] += max(0, (int) ($case['usage']['input_tokens'] ?? 0)) - $cached;
+            $run['cache_hit_requests'] += max(0, (int) ($case['usage']['cache_hit_requests'] ?? 0));
+            foreach (['cache_management_requests', 'cache_management_responses'] as $metric) {
+                $run[$metric] += max(0, (int) ($case[$metric] ?? 0));
+            }
+            $run['cache_status'] = $this->cacheStatus($case['cache_status'] ?? []);
             $run['next_index'] = $index + 1;
             $run['claimed_index'] = null;
             $run['current_case'] = null;
@@ -253,6 +286,8 @@ class EvaluationRuns
                 $this->terminate($run, 'failed', 'הבדיקה נקטעה ולא נוסתה שוב אוטומטית.');
             } elseif ($this->marker($id, 'cancel')) {
                 $this->terminate($run, 'canceled', 'הבדיקה נעצרה לבקשת מנהל לאחר השלמת התרחיש הנוכחי.');
+            } elseif (($run['cache_enabled'] ?? false) && $run['cache_status']['state'] === 'fallback') {
+                $this->terminate($run, 'failed', 'מטמון Gemini אינו זמין. ההרצה נעצרה כדי למנוע שליחה חוזרת של ההנחיות והכלים בכל התרחישים. בדקו את מצב המטמון לפני התחלת הרצה נוספת.');
             } elseif ($run['completed'] >= $run['total']) {
                 $this->terminate($run, 'completed', null);
             } else {
@@ -305,6 +340,36 @@ class EvaluationRuns
         }
 
         return ['ai' => $ai, 'assistant' => $assistant];
+    }
+
+    /** Dedicated provider metadata; no platform cache, site or conversation state is shared. */
+    private function providerCache(string $configuration): array
+    {
+        if (! preg_match('/^[a-f0-9]{64}$/D', $configuration)) {
+            throw new RuntimeException('Invalid provider cache configuration.');
+        }
+        $relative = 'provider-cache/'.$configuration.'.json';
+        if (Storage::disk('local')->exists(self::ROOT.'/'.$relative)) {
+            $saved = $this->read($relative, 160 * 1024);
+            if (is_string($saved['salt'] ?? null) && preg_match('/^[a-f0-9]{64}$/D', $saved['salt'])
+                && is_array($saved['state'] ?? null)) {
+                return ['salt' => $saved['salt'], 'state' => EvaluationGeminiContextCache::sanitizeState($saved['state'])];
+            }
+        }
+        $saved = ['salt' => bin2hex(random_bytes(32)), 'state' => EvaluationGeminiContextCache::sanitizeState([])];
+        $this->write($relative, $saved);
+
+        return $saved;
+    }
+
+    private function cacheStatus(mixed $status): array
+    {
+        $state = is_array($status) ? ($status['state'] ?? '') : '';
+
+        return ['state' => in_array($state, ['active', 'idle', 'disabled', 'unsupported_provider', 'fallback'], true) ? $state : 'idle',
+            'reason' => is_array($status) && in_array($status['reason'] ?? null,
+                ['busy', 'unavailable', 'provider_unavailable', 'prefix_too_short', 'model_unsupported', 'invalid_response', 'reference_rejected', 'expired'], true)
+                ? $status['reason'] : null];
     }
 
     protected function manifest(string $suite = 'original'): array
@@ -417,7 +482,11 @@ class EvaluationRuns
         }
         if ($case['status'] === 'passed' && $case['model_executed'] === true
             && (! is_int($case['provider_requests'] ?? null) || $case['provider_requests'] <= 0
-                || ($case['provider_responses'] ?? null) !== $case['provider_requests']
+                || ! is_int($case['provider_responses'] ?? null) || $case['provider_responses'] <= 0
+                || ! is_int($case['cache_reference_retries'] ?? 0) || ($case['cache_reference_retries'] ?? 0) < 0
+                || ($case['cache_reference_retries'] ?? 0) > $case['provider_responses']
+                || (($case['cache_reference_retries'] ?? 0) > 0 && ($run['provider'] !== 'google' || ! ($run['cache_enabled'] ?? false)))
+                || $case['provider_requests'] !== $case['provider_responses'] + ($case['cache_reference_retries'] ?? 0)
                 || (isset($case['execution']) && $case['execution'] !== 'model'))) {
             throw new RuntimeException('Passed evaluation case requires successful provider evidence.');
         }

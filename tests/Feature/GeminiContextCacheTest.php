@@ -8,6 +8,7 @@ use App\Models\Customer;
 use App\Services\Ai\AiUsageAttribution;
 use App\Services\Ai\ClaudeClient;
 use App\Services\Ai\GeminiContextCache;
+use Illuminate\Contracts\Cache\Repository;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Cache;
@@ -317,14 +318,16 @@ class GeminiContextCacheTest extends TestCase
 
             return Http::response($this->textResponse());
         }]);
-        Cache::shouldReceive('get')->andThrow(new \RuntimeException('cache down'));
+        Cache::shouldReceive('store')->andThrow(new \RuntimeException('cache down'));
         $this->assertSame('מוכן', $this->converse());
         Http::assertSentCount(1);
     }
 
     public function test_rebuild_reports_a_metadata_write_failure_instead_of_success(): void
     {
-        Cache::shouldReceive('forever')->once()->andReturn(false);
+        $store = \Mockery::mock(Repository::class);
+        $store->shouldReceive('forever')->once()->andReturn(false);
+        Cache::shouldReceive('store')->andReturn($store);
         $this->expectException(\RuntimeException::class);
         app(GeminiContextCache::class)->invalidate();
     }
@@ -332,7 +335,9 @@ class GeminiContextCacheTest extends TestCase
     public function test_failed_metadata_write_is_not_reported_as_an_active_reusable_cache(): void
     {
         Http::fake(['*' => fn () => Http::response($this->remote())]);
-        Cache::partialMock()->shouldReceive('put')->andReturn(false);
+        $store = \Mockery::mock(Cache::store())->makePartial();
+        $store->shouldReceive('put')->andReturn(false);
+        Cache::shouldReceive('store')->andReturn($store);
         $this->assertNull($this->acquire());
         $this->assertNotSame('active', app(GeminiContextCache::class)->status()['state']);
     }

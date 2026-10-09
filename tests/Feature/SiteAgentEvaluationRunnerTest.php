@@ -2,13 +2,17 @@
 
 namespace Tests\Feature;
 
+use App\Services\Ai\GeminiContextCache;
 use App\Services\SiteAgent\Evaluation\EvaluationCorpus;
+use App\Services\SiteAgent\Evaluation\EvaluationGeminiContextCache;
 use App\Services\SiteAgent\Evaluation\EvaluationRunner;
 use App\Services\SiteAgent\SiteAgentConversation;
 use GuzzleHttp\Promise\PromiseInterface;
+use GuzzleHttp\Psr7\Response;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
+use PHPUnit\Framework\Attributes\TestWith;
 use Tests\TestCase;
 
 /** Harness wiring only: these scripted HTTP responses do not grade real language understanding. */
@@ -35,14 +39,14 @@ class SiteAgentEvaluationRunnerTest extends TestCase
         Http::preventStrayRequests();
     }
 
-    public function test_all_800_are_reported_as_not_run_during_preflight_not_as_passed(): void
+    public function test_all_current_cases_are_reported_as_not_run_during_preflight_not_as_passed(): void
     {
         $cases = app(EvaluationCorpus::class)->cases();
-        $this->assertCount(800, $cases);
-        $this->assertSame(800, count(array_unique(array_column($cases, 'id'))));
+        $this->assertCount(752, $cases);
+        $this->assertSame(752, count(array_unique(array_column($cases, 'id'))));
         $this->assertGreaterThan(700, array_sum(array_map(fn (array $case): int => count($case['turns']), $cases)));
         $report = app(EvaluationRunner::class)->run($cases, false);
-        $this->assertSame(['total' => 800, 'passed' => 0, 'failed' => 0, 'blocked' => 800], $report['summary']);
+        $this->assertSame(['total' => 752, 'passed' => 0, 'failed' => 0, 'blocked' => 752], $report['summary']);
         $this->assertSame(0, $report['provider_requests']);
         $this->assertSame(['preflight_only'], array_values(array_unique(array_column($report['cases'], 'reason'))));
         Http::assertNothingSent();
@@ -56,7 +60,7 @@ class SiteAgentEvaluationRunnerTest extends TestCase
 
             return $round === 1 ? $this->tool('get_product_counts', []) : $this->answer('יש רק מוצר אחד.');
         }]);
-        $case = app(EvaluationCorpus::class)->cases('commerce-001');
+        $case = $this->countCase();
         $report = app(EvaluationRunner::class)->run($case, true);
         $this->assertSame(['total' => 1, 'passed' => 1, 'failed' => 0, 'blocked' => 0], $report['summary'], json_encode($report['cases'][0]['failures']));
         $this->assertSame(2, $report['provider_responses']);
@@ -110,7 +114,7 @@ class SiteAgentEvaluationRunnerTest extends TestCase
         config(['database.connections.pgsql' => ['driver' => 'pgsql']]);
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('isolated launcher');
-        app(EvaluationRunner::class)->run(app(EvaluationCorpus::class)->cases('commerce-001'), true);
+        app(EvaluationRunner::class)->run($this->countCase(), true);
     }
 
     public function test_a_curated_lone_confirmation_passes_as_a_deterministic_guard_without_claiming_model_execution(): void
@@ -196,6 +200,237 @@ class SiteAgentEvaluationRunnerTest extends TestCase
         $this->assertGreaterThan(0, $report['provider_requests']);
         $this->assertSame($report['provider_requests'], $report['provider_responses']);
         $this->assertSame([], $report['cases'][0]['provider_diagnostics']);
+    }
+
+    public function test_explicit_cache_creation_is_separate_from_inference_and_usage_does_not_double_count_cached_tokens(): void
+    {
+        config(['siteagent.assistant.cache.enabled' => true]);
+        $round = 0;
+        Http::fake(['generativelanguage.googleapis.com/*' => function (Request $request) use (&$round) {
+            if (str_ends_with($request->url(), '/cachedContents')) {
+                return $this->cacheResponse();
+            }
+            $this->assertSame('cachedContents/evaluation-reference', $request['cachedContent']);
+            $this->assertArrayNotHasKey('systemInstruction', $request->data());
+            $this->assertArrayNotHasKey('tools', $request->data());
+
+            return Http::response(['candidates' => [['content' => ['parts' => ++$round === 1
+                ? [['functionCall' => ['name' => 'get_product_counts', 'args' => (object) []]]]
+                : [['text' => 'יש 40 מוצרים.']]]]],
+                'usageMetadata' => ['promptTokenCount' => 1000, 'cachedContentTokenCount' => 800, 'totalTokenCount' => 1020]]);
+        }]);
+        $report = app(EvaluationRunner::class)->run($this->countCase(), true);
+
+        $this->assertSame(1, $report['summary']['passed'], json_encode($report['cases'][0]['failures']));
+        $this->assertSame(2, $report['provider_requests']);
+        $this->assertSame(2, $report['provider_responses']);
+        $this->assertSame(1, $report['cache_management_requests']);
+        $this->assertSame(1, $report['cache_management_responses']);
+        $this->assertSame('google_explicit', $report['cache_mode']);
+        $this->assertSame(['input_tokens' => 2000, 'cached_input_tokens' => 1600, 'uncached_input_tokens' => 400,
+            'output_tokens' => 40, 'cache_hit_requests' => 2], $report['cases'][0]['usage']);
+        $this->assertSame($report['cases'][0]['usage'], $report['provider_usage']);
+        $this->assertStringNotContainsString('evaluation-reference', json_encode($report));
+    }
+
+    public function test_isolated_prefix_metadata_survives_scenario_cache_flushes_and_exports_only_to_private_handoff(): void
+    {
+        config(['siteagent.assistant.cache.enabled' => true]);
+        app()->instance(GeminiContextCache::class, new EvaluationGeminiContextCache([], 'isolated-run-stable-salt'));
+        $round = 0;
+        Http::fake(['generativelanguage.googleapis.com/*' => function (Request $request) use (&$round) {
+            if (str_ends_with($request->url(), '/cachedContents')) {
+                return $this->cacheResponse();
+            }
+
+            return ++$round % 2 === 1 ? $this->tool('get_product_counts', []) : $this->answer('יש 40 מוצרים.');
+        }]);
+        $cases = $this->countCase();
+        $cases[] = [...$cases[0], 'id' => 'harness-next-count'];
+        $report = app(EvaluationRunner::class)->run($cases, true);
+
+        $this->assertSame(2, $report['summary']['passed'], json_encode(array_column($report['cases'], 'failures')));
+        $this->assertSame(1, $report['cache_management_requests']);
+        $this->assertSame(4, $report['provider_responses']);
+        $this->assertSame(0, $report['cases'][1]['cache_management_requests']);
+        $this->assertNotEmpty($report['_cache_state']['entries']);
+        $this->assertArrayNotHasKey('_cache_state', $report['cases'][0]);
+        $this->assertStringNotContainsString('כמה מוצרים', json_encode($report['_cache_state'], JSON_UNESCAPED_UNICODE));
+        $this->assertStringNotContainsString('test-evaluation-key', json_encode($report['_cache_state']));
+    }
+
+    public function test_required_evaluation_cache_failure_stops_before_any_uncached_inference(): void
+    {
+        config(['siteagent.assistant.cache.enabled' => true]);
+        app()->instance(GeminiContextCache::class, new EvaluationGeminiContextCache([], 'isolated-run-stable-salt'));
+        Http::fake(['generativelanguage.googleapis.com/*' => Http::response(['error' => ['message' => 'Unavailable']], 503)]);
+        $report = app(EvaluationRunner::class)->run($this->countCase(), true);
+
+        $this->assertSame(1, $report['summary']['blocked']);
+        $this->assertSame(0, $report['provider_requests']);
+        $this->assertSame(0, $report['provider_responses']);
+        $this->assertSame(1, $report['cache_management_requests']);
+        $this->assertSame('fallback', $report['cases'][0]['cache_status']['state']);
+        $this->assertFalse($report['cases'][0]['model_executed']);
+        Http::assertNotSent(fn (Request $request): bool => str_contains($request->url(), ':generateContent'));
+    }
+
+    public function test_cache_creation_failure_falls_back_without_blocking_a_successful_model_case(): void
+    {
+        config(['siteagent.assistant.cache.enabled' => true]);
+        $round = 0;
+        Http::fake(['generativelanguage.googleapis.com/*' => function (Request $request) use (&$round) {
+            if (str_ends_with($request->url(), '/cachedContents')) {
+                return Http::response(['error' => ['message' => 'sensitive cache response']], 503);
+            }
+            $this->assertArrayNotHasKey('cachedContent', $request->data());
+            $this->assertArrayHasKey('tools', $request->data());
+
+            return ++$round === 1 ? $this->tool('get_product_counts', []) : $this->answer('יש 40 מוצרים.');
+        }]);
+        $report = app(EvaluationRunner::class)->run($this->countCase(), true);
+
+        $this->assertSame(1, $report['summary']['passed'], json_encode($report['cases'][0]['failures']));
+        $this->assertSame(2, $report['provider_requests']);
+        $this->assertSame(2, $report['provider_responses']);
+        $this->assertSame(1, $report['cache_management_requests']);
+        $this->assertSame([['operation' => 'create', 'http_status' => 503]], $report['cases'][0]['cache_diagnostics']);
+        $this->assertSame('fallback', $report['cache_status']['state']);
+        $this->assertStringNotContainsString('sensitive cache response', json_encode($report));
+    }
+
+    public function test_a_rejected_cache_reference_followed_by_the_same_successful_uncached_request_is_not_a_provider_failure(): void
+    {
+        config(['siteagent.assistant.cache.enabled' => true]);
+        $round = 0;
+        $cachedContents = null;
+        Http::fake(['generativelanguage.googleapis.com/*' => function (Request $request) use (&$round, &$cachedContents) {
+            if (str_ends_with($request->url(), '/cachedContents')) {
+                return $this->cacheResponse();
+            }
+            if (isset($request['cachedContent'])) {
+                $cachedContents = $request['contents'];
+
+                return Http::response(['error' => ['message' => 'cachedContent expired']], 404);
+            }
+            if (++$round === 1) {
+                $this->assertSame($cachedContents, $request['contents']);
+
+                return $this->tool('get_product_counts', []);
+            }
+
+            return $this->answer('יש 40 מוצרים.');
+        }]);
+        $report = app(EvaluationRunner::class)->run($this->countCase(), true);
+
+        $this->assertSame(1, $report['summary']['passed'], json_encode($report['cases'][0]['failures']));
+        $this->assertSame(3, $report['provider_requests']);
+        $this->assertSame(2, $report['provider_responses']);
+        $this->assertSame(1, $report['cache_reference_retries']);
+        $this->assertSame(1, $report['cases'][0]['cache_reference_retries']);
+        $this->assertSame('cache_reference_rejected', $report['cases'][0]['provider_diagnostics'][0]['reason']);
+    }
+
+    #[TestWith([401, 'Invalid API key'])]
+    #[TestWith([400, 'Invalid function declarations schema'])]
+    public function test_cache_management_success_cannot_mask_inference_authentication_or_schema_failures(int $status, string $message): void
+    {
+        config(['siteagent.assistant.cache.enabled' => true]);
+        Http::fake(['generativelanguage.googleapis.com/*' => function (Request $request) use ($status, $message) {
+            if (str_ends_with($request->url(), '/cachedContents')) {
+                return $this->cacheResponse();
+            }
+
+            return Http::response(['error' => ['message' => $message]], $status);
+        }]);
+        $report = app(EvaluationRunner::class)->run($this->countCase(), true);
+
+        $this->assertSame(1, $report['summary']['blocked']);
+        $this->assertSame(0, $report['provider_responses']);
+        $this->assertGreaterThan(0, $report['cache_management_responses']);
+        $this->assertSame(0, $report['cache_reference_retries']);
+        $this->assertContains('provider_transport_or_response_failure', $report['cases'][0]['failures']);
+        $this->assertFalse($report['cases'][0]['model_executed']);
+    }
+
+    public function test_an_unrelated_successful_request_does_not_resolve_a_prior_cache_failure(): void
+    {
+        config(['siteagent.assistant.cache.enabled' => true]);
+        $runner = app(EvaluationRunner::class);
+        $record = new \ReflectionMethod($runner, 'recordProviderResponse');
+        $url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent';
+        $failed = new Response(404, [], json_encode(['error' => ['message' => 'cachedContent expired']]));
+        $request = new \GuzzleHttp\Psr7\Request('POST', $url, [], json_encode([
+            'cachedContent' => 'cachedContents/example', 'contents' => [['text' => 'original request']],
+        ]));
+        $record->invoke($runner, $failed, 'google', $request);
+        $success = new Response(200, [], json_encode(['candidates' => [['content' => ['parts' => [['text' => 'hello']]]]],
+            'usageMetadata' => ['promptTokenCount' => 100, 'cachedContentTokenCount' => 999, 'totalTokenCount' => 110]]));
+        $otherRequest = new \GuzzleHttp\Psr7\Request('POST', $url, [], json_encode([
+            'systemInstruction' => [], 'contents' => [['text' => 'different request']],
+        ]));
+        $record->invoke($runner, $success, 'google', $otherRequest);
+
+        $this->assertSame(0, (new \ReflectionProperty($runner, 'cacheReferenceRetries'))->getValue($runner));
+        $usage = (new \ReflectionProperty($runner, 'providerUsage'))->getValue($runner);
+        $this->assertSame(100, $usage['cached_input_tokens']);
+        $this->assertSame(0, $usage['uncached_input_tokens']);
+    }
+
+    public function test_provider_usage_is_reported_even_when_a_successful_http_response_contains_no_model_answer(): void
+    {
+        Http::fake(['generativelanguage.googleapis.com/*' => Http::response([
+            'promptFeedback' => ['blockReason' => 'SAFETY'],
+            'usageMetadata' => ['promptTokenCount' => 1000, 'cachedContentTokenCount' => 800, 'totalTokenCount' => 1010],
+        ])]);
+        $report = app(EvaluationRunner::class)->run($this->countCase(), true);
+
+        $this->assertSame(1, $report['summary']['blocked']);
+        $this->assertSame(0, $report['provider_responses']);
+        $this->assertSame(1000, $report['cases'][0]['usage']['input_tokens']);
+        $this->assertSame(800, $report['cases'][0]['usage']['cached_input_tokens']);
+        $this->assertSame(10, $report['cases'][0]['usage']['output_tokens']);
+    }
+
+    public function test_only_exact_cache_creation_and_renewal_paths_are_allowed_when_enabled(): void
+    {
+        config(['siteagent.assistant.cache.enabled' => true]);
+        $runner = app(EvaluationRunner::class);
+        (new \ReflectionProperty($runner, 'caseStarted'))->setValue($runner, microtime(true));
+        (new \ReflectionMethod($runner, 'restrictNetwork'))->invoke($runner);
+        Http::fake(['*' => Http::response(['name' => 'cachedContents/safe-id'])]);
+        $base = 'https://generativelanguage.googleapis.com';
+        Http::post($base.'/v1beta/cachedContents', []);
+        Http::patch($base.'/v1beta/cachedContents/safe-id', []);
+
+        foreach ([['GET', $base.'/v1beta/cachedContents'], ['DELETE', $base.'/v1beta/cachedContents/safe-id'],
+            ['PATCH', $base.'/v1beta/cachedContents/safe-id/extra'], ['POST', $base.'/v1beta/cachedContents?extra=1'],
+            ['POST', 'https://unapproved.example/v1beta/cachedContents'], ['POST', $base.'/v1beta/files']] as [$method, $url]) {
+            try {
+                Http::send($method, $url);
+                $this->fail('Unexpected allowed cache request');
+            } catch (\RuntimeException $exception) {
+                $this->assertSame('Evaluation blocked external traffic.', $exception->getMessage());
+            }
+        }
+        $this->assertSame(0, (new \ReflectionProperty($runner, 'providerRequests'))->getValue($runner));
+        $this->assertSame(2, (new \ReflectionProperty($runner, 'cacheManagementRequests'))->getValue($runner));
+        config(['siteagent.assistant.cache.enabled' => false]);
+        $this->expectExceptionMessage('Evaluation blocked external traffic.');
+        Http::post($base.'/v1beta/cachedContents', []);
+    }
+
+    private function countCase(): array
+    {
+        return [['id' => 'harness-count', 'domain' => 'harness', 'title' => 'ספירה באמצעות הכלי',
+            'turns' => [['user' => 'כמה מוצרים יש לי באתר?']],
+            'expect' => ['outcome' => 'read', 'tools_all' => ['wc_product_counts'], 'reply_contains' => ['40']]]];
+    }
+
+    private function cacheResponse(): PromiseInterface
+    {
+        return Http::response(['name' => 'cachedContents/evaluation-reference',
+            'model' => 'models/gemini-3.1-flash-lite', 'expireTime' => now()->addHour()->toIso8601String()]);
     }
 
     private function tool(string $name, array $arguments): PromiseInterface

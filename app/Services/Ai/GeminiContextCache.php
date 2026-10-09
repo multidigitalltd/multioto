@@ -3,6 +3,7 @@
 namespace App\Services\Ai;
 
 use Carbon\CarbonImmutable;
+use Illuminate\Contracts\Cache\Repository;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
@@ -23,6 +24,21 @@ class GeminiContextCache
     private const SAFETY_SECONDS = 30;
 
     private const MANAGEMENT_SECONDS = 8;
+
+    protected function store(): Repository
+    {
+        return Cache::store();
+    }
+
+    protected function timestamp(): int
+    {
+        return now()->timestamp;
+    }
+
+    protected function credentialSalt(): string
+    {
+        return (string) config('app.key');
+    }
 
     public function enabled(): bool
     {
@@ -47,23 +63,23 @@ class GeminiContextCache
         try {
             $configuration = $this->statusKey();
             $key = $this->entryKey($scope, $base, $model, $apiKey, $system, $tools);
-            $entry = Cache::get($key);
+            $entry = $this->store()->get($key);
             $usable = $this->usable($entry);
             $renewalWindow = min(300, max(60, (int) ($this->ttlSeconds() / 5)));
 
-            if ($usable && $entry['expires_at'] > now()->timestamp + $renewalWindow) {
+            if ($usable && $entry['expires_at'] > $this->timestamp() + $renewalWindow) {
                 $this->rememberStatus('active', $entry);
 
                 return $entry;
             }
 
-            if ($reason = Cache::get($key.':cooldown')) {
+            if ($reason = $this->store()->get($key.':cooldown')) {
                 $this->rememberStatus($usable ? 'active' : 'fallback', $usable ? $entry : null, $reason, $configuration);
 
                 return $usable ? $entry : null;
             }
 
-            $lock = Cache::lock($key.':lock', self::MANAGEMENT_SECONDS + 5);
+            $lock = $this->store()->lock($key.':lock', self::MANAGEMENT_SECONDS + 5);
 
             if (! $lock->get()) {
                 $this->rememberStatus($usable ? 'active' : 'fallback', $usable ? $entry : null, 'busy', $configuration);
@@ -72,15 +88,15 @@ class GeminiContextCache
             }
 
             // A worker may have filled the cache between our read and lock.
-            $latest = Cache::get($key);
-            if ($this->usable($latest) && $latest['expires_at'] > now()->timestamp + $renewalWindow) {
+            $latest = $this->store()->get($key);
+            if ($this->usable($latest) && $latest['expires_at'] > $this->timestamp() + $renewalWindow) {
                 $this->rememberStatus('active', $latest);
 
                 return $latest;
             }
             $entry = $latest;
             $usable = $this->usable($entry);
-            if (Cache::get($key.':cooldown')) {
+            if ($this->store()->get($key.':cooldown')) {
                 return $usable ? $entry : null;
             }
 
@@ -104,21 +120,21 @@ class GeminiContextCache
             $fresh = $response->successful() ? $this->validatedEntry($key, $model, $configuration, $response) : null;
 
             if ($fresh !== null && (! $usable || $fresh['name'] === $entry['name'])) {
-                if (! Cache::put($key, $fresh, max(1, $fresh['expires_at'] - now()->timestamp))) {
+                if (! $this->store()->put($key, $fresh, max(1, $fresh['expires_at'] - $this->timestamp()))) {
                     throw new \RuntimeException('The local cache could not persist the provider reference.');
                 }
-                Cache::forget($key.':cooldown');
+                $this->store()->forget($key.':cooldown');
                 $this->rememberStatus('active', $fresh);
 
                 return $fresh;
             }
 
             $reason = $response->successful() ? 'invalid_response' : $this->failureReason($response);
-            Cache::put($key.':cooldown', $reason, 300);
+            $this->store()->put($key.':cooldown', $reason, 300);
             // A failed renewal need not discard a resource still valid locally.
             // An explicit provider rejection does: it is not safe to call it live.
             if ($usable && $this->isReferenceFailure($response)) {
-                Cache::forget($key);
+                $this->store()->forget($key);
                 $usable = false;
             }
             $this->rememberStatus($usable ? 'active' : 'fallback', $usable ? $entry : null, $reason, $configuration);
@@ -129,7 +145,7 @@ class GeminiContextCache
             // API key, cached prompt or provider response. Status is an enum only.
             try {
                 if (isset($key)) {
-                    Cache::put($key.':cooldown', 'unavailable', 300);
+                    $this->store()->put($key.':cooldown', 'unavailable', 300);
                 }
                 if (isset($configuration) && $configuration === $this->statusKey()) {
                     $this->rememberStatus('fallback', null, 'unavailable', $configuration);
@@ -166,8 +182,8 @@ class GeminiContextCache
     {
         try {
             if (isset($entry['key']) && is_string($entry['key']) && str_starts_with($entry['key'], self::PREFIX)) {
-                Cache::forget($entry['key']);
-                Cache::put($entry['key'].':cooldown', 'reference_rejected', 60);
+                $this->store()->forget($entry['key']);
+                $this->store()->put($entry['key'].':cooldown', 'reference_rejected', 60);
             }
             if (($entry['configuration'] ?? null) === $this->statusKey()) {
                 $this->rememberStatus('fallback', null, 'reference_rejected', $entry['configuration']);
@@ -180,7 +196,7 @@ class GeminiContextCache
     /** Local-only rebuild: old provider resources expire normally, without renewal. */
     public function invalidate(): void
     {
-        if (! Cache::forever(self::PREFIX.'generation', Str::random(32))) {
+        if (! $this->store()->forever(self::PREFIX.'generation', Str::random(32))) {
             throw new \RuntimeException('The local cache could not save the rebuild request.');
         }
     }
@@ -209,10 +225,10 @@ class GeminiContextCache
         }
 
         try {
-            $observed = Cache::get($this->statusKey());
+            $observed = $this->store()->get($this->statusKey());
             if (is_array($observed)) {
                 $expires = $observed['expires_at'] ?? null;
-                if (($observed['state'] ?? '') === 'active' && (! is_int($expires) || $expires <= now()->timestamp + self::SAFETY_SECONDS)) {
+                if (($observed['state'] ?? '') === 'active' && (! is_int($expires) || $expires <= $this->timestamp() + self::SAFETY_SECONDS)) {
                     return [...$status, 'reason' => 'expired'];
                 }
 
@@ -233,7 +249,7 @@ class GeminiContextCache
             && is_string($entry['name'] ?? null)
             && preg_match('#^cachedContents/[A-Za-z0-9_-]{1,256}$#D', $entry['name']) === 1
             && is_int($entry['expires_at'] ?? null)
-            && $entry['expires_at'] > now()->timestamp + self::SAFETY_SECONDS;
+            && $entry['expires_at'] > $this->timestamp() + self::SAFETY_SECONDS;
         if (! $valid) {
             return false;
         }
@@ -260,17 +276,17 @@ class GeminiContextCache
         }
         $entry = ['key' => $key, 'name' => $data['name'] ?? null, 'expires_at' => $expiry, 'configuration' => $configuration];
 
-        return $this->usable($entry) && $expiry <= now()->timestamp + $this->ttlSeconds() + 120 ? $entry : null;
+        return $this->usable($entry) && $expiry <= $this->timestamp() + $this->ttlSeconds() + 120 ? $entry : null;
     }
 
     private function entryKey(string $scope, string $base, string $model, string $apiKey, string $system, array $tools): string
     {
         return self::PREFIX.'entry:'.hash('sha256', json_encode($this->canonical([
-            'generation' => Cache::get(self::PREFIX.'generation', 'initial'),
+            'generation' => $this->store()->get(self::PREFIX.'generation', 'initial'),
             'scope' => $scope,
             'endpoint' => rtrim($base, '/'),
             'model' => $this->model($model),
-            'credential' => hash_hmac('sha256', $apiKey, (string) config('app.key')),
+            'credential' => hash_hmac('sha256', $apiKey, $this->credentialSalt()),
             'system' => $system,
             'tools' => $tools,
             'ttl' => $this->ttlSeconds(),
@@ -299,11 +315,11 @@ class GeminiContextCache
     private function statusKey(): string
     {
         return self::PREFIX.'status:'.hash('sha256', json_encode([
-            Cache::get(self::PREFIX.'generation', 'initial'),
+            $this->store()->get(self::PREFIX.'generation', 'initial'),
             config('billing.ai.provider'),
             config('billing.ai.base_url'),
             config('billing.ai.model'),
-            hash_hmac('sha256', (string) config('billing.ai.api_key'), (string) config('app.key')),
+            hash_hmac('sha256', (string) config('billing.ai.api_key'), $this->credentialSalt()),
             $this->ttlSeconds(),
             config('siteagent.assistant.persona'),
             config('siteagent.assistant.style'),
@@ -319,7 +335,7 @@ class GeminiContextCache
         if ($key !== $this->statusKey()) {
             return;
         }
-        Cache::put($key, [
+        $this->store()->put($key, [
             'state' => $state,
             'expires_at' => $entry['expires_at'] ?? null,
             'reason' => $reason,

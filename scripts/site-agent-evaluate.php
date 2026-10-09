@@ -5,7 +5,9 @@
  * Platform AI configuration arrives through stdin, never command arguments.
  */
 declare(strict_types=1);
+use App\Services\Ai\GeminiContextCache;
 use App\Services\SiteAgent\Evaluation\EvaluationCorpus;
+use App\Services\SiteAgent\Evaluation\EvaluationGeminiContextCache;
 use App\Services\SiteAgent\Evaluation\EvaluationRunner;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Console\Kernel;
@@ -36,8 +38,8 @@ register_shutdown_function(static function () use ($runtime): void {
 
 try {
     if (isset($options['platform'])) {
-        $input = stream_get_contents(STDIN, 100001);
-        if (strlen($input) > 100000) {
+        $input = stream_get_contents(STDIN, 262145);
+        if (strlen($input) > 262144) {
             throw new RuntimeException('Configuration too large.');
         }
         $settings = json_decode($input, true, 32, JSON_THROW_ON_ERROR);
@@ -49,6 +51,10 @@ try {
             'persona', 'style', 'work_rules', 'instructions', 'history_messages', 'history_hours', 'history_chars',
             'max_turns', 'budget_seconds', 'tool_result_chars', 'disabled_permissions',
         ]));
+        $cacheInput = $settings['evaluation_cache'] ?? [];
+        if (! is_array($cacheInput)) {
+            throw new RuntimeException('Invalid evaluation cache metadata.');
+        }
         unset($input, $settings);
     } else {
         $environment = is_file($root.'/.env') ? Dotenv\Dotenv::parse(file_get_contents($root.'/.env')) : [];
@@ -58,6 +64,7 @@ try {
             'base_url' => $value('AI_BASE_URL', 'https://generativelanguage.googleapis.com'),
             'api_key' => $value('AI_API_KEY', ''), 'effort' => $value('AI_EFFORT', 'low')];
         $assistant = [];
+        $cacheInput = [];
         unset($environment, $value);
     }
     foreach (['provider', 'model', 'base_url', 'api_key', 'effort'] as $name) {
@@ -93,13 +100,19 @@ try {
         'mail.default' => 'array', 'mail.mailers' => ['array' => ['transport' => 'array']],
         'filesystems.default' => 'local', 'filesystems.disks' => ['local' => ['driver' => 'local', 'root' => $runtime.'/storage/app/private']],
         'siteagent.enabled' => true, 'siteagent.assistant.enabled' => true,
-        'siteagent.assistant.cache.enabled' => false, 'siteagent.alerts.failure_email' => '',
+        'siteagent.assistant.cache.enabled' => ($ai['provider'] ?? '') === 'google', 'siteagent.alerts.failure_email' => '',
         'billing.ai' => [...config('billing.ai'), ...$ai],
     ]);
     DB::purge('sqlite');
     foreach ($assistant as $name => $value) {
         config(['siteagent.assistant.'.$name => $value]);
     }
+    $salt = $cacheInput['salt'] ?? bin2hex(random_bytes(32));
+    if (! is_string($salt) || ! preg_match('/^[a-f0-9]{64}$/D', $salt) || ! is_array($cacheInput['state'] ?? [])) {
+        throw new RuntimeException('Invalid evaluation cache metadata.');
+    }
+    $app->instance(GeminiContextCache::class, new EvaluationGeminiContextCache($cacheInput['state'] ?? [], $salt));
+    unset($cacheInput, $salt);
     unset($ai, $assistant);
     // Scheduling cases use a documented reference clock; request budgets use
     // monotonic wall time in the runner and are not extended by this clock.

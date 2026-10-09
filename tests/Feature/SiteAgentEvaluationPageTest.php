@@ -42,10 +42,17 @@ class SiteAgentEvaluationPageTest extends TestCase
 
         Livewire::test(SiteAgentEvaluation::class)
             ->assertSuccessful()
-            ->assertSeeText('הפעלת 400 התרחישים')
+            ->assertSeeText('הפעלת 352 התרחישים')
+            ->assertSeeText('752 תרחישי שיחה עם הבוט')
+            ->assertSeeText('התרחישים שכבר עברו בדוח שסופק הוסרו מהרצות חדשות')
+            ->assertDontSeeText('כל 800 התרחישים')
             ->assertSeeText('google')
             ->assertSeeText('gemini-3.1-flash-lite')
             ->assertSeeText('הריצה צורכת שימוש בתשלום אצל ספק ה־AI')
+            ->assertSeeText('מטמון Gemini מופעל בהרצות חדשות')
+            ->assertSeeText('היסטוריית השיחות ונתוני האתר המדומה אינם נשמרים במטמון המשותף')
+            ->assertSeeText('מטמון אינו מבטל את העלות')
+            ->assertSeeText('אם המטמון אינו זמין, ההרצה נעצרת')
             ->assertSeeText('אינה משנה אתרי לקוחות')
             ->assertSeeText('אינה שולחת הודעות ללקוחות ואינה מחייבת אותם')
             ->assertSeeText('אין כאן סקירה אנושית של איכות כל תשובה')
@@ -98,7 +105,7 @@ class SiteAgentEvaluationPageTest extends TestCase
 
     public static function selectedSuites(): array
     {
-        return [['round2', 400], ['all', 800]];
+        return [['original', 352], ['round2', 400], ['all', 752]];
     }
 
     public function test_invalid_livewire_suite_never_reaches_the_queue_service(): void
@@ -183,6 +190,97 @@ class SiteAgentEvaluationPageTest extends TestCase
             ->assertNotified('בקשת העצירה נרשמה')
             ->assertSeeText('ממתינה לסיום התרחיש הנוכחי ולעצירה')
             ->assertDontSeeText('עצירה אחרי התרחיש הנוכחי');
+    }
+
+    public function test_provider_confirmed_cache_usage_is_shown_as_tokens_without_claiming_money_saved(): void
+    {
+        $this->actingAs(User::factory()->create());
+        $runs = $this->runs();
+        $runs->shouldReceive('latest')->andReturn($this->summary([
+            'cache_enabled' => true,
+            'cache_status' => ['state' => 'active', 'name' => 'cachedContents/private-handle', 'expires_at' => '2026-10-09T12:00:00Z'],
+            'input_tokens' => 12500,
+            'cached_input_tokens' => 10000,
+            'uncached_input_tokens' => 2500,
+            'cache_hit_requests' => 7,
+            'cache_management_requests' => 2,
+            'cache_management_responses' => 1,
+        ]));
+
+        Livewire::test(SiteAgentEvaluation::class)
+            ->assertSeeText('מטמון תקף נמצא בבדיקה האחרונה')
+            ->assertSeeText('טוקני קלט מהמטמון שאושרו על ידי הספק')
+            ->assertSeeText('12,500')
+            ->assertSeeText('10,000')
+            ->assertSeeText('2,500')
+            ->assertSeeText('80.0%')
+            ->assertSeeText('קריאות לניהול המטמון / תשובות שהתקבלו')
+            ->assertSeeText('2 / 1')
+            ->assertSeeText('אינו אחוז החיסכון הכספי')
+            ->assertDontSee('cachedContents/private-handle');
+    }
+
+    public function test_legacy_report_without_cache_metrics_is_not_presented_as_zero_cache_usage(): void
+    {
+        $this->actingAs(User::factory()->create());
+        $runs = $this->runs();
+        $runs->shouldReceive('latest')->andReturn($this->summary([
+            'status' => 'completed', 'input_tokens' => 23000, 'total' => 800,
+            'completed' => 50, 'passed' => 48, 'failed' => 2,
+        ]));
+
+        Livewire::test(SiteAgentEvaluation::class)
+            ->assertSeeText('לא נמדד בריצה זו')
+            ->assertSeeText('הושלמו 50 מתוך 800')
+            ->assertDontSeeText('חלק המטמון מתוך טוקני הקלט')
+            ->assertDontSeeText('0.0%')
+            ->assertDontSeeText('טוקני קלט מהמטמון שאושרו על ידי הספק');
+    }
+
+    public function test_new_run_with_zero_input_does_not_divide_by_zero_or_claim_a_cache_hit(): void
+    {
+        $this->actingAs(User::factory()->create());
+        $runs = $this->runs();
+        $runs->shouldReceive('latest')->andReturn($this->summary([
+            'cache_enabled' => true,
+            'cache_status' => ['state' => 'idle'],
+            'input_tokens' => 0, 'cached_input_tokens' => 0, 'uncached_input_tokens' => 0,
+            'cache_hit_requests' => 0, 'cache_management_requests' => 0, 'cache_management_responses' => 0,
+        ]));
+
+        Livewire::test(SiteAgentEvaluation::class)
+            ->assertSuccessful()
+            ->assertSeeText('טרם התקבל מצב מטמון בריצה זו')
+            ->assertSeeText('טרם נמדדו טוקני קלט')
+            ->assertDontSeeText('חלק המטמון מתוך טוקני הקלט')
+            ->assertDontSeeText('מטמון תקף נמצא בבדיקה האחרונה');
+    }
+
+    public function test_cache_failure_reason_is_enum_only_and_never_exposes_provider_metadata(): void
+    {
+        $this->actingAs(User::factory()->create());
+        $runs = $this->runs();
+        $runs->shouldReceive('latest')->andReturn($this->summary([
+            'cache_enabled' => true,
+            'cache_status' => ['state' => 'fallback', 'reason' => 'cachedContents/private-resource'],
+            'input_tokens' => 0, 'cached_input_tokens' => 0, 'uncached_input_tokens' => 0,
+        ]));
+
+        Livewire::test(SiteAgentEvaluation::class)
+            ->assertSeeText('המטמון לא היה זמין בבדיקה האחרונה')
+            ->assertDontSee('cachedContents/private-resource');
+    }
+
+    public function test_other_provider_does_not_claim_shared_gemini_cache_is_enabled(): void
+    {
+        $this->actingAs(User::factory()->create());
+        config(['billing.ai.provider' => 'openai', 'billing.ai.model' => 'test-model']);
+        $runs = $this->runs();
+        $runs->shouldReceive('latest')->andReturnNull();
+
+        Livewire::test(SiteAgentEvaluation::class)
+            ->assertSeeText('אצל הספק שנבחר אין כאן הבטחה לשימוש במטמון')
+            ->assertDontSeeText('מטמון Gemini מופעל בהרצות חדשות');
     }
 
     public function test_admin_download_uses_a_direct_http_link_instead_of_buffering_json_in_livewire(): void

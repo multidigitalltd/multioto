@@ -7,7 +7,16 @@ use InvalidArgumentException;
 /** Versioned owner messages and independent assertions; never model instructions. */
 final class EvaluationCorpus
 {
-    public const SUITES = ['original' => 400, 'round2' => 400, 'all' => 800];
+    public const SUITES = ['original' => 'הסבב המקורי', 'round2' => 'הסבב השני', 'all' => 'כל התרחישים הפעילים'];
+
+    /** Counts follow the active corpus after any explicitly retired scenarios. */
+    public function suiteCounts(): array
+    {
+        $cases = $this->cases();
+        $round2 = count(array_filter($cases, fn (array $case): bool => str_starts_with($case['id'], 'round2-')));
+
+        return ['original' => count($cases) - $round2, 'round2' => $round2, 'all' => count($cases)];
+    }
 
     public function cases(?string $only = null, string $suite = 'all'): array
     {
@@ -28,9 +37,8 @@ final class EvaluationCorpus
                 $cases[$row['id']] = $row;
             }
         }
-        $original = array_filter($cases, fn (array $case): bool => ! str_starts_with($case['id'], 'round2-'));
-        if (count($cases) !== 800 || count($original) !== 400) {
-            throw new InvalidArgumentException('The evaluation corpus must contain two suites of 400 scenarios.');
+        if ($cases === []) {
+            throw new InvalidArgumentException('The active evaluation corpus must not be empty.');
         }
         ksort($cases);
         if ($suite !== 'all') {
@@ -51,7 +59,8 @@ final class EvaluationCorpus
     {
         if (! is_array($case) || ! is_string($case['id'] ?? null)
             || ! preg_match('/^(?:[a-z]+|round2-(?:shop|content|manage))-[0-9]{3}$/D', $case['id'])
-            || ! is_string($case['domain'] ?? null) || ! is_string($case['title'] ?? null)
+            || ! is_string($case['domain'] ?? null) || trim($case['domain']) === ''
+            || ! is_string($case['title'] ?? null) || trim($case['title']) === ''
             || ! is_array($case['turns'] ?? null) || ! array_is_list($case['turns'])
             || count($case['turns']) < 1 || count($case['turns']) > 12) {
             throw new InvalidArgumentException('Invalid evaluation scenario.');

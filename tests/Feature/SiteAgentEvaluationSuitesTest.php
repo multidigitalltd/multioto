@@ -19,18 +19,33 @@ class SiteAgentEvaluationSuitesTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_two_independent_suites_cover_800_unique_scenarios(): void
+    public function test_two_independent_suites_cover_only_the_752_active_scenarios(): void
     {
         $corpus = app(EvaluationCorpus::class);
         $original = array_column($corpus->cases(suite: 'original'), 'id');
         $new = array_column($corpus->cases(suite: 'round2'), 'id');
-        $this->assertCount(400, $original);
+        $this->assertCount(352, $original);
         $this->assertCount(400, $new);
         $this->assertSame([], array_intersect($original, $new));
-        $this->assertCount(800, $corpus->cases());
+        $this->assertCount(752, $corpus->cases());
+        $this->assertSame(['original' => 352, 'round2' => 400, 'all' => 752], $corpus->suiteCounts());
         $this->assertSame('round2-shop-001', $corpus->cases('round2-shop-001')[0]['id']);
         $this->expectException(InvalidArgumentException::class);
-        $corpus->cases('commerce-001', 'round2');
+        $corpus->cases('commerce-011', 'round2');
+    }
+
+    public function test_only_the_48_passed_cases_from_the_partial_report_are_retired(): void
+    {
+        $corpus = app(EvaluationCorpus::class);
+        $active = array_column($corpus->cases(), 'id');
+        // Report 1a00a0e2-ad74-4616-b20c-e8534b38c4a1 completed 001–050;
+        // 011 and 036 failed its old oracle and must remain available for rerun.
+        foreach (range(1, 134) as $number) {
+            $id = sprintf('commerce-%03d', $number);
+            $this->assertSame($number > 50 || in_array($number, [11, 36], true), in_array($id, $active, true), $id);
+        }
+        $this->expectException(InvalidArgumentException::class);
+        $corpus->cases('commerce-001');
     }
 
     public function test_new_suite_is_persisted_and_queued_without_any_inference(): void

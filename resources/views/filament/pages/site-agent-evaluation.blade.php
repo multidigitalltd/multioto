@@ -1,6 +1,6 @@
 <x-filament-panels::page>
     <div dir="rtl" class="space-y-6" @if ($active) wire:poll.5s="$refresh" @endif>
-        <x-filament::section heading="800 תרחישי שיחה עם הבוט">
+        <x-filament::section :heading="$suiteCounts['all'].' תרחישי שיחה עם הבוט'">
             <div class="space-y-3 text-sm text-gray-700 dark:text-gray-300">
                 <p>
                     הבדיקה מפעילה את ספק ה־AI והמודל שהוגדרו במערכת מול אתר WordPress וחנות WooCommerce מדומים.
@@ -9,6 +9,16 @@
                 <p class="font-medium">
                     הריצה צורכת שימוש בתשלום אצל ספק ה־AI. היא אינה משנה אתרי לקוחות, אינה שולחת הודעות ללקוחות ואינה מחייבת אותם.
                 </p>
+                @if ($provider === 'google')
+                    <p>
+                        מטמון Gemini מופעל בהרצות חדשות: ההנחיות הקבועות וקטלוג הכלים נשמרים לשימוש חוזר בין תרחישים וריצות,
+                        בהתאם לתוקף ולהגדרות. היסטוריית השיחות ונתוני האתר המדומה אינם נשמרים במטמון המשותף.
+                        יצירת המטמון, אחסונו והטוקנים בכל בקשה עשויים להיות מחויבים אצל הספק; מטמון אינו מבטל את העלות.
+                        אם המטמון אינו זמין, ההרצה נעצרת כדי למנוע המשך סבב גדול ללא מטמון.
+                    </p>
+                @else
+                    <p>המטמון המפורש המשותף בין תרחישי הבדיקה זמין עבור Gemini. אצל הספק שנבחר אין כאן הבטחה לשימוש במטמון.</p>
+                @endif
                 <p>
                     מעבר של תרחיש מעיד על עמידה בבדיקות שהוגדרו עבורו. זו אינה בדיקה של כל תוסף או מצב אפשרי באתר אמיתי,
                     ואין כאן סקירה אנושית של איכות כל תשובה. תרחיש שנכשל או נחסם נשאר מסומן כך בדוח.
@@ -26,11 +36,11 @@
                 <div class="max-w-lg space-y-1">
                     <label for="evaluation-suite" class="block font-medium">תרחישים להרצה</label>
                     <select id="evaluation-suite" wire:model.live="suite" @disabled($active) aria-describedby="evaluation-suite-help" class="w-full rounded-lg border-gray-300 bg-white text-gray-950 focus:border-primary-500 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white">
-                        <option value="original">400 התרחישים המקוריים — בדיקה חוזרת אחרי התיקונים</option>
-                        <option value="round2">400 תרחישים חדשים — סבב שני</option>
-                        <option value="all">כל 800 התרחישים</option>
+                        <option value="original">{{ $suiteCounts['original'] }} התרחישים שנותרו מהסבב המקורי</option>
+                        <option value="round2">{{ $suiteCounts['round2'] }} תרחישים חדשים — סבב שני</option>
+                        <option value="all">כל {{ $suiteCounts['all'] }} התרחישים</option>
                     </select>
-                    <p id="evaluation-suite-help" class="text-sm">אפשר לחזור על הסבב המקורי כדי להשוות תוצאות, להפעיל את התרחישים החדשים או להריץ את שני הסבבים יחד.</p>
+                    <p id="evaluation-suite-help" class="text-sm">התרחישים שכבר עברו בדוח שסופק הוסרו מהרצות חדשות. אפשר לבדוק את התרחישים שנותרו, את הסבב החדש או את שניהם יחד. דוחות קודמים שומרים על התוצאות והמספרים המקוריים שלהם.</p>
                 </div>
                 <x-filament::button wire:click="start" wire:loading.attr="disabled" :disabled="! $configured || $active" icon="heroicon-o-play">
                     הפעלת {{ $selectedCount }} התרחישים
@@ -58,7 +68,7 @@
                     'canceled' => 'הריצה הופסקה לבקשת מנהל',
                 ];
                 $completed = (int) ($run['completed'] ?? 0);
-                $total = max(1, (int) ($run['total'] ?? 400));
+                $total = max(1, (int) ($run['total'] ?? $selectedCount));
             @endphp
             <x-filament::section heading="הריצה האחרונה">
                 <div class="space-y-4">
@@ -76,6 +86,31 @@
                             </div>
                         @endforeach
                     </dl>
+
+                    <div class="space-y-2 rounded-lg border border-gray-200 p-4 dark:border-gray-700">
+                        <h2 class="font-semibold">מטמון וטוקנים בריצה זו</h2>
+                        <p class="text-sm">{{ $cacheStatus }}</p>
+                        @if (array_key_exists('cached_input_tokens', $run))
+                            @php
+                                $inputTokens = max(0, (int) ($run['input_tokens'] ?? 0));
+                                $cachedTokens = max(0, (int) $run['cached_input_tokens']);
+                            @endphp
+                            <dl class="space-y-1 text-sm text-gray-600 dark:text-gray-400">
+                                <div><dt class="inline font-medium">מצב המטמון המפורש שהוגדר לריצה:</dt> <dd class="inline">{{ ($run['cache_enabled'] ?? false) ? 'מופעל' : 'כבוי' }}</dd></div>
+                                <div><dt class="inline font-medium">סך טוקני הקלט שדווחו:</dt> <dd class="inline" dir="ltr">{{ number_format($inputTokens) }}</dd></div>
+                                <div><dt class="inline font-medium">טוקני קלט מהמטמון שאושרו על ידי הספק:</dt> <dd class="inline" dir="ltr">{{ number_format($cachedTokens) }}</dd></div>
+                                <div><dt class="inline font-medium">טוקני קלט שלא דווחו כמטמון:</dt> <dd class="inline" dir="ltr">{{ number_format(max(0, (int) ($run['uncached_input_tokens'] ?? 0))) }}</dd></div>
+                                @if ($inputTokens > 0)
+                                    <div><dt class="inline font-medium">חלק המטמון מתוך טוקני הקלט:</dt> <dd class="inline" dir="ltr">{{ number_format(100 * $cachedTokens / $inputTokens, 1) }}%</dd></div>
+                                @else
+                                    <div>טרם נמדדו טוקני קלט.</div>
+                                @endif
+                                <div><dt class="inline font-medium">בקשות עם טוקני מטמון שאושרו:</dt> <dd class="inline" dir="ltr">{{ number_format(max(0, (int) ($run['cache_hit_requests'] ?? 0))) }}</dd></div>
+                                <div><dt class="inline font-medium">קריאות לניהול המטמון / תשובות שהתקבלו:</dt> <dd class="inline" dir="ltr">{{ number_format(max(0, (int) ($run['cache_management_requests'] ?? 0))) }} / {{ number_format(max(0, (int) ($run['cache_management_responses'] ?? 0))) }}</dd></div>
+                            </dl>
+                            <p class="text-xs text-gray-500 dark:text-gray-400">המדדים מצטברים מהתשובות שנאספו עד כה. חלק הטוקנים שנקראו מהמטמון אינו אחוז החיסכון הכספי; העלות תלויה במחירי הקלט, הפלט והמטמון אצל הספק.</p>
+                        @endif
+                    </div>
 
                     <dl class="space-y-1 text-sm text-gray-600 dark:text-gray-400">
                         <div><dt class="inline font-medium">קבוצת תרחישים:</dt> <dd class="inline">{{ ['original' => 'הסבב המקורי', 'round2' => 'הסבב החדש', 'all' => 'שני הסבבים'][$run['suite'] ?? 'original'] ?? 'לא ידועה' }}</dd></div>
