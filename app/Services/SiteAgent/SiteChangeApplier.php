@@ -71,6 +71,20 @@ class SiteChangeApplier
             return $this->refuse('הבקשה חסרה עמוד.');
         }
 
+        // "The homepage" refers to a setting as well as to the post's text.
+        // If it moved while approval waited, editing the old page is not the
+        // change the owner approved. Undo still targets the exact edited post.
+        if (array_key_exists('front_page', $plan)) {
+            $currentFront = $this->planner->frontPage($site);
+            $expectedFront = $plan['front_page'];
+            if (! is_array($expectedFront) || $currentFront === null
+                || ($expectedFront['mode'] ?? null) !== $currentFront['mode']
+                || ($expectedFront['id'] ?? null) !== $pageId || $currentFront['id'] !== $pageId
+                || ($expectedFront['blog_id'] ?? null) !== $currentFront['blog_id']) {
+                return $this->refuse(self::STALE);
+            }
+        }
+
         try {
             $page = $this->read($site, $pageId);
         } catch (\Throwable $e) {
@@ -381,6 +395,10 @@ class SiteChangeApplier
 
         if ($productId <= 0 || $fields === []) {
             return $this->refuse('הבקשה חסרה מוצר או ערכים לעדכון.');
+        }
+
+        if (! $this->supportsSaleMinutes($site, $fields)) {
+            return $this->refuse('קביעת שעת מבצע מדויקת דורשת תוסף סוכן בגרסה 1.11.0 ומעלה.');
         }
 
         // Is the product still what the customer was shown?
@@ -844,6 +862,10 @@ class SiteChangeApplier
             return $this->refuse('אין לי את הערכים הקודמים של המוצר.');
         }
 
+        if (! $this->supportsSaleMinutes($site, $fields)) {
+            return $this->refuse('שחזור שעת מבצע מדויקת דורש תוסף סוכן בגרסה 1.11.0 ומעלה.');
+        }
+
         // Has the shop moved since we changed it?
         //
         // The same rule as the page undo, and it matters more here: between the
@@ -881,6 +903,20 @@ class SiteChangeApplier
         }
 
         return ['ok' => true, 'reason' => null, 'message' => null];
+    }
+
+    /** An older site plugin must not reduce a confirmed minute to a date-only sale. */
+    private function supportsSaleMinutes(Site $site, array $fields): bool
+    {
+        foreach (['sale_from', 'sale_to'] as $key) {
+            if (is_string($fields[$key] ?? null) && strlen($fields[$key]) > 10) {
+                $installed = (string) data_get($site->mcp_capabilities, 'server.version', '');
+
+                return $installed !== '' && version_compare($installed, '1.11.0', '>=');
+            }
+        }
+
+        return true;
     }
 
     /**

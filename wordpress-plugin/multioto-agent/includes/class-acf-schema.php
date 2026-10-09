@@ -110,6 +110,9 @@ class Multioto_Agent_Acf_Schema
             if (! $post instanceof WP_Post || in_array($post->post_type, $excluded, true) || ! in_array($post->post_type, $types, true) || in_array($post->post_status, ['trash', 'auto-draft'], true)) {
                 self::fail('פריט תוכן זמין לא נמצא.');
             }
+            if (class_exists('Multioto_Agent_Fields')) {
+                Multioto_Agent_Fields::assertLearnDashContentAllowed($post->post_type);
+            }
             return $target + ['acf_id' => $id, 'label' => (string) $post->post_title];
         }
         if ($context === 'user') {
@@ -158,6 +161,8 @@ class Multioto_Agent_Acf_Schema
                     continue;
                 }
                 $field = self::loadedField($field);
+                $postType = $target['context'] === 'post' ? (string) get_post($target['id'])->post_type : '@'.$target['context'];
+                $field = self::learnDashFieldContext($field, $postType, (string) ($field['name'] ?? ''));
                 $key = $field['key'];
                 if (isset($fields[$key])) {
                     continue;
@@ -170,6 +175,43 @@ class Multioto_Agent_Acf_Schema
             }
         }
         return array_values($fields);
+    }
+
+    /** Mark only actual reserved storage names; a grouped custom course_id is unrelated metadata. */
+    private static function learnDashFieldContext(array $field, string $postType, string $storage, int $depth = 0): array
+    {
+        if ($depth > self::MAX_DEPTH) {
+            self::fail('סכמת ACF עמוקה מדי.');
+        }
+        if (! class_exists('Multioto_Agent_Fields') || ! Multioto_Agent_Fields::learnDashActive()) {
+            return $field;
+        }
+        if (Multioto_Agent_Fields::isLearnDashReserved($storage, $postType)) {
+            $field['_multioto_learndash_reserved'] = true;
+        }
+        $type = $field['type'] ?? '';
+        $prepared = $field;
+        if (in_array($type, ['group', 'clone'], true) && function_exists('acf_get_field_type')) {
+            $adapter = acf_get_field_type($type);
+            if (is_object($adapter) && is_callable([$adapter, 'prepare_field_for_db'])) {
+                $prepared['name'] = $storage;
+                $prepared = $adapter->prepare_field_for_db($prepared);
+            }
+        }
+        foreach ((array) ($field['sub_fields'] ?? []) as $index => $child) {
+            $name = (string) ($child['_name'] ?? $child['name'] ?? '');
+            $childStorage = $type === 'group' ? $storage.'_'.$name : ($type === 'repeater' ? $storage.'_0_'.$name : (string) ($child['name'] ?? ''));
+            if (isset($prepared['sub_fields'][$index]['name']) && $prepared['sub_fields'][$index]['name'] !== ($child['name'] ?? null)) {
+                $childStorage = (string) $prepared['sub_fields'][$index]['name'];
+            }
+            $field['sub_fields'][$index] = self::learnDashFieldContext($child, $postType, $childStorage, $depth + 1);
+        }
+        foreach ((array) ($field['layouts'] ?? []) as $layoutIndex => $layout) {
+            foreach ((array) ($layout['sub_fields'] ?? []) as $index => $child) {
+                $field['layouts'][$layoutIndex]['sub_fields'][$index] = self::learnDashFieldContext($child, $postType, $storage.'_0_'.(string) ($child['_name'] ?? $child['name'] ?? ''), $depth + 1);
+            }
+        }
+        return $field;
     }
 
     /** Loaded Clone sub_fields already contain ACF's exact prefixed keys and names. */
@@ -279,7 +321,7 @@ class Multioto_Agent_Acf_Schema
         $name = (string) ($field['name'] ?? '');
         $normalized = strtolower((string) preg_replace('/([a-z0-9])([A-Z])/', '$1_$2', $name));
         $normalized = str_replace('-', '_', $normalized);
-        return $name === '' || strpos($name, '_') === 0 || ! empty($field['readonly']) || ! empty($field['disabled'])
+        return $name === '' || strpos($name, '_') === 0 || ! empty($field['_multioto_learndash_reserved']) || ! empty($field['readonly']) || ! empty($field['disabled'])
             || in_array($normalized, ['user_pass', 'session_tokens', 'wp_capabilities', 'wp_user_level'], true)
             || (bool) preg_match('/(^|_)(api_?key|access_?token|refresh_?token|secret|private_?key|auth_?token|client_?secret|encryption_?key|webhook_?secret|token|authorization|credentials?)(_|$)/', $normalized)
             || (($field['type'] ?? '') !== 'password' && (bool) preg_match('/(^|_)(password|passwd|pwd)(_|$)/', $normalized));

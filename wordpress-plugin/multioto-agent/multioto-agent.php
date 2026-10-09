@@ -3,7 +3,7 @@
  * Plugin Name:       Multi Digital Agent
  * Plugin URI:        https://multidigital.co.il
  * Description:        מחבר את האתר לפאנל התפעול של Multi Digital: נקודת קצה MCP מאובטחת לאבחון ותיקון מרחוק.
- * Version:           1.10.0
+ * Version:           1.11.0
  * Requires at least: 6.0
  * Requires PHP:      7.4
  * Author:            Multi Digital
@@ -27,7 +27,7 @@ if (! defined('ABSPATH')) {
     exit; // No direct access.
 }
 
-define('MULTIOTO_AGENT_VERSION', '1.10.0');
+define('MULTIOTO_AGENT_VERSION', '1.11.0');
 define('MULTIOTO_AGENT_FILE', __FILE__);
 define('MULTIOTO_AGENT_SLUG', 'multioto-agent');
 define('MULTIOTO_AGENT_DIR', plugin_dir_path(__FILE__));
@@ -71,6 +71,9 @@ require_once MULTIOTO_AGENT_DIR.'includes/class-acf-schema.php';
 require_once MULTIOTO_AGENT_DIR.'includes/class-acf-management.php';
 require_once MULTIOTO_AGENT_DIR.'includes/class-fields.php';
 require_once MULTIOTO_AGENT_DIR.'includes/class-elementor.php';
+require_once MULTIOTO_AGENT_DIR.'includes/class-sale-schedule.php';
+require_once MULTIOTO_AGENT_DIR.'includes/class-category-sales.php';
+require_once MULTIOTO_AGENT_DIR.'includes/class-learndash.php';
 require_once MULTIOTO_AGENT_DIR.'includes/class-woo-writer.php';
 require_once MULTIOTO_AGENT_DIR.'includes/class-store-admin.php';
 require_once MULTIOTO_AGENT_DIR.'includes/class-leads.php';
@@ -97,6 +100,8 @@ add_action('plugins_loaded', function () {
     // stranger's administrator account.
     $guard = new Multioto_Agent_Guard;
     $guard->boot();
+
+    Multioto_Agent_Sale_Schedule::boot();
 
     $server = new Multioto_Agent_Mcp_Server;
     $server->boot();

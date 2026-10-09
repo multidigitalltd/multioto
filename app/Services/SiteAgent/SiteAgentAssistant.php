@@ -389,6 +389,11 @@ class SiteAgentAssistant
             'expires_at' => now()->addMinutes(max(1, (int) config('siteagent.confirmation_minutes', 30))),
         ]);
 
+        if ($turn->request->operation === SiteAgentRequest::OP_CATEGORY_SALE) {
+            $turn->request->update(['preview' => $turn->request->preview."\n\n".'לבדיקת כל המוצרים והמחירים לפני אישור: '
+                .route('portal.site-agent.change', ['change' => $turn->request->id])]);
+        }
+
         return ['content' => 'ההצעה נשמרה ומוצגת לבעל האתר כלשונה, עם בקשה לאשר ב"כן". היא עוד לא בוצעה. אל תחזור עליה ואל תכתוב שבוצעה — סיים עכשיו.'];
     }
 
@@ -398,7 +403,7 @@ class SiteAgentAssistant
         return [
             'name' => self::EDIT_PAGES,
             'description' => 'שינוי טקסט בעמודי האתר (כולל עמודים שבנויים באלמנטור): החלפת טקסט, הוספת פסקה או שינוי כותרת של עמוד. '
-                .'כתבו ב-instruction את הבקשה המלאה במילים — באיזה עמוד, מה להחליף ובמה. העורך מאתר את העמוד ומציג לבעל האתר תצוגה מקדימה בעצמו.',
+                .'כתבו ב-instruction את הבקשה המלאה במילים — באיזה עמוד, מה להחליף ובמה, כולל הפרטים מהשיחה הקודמת. אם חסר הטקסט הישן או החדש, שאלו עליו לפני הקריאה. העורך מאתר את העמוד ומציג לבעל האתר תצוגה מקדימה בעצמו.',
             'input_schema' => [
                 'type' => 'object',
                 'properties' => ['instruction' => ['type' => 'string']],
@@ -428,6 +433,9 @@ class SiteAgentAssistant
             in_array('propose_plugin_toggle', $names, true) ? 'הפעלה וכיבוי של תוספים מותרים ובדיקת יומן השגיאות' : null,
             in_array('propose_theme_switch', $names, true) ? 'מעבר בין תבניות מותקנות' : null,
             in_array('get_acf', $names, true) ? 'ACF ו-ACF Pro: קריאה ועריכה של כל סוגי השדות המובנים, כולל שדות מקוננים ועמודי אפשרויות, עם אישור ושחזור' : null,
+            in_array('propose_category_sale', $names, true) ? 'מבצע מתוזמן לכל מוצרי קטגוריית WooCommerce, כולל וריאציות ותתי-קטגוריות, עם בדיקת מחירים מלאה לפני אישור' : null,
+            in_array('find_ld_courses', $names, true) ? 'LearnDash: קורסים ומבנה לקריאה' : null,
+            in_array('get_ld_student_course', $names, true) ? 'LearnDash: גישת תלמידים והתקדמות, רישום ישיר לקורס וחברות בקבוצה בכפוף ליכולות האתר' : null,
             in_array('list_cct_types', $names, true) ? 'JetEngine CCT: גילוי סוגים ושדות, חיפוש, יצירה ועריכת רשומות נתמכות' : null,
             in_array('propose_content_manage', $names, true) ? 'תזמון תוכן, סדר והיררכיה' : null,
             in_array('propose_seo_update', $names, true) ? 'כותרות ותיאורי SEO עם Yoast או Rank Math וקישורים פנימיים' : null,
@@ -450,6 +458,7 @@ class SiteAgentAssistant
             '2. שינוי באתר נעשה אך ורק דרך כלי propose_* או edit_page_text. הצעה אחת בכל הודעה; אחרי שהגשת אותה — סיים. לעולם אל תכתוב שההצעה החדשה בוצעה, עודכנה או נשלחה: שינוי קורה רק אחרי שבעל האתר עונה "כן" על התצוגה המקדימה, וזה מטופל מחוץ לשיחה איתך. על פעולה קודמת מותר לומר שבוצעה רק אם מצב הפעולה שסופק הוא applied; reverted פירושו שהוחזרה. זה תיעוד העבר, לא אישור למצב האתר כיום.',
             '3. לפני הצעה על פריט קיים, מצא אותו בכלי קריאה באותו סבב (find_* / get_*) והשתמש במזהה שהוחזר. אם יש כמה התאמות — שאל לאיזו הוא מתכוון, אל תבחר בעצמך.',
             '4. המשך את השיחה מהנקודה שבה נעצרה: "אותו מוצר", "שם", "השנייה", "תקצר את זה" או תשובה לשאלה שלך מתייחסים להקשר האחרון המתאים באתר הזה. השתמש בפרטים שכבר נמסרו בלי לשאול עליהם שוב. אם יש כמה פירושים סבירים או שההקשר חסר — שאל שאלה אחת ממוקדת עם האפשרויות הידועות. אל תנחש יעד ואל תציע שינוי שלא התבקש.',
+            '4א. "להחליף טקסט בדף הבית" היא בקשת עריכה ברורה שחסרים בה פרטים: שאל "איזה טקסט בדף הבית תרצו להחליף, ומה לכתוב במקומו?". כשהתשובה מגיעה, שמור את דף הבית כיעד והעבר לעורך את הבקשה המלאה. אל תגיד שלא הבנת כשאפשר לשאול מה חסר.',
             '5. אי אפשר מכאן: החזר כספי, מחיקה סופית של תוכן או קובצי מדיה, מחיקה של הזמנות או משתמשים, מחיקה סופית של מוצרים'.$this->productAbilities($names).', הרשאת מנהל אתר, עדכון וורדפרס עצמו, התקנה או עדכון של תוספים ותבניות ללא מסלול שחזור מאומת, הסרת פריט תפריט, ביטול מנוי סופי, הערה הנשלחת באימייל ללקוח, כלי אבטחה או עריכת קוד. תוכן ניתן להעביר לפח עם שחזור; ניתן להחליף תבנית מותקנת רק אם קיים הכלי. אמור זאת בנימוס'
                 .($support !== '' ? " והפנה לצוות ({$support})." : ' והפנה לצוות Multi Digital.'),
             ($off = app(SiteAgentPermissions::class)->disabledLabels()) !== []
@@ -465,6 +474,8 @@ class SiteAgentAssistant
                 ? '12. מוצר חדש ("תעלה/תוסיף/תיצור מוצר…") — propose_product_create ישירות עם מה שנמסר (שם, מחיר, תיאור). זה אפשרי מכאן: אל תפנה לצוות. חסר שם — שאל עליו; את השאר אפשר להשלים אחר כך.'
                 : null,
             '14. ACF: קרא get_acf למיקום ולשדה המדויקים בסבב הנוכחי, ואז propose_acf_update. השתמש במפתחות field_ ובנתיבים מהסכמה; ערוך תא או שורה ממוקדים. Repeater ו-Flexible Content תומכים בהוספה, עריכה, הסרה וסידור שורות; Group ו-Clone בשדות ילד. קרא list_acf_options לפני בחירת עמוד אפשרויות. אין לנחש סודות מוסתרים או להחליף אותם כשמשנים שדה סמוך. שדות מתוספי צד שלישי אינם מובטחים. propose_fields_update מיועד למטא פשוט של JetEngine.',
+            '15. למבצע על קטגוריה: מצא category_id דרך find_terms עם product_cat, קרא get_category_sale עם בחירה מפורשת בתתי-קטגוריות ואז propose_category_sale. קבע תאריך ושעת סיום מפורשים לפי אזור הזמן שהאתר החזיר; תאריך יחסי כמו מחר מתייחס לשעון האתר. fixed הוא סכום הנחה מהמחיר הרגיל, לא מחיר סופי. אין להחליף מבצעים קיימים בלי בקשת בעל האתר. ההצעה מציגה מחירים והחרגות וקישור לרשימה מלאה; אין לדלג על האישור גם לקטגוריה גדולה.',
+            '16. LearnDash: בדוק get_ld_capabilities. מצא את התלמיד ב-find_users ואת הקורס או הקבוצה בכלי LearnDash; קרא get_ld_membership לאותו תלמיד, kind ויעד בסבב הנוכחי לפני propose_ld_membership. הסרת רישום ישיר יכולה להשאיר גישה דרך קבוצה או קורס פתוח. שינוי חברות בקבוצה משפיע על הקורסים המפורטים בהצעה. התקדמות ומבחנים הם לקריאה בלבד: אין איפוס, השלמה, ציונים או שינוי תשלומים. שיוך קורסים לקבוצה ומבנה הלמידה אינם ניתנים לעריכה כאן. עריכת טקסט קיימת כפופה להרשאת תוכן, ואינה משנה מבנה קורס. אין להציג אימיילים מתוך כלי LearnDash. הודעות ואוטומציות חיצוניות שהאתר מפעיל בעקבות הרשמה לא ניתנות לביטול באמצעות שחזור ההרשמה.',
             '13. CCT אינו פוסט: השתמש רק בכלי CCT עם הסוג והמזהה המדויקים. אין למחוק רשומות; מעבר לטיוטה משאיר את הרשומה וייתכן שתצוגות מותאמות מציגות טיוטות. ערוך רק שדות נתמכים בסכמה. תוספי JetEngine, SEO ו-Optimole זמינים רק אם קריאת המצב הצליחה. אין לטעון שכל פעולה מלוח הבקרה אפשרית.',
             '14. תזמון מתייחס לאזור הזמן שהאתר החזיר. קישורים פנימיים דורשים טקסט מדויק ויעד מאומת. שינוי שם מדיה משנה את כותרת הספרייה, לא את שם הקובץ או כתובתו. כדי להעלות תמונה לספרייה בעל האתר שולח אותה בוואטסאפ עם בקשת העלאה ותיאור; השינוי ממתין לאישור.',
             '',
@@ -632,7 +643,7 @@ class SiteAgentAssistant
     {
         $target = [];
 
-        foreach (['id', 'created_id', 'target_id', 'post_id', 'page_id', 'product_id', 'order_id', 'subscription_id', 'user_id', 'comment_id', 'item_id', 'attachment_id', 'term_id', 'menu_id'] as $key) {
+        foreach (['id', 'created_id', 'target_id', 'post_id', 'page_id', 'product_id', 'category_id', 'order_id', 'subscription_id', 'user_id', 'comment_id', 'item_id', 'attachment_id', 'term_id', 'menu_id'] as $key) {
             $value = data_get($request->plan, $key) ?? data_get($request->plan, 'arguments.'.$key) ?? data_get($request->restore, $key);
 
             if (is_numeric($value) && (int) $value > 0) {
@@ -640,12 +651,16 @@ class SiteAgentAssistant
             }
         }
 
-        foreach (['order_number', 'post_type', 'taxonomy', 'cct_slug', 'content_type', 'type', 'context', 'options_page', 'field_key'] as $key) {
+        foreach (['order_number', 'post_type', 'taxonomy', 'cct_slug', 'content_type', 'type', 'context', 'options_page', 'field_key', 'kind'] as $key) {
             $value = data_get($request->plan, $key) ?? data_get($request->plan, 'arguments.'.$key);
 
             if (is_string($value) && $value !== '') {
                 $target[$key] = Str::limit($value, 100);
             }
+        }
+
+        if ($request->operation === SiteAgentRequest::OP_CATEGORY_SALE) {
+            $target['include_children'] = (bool) data_get($request->plan, 'arguments.include_children', true);
         }
 
         return $target;

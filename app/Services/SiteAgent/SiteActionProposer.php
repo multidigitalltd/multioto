@@ -148,7 +148,8 @@ class SiteActionProposer
             }
         }
 
-        return [...$out, ...app(SiteAgentExtendedActions::class)->definitions($site), ...app(SiteAgentAcfActions::class)->definitions($site)];
+        return [...$out, ...app(SiteAgentExtendedActions::class)->definitions($site), ...app(SiteAgentAcfActions::class)->definitions($site),
+            ...app(SiteAgentCategorySales::class)->definitions($site), ...app(SiteAgentLearnDashActions::class)->definitions($site)];
     }
 
     /**
@@ -164,7 +165,7 @@ class SiteActionProposer
         $available = array_filter($this->catalogue(), fn (array $row): bool => SiteAgentReversibility::reasonFor($row[0]) === null);
 
         return array_values(array_unique([...array_column($available, 1), 'wp_plugin_activate',
-            ...app(SiteAgentExtendedActions::class)->pluginTools(), ...SiteAgentAcfActions::pluginTools()]));
+            ...app(SiteAgentExtendedActions::class)->pluginTools(), ...SiteAgentAcfActions::pluginTools(), ...SiteAgentCategorySales::pluginTools(), ...SiteAgentLearnDashActions::pluginTools()]));
     }
 
     /**
@@ -176,7 +177,7 @@ class SiteActionProposer
     {
         return [
             ['propose_product_update', 'wc_product_update',
-                'הצעה לעדכן מוצר קיים: שם, תיאור קצר, מחיר רגיל, מחיר מבצע (ריק = סיום המבצע), תאריכי מבצע (YYYY-MM-DD), כמות במלאי, מצב מלאי (instock/outofstock/onbackorder), סטטוס (publish/draft/private). רק השדות שמשתנים.',
+                'הצעה לעדכן מוצר קיים: שם, תיאור קצר, מחיר רגיל, מחיר מבצע (ריק = סיום המבצע), מועדי מבצע לפי שעון האתר (YYYY-MM-DD או YYYY-MM-DD HH:mm בתוסף 1.11.0 ומעלה), כמות במלאי, מצב מלאי (instock/outofstock/onbackorder), סטטוס (publish/draft/private). רק השדות שמשתנים. מבצע קטגוריה שלמה נעשה דרך propose_category_sale.',
                 ['product_id' => ['type' => 'integer'], 'name' => ['type' => 'string'], 'short_description' => ['type' => 'string'],
                     'regular_price' => ['type' => 'string'], 'sale_price' => ['type' => 'string'], 'sale_from' => ['type' => 'string'],
                     'sale_to' => ['type' => 'string'], 'stock_quantity' => ['type' => 'integer'], 'stock_status' => ['type' => 'string'],
@@ -277,7 +278,8 @@ class SiteActionProposer
      */
     public function isProposal(string $name): bool
     {
-        return $name === SiteAgentAcfActions::TOOL || in_array($name, self::PROPOSALS, true) || app(SiteAgentExtendedActions::class)->handles($name);
+        return in_array($name, [SiteAgentAcfActions::TOOL, SiteAgentCategorySales::TOOL, SiteAgentLearnDashActions::TOOL], true)
+            || in_array($name, self::PROPOSALS, true) || app(SiteAgentExtendedActions::class)->handles($name);
     }
 
     /**
@@ -303,11 +305,14 @@ class SiteActionProposer
 
         try {
             $extended = app(SiteAgentExtendedActions::class);
-            $offer = $name === SiteAgentAcfActions::TOOL
-                ? app(SiteAgentAcfActions::class)->propose($site, $input, $seen)
-                : ($extended->handles($name)
+            $offer = match ($name) {
+                SiteAgentAcfActions::TOOL => app(SiteAgentAcfActions::class)->propose($site, $input, $seen),
+                SiteAgentCategorySales::TOOL => app(SiteAgentCategorySales::class)->propose($site, $input, $seen),
+                SiteAgentLearnDashActions::TOOL => app(SiteAgentLearnDashActions::class)->propose($site, $input, $seen),
+                default => $extended->handles($name)
                     ? $extended->propose($site, $name, $input, $seen)
-                    : $this->{Str::camel($name)}($site, $input, $seen));
+                    : $this->{Str::camel($name)}($site, $input, $seen),
+            };
 
             if (isset($offer['plan'], $offer['preview'])) {
                 $plan = $offer['plan'];
@@ -385,6 +390,13 @@ class SiteActionProposer
             return $this->error($problem);
         }
 
+        foreach (['sale_from', 'sale_to'] as $dateField) {
+            if (isset($fields[$dateField]) && strlen((string) $fields[$dateField]) > 10
+                && ! $this->pluginAtLeast($site, '1.11.0')) {
+                return $this->error('קביעת שעת מבצע מדויקת דורשת עדכון של תוסף הסוכן לגרסה 1.11.0 ומעלה.');
+            }
+        }
+
         $product = $this->json($site, 'wc_product_get', ['product_id' => $productId]);
 
         if (! isset($product['id'])) {
@@ -411,6 +423,9 @@ class SiteActionProposer
 
         foreach ($fields as $field => $value) {
             $lines[] = $this->productLine($field, $product[$field] ?? null, $value);
+        }
+        if (array_intersect_key($fields, array_flip(['sale_from', 'sale_to'])) !== [] && is_string($product['timezone'] ?? null)) {
+            $lines[] = 'מועדי המבצע לפי שעון האתר: '.$product['timezone'];
         }
 
         return [
@@ -1883,8 +1898,8 @@ class SiteActionProposer
         }
 
         foreach (['sale_from', 'sale_to'] as $date) {
-            if (isset($fields[$date]) && $fields[$date] !== '' && ! $this->isDate((string) $fields[$date])) {
-                return self::PRODUCT_FIELDS[$date].' חייב להיות תאריך בפורמט YYYY-MM-DD.';
+            if (isset($fields[$date]) && $fields[$date] !== '' && ! $this->isSaleDate($fields[$date])) {
+                return self::PRODUCT_FIELDS[$date].' חייב להיות מועד בפורמט YYYY-MM-DD או YYYY-MM-DD HH:mm לפי שעון האתר.';
             }
         }
 
@@ -1988,6 +2003,19 @@ class SiteActionProposer
         $date = \DateTimeImmutable::createFromFormat('!Y-m-d', $value);
 
         return $date !== false && $date->format('Y-m-d') === $value;
+    }
+
+    private function isSaleDate(mixed $value): bool
+    {
+        if (! is_string($value)) {
+            return false;
+        }
+        if ($this->isDate($value)) {
+            return true;
+        }
+        $date = \DateTimeImmutable::createFromFormat('!Y-m-d H:i', $value, new \DateTimeZone('UTC'));
+
+        return $date !== false && $date->format('Y-m-d H:i') === $value;
     }
 
     private function isFutureDate(string $value): bool

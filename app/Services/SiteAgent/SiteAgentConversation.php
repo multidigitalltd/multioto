@@ -157,6 +157,16 @@ class SiteAgentConversation
                 return $this->answerProductQuestion($subscriber, $pending, $text, $messageId);
             }
 
+            if ($mediaId === null && $this->isPageQuestion($pending)) {
+                if ($this->matches($text, self::NO)) {
+                    $this->settle($pending, SiteAgentRequest::CANCELED);
+
+                    return 'בוטל, לא שיניתי כלום. אפשר לבקש משהו אחר.';
+                }
+
+                return $this->answerPageQuestion($subscriber, $pending, $text, $messageId);
+            }
+
             if ($this->matches($text, self::YES)) {
                 return $this->confirm($pending);
             }
@@ -251,6 +261,15 @@ class SiteAgentConversation
         }
 
         $plan ??= $this->planner->plan($site, $text);
+
+        if (is_array($plan) && isset($plan['question'])) {
+            $this->holdQuestion($subscriber, $site, $text, $messageId, [
+                'kind' => 'page',
+                'question' => $plan['question'],
+            ]);
+
+            return $plan['question'];
+        }
 
         // A refusal the planner can explain — an Elementor page it can replace
         // text in but not append to. Saying which page and what IS possible
@@ -398,6 +417,77 @@ class SiteAgentConversation
     {
         return data_get($request->plan, 'kind') === 'product'
             && filled(data_get($request->plan, 'question'));
+    }
+
+    private function isPageQuestion(SiteAgentRequest $request): bool
+    {
+        return data_get($request->plan, 'kind') === 'page'
+            && filled(data_get($request->plan, 'question'));
+    }
+
+    /** Keep the named page and all earlier answers until there is an exact preview. */
+    private function answerPageQuestion(SiteAgentSubscriber $subscriber, SiteAgentRequest $request, string $answer, ?string $messageId): string
+    {
+        if ($subscriber->site === null) {
+            return 'אין לי כרגע חיבור לאתר.';
+        }
+
+        // A bare yes is not the missing text and cannot consent to a question.
+        if ($this->matches($answer, self::YES)) {
+            return (string) data_get($request->plan, 'question');
+        }
+
+        $context = trim((string) data_get($request->plan, 'text', ''));
+        if (mb_strlen($context) > 3000) {
+            // Retain the original target and the latest corrections, not only
+            // the oldest answers when a clarification takes several turns.
+            $context = Str::limit($context, 1000)."\n[…]\n".mb_substr($context, -1900);
+        }
+
+        $combined = $context
+            ."\nשאלת הבהרה: ".data_get($request->plan, 'question')
+            ."\nתשובת בעל האתר: ".Str::limit($answer, 2000);
+        $plan = $this->planner->plan($subscriber->site, $combined);
+
+        if (isset($plan['refusal'])) {
+            // A temporary service/read failure must not discard their context.
+            $request->update(['plan' => [...$request->plan, 'text' => $combined]]);
+
+            return $plan['refusal'];
+        }
+
+        if ($plan === null) {
+            // A different subject is not another answer to the old question.
+            $this->settle($request, SiteAgentRequest::CANCELED);
+
+            return $this->converse($subscriber, $answer, $messageId)
+                ?? $this->propose($subscriber, $answer, $messageId);
+        }
+
+        if (isset($plan['question'])) {
+            $question = $plan['question'];
+            $request->update([
+                'plan' => ['kind' => 'page', 'question' => $question, 'text' => Str::limit($combined, 6000)],
+                'message' => Str::limit($combined, 2000),
+                'expires_at' => now()->addMinutes(max(1, (int) config('siteagent.confirmation_minutes', 30))),
+            ]);
+
+            return $question;
+        }
+
+        if (! app(SiteAgentPermissions::class)->allowsOperation($plan['operation'])) {
+            return SiteAgentPermissions::refusal();
+        }
+
+        $request->update([
+            'operation' => $plan['operation'],
+            'plan' => $plan,
+            'preview' => $this->preview($plan),
+            'message' => Str::limit($combined, 2000),
+            'expires_at' => now()->addMinutes(max(1, (int) config('siteagent.confirmation_minutes', 30))),
+        ]);
+
+        return $request->refresh()->preview."\n\n".self::CONFIRM_PROMPT;
     }
 
     /**

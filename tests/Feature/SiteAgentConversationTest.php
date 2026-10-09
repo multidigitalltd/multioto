@@ -379,7 +379,7 @@ class SiteAgentConversationTest extends TestCase
     public function test_an_unclear_request_changes_nothing_and_says_how_to_help(): void
     {
         $subscriber = $this->subscriber();
-        $this->planning(null);
+        $this->planning(['can_do' => false]);
 
         $reply = $this->talk($subscriber, 'תעשה שהאתר ייראה יותר טוב');
 

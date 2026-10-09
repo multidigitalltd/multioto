@@ -16,6 +16,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Mockery;
+use Symfony\Component\Process\Process;
 use Tests\TestCase;
 
 /**
@@ -89,11 +90,19 @@ class SiteAgentCoverageTest extends TestCase
         // The catalog includes provider definitions as well as the original
         // inline entries; JetEngine tools are first-class inventory members.
         $source = '';
-        foreach (['mcp-server', 'cct', 'media-management', 'content-management', 'site-administration', 'acf-schema', 'acf-management'] as $provider) {
+        foreach (['mcp-server', 'cct', 'media-management', 'content-management', 'site-administration', 'acf-schema', 'acf-management', 'category-sales'] as $provider) {
             $source .= file_get_contents(base_path('wordpress-plugin/multioto-agent/includes/class-'.$provider.'.php'));
         }
         preg_match_all("/(?:\\['name' =>\\s*|self::definition\\(\\s*|\\[\\s*)'((?:wp|wc|wcs|jet)_[a-z_]+)'\\s*,/", $source, $matches);
-        $plugin = array_values(array_unique($matches[1]));
+        // Dynamic providers need their actual catalogs inspected: a textual
+        // scan misses generated names and would silently skip write coverage.
+        $plugin = $matches[1];
+        foreach (['category-sales' => 'Multioto_Agent_Category_Sales', 'learndash' => 'Multioto_Agent_LearnDash'] as $file => $class) {
+            $catalog = new Process([PHP_BINARY, '-r', 'define("ABSPATH", __DIR__); require $argv[1]; echo json_encode($argv[2]::definitions());', base_path('wordpress-plugin/multioto-agent/includes/class-'.$file.'.php'), $class]);
+            $definitions = json_decode($catalog->mustRun()->getOutput(), true, 512, JSON_THROW_ON_ERROR);
+            $plugin = [...$plugin, ...array_column($definitions, 'name')];
+        }
+        $plugin = array_values(array_unique($plugin));
 
         $this->assertGreaterThan(50, count($plugin), 'The plugin tool list could not be read.');
 

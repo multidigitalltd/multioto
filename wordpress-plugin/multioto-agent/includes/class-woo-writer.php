@@ -133,8 +133,19 @@ class Multioto_Agent_Woo_Writer
      */
     public static function update(int $productId, array $args): array
     {
+        if (class_exists('Multioto_Agent_Sale_Schedule')) {
+            return Multioto_Agent_Sale_Schedule::withProductLocks([$productId], static function () use ($productId, $args): array {
+                return self::updateLocked($productId, $args);
+            });
+        }
+        return self::updateLocked($productId, $args);
+    }
+
+    private static function updateLocked(int $productId, array $args): array
+    {
         $product = self::product($productId);
         $previous = self::summary($product);
+        $beforeTuple = class_exists('Multioto_Agent_Sale_Schedule') ? Multioto_Agent_Sale_Schedule::productTuple($product) : null;
         $changed = [];
 
         if (isset($args['regular_price'])) {
@@ -159,7 +170,7 @@ class Multioto_Agent_Woo_Writer
         }
 
         foreach (['sale_from' => 'set_date_on_sale_from', 'sale_to' => 'set_date_on_sale_to'] as $key => $setter) {
-            if (! isset($args[$key])) {
+            if (! array_key_exists($key, $args)) {
                 continue;
             }
 
@@ -232,7 +243,78 @@ class Multioto_Agent_Woo_Writer
         // accepts it and the shop then advertises a "sale" that saves nothing.
         self::assertSaleBelowRegular($product);
 
-        $product->save();
+        $from = $product->get_date_on_sale_from();
+        $to = $product->get_date_on_sale_to();
+        if ($from && $to && $to->getTimestamp() <= $from->getTimestamp()) {
+            throw new Multioto_Agent_Rpc_Error(-32602, 'סיום המבצע חייב להיות אחרי תחילתו.');
+        }
+        $pricing = (bool) array_intersect(array_keys($changed), ['regular_price', 'sale_price', 'sale_from', 'sale_to']);
+        $detached = null;
+        $owner = null;
+        $intended = self::summary($product);
+        $touched = array_keys($changed);
+        if (array_key_exists('sale_price', $changed) && $changed['sale_price'] === '') {
+            $touched = array_merge($touched, ['sale_from', 'sale_to']);
+        }
+        if (array_key_exists('stock_quantity', $changed)) {
+            $touched[] = 'manage_stock';
+        }
+        $touched = array_values(array_unique($touched));
+        try {
+            if ($pricing && class_exists('Multioto_Agent_Sale_Schedule')) {
+                $detached = Multioto_Agent_Sale_Schedule::detach($productId);
+                $product->set_price($product->is_on_sale('edit') ? $product->get_sale_price('edit') : $product->get_regular_price('edit'));
+            }
+            if (! $product->save()) {
+                throw new Multioto_Agent_Rpc_Error(-32000, 'שמירת המוצר נכשלה.');
+            }
+            $saved = self::summary(self::product($productId));
+            foreach ($touched as $key) {
+                if ($saved[$key] !== $intended[$key]) {
+                    throw new Multioto_Agent_Rpc_Error(-32000, 'המוצר לא שמר את כל השינויים המבוקשים.');
+                }
+            }
+            if ($pricing && class_exists('Multioto_Agent_Sale_Schedule') && $product->get_sale_price('edit') !== '' && (! $to || $to->getTimestamp() > time())) {
+                $afterTuple = Multioto_Agent_Sale_Schedule::productTuple($product);
+                $owner = 'single_'.bin2hex(random_bytes(12));
+                Multioto_Agent_Sale_Schedule::register([
+                    'id' => $owner, 'starts_at' => $from ? $from->getTimestamp() : time(), 'ends_at' => $to ? $to->getTimestamp() : PHP_INT_MAX,
+                    'products' => [['id' => $productId, 'before' => $beforeTuple, 'after' => $afterTuple]],
+                ]);
+            }
+        } catch (Throwable $error) {
+            if ($pricing && class_exists('Multioto_Agent_Sale_Schedule')) {
+                if ($owner) {
+                    Multioto_Agent_Sale_Schedule::cancel($owner, false);
+                }
+                try {
+                    $fresh = self::product($productId);
+                    $live = self::summary($fresh);
+                    foreach (array_unique($touched) as $key) {
+                        if ($live[$key] !== $intended[$key] && $live[$key] !== $previous[$key]) {
+                            throw new RuntimeException('A changed field was edited outside this request.');
+                        }
+                    }
+                    foreach (array_unique($touched) as $key) {
+                        if (in_array($key, ['sale_from', 'sale_to'], true)) {
+                            $setter = $key === 'sale_from' ? 'set_date_on_sale_from' : 'set_date_on_sale_to';
+                            $fresh->{$setter}($beforeTuple[$key]);
+                        } else {
+                            $setter = 'set_'.$key;
+                            $fresh->{$setter}($previous[$key]);
+                        }
+                    }
+                    $fresh->set_price($fresh->is_on_sale('edit') ? $fresh->get_sale_price('edit') : $fresh->get_regular_price('edit'));
+                    if (! $fresh->save()) {
+                        throw new RuntimeException('Restoring the product failed.');
+                    }
+                    Multioto_Agent_Sale_Schedule::restoreDetached($productId, $detached);
+                } catch (Throwable $restoreError) {
+                    throw new Multioto_Agent_Rpc_Error(-32000, 'התזמון נכשל והשחזור לא הושלם. נדרשת בדיקה באתר.');
+                }
+            }
+            throw $error;
+        }
 
         return ['updated_id' => $productId, 'changed' => $changed, 'previous' => $previous];
     }
@@ -384,9 +466,10 @@ class Multioto_Agent_Woo_Writer
             'status' => $product->get_status(),
             'regular_price' => $product->get_regular_price(),
             'sale_price' => $product->get_sale_price(),
-            'sale_from' => $product->get_date_on_sale_from() ? $product->get_date_on_sale_from()->date('Y-m-d') : null,
-            'sale_to' => $product->get_date_on_sale_to() ? $product->get_date_on_sale_to()->date('Y-m-d') : null,
+            'sale_from' => self::saleDateSummary($product->get_date_on_sale_from()),
+            'sale_to' => self::saleDateSummary($product->get_date_on_sale_to()),
             'on_sale' => $product->is_on_sale(),
+            'timezone' => self::timezone()->getName(),
             'manage_stock' => $product->get_manage_stock(),
             'stock_quantity' => $product->get_stock_quantity(),
             'stock_status' => $product->get_stock_status(),
@@ -490,10 +573,14 @@ class Multioto_Agent_Woo_Writer
     private static function date(string $value, string $field): WC_DateTime
     {
         $value = trim($value);
-        $local = date_create_immutable_from_format('Y-m-d|', $value, self::timezone());
-
-        if ($local === false || $local->format('Y-m-d') !== $value) {
-            throw new Multioto_Agent_Rpc_Error(-32602, "{$field} אינו תאריך תקין בפורמט YYYY-MM-DD.");
+        if (class_exists('Multioto_Agent_Sale_Schedule')) {
+            $timestamp = Multioto_Agent_Sale_Schedule::parse($value);
+            $local = new DateTimeImmutable('@'.$timestamp);
+        } else {
+            $local = date_create_immutable_from_format('Y-m-d|', $value, self::timezone());
+            if ($local === false || $local->format('Y-m-d') !== $value) {
+                throw new Multioto_Agent_Rpc_Error(-32602, "{$field} אינו תאריך תקין בפורמט YYYY-MM-DD.");
+            }
         }
 
         // Built from the absolute instant and then moved into the shop's zone —
@@ -502,6 +589,16 @@ class Multioto_Agent_Woo_Writer
         $date->setTimezone(self::timezone());
 
         return $date;
+    }
+
+    private static function saleDateSummary($date): ?string
+    {
+        if (! $date) {
+            return null;
+        }
+        return class_exists('Multioto_Agent_Sale_Schedule')
+            ? Multioto_Agent_Sale_Schedule::format($date->getTimestamp())
+            : $date->date('Y-m-d');
     }
 
     /** The shop's timezone, however this WordPress happens to express it. */

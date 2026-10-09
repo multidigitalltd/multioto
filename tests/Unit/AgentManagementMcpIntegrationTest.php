@@ -23,7 +23,7 @@ class AgentManagementMcpIntegrationTest extends TestCase
         $response = $this->rpc('tools/list');
         $tools = $response['result']['tools'];
         $names = array_column($tools, 'name');
-        foreach ([\Multioto_Agent_Cct::class, \Multioto_Agent_Content_Management::class, \Multioto_Agent_Media_Management::class, \Multioto_Agent_Site_Administration::class, \Multioto_Agent_Acf_Schema::class, \Multioto_Agent_Acf_Management::class] as $provider) {
+        foreach ([\Multioto_Agent_Cct::class, \Multioto_Agent_Content_Management::class, \Multioto_Agent_Media_Management::class, \Multioto_Agent_Site_Administration::class, \Multioto_Agent_Acf_Schema::class, \Multioto_Agent_Acf_Management::class, \Multioto_Agent_Category_Sales::class, \Multioto_Agent_LearnDash::class] as $provider) {
             foreach ($provider::definitions() as $definition) {
                 $this->assertContainsEquals($definition, $tools);
             }
@@ -45,7 +45,7 @@ class AgentManagementMcpIntegrationTest extends TestCase
 
     public function test_each_provider_dispatches_and_returns_standard_mcp_text(): void
     {
-        foreach (['jet_cct_types', 'wp_optimole_get', 'wp_site_settings_get', 'wp_theme_active_get'] as $tool) {
+        foreach (['jet_cct_types', 'wp_optimole_get', 'wp_site_settings_get', 'wp_theme_active_get', 'ld_capabilities'] as $tool) {
             $response = $this->rpc('tools/call', ['name' => $tool, 'arguments' => []]);
             $this->assertFalse($response['result']['isError'], $tool);
             $this->assertSame('text', $response['result']['content'][0]['type']);

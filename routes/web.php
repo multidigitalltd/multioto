@@ -15,6 +15,7 @@ use App\Http\Controllers\PluginStoreController;
 use App\Http\Controllers\Portal\PortalAuthController;
 use App\Http\Controllers\Portal\PortalController;
 use App\Http\Controllers\Portal\PortalLicenseController;
+use App\Http\Controllers\Portal\PortalSiteAgentChangeController;
 use App\Http\Controllers\Portal\PortalSiteAgentController;
 use App\Http\Controllers\PushSubscriptionController;
 use App\Http\Controllers\SignatureController;
@@ -310,6 +311,8 @@ Route::prefix('portal')->group(function () {
          | one misplaced double-click away from a wrong invoice.
          */
         Route::get('/site-agent', [PortalSiteAgentController::class, 'index'])->name('portal.site-agent');
+        Route::get('/site-agent/changes/{change}', PortalSiteAgentChangeController::class)
+            ->whereNumber('change')->middleware('throttle:30,1')->name('portal.site-agent.change');
         Route::get('/site-agent/plugin', [PortalSiteAgentController::class, 'plugin'])
             ->middleware('throttle:20,60')->name('portal.site-agent.plugin');
         Route::get('/site-agent/sites/{site}/connect', [PortalSiteAgentController::class, 'connect'])

@@ -50,6 +50,7 @@ class Multioto_Agent_Fields
      */
     public static function schema(string $postType): array
     {
+        self::assertLearnDashContentAllowed($postType);
         if (! function_exists('acf_get_field_groups')) {
             return [];
         }
@@ -59,7 +60,7 @@ class Multioto_Agent_Fields
 
         foreach ($groups as $group) {
             foreach ((array) acf_get_fields($group['key']) as $field) {
-                if (self::hidden((string) ($field['name'] ?? '')) || ($field['type'] ?? '') === 'password'
+                if (self::hidden((string) ($field['name'] ?? '')) || self::isLearnDashReserved((string) ($field['name'] ?? ''), $postType) || ($field['type'] ?? '') === 'password'
                     || (class_exists('Multioto_Agent_Acf_Schema') && Multioto_Agent_Acf_Schema::isProtected($field))) {
                     continue;
                 }
@@ -91,6 +92,7 @@ class Multioto_Agent_Fields
      */
     public static function values(int $postId): array
     {
+        self::assertLearnDashContentAllowed(self::postType($postId));
         if (self::acfActive()) {
             // Never fall through to raw post meta when ACF owns the data: its
             // row storage contains secret children under otherwise public keys.
@@ -119,7 +121,7 @@ class Multioto_Agent_Fields
         $out = [];
 
         foreach ((array) get_post_meta($postId) as $key => $value) {
-            if (self::hidden((string) $key)) {
+            if (self::hidden((string) $key) || self::isLearnDashReserved((string) $key, self::postType($postId))) {
                 continue;
             }
 
@@ -144,6 +146,7 @@ class Multioto_Agent_Fields
      */
     public static function update(int $postId, array $fields): array
     {
+        self::assertLearnDashContentAllowed(self::postType($postId));
         if ($fields === []) {
             throw new Multioto_Agent_Rpc_Error(-32602, 'לא צוין שום שדה לעדכון.');
         }
@@ -166,7 +169,7 @@ class Multioto_Agent_Fields
         foreach (array_keys($fields) as $key) {
             $key = (string) $key;
 
-            if ($key === '' || self::hidden($key) || self::containsProtectedMeta($fields[$key])) {
+            if ($key === '' || self::hidden($key) || self::isLearnDashReserved($key, self::postType($postId)) || self::containsProtectedMeta($fields[$key])) {
                 throw new Multioto_Agent_Rpc_Error(-32602,
                     "השדה {$key} מוגן ואינו ניתן לעדכון דרך הסוכן. לא בוצע שום שינוי.");
             }
@@ -193,6 +196,67 @@ class Multioto_Agent_Fields
         }
 
         return ['updated' => $updated, 'previous' => $previous];
+    }
+
+    /** Generic post metadata is not an alternative to LearnDash's enrollment/builder APIs. */
+    public static function learnDashActive(): bool
+    {
+        return defined('LEARNDASH_VERSION') || class_exists('SFWD_LMS') || function_exists('learndash_get_post_type_slug')
+            || (function_exists('post_type_exists') && post_type_exists('sfwd-courses'));
+    }
+
+    public static function isLearnDashType(string $postType): bool
+    {
+        if (! self::learnDashActive()) {
+            return false;
+        }
+        $types = ['sfwd-courses', 'sfwd-lessons', 'sfwd-topic', 'sfwd-quiz', 'sfwd-question', 'sfwd-certificates', 'sfwd-assignment', 'sfwd-essays', 'sfwd-transactions', 'groups'];
+        return in_array($postType, $types, true);
+    }
+
+    /** Graded submissions, quiz questions and transactions are native LMS state, not page content. */
+    public static function isLearnDashInternalType(string $postType): bool
+    {
+        return self::learnDashActive() && in_array($postType, ['sfwd-assignment', 'sfwd-essays', 'sfwd-transactions', 'sfwd-question'], true);
+    }
+
+    public static function assertLearnDashContentAllowed(string $postType): void
+    {
+        if (self::isLearnDashInternalType($postType)) {
+            throw new Multioto_Agent_Rpc_Error(-32602, 'רשומות פנימיות של LearnDash, כולל הגשות, שאלות ועסקאות, מוגנות ואינן זמינות דרך כלי תוכן ושדות כלליים.');
+        }
+    }
+
+    public static function isLearnDashReserved(string $name, string $postType): bool
+    {
+        if (! self::learnDashActive()) {
+            return false;
+        }
+        $name = strtolower($name);
+        if (preg_match('/^(?:_?sfwd[_-]|learndash_|wp_pro_quiz_|proquiz_)/', $name)
+            || preg_match('/^(?:ld_)?course_\d+_(?:access_from|access_expires|access_expire|completed)$/', $name)
+            || preg_match('/^course_completed_\d+$/', $name)) {
+            return true;
+        }
+        return self::isLearnDashType($postType) && in_array($name, [
+            'course_id', 'lesson_id', 'topic_id', 'quiz_id', 'question_id', 'quiz_pro_id', 'question_pro_id',
+            'course_access_list', 'course_access_settings', 'course_price', 'course_price_type', 'course_prerequisite',
+            'course_points', 'course_disable_content_table', 'course_steps', 'course_sections', 'quiz_settings',
+        ], true);
+    }
+
+    public static function assertContentCreationAllowed(string $postType): void
+    {
+        self::assertLearnDashContentAllowed($postType);
+        if (self::isLearnDashType($postType) && in_array($postType, ['sfwd-quiz', 'sfwd-question'], true)) {
+            throw new Multioto_Agent_Rpc_Error(-32602, 'יצירת מבחן או שאלה של LearnDash דורשת את מנגנון המבחנים המקורי. יצירת פוסט רגיל אינה יוצרת מבחן שמיש.');
+        }
+    }
+
+    private static function postType(int $postId): string
+    {
+        $post = function_exists('get_post') ? get_post($postId) : null;
+        return $post ? (string) $post->post_type : '';
     }
 
     /** Raw meta never exports PHP objects or secret values nested in arrays. */

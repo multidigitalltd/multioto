@@ -25,6 +25,8 @@ class Multioto_Agent_Mcp_Server
         Multioto_Agent_Site_Administration::class,
         Multioto_Agent_Acf_Schema::class,
         Multioto_Agent_Acf_Management::class,
+        Multioto_Agent_Category_Sales::class,
+        Multioto_Agent_LearnDash::class,
     ];
 
     /** Options that are safe to read remotely (no secrets, no PII). */
@@ -242,7 +244,7 @@ class Multioto_Agent_Mcp_Server
         if (Multioto_Agent_Woo_Writer::active()) {
             $tools[] = ['name' => 'wc_product_search', 'description' => 'חיפוש מוצרים לפי טקסט חופשי (שם או מק"ט). מחזיר total (כמה מוצרים תואמים בסך הכל), returned (כמה הוחזרו בעמוד הזה), page, pages ו-products — לכל אחד מזהה, שם, מק"ט, מחיר רגיל, מחיר מבצע ומלאי. השתמשו בזה כדי להפוך תיאור בדיבור ("החולצה השחורה") למזהה מוצר — וכשחוזרות כמה תוצאות, שאלו על איזה מהן מדובר במקום לנחש. אם page קטן מ-pages יש עוד עמודים — בקשו אותם עם page=2,3… כדי לעבור על כל המוצרים התואמים, ואל תתייחסו לעמוד הראשון כאילו הוא כולם.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['search' => ['type' => 'string'], 'limit' => ['type' => 'integer'], 'page' => ['type' => 'integer']], 'required' => ['search']]];
             $tools[] = ['name' => 'wc_product_get', 'description' => 'פרטי מוצר מלאים לפי מזהה: מחירים, מבצע ותאריכיו, מלאי, סטטוס וקישור.', 'annotations' => $read, 'inputSchema' => ['type' => 'object', 'properties' => ['product_id' => ['type' => 'integer']], 'required' => ['product_id']]];
-            $tools[] = ['name' => 'wc_product_update', 'description' => 'עדכון מוצר לפי product_id. שדות אופציונליים: name, short_description, regular_price, sale_price (ריק = סיום המבצע), sale_from ו-sale_to (YYYY-MM-DD), stock_quantity, manage_stock, stock_status (instock/outofstock/onbackorder), status (publish/draft/private). מחזיר את המצב הקודם המלא לצורך ביטול. מחיר מבצע שאינו נמוך מהמחיר הרגיל נדחה.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['product_id' => ['type' => 'integer'], 'name' => ['type' => 'string'], 'short_description' => ['type' => 'string'], 'regular_price' => ['type' => 'string'], 'sale_price' => ['type' => 'string'], 'sale_from' => ['type' => 'string'], 'sale_to' => ['type' => 'string'], 'stock_quantity' => ['type' => 'integer'], 'manage_stock' => ['type' => 'boolean'], 'stock_status' => ['type' => 'string'], 'status' => ['type' => 'string']], 'required' => ['product_id']]];
+            $tools[] = ['name' => 'wc_product_update', 'description' => 'עדכון מוצר לפי product_id. שדות אופציונליים: name, short_description, regular_price, sale_price (ריק = סיום המבצע), sale_from ו-sale_to (YYYY-MM-DD או YYYY-MM-DD HH:mm לפי אזור זמן האתר), stock_quantity, manage_stock, stock_status (instock/outofstock/onbackorder), status (publish/draft/private). מחזיר את המצב הקודם המלא לצורך ביטול. מחיר מבצע שאינו נמוך מהמחיר הרגיל נדחה.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['product_id' => ['type' => 'integer'], 'name' => ['type' => 'string'], 'short_description' => ['type' => 'string'], 'regular_price' => ['type' => 'string'], 'sale_price' => ['type' => 'string'], 'sale_from' => ['type' => 'string'], 'sale_to' => ['type' => 'string'], 'stock_quantity' => ['type' => 'integer'], 'manage_stock' => ['type' => 'boolean'], 'stock_status' => ['type' => 'string'], 'status' => ['type' => 'string']], 'required' => ['product_id']]];
             $tools[] = ['name' => 'wc_product_create', 'description' => 'יצירת מוצר חדש — תמיד כטיוטה, לעולם לא מפורסם. name חובה; אופציונלי description, short_description, regular_price, sku. הפרסום נעשה בנפרד על ידי אדם שרואה את העמוד.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['name' => ['type' => 'string'], 'description' => ['type' => 'string'], 'short_description' => ['type' => 'string'], 'regular_price' => ['type' => 'string'], 'sku' => ['type' => 'string']], 'required' => ['name']]];
             $tools[] = ['name' => 'wc_product_trash', 'description' => 'העברת מוצר לפח לפי product_id — לא מחיקה סופית. המוצר יורד מהחנות מיד ואפשר להחזיר אותו עם wc_product_restore.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['product_id' => ['type' => 'integer']], 'required' => ['product_id']]];
             $tools[] = ['name' => 'wc_product_restore', 'description' => 'החזרת מוצר מהפח לפי product_id, לסטטוס שהיה לו לפני כן — הביטול של wc_product_trash.', 'annotations' => $change, 'inputSchema' => ['type' => 'object', 'properties' => ['product_id' => ['type' => 'integer']], 'required' => ['product_id']]];
@@ -1611,6 +1613,10 @@ class Multioto_Agent_Mcp_Server
             $post['post_date_gmt'] = $when[1];
         }
 
+        if (is_callable(['Multioto_Agent_Fields', 'assertContentCreationAllowed'])) {
+            Multioto_Agent_Fields::assertContentCreationAllowed($post['post_type']);
+        }
+
         $id = wp_insert_post($post, true);
 
         if (is_wp_error($id)) {
@@ -1788,7 +1794,12 @@ class Multioto_Agent_Mcp_Server
         ];
 
         // get_post_types() returns name => name; the values are what we filter.
-        return array_values(array_diff(get_post_types(['show_ui' => true], 'names'), $excluded));
+        $types = array_diff(get_post_types(['show_ui' => true], 'names'), $excluded);
+        if (class_exists('Multioto_Agent_Fields')) {
+            $types = array_filter($types, static fn (string $type): bool => ! Multioto_Agent_Fields::isLearnDashInternalType($type));
+        }
+
+        return array_values($types);
     }
 
     /** Validate a post status; blank/unknown falls back to draft (or any, for a query). */

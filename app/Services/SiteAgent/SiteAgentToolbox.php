@@ -137,7 +137,7 @@ class SiteAgentToolbox
         $tools = [];
 
         foreach (self::reads() as $name => [$pluginTool, $description, $properties, $required]) {
-            if (! $this->siteHas($site, $pluginTool)) {
+            if (! $this->siteHas($site, $pluginTool) || ! app(SiteAgentPermissions::class)->allowsTool($name)) {
                 continue;
             }
 
@@ -173,7 +173,7 @@ class SiteAgentToolbox
 
     private static function reads(): array
     {
-        return self::READS + SiteAgentExtendedCatalogue::reads() + SiteAgentAcfActions::reads();
+        return self::READS + SiteAgentExtendedCatalogue::reads() + SiteAgentAcfActions::reads() + SiteAgentCategorySales::reads() + SiteAgentLearnDashActions::reads();
     }
 
     /**
@@ -190,12 +190,19 @@ class SiteAgentToolbox
     {
         [$pluginTool, , $properties] = self::reads()[$name];
 
+        if (! app(SiteAgentPermissions::class)->allowsTool($name)) {
+            return ['content' => SiteAgentPermissions::refusal(), 'is_error' => true, 'ids' => []];
+        }
+        if (str_starts_with($pluginTool, 'ld_') && ! $this->siteHas($site, $pluginTool)) {
+            return ['content' => 'נדרשת סריקת יכולות עדכנית ותוסף סוכן 1.11.0 ומעלה עם LearnDash פעיל.', 'is_error' => true, 'ids' => []];
+        }
+
         $arguments = array_intersect_key($input, $properties);
 
         try {
             $text = $this->mcp->textContent($this->mcp->callTool($site, $pluginTool, $arguments));
         } catch (\Throwable $e) {
-            return ['content' => Str::limit($e->getMessage(), 400), 'is_error' => true, 'ids' => []];
+            return ['content' => str_starts_with($pluginTool, 'ld_') ? 'לא ניתן לקרוא את מידע LearnDash באתר. נסו לקרוא שוב לאחר בדיקת החיבור והיכולות.' : Str::limit($e->getMessage(), 400), 'is_error' => true, 'ids' => []];
         }
 
         $limit = max(1000, (int) config('siteagent.assistant.tool_result_chars', 6000));
@@ -205,6 +212,12 @@ class SiteAgentToolbox
         }
 
         $data = json_decode($text, true);
+        if (str_starts_with($pluginTool, 'ld_')) {
+            return SiteAgentLearnDashActions::modelRead($pluginTool, $data, $arguments);
+        }
+        if ($pluginTool === 'wc_category_sale_get') {
+            return SiteAgentCategorySales::modelRead($data, $arguments);
+        }
         $ids = str_starts_with($pluginTool, 'jet_cct_')
             ? $this->cctReferences($pluginTool, $data, $arguments)
             : $this->idsIn($data);
@@ -294,6 +307,13 @@ class SiteAgentToolbox
             ->pluck('name')
             ->filter()
             ->all();
+
+        if (str_starts_with($pluginTool, 'ld_')) {
+            $version = data_get($site->mcp_capabilities, 'server.version');
+
+            return is_string($version) && version_compare($version, '1.11.0', '>=')
+                && in_array($pluginTool, $known, true);
+        }
 
         return $known === [] || in_array($pluginTool, $known, true);
     }

@@ -131,6 +131,8 @@ class ClaudeClient
      */
     public function structured(string $system, string $prompt, array $schema): ?array
     {
+        $this->lastError = null;
+
         if (! $this->isEnabled()) {
             return null;
         }
@@ -195,6 +197,8 @@ class ClaudeClient
      */
     public function converse(string $system, string $prompt, array $tools, callable $handler, int $maxTurns = 6): ?string
     {
+        $this->lastError = null;
+
         if (! $this->isEnabled()) {
             return null;
         }
@@ -363,7 +367,13 @@ class ClaudeClient
         $declarations = array_map(fn (array $t): array => array_filter([
             'name' => (string) ($t['name'] ?? ''),
             'description' => (string) ($t['description'] ?? ''),
-            'parameters' => isset($t['input_schema']) ? $this->toGeminiSchema((array) $t['input_schema']) : null,
+            // The native JSON Schema field preserves free-form ACF/CCT values,
+            // unions and additionalProperties. The older `parameters` dialect
+            // requires a scalar type on each node; one untyped ACF value made
+            // Google reject the entire catalog, even for unrelated requests.
+            // FunctionDeclaration.parameters_json_schema is mutually exclusive
+            // with parameters in Google's generativelanguage/v1beta protocol.
+            'parametersJsonSchema' => $t['input_schema'] ?? null,
         ], fn ($v): bool => $v !== null), $tools);
 
         $contents = [['role' => 'user', 'parts' => [['text' => $prompt]]]];
@@ -577,7 +587,7 @@ class ClaudeClient
                 ],
                 'response_format' => [
                     'type' => 'json_schema',
-                    'json_schema' => ['name' => 'response', 'strict' => true, 'schema' => $schema],
+                    'json_schema' => ['name' => 'response', 'strict' => $this->hasClosedRequiredObjects($schema), 'schema' => $schema],
                 ],
             ]);
 
@@ -597,6 +607,53 @@ class ClaudeClient
         $content = $response->json('choices.0.message.content');
 
         return filled($content) ? $this->decode($content) : null;
+    }
+
+    /**
+     * OpenAI strict mode requires every object to reject unknown keys and
+     * require every declared property. Our planners deliberately use optional
+     * fields (a clarification has no edit yet), so send those schemas in the
+     * supported non-strict mode rather than changing their meaning. Callers
+     * still validate the returned intent before proposing or applying changes.
+     */
+    private function hasClosedRequiredObjects(array $schema): bool
+    {
+        // An unconstrained value (for example an ACF field described only in
+        // prose) cannot use strict mode either. Keep its native JSON shape.
+        if (! isset($schema['type']) && ! isset($schema['anyOf'])) {
+            return false;
+        }
+
+        if (in_array('object', (array) ($schema['type'] ?? []), true) || isset($schema['properties'])) {
+            $properties = (array) ($schema['properties'] ?? []);
+            $required = (array) ($schema['required'] ?? []);
+
+            if (($schema['additionalProperties'] ?? null) !== false
+                || array_diff(array_keys($properties), $required) !== []
+                || array_diff($required, array_keys($properties)) !== []) {
+                return false;
+            }
+
+            foreach ($properties as $property) {
+                if (! is_array($property) || ! $this->hasClosedRequiredObjects($property)) {
+                    return false;
+                }
+            }
+        }
+
+        if (isset($schema['items']) && (! is_array($schema['items']) || ! $this->hasClosedRequiredObjects($schema['items']))) {
+            return false;
+        }
+
+        foreach (['anyOf', 'allOf', 'oneOf', '$defs', 'definitions'] as $key) {
+            foreach ((array) ($schema[$key] ?? []) as $child) {
+                if (! is_array($child) || ! $this->hasClosedRequiredObjects($child)) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
     }
 
     /**

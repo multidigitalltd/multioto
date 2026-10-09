@@ -333,18 +333,21 @@ class SiteAgentAssistantTest extends TestCase
     public function test_without_the_assistant_the_fixed_planners_still_answer(): void
     {
         $subscriber = $this->subscriber();
+        $this->site['wp_content_list'] = [['id' => 11, 'title' => 'דף הבית']];
+        $this->site['wp_content_get'] = ['id' => 11, 'title' => 'דף הבית', 'content' => 'שלום', 'status' => 'publish'];
 
         $ai = Mockery::mock(ClaudeClient::class);
         $ai->shouldReceive('isEnabled')->andReturn(true);
         $ai->shouldReceive('supportsAgent')->andReturn(true);
         // The provider failed mid-conversation.
         $ai->shouldReceive('converse')->andReturn(null);
-        $ai->shouldReceive('structured')->once()->andReturn(null);
+        $ai->shouldReceive('structured')->twice()->andReturn(null);
         $this->app->instance(ClaudeClient::class, $ai);
 
         $reply = $this->talk($subscriber, 'משהו');
 
-        $this->assertStringContainsString('לא הצלחתי להבין', $reply);
+        $this->assertStringContainsString('הבוט לא הצליח לעבד את הבקשה כרגע', $reply);
+        $this->assertStringNotContainsString('לא הצלחתי להבין', $reply);
     }
 
     public function test_the_conversation_so_far_is_context_and_old_turns_are_not(): void

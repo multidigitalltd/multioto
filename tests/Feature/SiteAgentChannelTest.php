@@ -437,11 +437,13 @@ class SiteAgentChannelTest extends TestCase
         // Naming it answers the question...
         $this->deliver('972501234567', $cafe->site->domain);
         $this->assertStringNotContainsString('יותר מאתר אחד', $this->lastReply());
+        $this->assertSame(1, SiteAgentRequest::count());
 
         // ...and the next instruction does not ask again.
         $this->deliver('972501234567', 'תוסיף משפט בדף הבית');
         $this->assertStringNotContainsString('יותר מאתר אחד', $this->lastReply());
 
+        $this->assertSame(2, SiteAgentRequest::count());
         $this->assertSame($cafe->site_id, SiteAgentRequest::latest('id')->first()?->site_id);
     }
 
@@ -475,6 +477,8 @@ class SiteAgentChannelTest extends TestCase
         $request = SiteAgentRequest::latest('id')->firstOrFail();
         $this->assertSame($bakery->site_id, $request->site_id);
         $this->assertStringContainsString('פתוחים בשישי', (string) $request->message);
+        $this->assertSame(11, $request->plan['front_page']['id']);
+        $this->assertSame(SiteAgentRequest::AWAITING, $request->state);
     }
 
     public function test_an_ordinary_word_does_not_move_the_conversation_to_another_site(): void
@@ -1146,7 +1150,9 @@ class SiteAgentChannelTest extends TestCase
 
         $mcp = Mockery::mock(McpClient::class);
         $mcp->shouldReceive('callTool')->andReturnUsing(fn (Site $site, string $tool) => match ($tool) {
+            'wp_site_settings_get' => ['values' => ['show_on_front' => 'page', 'page_on_front' => 11, 'page_for_posts' => 0]],
             'wp_content_list' => ['items' => [['id' => 11, 'title' => 'דף הבית']]],
+            'wp_content_get' => ['id' => 11, 'type' => 'page', 'title' => 'דף הבית', 'status' => 'publish', 'content' => 'ברוכים הבאים'],
             'wc_product_search' => ['products' => []],
             default => [],
         });

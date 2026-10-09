@@ -25,7 +25,7 @@ class SiteAgentPermissions
      */
     public const GROUPS = [
         'products_create' => ['יצירת מוצרים חדשים', [SiteAgentRequest::OP_PRODUCT_CREATE], ['propose_product_create']],
-        'products_update' => ['עדכון מוצרים (מחיר, מבצע, מלאי, שם, תיאור)', [SiteAgentRequest::OP_PRODUCT, SiteAgentRequest::OP_PRICE, SiteAgentRequest::OP_STOCK], ['propose_product_update']],
+        'products_update' => ['עדכון מוצרים (מחיר, מבצע, מלאי, שם, תיאור)', [SiteAgentRequest::OP_PRODUCT, SiteAgentRequest::OP_PRICE, SiteAgentRequest::OP_STOCK, SiteAgentRequest::OP_CATEGORY_SALE], ['propose_product_update', 'propose_category_sale']],
         'products_delete' => ['מחיקת מוצרים (לפח, עם ביטול)', [SiteAgentRequest::OP_PRODUCT_TRASH], ['propose_product_trash']],
         'orders' => ['הזמנות — שינוי סטטוס והערות', [SiteAgentRequest::OP_ORDER_STATUS, SiteAgentRequest::OP_ORDER_NOTE], ['propose_order_status', 'propose_order_note']],
         'subscriptions' => ['מנויים מתחדשים — השהיה, חידוש וביטול', [SiteAgentRequest::OP_SUBSCRIPTION_STATUS], ['propose_subscription_status']],
@@ -41,6 +41,8 @@ class SiteAgentPermissions
         'optimole' => ['Optimole — איכות ואופטימיזציה של תמונות', [SiteAgentRequest::OP_OPTIMOLE], ['propose_optimole_update']],
         'seo' => ['SEO — כותרות, תיאורים וקישורים פנימיים', [SiteAgentRequest::OP_SEO, SiteAgentRequest::OP_INTERNAL_LINK], ['propose_seo_update', 'propose_internal_link']],
         'cct' => ['JetEngine CCT — יצירה ועריכת רשומות', [SiteAgentRequest::OP_CCT_CREATE, SiteAgentRequest::OP_CCT_UPDATE], ['propose_cct_create', 'propose_cct_update']],
+        'learndash_catalog' => ['LearnDash — קורסים, מבנה ורשימת קבוצות', [], ['get_ld_capabilities', 'find_ld_courses', 'get_ld_course', 'find_ld_groups']],
+        'learndash_students' => ['LearnDash — תלמידים, התקדמות והרשמה לקורסים ולקבוצות', [SiteAgentRequest::OP_LEARNDASH_MEMBERSHIP], ['get_ld_student_course', 'get_ld_group', 'get_ld_membership', 'propose_ld_membership']],
         'settings' => ['הגדרות האתר — שם, תצוגה, אזור זמן ועמוד בית', [SiteAgentRequest::OP_SITE_SETTINGS], ['propose_site_settings']],
         'cache' => ['ניקוי מטמון', [SiteAgentRequest::OP_CACHE_FLUSH], ['propose_cache_flush']],
     ];

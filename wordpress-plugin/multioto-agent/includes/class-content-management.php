@@ -79,6 +79,9 @@ class Multioto_Agent_Content_Management
         if (! $post instanceof WP_Post || in_array($post->post_type, $excluded, true) || ! in_array($post->post_type, get_post_types(['show_ui' => true], 'names'), true) || in_array($post->post_status, ['trash', 'auto-draft', 'inherit'], true)) {
             self::fail('פריט תוכן זמין לעריכה לא נמצא.');
         }
+        if (class_exists('Multioto_Agent_Fields')) {
+            Multioto_Agent_Fields::assertLearnDashContentAllowed($post->post_type);
+        }
         return $post;
     }
 
@@ -126,7 +129,11 @@ class Multioto_Agent_Content_Management
     private static function contentDetails(array $args): array
     {
         $post = self::post($args);
-        return ['id' => (int) $post->ID, 'label' => (string) $post->post_title, 'type' => $post->post_type, 'timezone' => wp_timezone_string(), 'values' => self::contentValues($post)];
+        $result = ['id' => (int) $post->ID, 'label' => (string) $post->post_title, 'type' => $post->post_type, 'timezone' => wp_timezone_string(), 'values' => self::contentValues($post)];
+        if (class_exists('Multioto_Agent_Fields') && Multioto_Agent_Fields::isLearnDashType($post->post_type)) {
+            $result['structure_note'] = 'שדות WordPress אלה אינם מייצגים את מבנה הקורס או שיוך השיעורים של LearnDash.';
+        }
+        return $result;
     }
 
     private static function contentManage(array $args): array
@@ -134,6 +141,14 @@ class Multioto_Agent_Content_Management
         $post = self::post($args);
         $current = self::contentValues($post);
         $values = self::changes($args, $current, self::CONTENT_KEYS);
+        if (class_exists('Multioto_Agent_Fields') && Multioto_Agent_Fields::isLearnDashType($post->post_type)
+            && in_array($post->post_type, ['sfwd-lessons', 'sfwd-topic', 'sfwd-quiz', 'sfwd-question'], true)) {
+            foreach (['parent', 'menu_order'] as $key) {
+                if (array_key_exists($key, $values) && $values[$key] !== $current[$key]) {
+                    self::fail('שיוך וסידור שלבי LearnDash דורשים את בונה הקורסים המקורי; post_parent ו-menu_order אינם מחליפים אותו.');
+                }
+            }
+        }
         $all = array_replace($current, $values);
         if (! is_string($all['status']) || ! in_array($all['status'], ['draft', 'pending', 'publish', 'private', 'future'], true)) {
             self::fail('מצב התוכן אינו מותר.');

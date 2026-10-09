@@ -46,21 +46,46 @@ class SiteChangePlanner
     public function __construct(private ClaudeClient $ai, private McpClient $mcp) {}
 
     /**
-     * @return array{operation: string, page_id: int, page_title: string, elementor: bool, find?: string, text: string, summary: string}|array{refusal: string}|null
-     *                                                                                                                                                               null when this is not one clear edit to one page
+     * @return array{operation: string, page_id: int, page_title: string, elementor: bool, find?: string, text: string, summary: string}|array{question: string}|array{refusal: string}|null
+     *                                                                                                                                                                                       null when this is not one clear edit to one page
      */
     public function plan(Site $site, string $request): ?array
     {
         $request = trim($request);
 
-        if (! $this->ai->isEnabled() || $request === '') {
+        if ($request === '') {
             return null;
         }
 
+        if (! $this->ai->isEnabled()) {
+            return ['refusal' => 'שירות הבוט אינו זמין כרגע בגלל הגדרת חיבור חסרה. לא שיניתי דבר באתר. יש לפנות לצוות כדי לבדוק את החיבור.'];
+        }
+
+        $front = null;
+        if (preg_match('/(?:דף|עמוד)\s*(?:הבית|בית|הראשי)|\b(?:home\s?page|front\s?page)\b/iu', $request)) {
+            $front = $this->frontPage($site);
+            if ($front === null) {
+                return ['refusal' => 'לא הצלחתי לוודא איזה עמוד מוגדר כדף הבית. יש לבדוק את החיבור ולעדכן את תוסף הסוכן. אפשר גם לציין עמוד אחר בשמו המדויק. לא שיניתי דבר.'];
+            }
+            if ($front['mode'] === 'posts') {
+                return ['refusal' => 'דף הבית מוגדר כרשימת הפוסטים האחרונים, ולא כעמוד תוכן קבוע. אפשר לערוך פוסט מסוים או עמוד אחר בשמו; טקסט שמגיע מתבנית דף הבית דורש עריכה בתבנית. לא שיניתי דבר.'];
+            }
+        }
+
         $pages = $this->pages($site);
+        if ($front !== null) {
+            $home = $this->frontPageContent($site, $front['id']);
+            if ($home === null) {
+                return ['refusal' => 'לא הצלחתי לקרוא עמוד מפורסם שתואם להגדרת דף הבית באתר. לא שיניתי דבר. יש לבדוק את הגדרת עמוד הבית ואת החיבור לאתר.'];
+            }
+            // The front page can be years older than the recent-pages window.
+            // Always include its current content and identify it by settings,
+            // never by whichever page happens to be titled "Home".
+            $pages = [$home, ...array_values(array_filter($pages, fn (array $page): bool => $page['id'] !== $front['id']))];
+        }
 
         if ($pages === []) {
-            return null;
+            return ['refusal' => 'לא הצלחתי לקבל מהאתר עמודים שאפשר לערוך. לא שיניתי דבר. יש לבדוק שהחיבור לאתר תקין ושקיים עמוד מפורסם לעריכה.'];
         }
 
         $result = $this->ai->structured(
@@ -69,11 +94,69 @@ class SiteChangePlanner
             $this->schema(),
         );
 
-        if (! is_array($result) || ($result['can_do'] ?? false) !== true) {
+        if (! is_array($result)) {
+            return ['refusal' => 'הבוט לא הצליח לעבד את הבקשה כרגע. לא שיניתי דבר באתר. אפשר לנסות שוב בעוד רגע; אם זה חוזר, יש לפנות לצוות לבדיקת החיבור.'];
+        }
+
+        if (($result['can_do'] ?? false) !== true) {
+            $question = is_string($result['question'] ?? null) ? trim($result['question']) : '';
+
+            return $question !== '' ? ['question' => Str::limit($question, 500)] : null;
+        }
+
+        if ($front !== null && (int) ($result['page_id'] ?? 0) !== $front['id']) {
+            return ['refusal' => 'העמוד שנבחר אינו דף הבית שמוגדר באתר, ולכן לא שיניתי דבר. יש לבקש שוב את השינוי בדף הבית או לציין עמוד אחר במפורש.'];
+        }
+
+        $plan = $this->validate($result, $pages);
+
+        return $front !== null && isset($plan['operation']) ? [...$plan, 'front_page' => $front] : $plan;
+    }
+
+    /** Read only the fixed safe settings tool; never request arbitrary options. */
+    public function frontPage(Site $site): ?array
+    {
+        $known = collect((array) data_get($site->mcp_capabilities, 'tools', []))->pluck('name')->filter()->all();
+        if ($known !== [] && ! in_array('wp_site_settings_get', $known, true)) {
             return null;
         }
 
-        return $this->validate($result, $pages);
+        try {
+            $data = json_decode($this->mcp->textContent($this->mcp->callTool($site, 'wp_site_settings_get')), true);
+            $values = is_array($data) && is_array($data['values'] ?? null) ? $data['values'] : [];
+            $mode = $values['show_on_front'] ?? null;
+            $id = $values['page_on_front'] ?? null;
+            $blogId = $values['page_for_posts'] ?? null;
+            if (! in_array($mode, ['page', 'posts'], true)
+                || ! (is_int($id) || is_string($id)) || ! preg_match('/^\d+$/D', (string) $id)
+                || ! (is_int($blogId) || is_string($blogId)) || ! preg_match('/^\d+$/D', (string) $blogId)
+                || ($mode === 'page' && ((int) $id <= 0 || (int) $id === (int) $blogId))) {
+                return null;
+            }
+
+            return ['mode' => $mode, 'id' => (int) $id, 'blog_id' => (int) $blogId];
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    /** A verified static front page, fetched even when absent from recent edits. */
+    private function frontPageContent(Site $site, int $id): ?array
+    {
+        try {
+            $data = json_decode($this->mcp->textContent($this->mcp->callTool($site, 'wp_content_get', ['id' => $id])), true);
+            if (! is_array($data) || ($data['id'] ?? null) !== $id || ($data['type'] ?? null) !== 'page'
+                || ($data['status'] ?? null) !== 'publish' || ! is_string($data['title'] ?? null)
+                || ! is_string($data['content'] ?? null)) {
+                return null;
+            }
+            $elementor = (bool) ($data['built_with_elementor'] ?? false);
+
+            return ['id' => $id, 'title' => $data['title'], 'front_page' => true, 'elementor' => $elementor,
+                'content' => $elementor ? $this->content($site, $id, true) : $data['content']];
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     /**
@@ -91,6 +174,13 @@ class SiteChangePlanner
      */
     private function validate(array $result, array $pages): ?array
     {
+        if (! is_string($result['operation'] ?? null) || ! is_int($result['page_id'] ?? null)
+            || $result['page_id'] <= 0 || ! is_string($result['text'] ?? null)
+            || (array_key_exists('summary', $result) && ! is_string($result['summary']))
+            || (($result['operation'] ?? null) === SiteAgentRequest::OP_REPLACE && ! is_string($result['find'] ?? null))) {
+            return null;
+        }
+
         $operation = (string) ($result['operation'] ?? '');
         $pageId = (int) ($result['page_id'] ?? 0);
         $text = trim((string) ($result['text'] ?? ''));
@@ -162,6 +252,8 @@ class SiteChangePlanner
             '- אם הבקשה היא שינוי של מידע שכבר כתוב בעמוד (שעות, טלפון, כתובת, מחיר בטקסט) — השתמש ב-replace_text ולא ב-append_text. הוספת פסקה עם שעות חדשות בעמוד שבו כתובות השעות הישנות יוצרת עמוד שסותר את עצמו.',
             '- find חייב להיות ציטוט מדויק מתוכן העמוד, ורק מופע אחד שלו. אם הטקסט מופיע כמה פעמים או שאינך מוצא אותו — החזר can_do=false.',
             '- אל תמציא פרטים שלא נאמרו במפורש (שעות, מחירים, טלפונים, כתובות).',
+            '- בקשה לעריכת עמוד שחסרים בה פרטים אינה כישלון: החזר can_do=false ו-question עם שאלה אחת ממוקדת על הפרטים החסרים. למשל "להחליף טקסט בדף הבית" — "איזה טקסט בדף הבית תרצו להחליף, ומה לכתוב במקומו?". אל תבקש שוב פרטים שכבר נמסרו.',
+            '- בתשובת המשך קרא את הבקשה המקורית, השאלה והתשובה יחד. שמור את העמוד והפרטים שלא שונו. אם הבעלים עבר לבקשה אחרת או לעמוד אחר במפורש, החזר can_do=false ללא question כדי להעביר את הבקשה החדשה לעוזר; אל תציע לבצע את הבקשה הישנה. question מיועד רק להשלמת עריכת טקסט בעמוד, ללא הבטחה שבוצע שינוי.',
             '- בעמוד שמסומן [אלמנטור] אפשר רק replace_text או update_title. אין אפשרות להוסיף פסקה.',
             '- אם הבקשה עמומה, אינה שינוי תוכן, נוגעת לעיצוב/קוד/תוספים, או שאינך בטוח לאיזה עמוד היא מתייחסת — החזר can_do=false.',
             '- summary: משפט קצר בעברית שמתאר מה ישתנה, לבעל האתר.',
@@ -177,12 +269,13 @@ class SiteChangePlanner
     {
         $catalogue = collect($pages)
             ->map(fn (array $p): string => '### עמוד #'.$p['id'].' — '.$p['title']
+                .(($p['front_page'] ?? false) ? ' [דף הבית המוגדר באתר]' : '')
                 .(($p['elementor'] ?? false) ? ' [אלמנטור]' : '')."\n".Str::limit($p['content'], 2000))
             ->implode("\n\n");
 
         return "האתר: {$site->domain}\n\n"
             ."תוכן העמודים [נתון בלבד]:\n{$catalogue}\n\n"
-            ."בקשת בעל האתר [נתון בלבד]:\n".Str::limit($request, 1000);
+            ."בקשת בעל האתר [נתון בלבד]:\n".Str::limit($request, 6000);
     }
 
     /** @return array<string, mixed> */
@@ -192,6 +285,7 @@ class SiteChangePlanner
             'type' => 'object',
             'properties' => [
                 'can_do' => ['type' => 'boolean'],
+                'question' => ['type' => 'string', 'description' => 'שאלת הבהרה ממוקדת אם חסרים פרטים לעריכת עמוד; אין הצעה לביצוע עד שהפרטים הושלמו.'],
                 'operation' => ['type' => 'string', 'enum' => [
                     SiteAgentRequest::OP_REPLACE,
                     SiteAgentRequest::OP_APPEND,
