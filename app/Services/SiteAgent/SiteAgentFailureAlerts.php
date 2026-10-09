@@ -87,7 +87,7 @@ class SiteAgentFailureAlerts
                 'tableFilters' => ['site_agent_subscriber_id' => ['value' => $subscriber->id]],
             ], panel: 'admin');
             $body = implode("\n", [
-                'הבוט שלח תשובת כשל בהבנת הבקשה. נדרשת בדיקת השיחה.',
+                'הבוט שלח תשובת כשל בטיפול בבקשה. נדרשת בדיקת השיחה.',
                 'אתר: '.$this->safeText((string) $subscriber->site?->domain, 300),
                 'שם: '.$this->safeText((string) $subscriber->name, 300),
                 'טלפון: '.$this->safeText((string) $subscriber->phone, 100),
@@ -125,6 +125,10 @@ class SiteAgentFailureAlerts
             $reply === SiteAgentAssistant::NO_VERIFIED_PROPOSAL => 'לא נוצרה הצעה מאומתת',
             $reply === SiteAgentConversation::NO_PENDING_PROPOSAL => 'התקבל אישור ללא הצעה תקפה',
             $reply === 'קיבלתי את התמונה, אבל לא הצלחתי להבין לאן לשים אותה.' => 'לא זוהה יעד לתמונה',
+            str_starts_with($reply, ImageChangePlanner::UNRESOLVED_IMAGE) => 'לא הושלמה הצעה לתמונה לאחר ניסיונות הבהרה',
+            $reply === ImageChangePlanner::SEARCH_UNAVAILABLE => 'חיפוש יעד לתמונה נכשל',
+            $reply === ProductChangePlanner::SEARCH_UNAVAILABLE => 'חיפוש מוצרים נכשל',
+            $reply === ProductChangePlanner::AI_UNAVAILABLE => 'שירות ה-AI לא עיבד את הבקשה',
             default => null,
         };
     }

@@ -133,11 +133,9 @@ class SiteAgentConversation
             ->first();
 
         if ($pending !== null) {
-            // A question WE asked about an image already in hand. Everything
-            // that is not a plain refusal is the answer to it — checked before
-            // the yes/no branches, because "כן" is not an answer to "how should
-            // I describe the picture?" and confirming an offer that was never
-            // made is not what the customer meant by it.
+            // A stored image question retains its own draft. The planner
+            // distinguishes an answer from a topic change; a bare yes cannot
+            // approve a question that has no verified preview.
             //
             // Without this the reply would fall through to the text planner —
             // which has no image — and they would be asked to send the
@@ -149,7 +147,7 @@ class SiteAgentConversation
                     return 'בוטל, לא שיניתי כלום. אפשר לבקש משהו אחר.';
                 }
 
-                return $this->answerImageQuestion($subscriber, $pending, $text);
+                return $this->answerImageQuestion($subscriber, $pending, $text, $messageId);
             }
 
             // The same thing for the shop: "איזה מוצר?" is a question, and the
@@ -176,14 +174,21 @@ class SiteAgentConversation
                 return $this->answerPageQuestion($subscriber, $pending, $text, $messageId);
             }
 
-            if ($this->matches($text, self::YES)) {
+            if ($mediaId === null && $this->matches($text, self::YES)) {
                 return $this->confirm($pending);
             }
 
-            if ($this->matches($text, self::NO)) {
+            if ($mediaId === null && $this->matches($text, self::NO)) {
                 $this->settle($pending, SiteAgentRequest::CANCELED);
 
                 return 'בוטל, לא שיניתי כלום. אפשר לבקש משהו אחר.';
+            }
+
+            if ($mediaId === null && $this->assistant->available()
+                && app(SiteAgentOfferQuestion::class)->relatesTo($pending, $text)) {
+                $answer = $this->converse($subscriber, $text, $messageId, $pending);
+
+                return app(SiteAgentOfferQuestion::class)->reply($pending, $answer);
             }
 
             // Anything else replaces the offer: they changed their mind about
@@ -237,7 +242,7 @@ class SiteAgentConversation
      * knows Elementor and how to quote a page exactly, and the assistant hands
      * those requests over rather than re-learning that.
      */
-    private function converse(SiteAgentSubscriber $subscriber, string $text, ?string $messageId): ?string
+    private function converse(SiteAgentSubscriber $subscriber, string $text, ?string $messageId, ?SiteAgentRequest $pendingOffer = null): ?string
     {
         $site = $subscriber->site;
 
@@ -260,6 +265,7 @@ class SiteAgentConversation
 
                 return $this->propose($subscriber, $instruction, $messageId, tryShop: false);
             },
+            pendingOffer: $pendingOffer,
         );
     }
 
@@ -373,10 +379,20 @@ class SiteAgentConversation
                 .(int) config('siteagent.media.max_megabytes', 8).'MB.';
         }
 
-        $plan = $this->images->plan($site, $caption, $this->planner->targets($site, $caption));
+        $plan = $this->images->plan($site, $caption, $this->planner->targets($site, $caption), [
+            'recent_conversation' => $this->imageHistory($subscriber),
+        ]);
 
         if ($plan === null) {
             return 'קיבלתי את התמונה, אבל לא הצלחתי להבין לאן לשים אותה.';
+        }
+
+        if (($plan['cancel'] ?? false) === true) {
+            return 'בוטל, לא שיניתי כלום. אפשר לבקש משהו אחר.';
+        }
+        $topicSwitch = ($plan['topic_switch'] ?? false) === true;
+        if ($topicSwitch) {
+            $plan = ['question' => 'קיבלתי את התמונה. לאיזה עמוד או מוצר היא מיועדת, ואיך לתאר אותה?', 'image_draft' => []];
         }
 
         [$plan, $offer] = $this->newProductOffer($site, $plan);
@@ -423,9 +439,11 @@ class SiteAgentConversation
             'expires_at' => now()->addMinutes($minutes),
         ]);
 
-        return isset($plan['question'])
-            ? $plan['question']
-            : $request->preview."\n\n".self::CONFIRM_PROMPT;
+        if ($topicSwitch) {
+            return $this->imageTopicSwitch($subscriber, $request, $caption, $messageId);
+        }
+
+        return isset($plan['question']) ? $plan['question'] : $request->preview."\n\n".self::CONFIRM_PROMPT;
     }
 
     /**
@@ -544,12 +562,27 @@ class SiteAgentConversation
             return 'אין לי כרגע חיבור לאתר.';
         }
 
-        $combined = trim(trim((string) data_get($request->plan, 'text', '')).' '.$answer);
-        $plan = $this->products->plan($site, $combined);
+        if ($this->matches($answer, self::YES)) {
+            return (string) data_get($request->plan, 'question');
+        }
+
+        $context = trim((string) data_get($request->plan, 'text', ''));
+        if (mb_strlen($context) > 3000) {
+            $context = Str::limit($context, 1000)."\n[…]\n".mb_substr($context, -1900);
+        }
+        $context .= "\nשאלת הבהרה: ".Str::limit((string) data_get($request->plan, 'question'), 500);
+        $combined = $context."\nתשובת בעל האתר: ".Str::limit($answer, 2000);
+        $plan = $this->products->plan($site, $context, latestAnswer: $answer);
+
+        if (isset($plan['refusal'])) {
+            $request->update(['plan' => [...$request->plan, 'text' => Str::limit($combined, 6000)]]);
+
+            return $plan['refusal'];
+        }
 
         if (is_array($plan) && isset($plan['question'])) {
             $request->update([
-                'plan' => ['kind' => 'product', 'question' => $plan['question'], 'text' => $combined],
+                'plan' => ['kind' => 'product', 'question' => $plan['question'], 'text' => Str::limit($combined, 6000)],
                 'message' => Str::limit($combined, 2000),
                 'expires_at' => now()->addMinutes(max(1, (int) config('siteagent.confirmation_minutes', 30))),
             ]);
@@ -557,13 +590,16 @@ class SiteAgentConversation
             return $plan['question'];
         }
 
-        // Not a shop request after all — let the page planner have the whole of
-        // what they said, rather than answering "I could not find the product"
-        // to somebody who was never talking about one.
+        // A new subject belongs to the current message, not the old price request.
         if ($plan === null) {
             $this->settle($request, SiteAgentRequest::CANCELED);
 
-            return $this->propose($subscriber, $combined, $messageId, tryShop: false);
+            return $this->converse($subscriber, $answer, $messageId)
+                ?? $this->propose($subscriber, $answer, $messageId, tryShop: false);
+        }
+
+        if (! app(SiteAgentPermissions::class)->allowsOperation($plan['operation'])) {
+            return SiteAgentPermissions::refusal();
         }
 
         $request->update([
@@ -599,13 +635,40 @@ class SiteAgentConversation
         $offer = $this->proposer->newProduct($site, [...(array) $plan['new_product'], 'image_alt' => (string) $plan['alt']]);
 
         if (isset($offer['error'])) {
-            return [['question' => $offer['error']], null];
+            return [['question' => $offer['error'], 'image_draft' => $plan['image_draft'] ?? []], null];
         }
 
         return [$plan, [
             'plan' => [...$offer['plan'], 'image_alt' => (string) $plan['alt']],
             'preview' => $offer['preview'],
         ]];
+    }
+
+    /** Read questions preserve the photo; another proposal supersedes and cleans it. */
+    private function imageTopicSwitch(SiteAgentSubscriber $subscriber, SiteAgentRequest $request, string $text, ?string $messageId): string
+    {
+        $reply = $this->converse($subscriber, $text, $messageId)
+            ?? $this->propose($subscriber, $text, $messageId);
+        if (SiteAgentRequest::query()->where('site_agent_subscriber_id', $subscriber->id)
+            ->where('site_id', $subscriber->site_id)->where('customer_id', $subscriber->customer_id)
+            ->where('id', '>', $request->id)->awaitingConfirmation()->exists()) {
+            $this->settle($request, SiteAgentRequest::CANCELED);
+        }
+
+        return $reply;
+    }
+
+    /** Recent words help resolve "this product"; only a live site read validates its identity. */
+    private function imageHistory(SiteAgentSubscriber $subscriber): array
+    {
+        return SiteAgentMessage::query()
+            ->where('site_agent_subscriber_id', $subscriber->id)
+            ->where('site_id', $subscriber->site_id)
+            ->latest('id')->limit(6)->get(['role', 'body'])->reverse()
+            ->map(fn (SiteAgentMessage $message): array => [
+                'role' => $message->role,
+                'body' => Str::limit($message->body, 700, ''),
+            ])->values()->all();
     }
 
     /**
@@ -628,7 +691,7 @@ class SiteAgentConversation
      * "כיכר לחם על שולחן עץ" is one instruction the customer gave in two
      * messages, and planning only the second would lose the page.
      */
-    private function answerImageQuestion(SiteAgentSubscriber $subscriber, SiteAgentRequest $request, string $answer): string
+    private function answerImageQuestion(SiteAgentSubscriber $subscriber, SiteAgentRequest $request, string $answer, ?string $messageId): string
     {
         $site = $subscriber->site;
 
@@ -637,17 +700,35 @@ class SiteAgentConversation
         }
 
         $plan = (array) $request->plan;
-        $caption = trim(trim((string) ($plan['caption'] ?? '')).' '.$answer);
+        if ($this->matches($answer, self::YES)) {
+            return (string) $plan['question'];
+        }
+        if (! Storage::disk('local')->exists((string) $plan['image_path'])) {
+            $this->settle($request, SiteAgentRequest::EXPIRED);
 
-        // Planned on both halves, but the shop is looked up with the ANSWER
-        // alone. The plugin hands the term straight to WooCommerce's text
-        // search, so a whole sentence — "שים את זה כמוצר הראשי של חולצה כחולה"
-        // — matches nothing, while the two words they just typed find it.
-        $next = $this->images->plan($site, $caption, $this->planner->targets($site, $answer));
+            return 'התמונה הקודמת כבר אינה זמינה. שלחו אותה שוב כדי להכין הצעה חדשה; לא שיניתי דבר באתר.';
+        }
 
+        // Keep the question and latest answer separate: a description answers
+        // the alt question without replacing the already verified product.
+        $next = $this->images->plan($site, $answer, $this->planner->targets($site, $answer), [
+            ...$plan,
+            'recent_conversation' => $this->imageHistory($subscriber),
+        ]);
         if ($next === null) {
             return 'קיבלתי את התמונה, אבל לא הצלחתי להבין לאן לשים אותה.';
         }
+        if (($next['cancel'] ?? false) === true) {
+            $this->settle($request, SiteAgentRequest::CANCELED);
+
+            return 'בוטל, לא שיניתי כלום. אפשר לבקש משהו אחר.';
+        }
+        if (($next['topic_switch'] ?? false) === true) {
+            return $this->imageTopicSwitch($subscriber, $request, $answer, $messageId);
+        }
+        $caption = Str::limit((string) ($plan['caption'] ?? ''), 1000, '')
+            ."\nשאלת הבהרה: ".(string) $plan['question']."\nתשובת בעל האתר: ".$answer;
+        $caption = Str::limit($caption, 6000, '');
 
         [$next, $offer] = $this->newProductOffer($site, $next);
         $operation = $offer !== null ? SiteAgentRequest::OP_PRODUCT_CREATE : ($next['operation'] ?? SiteAgentRequest::OP_IMAGE);
@@ -851,18 +932,46 @@ class SiteAgentConversation
             return 'לא הצלחתי לבצע את השינוי: '.$result['message'];
         }
 
+        $partial = ($result['partial'] ?? false) === true;
+        $plan = (array) $request->plan;
+        if (is_int($result['created_id'] ?? null) && $result['created_id'] > 0) {
+            $plan['created_id'] = $result['created_id'];
+        }
+        if ($partial) {
+            $plan['execution_outcome'] = [
+                'status' => 'partial',
+                'message' => Str::limit((string) ($result['done'] ?? 'הבקשה לא הושלמה במלואה.'), 1000),
+            ];
+        }
+
         $request->update([
             'state' => SiteAgentRequest::APPLIED,
             'restore' => $result['restore'],
             'applied_at' => now(),
+            'plan' => $plan,
         ]);
 
-        SystemLog::record('info', 'site-agent',
-            "שינוי באתר בוצע לבקשת הלקוח: {$request->plan['summary']}",
+        SystemLog::record($partial ? 'warning' : 'info', 'site-agent',
+            ($partial ? 'בקשה באתר בוצעה חלקית: ' : 'שינוי באתר בוצע לבקשת הלקוח: ').$request->plan['summary'],
             ['request_id' => $request->id, 'site_id' => $request->site_id]);
 
         $window = max(1, (int) config('siteagent.undo_minutes', 1440));
         $done = isset($result['done']) ? "\n".$result['done'] : '';
+
+        // A created draft must not be created again, but incomplete required
+        // fields must not be described as a fully successful owner request.
+        if ($partial) {
+            $path = (string) ($plan['image_path'] ?? '');
+            $directory = 'site-agent/'.$request->site_agent_subscriber_id.'/';
+            if (str_starts_with($path, $directory)
+                && preg_match('/^[A-Za-z0-9]{32}\.(?:jpg|png|gif|webp)$/D', substr($path, strlen($directory))) === 1) {
+                // Only a staged image owned by this conversation. A partial
+                // creation is consumed and will not visit pending cleanup.
+                Storage::disk('local')->delete($path);
+            }
+
+            return '⚠️ הבקשה בוצעה חלקית.'.$done;
+        }
 
         // An undo is promised only where there is one. A note already emailed
         // or a user already invited cannot be taken back, and the owner was

@@ -80,7 +80,7 @@ class SiteAgentAssistant
      *
      * @param  Closure(string): string  $editPages  hands a page-text instruction to the page planner and returns its reply
      */
-    public function handle(SiteAgentSubscriber $subscriber, Site $site, string $text, ?string $messageId, Closure $editPages): ?string
+    public function handle(SiteAgentSubscriber $subscriber, Site $site, string $text, ?string $messageId, Closure $editPages, ?SiteAgentRequest $pendingOffer = null): ?string
     {
         if (! $this->available()) {
             return null;
@@ -98,16 +98,26 @@ class SiteAgentAssistant
             $this->myAccountTool(),
             $this->messageCapTool(),
             ...$this->reports->definitions(),
-        ], fn (array $tool): bool => $permissions->allowsTool($tool['name'])));
+        ], fn (array $tool): bool => $permissions->allowsTool($tool['name'])
+            && ($pendingOffer === null || $this->toolbox->isRead($tool['name']))));
+        $allowedReads = array_fill_keys(array_column($tools, 'name'), true);
 
         $answer = $this->ai->converse(
-            $this->system($tools),
-            $this->prompt($subscriber, $site, $text),
+            $this->system($tools).($pendingOffer !== null
+                ? "\nמצב הסבר להצעה שמורה: מותר לקרוא מידע ולענות בלבד. ההצעה טרם בוצעה; אל תשנה אותה ואל תציע או תבצע פעולה נוספת. לשאלה על מצב האתר קרא מידע עדכני. אל תבקש אישור בתשובתך — המערכת מצרפת את ההצעה המקורית ואת בקשת האישור בעצמה."
+                : ''),
+            $this->prompt($subscriber, $site, $text, $pendingOffer),
             $tools,
-            fn (string $name, array $input): array => $this->call($turn, $subscriber, $site, $text, $messageId, $editPages, $name, $input),
+            function (string $name, array $input) use ($turn, $subscriber, $site, $text, $messageId, $editPages, $pendingOffer, $allowedReads): array {
+                if ($pendingOffer !== null && (! isset($allowedReads[$name]) || ! $this->toolbox->isRead($name))) {
+                    return ['content' => 'בסבב ההסבר מותר לקרוא מידע בלבד. ההצעה המקורית נשארת ללא שינוי.', 'is_error' => true];
+                }
+
+                return $this->call($turn, $subscriber, $site, $text, $messageId, $editPages, $name, $input);
+            },
             min(10, max(2, (int) config('siteagent.assistant.max_turns', 6))),
             cacheScope: 'site-agent:customer:'.$subscriber->customer_id.':site:'.$site->id,
-            reviewReply: function (string $reply) use ($turn, $replyGuard, &$repairUsed, &$unbackedApproval): ?string {
+            reviewReply: function (string $reply) use ($turn, $replyGuard, $pendingOffer, &$repairUsed, &$unbackedApproval): ?string {
                 if ($turn->settled() || ! $replyGuard->asksForApproval($reply)) {
                     return null;
                 }
@@ -118,6 +128,9 @@ class SiteAgentAssistant
                 }
 
                 $repairUsed = true;
+                if ($pendingOffer !== null) {
+                    return 'ענה רק על שאלת ההסבר, בלי לבקש אישור ובלי לשנות או ליצור הצעה. ההצעה המקורית נשמרה והמערכת תצרף אותה אחרי תשובתך. מותר להשתמש רק בכלי הקריאה הזמינים.';
+                }
 
                 // The provider continues its existing loop: same tool results,
                 // permission checks and remaining round budget, one repair only.
@@ -144,7 +157,9 @@ class SiteAgentAssistant
         // Defence at the user-facing boundary as well as inside the provider
         // loop. A plain model sentence is never an approval record.
         if ($replyGuard->asksForApproval($answer) || ($answer === '' && $unbackedApproval)) {
-            return self::NO_VERIFIED_PROPOSAL;
+            return $pendingOffer !== null
+                ? 'לא הצלחתי להשלים את ההסבר כרגע. ההצעה המקורית לא שונתה.'
+                : self::NO_VERIFIED_PROPOSAL;
         }
 
         // WhatsApp's own ceiling is 4096 characters; a reply cut by the
@@ -199,6 +214,11 @@ class SiteAgentAssistant
         if ($this->toolbox->isRead($name)) {
             $result = $this->toolbox->read($site, $name, $input);
             $turn->see($result['ids']);
+            // Aggregate counts have an exact, validated answer. Do not let a
+            // remembered product or a model retelling replace the site's total.
+            if (isset($result['reply'])) {
+                $turn->reply = $result['reply'];
+            }
 
             return ['content' => $result['content'], 'is_error' => $result['is_error']];
         }
@@ -490,6 +510,9 @@ class SiteAgentAssistant
             '',
             'כללים:',
             '1. כל נתון (מספר, שם, מחיר, סטטוס, תאריך) מגיע מכלי — לעולם אל תנחש או תמציא. אם כלי נכשל, אמור זאת במילים פשוטות.',
+            in_array('get_product_counts', $names, true)
+                ? '1א. לשאלה כמה מוצרים יש באתר קרא get_product_counts בסבב הנוכחי. הכלי מחזיר את כל מוצרי האתר עם פירוט סטטוסים ווריאציות בנפרד. מספר תוצאות find_products או total של חיפוש מסונן אינו מספר המוצרים באתר; מוצר שנוצר בשיחה אינו ראיה שאין מוצרים נוספים. אין להסיק מהזיכרון מספרים או לטעון שהאחרים טיוטות בלי פירוט שהאתר החזיר. כלי הספירה מציג תשובה מאומתת בעצמו ומסיים את הסבב.'
+                : '1א. באתר הזה אין כרגע כלי מאומת לספירת כל המוצרים. אם נשאלת על מספר המוצרים, הסבר שנדרש עדכון תוסף הסוכן וסריקת יכולות. אין לנחש מהיסטוריית השיחה, ממוצר שנוצר לאחרונה או ממספר התוצאות בעמוד חיפוש; אין לטעון שהמוצרים האחרים טיוטות בלי מידע שהאתר החזיר.',
             '2. שינוי באתר נעשה אך ורק דרך כלי propose_* או edit_page_text. הצעה אחת בכל הודעה; אחרי שהגשת אותה — סיים. לעולם אל תכתוב שההצעה החדשה בוצעה, עודכנה או נשלחה: שינוי קורה רק אחרי שבעל האתר עונה "כן" על התצוגה המקדימה, וזה מטופל מחוץ לשיחה איתך. על פעולה קודמת מותר לומר שבוצעה רק אם מצב הפעולה שסופק הוא applied; reverted פירושו שהוחזרה. זה תיעוד העבר, לא אישור למצב האתר כיום.',
             '3. לפני הצעה על פריט קיים, מצא אותו בכלי קריאה באותו סבב (find_* / get_*) והשתמש במזהה שהוחזר. אם יש כמה התאמות — שאל לאיזו הוא מתכוון, אל תבחר בעצמך.',
             '4. המשך את השיחה מהנקודה שבה נעצרה: "אותו מוצר", "שם", "השנייה", "תקצר את זה" או תשובה לשאלה שלך מתייחסים להקשר האחרון המתאים באתר הזה. השתמש בפרטים שכבר נמסרו בלי לשאול עליהם שוב. אם יש כמה פירושים סבירים או שההקשר חסר — שאל שאלה אחת ממוקדת עם האפשרויות הידועות. אל תנחש יעד ואל תציע שינוי שלא התבקש.',
@@ -506,8 +529,9 @@ class SiteAgentAssistant
             '10. דוחות: "דוח שבועי", "מה היה אתמול" — report_now. "תשלח לי כל בוקר/שבוע/חודש" — schedule_report; ביטול — list_reports ואז cancel_report. "תודיע לי על כל ליד חדש" — lead_alerts.',
             '11. פרטים אישיים של לקוחות הקצה (טלפון, אימייל) — רק כשבעל האתר מבקש אותם או כשהם נחוצים לתשובה.',
             in_array('propose_product_create', $names, true)
-                ? '12. מוצר חדש ("תעלה/תוסיף/תיצור מוצר…") — propose_product_create ישירות עם מה שנמסר (שם, מחיר, תיאור). זה אפשרי מכאן: אל תפנה לצוות. חסר שם — שאל עליו; את השאר אפשר להשלים אחר כך.'
+                ? '12. מוצר חדש ("תעלה/תוסיף/תיצור מוצר…") — propose_product_create ישירות עם כל מה שנמסר (שם, מחיר, תיאור וסימון virtual). מוצר וירטואלי מחייב virtual=true; אל תשמיט בקשה זו ואל תיצור במקומו מוצר פיזי. זה אפשרי מכאן כשהתוסף תומך: אם הכלי דורש עדכון תוסף, הסבר זאת בלי להחליף את הפעולה. חסר שם — שאל עליו; את השאר אפשר להשלים אחר כך.'
                 : null,
+            '12א. ב-WooCommerce וירטואלי הוא סימון virtual נפרד מסוג המוצר, והוא מבטל את הצורך במשלוח. לשאלה "המוצר וירטואלי?" קרא get_product בסבב הנוכחי וענה לפי virtual; שדה חסר אינו false, ואין להסיק שהמוצר פיזי רק מפני ש-type הוא simple. שינוי הסימון נעשה דרך propose_product_update עם ערך בוליאני ובהצעה שמורה לאישור. הוספת המילה "וירטואלי" לשם או לתיאור אינה משנה את הסימון ואינה חלופה לפעולה. וירטואלי אינו בהכרח מוצר להורדה; אל תבטיח קובץ או הרשאת הורדה.',
             '14. ACF: קרא get_acf למיקום ולשדה המדויקים בסבב הנוכחי, ואז propose_acf_update. השתמש במפתחות field_ ובנתיבים מהסכמה; ערוך תא או שורה ממוקדים. Repeater ו-Flexible Content תומכים בהוספה, עריכה, הסרה וסידור שורות; Group ו-Clone בשדות ילד. קרא list_acf_options לפני בחירת עמוד אפשרויות. אין לנחש סודות מוסתרים או להחליף אותם כשמשנים שדה סמוך. שדות מתוספי צד שלישי אינם מובטחים. propose_fields_update מיועד למטא פשוט של JetEngine.',
             '15. למבצע על קטגוריה: מצא category_id דרך find_terms עם product_cat, קרא get_category_sale עם בחירה מפורשת בתתי-קטגוריות ואז propose_category_sale. קבע תאריך ושעת סיום מפורשים לפי אזור הזמן שהאתר החזיר; תאריך יחסי כמו מחר מתייחס לשעון האתר. fixed הוא סכום הנחה מהמחיר הרגיל, לא מחיר סופי. אין להחליף מבצעים קיימים בלי בקשת בעל האתר. ההצעה מציגה מחירים והחרגות וקישור לרשימה מלאה; אין לדלג על האישור גם לקטגוריה גדולה.',
             '16. LearnDash: בדוק get_ld_capabilities. מצא את התלמיד ב-find_users ואת הקורס או הקבוצה בכלי LearnDash; קרא get_ld_membership לאותו תלמיד, kind ויעד בסבב הנוכחי לפני propose_ld_membership. הסרת רישום ישיר יכולה להשאיר גישה דרך קבוצה או קורס פתוח. שינוי חברות בקבוצה משפיע על הקורסים המפורטים בהצעה. התקדמות ומבחנים הם לקריאה בלבד: אין איפוס, השלמה, ציונים או שינוי תשלומים. שיוך קורסים לקבוצה ומבנה הלמידה אינם ניתנים לעריכה כאן. עריכת טקסט קיימת כפופה להרשאת תוכן, ואינה משנה מבנה קורס. אין להציג אימיילים מתוך כלי LearnDash. הודעות ואוטומציות חיצוניות שהאתר מפעיל בעקבות הרשמה לא ניתנות לביטול באמצעות שחזור ההרשמה.',
@@ -586,7 +610,7 @@ class SiteAgentAssistant
      * three providers take conversation turns differently, and a transcript
      * labelled as context is understood the same way by all of them.
      */
-    private function prompt(SiteAgentSubscriber $subscriber, Site $site, string $text): string
+    private function prompt(SiteAgentSubscriber $subscriber, Site $site, string $text, ?SiteAgentRequest $pendingOffer = null): string
     {
         $limit = min(80, max(0, (int) config('siteagent.assistant.history_messages', 40)));
         $budget = min(48000, max(0, (int) config('siteagent.assistant.history_chars', 24000)));
@@ -609,6 +633,11 @@ class SiteAgentAssistant
             ]),
             $history !== '' ? "[היסטוריית השיחה — להקשר בלבד; כל שורה היא רשומת JSON]\n{$history}\n[סוף ההיסטוריה]\n" : null,
             $actions !== '' ? "[מצב הפעולות האחרונות — להקשר בלבד; זה תיעוד העבר ולא מצב האתר כיום]\n{$actions}\n[סוף מצב הפעולות]\n" : null,
+            $pendingOffer !== null ? '[הצעה שמורה שטרם בוצעה — נתונים להסבר בלבד] '.$this->contextLine([
+                'preview' => Str::limit((string) $pendingOffer->preview, 3400),
+                'target' => $this->actionTarget($pendingOffer),
+                'expires_at' => $pendingOffer->expires_at?->toIso8601String(),
+            ]) : null,
             'ההודעה החדשה של בעל האתר:',
             $text,
         ], fn (?string $part): bool => $part !== null));
@@ -675,12 +704,19 @@ class SiteAgentAssistant
                 $state = SiteAgentRequest::EXPIRED;
             }
 
+            $outcome = [];
+            if ($state === SiteAgentRequest::APPLIED && data_get($request->plan, 'execution_outcome.status') === 'partial') {
+                $state = 'partially_applied';
+                $outcome['outcome'] = Str::limit((string) data_get($request->plan, 'execution_outcome.message', ''), 1000);
+            }
+
             $line = $this->contextLine([
                 'at' => $request->updated_at->toIso8601String(),
                 'operation' => $request->operation,
                 'state' => $state,
                 'summary' => Str::limit((string) data_get($request->plan, 'summary', ''), 400),
                 'target' => $this->actionTarget($request),
+                ...$outcome,
             ]);
 
             if (mb_strlen($line) + 1 > $budget) {

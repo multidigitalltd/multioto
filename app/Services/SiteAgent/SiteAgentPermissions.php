@@ -25,7 +25,7 @@ class SiteAgentPermissions
      */
     public const GROUPS = [
         'products_create' => ['יצירת מוצרים חדשים', [SiteAgentRequest::OP_PRODUCT_CREATE], ['propose_product_create']],
-        'products_update' => ['עדכון מוצרים (מחיר, מבצע, מלאי, שם, תיאור)', [SiteAgentRequest::OP_PRODUCT, SiteAgentRequest::OP_PRICE, SiteAgentRequest::OP_STOCK, SiteAgentRequest::OP_CATEGORY_SALE], ['propose_product_update', 'propose_category_sale']],
+        'products_update' => ['עדכון מוצרים (מחיר, מבצע, מלאי, שם, תיאור, וירטואלי)', [SiteAgentRequest::OP_PRODUCT, SiteAgentRequest::OP_PRICE, SiteAgentRequest::OP_STOCK, SiteAgentRequest::OP_CATEGORY_SALE], ['propose_product_update', 'propose_category_sale']],
         'products_delete' => ['מחיקת מוצרים (לפח, עם ביטול)', [SiteAgentRequest::OP_PRODUCT_TRASH], ['propose_product_trash']],
         'orders' => ['הזמנות — שינוי סטטוס והערות', [SiteAgentRequest::OP_ORDER_STATUS, SiteAgentRequest::OP_ORDER_NOTE], ['propose_order_status', 'propose_order_note']],
         'subscriptions' => ['מנויים מתחדשים — השהיה, חידוש וביטול', [SiteAgentRequest::OP_SUBSCRIPTION_STATUS], ['propose_subscription_status']],

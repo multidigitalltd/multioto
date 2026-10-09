@@ -425,11 +425,28 @@ class SiteActionApplier
     /** @param array<string, mixed> $plan */
     private function productCreate(Site $site, array $plan): array
     {
-        $created = $this->call($site, 'wc_product_create', (array) $plan['fields']);
+        $fields = (array) ($plan['fields'] ?? []);
+        if (array_key_exists('virtual', $fields)
+            && (! is_bool($fields['virtual']) || version_compare((string) data_get($site->mcp_capabilities, 'server.version', ''), SiteActionProposer::PRODUCT_VIRTUAL_SINCE, '<'))) {
+            return $this->refuse('יצירת מוצר וירטואלי או פיזי במפורש דורשת ערך תקין ותוסף סוכן בגרסה 1.12.0 ומעלה. עדכנו את התוסף ובקשו הצעה חדשה.');
+        }
+        $created = $this->call($site, 'wc_product_create', $fields);
         $id = (int) ($created['id'] ?? 0);
 
         if ($id <= 0) {
             return $this->failure('product create returned no id');
+        }
+
+        if (array_key_exists('virtual', $fields)) {
+            try {
+                $live = $this->call($site, 'wc_product_get', ['product_id' => $id]);
+            } catch (\Throwable) {
+                $live = [];
+            }
+            if (($live['id'] ?? null) !== $id || ($live['type'] ?? null) !== 'simple'
+                || ! is_bool($live['virtual'] ?? null) || $live['virtual'] !== $fields['virtual']) {
+                return [...$this->ok(null, "המוצר נוצר (מזהה {$id}), אך לא הצלחתי לאמת את ההגדרה וירטואלי/פיזי. לא ביצעתי את שלב הפרסום או את השלבים הנוספים. בדקו את המוצר באתר ועדכנו את תוסף הסוכן; אין ליצור את המוצר שוב."), 'partial' => true, 'created_id' => $id];
+            }
         }
 
         $extra = (array) ($plan['extra'] ?? []);
@@ -444,11 +461,22 @@ class SiteActionApplier
         }
 
         $missing = [...$missing, ...$this->completeNewProduct($site, $id, $extra, (array) ($plan['category_ids'] ?? []))];
+        if (array_key_exists('virtual', $fields) && ($extra !== [] || ! empty($plan['category_ids']) || isset($plan['image_path']))) {
+            try {
+                $final = $this->call($site, 'wc_product_get', ['product_id' => $id]);
+            } catch (\Throwable) {
+                $final = [];
+            }
+            if (($final['id'] ?? null) !== $id || ($final['type'] ?? null) !== 'simple'
+                || ! is_bool($final['virtual'] ?? null) || $final['virtual'] !== $fields['virtual']) {
+                return [...$this->ok(null, "המוצר נוצר (מזהה {$id}), אך לאחר השלבים הנוספים לא הצלחתי לאמת את ההגדרה וירטואלי/פיזי. ייתכן שהוא כבר פורסם; בדקו את מצבו באתר. אין ליצור את המוצר שוב."), 'partial' => true, 'created_id' => $id];
+            }
+        }
         $live = ($extra['status'] ?? null) === 'publish' && ! in_array('הפרסום', $missing, true);
 
         // No undo: there is no tool that deletes a product — which is the right
         // way round for a phone. Unpublishing is an ordinary product update.
-        return $this->ok(null, implode("\n", array_filter([
+        return [...$this->ok(null, implode("\n", array_filter([
             $live
                 ? "המוצר נוצר ופורסם באתר (מזהה {$id})."
                 : "המוצר נוצר כטיוטה (מזהה {$id}). כשתרצו לפרסם אותו — כתבו לי.",
@@ -456,7 +484,7 @@ class SiteActionApplier
                 ? 'לא הושלמו: '.implode(', ', $missing).'. המוצר קיים, ואפשר לבקש את זה שוב.'
                 : null,
             isset($plan['image_path']) ? null : 'לתמונה למוצר — שלחו אותה כאן עם שם המוצר.',
-        ])));
+        ]))), 'created_id' => $id];
     }
 
     /**

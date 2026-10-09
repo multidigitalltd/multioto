@@ -43,6 +43,34 @@ class AgentManagementMcpIntegrationTest extends TestCase
         $this->assertContains('jet_cct_types', $names);
     }
 
+    public function test_product_virtual_flags_are_advertised_as_optional_booleans(): void
+    {
+        class_alias(get_class(new class {}), 'WooCommerce');
+        $tools = array_column($this->rpc('tools/list')['result']['tools'], null, 'name');
+        foreach (['wc_product_create', 'wc_product_update'] as $name) {
+            $schema = $tools[$name]['inputSchema'];
+            $this->assertSame(['type' => 'boolean'], $schema['properties']['virtual']);
+            $this->assertNotContains('virtual', $schema['required']);
+            $this->assertStringContainsString('virtual', $tools[$name]['description']);
+        }
+        foreach (['wc_product_get', 'wc_product_search'] as $name) {
+            $this->assertStringContainsString('virtual', $tools[$name]['description']);
+        }
+    }
+
+    public function test_product_counts_are_read_only_without_search_filters(): void
+    {
+        class_alias(get_class(new class {}), 'WooCommerce');
+        $tools = array_column($this->rpc('tools/list')['result']['tools'], null, 'name');
+        $this->assertTrue($tools['wc_product_counts']['annotations']['readOnlyHint']);
+        $this->assertSame([], (array) $tools['wc_product_counts']['inputSchema']['properties']);
+        $this->assertFalse($tools['wc_product_counts']['inputSchema']['additionalProperties']);
+
+        $response = $this->rpc('tools/call', ['name' => 'wc_product_counts', 'arguments' => ['search' => 'recent product']]);
+        $this->assertSame(-32602, $response['error']['code']);
+        $this->assertArrayNotHasKey('result', $response);
+    }
+
     public function test_each_provider_dispatches_and_returns_standard_mcp_text(): void
     {
         foreach (['jet_cct_types', 'wp_optimole_get', 'wp_site_settings_get', 'wp_theme_active_get', 'ld_capabilities'] as $tool) {

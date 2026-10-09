@@ -406,6 +406,10 @@ class SiteChangeApplier
             return $this->refuse('קביעת שעת מבצע מדויקת דורשת תוסף סוכן בגרסה 1.11.0 ומעלה.');
         }
 
+        if (array_key_exists('virtual', $fields) && (! $this->supportsVirtual($site) || ! is_bool($fields['virtual']))) {
+            return $this->refuse('שינוי מוצר וירטואלי/פיזי דורש ערך תקין ועדכון של תוסף הסוכן לגרסה 1.12.0 ומעלה.');
+        }
+
         // Is the product still what the customer was shown?
         //
         // These are absolute values, not deltas: an approved "stock 40" written
@@ -418,15 +422,21 @@ class SiteChangeApplier
         // change nobody else touched.
         $current = array_intersect_key((array) ($plan['current'] ?? []), $fields);
 
+        if (array_key_exists('virtual', $fields) && ! is_bool($current['virtual'] ?? null)) {
+            return $this->refuse('חסר מצב וירטואלי מאומת להצעה. עדכנו את תוסף הסוכן ובקשו הצעה חדשה.');
+        }
+
         if ($current !== []) {
             $live = $this->productNow($site, $productId, $current);
 
             if ($live === []) {
-                return $this->refuse('לא הצלחתי לקרוא את המוצר מהחנות.');
+                return $this->refuse(array_key_exists('virtual', $fields)
+                    ? 'לא התקבל מצב וירטואלי מאומת למוצר פשוט או לווריאציה. עדכנו את תוסף הסוכן לגרסה 1.12.0 ומעלה, סרקו מחדש את החיבור ובקשו הצעה חדשה.'
+                    : 'לא הצלחתי לקרוא את המוצר מהחנות.');
             }
 
             foreach ($current as $field => $value) {
-                if (! $this->sameText((string) ($live[$field] ?? ''), (string) $value)) {
+                if ($field === 'virtual' ? ($live[$field] ?? null) !== $value : ! $this->sameText((string) ($live[$field] ?? ''), (string) $value)) {
                     return $this->refuse(self::STALE);
                 }
             }
@@ -443,6 +453,10 @@ class SiteChangeApplier
 
         $previous = (array) data_get($result, 'previous', data_get($result, 'before', []));
 
+        if (array_key_exists('virtual', $fields) && ! is_bool($previous['virtual'] ?? null)) {
+            return $this->refuse('העדכון נשלח, אך לא התקבל מצב קודם מאומת של ההגדרה וירטואלי/פיזי. יש לבדוק את המוצר באתר; לא הוכן שחזור אוטומטי.');
+        }
+
         if ($previous === []) {
             // The change may well have happened, but without the shop's own
             // "before" there is nothing honest to offer as an undo — so the
@@ -458,6 +472,10 @@ class SiteChangeApplier
         // discount that was meant to end running for ever, or leave a product
         // managing stock it never managed — and report success either way.
         $touched = array_merge($fields, $this->sideEffectsOf($fields));
+        $after = $this->productNow($site, $productId, $touched);
+        if (array_key_exists('virtual', $fields) && ($after['virtual'] ?? null) !== $fields['virtual']) {
+            return $this->refuse('העדכון נשלח, אך לא הצלחתי לאמת שההגדרה וירטואלי/פיזי נשמרה. יש לבדוק את המוצר באתר לפני בקשה נוספת.');
+        }
 
         return ['ok' => true, 'reason' => null, 'message' => null, 'restore' => [
             'kind' => 'product',
@@ -468,7 +486,7 @@ class SiteChangeApplier
             // moves on its own: an order drops the stock, an administrator sets
             // a price, and restoring the values from before our change would
             // erase a sale that really happened.
-            'after' => $this->productNow($site, $productId, $touched),
+            'after' => $after,
         ]];
     }
 
@@ -522,6 +540,12 @@ class SiteChangeApplier
                 'product_id' => $productId,
             ])), true);
         } catch (\Throwable) {
+            return [];
+        }
+
+        if (array_key_exists('virtual', $fields) && (! is_array($product)
+                || ($product['id'] ?? null) !== $productId || ! is_bool($product['virtual'] ?? null)
+                || ! in_array($product['type'] ?? null, ['simple', 'variation'], true))) {
             return [];
         }
 
@@ -871,6 +895,10 @@ class SiteChangeApplier
             return $this->refuse('שחזור שעת מבצע מדויקת דורש תוסף סוכן בגרסה 1.11.0 ומעלה.');
         }
 
+        if (array_key_exists('virtual', $fields) && (! $this->supportsVirtual($site) || ! is_bool($fields['virtual']))) {
+            return $this->refuse('שחזור מוצר וירטואלי/פיזי דורש ערך מאומת ותוסף סוכן בגרסה 1.12.0 ומעלה.');
+        }
+
         // Has the shop moved since we changed it?
         //
         // The same rule as the page undo, and it matters more here: between the
@@ -879,6 +907,10 @@ class SiteChangeApplier
         // items they have already sold.
         $after = (array) ($restore['after'] ?? []);
 
+        if (array_key_exists('virtual', $fields) && ! is_bool($after['virtual'] ?? null)) {
+            return $this->refuse('חסר מצב וירטואלי מאומת לאחר השינוי, ולכן לא ניתן לשחזר בבטחה.');
+        }
+
         if ($after === []) {
             return $this->refuse('איני יכול לוודא שהמוצר לא השתנה מאז, ולכן לא שיניתי בו דבר.');
         }
@@ -886,14 +918,16 @@ class SiteChangeApplier
         $live = $this->productNow($site, $productId, $after);
 
         if ($live === []) {
-            return $this->refuse('לא הצלחתי לקרוא את המוצר מהחנות.');
+            return $this->refuse(array_key_exists('virtual', $fields)
+                ? 'לא התקבל מצב וירטואלי מאומת למוצר פשוט או לווריאציה. עדכנו את תוסף הסוכן לגרסה 1.12.0 ומעלה וסרקו מחדש את החיבור לפני שחזור.'
+                : 'לא הצלחתי לקרוא את המוצר מהחנות.');
         }
 
         foreach ($after as $field => $value) {
             // Compared as strings: the shop gives a price back as "90.00" and a
             // quantity as a number, and only their written form is comparable
             // across the two reads.
-            if (! $this->sameText((string) ($live[$field] ?? ''), (string) $value)) {
+            if ($field === 'virtual' ? ($live[$field] ?? null) !== $value : ! $this->sameText((string) ($live[$field] ?? ''), (string) $value)) {
                 return $this->refuse(self::STALE);
             }
         }
@@ -907,7 +941,16 @@ class SiteChangeApplier
             return $this->failure(Str::limit($e->getMessage(), 200));
         }
 
+        if (array_key_exists('virtual', $fields) && ($this->productNow($site, $productId, $fields)['virtual'] ?? null) !== $fields['virtual']) {
+            return $this->refuse('השחזור נשלח, אך לא הצלחתי לאמת שההגדרה וירטואלי/פיזי הוחזרה. יש לבדוק את המוצר באתר.');
+        }
+
         return ['ok' => true, 'reason' => null, 'message' => null];
+    }
+
+    private function supportsVirtual(Site $site): bool
+    {
+        return version_compare((string) data_get($site->mcp_capabilities, 'server.version', ''), SiteActionProposer::PRODUCT_VIRTUAL_SINCE, '>=');
     }
 
     /** An older site plugin must not reduce a confirmed minute to a date-only sale. */

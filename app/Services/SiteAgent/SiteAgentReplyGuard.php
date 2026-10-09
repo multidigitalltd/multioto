@@ -19,7 +19,10 @@ final class SiteAgentReplyGuard
             ['"', '"', '"', '"', '"', '"', "'", "'", "'", "'", '', '', '', '', ''],
             $reply,
         );
-        $reply = preg_replace('/\s+/u', ' ', $reply) ?? '';
+        // Keep paragraph boundaries: a yes/no consent question starts a
+        // clause, unlike "איזה מוצר תרצי שאעדכן?", which asks for a target.
+        $reply = str_replace(["\r\n", "\r"], "\n", $reply);
+        $reply = preg_replace('/[^\S\r\n]+/u', ' ', $reply) ?? '';
 
         $directive = '(?:השיבו|השב|השיבי|הגיבו|הגב|הגיבי|כתבו|כתוב|כתבי|שלחו|שלח|שלחי|ענו|ענה|עני|תכתבו|תכתוב|תכתבי|תשיבו|תשיב|תשיבי|לחצו|לחץ|לחצי)';
         $connector = '(?:\s+(?:לי|כאן|בתשובה|בהודעה|רק|במילה|את\s+המילה|על\s+הכפתור|על)){0,3}';
@@ -28,6 +31,8 @@ final class SiteAgentReplyGuard
         $continuation = '(?:עם\s+(?:השינוי|העדכון|הפעולה|ההצעה)|ב(?:שינוי|עדכון|פעולה|הצעה)|לביצוע)';
         $boundary = '(?![\p{L}\p{N}_])';
         $affirmative = '(?:ב\s*)?["\']?'.$yes.$boundary.'["\']?';
+        $consentStart = '(?:^\s*|(?<=[.!?؟:;])\s+|(?<=\n)\s*)(?:האם\s+)?(?:תרצה|תרצי|תרצו|רוצה|רוצים|רוצות|אפשר)\s+ש';
+        $writeVerb = '(?:אבצע|אעדכן|אשמור|אחיל|אשנה|אגדיר|אהפוך|אסמן|אחליף|נבצע|נעדכן|נשמור|נחיל|נשנה|נגדיר|נהפוך|נסמן|נחליף)';
         $patterns = [
             // Quoted and unquoted yes/no can both answer an ordinary
             // clarification. Require an execution/approval purpose nearby.
@@ -39,7 +44,8 @@ final class SiteAgentReplyGuard
             '(?:האם\s+)?(?:להמשיך|להתקדם)\s+'.$continuation.'\s*[?؟]',
             'האם\s+(?:להמשיך|להתקדם)\s+'.$continuation.$boundary,
             '(?:מאשר|מאשרת|מאשרים|מאשרות|מאושר)(?:\s+(?:את\s+)?'.$target.')?\s*[?؟]',
-            '(?:תרצה|תרצי|תרצו|רוצה|רוצים|רוצות|אפשר)\s+ש(?:אבצע|אעדכן|אשמור|אחיל)(?:\s+(?:את\s+)?'.$target.')?\s*[?؟]',
+            $consentStart.$writeVerb.'(?:\s+(?:את\s+)?'.$target.')?\s*[?؟]',
+            $consentStart.$writeVerb.'\s+(?:אותו|אותה|אותם|אותן|את\s+[^\s?؟.!]+)'.$boundary.'[^\r\n?؟]{0,180}[?؟]',
             // English providers sometimes answer in English despite the site
             // language. Keep the same distinction between approval and data.
             '(?:reply|respond|type|send|say|answer|click|press)\s+(?:with\s+)?["\']?yes\b["\']?\s+(?:to\s+)?(?:confirm|approve|proceed|apply)\b',

@@ -13,6 +13,8 @@ use App\Models\SiteAgentMessage;
 use App\Models\SiteAgentSubscriber;
 use App\Models\User;
 use App\Models\WebhookEvent;
+use App\Services\SiteAgent\ImageChangePlanner;
+use App\Services\SiteAgent\ProductChangePlanner;
 use App\Services\SiteAgent\SiteAgentAccess;
 use App\Services\SiteAgent\SiteAgentAssistant;
 use App\Services\SiteAgent\SiteAgentBilling;
@@ -133,6 +135,10 @@ class SiteAgentFailureAlertsTest extends TestCase
             [SiteAgentAssistant::NO_VERIFIED_PROPOSAL],
             [SiteAgentConversation::NO_PENDING_PROPOSAL],
             ['קיבלתי את התמונה, אבל לא הצלחתי להבין לאן לשים אותה.'],
+            [ImageChangePlanner::UNRESOLVED_IMAGE.' היעד שנבחר הוא "מוצר א". איך לתאר את התמונה? אפשר גם לבטל.'],
+            [ProductChangePlanner::SEARCH_UNAVAILABLE],
+            [ProductChangePlanner::AI_UNAVAILABLE],
+            [ImageChangePlanner::SEARCH_UNAVAILABLE],
         ];
     }
 
@@ -149,7 +155,12 @@ class SiteAgentFailureAlertsTest extends TestCase
 
     public static function ordinaryReplies(): array
     {
-        return [['איזה טקסט תרצה להחליף?'], ['בוצע.'], ['אין הרשאה לפעולה הזאת.'], ['לא הצלחתי לקרוא את התמונה. אפשר לשלוח JPG?']];
+        return [
+            ['איזה טקסט תרצה להחליף?'], ['בוצע.'], ['אין הרשאה לפעולה הזאת.'], ['לא הצלחתי לקרוא את התמונה. אפשר לשלוח JPG?'],
+            ['לא מצאתי יעד חד־משמעי לתמונה. מה שם המוצר או העמוד כפי שהוא מופיע באתר? התמונה והתיאור שכבר מסרתם נשמרו.'],
+            ['איך לתאר את התמונה?'], ['לא מצאתי מוצר בשם "חולצה" בחנות. אפשר לכתוב את שם המוצר המדויק או את המק"ט?'],
+            ['תשובה חופשית שמזכירה הודעה קודמת: '.ImageChangePlanner::UNRESOLVED_IMAGE],
+        ];
     }
 
     #[DataProvider('ordinaryReplies')]
@@ -208,6 +219,32 @@ class SiteAgentFailureAlertsTest extends TestCase
         Queue::assertNotPushed(SendSiteAgentFailureAlertJob::class);
     }
 
+    public static function recoveryDeliveries(): array
+    {
+        $cases = [];
+        foreach ([ImageChangePlanner::UNRESOLVED_IMAGE.' לאיזה מוצר התכוונתם?', ImageChangePlanner::SEARCH_UNAVAILABLE, ProductChangePlanner::SEARCH_UNAVAILABLE, ProductChangePlanner::AI_UNAVAILABLE] as $reply) {
+            $cases[] = [$reply, true];
+            $cases[] = [$reply, false];
+        }
+
+        return $cases;
+    }
+
+    #[DataProvider('recoveryDeliveries')]
+    public function test_new_recovery_failures_alert_only_after_the_actual_response_is_accepted(string $reply, bool $delivered): void
+    {
+        config(['siteagent.alerts.failure_email' => 'admin@example.test']);
+        $event = $this->handleMessage($this->subscriber(), $delivered ? 'outgoing-message' : null, $reply);
+
+        $this->assertNotNull($event->fresh()->processed_at);
+        if ($delivered) {
+            Queue::assertPushed(SendSiteAgentFailureAlertJob::class, fn (SendSiteAgentFailureAlertJob $job): bool => str_contains($job->bodyText, $reply));
+        } else {
+            Queue::assertNotPushed(SendSiteAgentFailureAlertJob::class);
+        }
+        Mail::assertNothingSent();
+    }
+
     public function test_diagnostic_history_lookup_failure_does_not_abort_the_owner_request_or_expose_its_exception(): void
     {
         config(['siteagent.alerts.failure_email' => 'admin@example.test']);
@@ -243,7 +280,7 @@ class SiteAgentFailureAlertsTest extends TestCase
         Log::shouldHaveReceived('warning')->once()->with('SiteAgent: failure alert could not be queued', Mockery::on(fn (array $context): bool => array_keys($context) === ['webhook_event_id', 'subscriber_id', 'error_class']));
     }
 
-    private function handleMessage(SiteAgentSubscriber $subscriber, ?string $delivery): WebhookEvent
+    private function handleMessage(SiteAgentSubscriber $subscriber, ?string $delivery, string $reply = SiteAgentAssistant::NO_VERIFIED_PROPOSAL): WebhookEvent
     {
         $event = WebhookEvent::create([
             'source' => WebhookSource::WhatsappCloud, 'event_type' => 'message', 'external_id' => 'incoming-'.$subscriber->id,
@@ -261,10 +298,10 @@ class SiteAgentFailureAlertsTest extends TestCase
             return $delivery;
         });
         $conversation = Mockery::mock(SiteAgentConversation::class);
-        $conversation->shouldReceive('handle')->once()->andReturnUsing(function ($subscriber, $text, $id, $media, $beforeTurn): string {
+        $conversation->shouldReceive('handle')->once()->andReturnUsing(function ($subscriber, $text, $id, $media, $beforeTurn) use ($reply): string {
             $beforeTurn();
 
-            return SiteAgentAssistant::NO_VERIFIED_PROPOSAL;
+            return $reply;
         });
         $meter = Mockery::mock(SiteAgentUsageMeter::class);
         $meter->shouldReceive('capReached')->once()->andReturnFalse();

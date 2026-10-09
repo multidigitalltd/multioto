@@ -361,7 +361,7 @@ class SiteAgentAssistantTest extends TestCase
         $ai->shouldReceive('supportsAgent')->andReturn(true);
         // The provider failed mid-conversation.
         $ai->shouldReceive('converse')->andReturn(null);
-        $ai->shouldReceive('structured')->twice()->andReturn(null);
+        $ai->shouldReceive('structured')->once()->andReturn(null);
         $this->app->instance(ClaudeClient::class, $ai);
 
         $reply = $this->talk($subscriber, 'משהו');
@@ -644,7 +644,9 @@ class SiteAgentAssistantTest extends TestCase
         [$system, , $tools] = $this->seenByModel;
         $this->assertContains('propose_product_create', array_column($tools, 'name'));
         $this->assertStringContainsString('propose_product_create ישירות', $system);
-        $this->assertStringContainsString('אל תפנה לצוות', $system);
+        $this->assertStringContainsString('זה אפשרי מכאן כשהתוסף תומך', $system);
+        $this->assertStringContainsString('מוצר וירטואלי מחייב virtual=true', $system);
+        $this->assertStringContainsString('הוספת המילה "וירטואלי" לשם או לתיאור אינה משנה את הסימון', $system);
         // Deleting products stays out of reach; creating them is not lumped in with it.
         $this->assertStringContainsString('מוצרים: יצירה, עדכון, העברה לפח — כן', $system);
     }

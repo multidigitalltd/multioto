@@ -43,10 +43,13 @@ class SiteAgentToolbox
             'כמה הזמנות נוצרו ושולמו בכל יום ב-N הימים האחרונים, ופירוט 24 השעות האחרונות לפי סטטוס.',
             ['days' => ['type' => 'integer']], []],
         'find_products' => ['wc_product_search',
-            'חיפוש מוצרים לפי שם או מק"ט: מזהה, שם, מחירים, מלאי וסטטוס.',
+            'חיפוש מוצרים לפי שם או מק"ט: מזהה, שם, מחירים, מלאי וסטטוס. התוצאות וה-total שייכים לחיפוש הזה בלבד; מספר השורות בעמוד אינו מספר המוצרים באתר. לספירת כל המוצרים השתמש ב-get_product_counts בלי להסיק מהיסטוריית השיחה. בתוסף נתמך מוחזרים גם type והסימון virtual (ללא משלוח); היעדר virtual אינו אומר שהמוצר פיזי.',
             ['search' => ['type' => 'string'], 'limit' => ['type' => 'integer'], 'page' => ['type' => 'integer']], ['search']],
+        'get_product_counts' => ['wc_product_counts',
+            'ספירה עדכנית של כל מוצרי האתר, ללא חיפוש או סינון: סך המוצרים ופירוט מפורסמים, טיוטות, פרטיים, ממתינים ומתוזמנים. פח וטיוטות אוטומטיות מוצגים בנפרד ואינם בסך הכול; וריאציות נספרות בנפרד ממוצרי האב. לשאלה כמה מוצרים יש באתר קרא לכלי הזה בסבב הנוכחי. הכלי מחזיר תשובה מאומתת לבעל האתר ומסיים את הסבב; אין לחשב מספר מתוצאות חיפוש או ממוצר שנוצר בשיחה.',
+            [], []],
         'get_product' => ['wc_product_get',
-            'פרטי מוצר אחד לפי מזהה.',
+            'פרטי מוצר אחד לפי מזהה. קרא לפני תשובה על מצבו: virtual=true פירושו וירטואלי ללא משלוח, virtual=false פירושו שאינו וירטואלי. זה נפרד מ-type; אם virtual חסר אי אפשר לקבוע את הסימון מהמידע הזה.',
             ['product_id' => ['type' => 'integer']], ['product_id']],
         'list_coupons' => ['wc_coupon_list',
             'הקופונים בחנות: קוד, סוג, גובה ההנחה, תפוגה ושימושים.',
@@ -184,7 +187,7 @@ class SiteAgentToolbox
      * read that fails is not a reason to abandon the whole conversation.
      *
      * @param  array<string, mixed>  $input
-     * @return array{content: string, is_error: bool, ids: list<int>}
+     * @return array{content: string, is_error: bool, ids: list<int>, reply?: string}
      */
     public function read(Site $site, string $name, array $input): array
     {
@@ -192,6 +195,9 @@ class SiteAgentToolbox
 
         if (! app(SiteAgentPermissions::class)->allowsTool($name)) {
             return ['content' => SiteAgentPermissions::refusal(), 'is_error' => true, 'ids' => []];
+        }
+        if ($pluginTool === 'wc_product_counts' && ! $this->siteHas($site, $pluginTool)) {
+            return $this->productCountsError('לא ניתן לקבל כרגע ספירה מאומתת של כל מוצרי האתר. יש לעדכן את תוסף הסוכן ולסרוק מחדש את יכולות האתר. תוצאות חיפוש והיסטוריית השיחה אינן ספירה מלאה.');
         }
         if (str_starts_with($pluginTool, 'ld_') && ! $this->siteHas($site, $pluginTool)) {
             return ['content' => 'נדרשת סריקת יכולות עדכנית ותוסף סוכן 1.11.0 ומעלה עם LearnDash פעיל.', 'is_error' => true, 'ids' => []];
@@ -202,6 +208,10 @@ class SiteAgentToolbox
         try {
             $text = $this->mcp->textContent($this->mcp->callTool($site, $pluginTool, $arguments));
         } catch (\Throwable $e) {
+            if ($pluginTool === 'wc_product_counts') {
+                return $this->productCountsError('לא הצלחתי לקרוא מהאתר את ספירת המוצרים כרגע. אין לי מספר מאומת; אפשר לנסות שוב לאחר בדיקת החיבור.');
+            }
+
             return ['content' => str_starts_with($pluginTool, 'ld_') ? 'לא ניתן לקרוא את מידע LearnDash באתר. נסו לקרוא שוב לאחר בדיקת החיבור והיכולות.' : Str::limit($e->getMessage(), 400), 'is_error' => true, 'ids' => []];
         }
 
@@ -212,6 +222,9 @@ class SiteAgentToolbox
         }
 
         $data = json_decode($text, true);
+        if ($pluginTool === 'wc_product_counts') {
+            return $this->productCountsRead($data);
+        }
         if (str_starts_with($pluginTool, 'ld_')) {
             return SiteAgentLearnDashActions::modelRead($pluginTool, $data, $arguments);
         }
@@ -269,6 +282,84 @@ class SiteAgentToolbox
         ];
     }
 
+    /** Return only verified aggregates; no model-written total replaces these numbers. */
+    private function productCountsRead(mixed $data): array
+    {
+        $standard = ['publish', 'draft', 'private', 'pending', 'future', 'trash', 'auto-draft'];
+        $excluded = is_array($data) ? ($data['excluded_from_total'] ?? null) : null;
+        if (! is_array($excluded) || count($excluded) !== 2
+            || ! in_array('trash', $excluded, true) || ! in_array('auto-draft', $excluded, true)) {
+            return $this->productCountsError();
+        }
+
+        $counts = [];
+        foreach (['products', 'variations'] as $kind) {
+            $section = $data[$kind] ?? null;
+            $statuses = is_array($section) ? ($section['by_status'] ?? null) : null;
+            if (! is_array($section) || ! is_int($section['total'] ?? null) || $section['total'] < 0
+                || ! is_array($statuses) || count($statuses) > 100 || array_diff($standard, array_keys($statuses)) !== []) {
+                return $this->productCountsError();
+            }
+
+            $total = 0;
+            foreach ($statuses as $status => $count) {
+                if (! is_string($status) || ! preg_match('/^[a-z0-9_-]{1,32}$/D', $status)
+                    || ! is_int($count) || $count < 0) {
+                    return $this->productCountsError();
+                }
+                if (! in_array($status, $excluded, true)) {
+                    if ($count > PHP_INT_MAX - $total) {
+                        return $this->productCountsError();
+                    }
+                    $total += $count;
+                }
+            }
+            if ($total !== $section['total']) {
+                return $this->productCountsError();
+            }
+
+            $counts[$kind] = ['total' => $total, 'by_status' => $statuses];
+        }
+
+        $products = $counts['products']['by_status'];
+        $variations = $counts['variations']['by_status'];
+        $reply = implode("\n", [
+            'בקטלוג האתר יש '.$counts['products']['total'].' מוצרים (ללא פח וטיוטות אוטומטיות).',
+            'פירוט המוצרים: '.$this->productStatusSummary($products).'.',
+            'וריאציות: '.$counts['variations']['total'].' — נספרות בנפרד ואינן כלולות במספר המוצרים.',
+            'פירוט הווריאציות: '.$this->productStatusSummary($variations).'.',
+            'מחוץ לספירה: מוצרים בפח '.$products['trash'].', טיוטות אוטומטיות '.$products['auto-draft']
+                .'; וריאציות בפח '.$variations['trash'].', טיוטות אוטומטיות '.$variations['auto-draft'].'.',
+        ]);
+
+        return ['content' => json_encode([...$counts, 'excluded_from_total' => ['trash', 'auto-draft']], JSON_UNESCAPED_UNICODE),
+            'is_error' => false, 'ids' => [], 'reply' => $reply];
+    }
+
+    /** Unknown custom statuses are included in totals without inventing their meaning. */
+    private function productStatusSummary(array $statuses): string
+    {
+        $labels = ['publish' => 'מפורסמים', 'draft' => 'טיוטות', 'private' => 'פרטיים',
+            'pending' => 'ממתינים לאישור', 'future' => 'מתוזמנים'];
+        $parts = [];
+        foreach ($labels as $key => $label) {
+            if ($statuses[$key] > 0) {
+                $parts[] = $label.' '.$statuses[$key];
+            }
+        }
+        $other = array_sum(array_diff_key($statuses, $labels, ['trash' => true, 'auto-draft' => true]));
+        if ($other > 0) {
+            $parts[] = 'סטטוסים נוספים '.$other;
+        }
+
+        return $parts !== [] ? implode(', ', $parts) : 'אין';
+    }
+
+    private function productCountsError(string $message = 'האתר החזיר ספירת מוצרים חסרה או לא עקבית, ולכן אין לי מספר מאומת. יש לבדוק את החיבור ולעדכן את תוסף הסוכן.'): array
+    {
+        return ['content' => $message, 'is_error' => true, 'ids' => [], 'reply' => $message];
+    }
+
     /** CCT ids belong to separate tables and must never authorize a WordPress id. */
     private function cctReferences(string $tool, mixed $data, array $arguments): array
     {
@@ -307,6 +398,10 @@ class SiteAgentToolbox
             ->pluck('name')
             ->filter()
             ->all();
+
+        if ($pluginTool === 'wc_product_counts') {
+            return in_array($pluginTool, $known, true);
+        }
 
         if (str_starts_with($pluginTool, 'ld_')) {
             $version = data_get($site->mcp_capabilities, 'server.version');

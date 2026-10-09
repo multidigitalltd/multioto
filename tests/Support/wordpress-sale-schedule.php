@@ -24,7 +24,7 @@ class WC_Product
 
     public function __construct(int $id)
     {
-        $this->values = ['id' => $id, 'regular_price' => '100', 'sale_price' => '', 'price' => '100', 'sale_from' => null, 'sale_to' => null, 'parent_id' => 0, 'name' => 'Product', 'sku' => '', 'status' => 'publish', 'manage_stock' => false, 'stock_quantity' => null, 'stock_status' => 'instock', 'short_description' => '', 'image_id' => 0, 'type' => 'simple', 'children' => []];
+        $this->values = ['id' => $id, 'regular_price' => '100', 'sale_price' => '', 'price' => '100', 'sale_from' => null, 'sale_to' => null, 'parent_id' => 0, 'name' => 'Product', 'sku' => '', 'status' => 'publish', 'manage_stock' => false, 'stock_quantity' => null, 'stock_status' => 'instock', 'short_description' => '', 'image_id' => 0, 'type' => 'simple', 'virtual' => false, 'downloadable' => false, 'children' => []];
     }
 
     public function __call($name, $args)

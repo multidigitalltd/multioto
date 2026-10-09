@@ -2,19 +2,23 @@
 
 namespace Tests\Feature;
 
+use App\Jobs\SendSiteAgentFailureAlertJob;
 use App\Models\Customer;
 use App\Models\Site;
 use App\Models\SiteAgentRequest;
 use App\Models\SiteAgentSubscriber;
 use App\Services\Agent\McpClient;
 use App\Services\Ai\ClaudeClient;
+use App\Services\SiteAgent\ProductChangePlanner;
 use App\Services\SiteAgent\SiteAgentConversation;
+use App\Services\SiteAgent\SiteAgentFailureAlerts;
 use App\Services\SiteAgent\SiteChangeApplier;
 use App\Services\SiteAgent\SiteChangePlanner;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\ResponseSequence;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
 use Mockery;
 use Tests\TestCase;
 
@@ -76,13 +80,14 @@ class SiteAgentConversationTest extends TestCase
         $subscriber = $this->subscriber();
         $captured = false;
         $this->planning(null);
-        $planner = Mockery::mock(SiteChangePlanner::class);
-        $planner->shouldReceive('plan')->once()->andReturnUsing(function () use (&$captured): ?array {
+        $ai = Mockery::mock(ClaudeClient::class);
+        $ai->shouldReceive('isEnabled')->andReturnTrue();
+        $ai->shouldReceive('structured')->once()->andReturnUsing(function () use (&$captured): ?array {
             $this->assertTrue($captured);
 
             return null;
         });
-        $this->app->instance(SiteChangePlanner::class, $planner);
+        $this->app->instance(ClaudeClient::class, $ai);
 
         $reply = app(SiteAgentConversation::class)->handle(
             $subscriber,
@@ -96,7 +101,11 @@ class SiteAgentConversationTest extends TestCase
         );
 
         $this->assertTrue($captured);
-        $this->assertStringContainsString('לא הצלחתי להבין בוודאות', $reply);
+        $this->assertSame(ProductChangePlanner::AI_UNAVAILABLE, $reply);
+        config(['siteagent.alerts.failure_email' => 'admin@example.test']);
+        Queue::fake([SendSiteAgentFailureAlertJob::class]);
+        app(SiteAgentFailureAlerts::class)->dispatch(123, $subscriber, 'עדכן את הכותרת', $reply, 0);
+        Queue::assertPushed(SendSiteAgentFailureAlertJob::class, fn (SendSiteAgentFailureAlertJob $job): bool => str_contains($job->bodyText, $reply));
         Http::assertNothingSent();
     }
 

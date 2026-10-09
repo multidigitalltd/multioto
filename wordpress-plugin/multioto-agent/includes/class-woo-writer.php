@@ -53,13 +53,16 @@ class Multioto_Agent_Woo_Writer
         // lookup somebody does before repricing, answered with "no such
         // product" about a product that exists.
         $bySku = wc_get_product_id_by_sku(trim($term));
-        $skuMatched = false;
+        $skuProduct = $bySku > 0 ? wc_get_product($bySku) : null;
+        if (! $skuProduct instanceof WC_Product || ! in_array($skuProduct->get_status(), ['publish', 'draft', 'private'], true)) {
+            $skuProduct = null;
+        }
 
-        // Only on the first page: prepending it to every page would repeat the
-        // same product all the way through a paged walk.
-        if ($page === 1 && $bySku > 0 && ($product = wc_get_product($bySku)) instanceof WC_Product) {
-            $found[$bySku] = self::summary($product);
-            $skuMatched = true;
+        // Exclude the SKU hit from EVERY text page, even if its title matches
+        // a later one. This makes the union total stable and prevents the hit
+        // appearing twice while the caller walks the complete result set.
+        if ($page === 1 && $skuProduct !== null) {
+            $found[$bySku] = self::summary($skuProduct);
         }
 
         // `paginate` so the answer can say how many matched, not only how many
@@ -71,6 +74,7 @@ class Multioto_Agent_Woo_Writer
             'limit' => $limit,
             'page' => $page,
             'status' => ['publish', 'draft', 'private'],
+            'exclude' => $skuProduct !== null ? [$bySku] : [],
             // Stable across pages: relevance can reorder between calls, and a
             // walk over shifting order silently skips products and repeats
             // others — the caller then acts on "all of them" having missed some.
@@ -79,10 +83,7 @@ class Multioto_Agent_Woo_Writer
             'paginate' => true,
         ]);
 
-        $fromText = [];
-
         foreach ($query->products as $product) {
-            $fromText[] = $product->get_id();
             $found[$product->get_id()] = self::summary($product);
         }
 
@@ -94,15 +95,11 @@ class Multioto_Agent_Woo_Writer
         // single full page that product would not appear on any page at all.
         // A walk over "all the shirts" would then miss one, and nothing would
         // say so. One extra row in a single answer is the cheaper problem.
-        $extra = $skuMatched && ! in_array($bySku, $fromText, true) ? 1 : 0;
+        $extra = $page === 1 && $skuProduct !== null ? 1 : 0;
         $products = array_slice(array_values($found), 0, $limit + $extra);
 
-        // The SKU hit counts toward the total only when the text query did not
-        // already contain it. Without this, a SKU that appears nowhere in the
-        // title or description answers "total 0, returned 1" — a pair of numbers
-        // that contradict each other, and that a caller reading the total would
-        // take as "no such product" about a product it is holding.
-        $total = (int) $query->total + ($skuMatched && ! in_array($bySku, $fromText, true) ? 1 : 0);
+        // query.total excludes the SKU hit by construction, on every page.
+        $total = (int) $query->total + ($skuProduct !== null ? 1 : 0);
 
         return [
             // Never fewer than what is in the box: the page is proof those
@@ -119,6 +116,53 @@ class Multioto_Agent_Woo_Writer
     public static function get(int $productId): array
     {
         return self::summary(self::product($productId));
+    }
+
+    /** Whole-store counts: parent products and variations are separate totals. */
+    public static function counts(): array
+    {
+        if (! self::active() || ! function_exists('wp_count_posts')) {
+            throw new Multioto_Agent_Rpc_Error(-32602, 'ספירת מוצרי WooCommerce אינה זמינה באתר.');
+        }
+
+        return [
+            'products' => self::countsForPostType('product'),
+            'variations' => self::countsForPostType('product_variation'),
+            'excluded_from_total' => ['trash', 'auto-draft'],
+        ];
+    }
+
+    /** Fixed post types, two core aggregate counts, never a paginated search. */
+    private static function countsForPostType(string $postType): array
+    {
+        if (! post_type_exists($postType)) {
+            throw new Multioto_Agent_Rpc_Error(-32602, 'סוג התוכן הנדרש לספירת המוצרים אינו זמין.');
+        }
+        // The authenticated site-management endpoint has the same whole-store
+        // scope as product reads, including private/draft products. The core
+        // count cache is invalidated by normal WordPress product state changes.
+        $counts = wp_count_posts($postType);
+        if (! is_object($counts)) {
+            throw new Multioto_Agent_Rpc_Error(-32000, 'לא ניתן לאמת את ספירת המוצרים.');
+        }
+        $byStatus = array_fill_keys(['publish', 'draft', 'private', 'pending', 'future', 'trash', 'auto-draft'], 0);
+        $total = 0;
+        foreach (get_object_vars($counts) as $status => $count) {
+            if (! is_string($status) || ! preg_match('/^[a-z0-9_-]{1,20}$/D', $status)
+                || ! (is_int($count) || is_string($count)) || ! preg_match('/^\d+$/D', (string) $count)
+                || filter_var($count, FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]]) === false) {
+                throw new Multioto_Agent_Rpc_Error(-32000, 'לא ניתן לאמת את ספירת המוצרים לפי סטטוס.');
+            }
+            $byStatus[$status] = (int) $count;
+            if (! in_array($status, ['trash', 'auto-draft'], true)) {
+                if ($byStatus[$status] > PHP_INT_MAX - $total) {
+                    throw new Multioto_Agent_Rpc_Error(-32000, 'ספירת המוצרים חורגת מהטווח הנתמך.');
+                }
+                $total += $byStatus[$status];
+            }
+        }
+
+        return ['total' => $total, 'by_status' => $byStatus];
     }
 
     /**
@@ -143,10 +187,19 @@ class Multioto_Agent_Woo_Writer
 
     private static function updateLocked(int $productId, array $args): array
     {
+        $virtual = self::virtualValue($args);
         $product = self::product($productId);
+        if ($virtual !== null && ! in_array($product->get_type(), ['simple', 'variation'], true)) {
+            throw new Multioto_Agent_Rpc_Error(-32602, 'virtual ניתן לעדכון רק במוצר פשוט או בווריאציה מסוימת, ולא במוצר האב או בסוג מוצר אחר.');
+        }
         $previous = self::summary($product);
         $beforeTuple = class_exists('Multioto_Agent_Sale_Schedule') ? Multioto_Agent_Sale_Schedule::productTuple($product) : null;
         $changed = [];
+
+        if ($virtual !== null) {
+            $product->set_virtual($virtual);
+            $changed['virtual'] = $virtual;
+        }
 
         if (isset($args['regular_price'])) {
             $product->set_regular_price(self::price($args['regular_price'], 'regular_price'));
@@ -330,6 +383,7 @@ class Multioto_Agent_Woo_Writer
      */
     public static function create(array $args): array
     {
+        $virtual = self::virtualValue($args);
         $name = trim((string) ($args['name'] ?? ''));
 
         if ($name === '') {
@@ -337,6 +391,9 @@ class Multioto_Agent_Woo_Writer
         }
 
         $product = new WC_Product_Simple;
+        if ($virtual !== null) {
+            $product->set_virtual($virtual);
+        }
         $product->set_name(sanitize_text_field($name));
         $product->set_status('draft');
         $product->set_description(wp_kses_post((string) ($args['description'] ?? '')));
@@ -350,9 +407,36 @@ class Multioto_Agent_Woo_Writer
             $product->set_sku(sanitize_text_field((string) $args['sku']));
         }
 
-        $product->save();
+        if (! $product->save()) {
+            throw new Multioto_Agent_Rpc_Error(-32000, 'שמירת טיוטת המוצר נכשלה.');
+        }
+
+        if ($virtual !== null) {
+            // A draft already exists. Keep its ID even if readback fails so the
+            // caller can inspect it instead of retrying and creating a duplicate.
+            try {
+                $saved = self::summary(self::product($product->get_id()));
+
+                return $saved + ['created_as' => 'draft', 'virtual_applied' => $saved['virtual'] === $virtual];
+            } catch (Throwable $error) {
+                return ['id' => $product->get_id(), 'created_as' => 'draft', 'verification_failed' => true];
+            }
+        }
 
         return self::summary($product) + ['created_as' => 'draft'];
+    }
+
+    /** An explicit false clears the flag; omission leaves Woo's value alone. */
+    private static function virtualValue(array $args): ?bool
+    {
+        if (! array_key_exists('virtual', $args)) {
+            return null;
+        }
+        if (! is_bool($args['virtual'])) {
+            throw new Multioto_Agent_Rpc_Error(-32602, 'virtual חייב להיות ערך בוליאני true או false.');
+        }
+
+        return $args['virtual'];
     }
 
     /**
@@ -464,6 +548,8 @@ class Multioto_Agent_Woo_Writer
             'name' => $product->get_name(),
             'sku' => $product->get_sku(),
             'status' => $product->get_status(),
+            'type' => $product->get_type(),
+            'virtual' => (bool) $product->get_virtual('edit'),
             'regular_price' => $product->get_regular_price(),
             'sale_price' => $product->get_sale_price(),
             'sale_from' => self::saleDateSummary($product->get_date_on_sale_from()),

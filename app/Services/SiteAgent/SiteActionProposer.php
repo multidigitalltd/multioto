@@ -32,6 +32,8 @@ class SiteActionProposer
     /** The plugin version that understands name/short_description on a product. */
     private const PRODUCT_TEXT_FIELDS_SINCE = '1.8.0';
 
+    public const PRODUCT_VIRTUAL_SINCE = '1.12.0';
+
     public const ORDER_STATUSES = [
         'pending' => 'ממתינה לתשלום',
         'processing' => 'בטיפול',
@@ -91,6 +93,7 @@ class SiteActionProposer
         'stock_quantity' => 'מלאי',
         'stock_status' => 'מצב מלאי',
         'status' => 'סטטוס',
+        'virtual' => 'סוג מוצר',
     ];
 
     /** Every proposal tool, by name. */
@@ -181,13 +184,13 @@ class SiteActionProposer
                 ['product_id' => ['type' => 'integer'], 'name' => ['type' => 'string'], 'short_description' => ['type' => 'string'],
                     'regular_price' => ['type' => 'string'], 'sale_price' => ['type' => 'string'], 'sale_from' => ['type' => 'string'],
                     'sale_to' => ['type' => 'string'], 'stock_quantity' => ['type' => 'integer'], 'stock_status' => ['type' => 'string'],
-                    'status' => ['type' => 'string']], ['product_id']],
+                    'status' => ['type' => 'string'], 'virtual' => ['type' => 'boolean', 'description' => 'true = וירטואלי ללא משלוח; false = פיזי. מוצר פשוט או וריאציה בלבד; תוסף 1.12.0 ומעלה.']], ['product_id']],
             ['propose_product_create', 'wc_product_create',
                 'הצעה ליצור מוצר חדש: שם, מחיר, מחיר מבצע, תיאור קצר ומלא, מק"ט, כמות במלאי, קטגוריות מוצרים קיימות (שמות, מ-find_terms עם product_cat) ו-publish=true כדי לפרסם מיד. בלי publish הוא נוצר כטיוטה. תמונה — בעל האתר שולח אותה אחרי שהמוצר נוצר, עם שם המוצר.',
                 ['name' => ['type' => 'string'], 'regular_price' => ['type' => 'string'], 'sale_price' => ['type' => 'string'],
                     'short_description' => ['type' => 'string'], 'description' => ['type' => 'string'], 'sku' => ['type' => 'string'],
                     'stock_quantity' => ['type' => 'integer'], 'categories' => ['type' => 'array', 'items' => ['type' => 'string']],
-                    'publish' => ['type' => 'boolean']], ['name']],
+                    'publish' => ['type' => 'boolean'], 'virtual' => ['type' => 'boolean', 'description' => 'true = וירטואלי ללא משלוח; false או ללא השדה = מוצר פיזי. תוסף 1.12.0 ומעלה נדרש לשדה מפורש.']], ['name']],
             ['propose_product_trash', 'wc_product_trash',
                 'הצעה למחוק מוצר לפי product_id — הוא עובר לפח (לא מחיקה סופית) ויורד מהחנות מיד. הפיך — "בטל" מחזיר אותו.',
                 ['product_id' => ['type' => 'integer']], ['product_id']],
@@ -393,6 +396,10 @@ class SiteActionProposer
 
         $fields = [];
 
+        if (array_key_exists('virtual', $input) && ! is_bool($input['virtual'])) {
+            return $this->error('virtual חייב להיות true או false אמיתי.');
+        }
+
         foreach (array_keys(self::PRODUCT_FIELDS) as $field) {
             if (array_key_exists($field, $input) && $input[$field] !== null) {
                 $fields[$field] = is_string($input[$field]) ? trim($input[$field]) : $input[$field];
@@ -401,6 +408,10 @@ class SiteActionProposer
 
         if ($fields === []) {
             return $this->error('לא צוין שום שדה לשינוי.');
+        }
+
+        if (array_key_exists('virtual', $fields) && ! $this->pluginAtLeast($site, self::PRODUCT_VIRTUAL_SINCE)) {
+            return $this->error('שינוי בין מוצר וירטואלי לפיזי דורש עדכון של תוסף הסוכן לגרסה 1.12.0 ומעלה.');
         }
 
         if ((isset($fields['name']) || isset($fields['short_description'])) && ! $this->pluginAtLeast($site, self::PRODUCT_TEXT_FIELDS_SINCE)) {
@@ -424,9 +435,20 @@ class SiteActionProposer
             return $this->error("המוצר {$productId} לא נמצא בחנות.");
         }
 
+        if (array_key_exists('virtual', $fields)) {
+            if ((int) $product['id'] !== $productId || ! is_bool($product['virtual'] ?? null)) {
+                return $this->error('לא התקבל מצב וירטואלי תקין למוצר. עדכנו את תוסף הסוכן לגרסה 1.12.0 ומעלה וסרקו מחדש את החיבור.');
+            }
+            if (! in_array($product['type'] ?? null, ['simple', 'variation'], true)) {
+                return $this->error('שינוי בין וירטואלי לפיזי נתמך רק במוצר פשוט או בווריאציה נפרדת.');
+            }
+        }
+
         // A field already at the requested value is not a change, and showing
         // "100 ← 100" in a preview is a preview nobody can read.
-        $fields = array_filter($fields, fn ($value, string $field): bool => (string) ($product[$field] ?? '') !== (string) $value, ARRAY_FILTER_USE_BOTH);
+        $fields = array_filter($fields, fn ($value, string $field): bool => $field === 'virtual'
+            ? $product[$field] !== $value
+            : (string) ($product[$field] ?? '') !== (string) $value, ARRAY_FILTER_USE_BOTH);
 
         if ($fields === []) {
             return $this->error('המוצר כבר במצב המבוקש — אין מה לשנות.');
@@ -508,6 +530,14 @@ class SiteActionProposer
      */
     private function proposeProductCreate(Site $site, array $input, array $seen): array
     {
+        if (array_key_exists('virtual', $input)) {
+            if (! is_bool($input['virtual'])) {
+                return $this->error('virtual חייב להיות true או false אמיתי.');
+            }
+            if (! $this->pluginAtLeast($site, self::PRODUCT_VIRTUAL_SINCE)) {
+                return $this->error('יצירה מפורשת של מוצר וירטואלי או פיזי דורשת עדכון של תוסף הסוכן לגרסה 1.12.0 ומעלה.');
+            }
+        }
         $name = trim((string) ($input['name'] ?? ''));
 
         if ($name === '' || mb_strlen($name) > 200) {
@@ -521,6 +551,10 @@ class SiteActionProposer
             'description' => trim((string) ($input['description'] ?? '')),
             'sku' => trim((string) ($input['sku'] ?? '')),
         ], fn (string $value): bool => $value !== '');
+
+        if ($this->pluginAtLeast($site, self::PRODUCT_VIRTUAL_SINCE)) {
+            $fields['virtual'] = $input['virtual'] ?? false;
+        }
 
         $extra = $this->newProductExtras($input, $fields['regular_price'] ?? null);
 
@@ -546,6 +580,7 @@ class SiteActionProposer
             ],
             'preview' => implode("\n", array_filter([
                 "🛒 מוצר חדש: {$name}",
+                ($fields['virtual'] ?? false) ? 'סוג מוצר: וירטואלי — ללא משלוח' : 'סוג מוצר: פיזי — משלוח לפי הגדרות החנות',
                 isset($fields['regular_price']) ? "מחיר: {$fields['regular_price']} ₪" : null,
                 isset($extra['sale_price']) ? "מחיר מבצע: {$extra['sale_price']} ₪" : null,
                 isset($fields['sku']) ? "מק\"ט: {$fields['sku']}" : null,
@@ -1949,6 +1984,7 @@ class SiteActionProposer
         $show = fn (mixed $value): string => match ($field) {
             'stock_status' => self::STOCK_STATUSES[(string) $value] ?? (string) $value,
             'status' => self::POST_STATUSES[(string) $value] ?? (string) $value,
+            'virtual' => $value === true ? 'וירטואלי — ללא משלוח' : 'פיזי — משלוח לפי הגדרות החנות',
             default => ($value === null || $value === '') ? '—' : (string) $value,
         };
 

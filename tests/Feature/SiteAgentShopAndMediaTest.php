@@ -725,6 +725,34 @@ class SiteAgentShopAndMediaTest extends TestCase
         Storage::disk('local')->assertMissing($path);
     }
 
+    public function test_photo_product_planning_preserves_both_boolean_virtual_values(): void
+    {
+        $site = $this->subscriber()->site;
+        foreach ([true, false] as $virtual) {
+            $this->aiAnswers(['new_product' => true, 'name' => 'מוצר דוגמה', 'regular_price' => '150',
+                'alt' => 'עטיפת המוצר', 'virtual' => $virtual]);
+
+            $plan = app(ImageChangePlanner::class)->plan($site, 'הוסף מוצר עם התמונה', []);
+
+            $this->assertSame($virtual, $plan['new_product']['virtual']);
+            $this->assertSame('150', $plan['new_product']['regular_price']);
+        }
+        Http::assertNothingSent();
+    }
+
+    public function test_photo_product_planning_rejects_a_string_virtual_value(): void
+    {
+        $site = $this->subscriber()->site;
+        $this->aiAnswers(['new_product' => true, 'name' => 'מוצר דוגמה', 'regular_price' => '150',
+            'alt' => 'עטיפת המוצר', 'virtual' => 'false']);
+
+        $plan = app(ImageChangePlanner::class)->plan($site, 'הוסף מוצר עם התמונה', []);
+
+        $this->assertArrayHasKey('question', $plan);
+        $this->assertArrayNotHasKey('new_product', $plan);
+        Http::assertNothingSent();
+    }
+
     public function test_a_new_product_photo_without_a_name_is_asked_about_and_kept(): void
     {
         $subscriber = $this->subscriber();
